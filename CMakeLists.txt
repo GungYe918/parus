@@ -1,7 +1,7 @@
-# slyte/cmake
+# gaupel/cmake
 cmake_minimum_required(VERSION 3.25)
 
-project(slyte
+project(gaupel
   VERSION 0.1.0
   LANGUAGES CXX
 )
@@ -11,11 +11,11 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(SLYTE_BUILD_TESTS "Build Slyte tests" ON)
+option(SLYTE_BUILD_TESTS "Build Gaupel tests" ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(compiler)
-add_subdirectory(tools/slytec)
+add_subdirectory(tools/gaupelc)
 
 
 if(SLYTE_BUILD_TESTS)

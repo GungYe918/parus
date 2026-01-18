@@ -1,12 +1,12 @@
-// compiler/include/slyte/syntax/Punct.hpp
+// compiler/include/gaupel/syntax/Punct.hpp
 #pragma once
-#include <slyte/syntax/TokenKind.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
 
 #include <array>
 #include <string_view>
 
 
-namespace slyte::syntax {
+namespace gaupel::syntax {
 
     // Maximal munch: longer punctuations first.
     struct PunctEntry {
@@ -62,4 +62,4 @@ namespace slyte::syntax {
         {">",   TokenKind::kGt},
     }};
 
-} // namespace slyte::syntax
+} // namespace gaupel::syntax

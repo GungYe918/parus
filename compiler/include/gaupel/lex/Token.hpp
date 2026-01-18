@@ -1,11 +1,11 @@
-// compiler/include/slyte/lex/Token.hpp
+// compiler/include/gaupel/lex/Token.hpp
 #pragma once
 #include <string_view>
-#include <slyte/text/Span.hpp>
-#include <slyte/syntax/TokenKind.hpp>
+#include <gaupel/text/Span.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
 
 
-namespace slyte {
+namespace gaupel {
 
     struct Token {
         syntax::TokenKind kind = syntax::TokenKind::kError;
@@ -13,4 +13,4 @@ namespace slyte {
         std::string_view lexeme{};
     };
 
-} // namespace slyte
+} // namespace gaupel

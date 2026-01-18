@@ -1,9 +1,9 @@
-// compiler/include/slyte/syntax/TokenKind.hpp
+// compiler/include/gaupel/syntax/TokenKind.hpp
 #pragma once
 #include <cstdint>
 
 
-namespace slyte::syntax {
+namespace gaupel::syntax {
 
     enum class TokenKind : uint16_t {
     // special
@@ -72,7 +72,7 @@ namespace slyte::syntax {
     kGt,       // >
     kGtEq,     // >=
 
-    kLessLess, // <<   (pipe operator in Slyte)
+    kLessLess, // <<   (pipe operator in Gaupel)
 
     kDotDot,       // ..
     kDotDotColon,  // ..:
@@ -148,4 +148,4 @@ namespace slyte::syntax {
         return "unknown";
     }
 
-} // namespace slyte::syntax
+} // namespace gaupel::syntax

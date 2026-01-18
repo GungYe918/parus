@@ -1,9 +1,9 @@
 // compiler/src/parse/parse_expr.cpp
-#include <slyte/parse/Parser.hpp>
-#include <slyte/syntax/Precedence.hpp>
+#include <gaupel/parse/Parser.hpp>
+#include <gaupel/syntax/Precedence.hpp>
 
 
-namespace slyte {
+namespace gaupel {
 
     static Span tok_span(const Token& t) {  return t.span;  }
 
@@ -295,4 +295,4 @@ namespace slyte {
     }
 
 
-} // namespace slyte
+} // namespace gaupel

@@ -1,11 +1,11 @@
 // compiler/include/syntax/Precedence.hpp
 #pragma once
-#include <slyte/syntax/TokenKind.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
 
 #include <optional>
 
 
-namespace slyte::syntax {
+namespace gaupel::syntax {
 
     // Higher number = tighter binding.
     enum class Assoc : uint8_t {
@@ -24,7 +24,7 @@ namespace slyte::syntax {
     inline constexpr int k_prec_postfix = 100; // call(), index[]
 
 
-    // Infix precedence roughly matches the spec table (C-like) with Slyte additions.
+    // Infix precedence roughly matches the spec table (C-like) with Gaupel additions.
     constexpr std::optional<InfixInfo> infix_info(TokenKind k) {
         switch(k) {
             // assignment (right assoc)
@@ -98,4 +98,4 @@ namespace slyte::syntax {
         }
     }
 
-} // namespace slyte::syntax
+} // namespace gaupel::syntax

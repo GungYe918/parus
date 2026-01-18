@@ -3,6 +3,6 @@
 int main() {
     using namespace std;
 
-    cout << "Hello slyte!" << endl;
+    cout << "Hello gaupel!" << endl;
     return 0;
 }

@@ -1,13 +1,13 @@
 // compiler/src/lex/lexer.cpp
-#include <slyte/lex/Lexer.hpp>
-#include <slyte/syntax/Punct.hpp>
-#include <slyte/syntax/TokenKind.hpp>
+#include <gaupel/lex/Lexer.hpp>
+#include <gaupel/syntax/Punct.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
 
 #include <cctype>
 #include <algorithm>
 
 
-namespace slyte {
+namespace gaupel {
 
     static bool is_ident_start(char c) {
         return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
@@ -224,4 +224,4 @@ namespace slyte {
         return out;
     }
 
-} // namespace slyte
+} // namespace gaupel

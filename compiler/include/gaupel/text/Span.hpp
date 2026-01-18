@@ -1,9 +1,9 @@
-// compiler/include/slyte/text/Span.hpp
+// compiler/include/gaupel/text/Span.hpp
 #pragma once
 #include <cstdint>
 
 
-namespace slyte {
+namespace gaupel {
 
     struct Span {
         uint32_t file_id = 0;
@@ -11,4 +11,4 @@ namespace slyte {
         uint32_t hi = 0;   // byte offset exclusive
     };
 
-} // namespace slyte
+} // namespace gaupel

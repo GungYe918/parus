@@ -1,8 +1,8 @@
-# Slyte v0 설계 초안 Draft (통합 레퍼런스, 최종 개정)
+# Gaupel v0 설계 초안 Draft (통합 레퍼런스, 최종 개정)
 
-> 본 문서는 **Slyte v0의 단일 레퍼런스 초안(확정안)**이다.
+> 본 문서는 **Gaupel v0의 단일 레퍼런스 초안(확정안)**이다.
 > 목적: 토크나이저, 프리패스, 파서, 타입체커의 v0 구현이 가능하도록 **철학 + 정적 규칙 + 문법 + 예시**를 포함한다.
-> 언어명: **Slyte** (확정)
+> 언어명: **Gaupel** (확정)
 
 ---
 
@@ -69,8 +69,8 @@
 
 ### 2.1 프리패스 `#define` (파일 단위 문자열 치환)
 
-```slyte
-#define GAME_NAME "Slyte"
+```gaupel
+#define GAME_NAME "Gaupel"
 #define VER "0.1"
 ```
 
@@ -81,7 +81,7 @@
 
 ### 2.2 모듈 임포트(절대/상대 경로 규칙)
 
-```slyte
+```gaupel
 embed module <engine/core> as core;          // 절대 경로(컴파일 타임 path에 등록되어 있어야 함)
 embed module "../engine/core" as core2;      // 상대 경로(현재 파일 기준)
 ```
@@ -104,7 +104,7 @@ embed module "../engine/core" as core2;      // 상대 경로(현재 파일 기�
 
 ### 2.3 FFI는 `embed ...::ffi`로만 (언어명 비노출)
 
-```slyte
+```gaupel
 embed func::ffi<int (int, int)> c_add;
 embed struct::ffi Vec2 { float32 x; float32 y; }
 ```
@@ -146,7 +146,7 @@ nullable 표기(v0):
 * `T?`에만 `null` 허용
 * `if (x == null)` 비교는 `T?`에서만 허용
 
-> 참고: Rust의 `&T`가 non-null인 것처럼, **Slyte의 borrow 참조(`&T`, `&mut T`)는 항상 non-null**이다.
+> 참고: Rust의 `&T`가 non-null인 것처럼, **Gaupel의 borrow 참조(`&T`, `&mut T`)는 항상 non-null**이다.
 > nullable 참조가 필요하면 `ref<T>?` 또는 `Handle<T>?`를 사용한다.
 
 ### 3.3 배열/리스트
@@ -167,7 +167,7 @@ nullable 표기(v0):
 
 형식:
 
-```slyte
+```gaupel
 @returns Type
 fn [qualifier...]* Name(p1: Type, p2: Type, ...) [ : Mode ] {
   ...
@@ -213,7 +213,7 @@ fn [qualifier...]* Name(p1: Type, p2: Type, ...) [ : Mode ] {
 
 ---
 
-## 5. 변수/가변성/소유권: Rust 규칙 그대로 + Slyte의 `ref`
+## 5. 변수/가변성/소유권: Rust 규칙 그대로 + Gaupel의 `ref`
 
 > v0에서 **borrow 규칙은 Rust와 동일한 의미론**을 따른다.
 > 즉, “런타임 카운터(RefCell 같은 것)” 없이 **정적(컴파일타임) borrow checker**로 처리한다.
@@ -224,7 +224,7 @@ fn [qualifier...]* Name(p1: Type, p2: Type, ...) [ : Mode ] {
 * 변수는 기본 불변.
 * `mut` 바인딩만 재대입/수정 가능.
 
-```slyte
+```gaupel
 int x = 1;
 x = 2;          // 에러
 
@@ -234,7 +234,7 @@ y = 2;          // OK
 
 `set`(추론)도 동일:
 
-```slyte
+```gaupel
 set a = 10;
 mut set b = 10;
 ```
@@ -253,7 +253,7 @@ Copy 가능한 타입(v0 기본):
 * `field`(조건 충족 시)
 * 고정 배열 `T[N]` (T가 Copy일 때)
 
-```slyte
+```gaupel
 mut int a = 1;
 set b = copy a;      // OK
 ```
@@ -279,16 +279,16 @@ set b = copy a;      // OK
 
 예:
 
-```slyte
+```gaupel
 mut int x = 1;
 set r = &x;          // &int
 set m = &mut x;      // 에러: r이 살아있으면 불가
 ```
 
-### 5.4 Slyte `ref<T>` (간단 공유용 우회 경로)
+### 5.4 Gaupel `ref<T>` (간단 공유용 우회 경로)
 
 Rust는 “간단히 공유하고 싶을 때도” 수명/소유권 제약 때문에 설계가 꼬일 수 있다.
-Slyte는 이를 완화하기 위해 **`ref<T>`를 제공**한다.
+Gaupel는 이를 완화하기 위해 **`ref<T>`를 제공**한다.
 
 #### 5.4.1 ref의 정의
 
@@ -373,7 +373,7 @@ C에서 `int` 함수가 “마지막에 확실히 return이 있어야 한다”�
 
 ### 8.1 람다 문법(함수 스코프 전용)
 
-```slyte
+```gaupel
 [captures] (params...) { body }
 ```
 
@@ -395,7 +395,7 @@ C에서 `int` 함수가 “마지막에 확실히 return이 있어야 한다”�
 
 ### 9.1 if
 
-```slyte
+```gaupel
 if (cond) { ... } elif (cond) { ... } else { ... }
 ```
 
@@ -403,7 +403,7 @@ if (cond) { ... } elif (cond) { ... } else { ... }
 
 ### 9.2 switch
 
-```slyte
+```gaupel
 switch (expr) {
   case 1: { ... }
   default: { ... }
@@ -415,7 +415,7 @@ switch (expr) {
 
 ### 9.3 while (분리 확정)
 
-```slyte
+```gaupel
 while (cond) { ... }
 ```
 
@@ -427,7 +427,7 @@ while (cond) { ... }
 
 대신 반복자/컨테이너 반복은 다음 한 형태로 통일:
 
-```slyte
+```gaupel
 loop(iter: i in IterableExpr) { Body }
 ```
 
@@ -465,7 +465,7 @@ loop(iter: i in IterableExpr) { Body }
 
 예:
 
-```slyte
+```gaupel
 @with_simd
 field Particle {
   float32 x; float32 y;
@@ -494,7 +494,7 @@ field Particle {
 
 형식:
 
-```slyte
+```gaupel
 lhs << f(a: _, b: 2);
 ```
 
@@ -509,7 +509,7 @@ lhs << f(a: _, b: 2);
 
 체이닝:
 
-```slyte
+```gaupel
 set r = 1 << add(a: _, b: 2) << mul(x: _, y: 10);
 ```
 
@@ -545,7 +545,7 @@ set r = 1 << add(a: _, b: 2) << mul(x: _, y: 10);
 
 ### 14.1 while + loop(iter) + pipe
 
-```slyte
+```gaupel
 @returns int
 fn add(a: int, b: int) {
   return a + b;
@@ -573,7 +573,7 @@ fn main() {
 
 ### 14.2 pub/sub + 최종 commit 강제
 
-```slyte
+```gaupel
 class Game {
   @returns int
   fn score() : sub {
@@ -597,7 +597,7 @@ class Game {
 
 ### 14.3 borrow(Rust) + ref(공유 우회)
 
-```slyte
+```gaupel
 @returns void
 fn demo() {
   mut int x = 1;

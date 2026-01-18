@@ -1,12 +1,12 @@
-// compiler/include/slyte/lex/Lexer.hpp
+// compiler/include/gaupel/lex/Lexer.hpp
 #pragma once
-#include <slyte/lex/Token.hpp>
+#include <gaupel/lex/Token.hpp>
 
 #include <string_view>
 #include <vector>
 
 
-namespace slyte {
+namespace gaupel {
 
     class Lexer {
     public:
@@ -34,4 +34,4 @@ namespace slyte {
         size_t pos_ = 0;
     };
 
-} // namespace slyte
+} // namespace gaupel

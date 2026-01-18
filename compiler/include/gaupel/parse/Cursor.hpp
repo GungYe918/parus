@@ -1,11 +1,11 @@
-// compiler/include/slyte/parse/Cursor.hpp
+// compiler/include/gaupel/parse/Cursor.hpp
 #pragma once
-#include <slyte/lex/Token.hpp>
+#include <gaupel/lex/Token.hpp>
 
 #include <vector>
 
 
-namespace slyte {
+namespace gaupel {
 
     class Cursor {
     public:
@@ -36,4 +36,4 @@ namespace slyte {
         size_t pos_ = 0;
     };  
 
-} // namespace slyte
+} // namespace gaupel

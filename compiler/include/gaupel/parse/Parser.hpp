@@ -1,12 +1,12 @@
-// compiler/include/slyte/parse/Parser.hpp
+// compiler/include/gaupel/parse/Parser.hpp
 #pragma once
-#include <slyte/parse/Cursor.hpp>
-#include <slyte/ast/Nodes.hpp>
+#include <gaupel/parse/Cursor.hpp>
+#include <gaupel/ast/Nodes.hpp>
 
 #include <vector>
 
 
-namespace slyte {
+namespace gaupel {
 
     class Parser {
     public:
@@ -32,4 +32,4 @@ namespace slyte {
         ast::AstArena& ast_;
     };
 
-} // namespace slyte
+} // namespace gaupel

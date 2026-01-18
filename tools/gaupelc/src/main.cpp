@@ -1,23 +1,23 @@
-// tools/slytec/src/main.cpp
+// tools/gaupelc/src/main.cpp
 #include <iostream>
 #include <string_view>
 #include <vector>
 
-#include "slyte/Version.hpp"
-#include "slyte/lex/Lexer.hpp"
-#include "slyte/parse/Parser.hpp"
-#include "slyte/ast/Nodes.hpp"
-#include "slyte/syntax/TokenKind.hpp"
+#include "gaupel/Version.hpp"
+#include "gaupel/lex/Lexer.hpp"
+#include "gaupel/parse/Parser.hpp"
+#include "gaupel/ast/Nodes.hpp"
+#include "gaupel/syntax/TokenKind.hpp"
 
 static void print_usage() {
   std::cout
-    << "slytec\n"
+    << "gaupelc\n"
     << "  --version\n"
     << "  --expr \"<expr>\"\n";
 }
 
-static const char* expr_kind_name(slyte::ast::ExprKind k) {
-  using K = slyte::ast::ExprKind;
+static const char* expr_kind_name(gaupel::ast::ExprKind k) {
+  using K = gaupel::ast::ExprKind;
   switch (k) {
     case K::kIntLit: return "IntLit";
     case K::kFloatLit: return "FloatLit";
@@ -36,14 +36,14 @@ static const char* expr_kind_name(slyte::ast::ExprKind k) {
   return "Unknown";
 }
 
-static void dump_expr(const slyte::ast::AstArena& ast, slyte::ast::ExprId id, int indent) {
+static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, int indent) {
   const auto& e = ast.expr(id);
   for (int i = 0; i < indent; ++i) std::cout << "  ";
 
   std::cout << expr_kind_name(e.kind);
 
-  if (e.op != slyte::syntax::TokenKind::kError) {
-    std::cout << " op=" << slyte::syntax::token_kind_name(e.op);
+  if (e.op != gaupel::syntax::TokenKind::kError) {
+    std::cout << " op=" << gaupel::syntax::token_kind_name(e.op);
   }
   if (!e.text.empty()) {
     std::cout << " text=" << e.text;
@@ -52,23 +52,23 @@ static void dump_expr(const slyte::ast::AstArena& ast, slyte::ast::ExprId id, in
   std::cout << " span=[" << e.span.lo << "," << e.span.hi << ")\n";
 
   switch (e.kind) {
-    case slyte::ast::ExprKind::kUnary:
-    case slyte::ast::ExprKind::kPostfixUnary:
+    case gaupel::ast::ExprKind::kUnary:
+    case gaupel::ast::ExprKind::kPostfixUnary:
       dump_expr(ast, e.a, indent + 1);
       break;
 
-    case slyte::ast::ExprKind::kBinary:
+    case gaupel::ast::ExprKind::kBinary:
       dump_expr(ast, e.a, indent + 1);
       dump_expr(ast, e.b, indent + 1);
       break;
 
-    case slyte::ast::ExprKind::kTernary:
+    case gaupel::ast::ExprKind::kTernary:
       dump_expr(ast, e.a, indent + 1);
       dump_expr(ast, e.b, indent + 1);
       dump_expr(ast, e.c, indent + 1);
       break;
 
-    case slyte::ast::ExprKind::kCall: {
+    case gaupel::ast::ExprKind::kCall: {
       dump_expr(ast, e.a, indent + 1);
       const auto& args = ast.args();
       for (uint32_t i = 0; i < e.arg_count; ++i) {
@@ -86,7 +86,7 @@ static void dump_expr(const slyte::ast::AstArena& ast, slyte::ast::ExprId id, in
       break;
     }
 
-    case slyte::ast::ExprKind::kIndex:
+    case gaupel::ast::ExprKind::kIndex:
       dump_expr(ast, e.a, indent + 1);
       dump_expr(ast, e.b, indent + 1);
       break;
@@ -98,7 +98,7 @@ static void dump_expr(const slyte::ast::AstArena& ast, slyte::ast::ExprId id, in
 
 int main(int argc, char** argv) {
   if (argc <= 1) {
-    std::cout << slyte::k_version_string << "\n";
+    std::cout << gaupel::k_version_string << "\n";
     print_usage();
     return 0;
   }
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
 
   if (args[0] == "--version") {
-    std::cout << slyte::k_version_string << "\n";
+    std::cout << gaupel::k_version_string << "\n";
     return 0;
   }
 
@@ -120,18 +120,18 @@ int main(int argc, char** argv) {
 
     std::string_view src = args[1];
 
-    slyte::Lexer lex(src, /*file_id=*/0);
+    gaupel::Lexer lex(src, /*file_id=*/0);
     auto tokens = lex.lex_all();
 
     std::cout << "TOKENS:\n";
     for (const auto& t : tokens) {
-      std::cout << "  " << slyte::syntax::token_kind_name(t.kind)
+      std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
                 << " '" << t.lexeme << "'"
                 << " [" << t.span.lo << "," << t.span.hi << ")\n";
     }
 
-    slyte::ast::AstArena ast;
-    slyte::Parser p(tokens, ast);
+    gaupel::ast::AstArena ast;
+    gaupel::Parser p(tokens, ast);
     auto root = p.parse_expr();
 
     std::cout << "\nAST:\n";

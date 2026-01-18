@@ -1,14 +1,14 @@
-// compiler/include/slyte/ast/Nodes.hpp
+// compiler/include/gaupel/ast/Nodes.hpp
 #pragma once
-#include <slyte/text/Span.hpp>
-#include <slyte/syntax/TokenKind.hpp>
+#include <gaupel/text/Span.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
 
 #include <cstdint>
 #include <string_view>
 #include <vector>
 
 
-namespace slyte::ast {
+namespace gaupel::ast {
 
     using ExprId = uint32_t;
     inline constexpr ExprId k_invalid_expr = 0xFFFF'FFFFu;
@@ -78,4 +78,4 @@ namespace slyte::ast {
         std::vector<Arg> args_;
     };
 
-} // namespace slyte::ast
+} // namespace gaupel::ast
