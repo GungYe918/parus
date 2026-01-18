@@ -1,4 +1,3 @@
-// tools/gaupelc/src/main.cpp
 #include <iostream>
 #include <string_view>
 #include <vector>
@@ -9,11 +8,29 @@
 #include "gaupel/ast/Nodes.hpp"
 #include "gaupel/syntax/TokenKind.hpp"
 
+#include "gaupel/diag/Diagnostic.hpp"
+#include "gaupel/diag/Render.hpp"
+#include "gaupel/diag/DiagCode.hpp"
+#include "gaupel/text/SourceManager.hpp"
+
+#include "gaupel/passes/CheckPipeHole.hpp"
+
+
 static void print_usage() {
   std::cout
     << "gaupelc\n"
     << "  --version\n"
-    << "  --expr \"<expr>\"\n";
+    << "  --expr \"<expr>\" [--lang en|ko]\n";
+}
+
+static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& args) {
+  for (size_t i = 0; i + 1 < args.size(); ++i) {
+    if (args[i] == "--lang") {
+      if (args[i + 1] == "ko") return gaupel::diag::Language::kKo;
+      return gaupel::diag::Language::kEn;
+    }
+  }
+  return gaupel::diag::Language::kEn;
 }
 
 static const char* expr_kind_name(gaupel::ast::ExprKind k) {
@@ -118,9 +135,14 @@ int main(int argc, char** argv) {
       return 1;
     }
 
-    std::string_view src = args[1];
+    const auto lang = parse_lang(args);
 
-    gaupel::Lexer lex(src, /*file_id=*/0);
+    // ---- SourceManager owns the buffer ----
+    gaupel::SourceManager sm;
+    std::string src_owned(args[1]);                // own storage
+    const uint32_t file_id = sm.add("<expr>", std::move(src_owned));
+
+    gaupel::Lexer lex(sm.content(file_id), file_id);
     auto tokens = lex.lex_all();
 
     std::cout << "TOKENS:\n";
@@ -130,13 +152,30 @@ int main(int argc, char** argv) {
                 << " [" << t.span.lo << "," << t.span.hi << ")\n";
     }
 
+    gaupel::diag::Bag bag;
+
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast);
+    gaupel::Parser p(tokens, ast, &bag);
     auto root = p.parse_expr();
+
+    // ---- core static rule: pipe + hole ----
+    gaupel::passes::check_pipe_hole(ast, root, bag);
 
     std::cout << "\nAST:\n";
     dump_expr(ast, root, 0);
-    return 0;
+
+    std::cout << "\nDIAGNOSTICS:\n";
+    if (bag.diags().empty()) {
+      std::cout << "no error.\n";
+      return 0;
+    }
+
+    for (const auto& d : bag.diags()) {
+      // NOTE: Render.hpp needs render_one(d, lang, sm) signature.
+      std::cerr << gaupel::diag::render_one(d, lang, sm) << "\n";
+    }
+
+    return bag.has_error() ? 1 : 0;
   }
 
   print_usage();

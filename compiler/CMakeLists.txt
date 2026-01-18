@@ -1,5 +1,5 @@
 # compiler/cmake
-add_library(slyte_compiler STATIC
+add_library(gaupel_compiler STATIC
   src/diag/diagnostic.cpp
   src/diag/render.cpp
   src/text/source_manager.cpp
@@ -14,19 +14,19 @@ add_library(slyte_compiler STATIC
   src/passes/check_pub_commit.cpp
 )
 
-target_include_directories(slyte_compiler
+target_include_directories(gaupel_compiler
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-target_compile_features(slyte_compiler PUBLIC cxx_std_23)
+target_compile_features(gaupel_compiler PUBLIC cxx_std_23)
 
 # ---- warnings (no -Werror; keep iteration smooth) ----
 if (MSVC)
-  target_compile_options(slyte_compiler PRIVATE /W4 /permissive-)
+  target_compile_options(gaupel_compiler PRIVATE /W4 /permissive-)
 else()
-  target_compile_options(slyte_compiler PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(gaupel_compiler PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Optional: faster rebuilds for clang/gcc
-# target_compile_options(slyte_compiler PRIVATE -fno-omit-frame-pointer)
+# target_compile_options(gaupel_compiler PRIVATE -fno-omit-frame-pointer)

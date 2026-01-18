@@ -4,7 +4,7 @@ add_executable(gaupelc
 )
 
 target_link_libraries(gaupelc
-  PRIVATE slyte_compiler
+  PRIVATE gaupel_compiler
 )
 
 target_compile_features(gaupelc PRIVATE cxx_std_23)

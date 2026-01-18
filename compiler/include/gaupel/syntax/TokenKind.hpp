@@ -1,5 +1,6 @@
 // compiler/include/gaupel/syntax/TokenKind.hpp
 #pragma once
+#include <string_view>
 #include <cstdint>
 
 

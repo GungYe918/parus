@@ -1,11 +1,32 @@
 // compiler/src/parse/parse_expr.cpp
 #include <gaupel/parse/Parser.hpp>
 #include <gaupel/syntax/Precedence.hpp>
+#include <gaupel/syntax/TokenKind.hpp>
+#include <gaupel/diag/DiagCode.hpp>
 
 
 namespace gaupel {
 
-    static Span tok_span(const Token& t) {  return t.span;  }
+    void Parser::report(diag::Code code, Span span, std::string_view a0) {
+        if (!diags_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, span);
+        if (!a0.empty()) d.add_arg(a0);
+        diags_->add(std::move(d));
+    }
+
+    void Parser::report_int(diag::Code code, Span span, int v0) {
+        if (!diags_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, span);
+        d.add_arg_int(v0);
+        diags_->add(std::move(d));
+    }
+
+    bool Parser::expect(syntax::TokenKind k) {
+        if (cursor_.eat(k)) return true;
+        const Token t = cursor_.peek();
+        report(diag::Code::kExpectedToken, t.span, syntax::token_kind_name(k));
+        return false;
+    }
 
     Span Parser::span_join(Span a, Span b) const {
         Span s = a;
@@ -32,19 +53,12 @@ namespace gaupel {
             // ternary ?: (non-nestable)
             if (tok.kind == syntax::TokenKind::kQuestion) {
                 if (ternary_depth > 0) {
-                    // v0: hard-stop by consuming '?' and parsing anyway minimally
+                    report(diag::Code::kNestedTernaryNotAllowed, tok.span);
                     cursor_.bump();
                 } else {
-                    const Token q = cursor_.bump();
-                    (void)q;
+                    cursor_.bump(); // '?'
                     ast::ExprId then_e = parse_expr_pratt(0, ternary_depth + 1);
-
-                    // expect ':'
-                    if (!cursor_.eat(syntax::TokenKind::kColon)) {
-                    // error handling later (diagnostics system)
-                    // best-effort: continue
-                    }
-
+                    expect(syntax::TokenKind::kColon);
                     ast::ExprId else_e = parse_expr_pratt(0, ternary_depth + 1);
 
                     ast::Expr e{};
@@ -171,11 +185,12 @@ namespace gaupel {
         // parenthesized
         if (cursor_.eat(syntax::TokenKind::kLParen)) {
             ast::ExprId inner = parse_expr_pratt(0, ternary_depth);
-            (void)cursor_.eat(syntax::TokenKind::kRParen); // diag later
+            expect(syntax::TokenKind::kRParen);
             return inner;
         }
 
         // fallback: create error-ish hole node
+        report(diag::Code::kUnexpectedToken, t.span, t.lexeme);
         cursor_.bump();
         ast::Expr e{};
         e.kind = ast::ExprKind::kIdent;
@@ -267,7 +282,7 @@ namespace gaupel {
         }
 
         Token rp = cursor_.peek();
-        (void)cursor_.eat(syntax::TokenKind::kRParen); // diag later
+        expect(syntax::TokenKind::kRParen);
 
         ast::Expr e{};
         e.kind = ast::ExprKind::kCall;
@@ -283,7 +298,7 @@ namespace gaupel {
         (void)lbracket_tok;
         ast::ExprId idx = parse_expr_pratt(0, ternary_depth);
         Token rb = cursor_.peek();
-        (void)cursor_.eat(syntax::TokenKind::kRBracket);
+        expect(syntax::TokenKind::kRBracket);
 
         ast::Expr e{};
         e.kind = ast::ExprKind::kIndex;
