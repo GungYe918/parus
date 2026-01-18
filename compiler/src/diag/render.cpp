@@ -86,13 +86,11 @@ namespace gaupel::diag {
         oss << "  | ";
 
         // spaces to caret
-        uint32_t caret_pos = (sn.col_lo > 0) ? (sn.col_lo - 1) : 0;
-        for (uint32_t i = 0; i < caret_pos; ++i) oss << ' ';
+        for (uint32_t i = 0; i < sn.caret_cols_before; ++i) oss << ' ';
 
-        uint32_t len = (sn.col_hi >= sn.col_lo) ? (sn.col_hi - sn.col_lo) : 0;
-        if (len == 0) len = 1;
-        for (uint32_t i = 0; i < len; ++i) oss << '^';
-
+        // underline
+        for (uint32_t i = 0; i < sn.caret_cols_len; ++i) oss << '^';
+        
         return oss.str();
     }
 

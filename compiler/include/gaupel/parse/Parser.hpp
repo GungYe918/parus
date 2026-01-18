@@ -16,6 +16,9 @@ namespace gaupel {
 
         ast::ExprId parse_expr();
 
+        ast::StmtId parse_stmt();
+        ast::StmtId parse_block_stmt();
+
     private:
         void report(diag::Code code, Span span, std::string_view a0 = {});
         void report_int(diag::Code code, Span span, int v0);
@@ -29,6 +32,9 @@ namespace gaupel {
 
         ast::ExprId parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth);
         ast::ExprId parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
+
+        ast::StmtId parse_stmt_inner();
+        ast::StmtId parse_expr_stmt();
 
         ast::Arg parse_arg(int ternary_depth);
 

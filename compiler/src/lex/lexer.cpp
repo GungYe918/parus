@@ -10,11 +10,15 @@
 namespace gaupel {
 
     static bool is_ident_start(char c) {
-        return std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 0x80) return true; // UTF-8 lead/cont bytes: accept as identifier (v0 policy)
+        return std::isalpha(u) || c == '_';
     }
 
     static bool is_ident_cont(char c) {
-        return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+        unsigned char u = static_cast<unsigned char>(c);
+        if (u >= 0x80) return true; // UTF-8 bytes: accept as identifier (v0 policy)
+        return std::isalnum(u) || c == '_';
     }
 
     Lexer::Lexer(std::string_view source, uint32_t file_id) 
@@ -202,7 +206,9 @@ namespace gaupel {
             if (eof()) break;
 
             char c = peek();
-            if (std::isdigit(static_cast<unsigned char>(c))) {
+            unsigned char u = static_cast<unsigned char>(c);
+
+            if (std::isdigit(u)) {
                 out.push_back(lex_number());
                 continue;
             }
@@ -212,6 +218,7 @@ namespace gaupel {
                 continue;
             }
             
+            // ident / keyword (ASCII or UTF-8 bytes)
             if (is_ident_start(c)) {
                 out.push_back(lex_ident_or_kw());
                 continue;

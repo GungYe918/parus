@@ -113,6 +113,49 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
   }
 }
 
+static int run_expr(std::string_view src_arg, gaupel::diag::Language lang) {
+  // 1) SourceManager에 소스를 "등록"해서 file_id를 얻는다.
+  gaupel::SourceManager sm;
+  std::string src_owned(src_arg); // 소유권 확보 (SourceManager가 내부에 복사/보관)
+  const uint32_t file_id = sm.add("<expr>", src_owned);
+
+  // 2) Lexer는 반드시 SourceManager의 content 뷰 + file_id로 동작
+  gaupel::Lexer lex(sm.content(file_id), file_id);
+  auto tokens = lex.lex_all();
+
+  std::cout << "TOKENS:\n";
+  for (const auto& t : tokens) {
+    std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
+              << " '" << t.lexeme << "'"
+              << " [" << t.span.lo << "," << t.span.hi << ")\n";
+  }
+
+  gaupel::diag::Bag bag;
+
+  gaupel::ast::AstArena ast;
+  gaupel::Parser p(tokens, ast, &bag);
+  auto root = p.parse_expr();
+
+  // 핵심 정적 규칙: pipe + hole 검사
+  gaupel::passes::check_pipe_hole(ast, root, bag);
+
+  std::cout << "\nAST:\n";
+  dump_expr(ast, root, 0);
+
+  std::cout << "\nDIAGNOSTICS:\n";
+  if (bag.diags().empty()) {
+    std::cout << "no error.\n";
+    return 0;
+  }
+
+  for (const auto& d : bag.diags()) {
+    // SourceManager 기반 렌더
+    std::cerr << gaupel::diag::render_one(d, lang, sm) << "\n";
+  }
+
+  return bag.has_error() ? 1 : 0;
+}
+
 int main(int argc, char** argv) {
   if (argc <= 1) {
     std::cout << gaupel::k_version_string << "\n";
@@ -134,48 +177,8 @@ int main(int argc, char** argv) {
       std::cerr << "error: --expr requires a string\n";
       return 1;
     }
-
     const auto lang = parse_lang(args);
-
-    // ---- SourceManager owns the buffer ----
-    gaupel::SourceManager sm;
-    std::string src_owned(args[1]);                // own storage
-    const uint32_t file_id = sm.add("<expr>", std::move(src_owned));
-
-    gaupel::Lexer lex(sm.content(file_id), file_id);
-    auto tokens = lex.lex_all();
-
-    std::cout << "TOKENS:\n";
-    for (const auto& t : tokens) {
-      std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
-                << " '" << t.lexeme << "'"
-                << " [" << t.span.lo << "," << t.span.hi << ")\n";
-    }
-
-    gaupel::diag::Bag bag;
-
-    gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag);
-    auto root = p.parse_expr();
-
-    // ---- core static rule: pipe + hole ----
-    gaupel::passes::check_pipe_hole(ast, root, bag);
-
-    std::cout << "\nAST:\n";
-    dump_expr(ast, root, 0);
-
-    std::cout << "\nDIAGNOSTICS:\n";
-    if (bag.diags().empty()) {
-      std::cout << "no error.\n";
-      return 0;
-    }
-
-    for (const auto& d : bag.diags()) {
-      // NOTE: Render.hpp needs render_one(d, lang, sm) signature.
-      std::cerr << gaupel::diag::render_one(d, lang, sm) << "\n";
-    }
-
-    return bag.has_error() ? 1 : 0;
+    return run_expr(args[1], lang);
   }
 
   print_usage();
