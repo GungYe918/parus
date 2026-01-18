@@ -36,6 +36,7 @@ namespace slyte {
                     cursor_.bump();
                 } else {
                     const Token q = cursor_.bump();
+                    (void)q;
                     ast::ExprId then_e = parse_expr_pratt(0, ternary_depth + 1);
 
                     // expect ':'
@@ -199,6 +200,17 @@ namespace slyte {
                 continue;
             }
 
+            if (t.kind == syntax::TokenKind::kPlusPlus) {
+                const Token op = cursor_.bump();
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kPostfixUnary;
+                e.op = op.kind;
+                e.a = base;
+                e.span = span_join(ast_.expr(base).span, op.span);
+                base = ast_.add_expr(e);
+                continue;
+            }
+
             break;
         }
 
@@ -239,6 +251,7 @@ namespace slyte {
     }
 
     ast::ExprId Parser::parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
+        (void)lparen_tok;
         uint32_t begin = static_cast<uint32_t>(ast_.args().size());
         uint32_t count = 0;
     
@@ -267,6 +280,7 @@ namespace slyte {
     }
 
     ast::ExprId Parser::parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth) {
+        (void)lbracket_tok;
         ast::ExprId idx = parse_expr_pratt(0, ternary_depth);
         Token rb = cursor_.peek();
         (void)cursor_.eat(syntax::TokenKind::kRBracket);

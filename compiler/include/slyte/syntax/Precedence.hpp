@@ -91,6 +91,7 @@ namespace slyte::syntax {
             case TokenKind::kKwNot:
             case TokenKind::kPlus:
             case TokenKind::kMinus:
+            case TokenKind::kPlusPlus:
                 return PrefixInfo{95};
             default:
                 return std::nullopt;

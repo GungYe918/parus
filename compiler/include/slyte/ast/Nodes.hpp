@@ -22,6 +22,7 @@ namespace slyte::ast {
         kIdent,
         kHole,     // "_" expression (only meaningful inside call args)
         kUnary,
+        kPostfixUnary,
         kBinary,
         kTernary,
         kCall,

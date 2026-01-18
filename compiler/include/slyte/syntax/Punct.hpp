@@ -15,7 +15,7 @@ namespace slyte::syntax {
     };
 
     
-    inline constexpr std::array<PunctEntry, 34> k_punct_table = {{
+    inline constexpr std::array<PunctEntry, 35> k_punct_table = {{
         {"..:", TokenKind::kDotDotColon},
         {"..",  TokenKind::kDotDot},
 
@@ -29,6 +29,7 @@ namespace slyte::syntax {
         {"<=",  TokenKind::kLtEq},
         {">=",  TokenKind::kGtEq},
 
+        {"++", TokenKind::kPlusPlus},
         {"+=",  TokenKind::kPlusAssign},
         {"-=",  TokenKind::kMinusAssign},
         {"*=",  TokenKind::kStarAssign},
