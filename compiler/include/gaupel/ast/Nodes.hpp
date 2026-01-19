@@ -12,14 +12,20 @@ namespace gaupel::ast {
 
     using ExprId = uint32_t;
     inline constexpr ExprId k_invalid_expr = 0xFFFF'FFFFu;
+
     using StmtId = uint32_t;
     inline constexpr StmtId k_invalid_stmt = 0xFFFF'FFFFu;
+
+    using TypeId = uint32_t;
+    inline constexpr TypeId k_invalid_type = 0xFFFF'FFFFu;
+
 
     enum class ExprKind : uint8_t {
         kError,
         kIntLit,
         kFloatLit,
         kStringLit,
+        kCharLit,
         kBoolLit,
         kNullLit,
         kIdent,
@@ -33,13 +39,18 @@ namespace gaupel::ast {
         kIndex,
     };
 
+    enum class TypeKind : uint8_t {
+        kError,
+        kNamed,
+    };
+
     enum class StmtKind : uint8_t {
         kError,
         kEmpty,       // ';'
         kExprStmt,    // expr ';'
         kBlock,       // '{' ... '}'
         
-        kLet,         // let (mut)? name (= expr)? ';'
+        kVar,         // let/set variable declaration 
         kIf,          // if cond block else block?
         kWhile,       // while cond block
         kReturn,      // return expr? ';'
@@ -73,6 +84,12 @@ namespace gaupel::ast {
         uint32_t arg_count = 0;
     };      
 
+    struct Type {
+        TypeKind kind{};
+        Span span{};
+        std::string_view text{};    // for kNamed: raw token text view (e.g. "u32")
+    };
+
     struct Stmt {
         StmtKind kind{};
         Span span{};
@@ -88,9 +105,13 @@ namespace gaupel::ast {
         uint32_t stmt_begin = 0;          // for Block (stmt list)
         uint32_t stmt_count = 0;          // for Block
 
-        // let payload
+        // Var payload (let/set)
+        bool is_set = false;            // false=let, true=set
         bool is_mut = false;
         std::string_view name{};        // identifier
+
+        TypeId type = k_invalid_type;   // let requires; set forbids in v0
+        ExprId init = k_invalid_expr;   // initializer expression (set requires in v0)
     };
 
     class AstArena {
@@ -105,6 +126,11 @@ namespace gaupel::ast {
             return static_cast<StmtId>(stmts_.size() -1);
         }
 
+        TypeId add_type(const Type& t) {
+            types_.push_back(t);
+            return static_cast<TypeId>(types_.size() - 1);
+        }
+
         uint32_t add_arg(const Arg& a) {
             args_.push_back(a);
             return static_cast<uint32_t>(args_.size() - 1);
@@ -116,22 +142,26 @@ namespace gaupel::ast {
         }
 
 
-        const Expr& expr(ExprId id) const   {  return exprs_[id];  }
-        Expr& expr_mut(ExprId id)           {  return exprs_[id];  }
+        const Expr& expr(ExprId id) const       {  return exprs_[id];  }
+        Expr& expr_mut(ExprId id)               {  return exprs_[id];  }
+        const std::vector<Expr>& exprs() const  {  return exprs_;  }
+        
+        const Type& type_node(TypeId id) const  {  return types_[id];   }
+        std::vector<Type>& types_mut()          {  return types_;       }
+        const std::vector<Type>& types() const  {  return types_;       }
 
-        const std::vector<Expr>& exprs() const {  return exprs_;  }
-        const std::vector<Arg>& args()   const {  return args_;   }
+        const std::vector<Arg>& args()   const  {  return args_;   }
 
-        const Stmt& stmt(StmtId id) const   {  return stmts_[id];  }
-        Stmt& stmt_mut(StmtId id)           {  return stmts_[id];  }
-
-        const std::vector<StmtId>& stmt_children() const { return stmt_children_; }
-        const std::vector<Stmt>& stmts() const {  return stmts_;  }
+        const Stmt& stmt(StmtId id) const       {  return stmts_[id];  }
+        Stmt& stmt_mut(StmtId id)               {  return stmts_[id];  }
+        const std::vector<StmtId>& stmt_children() const {  return stmt_children_;  }
+        const std::vector<Stmt>& stmts() const  {  return stmts_;  }
     
     private:
-        std::vector<Expr> exprs_;
-        std::vector<Stmt> stmts_;
-        std::vector<Arg> args_;
+        std::vector<Expr>   exprs_;
+        std::vector<Stmt>   stmts_;
+        std::vector<Arg>    args_;
+        std::vector<Type>   types_;
 
         std::vector<StmtId> stmt_children_;
     };

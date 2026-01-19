@@ -56,12 +56,13 @@ namespace gaupel {
         }
 
         // keyword stmts
-        if (tok.kind == syntax::TokenKind::kKwLet)      return parse_let_stmt();
         if (tok.kind == syntax::TokenKind::kKwIf)       return parse_if_stmt();
         if (tok.kind == syntax::TokenKind::kKwWhile)    return parse_while_stmt();
         if (tok.kind == syntax::TokenKind::kKwReturn)   return parse_return_stmt();
         if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_break_stmt();
         if (tok.kind == syntax::TokenKind::kKwContinue) return parse_continue_stmt();
+        if (tok.kind == syntax::TokenKind::kKwLet
+        ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_var_stmt();
 
         // expr stmt: Expr ';'
         return parse_expr_stmt();
@@ -125,40 +126,76 @@ namespace gaupel {
         return parse_block_stmt();
     }
 
-    ast::StmtId Parser::parse_let_stmt() {
-        const Token kw = cursor_.bump(); // let
+    ast::StmtId Parser::parse_var_stmt() {
+        const Token& kw = cursor_.peek();
+        const bool is_set = (kw.kind == syntax::TokenKind::kKwSet);
+        cursor_.bump(); // consume let/set
 
+        // let mut x : T = expr;
         bool is_mut = false;
         if (cursor_.at(syntax::TokenKind::kKwMut)) {
             is_mut = true;
             cursor_.bump();
         }
 
-        const Token name_tok = cursor_.peek();
-        if (!expect(syntax::TokenKind::kIdent)) {
-            // recovery: fabricate
-        }
-
-        ast::ExprId init = ast::k_invalid_expr;
-        if (cursor_.at(syntax::TokenKind::kAssign/*=*/)) {
+        // name
+        const Token& name_tok = cursor_.peek();
+        std::string_view name{};
+        if (name_tok.kind == syntax::TokenKind::kIdent) {
+            name = name_tok.lexeme;
             cursor_.bump();
-            init = parse_expr();
+        } else {
+            report(diag::Code::kUnexpectedToken, name_tok.span, "identifier");
         }
 
-        // let의 fallback:
-        // - init이 있으면 init 끝
-        // - 없으면 name 끝
-        Span fallback = name_tok.span;
-        if (init != ast::k_invalid_expr) fallback = ast_.expr(init).span;
+        ast::TypeId type_id = ast::k_invalid_type;
 
-        const Span term_end = consume_semicolon_or_recover(fallback);
+        // let requires ": Type"
+        if (!is_set) {
+            const Token& maybe_colon = cursor_.peek();
+            if (!cursor_.at(syntax::TokenKind::kColon)) {
+                // let must have type annotation in v0
+                report(diag::Code::kUnexpectedToken, maybe_colon.span, "':' (type annotation required for let)");
+            } else {
+                cursor_.bump(); // ':'
+                type_id = parse_type();
+            }
+        } else {
+            // set forbids ": Type" (v0 rule)
+            if (cursor_.at(syntax::TokenKind::kColon)) {
+                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "type annotation not allowed for set in v0");
+                cursor_.bump();
+                // best-effort: still parse a type and discard to keep cursor sane
+                (void)parse_type();
+            }
+        }
+
+        // initializer
+        ast::ExprId init = ast::k_invalid_expr;
+
+        if (cursor_.at(syntax::TokenKind::kAssign)) {
+            const Token& eq = cursor_.peek();
+            cursor_.bump(); // '='
+            init = parse_expr();
+            (void)eq;
+        } else {
+            // set requires initializer to infer type
+            if (is_set) {
+                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "'=' initializer required for set");
+            }
+        }
+
+        // semicolon
+        const Span end = consume_semicolon_or_recover(cursor_.prev().span);
 
         ast::Stmt s{};
-        s.kind = ast::StmtKind::kLet;
+        s.kind = ast::StmtKind::kVar;
+        s.is_set = is_set;
         s.is_mut = is_mut;
-        s.name = name_tok.lexeme;
-        s.expr = init;
-        s.span = span_join(kw.span, term_end);
+        s.name = name;
+        s.type = type_id;
+        s.init = init;
+        s.span = span_join(kw.span, end);
         return ast_.add_stmt(s);
     }
 

@@ -13,44 +13,46 @@ namespace gaupel {
         return syntax::token_kind_name(t.kind);
     }
 
-    void Parser::report(diag::Code code, Span span, std::string_view a0) {
-        if (!diags_) return;
-        if (aborted_) return;
+    void gaupel::Parser::report(diag::Code code, Span span, std::string_view a0) {
+        if (!diags_ || aborted_) return;
 
-        // lexer-fatal 이후엔 파서 진단 억제
-        if (lexer_fatal_) {
-            if (code == diag::Code::kUnexpectedToken) return;
-            if (code == diag::Code::kExpectedToken) return;
-            if (code == diag::Code::kUnexpectedEof) return;
-        }
-
-        // 동일 위치/동일 코드 중복 억제
-        if (code == last_diag_code_ && span.lo == last_diag_lo_) return;
-        last_diag_code_ = code;
+        // 같은 위치/같은 코드 중복 스팸 방지
+        if (span.lo == last_diag_lo_ && code == last_diag_code_) return;
         last_diag_lo_ = span.lo;
+        last_diag_code_ = code;
 
-        // max-errors 도달 시 중단
-        // (현재 진단을 찍기 전에 체크해서 "정확히 N개"를 보장)
-        if (diags_->issue_count() >= max_errors_) {
-            if (!too_many_errors_emitted_) {
-                too_many_errors_emitted_ = true;
-                diag::Diagnostic stop(diag::Severity::kFatal, diag::Code::kTooManyErrors, span);
-                diags_->add(std::move(stop));
-            }
+        diag::Severity sev = diag::Severity::kError;
+
+        diag::Diagnostic d(sev, code, span);
+        if (!a0.empty()) d.add_arg(a0);
+        diags_->add(std::move(d));
+
+        ++parse_error_count_;
+
+        // 하드 세이프티 캡 (무한 루프 방지)
+        if (parse_error_count_ >= kMaxParseErrors) {
             aborted_ = true;
             return;
         }
 
-        diag::Diagnostic d(diag::Severity::kError, code, span);
-        if (!a0.empty()) d.add_arg(a0);
-        diags_->add(std::move(d));
+        // -fmax-errors= 제한
+        if (!too_many_errors_emitted_ && parse_error_count_ >= max_errors_) {
+            too_many_errors_emitted_ = true;
+
+            Span sp = span;
+            if (cursor_.peek().kind != syntax::TokenKind::kEof) sp = cursor_.peek().span;
+
+            diag::Diagnostic stop(diag::Severity::kFatal, diag::Code::kTooManyErrors, sp);
+            diags_->add(std::move(stop));
+
+            aborted_ = true;
+        }
     }
 
+
     void Parser::report_int(diag::Code code, Span span, int v0) {
-        if (!diags_) return;
-        diag::Diagnostic d(diag::Severity::kError, code, span);
-        d.add_arg_int(v0);
-        diags_->add(std::move(d));
+        std::string tmp = std::to_string(v0);
+        report(code, span, tmp);
     }
 
     bool Parser::expect(syntax::TokenKind k) {
@@ -258,6 +260,16 @@ namespace gaupel {
             e.text = t.lexeme;
             return ast_.add_expr(e);
         }
+
+        if (t.kind == syntax::TokenKind::kCharLit) {
+            cursor_.bump();
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kCharLit;
+            e.span = t.span;
+            e.text = t.lexeme;
+            return ast_.add_expr(e);
+        }
+        
         if (t.kind == syntax::TokenKind::kKwTrue || t.kind == syntax::TokenKind::kKwFalse) {
             cursor_.bump();
             ast::Expr e{};

@@ -232,6 +232,60 @@ namespace gaupel {
         return t;
     }
 
+    Token Lexer::lex_char() {
+        // assumes current char is '\''
+        const size_t start = pos_;
+        bump(); // consume opening '
+
+        if (eof()) {
+            // unterminated
+            Token t;
+            t.kind = syntax::TokenKind::kError;
+            t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(pos_)};
+            t.lexeme = source_.substr(start, pos_ - start);
+            return t;
+        }
+
+        // minimal escape support
+        if (peek() == '\\') {
+            bump(); // '\'
+            if (!eof()) bump(); // escaped char (n, t, r, \, ')
+        } else {
+            // consume exactly one UTF-8 codepoint (minimal, permissive):
+            // - if ASCII: 1 byte
+            // - else: 2~4 bytes based on leading bits
+            unsigned char c0 = static_cast<unsigned char>(peek());
+            size_t need = 1;
+            if ((c0 & 0x80u) == 0x00u) need = 1;
+            else if ((c0 & 0xE0u) == 0xC0u) need = 2;
+            else if ((c0 & 0xF0u) == 0xE0u) need = 3;
+            else if ((c0 & 0xF8u) == 0xF0u) need = 4;
+            for (size_t i = 0; i < need && !eof(); ++i) bump();
+        }
+
+        // expect closing '
+        if (peek() == '\'') {
+            bump();
+            Token t;
+            t.kind = syntax::TokenKind::kCharLit;
+            t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(pos_)};
+            t.lexeme = source_.substr(start, pos_ - start);
+            return t;
+        }
+
+        // unterminated or too long
+        // recover: consume until closing ' or newline/eof (best-effort)
+        while (!eof() && peek() != '\'' && peek() != '\n') bump();
+        if (peek() == '\'') bump();
+
+        Token t;
+        t.kind = syntax::TokenKind::kError;
+        t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(pos_)};
+        t.lexeme = source_.substr(start, pos_ - start);
+        return t;
+    }
+
+
     Token Lexer::lex_ident_or_kw() {
         size_t start = pos_;
         bump(); // first char
@@ -263,6 +317,7 @@ namespace gaupel {
 
         // stmt keywords
         if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }
+        if (t.lexeme == "set")      { t.kind = syntax::TokenKind::kKwSet;      return t; }
         if (t.lexeme == "if")       { t.kind = syntax::TokenKind::kKwIf;       return t; }
         if (t.lexeme == "elif")     { t.kind = syntax::TokenKind::kKwElif;     return t; }
         if (t.lexeme == "else")     { t.kind = syntax::TokenKind::kKwElse;     return t; }
@@ -341,6 +396,11 @@ namespace gaupel {
 
             if (c == '"') {
                 out.push_back(lex_string());
+                continue;
+            }
+
+            if (peek() == '\'') {
+                out.push_back(lex_char());
                 continue;
             }
             

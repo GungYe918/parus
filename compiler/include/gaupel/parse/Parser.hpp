@@ -43,12 +43,14 @@ namespace gaupel {
         ast::ExprId parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth);
         ast::ExprId parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
 
+        ast::TypeId parse_type();
+
         ast::StmtId parse_stmt_inner();
         ast::StmtId parse_expr_stmt();
-
         ast::StmtId parse_block_stmt();
 
-        ast::StmtId parse_let_stmt();
+        ast::StmtId parse_var_stmt();
+        
         ast::StmtId parse_if_stmt();
         ast::StmtId parse_while_stmt();
         ast::StmtId parse_return_stmt();

@@ -10,8 +10,8 @@ namespace gaupel::syntax {
 
     // Maximal munch: longer punctuations first.
     struct PunctEntry {
-    std::string_view text;
-    TokenKind kind;
+        std::string_view text;
+        TokenKind kind;
     };
 
     

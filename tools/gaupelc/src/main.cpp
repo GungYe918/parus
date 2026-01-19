@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string_view>
 #include <vector>
+#include <optional>
 
 #include "gaupel/Version.hpp"
 #include "gaupel/lex/Lexer.hpp"
@@ -92,7 +93,7 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kEmpty: return "Empty";
         case K::kExprStmt: return "ExprStmt";
         case K::kBlock: return "Block";
-        case K::kLet: return "Let";
+        case K::kVar: return "Var";
         case K::kIf: return "If";
         case K::kWhile: return "While";
         case K::kReturn: return "Return";
@@ -109,6 +110,7 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
         case K::kIntLit: return "IntLit";
         case K::kFloatLit: return "FloatLit";
         case K::kStringLit: return "StringLit";
+        case K::kCharLit: return "CharLit";
         case K::kBoolLit: return "BoolLit";
         case K::kNullLit: return "NullLit";
         case K::kIdent: return "Ident";
@@ -127,10 +129,12 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
 }
 
 /// @brief 진단 출력(컨텍스트 포함) + 종료코드 계산
-static int flush_diags(const gaupel::diag::Bag& bag,
-                       gaupel::diag::Language lang,
-                       const gaupel::SourceManager& sm,
-                       uint32_t context_lines) {
+static int flush_diags(
+    const gaupel::diag::Bag& bag,
+    gaupel::diag::Language lang,
+    const gaupel::SourceManager& sm,
+    uint32_t context_lines
+) {
     std::cout << "\nDIAGNOSTICS:\n";
     if (bag.diags().empty()) {
         std::cout << "no error.\n";
@@ -165,6 +169,7 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
             break;
 
         case gaupel::ast::ExprKind::kBinary:
+        case gaupel::ast::ExprKind::kAssign:
             dump_expr(ast, e.a, indent + 1);
             dump_expr(ast, e.b, indent + 1);
             break;
@@ -211,8 +216,15 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
     std::cout << stmt_kind_name(s.kind)
               << " span=[" << s.span.lo << "," << s.span.hi << ")";
 
-    if (s.kind == gaupel::ast::StmtKind::kLet) {
-        std::cout << " name=" << s.name << " mut=" << (s.is_mut ? "true" : "false");
+    if (s.kind == gaupel::ast::StmtKind::kVar) {
+        std::cout << " kw=" << (s.is_set ? "set" : "let");
+        std::cout << " mut=" << (s.is_mut ? "true" : "false");
+        std::cout << " name=" << s.name;
+
+        if (s.type != gaupel::ast::k_invalid_type) {
+            const auto& ty = ast.type_node(s.type);
+            if (!ty.text.empty()) std::cout << " type=" << ty.text;
+        }
     }
     std::cout << "\n";
 
@@ -221,11 +233,11 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
             dump_expr(ast, s.expr, indent + 1);
             break;
 
-        case gaupel::ast::StmtKind::kLet:
-            if (s.expr != gaupel::ast::k_invalid_expr) {
+        case gaupel::ast::StmtKind::kVar:
+            if (s.init != gaupel::ast::k_invalid_expr) {
                 for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
                 std::cout << "Init:\n";
-                dump_expr(ast, s.expr, indent + 2);
+                dump_expr(ast, s.init, indent + 2);
             }
             break;
 
@@ -284,7 +296,7 @@ static std::vector<gaupel::Token> lex_with_sm(
 }
 
 /// @brief expr 파싱 실행
-static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines) {
+static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, uint32_t max_errors) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<expr>", src_owned);
@@ -294,7 +306,7 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag);
+    gaupel::Parser p(tokens, ast, &bag, max_errors);
 
     auto root = p.parse_expr();
     gaupel::passes::check_pipe_hole(ast, root, bag);
@@ -306,7 +318,7 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
 }
 
 /// @brief stmt 1개 파싱 실행
-static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines) {
+static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, uint32_t max_errors) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<stmt>", src_owned);
@@ -316,7 +328,7 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag);
+    gaupel::Parser p(tokens, ast, &bag, max_errors);
 
     auto root = p.parse_stmt();
 
@@ -328,7 +340,7 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
 
 
 /// @brief 프로그램(여러 stmt) 파싱 실행
-static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, std::string_view name) {
+static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, std::string_view name, uint32_t max_errors) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add(std::string(name), std::move(src_owned));
@@ -338,7 +350,7 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag);
+    gaupel::Parser p(tokens, ast, &bag, max_errors);
 
     auto root = p.parse_program();
 
@@ -350,7 +362,7 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
 
 
 /// @brief 파일을 읽어서 프로그램 모드로 파싱
-static int run_file(const std::string& path, gaupel::diag::Language lang, uint32_t context_lines) {
+static int run_file(const std::string& path, gaupel::diag::Language lang, uint32_t context_lines, uint32_t max_errors) {
     std::string content;
     std::string err;
 
@@ -360,7 +372,7 @@ static int run_file(const std::string& path, gaupel::diag::Language lang, uint32
     }
 
     std::string norm = gaupel::normalize_path(path);
-    return run_all(content, lang, context_lines, norm);
+    return run_all(content, lang, context_lines, norm, max_errors);
 }
 
 int main(int argc, char** argv) {
@@ -371,49 +383,58 @@ int main(int argc, char** argv) {
     }
 
     std::vector<std::string_view> args;
-    args.reserve(static_cast<size_t>(argc));
+    args.reserve(static_cast<size_t>(argc - 1));
     for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
 
-    if (args[0] == "--version") {
-        std::cout << gaupel::k_version_string << "\n";
-        return 0;
+    // --version can appear anywhere
+    for (auto a : args) {
+        if (a == "--version") {
+            std::cout << gaupel::k_version_string << "\n";
+            return 0;
+        }
     }
 
     const auto lang = parse_lang(args);
     const auto context_lines = parse_context(args);
     const auto max_errors = parse_max_errors(args);
-    (void)max_errors;
 
-    if (args[0] == "--expr") {
-        if (args.size() < 2) {
+    auto find_flag = [&](std::string_view key) -> std::optional<size_t> {
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i] == key) return i;
+        }
+        return std::nullopt;
+    };
+
+    if (auto i = find_flag("--expr")) {
+        if (*i + 1 >= args.size()) {
             std::cerr << "error: --expr requires a string\n";
             return 1;
         }
-        return run_expr(args[1], lang, context_lines);
+        return run_expr(args[*i + 1], lang, context_lines, max_errors);
     }
 
-    if (args[0] == "--stmt") {
-        if (args.size() < 2) {
+    if (auto i = find_flag("--stmt")) {
+        if (*i + 1 >= args.size()) {
             std::cerr << "error: --stmt requires a string\n";
             return 1;
         }
-        return run_stmt(args[1], lang, context_lines);
+        return run_stmt(args[*i + 1], lang, context_lines, max_errors);
     }
 
-    if (args[0] == "--all") {
-        if (args.size() < 2) {
+    if (auto i = find_flag("--all")) {
+        if (*i + 1 >= args.size()) {
             std::cerr << "error: --all requires a string\n";
             return 1;
         }
-        return run_all(args[1], lang, context_lines, "<all>");
+        return run_all(args[*i + 1], lang, context_lines, "<all>", max_errors);
     }
 
-    if (args[0] == "--file") {
-        if (args.size() < 2) {
+    if (auto i = find_flag("--file")) {
+        if (*i + 1 >= args.size()) {
             std::cerr << "error: --file requires a path\n";
             return 1;
         }
-        return run_file(std::string(args[1]), lang, context_lines);
+        return run_file(std::string(args[*i + 1]), lang, context_lines, max_errors);
     }
 
     print_usage();

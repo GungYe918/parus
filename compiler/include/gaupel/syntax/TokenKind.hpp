@@ -17,6 +17,7 @@ namespace gaupel::syntax {
     kIntLit,
     kFloatLit,
     kStringLit,
+    kCharLit,     // 'C', '\n', '한', ...
 
     // keywords (subset for expressions / decls)
     kKwTrue,
@@ -33,6 +34,7 @@ namespace gaupel::syntax {
 
     // stmt keywords
     kKwLet,
+    kKwSet,
     kKwIf,
     kKwElif,
     kKwElse,
@@ -101,6 +103,7 @@ namespace gaupel::syntax {
             case TokenKind::kIntLit: return "int_lit";
             case TokenKind::kFloatLit: return "float_lit";
             case TokenKind::kStringLit: return "string_lit";
+            case TokenKind::kCharLit: return "char_lit";
 
             case TokenKind::kKwTrue: return "true";
             case TokenKind::kKwFalse: return "false";
@@ -113,6 +116,7 @@ namespace gaupel::syntax {
             case TokenKind::kKwRef: return "ref";
 
             case TokenKind::kKwLet: return "let";
+            case TokenKind::kKwSet: return "set";
             case TokenKind::kKwIf:  return "if";
             case TokenKind::kKwElif: return "elif";
             case TokenKind::kKwElse: return "else";
