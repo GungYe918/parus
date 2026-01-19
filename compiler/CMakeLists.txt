@@ -12,6 +12,7 @@ add_library(gaupel_compiler STATIC
   src/ast/nodes.cpp
   src/passes/check_pipe_hole.cpp
   src/passes/check_pub_commit.cpp
+  src/os/file.cpp
 )
 
 target_include_directories(gaupel_compiler

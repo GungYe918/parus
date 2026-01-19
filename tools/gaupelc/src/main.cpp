@@ -14,15 +14,18 @@
 #include "gaupel/text/SourceManager.hpp"
 
 #include "gaupel/passes/CheckPipeHole.hpp"
+#include <gaupel/os/File.hpp>
+
 
 /// @brief gaupelc 사용법 출력
 static void print_usage() {
     std::cout
         << "gaupelc\n"
         << "  --version\n"
-        << "  --expr \"<expr>\" [--lang en|ko]\n"
-        << "  --stmt \"<stmt>\" [--lang en|ko]\n"
-        << "  --all  \"<program>\" [--lang en|ko]\n";
+        << "  --expr \"<expr>\" [--lang en|ko] [--context N]\n"
+        << "  --stmt \"<stmt>\" [--lang en|ko] [--context N]\n"
+        << "  --all  \"<program>\" [--lang en|ko] [--context N]\n"
+        << "  --file <path> [--lang en|ko] [--context N]\n";
 }
 
 static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& args) {
@@ -33,6 +36,32 @@ static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& ar
         }
     }
     return gaupel::diag::Language::kEn;
+}
+
+/// @brief 진단 컨텍스트 줄 수를 파싱한다.
+static uint32_t parse_context(const std::vector<std::string_view>& args) {
+    for (size_t i = 0; i + 1 < args.size(); ++i) {
+        if (args[i] == "--context") {
+            try {
+                int v = std::stoi(std::string(args[i + 1]));
+                if (v < 0) v = 0;
+                return static_cast<uint32_t>(v);
+            } catch (...) {
+                return 2;
+            }
+        }
+    }
+    return 2; // 기본: 위/아래 2줄
+}
+
+/// @brief 토큰 목록 출력
+static void dump_tokens(const std::vector<gaupel::Token>& tokens) {
+    std::cout << "TOKENS:\n";
+    for (const auto& t : tokens) {
+        std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
+                  << " '" << t.lexeme << "'"
+                  << " [" << t.span.lo << "," << t.span.hi << ")\n";
+    }
 }
 
 /// @brief StmtKind를 사람이 읽기 쉬운 이름으로 변경
@@ -72,20 +101,11 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
     return "Unknown";
 }
 
-/// @brief 토큰 목록을 출력한다.
-static void dump_tokens(const std::vector<gaupel::Token>& tokens) {
-    std::cout << "TOKENS:\n";
-    for (const auto& t : tokens) {
-        std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
-                  << " '" << t.lexeme << "'"
-                  << " [" << t.span.lo << "," << t.span.hi << ")\n";
-    }
-}
-
-/// @brief 진단을 SourceManager 기반으로 출력하고 종료 코드를 계산한다.
+/// @brief 진단 출력(컨텍스트 포함) + 종료코드 계산
 static int flush_diags(const gaupel::diag::Bag& bag,
                        gaupel::diag::Language lang,
-                       const gaupel::SourceManager& sm) {
+                       const gaupel::SourceManager& sm,
+                       uint32_t context_lines) {
     std::cout << "\nDIAGNOSTICS:\n";
     if (bag.diags().empty()) {
         std::cout << "no error.\n";
@@ -93,7 +113,7 @@ static int flush_diags(const gaupel::diag::Bag& bag,
     }
 
     for (const auto& d : bag.diags()) {
-        std::cerr << gaupel::diag::render_one(d, lang, sm) << "\n";
+        std::cerr << gaupel::diag::render_one_context(d, lang, sm, context_lines) << "\n";
     }
     return bag.has_error() ? 1 : 0;
 }
@@ -229,57 +249,43 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
     }
 }
 
-static int run_expr(std::string_view src_arg, gaupel::diag::Language lang) {
-    // 1) SourceManager에 소스를 "등록"해서 file_id를 얻는다.
+static std::vector<gaupel::Token> lex_with_sm(
+    gaupel::SourceManager& sm,
+    uint32_t file_id
+) {
+    gaupel::Lexer lex(sm.content(file_id), file_id);
+    return lex.lex_all();
+}
+
+/// @brief expr 파싱 실행
+static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines) {
     gaupel::SourceManager sm;
-    std::string src_owned(src_arg); // 소유권 확보 (SourceManager가 내부에 복사/보관)
+    std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<expr>", src_owned);
 
-    // 2) Lexer는 반드시 SourceManager의 content 뷰 + file_id로 동작
-    gaupel::Lexer lex(sm.content(file_id), file_id);
-    auto tokens = lex.lex_all();
-
-    std::cout << "TOKENS:\n";
-    for (const auto& t : tokens) {
-        std::cout << "  " << gaupel::syntax::token_kind_name(t.kind)
-                  << " '" << t.lexeme << "'"
-                  << " [" << t.span.lo << "," << t.span.hi << ")\n";
-    }
+    auto tokens = lex_with_sm(sm, file_id);
+    dump_tokens(tokens);
 
     gaupel::diag::Bag bag;
-
     gaupel::ast::AstArena ast;
     gaupel::Parser p(tokens, ast, &bag);
-    auto root = p.parse_expr();
 
-    // 핵심 정적 규칙: pipe + hole 검사
+    auto root = p.parse_expr();
     gaupel::passes::check_pipe_hole(ast, root, bag);
 
     std::cout << "\nAST:\n";
     dump_expr(ast, root, 0);
 
-    std::cout << "\nDIAGNOSTICS:\n";
-    if (bag.diags().empty()) {
-        std::cout << "no error.\n";
-        return 0;
-    }
-
-    for (const auto& d : bag.diags()) {
-        // SourceManager 기반 렌더
-        std::cerr << gaupel::diag::render_one(d, lang, sm) << "\n";
-    }
-
-    return bag.has_error() ? 1 : 0;
+    return flush_diags(bag, lang, sm, context_lines);
 }
 
-/// @brief 입력 문자열을 stmt 1개로 파싱해서 AST/진단을 출력
-static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang) {
+/// @brief stmt 1개 파싱 실행
+static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<stmt>", src_owned);
 
-    gaupel::Lexer lex(sm.content(file_id), file_id);
-    auto tokens = lex.lex_all();
+    auto tokens = lex_with_sm(sm, file_id);
     dump_tokens(tokens);
 
     gaupel::diag::Bag bag;
@@ -291,31 +297,44 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang) {
     std::cout << "\nAST(STMT):\n";
     dump_stmt(ast, root, 0);
 
-    return flush_diags(bag, lang, sm);
+    return flush_diags(bag, lang, sm, context_lines);
 }
 
-/// @brief 입력 문자열을 "프로그램(여러 stmt)"으로 파싱해서 AST/진단을 출력한다.
-/// @details expr과 stmt가 섞인 전체 문법을 검증하기 위한 모드.
-static int run_all(std::string_view src_arg, gaupel::diag::Language lang) {
+
+/// @brief 프로그램(여러 stmt) 파싱 실행
+static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, std::string_view name) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
-    const uint32_t file_id = sm.add("<all>", src_owned);
+    const uint32_t file_id = sm.add(std::string(name), std::move(src_owned));
 
-    gaupel::Lexer lex(sm.content(file_id), file_id);
-    auto tokens = lex.lex_all();
+    auto tokens = lex_with_sm(sm, file_id);
     dump_tokens(tokens);
 
     gaupel::diag::Bag bag;
     gaupel::ast::AstArena ast;
     gaupel::Parser p(tokens, ast, &bag);
 
-    // 프로그램 루트(암묵 블록) 파싱
     auto root = p.parse_program();
 
     std::cout << "\nAST(PROGRAM):\n";
     dump_stmt(ast, root, 0);
 
-    return flush_diags(bag, lang, sm);
+    return flush_diags(bag, lang, sm, context_lines);
+}
+
+
+/// @brief 파일을 읽어서 프로그램 모드로 파싱
+static int run_file(const std::string& path, gaupel::diag::Language lang, uint32_t context_lines) {
+    std::string content;
+    std::string err;
+
+    if (!gaupel::open_file(path, content, err)) {
+        std::cerr << "error: " << err << "\n";
+        return 1;
+    }
+
+    std::string norm = gaupel::normalize_path(path);
+    return run_all(content, lang, context_lines, norm);
 }
 
 int main(int argc, char** argv) {
@@ -334,13 +353,15 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    const auto lang = parse_lang(args);
+    const auto context_lines = parse_context(args);
+
     if (args[0] == "--expr") {
         if (args.size() < 2) {
             std::cerr << "error: --expr requires a string\n";
             return 1;
         }
-        const auto lang = parse_lang(args);
-        return run_expr(args[1], lang);
+        return run_expr(args[1], lang, context_lines);
     }
 
     if (args[0] == "--stmt") {
@@ -348,8 +369,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --stmt requires a string\n";
             return 1;
         }
-        const auto lang = parse_lang(args);
-        return run_stmt(args[1], lang);
+        return run_stmt(args[1], lang, context_lines);
     }
 
     if (args[0] == "--all") {
@@ -357,8 +377,15 @@ int main(int argc, char** argv) {
             std::cerr << "error: --all requires a string\n";
             return 1;
         }
-        const auto lang = parse_lang(args);
-        return run_all(args[1], lang);
+        return run_all(args[1], lang, context_lines, "<all>");
+    }
+
+    if (args[0] == "--file") {
+        if (args.size() < 2) {
+            std::cerr << "error: --file requires a path\n";
+            return 1;
+        }
+        return run_file(std::string(args[1]), lang, context_lines);
     }
 
     print_usage();

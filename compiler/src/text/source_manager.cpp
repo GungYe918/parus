@@ -187,4 +187,77 @@ namespace gaupel {
         return sn;
     }
 
+    uint32_t SourceManager::line_index_from_byte(const File& f, uint32_t byte_off) {
+        const auto& starts = f.line_starts;
+        uint32_t off = std::min<uint32_t>(byte_off, static_cast<uint32_t>(f.content.size()));
+        auto it = std::upper_bound(starts.begin(), starts.end(), off);
+        uint32_t idx = (it == starts.begin()) ? 0 : static_cast<uint32_t>((it - starts.begin()) - 1);
+        return idx;
+    }
+
+    uint32_t SourceManager::line_end_byte(const File& f, uint32_t line_index) {
+        const auto& starts = f.line_starts;
+        uint32_t end = 0;
+        if (line_index + 1 < starts.size()) {
+            // 다음 줄 시작 바로 앞(개행 문자 전)까지를 line 텍스트로
+            end = starts[line_index + 1];
+            if (end > 0 && end <= f.content.size() && f.content[end - 1] == '\n') {
+                end -= 1;
+            }
+        } else {
+            end = static_cast<uint32_t>(f.content.size());
+        }
+        return end;
+    }
+
+    SnippetBlock SourceManager::snippet_block_for_span(const Span& sp, uint32_t context_lines) const {
+        SnippetBlock blk;
+
+        const auto& f = files_[sp.file_id];
+
+        uint32_t lo = std::min<uint32_t>(sp.lo, static_cast<uint32_t>(f.content.size()));
+        uint32_t hi = std::min<uint32_t>(sp.hi, static_cast<uint32_t>(f.content.size()));
+        if (hi < lo) hi = lo;
+
+        uint32_t caret_line_idx = line_index_from_byte(f, lo);
+
+        uint32_t first = (caret_line_idx > context_lines) ? (caret_line_idx - context_lines) : 0;
+        uint32_t last = std::min<uint32_t>(caret_line_idx + context_lines,
+                                           static_cast<uint32_t>(f.line_starts.size() - 1));
+
+        blk.first_line_no = first + 1;
+        blk.caret_line_offset = caret_line_idx - first;
+
+        // caret 라인 start/end
+        uint32_t caret_line_start = f.line_starts[caret_line_idx];
+        uint32_t caret_line_end = line_end_byte(f, caret_line_idx);
+
+        // caret 라인 텍스트
+        std::string_view caret_line_text = std::string_view(f.content).substr(
+            caret_line_start, caret_line_end - caret_line_start
+        );
+
+        // hi를 caret 라인 내부로 clamp (멀티라인 span이라도 v0는 “시작 라인”에 caret)
+        uint32_t hi_clamped = std::min<uint32_t>(hi, caret_line_end);
+
+        // caret 위치 계산 (UTF-8 표시폭)
+        uint32_t before_cols = display_width_between(caret_line_text, 0, lo - caret_line_start);
+        uint32_t len_cols = display_width_between(caret_line_text, lo - caret_line_start, hi_clamped - caret_line_start);
+        if (len_cols == 0) len_cols = 1;
+
+        blk.col = before_cols + 1;
+        blk.caret_cols_before = before_cols;
+        blk.caret_cols_len = len_cols;
+
+        // 라인들 채우기
+        blk.lines.reserve(static_cast<size_t>(last - first + 1));
+        for (uint32_t li = first; li <= last; ++li) {
+            uint32_t s = f.line_starts[li];
+            uint32_t e = line_end_byte(f, li);
+            blk.lines.push_back(std::string_view(f.content).substr(s, e - s));
+        }
+
+        return blk;
+    }
+
 } // namespace gaupel

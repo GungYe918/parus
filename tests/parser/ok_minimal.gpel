@@ -1,0 +1,41 @@
+{
+    // 1) 우선순위/결합 + 괄호 흔들기
+    let a = 1
+        + 2
+        * 3;
+
+    // 2) call / index / call 체인
+    let v =
+        f( a )
+            ( b )
+            [ i ]
+            ( c )
+            [ j ];
+
+    // 3) 라벨 인자 (줄바꿈/공백 다양화)
+    let s = add(
+        a: 10
+        ,
+        b: 20
+    );
+
+    // 4) pipe + labeled hole (정상)
+    let r =
+        lhs
+            << add(
+                a: _,
+                b: 2
+            );
+
+    // 5) 삼항 (중첩은 피해서 "정상")
+    let t =
+        cond
+            ? yes + 1
+            : no  * 2;
+
+    // 6) UTF-8 ident 섞기
+    let 雲 =
+        星 + 1;
+
+    return r;
+}

@@ -1,0 +1,10 @@
+{
+    let r =
+        lhs
+            << add(
+                a: _,
+                b: 2
+            ;
+
+    return r;
+}

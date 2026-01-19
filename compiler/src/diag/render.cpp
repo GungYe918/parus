@@ -2,10 +2,17 @@
 #include <gaupel/diag/Render.hpp>
 
 #include <array>
+#include <algorithm>
 #include <sstream>
 
 
 namespace gaupel::diag {
+
+    static constexpr uint32_t digits10(uint32_t v) {
+        uint32_t d = 1;
+        while (v >= 10) { v /= 10; ++d; }
+        return d;
+    }
 
     static std::string replace_all(std::string s, std::string_view from, std::string_view to) {
         size_t pos = 0;
@@ -92,6 +99,48 @@ namespace gaupel::diag {
         for (uint32_t i = 0; i < sn.caret_cols_len; ++i) oss << '^';
         
         return oss.str();
+    }
+
+    std::string render_one_context(const Diagnostic& d, Language lang, const SourceManager& sm, uint32_t context_lines) {
+        std::string msg = (lang == Language::kKo) ? template_ko(d.code()) : template_en(d.code());
+        msg = format_template(std::move(msg), d.args());
+
+        const auto sp = d.span();
+        auto lc = sm.line_col(sp.file_id, sp.lo);
+
+        // 컨텍스트 스니펫
+        auto blk = sm.snippet_block_for_span(sp, context_lines);
+
+        uint32_t last_line_no = blk.first_line_no + static_cast<uint32_t>(blk.lines.size()) - 1;
+        uint32_t w = digits10(last_line_no);
+
+        std::ostringstream out;
+
+        // v0: severity는 일단 error 고정 (to_string/message 같은 외부 의존 제거)
+        out << "error[" << code_name(d.code()) << "]: " << msg << "\n";
+        out << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
+        out << "  |\n";
+
+        for (uint32_t i = 0; i < blk.lines.size(); ++i) {
+            uint32_t line_no = blk.first_line_no + i;
+
+            // "  12 | code..."
+            out << std::string(2, ' ');
+            {
+                std::string num = std::to_string(line_no);
+                out << std::string(w - static_cast<uint32_t>(num.size()), ' ') << num;
+            }
+            out << " | " << blk.lines[i] << "\n";
+
+            if (i == blk.caret_line_offset) {
+                out << std::string(2, ' ');
+                out << std::string(w, ' ') << " | ";
+                out << std::string(blk.caret_cols_before, ' ');
+                out << std::string(blk.caret_cols_len, '^') << "\n";
+            }
+        }
+
+        return out.str();
     }
 
 } // namespace gaupel::diag

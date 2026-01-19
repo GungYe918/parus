@@ -25,7 +25,6 @@ namespace gaupel {
             last = ast_.stmt(s).span;
         }
 
-        // 빈 파일도 허용: span은 eof span으로
         if (count == 0) {
             first = cursor_.peek().span;
             last  = first;
@@ -95,14 +94,14 @@ namespace gaupel {
     ast::StmtId Parser::parse_expr_stmt() {
         const auto start_tok = cursor_.peek();
         ast::ExprId e = parse_expr();
-        const auto end_span = ast_.expr(e).span;
 
-        // require ';'
-        expect(syntax::TokenKind::kSemicolon);
+        // ';' 누락 recovery의 fallback은 "expr의 끝"으로 설정
+        const Span expr_end = ast_.expr(e).span;
+        const Span term_end = consume_semicolon_or_recover(expr_end);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kExprStmt;
-        s.span = span_join(start_tok.span, end_span);
+        s.span = span_join(start_tok.span, term_end);
         s.expr = e;
         return ast_.add_stmt(s);
     }
@@ -110,9 +109,12 @@ namespace gaupel {
     ast::StmtId Parser::parse_required_block(std::string_view ctx) {
         (void)ctx;
         if (!cursor_.at(syntax::TokenKind::kLBrace)) {
-            // v0: "block required"를 ExpectedToken으로 합쳐서 report
             report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
-            // error-recovery: pretend empty block
+
+            // recovery: "블록이 없으면" 다음 stmt 경계까지는 스킵
+            sync_to_stmt_boundary();
+            if (cursor_.at(syntax::TokenKind::kSemicolon)) cursor_.bump();
+
             ast::Stmt s{};
             s.kind = ast::StmtKind::kBlock;
             s.span = cursor_.peek().span;
@@ -143,15 +145,20 @@ namespace gaupel {
             init = parse_expr();
         }
 
-        const Token semi_tok = cursor_.peek();
-        expect(syntax::TokenKind::kSemicolon);
+        // let의 fallback:
+        // - init이 있으면 init 끝
+        // - 없으면 name 끝
+        Span fallback = name_tok.span;
+        if (init != ast::k_invalid_expr) fallback = ast_.expr(init).span;
+
+        const Span term_end = consume_semicolon_or_recover(fallback);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kLet;
         s.is_mut = is_mut;
         s.name = name_tok.lexeme;
         s.expr = init;
-        s.span = span_join(kw.span, semi_tok.span);
+        s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }
 
@@ -222,40 +229,75 @@ namespace gaupel {
         const Token kw = cursor_.bump(); // return
 
         ast::ExprId v = ast::k_invalid_expr;
+        Span fallback = kw.span;
+
         if (!cursor_.at(syntax::TokenKind::kSemicolon)) {
             v = parse_expr();
+            fallback = ast_.expr(v).span;
         }
 
-        const Token semi = cursor_.peek();
-        expect(syntax::TokenKind::kSemicolon);
+        const Span term_end = consume_semicolon_or_recover(fallback);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kReturn;
         s.expr = v;
-        s.span = span_join(kw.span, semi.span);
+        s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }
 
     ast::StmtId Parser::parse_break_stmt() {
         const Token kw = cursor_.bump(); // break
-        const Token semi = cursor_.peek();
-        expect(syntax::TokenKind::kSemicolon);
+        const Span term_end = consume_semicolon_or_recover(kw.span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kBreak;
-        s.span = span_join(kw.span, semi.span);
+        s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }
 
     ast::StmtId Parser::parse_continue_stmt() {
         const Token kw = cursor_.bump(); // continue
-        const Token semi = cursor_.peek();
-        expect(syntax::TokenKind::kSemicolon);
+        const Span term_end = consume_semicolon_or_recover(kw.span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kContinue;
-        s.span = span_join(kw.span, semi.span);
+        s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
+    }
+
+    void Parser::sync_to_stmt_boundary() {
+        // stmt 경계: ';' or '}' or EOF
+        while (!cursor_.at(syntax::TokenKind::kSemicolon) &&
+               !cursor_.at(syntax::TokenKind::kRBrace) &&
+               !cursor_.at(syntax::TokenKind::kEof)) {
+            cursor_.bump(); // 반드시 전진
+        }
+    }
+
+    Span Parser::consume_semicolon_or_recover(Span fallback_end) {
+        if (cursor_.at(syntax::TokenKind::kSemicolon)) {
+            const Token semi = cursor_.bump();
+            return semi.span;
+        }
+
+        // 여기서 ';'가 필요한 상황
+        const Token t = cursor_.peek();
+        report(diag::Code::kExpectedToken, t.span, syntax::token_kind_name(syntax::TokenKind::kSemicolon));
+
+        // recovery: 다음 stmt 경계까지 스킵
+        Span last = fallback_end;
+        while (!cursor_.at(syntax::TokenKind::kSemicolon) &&
+               !cursor_.at(syntax::TokenKind::kRBrace) &&
+               !cursor_.at(syntax::TokenKind::kEof)) {
+            last = cursor_.bump().span;
+        }
+
+        // ';'를 만나면 소비해서 다음 stmt 시작점을 안정화
+        if (cursor_.at(syntax::TokenKind::kSemicolon)) {
+            last = cursor_.bump().span;
+        }
+
+        return last;
     }
 
 }

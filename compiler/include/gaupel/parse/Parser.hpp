@@ -55,6 +55,16 @@ namespace gaupel {
 
         Span span_join(Span a, Span b) const;
 
+        // stmt 종결자 ';'를 요구하되, 없으면 stmt 경계까지 recovery
+        // - ';'가 있으면 그 span 반환
+        // - 없으면 에러 찍고, ';' 또는 '}' 또는 EOF까지 스킵
+        //   - 그 과정에서 ';'를 만나면 소비하고 그 span 반환
+        //   - '}'/EOF에서 멈추면 fallback_end 또는 마지막으로 소비한 토큰 span 반환
+        Span consume_semicolon_or_recover(Span fallback_end);
+
+        // 현재 위치에서 stmt 경계까지 스킵(세미콜론은 소비하지 않음)
+        void sync_to_stmt_boundary();
+
         Cursor cursor_;
         ast::AstArena& ast_;
         diag::Bag* diags_ = nullptr;
