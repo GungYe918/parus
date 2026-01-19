@@ -17,7 +17,10 @@ namespace gaupel {
         ast::ExprId parse_expr();
 
         ast::StmtId parse_stmt();
-        ast::StmtId parse_block_stmt();
+
+        /// @brief  EOF까지 stmt를 반복 파싱하여 프로그램 노드를 생성
+        /// @details gaupelc에서 여러 stmt를 한 번에 검증할 때 사용
+        ast::StmtId parse_program();
 
     private:
         void report(diag::Code code, Span span, std::string_view a0 = {});
@@ -35,6 +38,18 @@ namespace gaupel {
 
         ast::StmtId parse_stmt_inner();
         ast::StmtId parse_expr_stmt();
+
+        ast::StmtId parse_block_stmt();
+
+        ast::StmtId parse_let_stmt();
+        ast::StmtId parse_if_stmt();
+        ast::StmtId parse_while_stmt();
+        ast::StmtId parse_return_stmt();
+        ast::StmtId parse_break_stmt();
+        ast::StmtId parse_continue_stmt();
+
+        // helper: require a block after if/while
+        ast::StmtId parse_required_block(std::string_view ctx);
 
         ast::Arg parse_arg(int ternary_depth);
 

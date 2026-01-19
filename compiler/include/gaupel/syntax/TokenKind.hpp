@@ -31,6 +31,16 @@ namespace gaupel::syntax {
     kKwMut,
     kKwRef,
 
+    // stmt keywords
+    kKwLet,
+    kKwIf,
+    kKwElif,
+    kKwElse,
+    kKwWhile,
+    kKwReturn,
+    kKwBreak,
+    kKwContinue,
+
     // punct / delimiters
     kLParen,   // (
     kRParen,   // )
@@ -101,6 +111,15 @@ namespace gaupel::syntax {
             case TokenKind::kKwXor: return "xor";
             case TokenKind::kKwMut: return "mut";
             case TokenKind::kKwRef: return "ref";
+
+            case TokenKind::kKwLet: return "let";
+            case TokenKind::kKwIf:  return "if";
+            case TokenKind::kKwElif: return "elif";
+            case TokenKind::kKwElse: return "else";
+            case TokenKind::kKwWhile: return "while";
+            case TokenKind::kKwReturn: return "return";
+            case TokenKind::kKwBreak: return "break";
+            case TokenKind::kKwContinue: return "continue";
 
             case TokenKind::kLParen: return "(";
             case TokenKind::kRParen: return ")";

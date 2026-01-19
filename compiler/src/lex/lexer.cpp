@@ -153,6 +153,16 @@ namespace gaupel {
         if (t.lexeme == "mut") { t.kind = syntax::TokenKind::kKwMut; return t; }
         if (t.lexeme == "ref") { t.kind = syntax::TokenKind::kKwRef; return t; }
 
+        // stmt keywords
+        if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }
+        if (t.lexeme == "if")       { t.kind = syntax::TokenKind::kKwIf;       return t; }
+        if (t.lexeme == "elif")     { t.kind = syntax::TokenKind::kKwElif;     return t; }
+        if (t.lexeme == "else")     { t.kind = syntax::TokenKind::kKwElse;     return t; }
+        if (t.lexeme == "while")    { t.kind = syntax::TokenKind::kKwWhile;    return t; }
+        if (t.lexeme == "return")   { t.kind = syntax::TokenKind::kKwReturn;   return t; }
+        if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
+        if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }
+
         t.kind = syntax::TokenKind::kIdent;
         return t;
     }

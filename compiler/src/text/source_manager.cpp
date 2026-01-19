@@ -187,5 +187,4 @@ namespace gaupel {
         return sn;
     }
 
-
 } // namespace gaupel

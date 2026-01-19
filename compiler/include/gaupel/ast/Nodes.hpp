@@ -35,8 +35,13 @@ namespace gaupel::ast {
         kEmpty,       // ';'
         kExprStmt,    // expr ';'
         kBlock,       // '{' ... '}'
-        // v0 확장 후보:
-        // kLet, kIf, kWhile, kReturn, kBreak, kContinue ...
+        
+        kLet,         // let (mut)? name (= expr)? ';'
+        kIf,          // if cond block else block?
+        kWhile,       // while cond block
+        kReturn,      // return expr? ';'
+        kBreak,       // break ';'
+        kContinue,    // continue ';'
     };
 
     struct Arg {
@@ -71,8 +76,18 @@ namespace gaupel::ast {
 
         // generic slots (interpret by kind)
         ExprId expr = k_invalid_expr;     // for ExprStmt
+
+        // extra stmt links
+        StmtId a = k_invalid_stmt;      // If: then block, While: body block
+        StmtId b = k_invalid_stmt;      // If: else block (or invalid)
+
+
         uint32_t stmt_begin = 0;          // for Block (stmt list)
         uint32_t stmt_count = 0;          // for Block
+
+        // let payload
+        bool is_mut = false;
+        std::string_view name{};        // identifier
     };
 
     class AstArena {
