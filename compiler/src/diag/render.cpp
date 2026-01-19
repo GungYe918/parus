@@ -34,8 +34,11 @@ namespace gaupel::diag {
 
     static std::string_view code_name(Code c) {
         switch (c) {
+            case Code::kInvalidUtf8: return "InvalidUtf8";
             case Code::kExpectedToken: return "ExpectedToken";
             case Code::kUnexpectedToken: return "UnexpectedToken";
+            case Code::kUnexpectedEof: return "UnexpectedEof";
+            case Code::kTooManyErrors: return "TooManyErrors";
             case Code::kNestedTernaryNotAllowed: return "NestedTernaryNotAllowed";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeHoleMustBeLabeled: return "PipeHoleMustBeLabeled";
@@ -49,8 +52,12 @@ namespace gaupel::diag {
 
     static std::string template_en(Code c) {
         switch (c) {
+            // args: {0}=byte offset, {1}=byte hex
+            case Code::kInvalidUtf8: return "invalid UTF-8 sequence starting at byte offset {0} (byte=0x{1})";
             case Code::kExpectedToken: return "expected '{0}'";
             case Code::kUnexpectedToken: return "unexpected token '{0}'";
+            case Code::kUnexpectedEof:  return "unexpected end of file; expected {0}";
+            case Code::kTooManyErrors:  return "too many errors emitted; parsing stopped";
             case Code::kNestedTernaryNotAllowed: return "nested ternary operator is not allowed";
             case Code::kPipeRhsMustBeCall: return "pipe operator '<<' requires a function call on the right-hand side";
             case Code::kPipeHoleMustBeLabeled: return "hole '_' must appear as a labeled argument value (e.g., a: _)";
@@ -64,8 +71,12 @@ namespace gaupel::diag {
 
     static std::string template_ko(Code c) {
         switch (c) {
+            // args: {0}=byte offset, {1}=byte hex
+            case Code::kInvalidUtf8: return "UTF-8 시퀀스가 바이트 오프셋 {0}에서 깨졌습니다 (바이트=0x{1})";
             case Code::kExpectedToken: return "'{0}'이(가) 필요합니다";
             case Code::kUnexpectedToken: return "예상치 못한 토큰 '{0}'";
+            case Code::kUnexpectedEof:  return "예상치 못한 파일 끝(EOF)입니다; {0}이(가) 필요합니다";
+            case Code::kTooManyErrors:  return "오류가 너무 많아 파싱을 중단합니다";
             case Code::kNestedTernaryNotAllowed: return "삼항 연산자 중첩은 허용되지 않습니다";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자 '<<'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeHoleMustBeLabeled: return "'_'는 라벨 인자 값 위치에만 올 수 있습니다(예: a: _)";
@@ -86,7 +97,12 @@ namespace gaupel::diag {
         auto sn = sm.snippet_for_span(sp);
 
         std::ostringstream oss;
-        oss << "error[" << code_name(d.code()) << "]: " << msg << "\n";
+        auto sev = d.severity();
+        const char* sev_name =
+            (sev == Severity::kWarning) ? "warning" :
+            (sev == Severity::kFatal)   ? "fatal"   : "error";
+
+        oss << sev_name << "[" << code_name(d.code()) << "]: " << msg << "\n";
         oss << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
         oss << "  |\n";
         oss << sn.line_no << " | " << sn.line_text << "\n";
@@ -116,8 +132,13 @@ namespace gaupel::diag {
 
         std::ostringstream out;
 
-        // v0: severity는 일단 error 고정 (to_string/message 같은 외부 의존 제거)
-        out << "error[" << code_name(d.code()) << "]: " << msg << "\n";
+        // error / fatal 출력
+        auto sev = d.severity();
+        const char* sev_name =
+            (sev == Severity::kWarning) ? "warning" :
+            (sev == Severity::kFatal)   ? "fatal"   : "error";
+
+        out << sev_name << "[" << code_name(d.code()) << "]: " << msg << "\n";
         out << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
         out << "  |\n";
 

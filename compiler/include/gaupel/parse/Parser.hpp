@@ -11,8 +11,13 @@ namespace gaupel {
 
     class Parser {
     public:
-        Parser(const std::vector<Token>& tokens, ast::AstArena& ast, diag::Bag* diags = nullptr)
-            : cursor_(tokens), ast_(ast), diags_(diags) {}
+        Parser(const std::vector<Token>& tokens, ast::AstArena& ast, diag::Bag* diags = nullptr, uint32_t max_errors = 64)
+            : cursor_(tokens), ast_(ast), diags_(diags), max_errors_(max_errors) {
+            if (diags_ && diags_->has_code(diag::Code::kInvalidUtf8)) {
+                lexer_fatal_ = true;
+                aborted_ = true; // lexer fatal이면 파싱 자체도 중단 상태로 취급해도 됨
+            }
+        }
 
         ast::ExprId parse_expr();
 
@@ -27,6 +32,8 @@ namespace gaupel {
         void report_int(diag::Code code, Span span, int v0);
 
         bool expect(syntax::TokenKind k);
+
+        bool is_aborted() const {  return aborted_;  }
 
         ast::ExprId parse_expr_pratt(int min_prec, int ternary_depth);
         ast::ExprId parse_prefix(int ternary_depth);
@@ -65,9 +72,26 @@ namespace gaupel {
         // 현재 위치에서 stmt 경계까지 스킵(세미콜론은 소비하지 않음)
         void sync_to_stmt_boundary();
 
+        void recover_to_delim(
+            syntax::TokenKind stop0,
+            syntax::TokenKind stop1 = syntax::TokenKind::kError,
+            syntax::TokenKind stop2 = syntax::TokenKind::kError
+        );
+
         Cursor cursor_;
         ast::AstArena& ast_;
         diag::Bag* diags_ = nullptr;
+
+        // diagnostic quality controls
+        uint32_t last_diag_lo_ = 0xFFFFFFFFu;
+        diag::Code last_diag_code_ = diag::Code::kUnexpectedToken; // 초기값
+        uint32_t parse_error_count_ = 0;
+        static constexpr uint32_t kMaxParseErrors = 1024;
+
+        uint32_t max_errors_ = 64;
+        bool lexer_fatal_ = false;
+        bool aborted_ = false;
+        bool too_many_errors_emitted_ = false;
     };
 
 } // namespace gaupel

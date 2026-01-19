@@ -5,9 +5,85 @@
 
 #include <cctype>
 #include <algorithm>
+#include <sstream> 
 
 
 namespace gaupel {
+
+    static bool utf8_validate_strict(std::string_view s, uint32_t& bad_off) {
+        auto is_cont = [&](unsigned char b) -> bool {
+            return (b & 0xC0) == 0x80;
+        };
+
+        size_t i = 0;
+        while (i < s.size()) {
+            unsigned char b0 = static_cast<unsigned char>(s[i]);
+
+            // ASCII
+            if (b0 < 0x80) {
+                i += 1;
+                continue;
+            }
+
+            // continuation byte cannot start a sequence
+            if (b0 >= 0x80 && b0 <= 0xBF) {
+                bad_off = static_cast<uint32_t>(i);
+                return false;
+            }
+
+            // 2-byte: C2..DF
+            if (b0 >= 0xC2 && b0 <= 0xDF) {
+                if (i + 1 >= s.size()) { bad_off = (uint32_t)i; return false; }
+                unsigned char b1 = static_cast<unsigned char>(s[i + 1]);
+                if (!is_cont(b1)) { bad_off = (uint32_t)i; return false; }
+
+                // overlong already prevented by C2.. rule
+                i += 2;
+                continue;
+            }
+
+            // 3-byte: E0..EF
+            if (b0 >= 0xE0 && b0 <= 0xEF) {
+                if (i + 2 >= s.size()) { bad_off = (uint32_t)i; return false; }
+                unsigned char b1 = static_cast<unsigned char>(s[i + 1]);
+                unsigned char b2 = static_cast<unsigned char>(s[i + 2]);
+                if (!is_cont(b1) || !is_cont(b2)) { bad_off = (uint32_t)i; return false; }
+
+                // reject overlong: E0 A0..BF
+                if (b0 == 0xE0 && b1 < 0xA0) { bad_off = (uint32_t)i; return false; }
+
+                // reject surrogate: ED 80..9F (U+D800..U+DFFF)
+                if (b0 == 0xED && b1 >= 0xA0) { bad_off = (uint32_t)i; return false; }
+
+                i += 3;
+                continue;
+            }
+
+            // 4-byte: F0..F4
+            if (b0 >= 0xF0 && b0 <= 0xF4) {
+                if (i + 3 >= s.size()) { bad_off = (uint32_t)i; return false; }
+                unsigned char b1 = static_cast<unsigned char>(s[i + 1]);
+                unsigned char b2 = static_cast<unsigned char>(s[i + 2]);
+                unsigned char b3 = static_cast<unsigned char>(s[i + 3]);
+                if (!is_cont(b1) || !is_cont(b2) || !is_cont(b3)) { bad_off = (uint32_t)i; return false; }
+
+                // reject overlong: F0 90..BF
+                if (b0 == 0xF0 && b1 < 0x90) { bad_off = (uint32_t)i; return false; }
+
+                // reject > U+10FFFF: F4 80..8F only
+                if (b0 == 0xF4 && b1 > 0x8F) { bad_off = (uint32_t)i; return false; }
+
+                i += 4;
+                continue;
+            }
+
+            // invalid leading byte (C0,C1,F5..FF etc)
+            bad_off = static_cast<uint32_t>(i);
+            return false;
+        }
+
+        return true;
+    }
 
     static bool is_ident_start(char c) {
         unsigned char u = static_cast<unsigned char>(c);
@@ -21,8 +97,40 @@ namespace gaupel {
         return std::isalnum(u) || c == '_';
     }
 
-    Lexer::Lexer(std::string_view source, uint32_t file_id) 
-        : source_(source), file_id_(file_id) {}
+    Lexer::Lexer(std::string_view source, uint32_t file_id, diag::Bag* diags) 
+        : source_(source), file_id_(file_id), diags_(diags) {}
+
+    bool Lexer::validate_utf8_all(uint32_t& bad_off) const {
+        return utf8_validate_strict(source_, bad_off);
+    }
+
+    static std::string byte_hex2(unsigned char b) {
+        static constexpr char kHex[] = "0123456789ABCDEF";
+        std::string s;
+        s.push_back(kHex[(b >> 4) & 0xF]);
+        s.push_back(kHex[b & 0xF]);
+        return s;
+    }
+    
+    void Lexer::report_invalid_utf8(uint32_t bad_off) {
+        if (!diags_) return;
+
+        const uint32_t hi = std::min<uint32_t>(bad_off + 1, (uint32_t)source_.size());
+        Span sp{file_id_, bad_off, hi};
+
+        diag::Diagnostic d(diag::Severity::kFatal, diag::Code::kInvalidUtf8, sp);
+
+        // args = offset + offending byte hex
+        d.add_arg_int((int)bad_off);
+
+        unsigned char b = 0;
+        if (bad_off < source_.size()) {
+            b = static_cast<unsigned char>(source_[bad_off]);
+        }
+        d.add_arg(byte_hex2(b));
+
+        diags_->add(std::move(d));
+    }
 
     char Lexer::peek(size_t k) const {
         size_t i = pos_ + k;
@@ -210,6 +318,14 @@ namespace gaupel {
     std::vector<Token> Lexer::lex_all() {
         std::vector<Token> out;
         out.reserve(source_.size() / 4);
+
+        // strict utf8 gate
+        uint32_t bad_off = 0;
+        if (!validate_utf8_all(bad_off)) {
+            report_invalid_utf8(bad_off);
+            emit_eof(out);
+            return out;
+        }
         
         while (!eof()) {
             skip_ws_and_comments();

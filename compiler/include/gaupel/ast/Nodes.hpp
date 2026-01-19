@@ -16,6 +16,7 @@ namespace gaupel::ast {
     inline constexpr StmtId k_invalid_stmt = 0xFFFF'FFFFu;
 
     enum class ExprKind : uint8_t {
+        kError,
         kIntLit,
         kFloatLit,
         kStringLit,
@@ -26,12 +27,14 @@ namespace gaupel::ast {
         kUnary,
         kPostfixUnary,
         kBinary,
+        kAssign,
         kTernary,
         kCall,
         kIndex,
     };
 
     enum class StmtKind : uint8_t {
+        kError,
         kEmpty,       // ';'
         kExprStmt,    // expr ';'
         kBlock,       // '{' ... '}'

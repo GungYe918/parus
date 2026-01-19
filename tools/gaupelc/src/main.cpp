@@ -38,6 +38,27 @@ static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& ar
     return gaupel::diag::Language::kEn;
 }
 
+static uint32_t parse_max_errors(const std::vector<std::string_view>& args) {
+    // default: 64
+    uint32_t v = 64;
+
+    for (auto a : args) {
+        // 형태: -fmax-errors=128
+        std::string_view key = "-fmax-errors=";
+        if (a.size() >= key.size() && a.substr(0, key.size()) == key) {
+            auto tail = a.substr(key.size());
+            try {
+                int n = std::stoi(std::string(tail));
+                if (n < 1) n = 1;
+                v = static_cast<uint32_t>(n);
+            } catch (...) {
+                // ignore -> keep default
+            }
+        }
+    }
+    return v;
+}
+
 /// @brief 진단 컨텍스트 줄 수를 파싱한다.
 static uint32_t parse_context(const std::vector<std::string_view>& args) {
     for (size_t i = 0; i + 1 < args.size(); ++i) {
@@ -77,6 +98,7 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kReturn: return "Return";
         case K::kBreak: return "Break";
         case K::kContinue: return "Continue";
+        case K::kError: return "Error";
     }
     return "Unknown";
 }
@@ -97,7 +119,10 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
         case K::kTernary: return "Ternary";
         case K::kCall: return "Call";
         case K::kIndex: return "Index";
+        case K::kError: return "Error";
+        case K::kAssign: return "Assign";
     }
+
     return "Unknown";
 }
 
@@ -251,9 +276,10 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
 
 static std::vector<gaupel::Token> lex_with_sm(
     gaupel::SourceManager& sm,
-    uint32_t file_id
+    uint32_t file_id,
+    gaupel::diag::Bag* bag
 ) {
-    gaupel::Lexer lex(sm.content(file_id), file_id);
+    gaupel::Lexer lex(sm.content(file_id), file_id, bag);
     return lex.lex_all();
 }
 
@@ -263,10 +289,10 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<expr>", src_owned);
 
-    auto tokens = lex_with_sm(sm, file_id);
+    gaupel::diag::Bag bag;
+    auto tokens = lex_with_sm(sm, file_id, &bag);
     dump_tokens(tokens);
 
-    gaupel::diag::Bag bag;
     gaupel::ast::AstArena ast;
     gaupel::Parser p(tokens, ast, &bag);
 
@@ -285,10 +311,10 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<stmt>", src_owned);
 
-    auto tokens = lex_with_sm(sm, file_id);
+    gaupel::diag::Bag bag;
+    auto tokens = lex_with_sm(sm, file_id, &bag);
     dump_tokens(tokens);
 
-    gaupel::diag::Bag bag;
     gaupel::ast::AstArena ast;
     gaupel::Parser p(tokens, ast, &bag);
 
@@ -307,10 +333,10 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add(std::string(name), std::move(src_owned));
 
-    auto tokens = lex_with_sm(sm, file_id);
+    gaupel::diag::Bag bag;
+    auto tokens = lex_with_sm(sm, file_id, &bag);
     dump_tokens(tokens);
 
-    gaupel::diag::Bag bag;
     gaupel::ast::AstArena ast;
     gaupel::Parser p(tokens, ast, &bag);
 
@@ -355,6 +381,8 @@ int main(int argc, char** argv) {
 
     const auto lang = parse_lang(args);
     const auto context_lines = parse_context(args);
+    const auto max_errors = parse_max_errors(args);
+    (void)max_errors;
 
     if (args[0] == "--expr") {
         if (args.size() < 2) {
