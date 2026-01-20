@@ -20,8 +20,8 @@
 예시 (철학이 반영된 스타일, 작은 데이터는 값, 큰 상태는 class)
 
 ```gaupel
-@returns void
-fn demo_small_big() {
+@pure
+export fn demo_small_big() -> void {
   set x = 3;
   set y = x + 2;
 
@@ -43,13 +43,11 @@ fn demo_small_big() {
 class Counter {
   // Draft.count 라는 큰 상태를 가진다고 가정
 
-  @returns int
-  fn get() : sub {
+  fn sub get() -> int {
     return Draft.count;
   }
 
-  @returns void
-  fn inc() : pub {
+  fn pub inc() -> void {
     Draft.count += 1;
     commit;
   }
@@ -66,21 +64,19 @@ class Counter {
 예시 (개념 맛보기)
 
 ```gaupel
-field Vec2 {
+export field Vec2 {
   float32 x;
   float32 y;
 }
 
 proto Drawable {
-  @returns void
-  fn draw() ;
+  fn draw() -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
-    @returns void
-    fn draw() { /* ... */ }
+    fn draw() -> void { /* ... */ }
 }
 ```
 
@@ -97,8 +93,7 @@ tablet Sprite : Drawable {
 예시
 
 ```gaupel
-@returns void
-fn basic_blocks() {
+fn basic_blocks() -> void {
   set a = 1;
   if (a == 1) { set b = 2; }
 }
@@ -112,8 +107,7 @@ fn basic_blocks() {
 예시
 
 ```gaupel
-@returns void
-fn comments() {
+fn comments() -> void {
   // line comment
   /* block comment */
   set x = 1;
@@ -133,8 +127,7 @@ v0 권장 규칙:
 예시 (UTF-8 식별자, 이모지 포함)
 
 ```gaupel
-@returns void
-fn utf8_identifiers() {
+fn utf8_identifiers() -> void {
   let 한글이름: int = 3;
   let 🍣: int = 7;
   set 합 = 한글이름 + 🍣;
@@ -162,8 +155,7 @@ fn utf8_identifiers() {
 예시
 
 ```gaupel
-@returns void
-fn keywords_demo() {
+fn keywords_demo() -> void {
   set ok = true;
   if (ok and not false) { /* ... */ }
 }
@@ -182,8 +174,7 @@ fn keywords_demo() {
 예시
 
 ```gaupel
-@returns void
-fn int_literals() {
+fn int_literals() -> void {
   let a: u32 = 123u32;
   let b: u64 = 1_000_000u64;
 }
@@ -199,8 +190,7 @@ fn int_literals() {
 예시
 
 ```gaupel
-@returns void
-fn float_literals() {
+fn float_literals() -> void {
   let x: float32 = 3.14f;
   let y: float64 = 2.71828lf;
 }
@@ -214,8 +204,7 @@ fn float_literals() {
 예시
 
 ```gaupel
-@returns void
-fn bool_null() {
+fn bool_null() -> void {
   let t: bool = true;
   let f: bool = false;
   // let x: int = null; // error
@@ -230,8 +219,7 @@ fn bool_null() {
 예시
 
 ```gaupel
-@returns void
-fn char_literals() {
+fn char_literals() -> void {
   let c1: char = 'a';
   let c2: char = '\n';
   let c3: char = '\u{AC00}';
@@ -251,8 +239,7 @@ F-string 이스케이프:
 예시
 
 ```gaupel
-@returns void
-fn strings() {
+fn strings() -> void {
   let name: string = "gaupel";
   let msg: string = F"""hello {name}""";
   let raw: string = R"""no {interpolation} here""";
@@ -261,33 +248,133 @@ fn strings() {
 
 ---
 
-## 3. 프리패스와 모듈, FFI
+## 3. 프리패스와 project/module/file, `use`, FFI
 
-### 3.1 프리패스 #define (파일 단위 문자열 치환)
+### 3.1 단위 용어: project / module / file
 
-* 토큰화 이전, 원문 텍스트 치환만 수행한다.
-* 스코프: 파일 단위
-* 재정의 금지: 동일 NAME 재정의는 에러
-* 함수형 매크로, 인자 매크로는 없다. (v0)
+Gaupel 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 소스 코드를 다음 3단위로 정의한다.
 
-예시
+* **file**: 하나의 소스 파일. 파싱 단위이다.
+* **module**: 하나의 폴더(또는 논리적 디렉터리) 안의 file 집합. **컴파일 단위**이다.
+* **project**: 여러 module의 집합. 최상위 출력(실행파일/라이브러리)과 빌드 설정을 가진다.
+
+핵심 규칙(전방선언 문제 제거):
+
+* Gaupel은 **module 단위로 “선언 수집 prepass”**를 수행한다.
+* 따라서 같은 module 내부에서는:
+
+  * 함수/타입/acts 선언 순서가 의미를 갖지 않는다.
+  * 파일 A가 파일 B의 “뒤에 선언된” 함수를 전방선언 없이 호출할 수 있다.
+* module 외부로 노출되는 심볼은 `export`로만 결정된다.
+
+---
+
+### 3.1.1 `use` 문 (통합: 별칭/상수/타입/함수 경로)
+
+`use`는 다음 기능을 하나의 키워드로 통합한다.
+
+1. **타입 별칭**
 
 ```gaupel
-#define GAME_NAME "Gaupel"
-#define VER "0.1"
+use newT = u32;
+```
 
-@returns void
-fn show_ver() {
-  let s: string = F"""name={GAME_NAME}, ver={VER}""";
+2. **함수/심볼 별칭(경로 별칭)**
+
+```gaupel
+use Math::add = add_i32;
+use core::io::print = println;
+```
+
+3. **파일 스코프 상수/치환(매크로 함수 금지)**
+
+```gaupel
+use PI 3.14f;
+use GAME_NAME "Gaupel";
+```
+
+제약(v0 강제):
+
+* `use`는 **예약어/토큰을 바꾸지 않는다.**
+* `use` 치환 대상은 **식별자(IDENT)** 만 가능하다.
+* `use NAME expr;` 형태는 “소스 코드 레벨 치환”이며,
+
+  * 함수형 매크로(인자) 금지
+  * 토큰 결합/분해 금지
+* 구현 권장:
+
+  * (안전) 토큰화 이후 AST 레벨에서 치환
+  * (단순) 토큰화 직후 IDENT 토큰만 치환
+
+---
+
+### 3.1.2 `use module <path> as alias;` (모듈 임포트)
+
+문법:
+
+```gaupel
+use module <engine/core> as core;
+use module <engine/math> as math;
+```
+
+규칙:
+
+* `<...>`는 **모듈 경로**이며, project의 모듈 검색 규칙으로 해석한다.
+* `alias`는 필수(권장: v0에서는 강제). 모듈 외부 심볼은 `alias::...`로 접근한다.
+* `use module`은 include가 아니라 **의존성 선언**이다.
+
+  * 컴파일러는 이를 기반으로 module dependency graph(빌드 그래프)를 구성한다.
+* **순환 의존성 금지(v0 권장)**:
+
+  * module A가 B를 `use module`로 의존하면, B가 다시 A에 의존하는 것은 에러.
+  * (향후 확장) “인터페이스 전용 모듈” 분리로 완화 가능.
+
+심볼 접근 예시:
+
+```gaupel
+export fn sub init() -> void { ... }
+
+export fn pure add(a: int, b: int) -> int {
+  return a + b;
+}
+
+export fn sub demo() -> void {
+  core::init();
+  set x = math::add(a: 1, b: 2);
 }
 ```
+
+---
+
+### 3.1.3 `space {}` 네임스페이스
+
+`space`는 “이름 충돌 방지 및 계층화”를 위한 선언 스코프이다.
+
+문법:
+
+```gaupel
+export space engine {
+  export space math {
+    export fn pure add(a: int, b: int) -> int { return a + b; }
+  }
+}
+```
+
+규칙:
+
+* `space` 내부 선언은 경로로 식별된다: `engine::math::add`
+* 같은 module 내부에서 `space`는 파일을 넘어 공유된다(모듈 스코프).
+* `export space X { ... }`는 “X 아래의 공개 심볼 트리”를 만든다.
+* `space`는 타입/함수/상수/acts/tablet/proto/field/class를 포함할 수 있다.
+
+---
 
 ### 3.2 모듈 임포트
 
 문법:
 
-* embed module <abs/path> as alias;
-* embed module "../rel/path" as alias;
+* use module <abs/path> as alias;
+* use module "../rel/path" as alias;
 
 규칙:
 
@@ -309,11 +396,10 @@ fn show_ver() {
 예시
 
 ```gaupel
-embed module <engine/core> as core;
-embed module "../engine/math" as math;
+use module <engine/core> as core;
+use module "../engine/math" as math;
 
-@returns void
-fn use_modules() {
+fn use_modules() -> void {
   core::init();
   set v = math::add(a: 1, b: 2);
 }
@@ -331,8 +417,7 @@ fn use_modules() {
 embed func::ffi<int (int, int)> c_add;
 embed struct::ffi Vec2C { float32 x; float32 y; }
 
-@returns int
-fn call_c(a: int, b: int) {
+fn call_c(a: int, b: int) -> int {
   return c_add(a: a, b: b);
 }
 ```
@@ -378,8 +463,7 @@ class Counter {
   fn inc() : pub { Draft.count += 1u32; commit; }
 }
 
-@returns void
-fn counter_inc_ffi(h: handle<Counter>) {
+fn counter_inc_ffi(h: handle<Counter>) -> void {
   // 내부적으로 h의 Counter 인스턴스에 대해 pub 호출
 }
 ```
@@ -415,8 +499,7 @@ v0 권장 전략은 단순하다:
 예시
 
 ```gaupel
-@returns void
-fn primitives() {
+fn primitives() -> void{
   let a: int32 = 1i32;
   let b: uint64 = 2u64;
   let c: bool = true;
@@ -435,8 +518,7 @@ fn primitives() {
 예시
 
 ```gaupel
-@returns void
-fn nullable_demo() {
+fn nullable_demo() -> void {
   let a: int? = null;
   let b: int? = 3i32;
 
@@ -454,8 +536,7 @@ fn nullable_demo() {
 예시
 
 ```gaupel
-@returns void
-fn arrays_lists() {
+fn arrays_lists() -> void {
   let xs: int[3] = [1, 2, 3];
   // let ys: int[] = [1, 2, 3]; // 리스트 리터럴 문법은 v0에서 선택 구현
 }
@@ -476,7 +557,7 @@ v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한�
 * 제네릭 타입: TypeName<T> 형태
 * 제네릭 함수: fn foo<T>(...) ...
 * 제네릭 특수화와 monomorphization (컴파일 시 실체화) 혹은 제한된 형태의 dictionary passing 중 택1
-* 타입 추론 강화: set 바인딩의 추론, 간단한 반환 타입 추론 (v0에서는 @returns 강제 유지)
+* 타입 추론 강화: set 바인딩의 추론, 간단한 반환 타입 추론 (v0에서는 강제 유지)
 * trait 비슷한 개념을 acts/proto/tablet 조합으로 자연스럽게 확장
 
 예시 (향후 제네릭의 목표 형태, v0에서는 파싱만 선행 가능)
@@ -504,8 +585,7 @@ v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한�
 예시
 
 ```gaupel
-@returns void
-fn bindings() {
+fn bindings() -> void{
   let a: int = 1i32;
   set b = a + 2;
   mut set c = 0;
@@ -521,8 +601,7 @@ fn bindings() {
 예시
 
 ```gaupel
-@returns void
-fn shadowing() {
+fn shadowing() -> void {
   set x = 1;
   if (x == 1) {
     set x = 2; // 다른 스코프, 허용 가능(정책 선택)
@@ -532,14 +611,14 @@ fn shadowing() {
 
 ---
 
-## 6. 함수 선언: @returns, qualifier, 호출 규칙
+## 6. 함수 선언: @attribute, qualifier, 호출 규칙
 
 ### 6.1 함수 선언 기본형 (v0 확정)
 
 문법:
 
-* @returns Type
-* fn [qualifier]* Name(params...) [ : Mode ] Block
+* @attribute
+* [export] fn [mode] [qualifier] Name(params...) -> Type Block
 
 파라미터:
 
@@ -549,8 +628,8 @@ fn shadowing() {
 예시
 
 ```gaupel
-@returns int
-fn add(a: int, b: int) {
+@pure
+export fn add(a: int, b: int) -> u32 {
   return a + b;
 }
 ```
@@ -581,8 +660,8 @@ v0 보수 규칙:
 예시
 
 ```gaupel
-@returns int
-fn pure clamp(p: int, lo: int, hi: int) {
+@pure
+fn clamp(p: int, lo: int, hi: int) -> int {
   if (p < lo) { return lo; }
   if (p > hi) { return hi; }
   return p;
@@ -624,8 +703,8 @@ comptime 호출 위치 (v0 권장):
 예시
 
 ```gaupel
-@returns int
-fn comptime pow2(n: int) {
+@comptime
+fn pow2(n: int) -> int {
   // 단순 루프는 comptime 엔진이 지원한다고 가정
   mut set r = 1;
   mut set i = 0;
@@ -636,8 +715,8 @@ fn comptime pow2(n: int) {
   return r;
 }
 
-@returns void
-fn use_comptime() {
+
+fn use_comptime() -> void {
   let x: int = pow2(a: 5); // error: comptime 함수는 런타임에서 호출 불가
   // v0에서는 컴파일 타임 컨텍스트에서만 호출되도록 별도 문맥 규칙이 필요
 }
@@ -666,11 +745,9 @@ v0에서의 실용 규칙(권장):
 예시
 
 ```gaupel
-@returns int
-fn f(a: int, b: int) { return a + b; }
+fn f(a: int, b: int) -> int { return a + b; }
 
-@returns void
-fn calls() {
+fn calls() -> void {
   set x = f(1, 2);         // ok: positional
   set y = f(a: 1, b: 2);   // ok: labeled
   // set z = f(1, b: 2);   // error: mixed
@@ -696,8 +773,7 @@ fn calls() {
 예시
 
 ```gaupel
-@returns int
-fn sign(x: int) {
+fn sign(x: int) -> int {
   if (x < 0) { return -1; }
   elif (x == 0) { return 0; }
   else { return 1; }
@@ -725,8 +801,7 @@ switch (expr) {
 예시
 
 ```gaupel
-@returns int
-fn classify(c: char) {
+fn classify(c: char) -> int {
   switch (c) {
     case 'a': { return 1; }
     case 'b': { return 2; }
@@ -750,8 +825,7 @@ fn classify(c: char) {
 예시
 
 ```gaupel
-@returns int
-fn sum_to(n: int) {
+fn sum_to(n: int) -> int {
   mut set i = 0;
   mut set s = 0;
   while (i <= n) {
@@ -795,8 +869,7 @@ IterableExpr 허용 (v0):
 예시 (배열)
 
 ```gaupel
-@returns int
-fn sum_arr(xs: int[4]) {
+fn sum_arr(xs: int[4]) -> int {
   mut set s = 0;
   loop(iter: v in xs) {
     s = s + v;
@@ -808,8 +881,7 @@ fn sum_arr(xs: int[4]) {
 예시 (범위)
 
 ```gaupel
-@returns int
-fn sum_range(n: int) {
+fn sum_range(n: int) -> int {
   mut set s = 0;
   loop(iter: i in 0..:n) {
     s = s + i;
@@ -845,8 +917,7 @@ v0 권장 규칙 (단순):
 예시 (명시 이름 버전, 권장)
 
 ```gaupel
-@returns int
-fn sum_for() {
+fn sum_for() -> int {
   mut set s = 0;
   loop(for: i in 1..:5) {
     s = s + i;
@@ -858,8 +929,7 @@ fn sum_for() {
 예시 (축약 버전, 선택 구현)
 
 ```gaupel
-@returns int
-fn sum_for_short() {
+fn sum_for_short() -> int {
   mut set s = 0;
   loop(for: 1..:5) {
     // i는 컴파일러가 자동 제공한다고 가정
@@ -895,8 +965,7 @@ fn sum_for_short() {
 예시
 
 ```gaupel
-@returns void
-fn exprs() {
+fn exprs() -> void {
   set a = 1 + 2 * 3;
   set ok = (a >= 7) and (a != 0);
   set r = ok ? 10 : 20; // 중첩은 금지
@@ -921,14 +990,11 @@ fn exprs() {
 예시
 
 ```gaupel
-@returns int
-fn add(a: int, b: int) { return a + b; }
+fn add(a: int, b: int) -> int { return a + b; }
 
-@returns int
-fn mul(x: int, y: int) { return x * y; }
+fn mul(x: int, y: int) -> int { return x * y; }
 
-@returns void
-fn pipe_demo() {
+fn pipe_demo() -> void {
   set r = 1 << add(a: _, b: 2) << mul(x: _, y: 10);
 }
 ```
@@ -1054,13 +1120,11 @@ v0에서 place expression의 최소 집합:
 ##### 예시 1: 읽기 전용 borrow
 
 ```gaupel
-@returns int
-fn sum2(a: &int, b: &int) {
+fn sum2(a: &int, b: &int) -> int {
   return a + b;
 }
 
-@returns void
-fn demo_read_borrow() {
+fn demo_read_borrow() -> void {
   set x = 10;
   set y = 20;
   set s = sum2(a: &x, b: &y);
@@ -1070,13 +1134,11 @@ fn demo_read_borrow() {
 ##### 예시 2: `&mut`로 수정 권한 위임
 
 ```gaupel
-@returns void
-fn inc(x: &mut int) {
+fn inc(x: &mut int) -> void {
   x = x + 1;
 }
 
-@returns void
-fn demo_write_borrow() {
+fn demo_write_borrow() -> void {
   mut set a = 0;
   inc(x: &mut a);
   // a == 1
@@ -1086,14 +1148,12 @@ fn demo_write_borrow() {
 ##### 예시 3: borrow 비탈출 규칙(금지 사례)
 
 ```gaupel
-@returns &int
-fn bad_return_ref() {
+fn bad_return_ref() -> &int {
   set x = 3;
   return &x;   // error: borrow 값은 함수 밖으로 탈출할 수 없다
 }
 
-@returns void
-fn bad_store_global() {
+fn bad_store_global() -> void {
   // Draft.someRef = &x; // error: Draft/field/tablet 멤버 저장 금지
 }
 ```
@@ -1103,11 +1163,10 @@ fn bad_store_global() {
 ```gaupel
 tablet File {
   public:
-    @returns void fn close() { /* ... */ }
+    fn close() -> void { /* ... */ }
 }
 
-@returns handle<File>
-fn open_file() {
+fn open_file() -> handle<File> {
   set f = File();   // 스택/스코프 소유
   return &&f;       // f 소비, handle로 승격하여 반환
 }
@@ -1116,8 +1175,7 @@ fn open_file() {
 ##### 예시 5: `&mut` 배타 규칙(충돌)
 
 ```gaupel
-@returns void
-fn demo_exclusive() {
+fn demo_exclusive() -> void {
   mut set x = 1;
 
   set r = &mut x;
@@ -1131,8 +1189,7 @@ fn demo_exclusive() {
 ##### 예시 6: 논리 연산은 키워드만 사용
 
 ```gaupel
-@returns void
-fn demo_logic() {
+fn demo_logic() -> void {
   set a = true;
   set b = false;
 
@@ -1253,8 +1310,7 @@ slice borrow는 일반 borrow와 동일한 성질을 가진다.
 #### (5) 예시: 요청한 형태 그대로
 
 ```gaupel
-@returns void
-fn slice_demo() {
+fn slice_demo() -> void {
   let x: int[8] = [0,1,2,3,4,5,6,7];
 
   // 슬라이스 생성(읽기 전용)
@@ -1273,8 +1329,7 @@ fn slice_demo() {
 #### (6) 함수 파라미터에서의 사용 예시
 
 ```gaupel
-@returns int
-fn sum(xs: &[int]) {
+fn sum(xs: &[int]) -> int {
   mut set s = 0;
   // v0에서는 slice 반복을 단순화하기 위해 표준 라이브러리 helper가 필요할 수 있음
   // 최소 구현: xs[i] 인덱싱을 허용(범위 내라고 가정하거나 디버그 검사)
@@ -1286,8 +1341,7 @@ fn sum(xs: &[int]) {
   return s;
 }
 
-@returns void
-fn use_sum() {
+fn use_sum() -> void {
   let a: int[6] = [10,20,30,40,50,60];
   set mid = &a[1..:4];     // &[int] (20,30,40,50)
   set r = sum(xs: mid);
@@ -1355,20 +1409,17 @@ Gaupel의 “명시적 비용” 철학상 정책 A가 더 보수적이고 구�
 #### (5) 예시(반환/대입/초기화)
 
 ```gaupel
-@returns int
-fn demo_copy_return(a: int) {
+fn demo_copy_return(a: int) -> int {
   // int는 내장 copy 가능
   return copy a;
 }
 
-@returns void
-fn demo_copy_assign() {
+fn demo_copy_assign() -> void {
   let x: int = 3;
   let y: int = copy x;   // 명시적 복사
 }
 
-@returns void
-fn demo_clone_assign() {
+fn demo_clone_assign() -> void {
   let s: string = "hi";
   let t: string = clone s;   // 깊은 복제(새 버퍼)
 }
@@ -1396,8 +1447,7 @@ field Big {
 }
 
 acts Big {
-  @returns Big
-  fn do_copy(self: Big) : op("copy") {
+  fn do_copy(self: Big) : op("copy") -> Big {
     // field는 POD이므로 단순 복사로 충분
     return __intrin_memcpy_big(x: self);
   }
@@ -1437,18 +1487,16 @@ v0에서 구현 난이도를 낮추기 위해 다음처럼 제한을 권장한�
 ```gaupel
 tablet File {
   public:
-    @returns void fn close() { /* ... */ }
+    fn close() -> void { /* ... */ }
 }
 
 acts File {
-  @returns void
-  fn drop(self: File) : op("drop") {
+  fn drop(self: File) : op("drop") -> void {
     self.close();
   }
 }
 
-@returns void
-fn demo_delete() {
+fn demo_delete() -> void {
   set f = File();
   delete f;       // 조기 파괴(이후 f 사용 불가)
 
@@ -1488,11 +1536,9 @@ v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 �
 
 ```gaupel
 acts string {
-  @returns string
-  fn do_clone(self: string) : op("clone") { return __intrin_string_clone(s: self); }
+  fn do_clone(self: string) : op("clone") -> string { return __intrin_string_clone(s: self); }
 
-  @returns void
-  fn drop(self: string) : op("drop") { __intrin_string_drop(s: self); }
+  fn drop(self: string) : op("drop") -> void { __intrin_string_drop(s: self); }
 }
 ```
 
@@ -1512,8 +1558,7 @@ acts string {
 class Game {
   // Draft.score 같은 상태가 존재한다고 가정
 
-  @returns int
-  fn score() : sub { return Draft.score; }
+  fn sub score() -> int { return Draft.score; }
 }
 ```
 
@@ -1540,8 +1585,7 @@ recast (추가 설명):
 
 ```gaupel
 class Cache {
-  @returns int
-  fn get() : sub {
+  fn sub get() -> int {
     // sub는 기본적으로 스냅샷을 읽는다
     if (Draft.isStale) {
       // continue처럼 제어 구문으로 취급: 관찰 뷰를 다시 맞춘다
@@ -1562,7 +1606,7 @@ class Cache {
 
 v0 권장:
 
-* pub는 @returns void
+* pub는 void return
 * pub 내부 return 금지
 
 추가 (제어 구문 성격 강조):
@@ -1576,8 +1620,7 @@ v0 권장:
 
 ```gaupel
 class Counter {
-  @returns void
-  fn add(delta: int) : pub {
+  fn pub add(delta: int) -> void {
     if (delta < 0) {
       // commit; // 있어도 최종 commit으로는 인정되지 않음 (정책에 따라 경고/에러 가능)
     }
@@ -1757,8 +1800,7 @@ field<u32, i32> OnlyInts {
 
 ```gaupel
 proto Drawable {
-  @returns void
-  fn draw();
+  fn draw() -> void;
 }
 ```
 
@@ -1786,8 +1828,7 @@ tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    @returns void
-    fn draw() {
+    fn draw() -> void {
       // ...
     }
 
@@ -1838,19 +1879,16 @@ v0에서 파서와 타입체커 부담을 줄이기 위한 권장 문법:
 
 ```gaupel
 acts u32 {
-  @returns u32
-  fn add(self: u32, rhs: u32) : op("+") {
+  fn add(self: u32, rhs: u32) : op("+") -> u32 {
     // 실제 구현은 컴파일러 내장 또는 IR intrinsic으로 매핑
     return __intrin_u32_add(a: self, b: rhs);
   }
 
-  @returns u32
-  fn sub(self: u32, rhs: u32) : op("-") {
+  fn sub(self: u32, rhs: u32) : op("-") -> u32 {
     return __intrin_u32_sub(a: self, b: rhs);
   }
 
-  @returns bool
-  fn eq(self: u32, rhs: u32) : op("==") {
+  fn eq(self: u32, rhs: u32) : op("==") -> u32 {
     return __intrin_u32_eq(a: self, b: rhs);
   }
 }
@@ -1859,8 +1897,7 @@ acts u32 {
 이제 사용자 코드는 다음처럼 자연스럽게 연산자를 사용한다.
 
 ```gaupel
-@returns void
-fn u32_ops() {
+fn u32_ops() -> void {
   let a: u32 = 10u32;
   let b: u32 = 20u32;
   set c = a + b;
@@ -1872,21 +1909,16 @@ fn u32_ops() {
 
 ```gaupel
 acts u32 {
-  @returns u32
-  fn add(self: u32, rhs: u32) : op("+") { return __intrin_u32_add(a: self, b: rhs); }
+  fn add(self: u32, rhs: u32) : op("+") -> u32 { return __intrin_u32_add(a: self, b: rhs); }
 
-  @returns u32
-  fn sub(self: u32, rhs: u32) : op("-") { return __intrin_u32_sub(a: self, b: rhs); }
+  fn sub(self: u32, rhs: u32) : op("-") -> u32 { return __intrin_u32_sub(a: self, b: rhs); }
 
-  @returns u32
-  fn mul(self: u32, rhs: u32) : op("*") { return __intrin_u32_mul(a: self, b: rhs); }
+  fn mul(self: u32, rhs: u32) : op("*") -> u32 { return __intrin_u32_mul(a: self, b: rhs); }
 
-  @returns bool
-  fn lt(self: u32, rhs: u32) : op("<") { return __intrin_u32_lt(a: self, b: rhs); }
+  fn lt(self: u32, rhs: u32) : op("<") -> u32 { return __intrin_u32_lt(a: self, b: rhs); }
 
   // ++ 지원을 acts로도 모델링하고 싶다면 (v1+ 확장 키 예시)
-  // @returns u32
-  // fn inc_pre(self: &mut u32) : op("++pre") { ... }
+  // fn inc_pre(self: &mut u32) : op("++pre") -> u32 { ... }
 }
 ```
 
@@ -1904,8 +1936,7 @@ acts u32 {
 예시 (에러 케이스)
 
 ```gaupel
-@returns void
-fn bad_ops() {
+fn bad_ops() -> u32 {
   let a: u32 = 1u32;
   let b: int = 2i32;
   // set c = a + b; // error: op("+") for (u32, int) not found
@@ -1929,8 +1960,7 @@ fn bad_ops() {
 예시
 
 ```gaupel
-@returns void
-fn lambdas() {
+fn lambdas() -> void {
   set f = [](x: int) { return x + 1; };
   set y = f(3);
 }
@@ -1955,66 +1985,62 @@ fn lambdas() {
 
 ## 13. 심볼, ABI, 디버깅, 맹글링 규칙
 
-### 13.1 오버로딩 정책 (수정: 맹글링 도입으로 오버로딩 가능)
+### 13.1 오버로딩 규약(라벨 포함)
 
-기존 규칙을 다음처럼 갱신한다:
+Gaupel은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시그니처에 포함**된다.
 
-* 맹글링이 도입되었으므로, 함수 오버로딩을 허용한다.
-* 허용 범위:
+시그니처 유일성 키(v0):
 
-  * 동일 스코프에서 같은 이름의 fn을 여러 개 선언 가능
-  * 단, 모호한 호출이 발생하면 타입체커가 에러를 낸다
-* 권장:
+* 함수의 전체 경로: `module::(space...)::name`
+* 파라미터 개수(arity)
+* 각 파라미터의 **타입**
+* 각 파라미터의 **라벨 이름**
+* 반환 타입
+* (권장) `sub/pub` 모드도 시그니처에 포함 (상태 접근 의미가 달라 ABI/규칙이 달라질 수 있음)
 
-  * v0 초기에는 "과도한 오버로딩"을 경고로 두고, 명시적 호출을 권장한다
-  * 라벨 인자 호출은 오버로딩 해소에 도움을 준다 (이름이 같은 함수라도 파라미터 이름이 다르면 혼동 가능성이 있으므로, 정책은 보수적으로)
+호출 해소 규칙:
 
-예시 (오버로딩 허용)
+* 후보 집합을 모은 뒤,
+* “타입 + 라벨”이 정확히 1개에만 매칭되면 선택
+* 0개면 not found, 2개 이상이면 ambiguous 에러
 
-```gaupel
-@returns int
-fn f(a: int) { return a; }
+---
 
-@returns int
-fn f(a: int, b: int) { return a + b; }
-
-@returns void
-fn overload_demo() {
-  set x = f(a: 1);
-  set y = f(a: 1, b: 2);
-}
-```
-
-연산자 정의는 여전히 acts의 op 매핑으로 처리한다.
-
-### 13.2 사람 친화적 맹글링 (가독성 목표)
+### 13.2 맹글링 규칙(사람 친화 + 안정 링크)
 
 목표:
 
-* 디버거에서 원 이름이 보이게 한다.
-* 충돌을 막기 위한 정보는 뒤에 붙인다.
+* 디버거에서 원 이름이 읽히도록 유지
+* 링크 충돌 방지 + 오버로딩 지원
 
-권장 형식:
+권장 심볼 포맷(v0):
 
-* BaseName + "_" + uuid_or_hash
-* 같은 BaseName 충돌이 발생하면 _1, _2 같은 suffix (추가)
-* 제네릭 실체화는 _u32, _int 같은 suffix
+```
+<ModuleId>__<Path>__<BaseName>__P<ParamSig>__R<RetSig>__H<Hash>
+```
 
-오버로딩과 맹글링의 결합 규칙 (추가):
+* `ModuleId`: 모듈 경로를 정규화한 짧은 ID(예: `engine_core`)
+* `Path`: `space` 경로를 `__`로 연결 (예: `math__vec`)
+* `ParamSig`: 파라미터를 좌→우 순서로 나열, 각 항목은 `label$type`
 
-* 오버로딩된 함수는 "원형이 보이는 형태"를 우선한다.
-* 기본 형태 예:
+  * 예: `a$i32_b$i32`
+* `RetSig`: 반환 타입 (예: `i32`, `u32`, `void`)
+* `Hash`: 위 정보를 canonical 문자열로 만든 뒤 짧은 해시(충돌 방지)
 
-  * f(int) -> f_int_ab12cd34
-  * f(int,int) -> f_int_int_ab12cd34
-* 만약 동일한 시그니처가 모듈 경계에서 충돌하면, 뒤에 _1, _2 를 추가한다.
+예시:
 
-예시 (개념)
+* `engine_core__math__add__Pa$i32_b$i32__Ri32__H9f2c1a`
+* 오버로딩(라벨이 다르면 다른 심볼):
 
-* Sprite::draw -> Sprite__draw_ab12cd34
-* f(int) -> f_int_ab12cd34
-* f(int,int) -> f_int_int_ab12cd34
-* u32 op("+") add -> u32__op_add_plus_ab12cd34
+  * `...__Pa$x_i32__...` vs `...__Pleft$i32_right$i32__...`
+
+추가 규칙(v0 권장):
+
+* `export`된 심볼은 기본적으로 위 규칙으로 맹글링된다.
+* “정확히 이 이름으로 외부 ABI에 노출”이 필요하면(FFI 등),
+
+  * 별도 어트리뷰트(예: `@cabi`)로 “no-mangle export”를 제공하는 것을 권장한다.
+  * (이건 지금 문서에 “확장 포인트”로만 남겨도 됨)
 
 ---
 
@@ -2031,7 +2057,6 @@ fn overload_demo() {
 ### 14.2 파서
 
 * let/set/mut 바인딩
-* @returns 강제, fn qualifier 목록
 * while, loop(iter: i in expr)
 * loop(for: ...) (추가)
 * range a..b, a..:b
@@ -2081,16 +2106,14 @@ field<u32, i32> OnlyInts {
 }
 
 proto Drawable {
-  @returns void
-  fn draw();
+  fn draw() -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    @returns void
-    fn draw() {
+    fn draw() -> void {
       // draw using pos
     }
 
@@ -2099,40 +2122,33 @@ tablet Sprite : Drawable {
 }
 
 acts u32 {
-  @returns u32
-  fn add(self: u32, rhs: u32) : op("+") {
+  fn add(self: u32, rhs: u32) : op("+") -> u32 {
     return __intrin_u32_add(a: self, b: rhs);
   }
 
-  @returns bool
-  fn eq(self: u32, rhs: u32) : op("==") {
+  fn eq(self: u32, rhs: u32) : op("==") -> u32 {
     return __intrin_u32_eq(a: self, b: rhs);
   }
 }
 
 class Counter {
-  @returns u32
-  fn get() : sub {
+  fn sub get() -> u32 {
     // 필요하면 관찰 뷰를 재설정
     recast;
     return Draft.count;
   }
 
-  @returns void
-  fn inc() : pub {
+  fn pub inc() -> void {
     Draft.count += 1u32;
     commit;
   }
 }
 
-@returns int
-fn f(a: int) { return a; }
+fn f(a: int) -> int { return a; }
 
-@returns int
-fn f(a: int, b: int) { return a + b; }
+fn f(a: int, b: int) -> int { return a + b; }
 
-@returns void
-fn main() {
+fn main() -> void {
   let xs: u32[3] = [1u32, 2u32, 3u32];
 
   mut set s = 0u32;
@@ -2188,7 +2204,6 @@ EmbedFFIDecl =
     "embed" "func::ffi" "<" FfiSig ">" Ident ";"
   | "embed" "struct::ffi" Ident "{" FieldList "}" ;
 
-ReturnsDecl = "@returns" Type ;
 
 FuncDecl = ReturnsDecl "fn" { Qualifier } Ident "(" [ ParamList ] ")" [ Mode ] Block ;
 Qualifier = "pure" | "comptime" ;
