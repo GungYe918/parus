@@ -43,6 +43,22 @@ namespace gaupel::syntax {
     kKwBreak,
     kKwContinue,
 
+    // ---- keywords (decl / control) ----
+    kKwFn,
+    kKwClass,
+    kKwSwitch,
+    kKwCase,
+    kKwDefault,
+    kKwLoop,
+    kKwIter,
+    kKwIn,
+    kKwCommit,
+    kKwRefresh,
+    kKwPub,
+    kKwSub,
+    kKwPure,
+    kKwComptime,
+
     // punct / delimiters
     kLParen,   // (
     kRParen,   // )
