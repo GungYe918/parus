@@ -25,30 +25,30 @@ export fn demo_small_big() -> void {
   set x = 3;
   set y = x + 2;
 
-  // 큰 상태는 class Draft + pub/sub + commit으로 관리되는 방향을 지향
+  // 큰 상태는 class draft + pub/sub + commit으로 관리되는 방향을 지향
 }
 ```
 
 ### 0.2 작은 데이터 vs 큰 상태 (이원 모델)
 
 * 작은 데이터 전달/공유: 기본은 move, 필요 시 copy를 명시한다. (borrow/ref는 v0에서 설계 포함, 구현은 단계적으로)
-* 큰 공유 컨텍스트: class Draft + pub/sub + commit 모델을 사용한다.
+* 큰 공유 컨텍스트: class draft + pub/sub + commit 모델을 사용한다.
 
-  * sub: Draft 스냅샷 읽기 전용
-  * pub: Draft 수정 + commit 강제
+  * sub: draft 스냅샷 읽기 전용
+  * pub: draft 수정 + commit 강제
 
 예시
 
 ```gaupel
 class Counter {
-  // Draft.count 라는 큰 상태를 가진다고 가정
+  // draft.count 라는 큰 상태를 가진다고 가정
 
   fn sub get() -> int {
-    return Draft.count;
+    return draft.count;
   }
 
   fn pub inc() -> void {
-    Draft.count += 1;
+    draft.count += 1;
     commit;
   }
 }
@@ -140,7 +140,7 @@ fn utf8_identifiers() -> void {
 * 제어: if, elif, else, switch, case, default, while, loop, break, continue, return
 * 상탯값: true, false, null
 * 논리: and, or, not, xor
-* 시스템: embed, module, func::ffi, struct::ffi, commit, recast
+* 시스템: use, module, func::ffi, struct::ffi, commit, recast
 * 접근 제한: public, private
 * 메모리/수명/복사: **copy, clone, delete**
 * slice 관련 타입 표기(토큰이 아니라 타입 표기): **[T]**, **&[T]**, **&mut [T]**
@@ -390,7 +390,7 @@ export space engine {
 
 * Gaupel에서 "모듈(module)"은 컴파일 단위이다.
 * Rust가 crate를 컴파일 단위로 보듯, Gaupel은 "하나의 모듈(그리고 그 모듈이 포함하는 소스 집합)"을 컴파일 단위로 취급한다.
-* embed module은 이 컴파일 단위를 불러오는 문법이며, 단순 include가 아니다.
+* use module은 이 컴파일 단위를 불러오는 문법이며, 단순 include가 아니다.
 * 따라서 모듈 단위로 심볼 테이블, 의존성 그래프, 증분 빌드 캐시, ABI 경계 정책을 적용하기 쉽다.
 
 예시
@@ -408,14 +408,14 @@ fn use_modules() -> void {
 ### 3.3 FFI 임포트
 
 * extern 키워드는 제공하지 않는다.
-* FFI는 항상 embed로 명시적으로 가져온다.
+* FFI는 항상 use로 명시적으로 가져온다.
 * FFI는 ABI 경계이므로 pure/comptime에서 기본 금지다. (타입체커 규칙)
 
 예시
 
 ```gaupel
-embed func::ffi<int (int, int)> c_add;
-embed struct::ffi Vec2C { float32 x; float32 y; }
+use func::ffi<int (int, int)> c_add;
+use struct::ffi Vec2C { float32 x; float32 y; }
 
 fn call_c(a: int, b: int) -> int {
   return c_add(a: a, b: b);
@@ -450,7 +450,7 @@ fn call_c(a: int, b: int) -> int {
 * `field` -> `struct` (C 호환 레이아웃)
 * `handle<T>` -> `void*`(또는 `struct Handle_T*`) + 생성/해제 함수 세트
 * `tablet` -> C에서 직접 값으로는 못 다루고, 반드시 `handle<tablet>`로만 다룬다
-* `class`/`Draft`/`pub-sub` -> **FFI로 직접 노출하지 않는다**
+* `class`/`draft`/`pub-sub` -> **FFI로 직접 노출하지 않는다**
   대신:
 
   * “C가 호출할 수 있는 pub/sub wrapper 함수”를 제공하고,
@@ -460,7 +460,7 @@ fn call_c(a: int, b: int) -> int {
 
 ```gaupel
 class Counter {
-  fn inc() : pub { Draft.count += 1u32; commit; }
+  fn inc() : pub { draft.count += 1u32; commit; }
 }
 
 fn counter_inc_ffi(h: handle<Counter>) -> void {
@@ -682,7 +682,7 @@ v0 보수 규칙:
 
   * commit, recast 사용
   * pub 호출 (큰 상태 수정 경로)
-  * FFI 호출 (embed ...::ffi)
+  * FFI 호출 (use ...::ffi)
   * I/O 성격 표준 라이브러리 호출
   * && 사용
 
@@ -1110,7 +1110,6 @@ fn sum_for_short() -> int {
 * ++x : 전위 증가. 결과는 "증가 후 값"이다.
 * x가 mut 바인딩이어야 한다.
 * acts 기반으로도 모델링할 수 있으나, v0에서는 기본 수치 타입에 대해 내장으로 제공해도 된다.
-* 사용자 정의 타입에 대한 ++ 지원은 v0에서는 금지하거나, acts op("++pre"), op("++post") 같은 별도 키로 확장하는 방식으로 진행할 수 있다.
 
 예시
 
@@ -1184,7 +1183,7 @@ borrow 값(`&T`, `&mut T`)은 **절대 탈출할 수 없다**.
 탈출 금지에는 아래가 포함된다.
 
 * 함수 반환값으로 반환 금지
-* 전역/클래스 Draft/field/tablet 멤버에 저장 금지
+* 전역/클래스 draft/field/tablet 멤버에 저장 금지
 * 배열/리스트/클로저 캡처에 저장 금지
 * FFI로 전달 금지(ABI 경계)
 * `&&`로 승격 금지(= borrow를 escape로 바꾸는 것 금지)
@@ -1304,7 +1303,7 @@ fn bad_return_ref() -> &int {
 }
 
 fn bad_store_global() -> void {
-  // Draft.someRef = &x; // error: Draft/field/tablet 멤버 저장 금지
+  // draft.someRef = &x; // error: draft/field/tablet 멤버 저장 금지
 }
 ```
 
@@ -1535,8 +1534,8 @@ v0 권장 정책:
 1. Expr의 타입을 T로 확정한다.
 2. `acts T`에서 다음 op를 찾는다.
 
-   * `op("copy")`  (copy용)
-   * `op("clone")` (clone용)
+   * `op(copy)`  (copy용)
+   * `op(clone)` (clone용)
 3. 정확히 1개가 매칭되면 그 반환 타입이 결과 타입이다(일반적으로 T).
 4. 없으면 에러.
 
@@ -1596,8 +1595,8 @@ field Big {
   u32 d;
 }
 
-acts Big {
-  fn do_copy(self: Big) : op("copy") -> Big {
+acts for Big {
+  operator(copy)(self: Big) -> Big {
     // field는 POD이므로 단순 복사로 충분
     return __intrin_memcpy_big(x: self);
   }
@@ -1618,11 +1617,11 @@ acts Big {
 #### (2) 의미론
 
 * `delete x;`는 x를 **소비(consumed)** 하며, 이후 x는 사용 불가이다.
-* `delete`는 내부적으로 `acts T`의 `op("drop")` 또는 tablet destructor/handle drop으로 lowering 된다.
+* `delete`는 내부적으로 `acts T`의 `op(drop)` 또는 tablet destructor/handle drop으로 lowering 된다.
 
 권장 lowering:
 
-* `delete x;`  ==>  `__drop(T, x)` 또는 `acts T op("drop")`
+* `delete x;`  ==>  `__drop(T, x)` 또는 `acts T op(drop)`
 
 #### (3) 적용 대상(v0 권장)
 
@@ -1632,63 +1631,41 @@ v0에서 구현 난이도를 낮추기 위해 다음처럼 제한을 권장한�
 * 금지: borrow(`&T`, `&mut T`, `&[T]`, `&mut [T]`)에 대한 delete
 * 금지: `pure` / `comptime` 내부에서 delete
 
-#### (4) 예시
-
-```gaupel
-tablet File {
-  public:
-    fn close() -> void { /* ... */ }
-}
-
-acts File {
-  fn drop(self: File) : op("drop") -> void {
-    self.close();
-  }
-}
-
-fn demo_delete() -> void {
-  set f = File();
-  delete f;       // 조기 파괴(이후 f 사용 불가)
-
-  // set g = &&f;  // error: f는 이미 delete로 소비됨
-}
-```
-
 > 주의: tablet 생성자/소멸자 삭제 문법의 `= delete;`는 “선언” 문맥이고,
 > 여기의 `delete x;`는 “문장” 문맥이다. 둘은 충돌하지 않는다.
 
 ### 8.7 연산자 전반의 acts op 매핑 확장 지침(표준 키 목록)
 
-표현식에서 사용하는 연산자 대부분은 `acts`의 `op("...")`로 해석 가능해야 한다.
+표현식에서 사용하는 연산자 대부분은 `acts`의 `op(...)`로 해석 가능해야 한다.
 v0에서 구현을 튼튼하게 만들기 위해, **op 키 문자열을 표준화**한다.
 
 #### (1) v0 표준 op 키(권장)
 
 이 목록은 “문법 토큰”과 “op 키”를 1:1로 연결하기 위한 최소 표준이다.
 
-* 산술: `op("+")`, `op("-")`, `op("*")`, `op("/")`, `op("%")`
-* 비교: `op("==")`, `op("!=")`, `op("<")`, `op("<=")`, `op(">")`, `op(">=")`
-* 논리(키워드 기반): `op("and")`, `op("or")`, `op("not")`, `op("xor")`
-* 단항: `op("-unary")`, `op("!")(또는 not와 통일)`
-* 복사/복제: `op("copy")`, `op("clone")`
-* 파괴: `op("drop")`
-* 증감(v1+ 확장 키 예시): `op("++pre")`, `op("++post")` 등
+* 산술: `op(+)`, `op(-)`, `op(*)`, `op(/)`, `op(%")`
+* 비교: `op(==)`, `op(!=)`, `op(<)`, `op(<=)`, `op(>)`, `op(>=)`
+* 논리(키워드 기반): `op(and)`, `op(or)`, `op(not)`, `op(xor)`
+* 단항: `op(-unary)`, `op(not)(또는 not와 통일)`
+* 복사/복제: `op(copy)`, `op(clone)`
+* 파괴: `op(drop)`
+* 증감(v1+ 확장 키 예시): `op(++pre)`, `op(++post)` 등
 
 v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 되며,
 장기적으로는 위 확장 키로 acts에 편입 가능하다.
 
 #### (2) 규칙
 
-* 동일 타입의 acts 블록에서 같은 `op("...")`는 **정확히 1개만** 허용한다.
+* 동일 타입의 acts 블록에서 같은 `op(...)`는 **정확히 1개만** 허용한다.
 * 여러 후보가 생기면 모호성 에러(ambiguous)로 보고한다.
 
 #### (3) 예시: copy/clone/drop까지 포함한 acts
 
 ```gaupel
 acts string {
-  fn do_clone(self: string) : op("clone") -> string { return __intrin_string_clone(s: self); }
+  fn do_clone(self: string) : op(clone) -> string { return __intrin_string_clone(s: self); }
 
-  fn drop(self: string) : op("drop") -> void { __intrin_string_drop(s: self); }
+  fn drop(self: string) : op(drop) -> void { __intrin_string_drop(s: self); }
 }
 ```
 
@@ -1777,16 +1754,16 @@ fn load_user?(id: u32) -> User {
 
 ---
 
-## 9. class, Draft, pub/sub, commit, recast
+## 9. class, draft, pub/sub, commit, recast
 
-### 9.0 Draft의 실체: “스냅샷 + 스테이징(draft) 버퍼” 모델(명문화)
+### 9.0 draft의 실체: “스냅샷 + 스테이징(draft) 버퍼” 모델(명문화)
 
 class는 “큰 공유 상태”를 제공한다. v0의 핵심 구현 모델은 다음이다.
 
 * **Published Snapshot**: sub가 읽는 불변 스냅샷
-* **Draft Buffer**: pub가 수정하는 스테이징 버퍼(아직 발행되지 않음)
+* **draft Buffer**: pub가 수정하는 스테이징 버퍼(아직 발행되지 않음)
 
-즉, pub에서 `Draft.x = ...`는 “즉시 공유 메모리를 찌르기”가 아니라,
+즉, pub에서 `draft.x = ...`는 “즉시 공유 메모리를 찌르기”가 아니라,
 **스테이징 버퍼에 변경을 기록**하는 동작이다. `commit;`에서만 발행된다.
 
 이 모델은 OS 의존이 아니다.
@@ -1797,36 +1774,36 @@ class는 “큰 공유 상태”를 제공한다. v0의 핵심 구현 모델은 
 ### 9.1 class 정의
 
 * class는 대단위 공유 컨텍스트 단위다.
-* Draft는 class가 보유하는 상태의 논리적 이름이다.
-* Draft 접근은 sub/pub 모드 함수에서만 허용한다.
+* draft는 class가 보유하는 상태의 논리적 이름이다.
+* draft 접근은 sub/pub 모드 함수에서만 허용한다.
 
 예시
 
 ```gaupel
 class Game {
-  // Draft.score 같은 상태가 존재한다고 가정
+  // draft.score 같은 상태가 존재한다고 가정
 
-  fn sub score() -> int { return Draft.score; }
+  fn sub score() -> int { return draft.score; }
 }
 ```
 
 ### 9.2 sub 규칙
 
-* Draft 읽기만 가능
-* Draft에 대한 대입, 가변 변경 금지
-* recast; 는 sub 내부에서 "현재 sub가 보는 Draft 스냅샷을 재구성(recast)하여 최신 상태로 다시 캐스팅/재해석"하는 제어 구문으로 사용된다.
+* draft 읽기만 가능
+* draft에 대한 대입, 가변 변경 금지
+* recast; 는 sub 내부에서 "현재 sub가 보는 draft 스냅샷을 재구성(recast)하여 최신 상태로 다시 캐스팅/재해석"하는 제어 구문으로 사용된다.
 
 recast (추가 설명):
 
-* sub가 보는 Draft는 “함수 진입 시점의 스냅샷”이다(렉시컬 일관성).
+* sub가 보는 draft는 “함수 진입 시점의 스냅샷”이다(렉시컬 일관성).
 * `recast;`는 **현재 스레드/호출이 들고 있는 스냅샷 핸들을 최신으로 다시 잡는** 제어 구문이다.
 
 
 또한 pub/sub에서 commit, recast는 단순 함수 호출이 아니라 "제어 구문"으로 취급한다 (추가):
 
 * continue가 루프 흐름을 바꾸는 것처럼, commit/recast는 "상태 흐름을 바꾸는 제어 구문"이다.
-* 예를 들어, pub에서 commit은 "Draft 변경분을 발행"하고 pub의 상태 단계를 종료시키는 의미를 갖는다.
-* sub에서 recast는 "Draft 관찰 뷰"를 재설정하는 의미를 갖는다.
+* 예를 들어, pub에서 commit은 "draft 변경분을 발행"하고 pub의 상태 단계를 종료시키는 의미를 갖는다.
+* sub에서 recast는 "draft 관찰 뷰"를 재설정하는 의미를 갖는다.
 * 따라서 if 내부에서 continue를 쓰듯이, if 내부에서 recast/commit을 쓸 수 있으며, 이는 "제어적 의미"를 가진다.
 
   * 단, pub의 최종 commit 강제 규칙은 그대로 적용된다. (if 내부 commit은 최종 commit으로 인정되지 않는다)
@@ -1837,10 +1814,10 @@ recast (추가 설명):
 class Counter {
   fn sub get() -> u32 {
     // 오래된 스냅샷이면 갱신하고 싶을 때
-    if (Draft.stale) {
+    if (draft.stale) {
       recast;
     }
-    return Draft.count;
+    return draft.count;
   }
 }
 ```
@@ -1849,10 +1826,10 @@ class Counter {
 
 핵심 규칙:
 
-* pub 함수는 Draft 수정 가능
+* pub 함수는 draft 수정 가능
 * 최종 commit은 "함수 본문 최상위 블록의 마지막 유효 문장" 이어야 한다.
 * 분기/중첩 블록 내부의 commit은 최종 commit 검사에서 무시한다.
-* pub는 Draft를 수정할 수 있다. 단, v0의 흐름 규칙은 더 엄격히 고정한다.
+* pub는 draft를 수정할 수 있다. 단, v0의 흐름 규칙은 더 엄격히 고정한다.
 * pub는 내부적으로 “발행 가능한 변경 집합”을 만든다.
 * `commit;`을 실행하면 현재 변경 집합이 발행되고, pub는 계속 진행 가능(아래 9.X.5)
 
@@ -1877,37 +1854,37 @@ class Counter {
     if (delta < 0) {
       // commit; // 있어도 최종 commit으로는 인정되지 않음 (정책에 따라 경고/에러 가능)
     }
-    Draft.count += delta;
+    draft.count += delta;
     commit;
   }
 }
 ```
 
-### 9.3.1 pub에서 `&&`는 “핸들 생성(승격)”이며 Draft로는 “대입”만 한다
+### 9.3.1 pub에서 `&&`는 “핸들 생성(승격)”이며 draft로는 “대입”만 한다
 
-pub의 핵심은 “Draft 변경 + 최종 commit”이다. `&&`는 “소유권 탈출”이므로 pub에서 흔히 쓰일 수 있다:
+pub의 핵심은 “draft 변경 + 최종 commit”이다. `&&`는 “소유권 탈출”이므로 pub에서 흔히 쓰일 수 있다:
 
 예:
 
 ```gaupel
 fn add_sprite() : pub {
   set s = Sprite();
-  Draft.sprite = &&s;   // handle로 승격해 Draft에 저장
+  draft.sprite = &&s;   // handle로 승격해 draft에 저장
   commit;
 }
 ```
 
-### 9.3.2 pub/sub에서 Draft에 대한 “move-out” 금지
+### 9.3.2 pub/sub에서 draft에 대한 “move-out” 금지
 
-Draft는 “공유 상태의 저장소”이므로, v0에서는 Draft에서 값을 꺼내 move 하는 것을 금지하는 게 안전하다.
+draft는 “공유 상태의 저장소”이므로, v0에서는 draft에서 값을 꺼내 move 하는 것을 금지하는 게 안전하다.
 
 **v0 규칙:**
 
-* `&&Draft.x` 금지
-* `set y = Draft.x;` 는 Copy 가능한 타입이면 허용(복사/읽기)
+* `&&draft.x` 금지
+* `set y = draft.x;` 는 Copy 가능한 타입이면 허용(복사/읽기)
 * handle은 “값 복사(핸들 복제)”가 아니라 **핸들 규약**에 따른다(예: handle은 move-only, arc는 clone 등)
 
-이 규칙을 넣으면 Draft의 일관성/원자성 모델이 깨지는 걸 막을 수 있어.
+이 규칙을 넣으면 draft의 일관성/원자성 모델이 깨지는 걸 막을 수 있어.
 
 ### 9.3.3 commit의 경계 정의(강제): “publish barrier” + “borrow/alias 리셋 지점”
 
@@ -1918,24 +1895,24 @@ commit 경계에서의 규칙(강제):
 1. **commit을 넘는 borrow 금지**
 
    * pub에서 `&mut` 포함 모든 borrow 값(`&T`, `&mut T`, `&[T]`, `&mut [T]`)이 살아있는 상태로 `commit;` 실행 경로에 도달하면 에러
-2. **Draft에 대한 alias 규칙(배타)**
+2. **draft에 대한 alias 규칙(배타)**
 
-   * 같은 pub의 동일 스테이징 구간에서, 동일 Draft 셀(예: `Draft.x`, `Draft.arr[i]`)에 대해
+   * 같은 pub의 동일 스테이징 구간에서, 동일 draft 셀(예: `draft.x`, `draft.arr[i]`)에 대해
 
      * `&mut` alias가 2개 이상 생기면 에러
      * `&mut`이 존재하는 동안 동일 셀에 대한 읽기/쓰기 직접 접근도 에러(v0 보수 규칙)
-3. **Draft move-out 금지 유지**
+3. **draft move-out 금지 유지**
 
-   * `&&Draft.x` 금지
-   * Draft에서 꺼내는 건 “읽기(copy/clone/handle 규약)”만 허용
+   * `&&draft.x` 금지
+   * draft에서 꺼내는 건 “읽기(copy/clone/handle 규약)”만 허용
 
 예시(금지):
 
 ```gaupel
 class Bad {
   fn pub f() -> void {
-    set r = &mut Draft.count;
-    Draft.count = 1u32;
+    set r = &mut draft.count;
+    draft.count = 1u32;
     commit;              // error: borrow 살아있음
   }
 }
@@ -1952,10 +1929,10 @@ class Bad {
 
 pub는 한 번의 호출 안에서 여러 번 commit할 수 있다. 의미는 다음으로 고정한다.
 
-* `commit;`을 실행하면 **현재까지의 Draft 변경이 발행**된다.
+* `commit;`을 실행하면 **현재까지의 draft 변경이 발행**된다.
 * 그 즉시 pub는 **새 스테이징 단계**로 진입한다.
 
-  * 이후의 `Draft.*` 접근/수정은 “방금 발행된 최신 스냅샷”을 베이스로 하는 새로운 draft로 간주한다.
+  * 이후의 `draft.*` 접근/수정은 “방금 발행된 최신 스냅샷”을 베이스로 하는 새로운 draft로 간주한다.
 * 즉, pub 내부는 다음처럼 여러 “발행 단계”를 가질 수 있다:
 
 ```gaupel
@@ -1998,7 +1975,7 @@ pub는 “상태 발행을 반드시 명시”해야 하므로, 반환 정책을
 class Counter {
   fn pub add(delta: u32) -> u32 {
     draft.count += delta;
-    commit return Draft.count;     // 발행 + 반환
+    commit return draft.count;     // 발행 + 반환
   }
 }
 ```
@@ -2008,7 +1985,7 @@ class Counter {
 ```gaupel
 class Counter {
   fn pub inc() -> void {
-    Draft.count += 1u32;
+    draft.count += 1u32;
     commit;                        // 발행 + 종료(암묵 return)
   }
 }
@@ -2019,28 +1996,28 @@ class Counter {
 
 ---
 
-### 9.3.7 “Draft에 뭔가를 넣는(insert/append) 동작”의 위치: 표준 컨테이너는 **handle로 Draft에 저장**(권장)
+### 9.3.7 “draft에 뭔가를 넣는(insert/append) 동작”의 위치: 표준 컨테이너는 **handle로 draft에 저장**(권장)
 
-Draft는 “데이터 레코드 + 핸들”로 유지한다(기존 철학 강화).
+draft는 “데이터 레코드 + 핸들”로 유지한다(기존 철학 강화).
 
-* Draft 내부에 동적 컨테이너를 값으로 두지 않는다.
-* Draft에는 `handle<Vec<T>>` 같은 핸들만 두고,
+* draft 내부에 동적 컨테이너를 값으로 두지 않는다.
+* draft에는 `handle<Vec<T>>` 같은 핸들만 두고,
 * 실제 push/append는 핸들이 가리키는 구현체(tablet/컨테이너)에 대해 수행한다.
 
 예시(권장 패턴):
 
 ```gaupel
 class Scene {
-  // Draft.sprites: handle<SpriteList> 라고 가정
+  // draft.sprites: handle<SpriteList> 라고 가정
 
   fn pub add_sprite(s: handle<Sprite>) -> void {
-    // SpriteList는 tablet이고, Draft에는 handle만 저장
-    Draft.sprites.push(x: s);   // push는 handle/tablet 쪽 메서드
+    // SpriteList는 tablet이고, draft에는 handle만 저장
+    draft.sprites.push(x: s);   // push는 handle/tablet 쪽 메서드
     commit;
   }
 
   fn sub count() -> u32 {
-    return Draft.sprites.len();
+    return draft.sprites.len();
   }
 }
 ```
@@ -2048,7 +2025,7 @@ class Scene {
 이 패턴은 OS 의존이 없다.
 
 * freestanding에서는 컨테이너가 내부적으로 “사용자 제공 allocator” 또는 “고정 풀”을 쓰면 된다.
-* Draft는 여전히 “스냅샷/발행 모델”만 담당한다.
+* draft는 여전히 “스냅샷/발행 모델”만 담당한다.
 
 ---
 
@@ -2076,26 +2053,26 @@ v0에서 class는 다음 성질을 목표로 한다.
 
 > v0 권장: 중첩 선언은 허용하되, ABI/가시성 규칙은 “그냥 내부 스코프의 top-level”로 취급한다.
 
-### 9.4.2 class(Draft 상태)에 포함 가능한 것
+### 9.4.2 class(draft 상태)에 포함 가능한 것
 
-class의 Draft는 “대단위 공유 상태”이므로, v0에서는 **복잡한 생명주기/소유권이 끼는 값**을 Draft에 직접 넣지 않는 게 안정적이다.
+class의 draft는 “대단위 공유 상태”이므로, v0에서는 **복잡한 생명주기/소유권이 끼는 값**을 draft에 직접 넣지 않는 게 안정적이다.
 
 **v0 규칙:**
 
-* Draft에 직접 포함 가능:
+* draft에 직접 포함 가능:
 
   * 원시 타입, `char`, `bool`
   * `field` (단, field가 FFI-safe/POD 조건을 만족할 때)
   * 고정 배열 `T[N]` (T가 POD일 때)
   * `handle<T>` 같은 **핸들 계열**(표준 라이브러리 타입, 불투명 소유)
-* Draft에 직접 포함 금지:
+* draft에 직접 포함 금지:
 
   * `tablet` “값 인스턴스”
   * `class` 인스턴스
   * `string`, `T[]` 등 동적 소유/할당이 필요한 것(정책상 v0 금지 권장)
   * `&T`, `&mut T` (borrow)
 
-**의도:** Draft는 “데이터 레코드 + 핸들”로 유지하고, 리소스 생명주기/소유권은 handle로만 표현한다.
+**의도:** draft는 “데이터 레코드 + 핸들”로 유지하고, 리소스 생명주기/소유권은 handle로만 표현한다.
 
 ### 9.4.3 tablet 내부에 포함 가능한 것
 
@@ -2109,11 +2086,11 @@ tablet은 “일반 구현 타입”이므로 멤버 포함을 폭넓게 허용�
   * 다른 tablet 인스턴스(가능) *하지만 생성자/소멸자 호출이 존재*
 * tablet에 포함 금지:
 
-  * class 인스턴스 (Draft/publish 모델과 충돌: “객체 내부에 또 공유상태 머신”이 들어오면 모델이 무너짐)
+  * class 인스턴스 (draft/publish 모델과 충돌: “객체 내부에 또 공유상태 머신”이 들어오면 모델이 무너짐)
   * borrow 타입 멤버(`&T`, `&mut T`) (비탈출 원칙과 충돌)
 
-> **중요 포인트:** tablet을 class Draft에 “값으로” 넣는 건 금지하되, tablet은 어디서든 **handle<tablet>**로는 담을 수 있다.
-> 즉 “큰 상태 = handle로 들고, Draft에는 handle만 저장”이 기본 패턴.
+> **중요 포인트:** tablet을 class draft에 “값으로” 넣는 건 금지하되, tablet은 어디서든 **handle<tablet>**로는 담을 수 있다.
+> 즉 “큰 상태 = handle로 들고, draft에는 handle만 저장”이 기본 패턴.
 
 ---
 
@@ -2212,22 +2189,19 @@ proto Drawable {
 
 정의:
 
-* tablet은 구현체 타입이다.
-* 상속 표기: tablet A : B { ... }
-* tablet부터 생성자/소멸자가 존재한다.
-* 유저는 생성자/소멸자를 = delete; 로 제거할 수 있다.
-* 접근 제한자 public/private 를 지원한다.
-* protected는 없다.
+* `tablet`은 구현체 타입이다. (생성자/소멸자 + 메서드 + proto 구현)
+* 표기: `tablet Name [: Proto1, Proto2, ...] { ... }`
+* v0 권장: **상속은 proto에 대해서만 허용**한다.
 
-접근 제한 규칙 (단순 버전, v0):
-
-* public: 외부 접근 가능
-* private: tablet 내부에서만 접근 가능
-* 상속해도 접근 제한은 유지된다. (private은 derived에서 접근 불가)
+  * `tablet`끼리의 상속(필드/레이아웃 상속)은 v1+로 미룬다. (ABI/생성자 체인이 복잡해짐)
 
 예시
 
 ```gaupel
+proto Drawable {
+  fn draw() -> void;
+}
+
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
@@ -2235,115 +2209,473 @@ tablet Sprite : Drawable {
     fn draw() -> void {
       // ...
     }
-
-  private:
-    let secret: int;
 }
 ```
 
 ---
 
-## 11. acts: 타입별 행동과 연산자 정의
+### 10.3.1 멤버와 접근 제한자: `public:` / `private:`
+
+* `tablet` 본문은 “멤버 목록”이다.
+* 멤버 종류(v0):
+
+  * 데이터 멤버: `let name: Type;` 또는 `mut let name: Type;`(선택)
+  * 메서드: `fn ... { ... }`
+  * 생성자/소멸자: `construct`, `destruct` (아래 10.3.3)
+* 접근 제한자:
+
+  * C++ 스타일 `public:` / `private:` 라벨을 사용한다.
+  * 라벨은 “이후 멤버들에 적용되는 모드”를 바꾼다.
+  * v0 기본 접근은 `private`로 둔다.
+
+예시
+
+```gaupel
+tablet A {
+  let x: int;        // private
+
+  public:
+    fn get_x() -> int { return self.x; }
+
+  private:
+    fn helper() -> void { ... }
+}
+```
+
+---
+
+### 10.3.2 메서드의 `self` 규칙 (v0 단순/강제)
+
+Gaupel은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 **명시적으로 단순화**한다.
+
+* `tablet` 내부의 `fn name(...) -> R { ... }` 는 **항상 인스턴스 메서드**다.
+* 메서드에는 암묵 수신자 `self`가 존재한다.
+* v0에서 수신자 타입은 아래 둘 중 하나다.
+
+  * `fn name(...)`  : `self`는 `&Self` (읽기 전용)
+  * `fn mut name(...)` : `self`는 `&mut Self` (수정 가능)
+
+즉, “메서드가 객체를 바꾸려면 반드시 `mut`를 써야 한다.”
+이 규칙 하나로 C++의 암묵 변경 가능성 + Rust의 복잡한 추론 사이에서 깔끔하게 중간 지점을 잡는다.
+
+예시
+
+```gaupel
+tablet Counter {
+  public:
+    mut let n: int;
+
+    fn get() -> int {            // self: &Counter
+      return self.n;
+    }
+
+    fn mut inc() -> void {       // self: &mut Counter
+      self.n += 1;
+    }
+}
+```
+
+추가 규칙(v0):
+
+* `self`는 예약 식별자다(키워드 취급 권장).
+* `pure/comptime` 함수 안에서는 `fn mut` 메서드 호출을 금지할 수 있다(권장).
+  (관측 가능한 상태 변경을 정적으로 차단)
+
+---
+
+### 10.3.3 생성자/소멸자: `construct`, `destruct` (오버로딩 금지 철학과 정합)
+
+Gaupel은 “이름 오버로딩 금지” 철학이 있으므로, 생성자도 **단 하나만** 허용하는 게 깔끔하다.
+
+* 생성자(선택):
+
+  * `fn construct(params...) -> void { ... }`
+* 소멸자(선택):
+
+  * `fn destruct() -> void { ... }`
+
+호출/동작:
+
+* `set x = T(args...)` 는 `T.construct(args...)`를 호출해 `x`를 초기화한다.
+* 스코프 종료 시 `destruct()`가 호출된다(존재한다면).
+* `fn construct(...) = delete;` 로 생성을 금지할 수 있다.
+* `fn destruct() = delete;` 는 v0에서는 **금지 권장**(파괴 금지 객체는 모델이 꼬임). 대신 “drop이 없는 handle” 같은 타입으로 해결.
+
+예시
+
+```gaupel
+tablet File {
+  public:
+    let fd: int;
+
+    fn construct(path: string) -> void {
+      // open...
+    }
+
+    fn destruct() -> void {
+      // close...
+    }
+}
+```
+
+---
+
+### 10.3.4 proto 구현 규칙(정적 검사, v0 고정)
+
+* `tablet X : ProtoA, ProtoB` 는 “X가 각 proto의 모든 메서드를 구현해야 함”을 뜻한다.
+* 구현 체크는 prepass 이후 타입체커 단계에서 수행한다.
+* 시그니처 일치 조건(v0):
+
+  * 함수명 동일
+  * 파라미터 타입 동일
+  * 반환 타입 동일
+  * `mut` 여부 동일 (`fn` vs `fn mut`)
+  * `? 함수` 여부는 **proto에서는 v0 금지 권장**
+    (예외 전파가 인터페이스 경계를 넘으면 ABI/최적화 모델이 확 흔들림)
+
+---
+
+### 10.3.5 proto 값/참조/핸들 사용 규칙(동적 디스패치 경계)
+
+v0에서 proto는 “값으로 들고 다니는 타입”이 아니라 **참조/핸들로만 쓰는 계약**으로 고정하는 게 안전하다.
+
+권장 규칙(v0):
+
+* `ProtoType` 자체를 값으로 선언 금지:
+
+  * `let d: Drawable;` 금지
+* 허용:
+
+  * `&Drawable` (non-escaping borrow로서의 다형성)
+  * `handle<Drawable>` (escape 가능한 다형성)
+* 업캐스트는 암묵 허용:
+
+  * `handle<Sprite>`를 `handle<Drawable>` 파라미터에 전달 가능
+  * `&Sprite`를 `&Drawable` 파라미터에 전달 가능
+
+이 모델은 네가 이미 정의한 `handle`의 `(ptr, meta)` ABI와 잘 맞는다.
+
+* `meta`를 “vtable 포인터”로 쓰면 된다.
+
+---
+
+## 10.4 `proto` (interface) — v0에서 더 단단하게 못 박기
+
+너 문서의 proto 섹션에 이 한 줄만 추가해도 구현 난이도가 확 줄어:
+
+* proto 내부 메서드는 기본이 `fn`(즉 `self: &Proto`)이고,
+* 수정 가능한 메서드는 반드시 `fn mut`로 선언한다.
+
+예시
+
+```gaupel
+proto Stream {
+  fn read(buf: &mut [u8]) -> u32;
+  fn mut seek(pos: u64) -> void;   // self: &mut Stream
+}
+```
+
+---
+
+## 11. acts: 행동 묶음과 타입 부착(메서드/연산자)
 
 ### 11.1 acts의 목적
 
-* field는 저장소, acts는 행동이다.
-* "타입에 맞는 연산자"는 acts로 정의한다.
-* 기본 수치 타입(u32 등)도 컴파일러 내장 acts로 제공할 수 있으며, 사용자 정의 타입도 동일한 체계로 확장한다.
+* **field는 저장소, acts는 행동**이다. (field/tablet 내부에 “행동을 강제”하지 않고, 행동은 acts로 분리한다.)
+* acts는 다음을 정의한다.
 
-추가 (acts가 정의하는 것의 범위 보강, 추가):
+  1. **일반 함수(행동)**: 특정 기능의 표준 동작 집합을 제공
+  2. **연산자(operator) 구현**: `+`, `==`, `++` 같은 토큰 연산의 의미를 타입별로 정의
+* v0에서 acts는 “구조(타입)와 행동(함수/연산자)을 분리”하여
 
-* acts는 단순히 +, == 같은 연산자만이 아니라, 해당 타입이 "가능한 행동"의 표준 집합을 제공하는 목적도 가진다.
-* 예: u32에 대해 add/sub/mul/div/mod, 비교, 비트 연산, shift, 그리고 ++ 같은 증감까지 acts로 모델링할 수 있다.
-* v0에서는 ++를 내장으로 먼저 제공할 수 있지만, 장기적으로는 acts의 op 바인딩 키를 확장해 사용자 정의 타입도 증감을 지원할 수 있다.
+  * 파서/타입체커를 단순하게 유지하고
+  * “어디에 메서드가 붙는지”를 명시적으로 드러내는 것을 목표로 한다.
 
-### 11.2 acts 문법 (v0 권장)
+---
 
-v0에서 파서와 타입체커 부담을 줄이기 위한 권장 문법:
+### 11.2 acts의 두 형태: `acts A {}` vs `acts for A {}`
 
-* acts TypeName { ... }
-* 내부에는 함수 정의만 포함한다.
-* 연산자 매핑을 위해 함수에 operator 바인딩을 선언한다.
+Gaupel v0에는 acts 블록이 **두 가지 형태**로 존재한다.
 
-권장 형태:
+#### (1) 일반 acts: `acts A { ... }`
 
-* fn 이름(self: T, rhs: U) : op("TOKEN") { ... }
-* TOKEN은 "+", "-", "*", "/", "%", "==", "!=", "<", "<=", ">", ">=", "and", "or" 등의 토큰 문자열이다.
-* 단항 연산자는 rhs 없이 정의한다.
+* `acts A {}`는 **A라는 이름의 acts 네임스페이스(행동 묶음)** 를 만든다.
+* 이 블록 안의 선언은 **항상 스코프 호출(정적 호출)** 로 사용한다.
 
-  * fn neg(self: T) : op("-unary") { ... }
-  * fn not(self: T) : op("!") { ... }
-
-주의:
-
-* "오버로딩 금지"는 "동일 이름 함수 오버로딩"을 금지한다.
-* 연산자 정의는 이름 오버로딩이 아니라 "op 키로 매핑"되므로, op("...") 당 1개만 허용하면 된다.
-
-예시 (u32의 +, -, == 정의)
+호출 예시:
 
 ```gaupel
-acts u32 {
-  fn add(self: u32, rhs: u32) : op("+") -> u32 {
-    // 실제 구현은 컴파일러 내장 또는 IR intrinsic으로 매핑
-    return __intrin_u32_add(a: self, b: rhs);
+acts Math {
+  fn add(a: i32, b: i32) -> i32 { return a + b; }
+}
+
+fn demo() -> void {
+  set x = Math::add(1, 2);
+}
+```
+
+규칙:
+
+* `acts A` 내부 함수는 **dot 호출 sugar의 대상이 아니다.**
+* `acts A` 내부에 operator 선언은 불가능하다. (필요시 field에 타입을 정의하고 acts for로 규칙을 정의한다.)
+
+#### (2) 부착형 acts: `acts for A { ... }`
+
+* `acts for A {}`는 **타입 A에 행동을 부착**한다.
+* 이 블록 안의 함수는 **dot 호출**과 **타입-스코프 호출(UFCS 스타일)** 둘 다 가능하다.
+
+예시(메서드 형태):
+
+```gaupel
+acts for Packet {
+  fn checksum(self a: &Packet, foo: i32) -> u32 { ... }
+}
+
+fn demo(p: Packet) -> void {
+  set c = p.checksum(5);          // dot 호출 (리시버 암묵 전달)
+  set d = Packet::checksum(p, 5); // 타입-스코프 호출 (UFCS)
+}
+```
+
+---
+
+### 11.3 export 규칙: “acts 블록 단위 export”만 존재
+
+v0에서 export는 다음으로 고정한다.
+
+* `export`는 **acts 블록 전체**에만 적용된다.
+* acts 내부의 개별 함수/연산자만 export하는 기능은 **없다**.
+
+예시:
+
+```gaupel
+export acts for Packet {
+  fn checksum(self a: &Packet, foo: i32) -> u32 { ... }
+  fn verify(self a: &Packet) -> bool { ... }
+}
+```
+
+금지 예시(존재하지 않는 문법):
+
+```gaupel
+acts for Packet {
+  export fn checksum(...) -> u32 { ... } // 금지: acts 내부 개별 export 없음
+}
+```
+
+---
+
+### 11.4 `acts for A`의 리시버(self) 규칙과 호출 규칙
+
+#### (1) `self`는 “파라미터 이름”이 아니라 **리시버 마커(modifier)** 다
+
+`acts for A` 내부에서 “이 함수가 A에 부착된 메서드이며, 첫 인자가 리시버다”를 표시하려면 아래 형태를 쓴다:
+
+```gaupel
+fn checksum(self a: &A, foo: i32) -> u32 { ... }
+```
+
+여기서
+
+* `self` : 예약된 **리시버 마커** (컴파일러가 강제)
+* `a` : 유저가 고르는 **진짜 파라미터 이름** (라벨 슬롯 자유)
+* `&A`, `&mut A`, `A` 등은 리시버의 전달 방식을 의미
+
+**강제 규칙(v0):**
+
+* `self` 마커는 **반드시 첫 번째 파라미터 앞**에만 올 수 있다.
+* `self`가 붙은 파라미터는 **반드시 타입이 A(또는 &A / &mut A 등 A 기반)** 이어야 한다.
+* `self`가 붙은 함수만이 “메서드(리시버 보유)”로 취급된다.
+
+#### (2) dot 호출: 리시버 인자는 **암묵 전달(첫 인자 생략)**
+
+다음이 정확히 동일 의미다.
+
+```gaupel
+myA.checksum(5);
+A::checksum(myA, 5);
+```
+
+즉, dot 호출은
+
+* `myA.checksum(5)`  ==  `A::checksum(myA, 5)` 로 lowering 된다.
+
+#### (3) “self가 없는 함수”는 메서드가 아니며, 호출은 자유
+
+`acts for A` 안에 있어도 `self`가 없으면 그 함수는 “부착된 유틸리티(정적 함수)”로 취급한다.
+
+```gaupel
+acts for A {
+  fn foo(x: i32, y: i32) -> i32 { ... }  // self 없음
+}
+```
+
+호출은 아래 둘 다 허용:
+
+```gaupel
+set r1 = A::foo(1, 2);
+set r2 = myA.foo(1, 2);  // 허용: dot-정적 호출(문법 설탕)
+```
+
+v0 권장 해석(단순 규칙):
+
+* `myA.foo(1,2)`는 단순히 `A::foo(1,2)`로 lowering 된다.
+  (리시버 전달/오버로드 같은 추가 의미는 없다.)
+
+---
+
+### 11.5 `acts for A` 내부 함수의 “A 인자 요구” 규칙
+
+`acts for A` 안에 정의된 함수가 “A를 인자로 받는 동작”이라면 **반드시 `self`를 사용**해 메서드로 선언한다.
+
+예:
+
+```gaupel
+acts for A {
+  fn checksum(self a: &A, foo: i32) -> u32 { ... }
+}
+```
+
+호출:
+
+```gaupel
+A myA;
+set c = myA.checksum(5);
+set d = A::checksum(myA, 5);
+```
+
+반대로, `acts for A` 안에 있어도 A를 인자로 받지 않는다면 `self`를 쓰지 않는다:
+
+```gaupel
+acts for A {
+  fn make_seed(x: i32, y: i32) -> u64 { ... } // A 인자 없음
+}
+```
+
+호출:
+
+```gaupel
+set s1 = A::make_seed(1, 2);
+set s2 = myA.make_seed(1, 2); // 허용(정적 dot)
+```
+
+---
+
+### 11.6 연산자 오버로딩: `operator(...)`만 유일하게 존재 (기존 op("TOKEN") 완전 폐기)
+
+v0에서 연산자 정의 방식은 **오직 하나**만 존재한다.
+
+* 기존의 `: op("TOKEN")` 매핑 방식은 **언어에서 삭제**된다.
+* 연산자는 항상 다음 형태로 선언한다:
+
+```gaupel
+operator(+)(self a: A, rhs: A) -> A { ... }
+operator(==)(self a: &A, rhs: &A) -> bool { ... }
+operator(++pre)(self x: &mut A) -> A { ... }
+operator(++post)(self x: &mut A) -> A { ... }
+```
+
+#### (1) operator 선언은 `fn` 키워드를 붙이지 않는다
+
+* `operator(...)`는 acts 내부의 **특수 선언**이며, 함수 선언이지만 문법적으로 `fn`을 사용하지 않는다.
+
+#### (2) operator는 **`acts for Type`에서만 허용**
+
+* `operator(...)` 선언은 **반드시** `acts for T { ... }` 블록 내부에만 올 수 있다.
+* `acts X { ... }`(일반 acts) 내부에서 operator 선언은 **금지**한다.
+
+#### (3) operator의 “리시버(self)”는 항상 존재한다
+
+* 모든 operator 선언은 “해당 타입에 바인딩되는 연산”이므로, 첫 파라미터는 항상 `self` 리시버 마커를 사용한다.
+* 단항/이항/증감은 파라미터 개수로 구분한다.
+
+#### (4) `++`는 `(++pre)`, `(++post)`만 존재한다
+
+증감 연산은 토큰을 직접 쓰지 않고, 바인딩 키를 아래처럼 고정한다.
+
+* `operator(++pre)` : `++x`
+* `operator(++post)` : `x++`
+
+예시:
+
+```gaupel
+acts for i32 {
+  operator(++pre)(self x: &mut i32) -> i32 {
+    x = x + 1;
+    return x;
   }
 
-  fn sub(self: u32, rhs: u32) : op("-") -> u32 {
-    return __intrin_u32_sub(a: self, b: rhs);
-  }
-
-  fn eq(self: u32, rhs: u32) : op("==") -> u32 {
-    return __intrin_u32_eq(a: self, b: rhs);
+  operator(++post)(self x: &mut i32) -> i32 {
+    set old = x;
+    x = x + 1;
+    return old;
   }
 }
 ```
 
-이제 사용자 코드는 다음처럼 자연스럽게 연산자를 사용한다.
+---
+
+### 11.7 연산자 해석(리졸브) 규칙 요약 (v0)
+
+표현식에서 연산자를 만나면 타입체커는 다음 순서로 해석한다.
+
+* 피연산자 타입이 `T`라면, 컴파일러는 `acts for T`에서 해당 `operator(KEY)`를 찾는다.
+* 후보가 없으면 에러.
+* 후보가 2개 이상이면 에러(모호성 금지).
+
+v0에서는 다음을 권장/강제한다.
+
+* 같은 `acts for T` 안에서 동일한 `operator(KEY)`는 **정확히 1개만** 허용
+* “연산자 오버로드”로 인한 이름 충돌/다중 후보는 전부 컴파일 에러로 처리
+
+---
+
+### 11.8 예시 모음 (v0 스타일)
+
+#### (1) 타입 부착 메서드 + UFCS
 
 ```gaupel
-fn u32_ops() -> void {
-  let a: u32 = 10u32;
-  let b: u32 = 20u32;
-  set c = a + b;
-  set ok = (c == 30u32);
+export field Packet {
+  u32 len;
+  u32 crc;
+}
+
+export acts for Packet {
+  fn checksum(self p: &Packet, seed: u32) -> u32 {
+    // ...
+    return p.crc + seed;
+  }
+}
+
+fn demo(pkt: Packet) -> void {
+  set a = pkt.checksum(5u32);
+  set b = Packet::checksum(pkt, 5u32);
 }
 ```
 
-추가 (u32에 대해 가능한 연산 집합 예시 보강, 추가)
+#### (2) self 없는 유틸 함수(정적 dot 허용)
 
 ```gaupel
-acts u32 {
-  fn add(self: u32, rhs: u32) : op("+") -> u32 { return __intrin_u32_add(a: self, b: rhs); }
+export acts for Packet {
+  fn make(seed: u32, len: u32) -> Packet {
+    // ...
+    set p = Packet{ len: len, crc: seed };
+    return p;
+  }
+}
 
-  fn sub(self: u32, rhs: u32) : op("-") -> u32 { return __intrin_u32_sub(a: self, b: rhs); }
-
-  fn mul(self: u32, rhs: u32) : op("*") -> u32 { return __intrin_u32_mul(a: self, b: rhs); }
-
-  fn lt(self: u32, rhs: u32) : op("<") -> u32 { return __intrin_u32_lt(a: self, b: rhs); }
-
-  // ++ 지원을 acts로도 모델링하고 싶다면 (v1+ 확장 키 예시)
-  // fn inc_pre(self: &mut u32) : op("++pre") -> u32 { ... }
+fn demo2() -> void {
+  set p1 = Packet::make(3u32, 10u32);
+  set p2 = p1.make(3u32, 10u32); // 허용: Packet::make(...)로 lowering
 }
 ```
 
-### 11.3 연산자 해석 규칙 (타입체커)
-
-표현식 a + b 를 검사할 때:
-
-1. a의 타입을 결정한다.
-2. b의 타입을 결정한다.
-3. acts a_type 에서 op("+") 를 찾는다.
-4. 시그니처가 (self: a_type, rhs: b_type) 와 호환되는지 확인한다.
-5. 정확히 1개가 매칭되면 그 반환 타입이 a + b 의 타입이다.
-6. 없으면 에러. 여러 개면 모호성 에러.
-
-예시 (에러 케이스)
+#### (3) operator 정의
 
 ```gaupel
-fn bad_ops() -> u32 {
-  let a: u32 = 1u32;
-  let b: int = 2i32;
-  // set c = a + b; // error: op("+") for (u32, int) not found
+export acts for u32 {
+  operator(+)(self a: u32, rhs: u32) -> u32 { return __intrin_u32_add(a, rhs); }
+  operator(==)(self a: u32, rhs: u32) -> bool { return __intrin_u32_eq(a, rhs); }
 }
 ```
 
@@ -2374,7 +2706,7 @@ fn lambdas() -> void {
 
 * 람다는 함수 스코프 내부에서만 생성/존재 가능
 * 전역에는 closure 값을 둘 수 없다
-* 전역 콜백은 func<...>만 허용하거나 class Draft 슬롯에 저장
+* 전역 콜백은 func<...>만 허용하거나 class draft 슬롯에 저장
 * borrow 값(&T, &mut T)의 캡처
 * borrow를 인자로 받는 클로저는 “즉시 호출” 같은 특별 규칙 없이 그냥 금지(v0)
 
@@ -2453,9 +2785,9 @@ Gaupel은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 �
 ### 14.1 프리패스
 
 * #define 텍스트 치환
-* embed module 해석, alias 심볼 테이블 구성
+* use module 해석, alias 심볼 테이블 구성
 * 모듈을 컴파일 단위로 취급하는 의존성 그래프 구성 (추가)
-* embed ...::ffi 수집
+* use ...::ffi 수집
 * F-string 분절 (문자열 내부 expr 파싱 준비)
 
 ### 14.2 파서
@@ -2525,12 +2857,12 @@ tablet Sprite : Drawable {
     let secret: int;
 }
 
-acts u32 {
-  fn add(self: u32, rhs: u32) : op("+") -> u32 {
+acts for u32 {
+  operator(+)(self: u32, rhs: u32) -> u32 {
     return __intrin_u32_add(a: self, b: rhs);
   }
 
-  fn eq(self: u32, rhs: u32) : op("==") -> u32 {
+  operator(==) -> u32 {
     return __intrin_u32_eq(a: self, b: rhs);
   }
 }
@@ -2539,11 +2871,11 @@ class Counter {
   fn sub get() -> u32 {
     // 필요하면 관찰 뷰를 재설정
     recast;
-    return Draft.count;
+    return draft.count;
   }
 
   fn pub inc() -> void {
-    Draft.count += 1u32;
+    draft.count += 1u32;
     commit;
   }
 }
@@ -2581,6 +2913,8 @@ fn main() -> void {
 
 ---
 
+
+# 주의! 언어 스펙 변경으로 인해 이전버전의 EBNF와 호환되지 않음. 본문 내용의 정보를 우선적으로 신뢰할 것.
 ## 16. EBNF (v0 핵심 요약, 구현 기준)
 
 아래는 구현을 위한 핵심 뼈대다. 상세 확장은 문서의 문법 설명을 따른다.
@@ -2591,7 +2925,7 @@ CompilationUnit = { TopLevelDecl } eof ;
 TopLevelDecl =
     DefineDecl
   | ImportDecl
-  | EmbedFFIDecl
+  | UseFFIDecl
   | FieldDecl
   | ProtoDecl
   | TabletDecl
@@ -2602,11 +2936,11 @@ TopLevelDecl =
 
 DefineDecl = "#define" Ident StringLit ;
 
-ImportDecl = "embed" "module" ( AbsPath | StringLit ) "as" Ident ";" ;
+ImportDecl = "use" "module" ( AbsPath | StringLit ) "as" Ident ";" ;
 
-EmbedFFIDecl =
-    "embed" "func::ffi" "<" FfiSig ">" Ident ";"
-  | "embed" "struct::ffi" Ident "{" FieldList "}" ;
+UseFFIDecl =
+    "use" "func::ffi" "<" FfiSig ">" Ident ";"
+  | "use" "struct::ffi" Ident "{" FieldList "}" ;
 
 
 FuncDecl = ReturnsDecl "fn" { Qualifier } Ident "(" [ ParamList ] ")" [ Mode ] Block ;
