@@ -485,6 +485,40 @@ v0 권장 전략은 단순하다:
 
 이렇게 하면 “Gaupel 의미론”을 타 언어로 억지로 이식하지 않고, ABI는 깔끔하게 유지된다.
 
+## 3.4 `-ffreestanding` / `-fno-std` 경계 정의
+
+### 3.4.1 두 모드의 목적
+
+* `-ffreestanding` : OS/호스트 환경을 가정하지 않는다.
+
+  * 표준 라이브러리는 “freestanding 프로파일”로 링크 가능(선택)
+  * 원자/스핀락/기본 핸들/Result 정도는 제공 가능
+* `-fno-std` : 표준 라이브러리 **전체 미사용**.
+
+  * `core`(컴파일러 내장 최소 모듈)만 사용 가능
+  * 런타임 의존 기능은 전부 금지
+
+---
+
+### 3.4.2 예외 기능과의 경계(v0 강제)
+
+예외 메커니즘(`?`, `throw`, `try...catch`, `attempt`)은 런타임 지원이 필요할 수 있으므로 v0에서는 다음처럼 고정한다.
+
+* `-fno-std` 에서는:
+
+  * `? 함수` 선언 자체를 **금지**(또는 선언은 허용하되 본문에서 throw/try/attempt 전부 금지로 시작해도 되지만, v0는 “금지”가 더 단단함)
+  * `throw`, `try...catch`, `attempt` 전부 **컴파일 에러**
+  * 에러 핸들링은 **Result<T> + switch**만 사용
+* `-ffreestanding` 에서는:
+
+  * 표준 라이브러리 freestanding 프로파일이 “EH 지원”을 포함하는 경우에만 `? / throw / attempt` 허용
+  * 그렇지 않으면 `-fno-std`와 동일하게 금지
+
+이 경계 덕분에:
+
+* 커널/펌웨어/부트로더 같은 환경은 Result 기반으로 매우 예측 가능한 코드 생성이 가능
+* 사용자 앱/툴링 환경은 ? 함수로 더 편한 전파 모델을 쓸 수 있다
+
 ---
 
 ## 4. 타입 시스템 (v0 정의 + 향후 확장 방향)
@@ -611,7 +645,7 @@ fn shadowing() -> void {
 
 ---
 
-## 6. 함수 선언: @attribute, qualifier, 호출 규칙
+## 6. 함수 선언: @attribute, qualifier, 호출 규칙, non-?` / `?` 함수, 예외 허용 범위, 호출 제약
 
 ### 6.1 함수 선언 기본형 (v0 확정)
 
@@ -754,6 +788,103 @@ fn calls() -> void {
 }
 ```
 
+### 6.4 `non-?` / `?` 함수, 예외 허용 범위, 호출 제약
+
+### 6.4.1 함수 “예외 허용” 표기: 이름 접미 `?`
+
+Gaupel은 함수 단위로 “예외(throw) 경로”를 **정적 분리**한다.
+
+* **non-? 함수**: 함수 이름에 `?`가 없다.
+
+  * `throw`, `try...catch` **전부 금지**
+  * 컴파일러는 해당 함수를 **nounwind(비언와인드)**로 취급할 수 있다.
+* **? 함수**: 함수 이름에 `?`가 붙는다.
+
+  * `throw`, `try...catch` **허용**
+  * 호출 그래프 상 예외 전파 경로가 존재할 수 있다.
+
+문법 예시:
+
+```gaupel
+fn parse_u32(text: string) -> Result<u32> { ... }     // non-?
+fn read_file?(path: string) -> bytes { ... }          // ?
+```
+
+> `?`는 반환 타입(nullable)과 무관하며, **오직 예외 메커니즘(throw/catch) 허용 여부**만 뜻한다.
+
+---
+
+### 6.4.2 non-? 함수에서의 금지 규칙(강제)
+
+non-? 함수 본문에서는 아래가 **컴파일 에러**다.
+
+* `throw ...;`
+* `try { ... } catch (...) { ... }`
+* `try` / `catch` 키워드가 포함된 모든 문장/구문
+* **? 함수 호출** (단, 아래 6.X.4 “예외=>Result 브리지”를 통해서만 예외를 값으로 받는 것은 허용)
+
+예시:
+
+```gaupel
+fn bad() -> void {
+  throw Err("nope");          // error
+}
+
+fn also_bad() -> void {
+  try { ... } catch (e) { }   // error
+}
+```
+
+---
+
+### 6.4.3 ? 함수에서의 허용 규칙(기본)
+
+? 함수는 `throw`, `try...catch`를 사용할 수 있으며, **잡히지 않은 예외는 자동 전파**된다.
+
+```gaupel
+fn open_config?(path: string) -> Config {
+  set bytes = read_file?(path: path);   // 여기서 throw되면 자동 전파
+  return parse_config?(bytes: bytes);   // 자동 전파
+}
+```
+
+---
+
+### 6.4.4 예외 => `Result<T>` 브리지: `attempt` (추가, non-?에서도 사용 가능)
+
+non-? 함수는 예외를 직접 다룰 수 없으므로, **예외를 값(`Result<T>`)으로 포획**하는 브리지를 제공한다.
+
+* `attempt Expr;` 는 **Expr 실행 중 발생한 throw를 잡아** `Result<T>`로 만든다.
+* Expr은 보통 `? 함수 호출`이 된다.
+* `attempt` 자체는 **try...catch 문법이 아니다**. (non-?에서 허용)
+
+형태:
+
+```gaupel
+set r: Result<T> = attempt some_throwing_call?(...);
+```
+
+예시:
+
+```gaupel
+fn load_config(path: string) -> Result<Config> {
+  set bytes_r = attempt read_file?(path: path);   // Result<bytes>
+  switch (bytes_r) {
+    case Ok(bytes): {
+      // parse는 non-? Result 기반 API를 사용한다고 가정
+      return parse_config(bytes: bytes);
+    }
+    case Err(e): {
+      return Err(e);
+    }
+  }
+}
+```
+
+`attempt`는 컴파일러가 제공하는 최소 런타임(EH 포획 경계)로 lowering 되며,
+**-fno-std 모드에서는 금지**(3.X 참조)로 두는 것을 v0 정책으로 한다.
+
+
 ---
 
 ## 7. 제어 흐름: if, switch, while, loop(iter), loop(for)
@@ -797,6 +928,25 @@ switch (expr) {
 * fallthrough 금지
 * case 라벨은 리터럴만 허용 (int, string, bool, char 등)
 * default는 선택이지만 권장
+* `case Err(name): { ... }` 등 타입 패턴 매칭
+
+*여기서 `name`은 새 바인딩(스코프는 해당 case 블록).
+
+예시:
+
+```gaupel
+fn demo(r: Result<u32>) -> u32 {
+  switch (r) {
+    case Ok(v): {
+      return v;
+    }
+    case Err(e): {
+      // e: Error
+      return 0u32;
+    }
+  }
+}
+```
 
 예시
 
@@ -1542,9 +1692,107 @@ acts string {
 }
 ```
 
+### 8.8 예외 메커니즘: `throw`, `try...catch`, 예외 타입, 전파 규칙 (추가)
+
+### 8.8.1 예외 값의 타입: 표준 `Error`만 허용(v0 고정)
+
+Gaupel의 `throw`는 “아무거나 던지기”를 금지한다. v0에서는 다음으로 고정한다.
+
+* `throw`에 실리는 값은 반드시 표준 라이브러리의 `Error` 타입이어야 한다.
+
+  * 권장: `Error`는 “메시지 + 코드 + 원인 체인”을 담을 수 있는 불투명 핸들
+  * freestanding에서도 동작 가능하도록 `Error`는 **할당 없이도 생성 가능한 경로**(고정 문자열, 코드 기반)를 제공해야 한다.
+
+예시(표준 라이브러리 관례 예시):
+
+```gaupel
+// std::error::Error 가 있다고 가정
+use std::error::Error;
+
+fn fail?( ) -> void {
+  throw Error::from_msg(msg: "boom");
+}
+```
+
+---
+
+### 8.8.2 `throw` 문장 규칙(? 함수 전용)
+
+* `throw Expr;` 는 **문장(statement)** 이다.
+* **? 함수 내부에서만 허용**된다.
+* Expr의 타입은 `Error`여야 한다(또는 `Error`로의 명시적 변환이 있어야 한다).
+
+```gaupel
+fn read_file?(path: string) -> bytes {
+  if (path == "") {
+    throw Error::from_code(code: 12);   // ok
+  }
+  // ...
+}
+```
+
+---
+
+### 8.8.3 `try...catch` 문법과 규칙(? 함수 전용)
+
+문법(권장 최소형):
+
+```gaupel
+try {
+  // throwing code
+} catch (e: Error) {
+  // handler
+}
+```
+
+규칙:
+
+* `try...catch`는 **? 함수 내부에서만 허용**
+* catch 파라미터 타입은 v0에서 `Error`로 고정(패턴/다형 catch는 v1+)
+
+예시:
+
+```gaupel
+fn load_user?(id: u32) -> User {
+  try {
+    return fetch_user?(id: id);
+  } catch (e: Error) {
+    // 복구 또는 변환
+    throw Error::wrap(msg: "load_user failed", cause: e);
+  }
+}
+```
+
+---
+
+### 8.8.4 전파 규칙(암묵 전파)과 “명시성”의 경계
+
+? 함수는 예외를 암묵 전파할 수 있다. 단, non-?로 빠져나가는 경계에서는 항상 명시적이어야 한다.
+
+* `? -> ?` : 암묵 전파 허용
+* `? -> non-?` : 직접 호출 금지(6.X.2), 반드시 `attempt`로 값으로 포획
+
+이 규칙 덕분에 컴파일러는 **non-? 영역을 강한 최적화/단순 CFG**로 유지할 수 있다.
+
+
 ---
 
 ## 9. class, Draft, pub/sub, commit, recast
+
+### 9.0 Draft의 실체: “스냅샷 + 스테이징(draft) 버퍼” 모델(명문화)
+
+class는 “큰 공유 상태”를 제공한다. v0의 핵심 구현 모델은 다음이다.
+
+* **Published Snapshot**: sub가 읽는 불변 스냅샷
+* **Draft Buffer**: pub가 수정하는 스테이징 버퍼(아직 발행되지 않음)
+
+즉, pub에서 `Draft.x = ...`는 “즉시 공유 메모리를 찌르기”가 아니라,
+**스테이징 버퍼에 변경을 기록**하는 동작이다. `commit;`에서만 발행된다.
+
+이 모델은 OS 의존이 아니다.
+
+* 멀티스레드 동기화는 표준 라이브러리(또는 런타임)가 제공하는 최소 프리미티브(원자적 포인터 스왑, 스핀락/뮤텍스)만으로 구현 가능
+* freestanding에서도 동일
 
 ### 9.1 class 정의
 
@@ -1570,7 +1818,9 @@ class Game {
 
 recast (추가 설명):
 
-* recast; 는 "스냅샷 갱신을 포함하여 Draft 접근 뷰 자체를 다시 세팅"한다는 의미를 가진다.
+* sub가 보는 Draft는 “함수 진입 시점의 스냅샷”이다(렉시컬 일관성).
+* `recast;`는 **현재 스레드/호출이 들고 있는 스냅샷 핸들을 최신으로 다시 잡는** 제어 구문이다.
+
 
 또한 pub/sub에서 commit, recast는 단순 함수 호출이 아니라 "제어 구문"으로 취급한다 (추가):
 
@@ -1581,28 +1831,31 @@ recast (추가 설명):
 
   * 단, pub의 최종 commit 강제 규칙은 그대로 적용된다. (if 내부 commit은 최종 commit으로 인정되지 않는다)
 
-예시
+예시:
 
 ```gaupel
-class Cache {
-  fn sub get() -> int {
-    // sub는 기본적으로 스냅샷을 읽는다
-    if (Draft.isStale) {
-      // continue처럼 제어 구문으로 취급: 관찰 뷰를 다시 맞춘다
+class Counter {
+  fn sub get() -> u32 {
+    // 오래된 스냅샷이면 갱신하고 싶을 때
+    if (Draft.stale) {
       recast;
     }
-    return Draft.value;
+    return Draft.count;
   }
 }
 ```
 
-### 9.3 pub 규칙과 최종 commit 강제
+### 9.3 pub 규칙
 
 핵심 규칙:
 
 * pub 함수는 Draft 수정 가능
 * 최종 commit은 "함수 본문 최상위 블록의 마지막 유효 문장" 이어야 한다.
 * 분기/중첩 블록 내부의 commit은 최종 commit 검사에서 무시한다.
+* pub는 Draft를 수정할 수 있다. 단, v0의 흐름 규칙은 더 엄격히 고정한다.
+* pub는 내부적으로 “발행 가능한 변경 집합”을 만든다.
+* `commit;`을 실행하면 현재 변경 집합이 발행되고, pub는 계속 진행 가능(아래 9.X.5)
+
 
 v0 권장:
 
@@ -1656,11 +1909,162 @@ Draft는 “공유 상태의 저장소”이므로, v0에서는 Draft에서 값�
 
 이 규칙을 넣으면 Draft의 일관성/원자성 모델이 깨지는 걸 막을 수 있어.
 
-### 9.3.3 commit 시점 제약: “commit을 넘는 borrow 금지”를 명문화
+### 9.3.3 commit의 경계 정의(강제): “publish barrier” + “borrow/alias 리셋 지점”
+
+`commit;`은 단순한 문장이 아니라, **상태 경계**다.
+
+commit 경계에서의 규칙(강제):
+
+1. **commit을 넘는 borrow 금지**
+
+   * pub에서 `&mut` 포함 모든 borrow 값(`&T`, `&mut T`, `&[T]`, `&mut [T]`)이 살아있는 상태로 `commit;` 실행 경로에 도달하면 에러
+2. **Draft에 대한 alias 규칙(배타)**
+
+   * 같은 pub의 동일 스테이징 구간에서, 동일 Draft 셀(예: `Draft.x`, `Draft.arr[i]`)에 대해
+
+     * `&mut` alias가 2개 이상 생기면 에러
+     * `&mut`이 존재하는 동안 동일 셀에 대한 읽기/쓰기 직접 접근도 에러(v0 보수 규칙)
+3. **Draft move-out 금지 유지**
+
+   * `&&Draft.x` 금지
+   * Draft에서 꺼내는 건 “읽기(copy/clone/handle 규약)”만 허용
+
+예시(금지):
+
+```gaupel
+class Bad {
+  fn pub f() -> void {
+    set r = &mut Draft.count;
+    Draft.count = 1u32;
+    commit;              // error: borrow 살아있음
+  }
+}
+```
+
+
+### 9.3.4 commit 시점 제약: “commit을 넘는 borrow 금지”를 명문화
 
 이미 본문에 힌트가 있으니, 딱 한 줄 규칙으로 고정:
 
 * pub 블록에서 `commit;`이 실행되는 경로에서, `&mut` borrow(또는 어떤 borrow든)가 살아있으면 에러.
+
+### 9.3.5 pub에서 “commit 여러 번 허용”(요청 반영, v0 확정)
+
+pub는 한 번의 호출 안에서 여러 번 commit할 수 있다. 의미는 다음으로 고정한다.
+
+* `commit;`을 실행하면 **현재까지의 Draft 변경이 발행**된다.
+* 그 즉시 pub는 **새 스테이징 단계**로 진입한다.
+
+  * 이후의 `Draft.*` 접근/수정은 “방금 발행된 최신 스냅샷”을 베이스로 하는 새로운 draft로 간주한다.
+* 즉, pub 내부는 다음처럼 여러 “발행 단계”를 가질 수 있다:
+
+```gaupel
+class Progress {
+  fn pub run() -> void {
+    draft.step = 1u32;
+    commit;          // step=1 발행
+
+    draft.step = 2u32;
+    commit;          // step=2 발행
+
+    draft.step = 3u32;
+    commit;          // step=3 발행 (최종)
+  }
+}
+```
+
+이 규칙은 멀티스레드에서도 안전한 모델을 유지한다.
+
+* sub는 각자 잡은 스냅샷을 읽으며, 필요할 때만 `recast;`로 최신을 본다.
+* pub의 각 commit은 “원자적 스냅샷 교체(또는 버전 증가)”로 구현된다.
+
+---
+
+### 9.3.6 pub 함수의 return 정책(요청 반영, v0 확정)
+
+pub는 “상태 발행을 반드시 명시”해야 하므로, 반환 정책을 다음으로 고정한다.
+
+* pub는 **일반 `return`을 금지**한다. (조기 탈출이 commit 규칙을 깨기 쉬움)
+* pub에서 값을 반환하려면 아래 단 하나만 허용한다:
+
+#### (1) `commit return Expr;` (신규 문법, pub 전용)
+
+* 의미: “현재 draft를 발행하고, Expr 값을 반환하며, pub를 종료”
+* `commit return ...;` 는 **함수 최상위 블록에서만**, 그리고 **마지막 문장으로만** 허용한다.
+
+예시:
+
+```gaupel
+class Counter {
+  fn pub add(delta: u32) -> u32 {
+    draft.count += delta;
+    commit return Draft.count;     // 발행 + 반환
+  }
+}
+```
+
+#### (2) void pub는 `commit;`으로 종료
+
+```gaupel
+class Counter {
+  fn pub inc() -> void {
+    Draft.count += 1u32;
+    commit;                        // 발행 + 종료(암묵 return)
+  }
+}
+```
+
+> 결과적으로 “pub의 종료는 항상 commit과 결합”된다.
+> 컴파일러 입장에선 CFG가 매우 단순해지고, 규칙 위반 진단도 쉬워진다.
+
+---
+
+### 9.3.7 “Draft에 뭔가를 넣는(insert/append) 동작”의 위치: 표준 컨테이너는 **handle로 Draft에 저장**(권장)
+
+Draft는 “데이터 레코드 + 핸들”로 유지한다(기존 철학 강화).
+
+* Draft 내부에 동적 컨테이너를 값으로 두지 않는다.
+* Draft에는 `handle<Vec<T>>` 같은 핸들만 두고,
+* 실제 push/append는 핸들이 가리키는 구현체(tablet/컨테이너)에 대해 수행한다.
+
+예시(권장 패턴):
+
+```gaupel
+class Scene {
+  // Draft.sprites: handle<SpriteList> 라고 가정
+
+  fn pub add_sprite(s: handle<Sprite>) -> void {
+    // SpriteList는 tablet이고, Draft에는 handle만 저장
+    Draft.sprites.push(x: s);   // push는 handle/tablet 쪽 메서드
+    commit;
+  }
+
+  fn sub count() -> u32 {
+    return Draft.sprites.len();
+  }
+}
+```
+
+이 패턴은 OS 의존이 없다.
+
+* freestanding에서는 컨테이너가 내부적으로 “사용자 제공 allocator” 또는 “고정 풀”을 쓰면 된다.
+* Draft는 여전히 “스냅샷/발행 모델”만 담당한다.
+
+---
+
+### 9.3.8 멀티스레드 안전성 요약(문서에 포함, 구현 가이드)
+
+v0에서 class는 다음 성질을 목표로 한다.
+
+* sub: 락 없이 읽을 수 있다(스냅샷 포인터/버전 기반)
+* pub: 단일 writer(혹은 내부 락)로 직렬화된다
+* commit: 원자적 스냅샷 교체(atomic swap) + 필요 시 epoch 기반 reclamation(표준 라이브러리 구현 영역)
+
+즉, 사용자는 OS 없이도 일관된 규칙을 얻는다.
+
+* “sub는 읽기 전용 스냅샷”
+* “pub는 draft 수정”
+* “commit은 publish barrier”
 
 ---
 
@@ -2021,7 +2425,7 @@ Gaupel은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 �
 
 * `ModuleId`: 모듈 경로를 정규화한 짧은 ID(예: `engine_core`)
 * `Path`: `space` 경로를 `__`로 연결 (예: `math__vec`)
-* `ParamSig`: 파라미터를 좌→우 순서로 나열, 각 항목은 `label$type`
+* `ParamSig`: 파라미터를 좌=>우 순서로 나열, 각 항목은 `label$type`
 
   * 예: `a$i32_b$i32`
 * `RetSig`: 반환 타입 (예: `i32`, `u32`, `void`)
