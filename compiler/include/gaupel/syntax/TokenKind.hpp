@@ -2,123 +2,116 @@
 #pragma once
 #include <string_view>
 #include <cstdint>
-
+#include <type_traits>
 
 namespace gaupel::syntax {
 
     enum class TokenKind : uint16_t {
-    // special
-    kEof = 0,
-    kError,
+        // special
+        kEof = 0,
+        kError,
 
-    // identifiers / literals
-    kIdent,
-    kHole,        // "_" (single underscore)
-    kIntLit,
-    kFloatLit,
-    kStringLit,
-    kCharLit,     // 'C', '\n', '한', ...
+        // identifiers / literals
+        kIdent,
+        kHole,        // "_" (single underscore)
+        kIntLit,
+        kFloatLit,
+        kStringLit,
+        kCharLit,     // 'C', '\n', '한', ...
 
-    // keywords (subset for expressions / decls)
-    kKwTrue,
-    kKwFalse,
-    kKwNull,
+        // keywords (subset for expressions / decls)
+        kKwTrue,
+        kKwFalse,
+        kKwNull,
 
-    kKwAnd,
-    kKwOr,
-    kKwNot,
-    kKwXor,
+        kKwAnd,
+        kKwOr,
+        kKwNot,
+        kKwXor,
 
-    kKwMut,
-    kKwRef,
+        kKwMut,
+        // NOTE(스펙 변경): ref 토큰은 삭제됨.
 
-    // stmt keywords
-    kKwLet,
-    kKwSet,
-    kKwIf,
-    kKwElif,
-    kKwElse,
-    kKwWhile,
-    kKwReturn,
-    kKwBreak,
-    kKwContinue,
+        // stmt keywords
+        kKwLet,
+        kKwSet,
+        kKwIf,
+        kKwElif,
+        kKwElse,
+        kKwWhile,
+        kKwReturn,
+        kKwBreak,
+        kKwContinue,
 
-    // ---- keywords (decl / control) ----
-    kKwExport,
-    kKwFn,
-    kKwClass,
-    kKwSwitch,
-    kKwCase,
-    kKwDefault,
-    kKwLoop,
-    kKwIter,
-    kKwIn,
-    kKwCommit,
-    kKwRefresh,
-    kKwPub,
-    kKwSub,
-    kKwPure,
-    kKwComptime,
+        // ---- keywords (decl / control) ----
+        kKwExport,
+        kKwFn,
+        kKwClass,
+        kKwSwitch,
+        kKwCase,
+        kKwDefault,
+        kKwLoop,
+        kKwIter,
+        kKwIn,
+        kKwCommit,
+        kKwRecast,
+        kKwPub,
+        kKwSub,
+        kKwPure,
+        kKwComptime,
 
-    // punct / delimiters
-    kAt,       // @
-    kArrow,    // ->
-    kLParen,   // (
-    kRParen,   // )
-    kLBrace,   // {
-    kRBrace,   // }
-    kLBracket, // [
-    kRBracket, // ]
+        // punct / delimiters
+        kAt,       // @
+        kArrow,    // ->
+        kLParen,   // (
+        kRParen,   // )
+        kLBrace,   // {
+        kRBrace,   // }
+        kLBracket, // [
+        kRBracket, // ]
 
-    kComma,     // ,
-    kColon,     // :
-    kSemicolon, // ;
-    kQuestion,  // ?
+        kComma,     // ,
+        kColon,     // :
+        kSemicolon, // ;
+        kQuestion,  // ?
 
-    // operators
-    kAssign,      // =
-    kPlusAssign,  // +=
-    kMinusAssign, // -=
-    kStarAssign,  // *=
-    kSlashAssign, // /=
-    kPercentAssign, // %=
+        // operators
+        kAssign,      // =
+        kPlusAssign,  // +=
+        kMinusAssign, // -=
+        kStarAssign,  // *=
+        kSlashAssign, // /=
+        kPercentAssign, // %=
 
-    kPlus,     // +
-    kMinus,    // -
-    kStar,     // *
-    kSlash,    // /
-    kPercent,  // %
+        kPlus,     // +
+        kMinus,    // -
+        kStar,     // *
+        kSlash,    // /
+        kPercent,  // %
 
-    kPlusPlus, // ++   (prefix/postfix)
+        kPlusPlus, // ++   (prefix/postfix)
 
-    kBang,     // !
-    kCaret,    // ^
+        kBang,     // !
+        kCaret,    // ^
 
-    kAmpAmp,   // &&
-    kPipePipe, // ||
+        kAmpAmp,   // &&
+        kPipePipe, // ||
 
-    kEqEq,     // ==
-    kBangEq,   // !=
-    kLt,       // <
-    kLtEq,     // <=
-    kGt,       // >
-    kGtEq,     // >=
+        kEqEq,     // ==
+        kBangEq,   // !=
+        kLt,       // <
+        kLtEq,     // <=
+        kGt,       // >
+        kGtEq,     // >=
 
-    kLessLess, // <<   (pipe operator in Gaupel)
+        kLessLess, // <<   (pipe operator in Gaupel)
 
-    kDotDot,       // ..
-    kDotDotColon,  // ..:
+        kDotDot,       // ..
+        kDotDotColon,  // ..:
 
-    // for convenience in parser recovery
-    kUnknownPunct,
+        // for convenience in parser recovery
+        kUnknownPunct,
     };
-
-    constexpr bool is_keyword(TokenKind k) {
-        using U = std::underlying_type_t<TokenKind>;
-        const U v = static_cast<U>(k);
-        return v >= static_cast<U>(TokenKind::kKwTrue)
-            && v <= static_cast<U>(TokenKind::kKwComptime);
-    }
 
     constexpr std::string_view token_kind_name(TokenKind k) {
         switch(k) {
@@ -139,10 +132,9 @@ namespace gaupel::syntax {
             case TokenKind::kKwNot: return "not";
             case TokenKind::kKwXor: return "xor";
             case TokenKind::kKwMut: return "mut";
-            case TokenKind::kKwRef: return "ref";
 
-            case TokenKind::kKwFn: return "fn";  
-            case TokenKind::kKwExport: return "export";              
+            case TokenKind::kKwFn: return "fn";
+            case TokenKind::kKwExport: return "export";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
             case TokenKind::kKwIf:  return "if";
@@ -153,8 +145,12 @@ namespace gaupel::syntax {
             case TokenKind::kKwBreak: return "break";
             case TokenKind::kKwContinue: return "continue";
 
-            case TokenKind::kKwPure: return "pure";        
+            case TokenKind::kKwPure: return "pure";
             case TokenKind::kKwComptime: return "comptime";
+            case TokenKind::kKwPub: return "pub";
+            case TokenKind::kKwSub: return "sub";
+            case TokenKind::kKwCommit: return "commit";
+            case TokenKind::kKwRecast: return "recast";
 
             case TokenKind::kAt: return "@";
             case TokenKind::kArrow: return "->";

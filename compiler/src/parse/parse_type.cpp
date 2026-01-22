@@ -18,7 +18,7 @@ namespace gaupel {
         }
 
         // error type
-        report(diag::Code::kUnexpectedToken, t.span, "type");
+        diag_report(diag::Code::kUnexpectedToken, t.span, "type");
         ast::Type ty{};
         ty.kind = ast::TypeKind::kError;
         ty.span = t.span;

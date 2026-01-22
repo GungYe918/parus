@@ -10,6 +10,9 @@
 
 namespace gaupel::ast {
 
+    // --------------------
+    // Node Ids
+    // --------------------
     using ExprId = uint32_t;
     inline constexpr ExprId k_invalid_expr = 0xFFFF'FFFFu;
 
@@ -20,8 +23,13 @@ namespace gaupel::ast {
     inline constexpr TypeId k_invalid_type = 0xFFFF'FFFFu;
 
 
+    // --------------------
+    // Expr
+    // --------------------
     enum class ExprKind : uint8_t {
         kError,
+
+        // literals / primary
         kIntLit,
         kFloatLit,
         kStringLit,
@@ -29,47 +37,63 @@ namespace gaupel::ast {
         kBoolLit,
         kNullLit,
         kIdent,
-        kHole,     // "_" expression (only meaningful inside call args)
+        kHole,     // "_" expression (특히 pipe-hole / call hole 용)
+
+        // operators
         kUnary,
         kPostfixUnary,
         kBinary,
         kAssign,
         kTernary,
+
+        // postfix
         kCall,
         kIndex,
     };
 
+    // --------------------
+    // Type
+    // --------------------
     enum class TypeKind : uint8_t {
         kError,
-        kNamed,
+        kNamed, // v0: Ident 기반 NamedType만 지원
     };
 
+    // --------------------
+    // Stmt
+    // --------------------
     enum class StmtKind : uint8_t {
         kError,
         kEmpty,       // ';'
         kExprStmt,    // expr ';'
         kBlock,       // '{' ... '}'
-        
-        kVar,         // let/set variable declaration 
-        kIf,          // if cond block else block?
-        kWhile,       // while cond block
-        kReturn,      // return expr? ';'
-        kBreak,       // break ';'
-        kContinue,    // continue ';'
+
+        // stmt/decl 혼용이 가능한 언어지만, 의미적으로는 "decl 성격"인 stmt도 존재
+        kVar,         // let/set
+        kIf,
+        kWhile,
+        kReturn,
+        kBreak,
+        kContinue,
+
+        // decl-like
         kFnDecl,
     };
 
+    // --------------------
+    // Call Args
+    // --------------------
     enum class ArgKind : uint8_t {
         kPositional,
         kLabeled,
-        kNamedGroup, // { ... } 자체
+        kNamedGroup, // call-site "{ ... }" 그룹 자체
     };
 
     struct Arg {
         ArgKind kind = ArgKind::kPositional;
 
         bool has_label = false;
-        bool is_hole = false;     // label: _  (hole payload)
+        bool is_hole = false;     // label: _ (hole payload)
         std::string_view label{};
         ExprId expr = k_invalid_expr;
 
@@ -80,30 +104,39 @@ namespace gaupel::ast {
         Span span{};
     };
 
+    // --------------------
+    // Attributes
+    // --------------------
     struct Attr {
-        std::string_view name; // "pure", "comptime", "inline" ...
+        std::string_view name; // "@pure" -> "pure"
         Span span;
     };
 
+    // --------------------
+    // Function Params
+    // --------------------
     struct Param {
         std::string_view name{};
         TypeId type = k_invalid_type;
 
-        // default값 관련
+        // default 값: "= Expr"
         bool has_default = false;
         ExprId default_expr = k_invalid_expr;
 
-        // named-group이 함수 인자에 있는지
+        // 함수 선언의 named-group({}) 내부 파라미터인지 여부
         bool is_named_group = false;
 
         Span span{};
     };
 
+    // --------------------
+    // Expr/Type/Stmt nodes
+    // --------------------
     struct Expr {
         ExprKind kind{};
         Span span{};
 
-        // generic slots (interpret by kind)
+        // generic slots (kind에 따라 해석)
         syntax::TokenKind op = syntax::TokenKind::kError;
         ExprId a = k_invalid_expr;
         ExprId b = k_invalid_expr;
@@ -112,129 +145,128 @@ namespace gaupel::ast {
         // literals / identifiers
         std::string_view text{};
 
-        // call/index arg storage
+        // call args storage (Arg 배열 slice)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
-    };      
+    };
 
     struct Type {
         TypeKind kind{};
         Span span{};
-        std::string_view text{};    // for kNamed: raw token text view (e.g. "u32")
+        std::string_view text{}; // for kNamed
+    };
+
+    // --------------------
+    // Function Decl Mode
+    // --------------------
+    enum class FnMode : uint8_t {
+        kNone = 0,
+        kPub,
+        kSub,
     };
 
     struct Stmt {
         StmtKind kind{};
         Span span{};
 
-        // generic slots (interpret by kind)
-        ExprId expr = k_invalid_expr;     // for ExprStmt
+        // ---- stmt 공통 ----
+        ExprId expr = k_invalid_expr; // ExprStmt 등
 
-        // extra stmt links
-        StmtId a = k_invalid_stmt;      // If: then block, While: body block
-        StmtId b = k_invalid_stmt;      // If: else block (or invalid)
+        // control-flow link
+        StmtId a = k_invalid_stmt;    // If: then block / While: body block / FnDecl: body block
+        StmtId b = k_invalid_stmt;    // If: else block
 
+        // block children slice (stmt_children_에 대한 범위)
+        uint32_t stmt_begin = 0;
+        uint32_t stmt_count = 0;
 
-        uint32_t stmt_begin = 0;          // for Block (stmt list)
-        uint32_t stmt_count = 0;          // for Block
-
-        // Var payload (let/set)
-        bool is_set = false;            // false=let, true=set
+        // ---- var ----
+        bool is_set = false;          // false=let, true=set
         bool is_mut = false;
-        std::string_view name{};        // identifier
+        std::string_view name{};
+        TypeId type = k_invalid_type;
+        ExprId init = k_invalid_expr;
 
-        TypeId type = k_invalid_type;   // let requires; set forbids in v0
-        ExprId init = k_invalid_expr;   // initializer expression (set requires in v0)
-
-        // attr 
+        // ---- fn decl ----
         uint32_t attr_begin = 0;
         uint32_t attr_count = 0;
 
         bool is_export = false;
-        bool is_pure = false;
-        bool is_comptime = false;
-        bool is_throwing = false;
+        
+        FnMode fn_mode = FnMode::kNone;
+
+        bool is_pure = false;         // qualifier 키워드형
+        bool is_comptime = false;     // qualifier 키워드형
+
+        // NOTE: "commit/recast" 같은 decl-qualifier를 확장 대비로 저장
+        bool is_commit = false;
+        bool is_recast = false;
+
+        bool is_throwing = false;     // name?
 
         uint32_t param_begin = 0;
         uint32_t param_count = 0;
 
-        // split point inside [param_begin, param_begin + param_count)
-        // positional_count = N, named_count = param_count - N
+        // [param_begin, param_begin+positional_param_count) : positional
+        // 나머지: named-group
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
     };
 
+    // --------------------
+    // Arena
+    // --------------------
     class AstArena {
     public:
-        ExprId add_expr(const Expr& e) {
-            exprs_.push_back(e);
-            return static_cast<ExprId>(exprs_.size() - 1);
-        }
+        ExprId add_expr(const Expr& e) { exprs_.push_back(e); return static_cast<ExprId>(exprs_.size() - 1); }
+        StmtId add_stmt(const Stmt& s) { stmts_.push_back(s); return static_cast<StmtId>(stmts_.size() - 1); }
+        TypeId add_type(const Type& t) { types_.push_back(t); return static_cast<TypeId>(types_.size() - 1); }
 
-        StmtId add_stmt(const Stmt& s) {
-            stmts_.push_back(s);
-            return static_cast<StmtId>(stmts_.size() -1);
-        }
+        uint32_t add_arg(const Arg& a) { args_.push_back(a); return static_cast<uint32_t>(args_.size() - 1); }
+        uint32_t add_named_group_arg(const Arg& a) { named_group_args_.push_back(a); return static_cast<uint32_t>(named_group_args_.size() - 1); }
 
-        TypeId add_type(const Type& t) {
-            types_.push_back(t);
-            return static_cast<TypeId>(types_.size() - 1);
-        }
+        void add_fn_attr(const Attr& a) { fn_attrs_.push_back(a); }
+        uint32_t add_param(const Param& p) { params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1); }
 
-        uint32_t add_arg(const Arg& a) {
-            args_.push_back(a);
-            return static_cast<uint32_t>(args_.size() - 1);
-        }
+        uint32_t add_stmt_child(StmtId id) { stmt_children_.push_back(id); return static_cast<uint32_t>(stmt_children_.size() - 1); }
 
-        uint32_t add_named_group_arg(const Arg& a) {
-            named_group_args_.push_back(a);
-            return static_cast<uint32_t>(named_group_args_.size() - 1);
-        }
+        // accessors
+        const Expr& expr(ExprId id) const { return exprs_[id]; }
+        Expr& expr_mut(ExprId id) { return exprs_[id]; }
+        const std::vector<Expr>& exprs() const { return exprs_; }
 
-        void add_fn_attr(const ast::Attr& a) {
-            fn_attrs_.push_back(a);
-        }
+        const Type& type_node(TypeId id) const { return types_[id]; }
+        std::vector<Type>& types_mut() { return types_; }
+        const std::vector<Type>& types() const { return types_; }
 
-        uint32_t add_param(const Param& p) {
-            params_.push_back(p);
-            return static_cast<uint32_t>(params_.size() - 1);
-        }
+        const Stmt& stmt(StmtId id) const { return stmts_[id]; }
+        Stmt& stmt_mut(StmtId id) { return stmts_[id]; }
+        const std::vector<Stmt>& stmts() const { return stmts_; }
 
-        uint32_t add_stmt_child(StmtId id) {
-            stmt_children_.push_back(id);
-            return static_cast<uint32_t>(stmt_children_.size() - 1);
-        }
+        const std::vector<Arg>& args() const { return args_; }
+        std::vector<Arg>& args_mut() { return args_; }
 
-
-        const Expr& expr(ExprId id) const       {  return exprs_[id];  }
-        Expr& expr_mut(ExprId id)               {  return exprs_[id];  }
-        const std::vector<Expr>& exprs() const  {  return exprs_;  }
-        
-        const Type& type_node(TypeId id) const  {  return types_[id];   }
-        std::vector<Type>& types_mut()          {  return types_;       }
-        const std::vector<Type>& types() const  {  return types_;       }
-
-        const std::vector<Arg>& args()   const  {  return args_;   }
         const std::vector<Arg>& named_group_args() const { return named_group_args_; }
+        std::vector<Arg>& named_group_args_mut() { return named_group_args_; }
 
-        const std::vector<ast::Attr>& fn_attrs() const { return fn_attrs_; }
-        std::vector<ast::Attr>& fn_attrs() { return fn_attrs_; }
-
-        const Stmt& stmt(StmtId id) const       {  return stmts_[id];  }
-        Stmt& stmt_mut(StmtId id)               {  return stmts_[id];  }
-        const std::vector<StmtId>& stmt_children() const {  return stmt_children_;  }
-        const std::vector<Stmt>& stmts() const  {  return stmts_;  }
+        const std::vector<Attr>& fn_attrs() const { return fn_attrs_; }
+        std::vector<Attr>& fn_attrs_mut() { return fn_attrs_; }
 
         const std::vector<Param>& params() const { return params_; }
-    
+        std::vector<Param>& params_mut() { return params_; }
+
+        const std::vector<StmtId>& stmt_children() const { return stmt_children_; }
+        std::vector<StmtId>& stmt_children_mut() { return stmt_children_; }
+
     private:
-        std::vector<Expr>   exprs_;
-        std::vector<Stmt>   stmts_;
-        std::vector<Arg>    args_;
-        std::vector<Arg>    named_group_args_;
-        std::vector<ast::Attr> fn_attrs_;
-        std::vector<Type>   types_;
-        std::vector<Param>  params_;
+        std::vector<Expr> exprs_;
+        std::vector<Stmt> stmts_;
+        std::vector<Arg>  args_;
+        std::vector<Arg>  named_group_args_;
+
+        std::vector<Attr> fn_attrs_;
+        std::vector<Type> types_;
+        std::vector<Param> params_;
 
         std::vector<StmtId> stmt_children_;
     };

@@ -1,5 +1,5 @@
 // ok_mininal.gpel
-@comptime export fn add(a: i32, b: i32) -> u32 {
+@comptime @foooo export fn add(a: i32, b: i32) -> u32 {
   return a + b;
 }
 
@@ -36,3 +36,26 @@ foo({ x: 1, y: 2 }, mode: 3);
 // foo({ x 1 });             // label: expr 형태가 아니므로 named-group entry 에러
 // foo({ x: 1 }, { y: 2 });  // named-group은 1개만 허용(내가 위에서 그렇게 구현)
 // @ fn bad() -> int { }     // '@' 뒤 이름 토큰이 없어서 에러
+
+
+
+
+/// 함수 기본값 정책 테스트
+ 
+fn add(a: int, b: int) -> int { return a + b; } // 통과
+
+fn mix(a: int, { x: int = 1, y: int = 2 }) -> int { return a + x + y; } // 통과
+
+export fn opt({ scale: int = 2, offset: int = 0 }) -> int { return scale + offset; } // 통과
+
+fn only_named({ a: int, b: int = 10, c: int }) -> int { return b; } // 통과
+
+
+fn bad1(a: int = 1) -> int { return a; } // {}밖의 기본값 금지 정책으로 인해 에러
+
+fn bad2(a: int, b: int = 2, { x: int = 3 }) -> int { return a; } // 위와 같음
+
+fn bad3(a: int = , { x: int = 1 }) -> int { return x; } // positional에서 = , 처럼 식이 없거나 이상해도 “금지”가 먼저 뜨고 복구
+
+fn bad4(a: int, { x: int = }) -> int { return a; } // named-group에서는 기본값 허용하지만 = 뒤 식 누락은 에러
+

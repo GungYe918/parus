@@ -13,7 +13,7 @@ namespace gaupel {
         return syntax::token_kind_name(t.kind);
     }
 
-    void gaupel::Parser::report(diag::Code code, Span span, std::string_view a0) {
+    void gaupel::Parser::diag_report(diag::Code code, Span span, std::string_view a0) {
         if (!diags_ || aborted_) return;
 
         // 같은 위치/같은 코드 중복 스팸 방지
@@ -50,12 +50,12 @@ namespace gaupel {
     }
 
 
-    void Parser::report_int(diag::Code code, Span span, int v0) {
+    void Parser::diag_report_int(diag::Code code, Span span, int v0) {
         std::string tmp = std::to_string(v0);
-        report(code, span, tmp);
+        diag_report(code, span, tmp);
     }
 
-    bool Parser::expect(syntax::TokenKind k) {
+    bool Parser::diag_expect(syntax::TokenKind k) {
         if (aborted_) return false;
 
         if (cursor_.at(k)) {
@@ -65,12 +65,12 @@ namespace gaupel {
 
         const Token& got = cursor_.peek();
         if (got.kind == syntax::TokenKind::kEof) {
-            report(diag::Code::kUnexpectedEof, got.span, syntax::token_kind_name(k));
+            diag_report(diag::Code::kUnexpectedEof, got.span, syntax::token_kind_name(k));
             aborted_ = true;
             return false;
         }
 
-        report(diag::Code::kExpectedToken, got.span, syntax::token_kind_name(k));
+        diag_report(diag::Code::kExpectedToken, got.span, syntax::token_kind_name(k));
         return false;
     }
 
@@ -142,8 +142,8 @@ namespace gaupel {
             return ast_.add_expr(e);
         }
 
-        ast::ExprId lhs = parse_prefix(ternary_depth);
-        lhs = parse_postfix(lhs, ternary_depth);
+        ast::ExprId lhs = parse_expr_prefix(ternary_depth);
+        lhs = parse_expr_postfix(lhs, ternary_depth);
 
         
         while (1) {
@@ -152,12 +152,12 @@ namespace gaupel {
             // ternary ?: (non-nestable)
             if (tok.kind == syntax::TokenKind::kQuestion) {
                 if (ternary_depth > 0) {
-                    report(diag::Code::kNestedTernaryNotAllowed, tok.span);
+                    diag_report(diag::Code::kNestedTernaryNotAllowed, tok.span);
                     cursor_.bump();
                 } else {
                     cursor_.bump(); // '?'
                     ast::ExprId then_e = parse_expr_pratt(0, ternary_depth + 1);
-                    expect(syntax::TokenKind::kColon);
+                    diag_expect(syntax::TokenKind::kColon);
                     ast::ExprId else_e = parse_expr_pratt(0, ternary_depth + 1);
 
                     ast::Expr e{};
@@ -181,7 +181,7 @@ namespace gaupel {
             int next_min = (info->assoc == syntax::Assoc::kLeft) ? (prec + 1) : prec;
 
             ast::ExprId rhs = parse_expr_pratt(next_min, ternary_depth);
-            rhs = parse_postfix(rhs, ternary_depth);
+            rhs = parse_expr_postfix(rhs, ternary_depth);
 
             ast::Expr e{};
             e.kind = ast::ExprKind::kBinary;
@@ -202,7 +202,7 @@ namespace gaupel {
         return lhs;
     }
 
-    ast::ExprId Parser::parse_prefix(int ternary_depth) {
+    ast::ExprId Parser::parse_expr_prefix(int ternary_depth) {
         if (aborted_) {
             ast::Expr e{};
             e.kind = ast::ExprKind::kError;
@@ -215,8 +215,8 @@ namespace gaupel {
 
         if (auto p = syntax::prefix_info(t.kind); p.has_value()) {
             const Token op = cursor_.bump();
-            ast::ExprId rhs = parse_prefix(ternary_depth);
-            rhs = parse_postfix(rhs, ternary_depth);
+            ast::ExprId rhs = parse_expr_prefix(ternary_depth);
+            rhs = parse_expr_postfix(rhs, ternary_depth);
 
             ast::Expr e{};
             e.kind = ast::ExprKind::kUnary;
@@ -227,10 +227,10 @@ namespace gaupel {
             return ast_.add_expr(e);
         }
 
-        return parse_primary(ternary_depth);
+        return parse_expr_primary(ternary_depth);
     }
 
-    ast::ExprId Parser::parse_primary(int ternary_depth) {
+    ast::ExprId Parser::parse_expr_primary(int ternary_depth) {
         const Token t = cursor_.peek();
 
         // literals / ident / hole
@@ -308,7 +308,7 @@ namespace gaupel {
 
         if (t.kind == syntax::TokenKind::kEof) {
             if (!lexer_fatal_) {
-                report(diag::Code::kUnexpectedEof, t.span, "expression");
+                diag_report(diag::Code::kUnexpectedEof, t.span, "expression");
             }
             aborted_ = true;
 
@@ -323,7 +323,7 @@ namespace gaupel {
         if (cursor_.eat(syntax::TokenKind::kLParen)) {
             ast::ExprId inner = parse_expr_pratt(0, ternary_depth);
             if (!cursor_.eat(syntax::TokenKind::kRParen)) {
-                report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
                 recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
                 cursor_.eat(syntax::TokenKind::kRParen);
             }
@@ -331,7 +331,7 @@ namespace gaupel {
         }
 
         // fallback: create error-ish hole node
-        report(diag::Code::kUnexpectedToken, t.span, token_display(t));
+        diag_report(diag::Code::kUnexpectedToken, t.span, token_display(t));
         cursor_.bump();
 
         ast::Expr e{};
@@ -341,7 +341,7 @@ namespace gaupel {
         return ast_.add_expr(e);
     }
 
-    ast::ExprId Parser::parse_postfix(ast::ExprId base, int ternary_depth) {
+    ast::ExprId Parser::parse_expr_postfix(ast::ExprId base, int ternary_depth) {
         if (aborted_) {
             ast::Expr e{};
             e.kind = ast::ExprKind::kError;
@@ -355,13 +355,13 @@ namespace gaupel {
 
             if (t.kind == syntax::TokenKind::kLParen) {
                 const Token lp = cursor_.bump();
-                base = parse_call(base, lp, ternary_depth);
+                base = parse_expr_call(base, lp, ternary_depth);
                 continue;
             }
 
             if (t.kind == syntax::TokenKind::kLBracket) {
                 const Token lb = cursor_.bump();
-                base = parse_index(base, lb, ternary_depth);
+                base = parse_expr_index(base, lb, ternary_depth);
                 continue;
             }
 
@@ -382,7 +382,7 @@ namespace gaupel {
         return base;
     }
 
-    ast::Arg Parser::parse_arg(int ternary_depth) {
+    ast::Arg Parser::parse_call_arg(int ternary_depth) {
         ast::Arg a{};
         const Token first = cursor_.peek();
 
@@ -417,7 +417,7 @@ namespace gaupel {
         return a;
     }
 
-    ast::Arg Parser::parse_named_group_call_arg(int ternary_depth) {
+    ast::Arg Parser::parse_call_named_group_arg(int ternary_depth) {
         using K = syntax::TokenKind;
 
         const Token lb = cursor_.bump(); // '{'
@@ -429,7 +429,7 @@ namespace gaupel {
                 const Token first = cursor_.peek();
 
                 if (!(first.kind == K::kIdent && cursor_.peek(1).kind == K::kColon)) {
-                    report(diag::Code::kNamedGroupEntryExpectedColon, first.span);
+                    diag_report(diag::Code::kNamedGroupEntryExpectedColon, first.span);
                     recover_to_delim(K::kComma, K::kRBrace);
                     if (cursor_.eat(K::kComma)) continue;
                     break;
@@ -466,7 +466,7 @@ namespace gaupel {
         }
 
         Token rb = cursor_.peek();
-        expect(K::kRBrace);
+        diag_expect(K::kRBrace);
 
         ast::Arg g{};
         g.kind = ast::ArgKind::kNamedGroup;
@@ -476,7 +476,7 @@ namespace gaupel {
         return g;
     }
 
-    ast::ExprId Parser::parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
+    ast::ExprId Parser::parse_expr_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
         using K = syntax::TokenKind;
 
         if (aborted_) {
@@ -502,17 +502,17 @@ namespace gaupel {
                 // named-group arg: '{' ... '}'
                 if (cursor_.at(K::kLBrace)) {
                     if (seen_named_group) {
-                        report(diag::Code::kCallOnlyOneNamedGroupAllowed, cursor_.peek().span);
+                        diag_report(diag::Code::kCallOnlyOneNamedGroupAllowed, cursor_.peek().span);
                         recover_to_delim(K::kComma, K::kRParen);
                         cursor_.eat(K::kComma);
                         continue;
                     }
 
                     seen_named_group = true;
-                    a = parse_named_group_call_arg(ternary_depth);
+                    a = parse_call_named_group_arg(ternary_depth);
                 } else {
                     // normal arg (positional or labeled)
-                    a = parse_arg(ternary_depth);
+                    a = parse_call_arg(ternary_depth);
                 }
 
                 ast_.add_arg(a);
@@ -527,7 +527,7 @@ namespace gaupel {
 
                 // if we didn't progress (or we hit junk), recover to ',' or ')'
                 if (cursor_.pos() == before && !cursor_.at(K::kRParen)) {
-                    report(diag::Code::kUnexpectedToken, cursor_.peek().span, token_display(cursor_.peek()));
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, token_display(cursor_.peek()));
                     recover_to_delim(K::kComma, K::kRParen);
                     if (cursor_.eat(K::kComma)) continue;
                 }
@@ -539,7 +539,7 @@ namespace gaupel {
         // closing ')'
         Token rp = cursor_.peek();
         if (!cursor_.eat(K::kRParen)) {
-            report(diag::Code::kExpectedToken, rp.span, ")");
+            diag_report(diag::Code::kExpectedToken, rp.span, ")");
             recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
             rp = cursor_.peek();
             cursor_.eat(K::kRParen);
@@ -564,7 +564,7 @@ namespace gaupel {
             if (labeled > 0 && positional > 0) {
                 // 어디를 span으로 찍을지: call의 '(' 위치 or 첫 섞인 arg 위치
                 // 여기선 call 전체 범위의 시작( lparen_tok ) 근처를 사용
-                report(diag::Code::kCallArgMixNotAllowed, lparen_tok.span);
+                diag_report(diag::Code::kCallArgMixNotAllowed, lparen_tok.span);
             }
         }
 
@@ -577,7 +577,7 @@ namespace gaupel {
         return ast_.add_expr(e);
     }
 
-    ast::ExprId Parser::parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth) {
+    ast::ExprId Parser::parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth) {
         (void)lbracket_tok;
         if (aborted_) {
             ast::Expr e{};
@@ -591,7 +591,7 @@ namespace gaupel {
 
         Token rb = cursor_.peek();
         if (!cursor_.eat(syntax::TokenKind::kRBracket)) {
-            report(diag::Code::kExpectedToken, rb.span, "]");
+            diag_report(diag::Code::kExpectedToken, rb.span, "]");
             recover_to_delim(syntax::TokenKind::kRBracket, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
             rb = cursor_.peek();
             cursor_.eat(syntax::TokenKind::kRBracket);

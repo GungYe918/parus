@@ -5,92 +5,175 @@
 #include <gaupel/diag/Diagnostic.hpp>
 
 #include <vector>
+#include <utility>
 
 
 namespace gaupel {
 
     class Parser {
     public:
-        Parser(const std::vector<Token>& tokens, ast::AstArena& ast, diag::Bag* diags = nullptr, uint32_t max_errors = 64)
+        Parser(const std::vector<Token>& tokens,
+               ast::AstArena& ast,
+               diag::Bag* diags = nullptr,
+               uint32_t max_errors = 64)
             : cursor_(tokens), ast_(ast), diags_(diags), max_errors_(max_errors) {
+
+            // Lexer 단계에서 UTF-8 fatal이 발생한 경우, 파싱은 즉시 중단 상태로 취급
             if (diags_ && diags_->has_code(diag::Code::kInvalidUtf8)) {
                 lexer_fatal_ = true;
-                aborted_ = true; // lexer fatal이면 파싱 자체도 중단 상태로 취급해도 됨
+                aborted_ = true;
             }
         }
 
+        // 최상위 표현식 1개를 파싱
         ast::ExprId parse_expr();
 
+        // stmt/decl 혼용 문장 1개를 파싱
         ast::StmtId parse_stmt();
 
-        /// @brief  EOF까지 stmt를 반복 파싱하여 프로그램 노드를 생성
-        /// @details gaupelc에서 여러 stmt를 한 번에 검증할 때 사용
+        // EOF까지 stmt/decl을 반복 파싱하여 프로그램(Block) 노드 생성
         ast::StmtId parse_program();
 
     private:
-        void report(diag::Code code, Span span, std::string_view a0 = {});
-        void report_int(diag::Code code, Span span, int v0);
+        // --------------------
+        // diag & small helpers
+        // --------------------
 
-        bool expect(syntax::TokenKind k);
+        //  진단을 기록 (중복 스팸 방지, max-errors 처리 포함)
+        void diag_report(diag::Code code, Span span, std::string_view a0 = {});
 
-        bool is_aborted() const {  return aborted_;  }
-        bool is_fn_decl_start(syntax::TokenKind k) const;
+        //  정수 인자를 포함하는 진단을 기록
+        void diag_report_int(diag::Code code, Span span, int v0);
 
+        //  토큰 1개를 기대하고 소비, 실패 시 진단
+        bool diag_expect(syntax::TokenKind k);
+
+        //  중단 상태인지 확인
+        bool is_aborted() const { return aborted_; }
+
+        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export, fn)
+        bool is_decl_start(syntax::TokenKind k) const;
+
+        // --------------------
+        // expr
+        // --------------------
+
+        //  Pratt 파서 본체
         ast::ExprId parse_expr_pratt(int min_prec, int ternary_depth);
-        ast::ExprId parse_prefix(int ternary_depth);
-        ast::ExprId parse_primary(int ternary_depth);
-        ast::ExprId parse_postfix(ast::ExprId base, int ternary_depth);
 
-        ast::ExprId parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth);
-        ast::ExprId parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
+        //  prefix(unary 포함) 파싱
+        ast::ExprId parse_expr_prefix(int ternary_depth);
 
+        //  primary(리터럴/식별자/괄호 등) 파싱
+        ast::ExprId parse_expr_primary(int ternary_depth);
+
+        //  postfix(call/index/++) 연속 파싱
+        ast::ExprId parse_expr_postfix(ast::ExprId base, int ternary_depth);
+
+        //  call 파싱
+        ast::ExprId parse_expr_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth);
+
+        //  index 파싱
+        ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
+
+        // --------------------
+        // type
+        // --------------------
+
+        //  타입 파싱(v0: NamedType).
         ast::TypeId parse_type();
 
-        ast::StmtId parse_stmt_inner();
-        ast::StmtId parse_expr_stmt();
-        ast::StmtId parse_block_stmt();
+        // --------------------
+        // stmt
+        // --------------------
 
-        ast::StmtId parse_var_stmt();
-        
-        ast::StmtId parse_if_stmt();
-        ast::StmtId parse_while_stmt();
-        ast::StmtId parse_return_stmt();
-        ast::StmtId parse_break_stmt();
-        ast::StmtId parse_continue_stmt();
+        //  stmt/decl 혼용의 내부 엔트리
+        ast::StmtId parse_stmt_any();
 
-        ast::StmtId parse_fn_decl_stmt();
+        //  expr ';' 문장 파싱
+        ast::StmtId parse_stmt_expr();
 
-        // helper: require a block after if/while
-        ast::StmtId parse_required_block(std::string_view ctx);
+        //  '{ ... }' 블록 파싱
+        ast::StmtId parse_stmt_block();
 
-        ast::Arg parse_arg(int ternary_depth);
-        ast::Arg parse_named_group_call_arg(int ternary_depth);
+        //  let/set 변수 선언 파싱
+        ast::StmtId parse_stmt_var();
 
+        //  if/elif/else 파싱
+        ast::StmtId parse_stmt_if();
+
+        //  while 파싱
+        ast::StmtId parse_stmt_while();
+
+        //  return 파싱
+        ast::StmtId parse_stmt_return();
+
+        //  break 파싱
+        ast::StmtId parse_stmt_break();
+
+        //  continue 파싱
+        ast::StmtId parse_stmt_continue();
+
+        //  if/while/fn에서 블록이 필수일 때
+        ast::StmtId parse_stmt_required_block(std::string_view ctx);
+
+        // --------------------
+        // decl
+        // --------------------
+
+        //  decl 엔트리(현재는 fn decl만 지원)
+        ast::StmtId parse_decl_any();
+
+        //  함수 선언(스펙 6.1)을 파싱
+        ast::StmtId parse_decl_fn();
+
+        //  '@attr' 리스트를 파싱하여 arena에 저장
+        std::pair<uint32_t, uint32_t> parse_decl_fn_attr_list();
+
+        //  함수 파라미터 목록을 파싱 (positional + optional named-group)
+        void parse_decl_fn_params(uint32_t& out_param_begin,
+                                  uint32_t& out_param_count,
+                                  uint32_t& out_positional_count,
+                                  bool& out_has_named_group);
+
+        //  파라미터 1개(Ident ':' Type ['=' Expr])를 파싱
+        //  반환값: 성공 여부(이름/타입까지 정상 파싱되었는지)
+        bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name);
+
+        // --------------------
+        // call args
+        // --------------------
+
+        //  일반 인자(positional or labeled)를 파싱
+        ast::Arg parse_call_arg(int ternary_depth);
+
+        //  call-site named-group '{ ... }' 자체를 파싱
+        ast::Arg parse_call_named_group_arg(int ternary_depth);
+
+        // --------------------
+        // recovery & misc
+        // --------------------
+
+        //  Span 두 개를 결합
         Span span_join(Span a, Span b) const;
 
-        // stmt 종결자 ';'를 요구하되, 없으면 stmt 경계까지 recovery
-        // - ';'가 있으면 그 span 반환
-        // - 없으면 에러 찍고, ';' 또는 '}' 또는 EOF까지 스킵
-        //   - 그 과정에서 ';'를 만나면 소비하고 그 span 반환
-        //   - '}'/EOF에서 멈추면 fallback_end 또는 마지막으로 소비한 토큰 span 반환
-        Span consume_semicolon_or_recover(Span fallback_end);
+        //  ';'를 요구하되 없으면 stmt 경계까지 recovery
+        Span stmt_consume_semicolon_or_recover(Span fallback_end);
 
-        // 현재 위치에서 stmt 경계까지 스킵(세미콜론은 소비하지 않음)
-        void sync_to_stmt_boundary();
+        //  현재 위치에서 stmt 경계(';', '}', EOF)까지 스킵
+        void stmt_sync_to_boundary();
 
-        void recover_to_delim(
-            syntax::TokenKind stop0,
-            syntax::TokenKind stop1 = syntax::TokenKind::kError,
-            syntax::TokenKind stop2 = syntax::TokenKind::kError
-        );
+        //  구분자(, ) } 등)까지 중첩을 고려해 스킵
+        void recover_to_delim(syntax::TokenKind stop0,
+                              syntax::TokenKind stop1 = syntax::TokenKind::kError,
+                              syntax::TokenKind stop2 = syntax::TokenKind::kError);
 
         Cursor cursor_;
         ast::AstArena& ast_;
         diag::Bag* diags_ = nullptr;
 
-        // diagnostic quality controls
         uint32_t last_diag_lo_ = 0xFFFFFFFFu;
-        diag::Code last_diag_code_ = diag::Code::kUnexpectedToken; // 초기값
+        diag::Code last_diag_code_ = diag::Code::kUnexpectedToken;
         uint32_t parse_error_count_ = 0;
         static constexpr uint32_t kMaxParseErrors = 1024;
 

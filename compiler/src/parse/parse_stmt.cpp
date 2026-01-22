@@ -6,9 +6,9 @@
 
 
 namespace gaupel {
-    
+
     ast::StmtId Parser::parse_stmt() {
-        return parse_stmt_inner();
+        return parse_stmt_any();
     }
 
     ast::StmtId Parser::parse_program() {
@@ -19,7 +19,7 @@ namespace gaupel {
         Span last  = first;
 
         while (!cursor_.at(syntax::TokenKind::kEof)) {
-            ast::StmtId s = parse_stmt_inner();
+            ast::StmtId s = parse_stmt_any();
             ast_.add_stmt_child(s);
             ++count;
             last = ast_.stmt(s).span;
@@ -38,20 +38,13 @@ namespace gaupel {
         return ast_.add_stmt(root);
     }
 
-    bool Parser::is_fn_decl_start(syntax::TokenKind k) const {
-        using K = syntax::TokenKind;
-        return k == K::kAt
-            || k == K::kKwExport
-            || k == K::kKwFn;
-            //|| k == K::kKwPure
-            //|| k == K::kKwComptime;
-    }
-
-    ast::StmtId Parser::parse_stmt_inner() {
+    // stmt/decl 혼용 엔트리
+    ast::StmtId Parser::parse_stmt_any() {
         const auto& tok = cursor_.peek();
 
-        if (is_fn_decl_start(tok.kind)) {
-            return parse_fn_decl_stmt();
+        // decl start => decl 파서로 위임
+        if (is_decl_start(tok.kind)) {
+            return parse_decl_any();
         }
 
         // empty stmt: ';'
@@ -63,39 +56,39 @@ namespace gaupel {
             return ast_.add_stmt(s);
         }
 
-        // block stmt: '{' ... '}'
+        // block
         if (tok.kind == syntax::TokenKind::kLBrace) {
-            return parse_block_stmt();
+            return parse_stmt_block();
         }
 
         // keyword stmts
-        if (tok.kind == syntax::TokenKind::kKwIf)       return parse_if_stmt();
-        if (tok.kind == syntax::TokenKind::kKwWhile)    return parse_while_stmt();
-        if (tok.kind == syntax::TokenKind::kKwReturn)   return parse_return_stmt();
-        if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_break_stmt();
-        if (tok.kind == syntax::TokenKind::kKwContinue) return parse_continue_stmt();
+        if (tok.kind == syntax::TokenKind::kKwIf)       return parse_stmt_if();
+        if (tok.kind == syntax::TokenKind::kKwWhile)    return parse_stmt_while();
+        if (tok.kind == syntax::TokenKind::kKwReturn)   return parse_stmt_return();
+        if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_stmt_break();
+        if (tok.kind == syntax::TokenKind::kKwContinue) return parse_stmt_continue();
         if (tok.kind == syntax::TokenKind::kKwLet
-        ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_var_stmt();
+        ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_stmt_var();
 
-        // expr stmt: Expr ';'
-        return parse_expr_stmt();
+        return parse_stmt_expr();
     }
 
-    ast::StmtId Parser::parse_block_stmt() {
+    // '{ ... }' 블록 파싱
+    ast::StmtId Parser::parse_stmt_block() {
         const Token lb = cursor_.peek();
-        expect(syntax::TokenKind::kLBrace);
+        diag_expect(syntax::TokenKind::kLBrace);
 
         uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
         uint32_t count = 0;
 
         while (!cursor_.at(syntax::TokenKind::kRBrace) && !cursor_.at(syntax::TokenKind::kEof)) {
-            ast::StmtId child = parse_stmt_inner();
+            ast::StmtId child = parse_stmt_any();
             ast_.add_stmt_child(child);
             ++count;
         }
 
         const Token rb = cursor_.peek();
-        expect(syntax::TokenKind::kRBrace);
+        diag_expect(syntax::TokenKind::kRBrace);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kBlock;
@@ -105,13 +98,13 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_expr_stmt() {
+    // expr ';' 파싱
+    ast::StmtId Parser::parse_stmt_expr() {
         const auto start_tok = cursor_.peek();
         ast::ExprId e = parse_expr();
 
-        // ';' 누락 recovery의 fallback은 "expr의 끝"으로 설정
         const Span expr_end = ast_.expr(e).span;
-        const Span term_end = consume_semicolon_or_recover(expr_end);
+        const Span term_end = stmt_consume_semicolon_or_recover(expr_end);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kExprStmt;
@@ -120,13 +113,13 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_required_block(std::string_view ctx) {
+    // 블록이 필수인 구문에서 블록을 강제
+    ast::StmtId Parser::parse_stmt_required_block(std::string_view ctx) {
         (void)ctx;
         if (!cursor_.at(syntax::TokenKind::kLBrace)) {
-            report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
 
-            // recovery: "블록이 없으면" 다음 stmt 경계까지는 스킵
-            sync_to_stmt_boundary();
+            stmt_sync_to_boundary();
             if (cursor_.at(syntax::TokenKind::kSemicolon)) cursor_.bump();
 
             ast::Stmt s{};
@@ -136,70 +129,62 @@ namespace gaupel {
             s.stmt_count = 0;
             return ast_.add_stmt(s);
         }
-        return parse_block_stmt();
+        return parse_stmt_block();
     }
 
-    ast::StmtId Parser::parse_var_stmt() {
+    // let/set 파싱
+    ast::StmtId Parser::parse_stmt_var() {
         const Token& kw = cursor_.peek();
         const bool is_set = (kw.kind == syntax::TokenKind::kKwSet);
-        cursor_.bump(); // consume let/set
+        cursor_.bump();
 
-        // let mut x : T = expr;
         bool is_mut = false;
         if (cursor_.at(syntax::TokenKind::kKwMut)) {
             is_mut = true;
             cursor_.bump();
         }
 
-        // name
         const Token& name_tok = cursor_.peek();
         std::string_view name{};
         if (name_tok.kind == syntax::TokenKind::kIdent) {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            report(diag::Code::kUnexpectedToken, name_tok.span, "identifier");
+            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier");
         }
 
         ast::TypeId type_id = ast::k_invalid_type;
 
-        // let requires ": Type"
         if (!is_set) {
-            const Token& maybe_colon = cursor_.peek();
             if (!cursor_.at(syntax::TokenKind::kColon)) {
-                // let must have type annotation in v0
-                report(diag::Code::kUnexpectedToken, maybe_colon.span, "':' (type annotation required for let)");
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "':' (type annotation required for let)");
             } else {
-                cursor_.bump(); // ':'
+                cursor_.bump();
                 type_id = parse_type();
             }
         } else {
-            // set forbids ": Type" (v0 rule)
             if (cursor_.at(syntax::TokenKind::kColon)) {
-                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "type annotation not allowed for set in v0");
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "type annotation not allowed for set in v0");
                 cursor_.bump();
-                // best-effort: still parse a type and discard to keep cursor sane
                 (void)parse_type();
             }
         }
 
-        // initializer
         ast::ExprId init = ast::k_invalid_expr;
 
         if (cursor_.at(syntax::TokenKind::kAssign)) {
-            const Token& eq = cursor_.peek();
-            cursor_.bump(); // '='
+            cursor_.bump();
             init = parse_expr();
-            (void)eq;
         } else {
-            // set requires initializer to infer type
             if (is_set) {
-                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "'=' initializer required for set");
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "'=' initializer required for set");
             }
         }
 
-        // semicolon
-        const Span end = consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kVar;
@@ -212,71 +197,72 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_while_stmt() {
-        const Token kw = cursor_.bump(); // while
+    // while 파싱
+    ast::StmtId Parser::parse_stmt_while() {
+        const Token kw = cursor_.bump();
 
         ast::ExprId cond = parse_expr();
-        ast::StmtId body = parse_required_block("while");
+        ast::StmtId body = parse_stmt_required_block("while");
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kWhile;
-        s.expr = cond;   // condition
-        s.a = body;      // body block
+        s.expr = cond;
+        s.a = body;
         s.span = span_join(kw.span, ast_.stmt(body).span);
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_if_stmt() {
-        // parse first "if"
-        const Token if_kw = cursor_.bump(); // if
+    // if/elif/else 파싱(elif는 desugar)
+    ast::StmtId Parser::parse_stmt_if() {
+        const Token if_kw = cursor_.bump();
         ast::ExprId cond0 = parse_expr();
-        ast::StmtId then0 = parse_required_block("if");
+        ast::StmtId then0 = parse_stmt_required_block("if");
 
-        // parse trailing elif arms into temp vectors (local)
         struct ElifArm { ast::ExprId cond; ast::StmtId block; Span span; };
         std::vector<ElifArm> elifs;
 
         while (cursor_.at(syntax::TokenKind::kKwElif)) {
             const Token elif_kw = cursor_.bump();
             ast::ExprId c = parse_expr();
-            ast::StmtId b = parse_required_block("elif");
+            ast::StmtId b = parse_stmt_required_block("elif");
             elifs.push_back(ElifArm{c, b, span_join(elif_kw.span, ast_.stmt(b).span)});
         }
 
-        // optional else
         ast::StmtId else_block = ast::k_invalid_stmt;
         if (cursor_.at(syntax::TokenKind::kKwElse)) {
             cursor_.bump();
-            else_block = parse_required_block("else");
-        } else {
-            // no else => synthesize empty block as else? (선택)
-            // v0는 else가 없어도 괜찮으니 invalid로 둠.
+            else_block = parse_stmt_required_block("else");
         }
 
-        // desugar: build from last elif backwards
         ast::StmtId tail_else = else_block;
         for (int i = static_cast<int>(elifs.size()) - 1; i >= 0; --i) {
             ast::Stmt nested{};
             nested.kind = ast::StmtKind::kIf;
             nested.expr = elifs[i].cond;
             nested.a = elifs[i].block;
-            nested.b = tail_else; // may be invalid
-            nested.span = span_join(elifs[i].span, (tail_else != ast::k_invalid_stmt) ? ast_.stmt(tail_else).span : ast_.stmt(elifs[i].block).span);
+            nested.b = tail_else;
+            nested.span = span_join(
+                elifs[i].span,
+                (tail_else != ast::k_invalid_stmt) ? ast_.stmt(tail_else).span : ast_.stmt(elifs[i].block).span
+            );
             tail_else = ast_.add_stmt(nested);
         }
 
-        // final root if
         ast::Stmt root{};
         root.kind = ast::StmtKind::kIf;
         root.expr = cond0;
         root.a = then0;
-        root.b = tail_else; // may be invalid
-        root.span = span_join(if_kw.span, (tail_else != ast::k_invalid_stmt) ? ast_.stmt(tail_else).span : ast_.stmt(then0).span);
+        root.b = tail_else;
+        root.span = span_join(
+            if_kw.span,
+            (tail_else != ast::k_invalid_stmt) ? ast_.stmt(tail_else).span : ast_.stmt(then0).span
+        );
         return ast_.add_stmt(root);
     }
 
-    ast::StmtId Parser::parse_return_stmt() {
-        const Token kw = cursor_.bump(); // return
+    // return 파싱
+    ast::StmtId Parser::parse_stmt_return() {
+        const Token kw = cursor_.bump();
 
         ast::ExprId v = ast::k_invalid_expr;
         Span fallback = kw.span;
@@ -286,7 +272,7 @@ namespace gaupel {
             fallback = ast_.expr(v).span;
         }
 
-        const Span term_end = consume_semicolon_or_recover(fallback);
+        const Span term_end = stmt_consume_semicolon_or_recover(fallback);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kReturn;
@@ -295,9 +281,10 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_break_stmt() {
-        const Token kw = cursor_.bump(); // break
-        const Span term_end = consume_semicolon_or_recover(kw.span);
+    // break 파싱
+    ast::StmtId Parser::parse_stmt_break() {
+        const Token kw = cursor_.bump();
+        const Span term_end = stmt_consume_semicolon_or_recover(kw.span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kBreak;
@@ -305,9 +292,10 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_continue_stmt() {
-        const Token kw = cursor_.bump(); // continue
-        const Span term_end = consume_semicolon_or_recover(kw.span);
+    // continue 파싱
+    ast::StmtId Parser::parse_stmt_continue() {
+        const Token kw = cursor_.bump();
+        const Span term_end = stmt_consume_semicolon_or_recover(kw.span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kContinue;
@@ -315,204 +303,25 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-    ast::StmtId Parser::parse_fn_decl_stmt() {
-        using K = syntax::TokenKind;
-
-        const Token start_tok = cursor_.peek();
-        Span start = start_tok.span;
-
-        bool is_export = false;
-        bool is_throwing = false;
-
-        // attr list in arena
-        uint32_t attr_begin = static_cast<uint32_t>(ast_.fn_attrs().size());
-        uint32_t attr_count = 0;
-
-        auto push_attr = [&](const Token& name_tok) {
-            ast::Attr a{};
-            a.name = name_tok.lexeme.empty() ? syntax::token_kind_name(name_tok.kind) : name_tok.lexeme;
-            a.span = name_tok.span;
-            ast_.add_fn_attr(a);
-            ++attr_count;
-        };
-
-        // header modifiers until 'fn'
-        while (1) {
-            if (cursor_.at(K::kAt)) {
-                const Token at = cursor_.bump();
-
-                // '@' 다음은 "속성 이름"이어야 함 (v0: ident만 허용)
-                const Token name_tok = cursor_.peek();
-                if (name_tok.kind == K::kIdent) {
-                    cursor_.bump();
-                    push_attr(name_tok);
-                    continue;
-                }
-
-                // '@' 뒤에 이름이 없으면 전용 diag code 사용
-                report(diag::Code::kAttrNameExpectedAfterAt, name_tok.span);
-
-                // recovery: 무한루프 방지로 1토큰 전진(EOF 제외)
-                if (!cursor_.at(K::kEof)) cursor_.bump();
-                continue;
-            }
-
-            // keep existing sugar: bare keywords before fn
-            if (cursor_.at(K::kKwExport)) {
-                is_export = true; 
-                cursor_.bump(); 
-                continue;
-            }
-
-            break;
-        }
-
-        // require 'fn'
-        if (!cursor_.at(K::kKwFn)) {
-            report(diag::Code::kExpectedToken, cursor_.peek().span, "fn");
-            sync_to_stmt_boundary();
-            if (cursor_.at(K::kSemicolon)) cursor_.bump();
-
-            ast::Stmt s{};
-            s.kind = ast::StmtKind::kError;
-            s.span = span_join(start, cursor_.prev().span);
-            return ast_.add_stmt(s);
-        }
-        const Token fn_kw = cursor_.bump(); (void)fn_kw;
-
-        // name
-        std::string_view name{};
-        const Token name_tok = cursor_.peek();
-        if (name_tok.kind == K::kIdent) {
-            name = name_tok.lexeme;
-            cursor_.bump();
-        } else {
-            report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (function name)");
-        }
-
-        // optional '?': fn name?
-        if (cursor_.at(K::kQuestion)) {
-            is_throwing = true;
-            cursor_.bump();
-        }
-
-        // params
-        uint32_t param_begin = static_cast<uint32_t>(ast_.params().size());
-        uint32_t param_count = 0;
-
-        if (!cursor_.eat(K::kLParen)) {
-            report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-            recover_to_delim(K::kLParen, K::kArrow, K::kLBrace);
-            cursor_.eat(K::kLParen);
-        }
-
-        if (!cursor_.at(K::kRParen)) {
-            while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
-                Token p0 = cursor_.peek();
-
-                std::string_view p_name{};
-                if (p0.kind == K::kIdent) {
-                    p_name = p0.lexeme;
-                    cursor_.bump();
-                } else {
-                    report(diag::Code::kUnexpectedToken, p0.span, "identifier (param name)");
-                    recover_to_delim(K::kComma, K::kRParen);
-                    if (cursor_.eat(K::kComma)) continue;
-                    break;
-                }
-
-                if (!cursor_.eat(K::kColon)) {
-                    report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
-                    recover_to_delim(K::kComma, K::kRParen);
-                    if (cursor_.eat(K::kComma)) continue;
-                }
-
-                ast::TypeId p_ty = parse_type();
-
-                ast::Param p{};
-                p.name = p_name;
-                p.type = p_ty;
-                p.span = span_join(p0.span, ast_.type_node(p_ty).span);
-                ast_.add_param(p);
-                ++param_count;
-
-                if (cursor_.eat(K::kComma)) continue;
-                break;
-            }
-        }
-
-        if (!cursor_.eat(K::kRParen)) {
-            report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-            recover_to_delim(K::kRParen, K::kArrow, K::kLBrace);
-            cursor_.eat(K::kRParen);
-        }
-
-        // '->' ReturnType
-        if (!cursor_.at(K::kArrow)) {
-            if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
-                cursor_.bump();
-                cursor_.bump();
-            } else {
-                report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
-                recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
-                cursor_.eat(K::kArrow);
-            }
-        } else {
-            cursor_.bump();
-        }
-
-        ast::TypeId ret_ty = parse_type();
-
-        // body
-        ast::StmtId body = parse_required_block("fn");
-
-        // optional semicolon after function decl
-        Span end_sp = ast_.stmt(body).span;
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
-
-        ast::Stmt s{};
-        s.kind = ast::StmtKind::kFnDecl;
-        s.span = span_join(start, end_sp);
-
-        s.name = name;
-        s.type = ret_ty;
-        s.a = body;
-
-        s.is_export = is_export;
-        s.is_throwing = is_throwing;
-
-        s.param_begin = param_begin;
-        s.param_count = param_count;
-
-        // store attrs
-        s.attr_begin = attr_begin;
-        s.attr_count = attr_count;
-
-        return ast_.add_stmt(s);
-    }
-
-    void Parser::sync_to_stmt_boundary() {
-        // stmt 경계: ';' or '}' or EOF
+    // stmt 경계까지 스킵
+    void Parser::stmt_sync_to_boundary() {
         while (!cursor_.at(syntax::TokenKind::kSemicolon) &&
                !cursor_.at(syntax::TokenKind::kRBrace) &&
                !cursor_.at(syntax::TokenKind::kEof)) {
-            cursor_.bump(); // 반드시 전진
+            cursor_.bump();
         }
     }
 
-    Span Parser::consume_semicolon_or_recover(Span fallback_end) {
+    // ';'가 없으면 다음 경계까지 복구 후 가능한 경우 ';' 소비
+    Span Parser::stmt_consume_semicolon_or_recover(Span fallback_end) {
         if (cursor_.at(syntax::TokenKind::kSemicolon)) {
-            const Token semi = cursor_.bump();
-            return semi.span;
+            return cursor_.bump().span;
         }
 
-        // 여기서 ';'가 필요한 상황
         const Token t = cursor_.peek();
-        report(diag::Code::kExpectedToken, t.span, syntax::token_kind_name(syntax::TokenKind::kSemicolon));
+        diag_report(diag::Code::kExpectedToken, t.span,
+                    syntax::token_kind_name(syntax::TokenKind::kSemicolon));
 
-        // recovery: 다음 stmt 경계까지 스킵
         Span last = fallback_end;
         while (!cursor_.at(syntax::TokenKind::kSemicolon) &&
                !cursor_.at(syntax::TokenKind::kRBrace) &&
@@ -520,7 +329,6 @@ namespace gaupel {
             last = cursor_.bump().span;
         }
 
-        // ';'를 만나면 소비해서 다음 stmt 시작점을 안정화
         if (cursor_.at(syntax::TokenKind::kSemicolon)) {
             last = cursor_.bump().span;
         }
@@ -528,4 +336,4 @@ namespace gaupel {
         return last;
     }
 
-}
+} // namespace gaupel

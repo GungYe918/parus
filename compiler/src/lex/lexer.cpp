@@ -313,7 +313,6 @@ namespace gaupel {
         if (t.lexeme == "xor") { t.kind = syntax::TokenKind::kKwXor; return t; }
 
         if (t.lexeme == "mut") { t.kind = syntax::TokenKind::kKwMut; return t; }
-        if (t.lexeme == "ref") { t.kind = syntax::TokenKind::kKwRef; return t; }
 
         // stmt keywords
         if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }
@@ -325,6 +324,9 @@ namespace gaupel {
         if (t.lexeme == "return")   { t.kind = syntax::TokenKind::kKwReturn;   return t; }
         if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
         if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }
+
+        if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
+        if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }
 
         if (t.lexeme == "fn")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
