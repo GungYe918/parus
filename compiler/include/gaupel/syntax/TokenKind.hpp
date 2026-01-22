@@ -113,6 +113,13 @@ namespace gaupel::syntax {
     kUnknownPunct,
     };
 
+    constexpr bool is_keyword(TokenKind k) {
+        using U = std::underlying_type_t<TokenKind>;
+        const U v = static_cast<U>(k);
+        return v >= static_cast<U>(TokenKind::kKwTrue)
+            && v <= static_cast<U>(TokenKind::kKwComptime);
+    }
+
     constexpr std::string_view token_kind_name(TokenKind k) {
         switch(k) {
             case TokenKind::kEof: return "eof";

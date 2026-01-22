@@ -42,9 +42,9 @@ namespace gaupel {
         using K = syntax::TokenKind;
         return k == K::kAt
             || k == K::kKwExport
-            || k == K::kKwFn
-            || k == K::kKwPure
-            || k == K::kKwComptime;
+            || k == K::kKwFn;
+            //|| k == K::kKwPure
+            //|| k == K::kKwComptime;
     }
 
     ast::StmtId Parser::parse_stmt_inner() {
@@ -320,30 +320,49 @@ namespace gaupel {
 
         const Token start_tok = cursor_.peek();
         Span start = start_tok.span;
-        
+
         bool is_export = false;
-        bool is_pure = false;
-        bool is_comptime = false;
-        
+        bool is_throwing = false;
+
+        // attr list in arena
+        uint32_t attr_begin = static_cast<uint32_t>(ast_.fn_attrs().size());
+        uint32_t attr_count = 0;
+
+        auto push_attr = [&](const Token& name_tok) {
+            ast::Attr a{};
+            a.name = name_tok.lexeme.empty() ? syntax::token_kind_name(name_tok.kind) : name_tok.lexeme;
+            a.span = name_tok.span;
+            ast_.add_fn_attr(a);
+            ++attr_count;
+        };
+
         // header modifiers until 'fn'
         while (1) {
             if (cursor_.at(K::kAt)) {
-                Token at = cursor_.bump();
-                (void)at;
+                const Token at = cursor_.bump();
 
-                // @pure / @comptime only (v0 minimal)
-                if (cursor_.at(K::kKwPure)) { is_pure = true; cursor_.bump(); continue; }
-                if (cursor_.at(K::kKwComptime)) { is_comptime = true; cursor_.bump(); continue; }
+                // '@' 다음은 "속성 이름"이어야 함 (v0: ident만 허용)
+                const Token name_tok = cursor_.peek();
+                if (name_tok.kind == K::kIdent) {
+                    cursor_.bump();
+                    push_attr(name_tok);
+                    continue;
+                }
 
-                // unknown attribute: consume one token to avoid infinite loop
-                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "attribute (pure/comptime)");
-                cursor_.bump();
+                // '@' 뒤에 이름이 없으면 전용 diag code 사용
+                report(diag::Code::kAttrNameExpectedAfterAt, name_tok.span);
+
+                // recovery: 무한루프 방지로 1토큰 전진(EOF 제외)
+                if (!cursor_.at(K::kEof)) cursor_.bump();
                 continue;
             }
 
-            if (cursor_.at(K::kKwPure)) { is_pure = true; cursor_.bump(); continue; }
-            if (cursor_.at(K::kKwComptime)) { is_comptime = true; cursor_.bump(); continue; }
-            if (cursor_.at(K::kKwExport)) { is_export = true; cursor_.bump(); continue; }
+            // keep existing sugar: bare keywords before fn
+            if (cursor_.at(K::kKwExport)) {
+                is_export = true; 
+                cursor_.bump(); 
+                continue;
+            }
 
             break;
         }
@@ -351,7 +370,6 @@ namespace gaupel {
         // require 'fn'
         if (!cursor_.at(K::kKwFn)) {
             report(diag::Code::kExpectedToken, cursor_.peek().span, "fn");
-            // recovery: bail to stmt boundary
             sync_to_stmt_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
 
@@ -373,13 +391,12 @@ namespace gaupel {
         }
 
         // optional '?': fn name?
-        bool is_throwing = false;
         if (cursor_.at(K::kQuestion)) {
             is_throwing = true;
             cursor_.bump();
         }
 
-        // params: '(' (name ':' Type) (',' ...) ')'
+        // params
         uint32_t param_begin = static_cast<uint32_t>(ast_.params().size());
         uint32_t param_count = 0;
 
@@ -393,28 +410,23 @@ namespace gaupel {
             while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
                 Token p0 = cursor_.peek();
 
-                // param name
                 std::string_view p_name{};
                 if (p0.kind == K::kIdent) {
                     p_name = p0.lexeme;
                     cursor_.bump();
                 } else {
                     report(diag::Code::kUnexpectedToken, p0.span, "identifier (param name)");
-                    // recovery: to ',' or ')'
                     recover_to_delim(K::kComma, K::kRParen);
                     if (cursor_.eat(K::kComma)) continue;
                     break;
                 }
 
-                // ':'
                 if (!cursor_.eat(K::kColon)) {
                     report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
                     recover_to_delim(K::kComma, K::kRParen);
                     if (cursor_.eat(K::kComma)) continue;
-                    // try continue anyway
                 }
 
-                // type
                 ast::TypeId p_ty = parse_type();
 
                 ast::Param p{};
@@ -437,25 +449,24 @@ namespace gaupel {
 
         // '->' ReturnType
         if (!cursor_.at(K::kArrow)) {
-            // fallback: if lexer not updated, accept '-' '>' pair
             if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
-                cursor_.bump(); // '-'
-                cursor_.bump(); // '>'
+                cursor_.bump();
+                cursor_.bump();
             } else {
                 report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
                 recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
                 cursor_.eat(K::kArrow);
             }
         } else {
-            cursor_.bump(); // '->'
+            cursor_.bump();
         }
 
         ast::TypeId ret_ty = parse_type();
 
-        // body block (required)
+        // body
         ast::StmtId body = parse_required_block("fn");
 
-        // optional semicolon after function decl (accept both styles)
+        // optional semicolon after function decl
         Span end_sp = ast_.stmt(body).span;
         if (cursor_.at(K::kSemicolon)) {
             end_sp = cursor_.bump().span;
@@ -466,16 +477,18 @@ namespace gaupel {
         s.span = span_join(start, end_sp);
 
         s.name = name;
-        s.type = ret_ty;  // return type
-        s.a = body;       // body block
+        s.type = ret_ty;
+        s.a = body;
 
         s.is_export = is_export;
-        s.is_pure = is_pure;
-        s.is_comptime = is_comptime;
         s.is_throwing = is_throwing;
 
         s.param_begin = param_begin;
         s.param_count = param_count;
+
+        // store attrs
+        s.attr_begin = attr_begin;
+        s.attr_count = attr_count;
 
         return ast_.add_stmt(s);
     }

@@ -59,17 +59,43 @@ namespace gaupel::ast {
         kFnDecl,
     };
 
+    enum class ArgKind : uint8_t {
+        kPositional,
+        kLabeled,
+        kNamedGroup, // { ... } 자체
+    };
+
     struct Arg {
+        ArgKind kind = ArgKind::kPositional;
+
         bool has_label = false;
-        std::string_view label{};
         bool is_hole = false;     // label: _  (hole payload)
+        std::string_view label{};
         ExprId expr = k_invalid_expr;
+
+        // for NamedGroup
+        uint32_t child_begin = 0;
+        uint32_t child_count = 0;
+
         Span span{};
+    };
+
+    struct Attr {
+        std::string_view name; // "pure", "comptime", "inline" ...
+        Span span;
     };
 
     struct Param {
         std::string_view name{};
         TypeId type = k_invalid_type;
+
+        // default값 관련
+        bool has_default = false;
+        ExprId default_expr = k_invalid_expr;
+
+        // named-group이 함수 인자에 있는지
+        bool is_named_group = false;
+
         Span span{};
     };
 
@@ -120,6 +146,10 @@ namespace gaupel::ast {
         TypeId type = k_invalid_type;   // let requires; set forbids in v0
         ExprId init = k_invalid_expr;   // initializer expression (set requires in v0)
 
+        // attr 
+        uint32_t attr_begin = 0;
+        uint32_t attr_count = 0;
+
         bool is_export = false;
         bool is_pure = false;
         bool is_comptime = false;
@@ -127,6 +157,11 @@ namespace gaupel::ast {
 
         uint32_t param_begin = 0;
         uint32_t param_count = 0;
+
+        // split point inside [param_begin, param_begin + param_count)
+        // positional_count = N, named_count = param_count - N
+        uint32_t positional_param_count = 0;
+        bool has_named_group = false;
     };
 
     class AstArena {
@@ -151,6 +186,15 @@ namespace gaupel::ast {
             return static_cast<uint32_t>(args_.size() - 1);
         }
 
+        uint32_t add_named_group_arg(const Arg& a) {
+            named_group_args_.push_back(a);
+            return static_cast<uint32_t>(named_group_args_.size() - 1);
+        }
+
+        void add_fn_attr(const ast::Attr& a) {
+            fn_attrs_.push_back(a);
+        }
+
         uint32_t add_param(const Param& p) {
             params_.push_back(p);
             return static_cast<uint32_t>(params_.size() - 1);
@@ -171,6 +215,10 @@ namespace gaupel::ast {
         const std::vector<Type>& types() const  {  return types_;       }
 
         const std::vector<Arg>& args()   const  {  return args_;   }
+        const std::vector<Arg>& named_group_args() const { return named_group_args_; }
+
+        const std::vector<ast::Attr>& fn_attrs() const { return fn_attrs_; }
+        std::vector<ast::Attr>& fn_attrs() { return fn_attrs_; }
 
         const Stmt& stmt(StmtId id) const       {  return stmts_[id];  }
         Stmt& stmt_mut(StmtId id)               {  return stmts_[id];  }
@@ -183,6 +231,8 @@ namespace gaupel::ast {
         std::vector<Expr>   exprs_;
         std::vector<Stmt>   stmts_;
         std::vector<Arg>    args_;
+        std::vector<Arg>    named_group_args_;
+        std::vector<ast::Attr> fn_attrs_;
         std::vector<Type>   types_;
         std::vector<Param>  params_;
 

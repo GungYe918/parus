@@ -64,6 +64,7 @@ namespace gaupel {
         ast::StmtId parse_required_block(std::string_view ctx);
 
         ast::Arg parse_arg(int ternary_depth);
+        ast::Arg parse_named_group_call_arg(int ternary_depth);
 
         Span span_join(Span a, Span b) const;
 

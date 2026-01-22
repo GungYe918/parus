@@ -99,6 +99,7 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kReturn: return "Return";
         case K::kBreak: return "Break";
         case K::kContinue: return "Continue";
+        case K::kFnDecl: return "FnDecl";
         case K::kError: return "Error";
     }
     return "Unknown";
@@ -182,21 +183,63 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
 
         case gaupel::ast::ExprKind::kCall: {
             dump_expr(ast, e.a, indent + 1);
+
             const auto& args = ast.args();
+            const auto& ngs  = ast.named_group_args();
+
             for (uint32_t i = 0; i < e.arg_count; ++i) {
                 const auto& a = args[e.arg_begin + i];
+
                 for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
                 std::cout << "Arg ";
+
+                // 1) named-group: { ... }
+                if (a.kind == gaupel::ast::ArgKind::kNamedGroup) {
+                    std::cout << "{\n";
+
+                    for (uint32_t k = 0; k < a.child_count; ++k) {
+                        const auto& entry = ngs[a.child_begin + k];
+
+                        for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
+                        std::cout << entry.label << ": ";
+
+                        if (entry.is_hole) {
+                            std::cout << "_\n";
+                            continue;
+                        }
+
+                        std::cout << "\n";
+                        if (entry.expr == gaupel::ast::k_invalid_expr) {
+                            for (int j = 0; j < indent + 3; ++j) std::cout << "  ";
+                            std::cout << "<invalid-expr>\n";
+                        } else {
+                            dump_expr(ast, entry.expr, indent + 3);
+                        }
+                    }
+
+                    for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
+                    std::cout << "}\n";
+                    continue;
+                }
+
+                // 2) labeled / positional
                 if (a.has_label) std::cout << a.label << ": ";
+
                 if (a.is_hole) {
                     std::cout << "_\n";
                 } else {
                     std::cout << "\n";
-                    dump_expr(ast, a.expr, indent + 2);
+                    if (a.expr == gaupel::ast::k_invalid_expr) {
+                        for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
+                        std::cout << "<invalid-expr>\n";
+                    } else {
+                        dump_expr(ast, a.expr, indent + 2);
+                    }
                 }
             }
             break;
         }
+
 
         case gaupel::ast::ExprKind::kIndex:
             dump_expr(ast, e.a, indent + 1);
@@ -206,6 +249,78 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
         default:
             break;
     }
+}
+
+static void dump_type(const gaupel::ast::AstArena& ast, gaupel::ast::TypeId ty) {
+    if (ty == gaupel::ast::k_invalid_type) {
+        std::cout << "<invalid-type>";
+        return;
+    }
+    const auto& t = ast.type_node(ty);
+    if (!t.text.empty()) std::cout << t.text;
+    else std::cout << "<type>";
+}
+
+static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, int indent);
+
+static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ast::Stmt& s, int indent) {
+    // indent already printed by dump_stmt header line; 여기선 디테일만 출력
+    for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+
+    std::cout << "name=" << s.name;
+
+    if (s.is_throwing) std::cout << " throwing=true";
+    if (s.is_export)   std::cout << " export=true";
+    if (s.is_pure)     std::cout << " pure=true";
+    if (s.is_comptime) std::cout << " comptime=true";
+
+    std::cout << " ret=";
+    dump_type(ast, s.type);
+    std::cout << "\n";
+
+    // attrs
+    {
+        const auto& attrs = ast.fn_attrs();
+        for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+        std::cout << "attrs:";
+        if (s.attr_count == 0) {
+            std::cout << " <none>\n";
+        } else {
+            std::cout << "\n";
+            for (uint32_t i = 0; i < s.attr_count; ++i) {
+                const auto& a = attrs[s.attr_begin + i];
+                for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
+                std::cout << "- " << a.name << " span=[" << a.span.lo << "," << a.span.hi << ")\n";
+            }
+        }
+    }
+
+    // params
+    {
+        const auto& ps = ast.params();
+        for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+        std::cout << "params:\n";
+
+        for (uint32_t i = 0; i < s.param_count; ++i) {
+            const auto& p = ps[s.param_begin + i];
+            for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
+            std::cout << p.name << ": ";
+            dump_type(ast, p.type);
+
+            if (p.has_default) {
+                std::cout << " = <default-expr>";
+            }
+            if (p.is_named_group) {
+                std::cout << " (named-group)";
+            }
+            std::cout << " span=[" << p.span.lo << "," << p.span.hi << ")\n";
+        }
+    }
+
+    // body
+    for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+    std::cout << "body:\n";
+    dump_stmt(ast, s.a, indent + 2);
 }
 
 /// @brief stmt 1개를 출력하고, 필요한 경우 하위 노드를 출력
@@ -280,6 +395,10 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
             }
             break;
         }
+
+        case gaupel::ast::StmtKind::kFnDecl:
+            dump_fn_decl(ast, s, indent);
+            break;
 
         default:
             break;

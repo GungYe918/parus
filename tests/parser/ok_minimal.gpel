@@ -1,3 +1,4 @@
+// ok_mininal.gpel
 @comptime export fn add(a: i32, b: i32) -> u32 {
   return a + b;
 }
@@ -7,7 +8,31 @@ export fn basic_blocks() -> void {
   if (a == 1) { set b = 2; }
 };
 
-@returns export fn add(a: i32, b: i32) -> u32 {
+export fn add(a: i32, b: i32) -> u32 {
     return a + b;
 }
 
+foo(1, 2, { x: 10, y: 20 });
+foo({ path: "a", flags: 3 }, 9);
+foo({ x: _, y: 2 });
+
+@pure @comptime export fn add(a: int, b: int) -> int {
+  return a + b;
+}
+
+@inline @no_mangle fn lowlevel(x: int) -> int {
+  return x;
+}
+
+drawSprite(tex, { x: 10, y: 20, scale: 2 });
+
+rpcCall({ endpoint: "login", retry: 3, timeout_ms: _ });
+
+
+foo(a: 1, b: 2, { x: 9, y: 8 });
+foo({ x: 1, y: 2 }, mode: 3);
+
+// 에러 상태 확인을 원하면 주석 해제
+// foo({ x 1 });             // label: expr 형태가 아니므로 named-group entry 에러
+// foo({ x: 1 }, { y: 2 });  // named-group은 1개만 허용(내가 위에서 그렇게 구현)
+// @ fn bad() -> int { }     // '@' 뒤 이름 토큰이 없어서 에러

@@ -34,6 +34,10 @@ namespace gaupel::diag {
 
         // call rules
         kCallArgMixNotAllowed,
+
+        kNamedGroupEntryExpectedColon,     // entry must be "label: expr|_"
+        kCallOnlyOneNamedGroupAllowed,     // only one "{ ... }" in a call
+        kAttrNameExpectedAfterAt,          // '@' must be followed by attr name
     };
 
 } // namespace gaupel::diag

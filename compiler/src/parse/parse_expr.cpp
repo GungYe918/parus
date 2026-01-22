@@ -390,6 +390,8 @@ namespace gaupel {
         if (first.kind == syntax::TokenKind::kIdent && cursor_.peek(1).kind == syntax::TokenKind::kColon) {
             cursor_.bump(); // label
             cursor_.bump(); // ':'
+
+            a.kind = ast::ArgKind::kLabeled;
             a.has_label = true;
             a.label = first.lexeme;
 
@@ -404,18 +406,79 @@ namespace gaupel {
 
             a.expr = parse_expr_pratt(0, ternary_depth);
             a.span = span_join(first.span, ast_.expr(a.expr).span);
-            
             return a;
         }
 
         // positional arg: Expr
+        a.kind = ast::ArgKind::kPositional;
         a.has_label = false;
         a.expr = parse_expr_pratt(0, ternary_depth);
         a.span = ast_.expr(a.expr).span;
         return a;
     }
 
+    ast::Arg Parser::parse_named_group_call_arg(int ternary_depth) {
+        using K = syntax::TokenKind;
+
+        const Token lb = cursor_.bump(); // '{'
+        uint32_t begin = (uint32_t)ast_.named_group_args().size();
+        uint32_t count = 0;
+
+        if (!cursor_.at(K::kRBrace)) {
+            while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
+                const Token first = cursor_.peek();
+
+                if (!(first.kind == K::kIdent && cursor_.peek(1).kind == K::kColon)) {
+                    report(diag::Code::kNamedGroupEntryExpectedColon, first.span);
+                    recover_to_delim(K::kComma, K::kRBrace);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                cursor_.bump(); // label
+                cursor_.bump(); // ':'
+
+                ast::Arg entry{};
+                entry.kind = ast::ArgKind::kLabeled;
+                entry.has_label = true;
+                entry.label = first.lexeme;
+
+                const Token next = cursor_.peek();
+                if (next.kind == K::kHole) {
+                    cursor_.bump();
+                    entry.is_hole = true;
+                    entry.expr = ast::k_invalid_expr;
+                    entry.span = span_join(first.span, next.span);
+                } else {
+                    entry.expr = parse_expr_pratt(0, ternary_depth);
+                    entry.span = span_join(first.span, ast_.expr(entry.expr).span);
+                }
+
+                ast_.add_named_group_arg(entry);
+                ++count;
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kRBrace)) break; // trailing comma
+                    continue;
+                }
+                break;
+            }
+        }
+
+        Token rb = cursor_.peek();
+        expect(K::kRBrace);
+
+        ast::Arg g{};
+        g.kind = ast::ArgKind::kNamedGroup;
+        g.child_begin = begin;
+        g.child_count = count;
+        g.span = span_join(lb.span, rb.span);
+        return g;
+    }
+
     ast::ExprId Parser::parse_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
+        using K = syntax::TokenKind;
+
         if (aborted_) {
             ast::Expr e{};
             e.kind = ast::ExprKind::kError;
@@ -428,37 +491,81 @@ namespace gaupel {
         uint32_t begin = static_cast<uint32_t>(ast_.args().size());
         uint32_t count = 0;
 
-        if (!cursor_.at(syntax::TokenKind::kRParen)) {
-            while (!cursor_.at(syntax::TokenKind::kRParen) && !cursor_.at(syntax::TokenKind::kEof)) {
+        bool seen_named_group = false;
+
+        if (!cursor_.at(K::kRParen)) {
+            while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
                 size_t before = cursor_.pos();
 
-                // try parse one arg
-                ast::Arg a = parse_arg(ternary_depth);
+                ast::Arg a{};
+
+                // named-group arg: '{' ... '}'
+                if (cursor_.at(K::kLBrace)) {
+                    if (seen_named_group) {
+                        report(diag::Code::kCallOnlyOneNamedGroupAllowed, cursor_.peek().span);
+                        recover_to_delim(K::kComma, K::kRParen);
+                        cursor_.eat(K::kComma);
+                        continue;
+                    }
+
+                    seen_named_group = true;
+                    a = parse_named_group_call_arg(ternary_depth);
+                } else {
+                    // normal arg (positional or labeled)
+                    a = parse_arg(ternary_depth);
+                }
+
                 ast_.add_arg(a);
                 ++count;
 
                 // normal separator
-                if (cursor_.eat(syntax::TokenKind::kComma)) continue;
-
-                // if we didn't progress (or we hit junk), recover to ',' or ')'
-                if (cursor_.pos() == before && !cursor_.at(syntax::TokenKind::kRParen)) {
-                    report(diag::Code::kUnexpectedToken, cursor_.peek().span, token_display(cursor_.peek()));
-                    recover_to_delim(syntax::TokenKind::kComma, syntax::TokenKind::kRParen);
-                    if (cursor_.eat(syntax::TokenKind::kComma)) continue;
+                if (cursor_.eat(K::kComma)) {
+                    // allow trailing comma before ')'
+                    if (cursor_.at(K::kRParen)) break;
+                    continue;
                 }
 
-                // otherwise break (expect ')')
+                // if we didn't progress (or we hit junk), recover to ',' or ')'
+                if (cursor_.pos() == before && !cursor_.at(K::kRParen)) {
+                    report(diag::Code::kUnexpectedToken, cursor_.peek().span, token_display(cursor_.peek()));
+                    recover_to_delim(K::kComma, K::kRParen);
+                    if (cursor_.eat(K::kComma)) continue;
+                }
+
                 break;
             }
         }
 
         // closing ')'
         Token rp = cursor_.peek();
-        if (!cursor_.eat(syntax::TokenKind::kRParen)) {
+        if (!cursor_.eat(K::kRParen)) {
             report(diag::Code::kExpectedToken, rp.span, ")");
-            recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
+            recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
             rp = cursor_.peek();
-            cursor_.eat(syntax::TokenKind::kRParen); // consume if present
+            cursor_.eat(K::kRParen);
+        }
+
+        // ---- call arg mix rule: labeled + positional mixing not allowed ----
+        {
+            uint32_t labeled = 0;
+            uint32_t positional = 0;
+
+            const auto& args = ast_.args();
+            for (uint32_t i = 0; i < count; ++i) {
+                const auto& a = args[begin + i];
+
+                // named-group 자체는 mix 판정에서 제외(원하면 포함시켜도 됨)
+                if (a.kind == ast::ArgKind::kNamedGroup) continue;
+
+                if (a.has_label) ++labeled;
+                else ++positional;
+            }
+
+            if (labeled > 0 && positional > 0) {
+                // 어디를 span으로 찍을지: call의 '(' 위치 or 첫 섞인 arg 위치
+                // 여기선 call 전체 범위의 시작( lparen_tok ) 근처를 사용
+                report(diag::Code::kCallArgMixNotAllowed, lparen_tok.span);
+            }
         }
 
         ast::Expr e{};
@@ -469,7 +576,6 @@ namespace gaupel {
         e.arg_count = count;
         return ast_.add_expr(e);
     }
-
 
     ast::ExprId Parser::parse_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth) {
         (void)lbracket_tok;
