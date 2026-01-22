@@ -15,10 +15,11 @@ namespace gaupel::syntax {
     };
 
     
-    inline constexpr std::array<PunctEntry, 35> k_punct_table = {{
+    inline constexpr std::array<PunctEntry, 37> k_punct_table = {{
         {"..:", TokenKind::kDotDotColon},
         {"..",  TokenKind::kDotDot},
 
+        {"->",  TokenKind::kArrow},
         {"<<",  TokenKind::kLessLess},
 
         {"&&",  TokenKind::kAmpAmp},
@@ -35,6 +36,8 @@ namespace gaupel::syntax {
         {"*=",  TokenKind::kStarAssign},
         {"/=",  TokenKind::kSlashAssign},
         {"%=",  TokenKind::kPercentAssign},
+
+        {"@",   TokenKind::kAt},
 
         {"(",   TokenKind::kLParen},
         {")",   TokenKind::kRParen},

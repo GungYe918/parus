@@ -34,6 +34,7 @@ namespace gaupel {
         bool expect(syntax::TokenKind k);
 
         bool is_aborted() const {  return aborted_;  }
+        bool is_fn_decl_start(syntax::TokenKind k) const;
 
         ast::ExprId parse_expr_pratt(int min_prec, int ternary_depth);
         ast::ExprId parse_prefix(int ternary_depth);
@@ -56,6 +57,8 @@ namespace gaupel {
         ast::StmtId parse_return_stmt();
         ast::StmtId parse_break_stmt();
         ast::StmtId parse_continue_stmt();
+
+        ast::StmtId parse_fn_decl_stmt();
 
         // helper: require a block after if/while
         ast::StmtId parse_required_block(std::string_view ctx);

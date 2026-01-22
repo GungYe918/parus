@@ -44,6 +44,7 @@ namespace gaupel::syntax {
     kKwContinue,
 
     // ---- keywords (decl / control) ----
+    kKwExport,
     kKwFn,
     kKwClass,
     kKwSwitch,
@@ -60,6 +61,8 @@ namespace gaupel::syntax {
     kKwComptime,
 
     // punct / delimiters
+    kAt,       // @
+    kArrow,    // ->
     kLParen,   // (
     kRParen,   // )
     kLBrace,   // {
@@ -131,6 +134,8 @@ namespace gaupel::syntax {
             case TokenKind::kKwMut: return "mut";
             case TokenKind::kKwRef: return "ref";
 
+            case TokenKind::kKwFn: return "fn";  
+            case TokenKind::kKwExport: return "export";              
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
             case TokenKind::kKwIf:  return "if";
@@ -141,6 +146,11 @@ namespace gaupel::syntax {
             case TokenKind::kKwBreak: return "break";
             case TokenKind::kKwContinue: return "continue";
 
+            case TokenKind::kKwPure: return "pure";        
+            case TokenKind::kKwComptime: return "comptime";
+
+            case TokenKind::kAt: return "@";
+            case TokenKind::kArrow: return "->";
             case TokenKind::kLParen: return "(";
             case TokenKind::kRParen: return ")";
             case TokenKind::kLBrace: return "{";

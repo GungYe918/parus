@@ -56,6 +56,7 @@ namespace gaupel::ast {
         kReturn,      // return expr? ';'
         kBreak,       // break ';'
         kContinue,    // continue ';'
+        kFnDecl,
     };
 
     struct Arg {
@@ -63,6 +64,12 @@ namespace gaupel::ast {
         std::string_view label{};
         bool is_hole = false;     // label: _  (hole payload)
         ExprId expr = k_invalid_expr;
+        Span span{};
+    };
+
+    struct Param {
+        std::string_view name{};
+        TypeId type = k_invalid_type;
         Span span{};
     };
 
@@ -112,6 +119,14 @@ namespace gaupel::ast {
 
         TypeId type = k_invalid_type;   // let requires; set forbids in v0
         ExprId init = k_invalid_expr;   // initializer expression (set requires in v0)
+
+        bool is_export = false;
+        bool is_pure = false;
+        bool is_comptime = false;
+        bool is_throwing = false;
+
+        uint32_t param_begin = 0;
+        uint32_t param_count = 0;
     };
 
     class AstArena {
@@ -136,6 +151,11 @@ namespace gaupel::ast {
             return static_cast<uint32_t>(args_.size() - 1);
         }
 
+        uint32_t add_param(const Param& p) {
+            params_.push_back(p);
+            return static_cast<uint32_t>(params_.size() - 1);
+        }
+
         uint32_t add_stmt_child(StmtId id) {
             stmt_children_.push_back(id);
             return static_cast<uint32_t>(stmt_children_.size() - 1);
@@ -156,12 +176,15 @@ namespace gaupel::ast {
         Stmt& stmt_mut(StmtId id)               {  return stmts_[id];  }
         const std::vector<StmtId>& stmt_children() const {  return stmt_children_;  }
         const std::vector<Stmt>& stmts() const  {  return stmts_;  }
+
+        const std::vector<Param>& params() const { return params_; }
     
     private:
         std::vector<Expr>   exprs_;
         std::vector<Stmt>   stmts_;
         std::vector<Arg>    args_;
         std::vector<Type>   types_;
+        std::vector<Param>  params_;
 
         std::vector<StmtId> stmt_children_;
     };

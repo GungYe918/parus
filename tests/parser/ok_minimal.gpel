@@ -1,41 +1,13 @@
-{
-    // 1) 우선순위/결합 + 괄호 흔들기
-    let a : u32 = 1
-        + 2
-        * 3;
-
-    // 2) call / index / call 체인
-    let v : u32 =
-        f( a )
-            ( b )
-            [ i ]
-            ( c )
-            [ j ];
-
-    // 3) 라벨 인자 (줄바꿈/공백 다양화)
-    let s : u32 = add(
-        a: 10
-        ,
-        b: 20
-    );
-
-    // 4) pipe + labeled hole (정상)
-    let r : u32 =
-        lhs
-            << add(
-                a: _,
-                b: 2
-            );
-
-    // 5) 삼항 (중첩은 피해서 "정상")
-    let t : u32 =
-        cond
-            ? yes + 1
-            : no  * 2;
-
-    // 6) UTF-8 ident 섞기
-    let 雲 : char =
-        星 + 1;
-
-    return r;
+@comptime export fn add(a: i32, b: i32) -> u32 {
+  return a + b;
 }
+
+export fn basic_blocks() -> void {
+  set a = 1;
+  if (a == 1) { set b = 2; }
+};
+
+@returns export fn add(a: i32, b: i32) -> u32 {
+    return a + b;
+}
+

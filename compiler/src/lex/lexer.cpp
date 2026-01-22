@@ -326,6 +326,11 @@ namespace gaupel {
         if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
         if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }
 
+        if (t.lexeme == "fn")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
+        if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
+        if (t.lexeme == "pure")     { t.kind = syntax::TokenKind::kKwPure;     return t; }
+        if (t.lexeme == "comptime") { t.kind = syntax::TokenKind::kKwComptime; return t; }
+
         t.kind = syntax::TokenKind::kIdent;
         return t;
     }

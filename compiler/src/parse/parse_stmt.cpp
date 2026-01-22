@@ -38,8 +38,21 @@ namespace gaupel {
         return ast_.add_stmt(root);
     }
 
+    bool Parser::is_fn_decl_start(syntax::TokenKind k) const {
+        using K = syntax::TokenKind;
+        return k == K::kAt
+            || k == K::kKwExport
+            || k == K::kKwFn
+            || k == K::kKwPure
+            || k == K::kKwComptime;
+    }
+
     ast::StmtId Parser::parse_stmt_inner() {
         const auto& tok = cursor_.peek();
+
+        if (is_fn_decl_start(tok.kind)) {
+            return parse_fn_decl_stmt();
+        }
 
         // empty stmt: ';'
         if (tok.kind == syntax::TokenKind::kSemicolon) {
@@ -299,6 +312,171 @@ namespace gaupel {
         ast::Stmt s{};
         s.kind = ast::StmtKind::kContinue;
         s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_fn_decl_stmt() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+        
+        bool is_export = false;
+        bool is_pure = false;
+        bool is_comptime = false;
+        
+        // header modifiers until 'fn'
+        while (1) {
+            if (cursor_.at(K::kAt)) {
+                Token at = cursor_.bump();
+                (void)at;
+
+                // @pure / @comptime only (v0 minimal)
+                if (cursor_.at(K::kKwPure)) { is_pure = true; cursor_.bump(); continue; }
+                if (cursor_.at(K::kKwComptime)) { is_comptime = true; cursor_.bump(); continue; }
+
+                // unknown attribute: consume one token to avoid infinite loop
+                report(diag::Code::kUnexpectedToken, cursor_.peek().span, "attribute (pure/comptime)");
+                cursor_.bump();
+                continue;
+            }
+
+            if (cursor_.at(K::kKwPure)) { is_pure = true; cursor_.bump(); continue; }
+            if (cursor_.at(K::kKwComptime)) { is_comptime = true; cursor_.bump(); continue; }
+            if (cursor_.at(K::kKwExport)) { is_export = true; cursor_.bump(); continue; }
+
+            break;
+        }
+
+        // require 'fn'
+        if (!cursor_.at(K::kKwFn)) {
+            report(diag::Code::kExpectedToken, cursor_.peek().span, "fn");
+            // recovery: bail to stmt boundary
+            sync_to_stmt_boundary();
+            if (cursor_.at(K::kSemicolon)) cursor_.bump();
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+        const Token fn_kw = cursor_.bump(); (void)fn_kw;
+
+        // name
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (function name)");
+        }
+
+        // optional '?': fn name?
+        bool is_throwing = false;
+        if (cursor_.at(K::kQuestion)) {
+            is_throwing = true;
+            cursor_.bump();
+        }
+
+        // params: '(' (name ':' Type) (',' ...) ')'
+        uint32_t param_begin = static_cast<uint32_t>(ast_.params().size());
+        uint32_t param_count = 0;
+
+        if (!cursor_.eat(K::kLParen)) {
+            report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            recover_to_delim(K::kLParen, K::kArrow, K::kLBrace);
+            cursor_.eat(K::kLParen);
+        }
+
+        if (!cursor_.at(K::kRParen)) {
+            while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+                Token p0 = cursor_.peek();
+
+                // param name
+                std::string_view p_name{};
+                if (p0.kind == K::kIdent) {
+                    p_name = p0.lexeme;
+                    cursor_.bump();
+                } else {
+                    report(diag::Code::kUnexpectedToken, p0.span, "identifier (param name)");
+                    // recovery: to ',' or ')'
+                    recover_to_delim(K::kComma, K::kRParen);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                // ':'
+                if (!cursor_.eat(K::kColon)) {
+                    report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                    recover_to_delim(K::kComma, K::kRParen);
+                    if (cursor_.eat(K::kComma)) continue;
+                    // try continue anyway
+                }
+
+                // type
+                ast::TypeId p_ty = parse_type();
+
+                ast::Param p{};
+                p.name = p_name;
+                p.type = p_ty;
+                p.span = span_join(p0.span, ast_.type_node(p_ty).span);
+                ast_.add_param(p);
+                ++param_count;
+
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+        }
+
+        if (!cursor_.eat(K::kRParen)) {
+            report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+            recover_to_delim(K::kRParen, K::kArrow, K::kLBrace);
+            cursor_.eat(K::kRParen);
+        }
+
+        // '->' ReturnType
+        if (!cursor_.at(K::kArrow)) {
+            // fallback: if lexer not updated, accept '-' '>' pair
+            if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
+                cursor_.bump(); // '-'
+                cursor_.bump(); // '>'
+            } else {
+                report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
+                recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
+                cursor_.eat(K::kArrow);
+            }
+        } else {
+            cursor_.bump(); // '->'
+        }
+
+        ast::TypeId ret_ty = parse_type();
+
+        // body block (required)
+        ast::StmtId body = parse_required_block("fn");
+
+        // optional semicolon after function decl (accept both styles)
+        Span end_sp = ast_.stmt(body).span;
+        if (cursor_.at(K::kSemicolon)) {
+            end_sp = cursor_.bump().span;
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kFnDecl;
+        s.span = span_join(start, end_sp);
+
+        s.name = name;
+        s.type = ret_ty;  // return type
+        s.a = body;       // body block
+
+        s.is_export = is_export;
+        s.is_pure = is_pure;
+        s.is_comptime = is_comptime;
+        s.is_throwing = is_throwing;
+
+        s.param_begin = param_begin;
+        s.param_count = param_count;
+
         return ast_.add_stmt(s);
     }
 

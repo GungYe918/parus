@@ -94,7 +94,7 @@ tablet Sprite : Drawable {
 예시
 
 ```gaupel
-fn basic_blocks() -> void {
+export fn basic_blocks() -> void {
   set a = 1;
   if (a == 1) { set b = 2; }
 }
