@@ -48,6 +48,12 @@ namespace gaupel::diag {
             case Code::kNamedGroupEntryExpectedColon: return "NamedGroupEntryExpectedColon";
             case Code::kCallOnlyOneNamedGroupAllowed: return "CallOnlyOneNamedGroupAllowed";
             case Code::kAttrNameExpectedAfterAt:      return "AttrNameExpectedAfterAt";
+            case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "FnParamDefaultNotAllowedOutsideNamedGroup";
+            case Code::kFnParamDefaultExprExpected:                return "FnParamDefaultExprExpected";
+            case Code::kNamedGroupLabelMustBeIdent: return "NamedGroupLabelMustBeIdent";
+            case Code::kNamedGroupLabelUnderscoreReserved: return "NamedGroupLabelUnderscoreReserved";
+            case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
+            case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
         }
 
         return "Unknown";
@@ -71,6 +77,12 @@ namespace gaupel::diag {
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry must be 'label: expr' or 'label: _'";
             case Code::kCallOnlyOneNamedGroupAllowed: return "only one named-group '{ ... }' is allowed in a call";
             case Code::kAttrNameExpectedAfterAt: return "attribute name expected after '@'";
+            case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "default value is only allowed inside named-group '{ ... }'";
+            case Code::kFnParamDefaultExprExpected: return "default expression expected after '='";
+            case Code::kNamedGroupLabelMustBeIdent: return "named-group label must be an identifier";
+            case Code::kNamedGroupLabelUnderscoreReserved: return "'_' cannot be used as a named-group label; use it only as a value (e.g., x: _)";
+            case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
+            case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
         }
 
         return "unknown diagnostic";
@@ -93,6 +105,14 @@ namespace gaupel::diag {
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry는 'label: expr' 또는 'label: _' 형태여야 합니다";
             case Code::kCallOnlyOneNamedGroupAllowed: return "호출 인자에서 named-group '{ ... }'는 1개만 허용됩니다";
             case Code::kAttrNameExpectedAfterAt: return "'@' 뒤에는 attribute 이름이 와야 합니다";
+            case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "기본값은 named-group '{ ... }' 안에서만 사용할 수 있습니다";
+            case Code::kFnParamDefaultExprExpected: return "'=' 뒤에는 기본값 식이 와야 합니다";
+            case Code::kNamedGroupLabelMustBeIdent: return "named-group의 라벨은 식별자(ident)여야 합니다";
+            case Code::kNamedGroupLabelUnderscoreReserved: return "'_'는 named-group의 라벨로 사용할 수 없습니다. 값 위치에서만 사용하세요(예: x: _)";
+            case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
+            case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
+
+            
         }
 
         return "알 수 없는 진단";

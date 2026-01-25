@@ -51,6 +51,7 @@ export fn opt({ scale: int = 2, offset: int = 0 }) -> int { return scale + offse
 fn only_named({ a: int, b: int = 10, c: int }) -> int { return b; } // 통과
 
 
+/* error case
 fn bad1(a: int = 1) -> int { return a; } // {}밖의 기본값 금지 정책으로 인해 에러
 
 fn bad2(a: int, b: int = 2, { x: int = 3 }) -> int { return a; } // 위와 같음
@@ -59,3 +60,17 @@ fn bad3(a: int = , { x: int = 1 }) -> int { return x; } // positional에서 = , 
 
 fn bad4(a: int, { x: int = }) -> int { return a; } // named-group에서는 기본값 허용하지만 = 뒤 식 누락은 에러
 
+pub fn add(a: int, b: int) -> int {  return a;  }
+*/
+
+// error cases
+foo(1, a: 2);                 // positional + labeled mix -> kCallArgMixNotAllowed
+foo({ x 1 });                  // missing ':' -> kNamedGroupEntryExpectedColon
+foo({ x: 1 }, { y: 2 });       // 2 named-group -> kCallOnlyOneNamedGroupAllowed
+foo({ x: 1, _: 2 });           // label이 ident가 아니면(만약 허용 안 한다면) 별도 진단 필요
+
+
+foo(1, 2, { x: 10, y: 20 });
+foo({ x: _, y: 2 });     // OK
+foo({ x: 1, _: 2 });     // err
+@pure @comptime export fn add(a: int, b: int) -> int { return a + b; }

@@ -107,8 +107,7 @@ namespace gaupel {
 
             // ---- 새 룰: 기본값은 named-group '{...}' 안에서만 허용 ----
             if (!is_named_group) {
-                diag_report(diag::Code::kUnexpectedToken, eq.span,
-                            "default value is only allowed inside named-group '{...}'");
+                diag_report(diag::Code::kFnParamDefaultNotAllowedOutsideNamedGroup, eq.span);
 
                 // 복구: "= expr" 형태면 expr는 소비해서 토큰 흐름을 안정화
                 // ("= , ) } eof" 는 expr를 소비하지 않음)
@@ -127,9 +126,8 @@ namespace gaupel {
                 // ---- 기본값 식 누락 방지: "= , ) }" 같은 케이스 ----
                 const auto nk = cursor_.peek().kind;
                 if (nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof) {
-                    // 새 diag code가 없으면 kUnexpectedToken/kExpectedToken 재활용 가능
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "default expression");
-                    // 복구: 그냥 invalid_expr로 두고 계속 진행
+                    diag_report(diag::Code::kFnParamDefaultExprExpected, eq_span);
+                    // def는 invalid 유지
                 } else {
                     def = parse_expr();
                 }
@@ -206,8 +204,7 @@ namespace gaupel {
             if (cursor_.at(K::kLBrace)) {
                 if (consumed_named_group) {
                     // named-group 2개 이상 금지
-                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                                "only one named-group '{...}' is allowed");
+                    diag_report(diag::Code::kFnOnlyOneNamedGroupAllowed, cursor_.peek().span);
                     // 복구: 다음 '}' 또는 ')'까지 스킵
                     cursor_.bump();
                     recover_to_delim(K::kRBrace, K::kRParen);

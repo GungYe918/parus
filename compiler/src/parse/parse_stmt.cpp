@@ -12,31 +12,39 @@ namespace gaupel {
     }
 
     ast::StmtId Parser::parse_program() {
-        uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
-        uint32_t count = 0;
+        // NOTE: 전역 stmt_children_에 즉시 push하지 말고,
+        //       top-level stmt들을 로컬에 모았다가 마지막에 한 번에 커밋
+        std::vector<ast::StmtId> top;
+        top.reserve(64);
 
         Span first = cursor_.peek().span;
         Span last  = first;
 
         while (!cursor_.at(syntax::TokenKind::kEof)) {
             ast::StmtId s = parse_stmt_any();
-            ast_.add_stmt_child(s);
-            ++count;
+            top.push_back(s);
             last = ast_.stmt(s).span;
         }
 
-        if (count == 0) {
+        if (top.empty()) {
             first = cursor_.peek().span;
             last  = first;
+        }
+
+        // commit (append in one contiguous slice)
+        uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (auto id : top) {
+            ast_.add_stmt_child(id);
         }
 
         ast::Stmt root{};
         root.kind = ast::StmtKind::kBlock;
         root.span = span_join(first, last);
         root.stmt_begin = begin;
-        root.stmt_count = count;
+        root.stmt_count = static_cast<uint32_t>(top.size());
         return ast_.add_stmt(root);
     }
+
 
     // stmt/decl 혼용 엔트리
     ast::StmtId Parser::parse_stmt_any() {
@@ -69,6 +77,22 @@ namespace gaupel {
         if (tok.kind == syntax::TokenKind::kKwContinue) return parse_stmt_continue();
         if (tok.kind == syntax::TokenKind::kKwLet
         ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_stmt_var();
+        if (tok.kind == syntax::TokenKind::kKwPub 
+        || tok.kind == syntax::TokenKind::kKwSub) {
+            diag_report(diag::Code::kPubSubOnlyAllowedInClass, tok.span);
+            cursor_.bump(); // pub/sub 소비
+
+            // 뒤가 fn/export/fn-attrs면 decl로 계속 파싱해서 연쇄 오류를 막는다.
+            if (is_decl_start(cursor_.peek().kind)) {
+                return parse_decl_any();
+            }
+
+            // 아니면 그냥 에러 stmt
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = tok.span;
+            return ast_.add_stmt(s);
+        }
 
         return parse_stmt_expr();
     }
@@ -78,23 +102,30 @@ namespace gaupel {
         const Token lb = cursor_.peek();
         diag_expect(syntax::TokenKind::kLBrace);
 
-        uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
-        uint32_t count = 0;
+        // NOTE: 자식 stmt를 전역 stmt_children_에 즉시 push하지 말고,
+        //       로컬에 모았다가 '}'를 확인한 뒤 한 번에 커밋한다.
+        std::vector<ast::StmtId> local;
+        local.reserve(16);
 
         while (!cursor_.at(syntax::TokenKind::kRBrace) && !cursor_.at(syntax::TokenKind::kEof)) {
             ast::StmtId child = parse_stmt_any();
-            ast_.add_stmt_child(child);
-            ++count;
+            local.push_back(child);
         }
 
         const Token rb = cursor_.peek();
         diag_expect(syntax::TokenKind::kRBrace);
 
+        // commit (append in one contiguous slice)
+        uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (auto id : local) {
+            ast_.add_stmt_child(id);
+        }
+
         ast::Stmt s{};
         s.kind = ast::StmtKind::kBlock;
         s.span = span_join(lb.span, rb.span);
         s.stmt_begin = begin;
-        s.stmt_count = count;
+        s.stmt_count = static_cast<uint32_t>(local.size());
         return ast_.add_stmt(s);
     }
 
@@ -122,6 +153,7 @@ namespace gaupel {
             stmt_sync_to_boundary();
             if (cursor_.at(syntax::TokenKind::kSemicolon)) cursor_.bump();
 
+            // NOTE: 빈 블록은 자식이 없으므로, 현재 전역 children size를 begin으로 잡고 count=0.
             ast::Stmt s{};
             s.kind = ast::StmtKind::kBlock;
             s.span = cursor_.peek().span;
