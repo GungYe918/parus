@@ -69,6 +69,11 @@ namespace gaupel::syntax {
             case TokenKind::kGtEq:
                 return InfixInfo{70, Assoc::kLeft};
 
+            // .., ..:
+            case TokenKind::kDotDot:
+            case TokenKind::kDotDotColon:
+                return InfixInfo{75, Assoc::kLeft};
+
             // additive
             case TokenKind::kPlus:
             case TokenKind::kMinus:

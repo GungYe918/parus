@@ -321,6 +321,8 @@ namespace gaupel {
         if (t.lexeme == "elif")     { t.kind = syntax::TokenKind::kKwElif;     return t; }
         if (t.lexeme == "else")     { t.kind = syntax::TokenKind::kKwElse;     return t; }
         if (t.lexeme == "while")    { t.kind = syntax::TokenKind::kKwWhile;    return t; }
+        if (t.lexeme == "loop")     { t.kind = syntax::TokenKind::kKwLoop;     return t; }
+        if (t.lexeme == "in")       { t.kind = syntax::TokenKind::kKwIn;       return t; }
         if (t.lexeme == "return")   { t.kind = syntax::TokenKind::kKwReturn;   return t; }
         if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
         if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }

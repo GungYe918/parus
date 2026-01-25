@@ -866,7 +866,7 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 사용자가 발췌한 규약(“라벨이 시그니처에 포함”)을 기반으로, v0에서 **시그니처 유일성 키**는 아래처럼 확장해 고정한다.
 
 시그니처 유일성 키(v0):
-
+ 
 * 함수의 전체 경로: `module::(space...)::name`
 * `sub/pub` 모드(권장: 포함)
 * **위치 파라미터 목록**
@@ -1175,21 +1175,25 @@ fn load_config(path: string) -> Result<Config> {
 
 ---
 
-## 7. 제어 흐름: if, switch, while, loop(iter), loop(for)
+## 7. 제어 흐름: if, switch, while, loop
 
 ### 7.1 if / elif / else
 
-문법:
+### 문법
 
-* if (cond) Block
-* elif (cond) Block (0개 이상)
-* else Block (0 또는 1)
+* `if (cond) Block`
+* `elif (cond) Block` (0개 이상)
+* `else Block` (0 또는 1)
 
-규칙:
+### 규칙
 
-* cond는 반드시 bool 타입이어야 한다. (truthy 금지)
+* `cond`는 반드시 `bool` 타입이어야 한다. (truthy 금지)
+* `if`는 **표현식(expression)** 이다.
+* 각 분기의 결과 타입은 서로 동일해야 한다.
 
-예시
+  * 모든 분기가 값을 반환하지 않는 경우, 전체 타입은 `unit`이다.
+
+### 예시
 
 ```gaupel
 fn sign(x: int) -> int {
@@ -1199,9 +1203,11 @@ fn sign(x: int) -> int {
 }
 ```
 
-### 7.2 switch
+---
 
-문법:
+## 7.2 switch
+
+### 문법
 
 ```gaupel
 switch (expr) {
@@ -1211,23 +1217,26 @@ switch (expr) {
 }
 ```
 
-규칙:
+### 규칙
 
 * fallthrough 금지
-* case 라벨은 리터럴만 허용 (int, string, bool, char 등)
-* default는 선택이지만 권장
-* `case Err(name): { ... }` 등 타입 패턴 매칭
+* `case` 라벨은 리터럴만 허용
+  (int, string, bool, char 등)
+* `default`는 선택 사항이나 강력히 권장
+* 타입 패턴 매칭 허용
 
-*여기서 `name`은 새 바인딩(스코프는 해당 case 블록).
+  ```gaupel
+  case Err(name): { ... }
+  ```
 
-예시:
+  * `name`은 새 바인딩이며, 스코프는 해당 `case` 블록 내부
+
+### 예시
 
 ```gaupel
 fn demo(r: Result<u32>) -> u32 {
   switch (r) {
-    case Ok(v): {
-      return v;
-    }
+    case Ok(v): { return v; }
     case Err(e): {
       // e: Error
       return 0u32;
@@ -1236,31 +1245,31 @@ fn demo(r: Result<u32>) -> u32 {
 }
 ```
 
-예시
+---
+
+## 7.3 while (statement 루프)
+
+### 문법
 
 ```gaupel
-fn classify(c: char) -> int {
-  switch (c) {
-    case 'a': { return 1; }
-    case 'b': { return 2; }
-    default: { return 0; }
-  }
-}
+while (cond) { ... }
 ```
 
-### 7.3 while (expr) Block
+### 규칙
 
-문법:
+* `cond`는 반드시 `bool` 타입이어야 한다.
+* `while`은 **문장(statement)** 이다.
 
-* while (cond) { ... }
+  * 값이 없으며, 표현식으로 사용될 수 없다.
+* `break;`, `continue;` 사용 가능
+* **`break expr;`는 허용되지 않는다.**
 
-규칙:
+### 의미
 
-* cond는 bool이어야 한다.
-* break, continue 사용 가능
-* v0에서 while은 표현식이 아니라 문장이다.
+* `while`은 **단순 반복 및 제어 흐름**을 위한 구조이다.
+* 반복 종료 후 어떤 값도 생성하지 않는다.
 
-예시
+### 예시
 
 ```gaupel
 fn sum_to(n: int) -> int {
@@ -1274,108 +1283,220 @@ fn sum_to(n: int) -> int {
 }
 ```
 
-### 7.4 loop(iter: i in IterableExpr) Block
+---
 
-문법:
+## 7.4 loop (표현식 루프)
 
-* loop(iter: name in iterable) { ... }
+`loop`는 반복을 통해 **값을 산출할 수 있는 표현식 루프**이다.
 
-정의:
+v0에서 `loop(cond)` 문법은 삭제되며,
+`loop`는 다음 두 형태만을 가진다.
 
-* 반복자 루프를 단일 문법으로 통일한다.
-* 기존 loop(while:), loop(until:) 문법은 v0에서 삭제한다.
+### 7.4.1 문법
 
-IterableExpr 허용 (v0):
+* 무한 루프: `loop { ... }`
+* 순회 루프: `loop (name in iterable) { ... }`
 
-* 고정 배열 T[N]
-* 가변 리스트 T[] (리스트 구현 여부에 따라)
-* 범위 a..b, a..:b
-* 표준 라이브러리 iterator (Handle/Store/ECS)
+---
 
-반복 변수의 타입:
+## 7.5 loop의 값 반환 규칙
 
-* iterable의 요소 타입으로 결정된다.
-* v0에서는 요소를 copy로 넘길지, 참조로 넘길지 정책을 고정해야 한다.
+### 7.5.1 break / continue
 
-  * 단순 정책(권장): 요소는 값으로 바인딩한다. 큰 요소는 Handle/ref를 사용한다.
+* `continue;` : 다음 반복으로 진행
+* `break`는 두 형태를 가진다:
 
-범위 문법:
+  * `break;`
 
-* a..b: b 미만
-* a..:b: b 이하
+    * 현재 `loop`를 종료
+    * 결과값은 **`null`**
+  * `break expr;`
 
-예시 (배열)
+    * 현재 `loop`를 종료
+    * 결과값은 `expr`
+
+> `break`와 `continue`는 **가장 가까운 반복문**에만 적용된다.
+> (v0에서는 라벨을 지원하지 않는다.)
+
+---
+
+### 7.5.2 loop는 표현식이다
+
+* `loop { ... }` 및 `loop (x in xs) { ... }`는 **표현식**이다.
+* 따라서 변수 대입, 반환, 인자 위치에서 사용 가능하다.
+
+```gaupel
+set x = loop {
+  break 42;
+};
+```
+
+---
+
+### 7.5.3 종료 가능한 loop의 결과 타입
+
+순회 루프는 **자연 종료**가 가능하다.
+
+* `loop (name in iterable) { ... }`
+
+  * iterable이 소진되면 자연 종료
+* 자연 종료 시 결과값은 **`null`**
+
+따라서:
+
+* `break expr;` → 결과는 `T`
+* `break;` 또는 자연 종료 → 결과는 `null`
+
+결과적으로, 순회 루프의 타입은 **`T?`** 이다.
+
+---
+
+## 7.6 변수 선언과 타입 규칙
+
+### 7.6.1 선언 방식
+
+* 타입 추론 선언: `set x = expr;`
+* 타입 명시 선언: `let x: T = expr;`
+* 가변 선언: `mut set`, `mut let`
+
+---
+
+### 7.6.2 loop 결과 대입 시 타입 강제
+
+종료 가능한 `loop`의 결과를 변수에 대입할 경우:
+
+* 대상 변수는 반드시 `T?` 타입이어야 한다.
+* 그렇지 않으면 컴파일 에러이다.
+
+#### 예시 (정상)
+
+```gaupel
+set found = loop (v in xs) {
+  if (v == 42) { break v; }
+};
+// found : int?
+```
+
+```gaupel
+let found: int? = loop (v in xs) {
+  if (v == 42) { break v; }
+};
+```
+
+#### 예시 (에러)
+
+```gaupel
+let found: int = loop (v in xs) {
+  if (v == 42) { break v; }
+};
+// 에러: 이 loop는 자연 종료 시 null을 반환할 수 있음
+```
+
+> v0 권장 규칙:
+> `T`에 대입하려면 컴파일러가 **자연 종료 경로가 없음을 증명**할 수 있어야 한다.
+
+---
+
+## 7.7 loop 형태별 상세 규칙
+
+### 7.7.1 무한 루프: `loop { ... }`
+
+* 자연 종료 경로 없음
+* `break expr;` 또는 `break;`로만 종료 가능
+* `break;` 사용 시 결과는 `null`
+
+예시:
+
+```gaupel
+fn retry() -> int? {
+  set attempts = 0;
+  loop {
+    attempts = attempts + 1;
+    if (attempts >= 3) { break 42; }
+  }
+}
+```
+
+---
+
+### 7.7.2 순회 루프: `loop (name in iterable) { ... }`
+
+#### 허용 iterable (v0)
+
+* 고정 배열 `T[N]`
+* 가변 리스트 `T[]`
+* 범위 `a..b`, `a..:b`
+* 표준 라이브러리 iterator
+
+#### 반복 변수
+
+* 타입은 iterable의 요소 타입
+* v0 정책: 요소는 **값으로 바인딩**
+
+  * 큰 요소는 Handle / ref 타입 사용 권장
+
+예시:
 
 ```gaupel
 fn sum_arr(xs: int[4]) -> int {
   mut set s = 0;
-  loop(iter: v in xs) {
+  loop (v in xs) {
     s = s + v;
   }
   return s;
 }
 ```
 
-예시 (범위)
+```gaupel
+fn find_positive(xs: int[]) -> int? {
+  loop (v in xs) {
+    if (v > 0) { break v; }
+  }
+}
+```
+
+---
+
+## 7.8 범위 표현식
+
+* `a..b`  : `b` 미만
+* `a..:b` : `b` 이하
 
 ```gaupel
 fn sum_range(n: int) -> int {
   mut set s = 0;
-  loop(iter: i in 0..:n) {
+  loop (i in 0..:n) {
     s = s + i;
   }
   return s;
 }
 ```
 
-### 7.5 loop(for: RangeExpr) Block (추가)
+---
 
-문법:
+## 7.9 기대 효과
 
-* loop(for: 1..:5) { ... }
-* loop(for: a..b) { ... }
-* loop(for: a..:b) { ... }
+1. **역할 분리로 인한 명확성**
 
-정의:
+   * `while` : 단순 반복(statement)
+   * `loop`  : 값 산출 가능한 반복(expression)
 
-* loop(iter: ...)는 "컨테이너/반복자" 기반 반복을 의미한다.
-* loop(for: ...)는 "정수 범위 기반 반복"을 더 직접적으로 나타내는 별도 표기다.
-* 둘은 의미가 겹칠 수 있으나, 파서와 사용자 가독성을 위해 둘 다 제공한다.
-* loop(for: ...)는 내부적으로 "암시적 인덱스 변수"를 제공하는 방식이 가능하다.
+2. **모호성 제거**
 
-v0 권장 규칙 (단순):
+   * 자연 종료 시 결과는 항상 `null`
+   * 값 존재 여부는 `T?`로 타입에 명시됨
 
-* loop(for: R)에는 반드시 이름을 포함해 명시한다. (권장 문법)
+3. **조기 종료 + 값 반환의 1급 지원**
 
-  * loop(for: i in 1..:5) { ... }
-* 또는 정말 축약 형태를 허용한다면, 컴파일러가 기본 이름 i를 제공한다.
+   * “찾으면 탈출하며 값 반환” 패턴이 언어 차원에서 직접 표현됨
 
-  * loop(for: 1..:5) { ... }  // i가 자동 생성된다고 가정
+4. **타입 기반 안전성**
 
-예시 (명시 이름 버전, 권장)
+   * 종료 가능한 `loop` 결과를 `T`에 대입하는 실수를 컴파일 타임에 차단
 
-```gaupel
-fn sum_for() -> int {
-  mut set s = 0;
-  loop(for: i in 1..:5) {
-    s = s + i;
-  }
-  return s;
-}
-```
+5. **확장 여지 확보**
 
-예시 (축약 버전, 선택 구현)
-
-```gaupel
-fn sum_for_short() -> int {
-  mut set s = 0;
-  loop(for: 1..:5) {
-    // i는 컴파일러가 자동 제공한다고 가정
-    s = s + i;
-  }
-  return s;
-}
-```
+   * 라벨 기반 `break`/`continue`는 v1에서 자연스럽게 확장 가능
 
 ---
 
@@ -3207,93 +3328,498 @@ fn main() -> void {
 
 아래는 구현을 위한 핵심 뼈대다. 상세 확장은 문서의 문법 설명을 따른다.
 
-```ebnf
-CompilationUnit = { TopLevelDecl } eof ;
+```
+/* ============================================================
+   16.0 Lexical (Tokenizer Contract)
+   ============================================================ */
 
-TopLevelDecl =
-    DefineDecl
-  | ImportDecl
-  | UseFFIDecl
-  | FieldDecl
-  | ProtoDecl
-  | TabletDecl
-  | ActsDecl
-  | ClassDecl
-  | FuncDecl
-  ;
+/* --- whitespace & comments --- */
+WS          := ( " " | "\t" | "\r" | "\n" )+ ;
+LineComment := "//" ( ~"\n" )* ;
+BlockComment:= "/*" ( ~"*/" )* "*/" ;   /* nested disallowed */
 
-DefineDecl = "#define" Ident StringLit ;
+/* --- identifiers --- */
+Ident       := IdentPlain | IdentBacktick ;
+IdentBacktick := "`" BacktickChar+ "`" ;     /* allows emoji etc */
+IdentPlain  := XID_Start XID_Continue* ;     /* tokenizer-level rule */
 
-ImportDecl = "use" "module" ( AbsPath | StringLit ) "as" Ident ";" ;
+/* --- literals --- */
+IntLit      := DecInt IntSuffix? ;
+DecInt      := Digit ( Digit | "_" )* ;      /* "_" not leading/trailing/repeated: tokenizer enforces */
+IntSuffix   := "i8"|"i16"|"i32"|"i64"|"u8"|"u16"|"u32"|"u64" ;
 
-UseFFIDecl =
-    "use" "func::ffi" "<" FfiSig ">" Ident ";"
-  | "use" "struct::ffi" Ident "{" FieldList "}" ;
+FloatLit    := DecFloat FloatSuffix ;
+DecFloat    := Digit (Digit|"_")* "." Digit (Digit|"_")* 
+            |  Digit (Digit|"_")* "." 
+            |  "." Digit (Digit|"_")* ;
+FloatSuffix := "f" | "lf" ;
+
+BoolLit     := "true" | "false" ;
+NullLit     := "null" ;
+
+CharLit     := "'" CharBody "'" ;
+CharBody    := CharNormal | CharEscape ;
+CharEscape  := "\\" ( "n"|"t"|"r"|"0"|"'"|"\""|"\\" )
+            | "\\" "u" "{" HexDigit+ "}" ;
+
+StringLit   := "\"" StringChar* "\"" ;
+RawString   := "R\"\"\"" RawChar* "\"\"\"" ;
+FString     := "F\"\"\"" FStringPart* "\"\"\"" ;
+FStringPart := FStringText | FStringInterp | FStringEscapedBrace ;
+FStringInterp := "{" Expr "}" ;
+FStringEscapedBrace := "{{" | "}}" ;
+/* tokenizer may hand FString as structured tokens; parser may treat as node w/ parts */
+
+/* --- paths & module paths --- */
+Path        := Ident ( "::" Ident )* ;
+
+ModulePath  := ModulePathAbs | ModulePathRel ;
+ModulePathAbs := "<" ModuleSeg ("/" ModuleSeg)* ">" ;
+ModuleSeg   := IdentPlain ;  /* 권장: ASCII ident; 구현이 허용하면 Ident도 가능 */
+ModulePathRel := StringLit ;
+
+/* --- punctuators / operators (must be maximal-munch) --- */
+Punct       := "{"|"}"|"("|")"|"["|"]"
+            |  ","|":"|";"|"."|"?" 
+            |  "->"
+            |  "="|"+="|"-="|"*="|"/="|"%="
+            |  "=="|"!="|"<="|">="|"<"|">"
+            |  "+"|"-"|"*"|"/"|"%"
+            |  "++"
+            |  "..:"|".."
+            |  "<<" 
+            |  "&"|"&&" 
+            ;
+
+/* ============================================================
+   16.1 Compilation Unit / File
+   ============================================================ */
+
+File        := Item* EOF ;
+
+Item        := UseDecl
+            |  SpaceDecl
+            |  FuncDecl
+            |  FieldDecl
+            |  ProtoDecl
+            |  TabletDecl
+            |  ClassDecl
+            |  ActsDecl
+            |  ";"                       /* empty item allowed (optional policy) */
+            ;
+
+/* ============================================================
+   16.2 use / module import / FFI import
+   ============================================================ */
+
+UseDecl     := "use" UseBody ;
+
+UseBody     := UseModule
+            |  UseTypeAlias
+            |  UsePathAlias
+            |  UseTextReplace
+            |  UseFfiFunc
+            |  UseFfiStruct
+            ;
+
+/* use module <path> as alias; */
+UseModule   := "module" ModulePath "as" Ident ";" ;
+
+/* use NewT = u32; */
+UseTypeAlias:= Ident "=" Type ";" ;
+
+/* use Math::add = add_i32;   or   use core::io::print = println; */
+UsePathAlias:= Path "=" Path ";" ;
+
+/* use PI 3.14f;   use GAME_NAME "Gaupel";   (source-level replacement of IDENT only) */
+UseTextReplace := Ident Expr ";" ;
+
+/* use func::ffi<int (int, int)> c_add; */
+UseFfiFunc  := "func::ffi" "<" FfiFnType ">" Ident ";" ;
+
+/* use struct::ffi Vec2C { float32 x; float32 y; }   (세미콜론은 정책: 아래에서 모호점으로 표기) */
+UseFfiStruct:= "struct::ffi" Ident "{" FfiFieldMember* "}" ";"? ;
+FfiFieldMember := Type Ident ";" ;
+
+/* ============================================================
+   16.3 Namespacing: space
+   ============================================================ */
+
+SpaceDecl   := ExportOpt "space" Ident SpaceBlock ;
+SpaceBlock  := "{" SpaceItem* "}" ;
+SpaceItem   := UseDecl
+            |  SpaceDecl
+            |  FuncDecl
+            |  FieldDecl
+            |  ProtoDecl
+            |  TabletDecl
+            |  ClassDecl
+            |  ActsDecl
+            |  ";" ;
+
+/* ============================================================
+   16.4 Attributes / export / qualifiers / modes
+   ============================================================ */
+
+Attribute   := "@" Ident ;
+AttributeList := Attribute* ;
+
+ExportOpt   := ("export")? ;
+
+ModeOpt     := ("sub" | "pub")? ;
+
+/* qualifier는 폐기. (@pure/@comptime은 attr속성으로 이동) */
+QualifierOpt:= ε ;
+
+/* ============================================================
+   16.5 Function Declarations
+   ============================================================ */
+
+FuncDecl    := AttributeList ExportOpt "fn" ModeOpt QualifierOpt FuncName FuncParams "->" Type FuncBody ;
+
+/* 이름 접미 '?' : 예외 허용 함수 (throw/try-catch 허용) */
+FuncName    := Ident ("?")? ;
+
+/* 파라미터: positional + optional named-group { ... } */
+FuncParams  := "(" ParamSectionsOpt ")" ;
+
+ParamSectionsOpt
+            := ε
+            |  PositionalParamList NamedParamGroupOpt
+            |  NamedParamGroup                /* named-group only */
+            ;
+
+PositionalParamList
+            := PositionalParam ("," PositionalParam)* (",")? ;
+
+PositionalParam
+            := Ident ":" Type DefaultOpt ;
+
+NamedParamGroupOpt
+            := (","? NamedParamGroup)? ;
+
+NamedParamGroup
+            := "{" NamedParamListOpt "}" ;
+
+NamedParamListOpt
+            := ε
+            |  NamedParam ("," NamedParam)* (",")? ;
+
+NamedParam  := Ident ":" Type DefaultOpt ;
+
+DefaultOpt  := ("=" Expr)? ;
+
+/* 함수 본문 or 시그니처 선언(프로토타입) */
+FuncBody    := Block | ";" ;
 
 
-FuncDecl = ReturnsDecl "fn" { Qualifier } Ident "(" [ ParamList ] ")" [ Mode ] Block ;
-Qualifier = "pure" | "comptime" ;
-Mode = ":" ( "sub" | "pub" ) ;
+/* ============================================================
+   16.6 Type Declarations: field / proto / tablet / class / acts
+   ============================================================ */
 
-ParamList = Param { "," Param } ;
-Param = [ "mut" ] Ident ":" Type ;
+/* -------- field -------- */
+FieldDecl   := ExportOpt "field" Ident TypeParamsOpt? "{" FieldMember* "}" ;
+FieldMember := Type Ident ";" ;
 
-FieldDecl = "field" [ "<" TypeList ">" ] Ident "{" FieldMembers "}" ;
-TypeList = Type { "," Type } ;
+/* -------- proto -------- */
+ProtoDecl   := ExportOpt "proto" Ident TypeParamsOpt? ProtoInheritOpt? "{" ProtoMember* "}" ;
+ProtoInheritOpt := (":" TypePathList)? ;
+ProtoMember := FuncSig ";" ;
+FuncSig  := AttributeList ExportOpt "fn" ModeOpt FuncName FuncParams "->" Type ;
 
-ProtoDecl = "proto" Ident "{" { ProtoMember } "}" ;
-ProtoMember = ReturnsDecl "fn" Ident "(" [ ParamList ] ")" ";" ;
+/* -------- tablet -------- */
+TabletDecl  := ExportOpt "tablet" Ident TypeParamsOpt? TabletInheritOpt? "{" TabletMember* "}" ;
+TabletInheritOpt := (":" TypePathList)? ;
 
-TabletDecl = "tablet" Ident [ ":" Ident ] "{" { TabletSection } "}" ;
-TabletSection = AccessLabel ":" { TabletMember } ;
-AccessLabel = "public" | "private" ;
-TabletMember = FuncDecl | VarDecl ;
+TabletMember:= AccessSection
+            |  MemberVarDecl
+            |  FuncDecl
+            |  SpecialDeleteDecl
+            |  ";" ;
 
-# 구버전. 폐기됨. 대신 operator(...)만 존재
-ActsDecl = "acts" TypeName "{" { ActsMember } "}" ;
-ActsMember = FuncDecl [ OpBind ] ;
-OpBind = ":" "op" "(" StringLit ")" ;
+AccessSection := ("public" | "private") ":" ;
 
-ClassDecl = "class" Ident "{" { ClassMember } "}" ;
-ClassMember = FuncDecl | VarDecl ;
+MemberVarDecl := ( "let" MutAfterOpt | "set" MutAfterOpt ) MemberVarTail ;
+/* 멤버는 초기화 강제 정책이 다를 수 있어 optional로 둠 */
+MemberVarTail := Ident ( ":" Type )? ( "=" Expr )? ";" ;
 
-VarDecl =
-    "let" Ident ":" Type "=" Expr ";"
-  | "set" Ident "=" Expr ";"
-  | "mut" "let" Ident ":" Type "=" Expr ";"
-  | "mut" "set" Ident "=" Expr ";"
-  ;
+/* tablet의 생성자/소멸자 삭제 문법 (= delete;) - 구체 키워드가 문서에 확정되어 있지 않아 일반형으로 둠 */
+SpecialDeleteDecl := Ident "(" ParamSectionsOpt? ")" "=" "delete" ";" ;
 
-Stmt =
-    VarDecl
-  | IfStmt
-  | SwitchStmt
-  | WhileStmt
-  | LoopIterStmt
-  | LoopForStmt
-  | ReturnStmt
-  | BreakStmt
-  | ContinueStmt
-  | CommitStmt
-  | RecastStmt
-  | ExprStmt
-  | DeleteStmt
-  ;
+/* -------- class -------- */
+ClassDecl   := ExportOpt "class" Ident "{" ClassMember* "}" ;
+ClassMember := FuncDecl
+            |  SpaceDecl
+            |  UseDecl
+            |  ";" ;
 
-WhileStmt = "while" "(" Expr ")" Block ;
+/* -------- acts -------- */
+ActsDecl    := ExportOpt "acts" ActsHead "{" ActsMember* "}" ;
 
-LoopIterStmt = "loop" "(" "iter" ":" Ident "in" Expr ")" Block ;
+ActsHead    := ("for")? Type ;   /* acts T, acts for T 둘 다 허용 (문서 예시 혼재) */
 
-// loop(for:)는 v0에서 2가지 형태 중 하나 또는 둘 다 선택 구현 가능
-LoopForStmt =
-    "loop" "(" "for" ":" Ident "in" RangeExpr ")" Block
-  | "loop" "(" "for" ":" RangeExpr ")" Block
-  ;
+ActsMember  := ActsFunc
+            |  OperatorFunc
+            |  ";" ;
 
-RangeExpr = Expr ".." [ ":" ] Expr ;
+/* operator(copy)(self: T) -> T { ... } */
+OperatorFunc:= "operator" "(" OpKey ")" FuncParams "->" Type Block ;
 
-CommitStmt = "commit" ";" ;
-RecastStmt = "recast" ";" ;
+OpKey       := OpKeyToken | OpKeyWord | Ident ;
+OpKeyToken  := "+"|"-"|"*"|"/"|"%"
+            |  "=="|"!="|"<"|"<="|">"|">="
+            |  "<<" 
+            |  "++pre" | "++post"          /* v1+ 키도 문자열로 허용 */
+            ;
+OpKeyWord   := "and"|"or"|"not"|"xor"
+            |  "copy"|"clone"|"drop"
+            ;
 
-// Expr 내에 x++ / ++x 같은 증감 연산자 규칙이 추가된다 (상세는 본문 규칙 참조)
+/* generic type params (v1+ 목표; v0에서는 파싱만 선행 가능) */
+TypeParamsOpt := ("<" TypeParam ("," TypeParam)* ">")? ;
+TypeParam   := Ident ;
+
+/* type path list: Drawable, A::B, etc. */
+TypePathList:= TypePath ("," TypePath)* ;
+TypePath    := Path TypeArgsOpt? ;
+TypeArgsOpt := ("<" Type ("," Type)* ">")? ;
+
+
+/* ============================================================
+   16.7 Statements
+   ============================================================ */
+
+Block       := "{" Stmt* "}" ;
+
+Stmt        := ";"
+            |  VarDeclStmt
+            |  IfStmt
+            |  SwitchStmt
+            |  WhileStmt
+            |  BreakStmt
+            |  ContinueStmt
+            |  ReturnStmt
+            |  DeleteStmt
+            |  CommitStmt
+            |  RecastStmt
+            |  ThrowStmt
+            |  TryCatchStmt
+            |  ExprStmt
+            ;
+
+VarDeclStmt := LetDecl | SetDecl ;
+MutAfterOpt := ("mut")? ;
+
+/* let mut x: T = ...; */
+LetDecl     := "let" MutAfterOpt Ident ":" Type ( "=" Expr )? ";" ;
+
+/* set mut x = ...; */
+SetDecl     := "set" MutAfterOpt Ident "=" Expr ";" ;
+
+
+/* if (cond) { ... } elif (...) { ... } else { ... } */
+IfStmt      := "if" "(" Expr ")" Block ElifClause* ElseClause? ;
+ElifClause  := "elif" "(" Expr ")" Block ;
+ElseClause  := "else" Block ;
+
+/* switch (expr) { case P: {..} ... default: {..} } */
+SwitchStmt  := "switch" "(" Expr ")" "{" CaseClause+ DefaultClause? "}" ;
+CaseClause  := "case" CasePattern ":" Block ;
+DefaultClause := "default" ":" Block ;
+
+/* while (cond) { ... } */
+WhileStmt   := "while" "(" Expr ")" Block ;
+
+
+
+BreakStmt   := "break" Expr? ";" ;
+ContinueStmt:= "continue" ";" ;
+ReturnStmt  := "return" Expr? ";" ;
+
+/* delete place; */
+DeleteStmt  := "delete" PlaceExpr ";" ;
+
+/* commit;   or   commit return expr; */
+CommitStmt  := "commit" ( "return" Expr )? ";" ;
+
+/* recast; */
+RecastStmt  := "recast" ";" ;
+
+/* throw expr; */
+ThrowStmt   := "throw" Expr ";" ;
+
+/* try { ... } catch (e: Error) { ... } */
+TryCatchStmt:= "try" Block "catch" "(" Ident ":" Type ")" Block ;
+
+/* expression statement */
+ExprStmt    := Expr ";" ;
+
+
+/* ============================================================
+   16.8 Patterns (switch case)
+   ============================================================ */
+
+CasePattern := Literal
+            |  Path "(" Ident ")"         /* Ok(v), Err(e) 등 */
+            |  Path                       /* (확장 여지: case Name:) */
+            ;
+
+Literal     := IntLit | FloatLit | BoolLit | NullLit | CharLit
+            |  StringLit | RawString | FString
+            ;
+
+
+/* ============================================================
+   16.9 Expressions (Precedence & Postfix)
+   ============================================================ */
+
+Expr        := AssignExpr ;
+
+AssignExpr  := TernaryExpr (AssignOp AssignExpr)? ;
+AssignOp    := "=" | "+=" | "-=" | "*=" | "/=" | "%=" ;
+
+/* ternary: cond ? a : b  (중첩 금지는 문법이 아닌 정적 규칙으로 검사) */
+TernaryExpr := OrExpr ( "?" Expr ":" Expr )? ;
+
+/* logical keywords only */
+OrExpr      := XorExpr ( "or" XorExpr )* ;
+XorExpr     := AndExpr ( "xor" AndExpr )* ;
+AndExpr     := PipeExpr ( "and" PipeExpr )* ;
+
+/* pipe operator */
+PipeExpr    := EqExpr ( "<<" PipeRhs )* ;
+PipeRhs     := PostfixExpr ;  /* 제약: CallExpr 형태 + Hole 1개는 별도 정적 검사 */
+
+/* equality / relational */
+EqExpr      := RelExpr ( ("==" | "!=") RelExpr )* ;
+RelExpr     := RangeExpr ( ("<"|"<="|">"|">=") RangeExpr )* ;
+
+/* range: a..b, a..:b  (루프/슬라이스/표현식 공용) */
+RangeExpr   := AddExpr ( (".." | "..:") AddExpr )? ;
+
+AddExpr     := MulExpr ( ("+"|"-") MulExpr )* ;
+MulExpr     := UnaryExpr ( ("*"|"/"|"%") UnaryExpr )* ;
+
+/* unary: not/!/+/-, copy/clone, & / &mut, &&, attempt, ++ */
+UnaryExpr   := ( "not" | "!" | "+" | "-" | "copy" | "clone" ) UnaryExpr
+            |  BorrowExpr
+            |  EscapeExpr
+            |  AttemptExpr
+            |  PreIncExpr
+            |  PostfixExpr
+            ;
+
+BorrowExpr  := "&" ("mut")? PlaceExpr ;    /* 제약: place-only, non-escaping(정적 규칙) */
+EscapeExpr  := "&&" PlaceExpr ;            /* 제약: place-only, pure/comptime 금지 등은 정적 규칙 */
+
+AttemptExpr := "attempt" Expr ;            /* expression */
+
+PreIncExpr  := "++" PlaceExpr ;            /* place-only (정적 규칙) */
+
+/* postfix chain: calls, indexing, field access, post++ */
+PostfixExpr := PrimaryExpr PostfixOp* ;
+
+PostfixOp   := CallSuffix
+            |  IndexSuffix
+            |  FieldSuffix
+            |  PostInc
+            ;
+
+FieldSuffix := "." Ident ;
+
+IndexSuffix := "[" IndexArg "]" ;
+IndexArg    := Expr ; /* Range도 Expr로 들어오므로 파서가 RangeExpr 우선/구문제약을 적용 가능 */
+
+PostInc     := "++" ;  /* x++ */
+
+/* calls: positional / labeled / positional + {named} / {named} */
+CallSuffix  := "(" CallArgsOpt ")" ;
+CallArgsOpt := ε | CallArgs ;
+
+CallArgs    := PositionalArgs NamedGroupArgsOpt
+            |  LabeledArgs
+            |  NamedGroupArgs                 /* named-only */
+            ;
+
+PositionalArgs := Expr ("," Expr)* (",")? ;
+LabeledArgs  := LabeledArg ("," LabeledArg)* (",")? ;
+LabeledArg   := Ident ":" ArgValue ;
+
+NamedGroupArgsOpt := (","? NamedGroupArgs)? ;
+NamedGroupArgs := "{" NamedArgListOpt "}" ;
+NamedArgListOpt := ε | NamedArg ("," NamedArg)* (",")? ;
+NamedArg     := Ident ":" ArgValue ;
+
+ArgValue    := Expr | Hole ;
+Hole        := "_" ;   /* 제약: pipe RHS call에서만, 그리고 정확히 1개 등은 정적 검사 */
+
+/* primaries */
+PrimaryExpr := Literal
+            |  Path
+            |  "draft"                      /* class 문맥에서 의미 있음 */
+            |  "(" Expr ")"
+            |  ArrayLit
+            |  LoopExpr
+            ;
+
+ArrayLit    := "[" (Expr ("," Expr)*)? (",")? "]" ;
+
+LoopExpr    := "loop" LoopHeaderOpt Block ;
+LoopHeaderOpt
+            := ε
+            |  "(" Ident "in" Expr ")"
+            ;
+
+
+/* ============================================================
+   16.10 Place Expressions (for &, &&, delete, assignments, ++)
+   ============================================================ */
+
+PlaceExpr   := PlaceAtom PlaceSuffix* ;
+PlaceAtom   := Ident | "draft" | "(" PlaceExpr ")" ;
+PlaceSuffix := "." Ident
+            |  "[" Expr "]"
+            ;
+
+/* ============================================================
+   16.11 Types
+   ============================================================ */
+
+Type        := BorrowType | TypeCore ;
+
+BorrowType  := "&" ("mut")? TypeBorrowTarget ;
+
+/* borrow target can be normal type or slice form */
+TypeBorrowTarget
+            := TypeCore                      /* &T, &mut T */
+            |  "[" Type "]"                  /* &[T], &mut [T] */
+            ;
+
+/* core type with suffixes (nullable, array, list) */
+TypeCore    := TypeAtom TypeSuffix* ;
+
+TypeAtom    := PrimitiveType
+            |  "handle" "<" Type ">"
+            |  TypePath                       /* includes generics via TypeArgsOpt in TypePath */
+            |  "(" Type ("," Type)* ")"       /* tuple (선택 정책; 파싱만 가능) */
+            ;
+
+TypeSuffix  := "?"                            /* nullable */
+            |  "[" ConstExpr "]"              /* fixed array: T[N] */
+            |  "[" "]"                        /* list: T[] */
+            ;
+
+/* array length expression: v0에서는 제한 가능(정적 규칙) */
+ConstExpr   := Expr ;
+
+PrimitiveType:= "int8"|"int16"|"int32"|"int64"
+             | "uint8"|"uint16"|"uint32"|"uint64"
+             | "float32"|"float64"
+             | "bool"|"char"|"string"
+             | "int"|"float"
+             | "void"
+             ;
+
+/* FFI function type inside func::ffi<...> */
+FfiFnType   := Type "(" (Type ("," Type)*)? ")" ;
 ```

@@ -54,6 +54,15 @@ namespace gaupel::diag {
             case Code::kNamedGroupLabelUnderscoreReserved: return "NamedGroupLabelUnderscoreReserved";
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
+            case Code::kTypeNameExpected: return "TypeNameExpected";
+            case Code::kTypeArrayMissingRBracket: return "TypeArrayMissingRBracket";
+            case Code::kTypeOptionalDuplicate: return "TypeOptionalDuplicate";
+            case Code::kTypeRecovery: return "TypeRecovery";
+            case Code::kLoopHeaderExpectedLParen: return "LoopHeaderExpectedLParen";
+            case Code::kLoopHeaderExpectedIn: return "LoopHeaderExpectedIn";
+            case Code::kLoopHeaderExpectedRParen: return "LoopHeaderExpectedRParen";
+            case Code::kLoopBodyExpectedBlock: return "LoopBodyExpectedBlock";
+            case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
         }
 
         return "Unknown";
@@ -83,6 +92,16 @@ namespace gaupel::diag {
             case Code::kNamedGroupLabelUnderscoreReserved: return "'_' cannot be used as a named-group label; use it only as a value (e.g., x: _)";
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
+            case Code::kTypeNameExpected: return "type name expected";
+            case Code::kTypeArrayMissingRBracket: return "array type suffix requires closing ']'";
+            case Code::kTypeOptionalDuplicate: return "duplicate optional suffix '?'";
+            case Code::kTypeRecovery: return "failed to parse type; recovered";
+            case Code::kLoopHeaderExpectedLParen: return "expected '(' after 'loop' header";
+            case Code::kLoopHeaderExpectedIn: return "expected 'in' in loop header (e.g., loop (v in xs))";
+            case Code::kLoopHeaderExpectedRParen: return "expected ')' to close loop header";
+            case Code::kLoopBodyExpectedBlock: return "expected loop body block '{ ... }'";
+            case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after 'let'/'set' (e.g., 'set mut x = ...')";
+
         }
 
         return "unknown diagnostic";
@@ -111,8 +130,15 @@ namespace gaupel::diag {
             case Code::kNamedGroupLabelUnderscoreReserved: return "'_'는 named-group의 라벨로 사용할 수 없습니다. 값 위치에서만 사용하세요(예: x: _)";
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
-
-            
+            case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
+            case Code::kTypeArrayMissingRBracket: return "배열 타입 접미사 '[]'를 닫는 ']'이(가) 필요합니다";
+            case Code::kTypeOptionalDuplicate: return "nullable 접미사 '?'가 중복되었습니다";
+            case Code::kTypeRecovery: return "타입 파싱에 실패하여 복구했습니다";
+            case Code::kLoopHeaderExpectedLParen: return "'loop' 헤더 뒤에는 '('이(가) 필요합니다";
+            case Code::kLoopHeaderExpectedIn: return "loop 헤더에는 'in'이(가) 필요합니다 (예: loop (v in xs))";
+            case Code::kLoopHeaderExpectedRParen: return "loop 헤더를 닫는 ')'이(가) 필요합니다";
+            case Code::kLoopBodyExpectedBlock: return "loop 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kVarMutMustFollowKw: return "'mut'는 'let/set' 바로 뒤에만 올 수 있습니다 (예: set mut x = ...)";
         }
 
         return "알 수 없는 진단";

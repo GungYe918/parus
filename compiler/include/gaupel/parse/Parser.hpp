@@ -76,6 +76,9 @@ namespace gaupel {
         //  index 파싱
         ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
 
+        // loop expr 파싱
+        ast::ExprId parse_expr_loop(int ternary_depth);
+
         // --------------------
         // type
         // --------------------
@@ -116,6 +119,7 @@ namespace gaupel {
 
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
+
 
         // --------------------
         // decl

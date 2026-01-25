@@ -198,7 +198,7 @@ namespace gaupel {
         } else {
             if (cursor_.at(syntax::TokenKind::kColon)) {
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "type annotation not allowed for set in v0");
+                            "type annotation not allowed for set");
                 cursor_.bump();
                 (void)parse_type();
             }
@@ -316,10 +316,21 @@ namespace gaupel {
     // break 파싱
     ast::StmtId Parser::parse_stmt_break() {
         const Token kw = cursor_.bump();
-        const Span term_end = stmt_consume_semicolon_or_recover(kw.span);
+
+        ast::ExprId v = ast::k_invalid_expr;
+        Span fallback = kw.span;
+
+        // break <expr> ;  허용 (세미콜론 전까지 expr 존재하면 파싱)
+        if (!cursor_.at(syntax::TokenKind::kSemicolon)) {
+            v = parse_expr();
+            fallback = ast_.expr(v).span;
+        }
+
+        const Span term_end = stmt_consume_semicolon_or_recover(fallback);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kBreak;
+        s.expr = v; // 없으면 invalid
         s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }

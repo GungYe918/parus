@@ -306,6 +306,10 @@ namespace gaupel {
             return ast_.add_expr(e);
         }
 
+        if (t.kind == syntax::TokenKind::kKwLoop) {
+            return parse_expr_loop(ternary_depth);
+        }
+
         if (t.kind == syntax::TokenKind::kEof) {
             if (!lexer_fatal_) {
                 diag_report(diag::Code::kUnexpectedEof, t.span, "expression");
@@ -605,5 +609,63 @@ namespace gaupel {
         return ast_.add_expr(e);
     }
 
+    ast::ExprId Parser::parse_expr_loop(int ternary_depth) {
+        using K = syntax::TokenKind;
+
+        const Token loop_tok = cursor_.bump(); // 'loop'
+
+        ast::Expr e{};
+        e.kind = ast::ExprKind::kLoop;
+        e.span = loop_tok.span;
+
+        // loop header is optional: either "loop { ... }" or "loop (v in xs) { ... }"
+        if (cursor_.at(K::kLParen)) {
+            e.loop_has_header = true;
+            cursor_.bump(); // '('
+
+            // var
+            const Token v = cursor_.peek();
+            if (v.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, v.span, "identifier");
+                // best-effort recovery
+            } else {
+                cursor_.bump();
+                e.loop_var = v.lexeme;
+            }
+
+            if (!cursor_.eat(K::kKwIn)) {
+                diag_report(diag::Code::kLoopHeaderExpectedIn, cursor_.peek().span);
+                recover_to_delim(K::kRParen, K::kLBrace);
+                cursor_.eat(K::kKwIn); // might be skipped; ok
+            }
+
+            e.loop_iter = parse_expr_pratt(0, ternary_depth);
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kLoopHeaderExpectedRParen, cursor_.peek().span);
+                recover_to_delim(K::kRParen, K::kLBrace);
+                cursor_.eat(K::kRParen);
+            }
+        }
+
+        // body must be a block
+        if (!cursor_.at(K::kLBrace)) {
+            diag_report(diag::Code::kLoopBodyExpectedBlock, cursor_.peek().span);
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+        }
+
+        // parse block stmt
+        if (cursor_.at(K::kLBrace)) {
+            e.loop_body = parse_stmt_block();
+            e.span = span_join(loop_tok.span, ast_.stmt(e.loop_body).span);
+        } else {
+            // still failed -> error expr
+            e.kind = ast::ExprKind::kError;
+            e.text = "loop_missing_body";
+            e.span = loop_tok.span;
+        }
+
+        return ast_.add_expr(e);
+    }
 
 } // namespace gaupel

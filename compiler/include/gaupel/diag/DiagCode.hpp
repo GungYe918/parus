@@ -50,6 +50,21 @@ namespace gaupel::diag {
 
         // pub/sub misuse
         kPubSubOnlyAllowedInClass,
+
+        // ---- type parsing ----
+        kTypeNameExpected,          // type name (ident) expected
+        kTypeArrayMissingRBracket,  // missing ']' in T[]
+        kTypeOptionalDuplicate,     // T?? 같은 중복
+        kTypeRecovery,              // 타입 파싱 실패 후 동기화(선택)
+
+        // ---- loop parsing ----
+        kLoopHeaderExpectedLParen,  // loop ( ... ) 형태인데 '(' 없음
+        kLoopHeaderExpectedIn,      // loop (v in xs)에서 'in' 필요
+        kLoopHeaderExpectedRParen,  // header ')' 필요
+        kLoopBodyExpectedBlock,     // loop body '{...}' 필요
+
+        // ---- var parsing ----
+        kVarMutMustFollowKw,        // "set mut x"만 허용, "set x mut" 금지
     };
 
 } // namespace gaupel::diag

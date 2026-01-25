@@ -49,6 +49,9 @@ namespace gaupel::ast {
         // postfix
         kCall,
         kIndex,
+
+        // loop
+        kLoop,
     };
 
     // --------------------
@@ -56,7 +59,9 @@ namespace gaupel::ast {
     // --------------------
     enum class TypeKind : uint8_t {
         kError,
-        kNamed, // v0: Ident 기반 NamedType만 지원
+        kNamed,     // v0: Ident 기반 NamedType만 지원
+        kArray,     // T[]
+        kOptional,  // T?
     };
 
     // --------------------
@@ -148,12 +153,23 @@ namespace gaupel::ast {
         // call args storage (Arg 배열 slice)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
+
+        // Loop expr
+        bool loop_has_header = false;      // loop (v in xs) { ... }
+        std::string_view loop_var{};       // v
+        ExprId loop_iter = k_invalid_expr; // xs (또는 range expr)
+        StmtId loop_body = k_invalid_stmt; // '{ ... }' block stmt id
     };
 
     struct Type {
         TypeKind kind{};
         Span span{};
         std::string_view text{}; // for kNamed
+
+        // NOTE: suffix types share this child slot:
+        // - kArray: elem = element type
+        // - kOptional: elem = inner type
+        TypeId elem = k_invalid_type;
     };
 
     // --------------------

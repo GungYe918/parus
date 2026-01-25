@@ -32,3 +32,26 @@ export fn entry() -> void {
     // diff는 int
   }
 }
+
+export fn find42(xs: int[]) -> int? {
+  set found = loop (v in xs) {
+    if (v == 42) { break v; }
+  };
+  return found;
+}
+
+fn sum_to(n: int) -> int {
+  // 아직 mut 키워드 파싱 못함
+  set mut s = 0;
+  loop (i in 0..:n) {
+    s = s + i;
+  };
+  return s;
+}
+
+fn make_value() -> int {
+  set x = loop {
+    break 7;
+  };
+  return x;
+}
