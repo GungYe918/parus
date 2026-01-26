@@ -129,6 +129,32 @@ namespace gaupel {
         }
     }
 
+    bool Parser::is_unambiguous_stmt_start(syntax::TokenKind k) const {
+        using K = syntax::TokenKind;
+
+        if (is_decl_start(k)) return true;
+        if (k == K::kSemicolon) return true;
+
+        // 확실한 stmt 키워드
+        if (k == K::kKwLet || k == K::kKwSet) return true;
+        if (k == K::kKwReturn || k == K::kKwBreak || k == K::kKwContinue) return true;
+        if (k == K::kKwWhile || k == K::kKwSwitch) return true;
+
+        // if/loop/{...} 는 expr도 될 수 있으므로 여기 넣지 않음
+        return false;
+    }
+
+    bool Parser::is_expr_with_block_kind(ast::ExprKind k) {
+        switch (k) {
+            case ast::ExprKind::kLoop:
+            case ast::ExprKind::kIfExpr:
+            case ast::ExprKind::kBlockExpr:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     ast::ExprId Parser::parse_expr() {
         return parse_expr_pratt(/*min_prec=*/0, /*ternary_depth=*/0);
     }
@@ -308,6 +334,16 @@ namespace gaupel {
 
         if (t.kind == syntax::TokenKind::kKwLoop) {
             return parse_expr_loop(ternary_depth);
+        }
+
+        // ---- if-expression (Rust style) ----
+        if (t.kind == syntax::TokenKind::kKwIf) {
+            return parse_expr_if(ternary_depth);
+        }
+
+        // ---- block-expression "{ ... }" ----
+        if (t.kind == syntax::TokenKind::kLBrace) {
+            return parse_expr_block(ternary_depth, BlockTailPolicy::kAllowEmptyTail);
         }
 
         if (t.kind == syntax::TokenKind::kEof) {
@@ -609,6 +645,180 @@ namespace gaupel {
         return ast_.add_expr(e);
     }
 
+    ast::ExprId Parser::parse_expr_if(int ternary_depth) {
+        using K = syntax::TokenKind;
+
+        const Token if_kw = cursor_.bump(); // 'if'
+
+        bool has_paren = false;
+        if (cursor_.eat(K::kLParen)) has_paren = true;
+
+        ast::ExprId cond = parse_expr_pratt(0, ternary_depth);
+
+        if (has_paren) {
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kLBrace, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+        }
+
+        // then: 반드시 block
+        if (!cursor_.at(K::kLBrace)) {
+            diag_report(diag::Code::kIfExprThenExpectedBlock, cursor_.peek().span);
+            recover_to_delim(K::kLBrace, K::kKwElse, K::kSemicolon);
+        }
+
+        ast::ExprId then_e = ast::k_invalid_expr;
+        if (cursor_.at(K::kLBrace)) {
+            then_e = parse_expr_block(ternary_depth, BlockTailPolicy::kRequireValueTail);
+        } else {
+            ast::Expr err{};
+            err.kind = ast::ExprKind::kError;
+            err.span = if_kw.span;
+            err.text = "if_missing_then_block";
+            then_e = ast_.add_expr(err);
+        }
+
+        // else: if-expr는 else 필수
+        ast::ExprId else_e = ast::k_invalid_expr;
+
+        if (!cursor_.at(K::kKwElse)) {
+            diag_report(diag::Code::kIfExprMissingElse, if_kw.span);
+        } else {
+            const Token else_kw = cursor_.bump();
+
+            if (cursor_.at(K::kKwIf)) {
+                else_e = parse_expr_if(ternary_depth);
+            } else {
+                if (!cursor_.at(K::kLBrace)) {
+                    diag_report(diag::Code::kIfExprElseExpectedBlock, cursor_.peek().span);
+                    recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+                }
+
+                if (cursor_.at(K::kLBrace)) {
+                    else_e = parse_expr_block(ternary_depth, BlockTailPolicy::kRequireValueTail);
+                } else {
+                    ast::Expr err{};
+                    err.kind = ast::ExprKind::kError;
+                    err.span = else_kw.span;
+                    err.text = "if_missing_else_block";
+                    else_e = ast_.add_expr(err);
+                }
+            }
+        }
+
+        ast::Expr e{};
+        e.kind = ast::ExprKind::kIfExpr;
+        e.a = cond;
+        e.b = then_e;
+        e.c = else_e;
+
+        Span end = ast_.expr(then_e).span;
+        if (else_e != ast::k_invalid_expr) end = ast_.expr(else_e).span;
+
+        e.span = span_join(if_kw.span, end);
+        return ast_.add_expr(e);
+    }
+
+    ast::ExprId Parser::parse_expr_block(int ternary_depth, BlockTailPolicy policy) {
+        using K = syntax::TokenKind;
+
+        const Token lb = cursor_.peek();
+        diag_expect(K::kLBrace);
+
+        std::vector<ast::StmtId> local;
+        local.reserve(16);
+
+        ast::ExprId tail = ast::k_invalid_expr;
+
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            const auto k = cursor_.peek().kind;
+
+            // 1) unambiguous stmt starters
+            if (is_unambiguous_stmt_start(k)) {
+                local.push_back(parse_stmt_any());
+                continue;
+            }
+
+            // 2) otherwise: parse expression first
+            const Token start = cursor_.peek();
+            ast::ExprId e = parse_expr_pratt(0, ternary_depth);
+
+            const auto expr_end = ast_.expr(e).span;
+            const bool expr_with_block = is_expr_with_block_kind(ast_.expr(e).kind);
+
+            // 2-a) expr ';'
+            if (cursor_.at(K::kSemicolon)) {
+                const Token semi = cursor_.bump();
+
+                // --- 핵심: tail 위치에서 ';'가 붙고 바로 '}'라면 ---
+                //   진단 후: expr-stmt로 만들지 말고 tail로 복구
+                if (policy == BlockTailPolicy::kRequireValueTail && cursor_.at(K::kRBrace)) {
+                    diag_report(diag::Code::kBlockTailSemicolonNotAllowed, semi.span);
+                    tail = e;
+                    break;
+                }
+
+                ast::Stmt s{};
+                s.kind = ast::StmtKind::kExprStmt;
+                s.expr = e;
+                s.span = span_join(start.span, semi.span);
+                local.push_back(ast_.add_stmt(s));
+                continue;
+            }
+
+            // 2-b) expr '}'  => tail
+            if (cursor_.at(K::kRBrace)) {
+                tail = e;
+                break;
+            }
+
+            // 2-c) expr-with-block + (not ';', not '}') => stmt 로 허용 (Rust 스타일)
+            // 예: if (...) { ... } else { ... }  <newline>  let x: ...
+            if (expr_with_block) {
+                ast::Stmt s{};
+                s.kind = ast::StmtKind::kExprStmt;
+                s.expr = e;
+                s.span = span_join(start.span, expr_end);
+                local.push_back(ast_.add_stmt(s));
+                continue;
+            }
+
+            // 2-d) 그 외는 문법 오류
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "';' or '}'");
+            recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+            if (cursor_.at(K::kSemicolon)) cursor_.bump();
+        }
+
+        const Token rb = cursor_.peek();
+        diag_expect(K::kRBrace);
+
+        // --- policy: value tail required ---
+        if (policy == BlockTailPolicy::kRequireValueTail && tail == ast::k_invalid_expr) {
+            // '}' 위치를 찍어도 되고, 마지막 토큰을 찍어도 됨. 여기선 '}'.
+            diag_report(diag::Code::kIfExprBranchValueExpected, rb.span);
+        }
+
+        // commit stmt children slice
+        uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (auto id : local) ast_.add_stmt_child(id);
+
+        ast::Stmt blk{};
+        blk.kind = ast::StmtKind::kBlock;
+        blk.span = span_join(lb.span, rb.span);
+        blk.stmt_begin = begin;
+        blk.stmt_count = static_cast<uint32_t>(local.size());
+        ast::StmtId blk_id = ast_.add_stmt(blk);
+
+        ast::Expr out{};
+        out.kind = ast::ExprKind::kBlockExpr;
+        out.span = span_join(lb.span, rb.span);
+        out.a = blk_id; // (설계상 Expr.a에 StmtId 저장)
+        out.b = tail;
+        return ast_.add_expr(out);
+    }
+    
     ast::ExprId Parser::parse_expr_loop(int ternary_depth) {
         using K = syntax::TokenKind;
 

@@ -2802,11 +2802,11 @@ proto Stream {
 
 ---
 
-### 11.2 acts의 두 형태: `acts A {}` vs `acts for A {}`
+### 11.2 acts의 세 형태: `acts A {}` vs `acts for T {}` vs `acts Foo for T {}`
 
-Gaupel v0에는 acts 블록이 **두 가지 형태**로 존재한다.
+Gaupel v0에는 acts 블록이 **세 가지 형태**로 존재한다.
 
-#### (1) 일반 acts: `acts A { ... }`
+#### (1) 일반 acts(네임스페이스): `acts A { ... }`
 
 * `acts A {}`는 **A라는 이름의 acts 네임스페이스(행동 묶음)** 를 만든다.
 * 이 블록 안의 선언은 **항상 스코프 호출(정적 호출)** 로 사용한다.
@@ -2826,25 +2826,61 @@ fn demo() -> void {
 규칙:
 
 * `acts A` 내부 함수는 **dot 호출 sugar의 대상이 아니다.**
-* `acts A` 내부에 operator 선언은 불가능하다. (필요시 field에 타입을 정의하고 acts for로 규칙을 정의한다.)
+* `acts A` 내부에 operator 선언은 불가능하다.
+  (연산자 재정의는 **반드시 타입 부착형**에서만 가능)
 
-#### (2) 부착형 acts: `acts for A { ... }`
+---
 
-* `acts for A {}`는 **타입 A에 행동을 부착**한다.
-* 이 블록 안의 함수는 **dot 호출**과 **타입-스코프 호출(UFCS 스타일)** 둘 다 가능하다.
+#### (2) 기본 부착형 acts(기본 동작/기본 연산자): `acts for T { ... }`
 
-예시(메서드 형태):
+* `acts for T {}`는 **타입 T에 행동을 부착**한다.
+* 이 acts는 **해당 타입의 “기본 acts”** 로 취급되며, **use 없이 자동 활성**이다.
+
+> **field 부착의 의미**:
+> `field Foo { ... }`가 있다고 해서 “부착 문법”이 따로 있는 게 아니라,
+> **`acts for Foo { ... }`를 정의하는 행위 자체가 Foo에 부착**이다.
+
+핵심 규칙(v0):
+
+* 타입 `T`에 대한 **기본 acts는 프로그램 전체에서 하나의 집합**이다.
+* 구현 편의상 v0에서는:
+
+  * `acts for T`를 여러 블록으로 “쪼개어” 쓸 수 있더라도 **한 파일 안에서만** 허용한다.
+  * 파일을 넘어 분산(partial)하는 것은 금지한다.
+* 동일한 시그니처(동일 함수 시그니처, 동일 operator key/시그니처)를 중복 정의하면 에러.
+
+호출(메서드/UFCS) 예시:
 
 ```gaupel
 acts for Packet {
-  fn checksum(self a: &Packet, foo: i32) -> u32 { ... }
+  fn checksum(self p: &Packet, seed: u32) -> u32 { return p.crc + seed; }
 }
 
 fn demo(p: Packet) -> void {
-  set c = p.checksum(5);          // dot 호출 (리시버 암묵 전달)
-  set d = Packet::checksum(p, 5); // 타입-스코프 호출 (UFCS)
+  set a = p.checksum(5u32);          // dot 호출
+  set b = Packet::checksum(p, 5u32); // UFCS 호출
 }
 ```
+
+---
+
+#### (3) 이름 있는 부착형 acts(선택 가능한 “행동/연산자 세트”): `acts Foo for T { ... }`
+
+* `acts Foo for T {}`는 **타입 T에 부착되지만 기본 활성은 아니다.**
+* 이 acts는 **이름이 Foo인 “선택 가능한 acts 세트”** 이다.
+* 사용하려면 **반드시** 아래처럼 명시해야 한다:
+
+```gaupel
+use acts Foo for T;
+```
+
+중요 규칙(v0):
+
+* 같은 타입 `T`에 대해 `acts Foo for T`, `acts Goo for T`가 동시에 존재할 수 있다.
+* 그러나 **한 스코프에서 동시에 둘 이상 활성화할 수 없다.**
+
+  * `use acts Foo for T;`와 `use acts Goo for T;`를 같은 스코프에 두면 에러
+* 선택 acts에서 정의되지 않은 연산자는 **fallback**으로 기본 동작을 따른다(11.7).
 
 ---
 
@@ -2874,98 +2910,70 @@ acts for Packet {
 
 ---
 
-### 11.4 `acts for A`의 리시버(self) 규칙과 호출 규칙
+### 11.4 `acts for T` / `acts Foo for T`의 리시버(self) 규칙과 호출 규칙
 
 #### (1) `self`는 “파라미터 이름”이 아니라 **리시버 마커(modifier)** 다
 
-`acts for A` 내부에서 “이 함수가 A에 부착된 메서드이며, 첫 인자가 리시버다”를 표시하려면 아래 형태를 쓴다:
-
 ```gaupel
-fn checksum(self a: &A, foo: i32) -> u32 { ... }
+fn checksum(self a: &T, seed: u32) -> u32 { ... }
 ```
 
 여기서
 
-* `self` : 예약된 **리시버 마커** (컴파일러가 강제)
-* `a` : 유저가 고르는 **진짜 파라미터 이름** (라벨 슬롯 자유)
-* `&A`, `&mut A`, `A` 등은 리시버의 전달 방식을 의미
+* `self` : 예약된 **리시버 마커**
+* `a` : 유저가 고르는 **진짜 파라미터 이름**
+* `&T`, `&mut T`, `T` 등은 리시버 전달 방식을 의미
 
 **강제 규칙(v0):**
 
 * `self` 마커는 **반드시 첫 번째 파라미터 앞**에만 올 수 있다.
-* `self`가 붙은 파라미터는 **반드시 타입이 A(또는 &A / &mut A 등 A 기반)** 이어야 한다.
+* `self`가 붙은 파라미터는 **반드시 타입이 T(또는 &T / &mut T 등 T 기반)** 이어야 한다.
 * `self`가 붙은 함수만이 “메서드(리시버 보유)”로 취급된다.
 
 #### (2) dot 호출: 리시버 인자는 **암묵 전달(첫 인자 생략)**
 
-다음이 정확히 동일 의미다.
+아래는 동일 의미:
 
 ```gaupel
-myA.checksum(5);
-A::checksum(myA, 5);
+x.f(1, 2);
+T::f(x, 1, 2);
 ```
 
-즉, dot 호출은
+즉, dot 호출은 `T::f(x, ...)`로 lowering 된다.
 
-* `myA.checksum(5)`  ==  `A::checksum(myA, 5)` 로 lowering 된다.
-
-#### (3) “self가 없는 함수”는 메서드가 아니며, 호출은 자유
-
-`acts for A` 안에 있어도 `self`가 없으면 그 함수는 “부착된 유틸리티(정적 함수)”로 취급한다.
+#### (3) “self가 없는 함수”는 메서드가 아니며, 호출은 자유(정적 dot sugar 허용)
 
 ```gaupel
-acts for A {
-  fn foo(x: i32, y: i32) -> i32 { ... }  // self 없음
+acts for T {
+  fn make(a: i32, b: i32) -> T { ... } // self 없음
 }
+
+set t1 = T::make(1,2);
+set t2 = someT.make(1,2); // 허용: T::make(1,2)로 lowering (리시버 전달 의미 없음)
 ```
-
-호출은 아래 둘 다 허용:
-
-```gaupel
-set r1 = A::foo(1, 2);
-set r2 = myA.foo(1, 2);  // 허용: dot-정적 호출(문법 설탕)
-```
-
-v0 권장 해석(단순 규칙):
-
-* `myA.foo(1,2)`는 단순히 `A::foo(1,2)`로 lowering 된다.
-  (리시버 전달/오버로드 같은 추가 의미는 없다.)
 
 ---
 
-### 11.5 `acts for A` 내부 함수의 “A 인자 요구” 규칙
+### 11.5 `acts for T` 내부 함수의 “T 인자 요구” 규칙
 
-`acts for A` 안에 정의된 함수가 “A를 인자로 받는 동작”이라면 **반드시 `self`를 사용**해 메서드로 선언한다.
+`acts ... for T` 안에서 “T에 붙는 동작”을 정의할 때,
+
+* **T를 인자로 받는다면 반드시 `self`로 리시버를 선언**한다.
 
 예:
 
 ```gaupel
-acts for A {
-  fn checksum(self a: &A, foo: i32) -> u32 { ... }
+acts for T {
+  fn checksum(self x: &T, seed: u32) -> u32 { ... }
 }
 ```
 
-호출:
+반대로, T를 받지 않으면 `self`를 쓰지 않는다:
 
 ```gaupel
-A myA;
-set c = myA.checksum(5);
-set d = A::checksum(myA, 5);
-```
-
-반대로, `acts for A` 안에 있어도 A를 인자로 받지 않는다면 `self`를 쓰지 않는다:
-
-```gaupel
-acts for A {
-  fn make_seed(x: i32, y: i32) -> u64 { ... } // A 인자 없음
+acts for T {
+  fn make_seed(x: i32, y: i32) -> u64 { ... } // T 인자 없음
 }
-```
-
-호출:
-
-```gaupel
-set s1 = A::make_seed(1, 2);
-set s2 = myA.make_seed(1, 2); // 허용(정적 dot)
 ```
 
 ---
@@ -2978,108 +2986,143 @@ v0에서 연산자 정의 방식은 **오직 하나**만 존재한다.
 * 연산자는 항상 다음 형태로 선언한다:
 
 ```gaupel
-operator(+)(self a: A, rhs: A) -> A { ... }
-operator(==)(self a: &A, rhs: &A) -> bool { ... }
-operator(++pre)(self x: &mut A) -> A { ... }
-operator(++post)(self x: &mut A) -> A { ... }
+operator(+)(self a: T, rhs: T) -> T { ... }
+operator(==)(self a: &T, rhs: &T) -> bool { ... }
+operator(++pre)(self x: &mut T) -> T { ... }
+operator(++post)(self x: &mut T) -> T { ... }
 ```
 
 #### (1) operator 선언은 `fn` 키워드를 붙이지 않는다
 
-* `operator(...)`는 acts 내부의 **특수 선언**이며, 함수 선언이지만 문법적으로 `fn`을 사용하지 않는다.
+* `operator(...)`는 acts 내부의 **특수 선언**이며, 문법적으로 `fn`을 사용하지 않는다.
 
-#### (2) operator는 **`acts for Type`에서만 허용**
+#### (2) operator는 **타입 부착형에서만 허용**
 
-* `operator(...)` 선언은 **반드시** `acts for T { ... }` 블록 내부에만 올 수 있다.
-* `acts X { ... }`(일반 acts) 내부에서 operator 선언은 **금지**한다.
+* `operator(...)` 선언은 아래 둘에서만 허용:
+
+  * `acts for T { ... }`
+  * `acts Foo for T { ... }`
+* `acts A { ... }`(일반 acts) 내부에서 operator 선언은 **금지**한다.
 
 #### (3) operator의 “리시버(self)”는 항상 존재한다
 
-* 모든 operator 선언은 “해당 타입에 바인딩되는 연산”이므로, 첫 파라미터는 항상 `self` 리시버 마커를 사용한다.
-* 단항/이항/증감은 파라미터 개수로 구분한다.
+* 모든 operator 선언은 해당 타입에 바인딩되므로 첫 파라미터는 항상 `self`를 사용한다.
 
 #### (4) `++`는 `(++pre)`, `(++post)`만 존재한다
-
-증감 연산은 토큰을 직접 쓰지 않고, 바인딩 키를 아래처럼 고정한다.
 
 * `operator(++pre)` : `++x`
 * `operator(++post)` : `x++`
 
-예시:
+---
+
+### 11.7 연산자/메서드 해석(리졸브) 규칙 요약 (v0)
+
+표현식에서 연산자나 dot-호출을 해석할 때 타입체커는 **“활성 acts 세트”** 를 사용한다.
+
+#### (1) 활성 acts 세트 결정 규칙
+
+타입이 `T`일 때, 현재 스코프에서:
+
+1. `use acts Foo for T;`가 존재하면 → **활성 세트 = Foo**
+2. 없으면 → **활성 세트 = 기본 acts (`acts for T`)**
+
+추가 규칙(v0):
+
+* 같은 스코프에서 `use acts Foo for T;`와 `use acts Goo for T;`가 동시에 있으면 **에러**
+* “섞기”는 불가능하다(의도적으로 단순화).
+
+#### (2) operator 해석 순서(fallback 포함)
+
+피연산자 타입이 `T`이고 현재 활성 세트가 `S`라면:
+
+1. `acts S for T` 안에서 `operator(KEY)` 찾기
+2. 없으면 `acts for T`(기본 acts)에서 찾기
+3. 그래도 없으면 primitive 등에서 가능한 **builtin 기본 연산**으로 처리(가능한 경우)
+4. 전부 없으면 타입 에러
+
+#### (3) 메서드(dot)/UFCS 해석도 동일한 “활성 세트”를 따른다
+
+`x.method(...)`나 `T::method(x, ...)`도
+
+* 먼저 활성 세트(예: `acts Foo for T`)에서 찾고,
+* 없으면 기본 acts(`acts for T`)에서 찾는다.
+
+---
+
+### 11.8 예시 모음 (v0 스타일, “확정된 규칙” 반영)
+
+#### (1) field + 기본 acts for(자동 부착/자동 활성)
 
 ```gaupel
-acts for i32 {
-  operator(++pre)(self x: &mut i32) -> i32 {
-    x = x + 1;
-    return x;
-  }
+export field Foo {
+  u32 v;
+}
 
-  operator(++post)(self x: &mut i32) -> i32 {
-    set old = x;
-    x = x + 1;
-    return old;
+export acts for Foo {
+  fn inc(self x: &mut Foo) -> void { x.v = x.v + 1u32; }
+
+  operator(+)(self a: Foo, rhs: Foo) -> Foo {
+    return Foo{ v: a.v + rhs.v };
   }
+}
+```
+
+사용:
+
+```gaupel
+fn demo(mut a: Foo, b: Foo) -> Foo {
+  a.inc();          // dot -> Foo::inc(a)
+  set c = a + b;    // 자동: acts for Foo의 operator(+)
+  return c;
 }
 ```
 
 ---
 
-### 11.7 연산자 해석(리졸브) 규칙 요약 (v0)
+#### (2) 선택 acts Foo for T + use로 세트 선택 + fallback
 
-표현식에서 연산자를 만나면 타입체커는 다음 순서로 해석한다.
+```gaupel
+export acts FooMath for Foo {
+  // +만 “다른 의미”로 재정의
+  operator(+)(self a: Foo, rhs: Foo) -> Foo {
+    // 예: saturating add 같은 정책
+    return Foo{ v: __intrin_u32_saturating_add(a.v, rhs.v) };
+  }
 
-* 피연산자 타입이 `T`라면, 컴파일러는 `acts for T`에서 해당 `operator(KEY)`를 찾는다.
-* 후보가 없으면 에러.
-* 후보가 2개 이상이면 에러(모호성 금지).
+  fn describe(self x: &Foo) -> string {
+    return F"""Foo(v={x.v})""";
+  }
+}
+```
 
-v0에서는 다음을 권장/강제한다.
+사용(기본 세트 vs 선택 세트):
 
-* 같은 `acts for T` 안에서 동일한 `operator(KEY)`는 **정확히 1개만** 허용
-* “연산자 오버로드”로 인한 이름 충돌/다중 후보는 전부 컴파일 에러로 처리
+```gaupel
+fn demo2(a: Foo, b: Foo) -> void {
+  // 기본 세트(acts for Foo)로 동작
+  set x = a + b;
+
+  // 여기서부터 FooMath 세트 활성
+  use acts FooMath for Foo;
+
+  set y = a + b;         // FooMath의 + 사용
+  set s = a.describe();  // FooMath의 메서드 사용
+
+  // FooMath에 없는 연산자는 fallback:
+  // 예: operator(==)가 FooMath에 없으면 -> acts for Foo -> builtin 순으로 탐색
+}
+```
+
+**주의(v0 규칙)**: 같은 스코프에 아래 둘을 동시에 두면 에러
+
+```gaupel
+use acts FooMath for Foo;
+use acts GooMath for Foo; // 에러: acts 세트 혼합 금지
+```
 
 ---
 
-### 11.8 예시 모음 (v0 스타일)
-
-#### (1) 타입 부착 메서드 + UFCS
-
-```gaupel
-export field Packet {
-  u32 len;
-  u32 crc;
-}
-
-export acts for Packet {
-  fn checksum(self p: &Packet, seed: u32) -> u32 {
-    // ...
-    return p.crc + seed;
-  }
-}
-
-fn demo(pkt: Packet) -> void {
-  set a = pkt.checksum(5u32);
-  set b = Packet::checksum(pkt, 5u32);
-}
-```
-
-#### (2) self 없는 유틸 함수(정적 dot 허용)
-
-```gaupel
-export acts for Packet {
-  fn make(seed: u32, len: u32) -> Packet {
-    // ...
-    set p = Packet{ len: len, crc: seed };
-    return p;
-  }
-}
-
-fn demo2() -> void {
-  set p1 = Packet::make(3u32, 10u32);
-  set p2 = p1.make(3u32, 10u32); // 허용: Packet::make(...)로 lowering
-}
-```
-
-#### (3) operator 정의
+#### (3) primitive 기본 연산은 코어 라이브러리의 `acts for u32`가 담당
 
 ```gaupel
 export acts for u32 {
@@ -3087,8 +3130,6 @@ export acts for u32 {
   operator(==)(self a: u32, rhs: u32) -> bool { return __intrin_u32_eq(a, rhs); }
 }
 ```
-
----
 
 ## 12. 람다/콜백 (전역 람다 금지)
 
@@ -3323,7 +3364,6 @@ fn main() -> void {
 ---
 
 
-# 주의! 언어 스펙 변경으로 인해 이전버전의 EBNF와 호환되지 않음. 본문 내용의 정보를 우선적으로 신뢰할 것.
 ## 16. EBNF (v0 핵심 요약, 구현 기준)
 
 아래는 구현을 위한 핵심 뼈대다. 상세 확장은 문서의 문법 설명을 따른다.
@@ -3420,7 +3460,10 @@ UseBody     := UseModule
             |  UseTextReplace
             |  UseFfiFunc
             |  UseFfiStruct
+            |  UseActs
             ;
+
+UseActs     := "acts" Ident "for" Type ";" ;   /* CHANGED: use acts Foo for T; */
 
 /* use module <path> as alias; */
 UseModule   := "module" ModulePath "as" Ident ";" ;
@@ -3493,7 +3536,16 @@ PositionalParamList
             := PositionalParam ("," PositionalParam)* (",")? ;
 
 PositionalParam
-            := Ident ":" Type DefaultOpt ;
+            := SelfOpt Ident ":" Type DefaultOpt ;   /* CHANGED */
+
+NamedParam  := Ident ":" Type DefaultOpt ;           /* named는 self 불가(v0 정책) */
+
+SelfOpt     := ("self")? ;                           /* CHANGED */
+
+/* 정적 규칙(v0):
+   - SelfOpt는 첫 번째 positional param에만 허용
+   - self가 붙으면 타입은 반드시 (T / &T / &mut T 등) “현재 acts의 부착 대상 타입” 기반
+*/
 
 NamedParamGroupOpt
             := (","? NamedParamGroup)? ;
@@ -3556,8 +3608,23 @@ ClassMember := FuncDecl
 /* -------- acts -------- */
 ActsDecl    := ExportOpt "acts" ActsHead "{" ActsMember* "}" ;
 
-ActsHead    := ("for")? Type ;   /* acts T, acts for T 둘 다 허용 (문서 예시 혼재) */
+ActsHead    := ActsNamespaceHead
+            |  ActsAttachHead
+            ;
 
+ActsNamespaceHead
+            := Ident ;                              /* CHANGED: acts A { ... } */
+
+ActsAttachHead
+            := "for" Type                           /* CHANGED: acts for T { ... } (default) */
+            |  Ident "for" Type                     /* CHANGED: acts Foo for T { ... } */
+            ;
+
+/* 멤버는 헤더 형태에 따라 제약이 다르지만, EBNF에서는 단순화를 위해 하나로 둔다.
+   정적 규칙(v0): 
+   - ActsNamespaceHead(acts A)에서는 OperatorFunc 금지
+   - ActsAttachHead(acts for / acts Foo for)에서만 OperatorFunc 허용
+*/
 ActsMember  := ActsFunc
             |  OperatorFunc
             |  ";" ;

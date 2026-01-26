@@ -73,6 +73,15 @@ namespace gaupel::diag {
         kLoopHeaderExpectedRParen,  // header ')' 필요
         kLoopBodyExpectedBlock,     // loop body '{...}' 필요
 
+        // ---- if-expr parsing ----
+        kIfExprThenExpectedBlock,   // if expr then must be "{ ... }"
+        kIfExprElseExpectedBlock,   // else branch must be "{ ... }" or "else if ..."
+        kIfExprMissingElse,         // if-expr requires else
+        kIfExprBranchValueExpected, // then/else block must yield a value (tail expr)
+
+        // ---- expr-block tail rules ----
+        kBlockTailSemicolonNotAllowed, // tail value has ';' right before '}'
+
         // ---- switch parsing ----
         kSwitchHeaderExpectedLParen,      // switch ( ... ) '(' 없음
         kSwitchHeaderExpectedRParen,      // switch ( ... ) ')' 없음

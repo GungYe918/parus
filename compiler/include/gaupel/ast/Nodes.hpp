@@ -52,6 +52,9 @@ namespace gaupel::ast {
 
         // loop
         kLoop,
+        
+        kIfExpr,
+        kBlockExpr,
     };
 
     // --------------------

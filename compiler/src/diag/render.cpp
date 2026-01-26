@@ -68,6 +68,11 @@ namespace gaupel::diag {
             case Code::kLoopHeaderExpectedIn:        return "LoopHeaderExpectedIn";
             case Code::kLoopHeaderExpectedRParen:    return "LoopHeaderExpectedRParen";
             case Code::kLoopBodyExpectedBlock:       return "LoopBodyExpectedBlock";
+            case Code::kIfExprThenExpectedBlock: return "IfExprThenExpectedBlock";
+            case Code::kIfExprElseExpectedBlock: return "IfExprElseExpectedBlock";
+            case Code::kIfExprMissingElse: return "IfExprMissingElse";
+            case Code::kIfExprBranchValueExpected: return "IfExprBranchValueExpected";
+            case Code::kBlockTailSemicolonNotAllowed: return "BlockTailSemicolonNotAllowed";
             case Code::kSwitchHeaderExpectedLParen:  return "SwitchHeaderExpectedLParen";
             case Code::kSwitchHeaderExpectedRParen:  return "SwitchHeaderExpectedRParen";
             case Code::kSwitchBodyExpectedLBrace:    return "SwitchBodyExpectedLBrace";
@@ -122,6 +127,13 @@ namespace gaupel::diag {
             case Code::kLoopHeaderExpectedIn:       return "expected 'in' in loop header (e.g., loop (v in xs))";
             case Code::kLoopHeaderExpectedRParen:   return "expected ')' to close loop header";
             case Code::kLoopBodyExpectedBlock:      return "expected loop body block '{ ... }'";
+            
+            case Code::kIfExprThenExpectedBlock: return "if-expression requires a then-branch block '{ ... }'";
+            case Code::kIfExprElseExpectedBlock: return "if-expression requires an else-branch block '{ ... }' or 'else if ...'";
+            case Code::kIfExprMissingElse: return "if-expression requires an 'else' branch";
+            case Code::kIfExprBranchValueExpected: return "if-expression branch must yield a value (remove trailing ';' or add a tail expression)";
+            case Code::kBlockTailSemicolonNotAllowed: return "tail value in a block must not end with ';'";
+
             case Code::kSwitchHeaderExpectedLParen: return "expected '(' after 'switch'";
             case Code::kSwitchHeaderExpectedRParen: return "expected ')' to close switch header";
             case Code::kSwitchBodyExpectedLBrace:   return "expected '{' to start switch body";
@@ -177,6 +189,12 @@ namespace gaupel::diag {
             case Code::kLoopHeaderExpectedIn:       return "loop 헤더에는 'in'이(가) 필요합니다 (예: loop (v in xs))";
             case Code::kLoopHeaderExpectedRParen:   return "loop 헤더를 닫는 ')'이(가) 필요합니다";
             case Code::kLoopBodyExpectedBlock:      return "loop 본문 블록 '{ ... }'이(가) 필요합니다";
+
+            case Code::kIfExprThenExpectedBlock: return "if 표현식의 then 분기는 블록 '{ ... }' 이어야 합니다";
+            case Code::kIfExprElseExpectedBlock: return "if 표현식의 else 분기는 블록 '{ ... }' 또는 'else if ...' 이어야 합니다";
+            case Code::kIfExprMissingElse: return "if 표현식에는 'else' 분기가 필요합니다";
+            case Code::kIfExprBranchValueExpected: return "if 표현식의 분기는 값을 반환해야 합니다(끝의 ';'를 제거하거나 tail 값을 추가하세요)";
+            case Code::kBlockTailSemicolonNotAllowed: return "블록의 마지막 값에는 ';'를 붙일 수 없습니다";
 
             case Code::kSwitchHeaderExpectedLParen: return "'switch' 뒤에는 '('이(가) 필요합니다";
             case Code::kSwitchHeaderExpectedRParen: return "switch 헤더를 닫는 ')'이(가) 필요합니다";

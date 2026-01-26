@@ -35,6 +35,12 @@ namespace gaupel {
         ast::StmtId parse_program();
 
     private:
+
+        enum class BlockTailPolicy : uint8_t {
+            kAllowEmptyTail,   // 일반 block expr: tail 없어도 됨
+            kRequireValueTail, // if-expr branch 등: tail 값 필요
+        };
+
         // --------------------
         // diag & small helpers
         // --------------------
@@ -75,6 +81,12 @@ namespace gaupel {
 
         //  index 파싱
         ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
+
+        ast::ExprId parse_expr_if(int ternary_depth);
+
+        // ast::ExprId parse_expr_block(int ternary_depth);
+
+        ast::ExprId parse_expr_block(int ternary_depth, BlockTailPolicy policy);
 
         // loop expr 파싱
         ast::ExprId parse_expr_loop(int ternary_depth);
@@ -122,6 +134,10 @@ namespace gaupel {
 
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
+
+        bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
+
+        static bool is_expr_with_block_kind(ast::ExprKind k);
 
 
         // --------------------

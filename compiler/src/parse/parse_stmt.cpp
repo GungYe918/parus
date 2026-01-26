@@ -163,7 +163,40 @@ namespace gaupel {
         ast::ExprId e = parse_expr();
 
         const Span expr_end = ast_.expr(e).span;
-        const Span term_end = stmt_consume_semicolon_or_recover(expr_end);
+
+        // ---- "expr-with-block"는 세미콜론 없이 stmt로 허용 ----
+        // loop { ... }
+        // if cond { ... } else { ... }
+        // { ... }  (block expr)
+        //
+        // 단, 일반 표현식은 기존처럼 ';' 필요.
+        auto is_expr_with_block = [&](ast::ExprId id) -> bool {
+            const auto& ex = ast_.expr(id);
+            switch (ex.kind) {
+                case ast::ExprKind::kLoop:
+                case ast::ExprKind::kIfExpr:     // parse_expr_if에서 생성
+                case ast::ExprKind::kBlockExpr:  // parse_expr_block에서 생성
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        Span term_end = expr_end;
+
+        if (cursor_.at(syntax::TokenKind::kSemicolon)) {
+            term_end = cursor_.bump().span;
+        } else {
+            // 세미콜론이 없을 때:
+            // - expr-with-block이면 OK
+            // - 아니면 기존 복구 루틴(세미콜론 요구)
+            if (!is_expr_with_block(e)) {
+                term_end = stmt_consume_semicolon_or_recover(expr_end);
+            } else {
+                // allow no-semicolon
+                term_end = expr_end;
+            }
+        }
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kExprStmt;
