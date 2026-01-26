@@ -117,6 +117,9 @@ namespace gaupel {
         //  continue 파싱
         ast::StmtId parse_stmt_continue();
 
+        // switch 파싱
+        ast::StmtId parse_stmt_switch();
+
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
 

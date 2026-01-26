@@ -81,6 +81,9 @@ namespace gaupel::ast {
         kBreak,
         kContinue,
 
+        // switch
+        kSwitch,
+
         // decl-like
         kFnDecl,
     };
@@ -131,6 +134,26 @@ namespace gaupel::ast {
         // 함수 선언의 named-group({}) 내부 파라미터인지 여부
         bool is_named_group = false;
 
+        Span span{};
+    };
+
+    enum class CasePatKind : uint8_t {
+        kError,
+        kInt,
+        kChar,
+        kString,
+        kBool,
+        kNull,
+        kIdent,
+    };
+
+    struct SwitchCase {
+        bool is_default = false;
+
+        CasePatKind pat_kind = CasePatKind::kError;
+        std::string_view pat_text{}; // literal/ident 원문 저장
+
+        StmtId body = k_invalid_stmt; // 항상 block
         Span span{};
     };
 
@@ -227,6 +250,11 @@ namespace gaupel::ast {
         // 나머지: named-group
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
+
+        // ---- switch ----
+        uint32_t case_begin = 0;
+        uint32_t case_count = 0;
+        bool has_default = false;
     };
 
     // --------------------
@@ -242,9 +270,11 @@ namespace gaupel::ast {
         uint32_t add_named_group_arg(const Arg& a) { named_group_args_.push_back(a); return static_cast<uint32_t>(named_group_args_.size() - 1); }
 
         void add_fn_attr(const Attr& a) { fn_attrs_.push_back(a); }
-        uint32_t add_param(const Param& p) { params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1); }
+        uint32_t add_param(const Param& p) {  params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1);  }
 
-        uint32_t add_stmt_child(StmtId id) { stmt_children_.push_back(id); return static_cast<uint32_t>(stmt_children_.size() - 1); }
+        uint32_t add_switch_case(const SwitchCase& c) {  switch_cases_.push_back(c); return (uint32_t)switch_cases_.size() - 1;  }
+
+        uint32_t add_stmt_child(StmtId id) {  stmt_children_.push_back(id); return static_cast<uint32_t>(stmt_children_.size() - 1);  }
 
         // accessors
         const Expr& expr(ExprId id) const { return exprs_[id]; }
@@ -271,6 +301,9 @@ namespace gaupel::ast {
         const std::vector<Param>& params() const { return params_; }
         std::vector<Param>& params_mut() { return params_; }
 
+        const std::vector<SwitchCase>& switch_cases() const {  return switch_cases_;  }
+        std::vector<SwitchCase>& switch_cases_mut() {  return switch_cases_;  }  
+
         const std::vector<StmtId>& stmt_children() const { return stmt_children_; }
         std::vector<StmtId>& stmt_children_mut() { return stmt_children_; }
 
@@ -283,6 +316,8 @@ namespace gaupel::ast {
         std::vector<Attr> fn_attrs_;
         std::vector<Type> types_;
         std::vector<Param> params_;
+
+        std::vector<SwitchCase> switch_cases_;
 
         std::vector<StmtId> stmt_children_;
     };

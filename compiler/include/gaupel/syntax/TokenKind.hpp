@@ -103,7 +103,14 @@ namespace gaupel::syntax {
         kGt,       // >
         kGtEq,     // >=
 
-        kLessLess, // <<   (pipe operator in Gaupel)
+        // deprecated. separated into shift/pipe
+        // kLessLess, // <<   (pipe operator in Gaupel)
+
+        kShiftLeft,   // <<  (bit shift)
+        kShiftRight,  // >>  (bit shift)
+
+        kPipeFwd,     // |>  (pipe forward)
+        kPipeRev,     // <|  (pipe reverse)
 
         kDotDot,       // ..
         kDotDotColon,  // ..:
@@ -145,6 +152,10 @@ namespace gaupel::syntax {
             case TokenKind::kKwReturn: return "return";
             case TokenKind::kKwBreak: return "break";
             case TokenKind::kKwContinue: return "continue";
+
+            case TokenKind::kKwSwitch: return "switch";
+            case TokenKind::kKwCase: return "case";
+            case TokenKind::kKwDefault: return "default";
 
             case TokenKind::kKwPure: return "pure";
             case TokenKind::kKwComptime: return "comptime";
@@ -192,7 +203,10 @@ namespace gaupel::syntax {
             case TokenKind::kGt: return ">";
             case TokenKind::kGtEq: return ">=";
 
-            case TokenKind::kLessLess: return "<<";
+            case TokenKind::kShiftLeft:  return "<<";
+            case TokenKind::kShiftRight: return ">>";
+            case TokenKind::kPipeFwd:    return "|>";
+            case TokenKind::kPipeRev:    return "<|";
             case TokenKind::kDotDot: return "..";
             case TokenKind::kDotDotColon: return "..:";
 

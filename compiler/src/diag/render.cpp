@@ -41,6 +41,8 @@ namespace gaupel::diag {
             case Code::kTooManyErrors: return "TooManyErrors";
             case Code::kNestedTernaryNotAllowed: return "NestedTernaryNotAllowed";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
+            case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
+            case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
             case Code::kPipeHoleMustBeLabeled: return "PipeHoleMustBeLabeled";
             case Code::kPipeHoleCountMismatch: return "PipeHoleCountMismatch";
             case Code::kPipeHolePositionalNotAllowed: return "PipeHolePositionalNotAllowed";
@@ -58,10 +60,24 @@ namespace gaupel::diag {
             case Code::kTypeArrayMissingRBracket: return "TypeArrayMissingRBracket";
             case Code::kTypeOptionalDuplicate: return "TypeOptionalDuplicate";
             case Code::kTypeRecovery: return "TypeRecovery";
-            case Code::kLoopHeaderExpectedLParen: return "LoopHeaderExpectedLParen";
-            case Code::kLoopHeaderExpectedIn: return "LoopHeaderExpectedIn";
-            case Code::kLoopHeaderExpectedRParen: return "LoopHeaderExpectedRParen";
-            case Code::kLoopBodyExpectedBlock: return "LoopBodyExpectedBlock";
+            case Code::kWhileHeaderExpectedLParen: return "WhileHeaderExpectedLParen";
+            case Code::kWhileHeaderExpectedRParen: return "WhileHeaderExpectedRParen";
+            case Code::kWhileBodyExpectedBlock:    return "WhileBodyExpectedBlock";
+            case Code::kLoopHeaderExpectedLParen:    return "LoopHeaderExpectedLParen";
+            case Code::kLoopHeaderVarExpectedIdent:  return "LoopHeaderVarExpectedIdent";
+            case Code::kLoopHeaderExpectedIn:        return "LoopHeaderExpectedIn";
+            case Code::kLoopHeaderExpectedRParen:    return "LoopHeaderExpectedRParen";
+            case Code::kLoopBodyExpectedBlock:       return "LoopBodyExpectedBlock";
+            case Code::kSwitchHeaderExpectedLParen:  return "SwitchHeaderExpectedLParen";
+            case Code::kSwitchHeaderExpectedRParen:  return "SwitchHeaderExpectedRParen";
+            case Code::kSwitchBodyExpectedLBrace:    return "SwitchBodyExpectedLBrace";
+            case Code::kSwitchBodyExpectedRBrace:    return "SwitchBodyExpectedRBrace";
+            case Code::kSwitchCaseExpectedPattern:   return "SwitchCaseExpectedPattern";
+            case Code::kSwitchCaseExpectedColon:     return "SwitchCaseExpectedColon";
+            case Code::kSwitchCaseBodyExpectedBlock: return "SwitchCaseBodyExpectedBlock";
+            case Code::kSwitchDefaultDuplicate:      return "SwitchDefaultDuplicate";
+            case Code::kSwitchNeedsAtLeastOneCase:   return "SwitchNeedsAtLeastOneCase";
+            case Code::kSwitchOnlyCaseOrDefaultAllowed: return "SwitchOnlyCaseOrDefaultAllowed";
             case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
         }
 
@@ -78,7 +94,9 @@ namespace gaupel::diag {
             case Code::kUnexpectedEof:  return "unexpected end of file; expected {0}";
             case Code::kTooManyErrors:  return "too many errors emitted; parsing stopped";
             case Code::kNestedTernaryNotAllowed: return "nested ternary operator is not allowed";
-            case Code::kPipeRhsMustBeCall: return "pipe operator '<<' requires a function call on the right-hand side";
+            case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
+            case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
+            case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
             case Code::kPipeHoleMustBeLabeled: return "hole '_' must appear as a labeled argument value (e.g., a: _)";
             case Code::kPipeHoleCountMismatch: return "pipe call must contain exactly one labeled hole '_' (found {0})";
             case Code::kPipeHolePositionalNotAllowed: return "hole '_' is not allowed as a positional argument in pipe calls";
@@ -96,10 +114,24 @@ namespace gaupel::diag {
             case Code::kTypeArrayMissingRBracket: return "array type suffix requires closing ']'";
             case Code::kTypeOptionalDuplicate: return "duplicate optional suffix '?'";
             case Code::kTypeRecovery: return "failed to parse type; recovered";
-            case Code::kLoopHeaderExpectedLParen: return "expected '(' after 'loop' header";
-            case Code::kLoopHeaderExpectedIn: return "expected 'in' in loop header (e.g., loop (v in xs))";
-            case Code::kLoopHeaderExpectedRParen: return "expected ')' to close loop header";
-            case Code::kLoopBodyExpectedBlock: return "expected loop body block '{ ... }'";
+            case Code::kWhileHeaderExpectedLParen: return "expected '(' after 'while'";
+            case Code::kWhileHeaderExpectedRParen: return "expected ')' to close while header";
+            case Code::kWhileBodyExpectedBlock:    return "expected while body block '{ ... }'";
+            case Code::kLoopHeaderExpectedLParen:   return "expected '(' after 'loop' header";
+            case Code::kLoopHeaderVarExpectedIdent: return "loop header variable must be an identifier";
+            case Code::kLoopHeaderExpectedIn:       return "expected 'in' in loop header (e.g., loop (v in xs))";
+            case Code::kLoopHeaderExpectedRParen:   return "expected ')' to close loop header";
+            case Code::kLoopBodyExpectedBlock:      return "expected loop body block '{ ... }'";
+            case Code::kSwitchHeaderExpectedLParen: return "expected '(' after 'switch'";
+            case Code::kSwitchHeaderExpectedRParen: return "expected ')' to close switch header";
+            case Code::kSwitchBodyExpectedLBrace:   return "expected '{' to start switch body";
+            case Code::kSwitchBodyExpectedRBrace:   return "expected '}' to close switch body";
+            case Code::kSwitchCaseExpectedPattern:  return "case pattern expected (literal/ident)";
+            case Code::kSwitchCaseExpectedColon:    return "expected ':' after case/default label";
+            case Code::kSwitchCaseBodyExpectedBlock:return "expected case/default body block '{ ... }'";
+            case Code::kSwitchDefaultDuplicate:     return "duplicate 'default' clause in switch";
+            case Code::kSwitchNeedsAtLeastOneCase:  return "switch must contain at least one 'case' clause";
+            case Code::kSwitchOnlyCaseOrDefaultAllowed: return "only 'case'/'default' clauses are allowed inside switch body";
             case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after 'let'/'set' (e.g., 'set mut x = ...')";
 
         }
@@ -116,7 +148,9 @@ namespace gaupel::diag {
             case Code::kUnexpectedEof:  return "예상치 못한 파일 끝(EOF)입니다; {0}이(가) 필요합니다";
             case Code::kTooManyErrors:  return "오류가 너무 많아 파싱을 중단합니다";
             case Code::kNestedTernaryNotAllowed: return "삼항 연산자 중첩은 허용되지 않습니다";
-            case Code::kPipeRhsMustBeCall: return "파이프 연산자 '<<'의 오른쪽은 함수 호출이어야 합니다";
+            case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
+            case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
+            case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";
             case Code::kPipeHoleMustBeLabeled: return "'_'는 라벨 인자 값 위치에만 올 수 있습니다(예: a: _)";
             case Code::kPipeHoleCountMismatch: return "파이프 호출에는 라벨 인자 값으로 '_'가 정확히 1개 있어야 합니다(현재 {0}개)";
             case Code::kPipeHolePositionalNotAllowed: return "'_'는 파이프 호출에서 위치 인자로 사용할 수 없습니다";
@@ -134,10 +168,27 @@ namespace gaupel::diag {
             case Code::kTypeArrayMissingRBracket: return "배열 타입 접미사 '[]'를 닫는 ']'이(가) 필요합니다";
             case Code::kTypeOptionalDuplicate: return "nullable 접미사 '?'가 중복되었습니다";
             case Code::kTypeRecovery: return "타입 파싱에 실패하여 복구했습니다";
-            case Code::kLoopHeaderExpectedLParen: return "'loop' 헤더 뒤에는 '('이(가) 필요합니다";
-            case Code::kLoopHeaderExpectedIn: return "loop 헤더에는 'in'이(가) 필요합니다 (예: loop (v in xs))";
-            case Code::kLoopHeaderExpectedRParen: return "loop 헤더를 닫는 ')'이(가) 필요합니다";
-            case Code::kLoopBodyExpectedBlock: return "loop 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kWhileHeaderExpectedLParen: return "'while' 뒤에는 '('이(가) 필요합니다";
+            case Code::kWhileHeaderExpectedRParen: return "while 헤더를 닫는 ')'이(가) 필요합니다";
+            case Code::kWhileBodyExpectedBlock:    return "while 본문 블록 '{ ... }'이(가) 필요합니다";
+
+            case Code::kLoopHeaderExpectedLParen:   return "'loop' 헤더 뒤에는 '('이(가) 필요합니다";
+            case Code::kLoopHeaderVarExpectedIdent: return "loop 헤더의 변수는 식별자(ident)여야 합니다";
+            case Code::kLoopHeaderExpectedIn:       return "loop 헤더에는 'in'이(가) 필요합니다 (예: loop (v in xs))";
+            case Code::kLoopHeaderExpectedRParen:   return "loop 헤더를 닫는 ')'이(가) 필요합니다";
+            case Code::kLoopBodyExpectedBlock:      return "loop 본문 블록 '{ ... }'이(가) 필요합니다";
+
+            case Code::kSwitchHeaderExpectedLParen: return "'switch' 뒤에는 '('이(가) 필요합니다";
+            case Code::kSwitchHeaderExpectedRParen: return "switch 헤더를 닫는 ')'이(가) 필요합니다";
+            case Code::kSwitchBodyExpectedLBrace:   return "switch 본문을 시작하는 '{'이(가) 필요합니다";
+            case Code::kSwitchBodyExpectedRBrace:   return "switch 본문을 닫는 '}'이(가) 필요합니다";
+            case Code::kSwitchCaseExpectedPattern:  return "case 패턴(literal/ident)이 필요합니다";
+            case Code::kSwitchCaseExpectedColon:    return "case/default 라벨 뒤에는 ':'이(가) 필요합니다";
+            case Code::kSwitchCaseBodyExpectedBlock:return "case/default 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kSwitchDefaultDuplicate:     return "switch에서 default 절은 1개만 허용됩니다";
+            case Code::kSwitchNeedsAtLeastOneCase:  return "switch에는 최소 1개의 case 절이 필요합니다";
+            case Code::kSwitchOnlyCaseOrDefaultAllowed: return "switch 본문에는 case/default 절만 올 수 있습니다";
+
             case Code::kVarMutMustFollowKw: return "'mut'는 'let/set' 바로 뒤에만 올 수 있습니다 (예: set mut x = ...)";
         }
 

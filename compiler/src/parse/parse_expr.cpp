@@ -618,16 +618,29 @@ namespace gaupel {
         e.kind = ast::ExprKind::kLoop;
         e.span = loop_tok.span;
 
-        // loop header is optional: either "loop { ... }" or "loop (v in xs) { ... }"
+        // ---- allow "loop v in xs { ... }" as recovery (missing '(') ----
+        if (!cursor_.at(K::kLParen)) {
+            if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kKwIn) {
+                diag_report(diag::Code::kLoopHeaderExpectedLParen, cursor_.peek().span);
+                e.loop_has_header = true;
+
+                const Token v = cursor_.bump(); // ident
+                e.loop_var = v.lexeme;
+
+                cursor_.bump(); // 'in'
+                e.loop_iter = parse_expr_pratt(0, ternary_depth);
+                // no ')'
+            }
+        }
+
+        // canonical header: loop (v in xs) { ... }
         if (cursor_.at(K::kLParen)) {
             e.loop_has_header = true;
             cursor_.bump(); // '('
 
-            // var
             const Token v = cursor_.peek();
             if (v.kind != K::kIdent) {
-                diag_report(diag::Code::kUnexpectedToken, v.span, "identifier");
-                // best-effort recovery
+                diag_report(diag::Code::kLoopHeaderVarExpectedIdent, v.span);
             } else {
                 cursor_.bump();
                 e.loop_var = v.lexeme;
@@ -636,7 +649,7 @@ namespace gaupel {
             if (!cursor_.eat(K::kKwIn)) {
                 diag_report(diag::Code::kLoopHeaderExpectedIn, cursor_.peek().span);
                 recover_to_delim(K::kRParen, K::kLBrace);
-                cursor_.eat(K::kKwIn); // might be skipped; ok
+                cursor_.eat(K::kKwIn);
             }
 
             e.loop_iter = parse_expr_pratt(0, ternary_depth);
@@ -648,18 +661,15 @@ namespace gaupel {
             }
         }
 
-        // body must be a block
         if (!cursor_.at(K::kLBrace)) {
             diag_report(diag::Code::kLoopBodyExpectedBlock, cursor_.peek().span);
             recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
         }
 
-        // parse block stmt
         if (cursor_.at(K::kLBrace)) {
             e.loop_body = parse_stmt_block();
             e.span = span_join(loop_tok.span, ast_.stmt(e.loop_body).span);
         } else {
-            // still failed -> error expr
             e.kind = ast::ExprKind::kError;
             e.text = "loop_missing_body";
             e.span = loop_tok.span;

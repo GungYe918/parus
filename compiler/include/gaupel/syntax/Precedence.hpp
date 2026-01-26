@@ -38,8 +38,9 @@ namespace gaupel::syntax {
 
             // ternary handled specially (not here)
 
-            // pipe operator '<<' (left assoc, between assignment and logical)
-            case TokenKind::kLessLess:
+            // pipe operator '|>', '<|' (left assoc, between assignment and logical)
+            case TokenKind::kPipeFwd:
+            case TokenKind::kPipeRev:
                 return InfixInfo{20, Assoc::kLeft};
 
             // logical or
@@ -73,6 +74,11 @@ namespace gaupel::syntax {
             case TokenKind::kDotDot:
             case TokenKind::kDotDotColon:
                 return InfixInfo{75, Assoc::kLeft};
+
+            // 비트쉬프트 연산: >>, <<
+            case TokenKind::kShiftLeft:
+            case TokenKind::kShiftRight:
+                return InfixInfo{77, Assoc::kLeft};
 
             // additive
             case TokenKind::kPlus:

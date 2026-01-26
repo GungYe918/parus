@@ -5,6 +5,33 @@
 #include <vector>
 
 
+namespace gaupel::detail {
+
+    static bool is_case_pattern_tok(syntax::TokenKind k) {
+        using K = syntax::TokenKind;
+
+        return k == K::kIntLit || k == K::kCharLit || k == K::kStringLit
+            || k == K::kKwTrue || k == K::kKwFalse || k == K::kKwNull
+            || k == K::kIdent;
+    }
+
+    static ast::CasePatKind case_pat_kind_from_tok(const Token& t) {
+        using K = syntax::TokenKind;
+
+        switch (t.kind) {
+            case K::kIntLit:    return ast::CasePatKind::kInt;
+            case K::kCharLit:   return ast::CasePatKind::kChar;
+            case K::kStringLit: return ast::CasePatKind::kString;
+            case K::kKwTrue:
+            case K::kKwFalse:   return ast::CasePatKind::kBool;
+            case K::kKwNull:    return ast::CasePatKind::kNull;
+            case K::kIdent:     return ast::CasePatKind::kIdent;
+            default:            return ast::CasePatKind::kError;
+        }
+    }
+
+} // namespace gaupel::detail
+
 namespace gaupel {
 
     ast::StmtId Parser::parse_stmt() {
@@ -75,6 +102,7 @@ namespace gaupel {
         if (tok.kind == syntax::TokenKind::kKwReturn)   return parse_stmt_return();
         if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_stmt_break();
         if (tok.kind == syntax::TokenKind::kKwContinue) return parse_stmt_continue();
+        if (tok.kind == syntax::TokenKind::kKwSwitch)   return parse_stmt_switch();
         if (tok.kind == syntax::TokenKind::kKwLet
         ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_stmt_var();
         if (tok.kind == syntax::TokenKind::kKwPub 
@@ -231,10 +259,43 @@ namespace gaupel {
 
     // while 파싱
     ast::StmtId Parser::parse_stmt_while() {
-        const Token kw = cursor_.bump();
+        const Token kw = cursor_.bump(); // 'while'
+
+        // expect '('
+        bool has_paren = false;
+        if (cursor_.eat(syntax::TokenKind::kLParen)) {
+            has_paren = true;
+        } else {
+            diag_report(diag::Code::kWhileHeaderExpectedLParen, cursor_.peek().span);
+        }
 
         ast::ExprId cond = parse_expr();
-        ast::StmtId body = parse_stmt_required_block("while");
+
+        // expect ')'
+        if (has_paren) {
+            if (!cursor_.eat(syntax::TokenKind::kRParen)) {
+                diag_report(diag::Code::kWhileHeaderExpectedRParen, cursor_.peek().span);
+                recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kLBrace, syntax::TokenKind::kSemicolon);
+                cursor_.eat(syntax::TokenKind::kRParen);
+            }
+        }
+
+        // body must be a block (DEDICATED)
+        ast::StmtId body{};
+        if (!cursor_.at(syntax::TokenKind::kLBrace)) {
+            diag_report(diag::Code::kWhileBodyExpectedBlock, cursor_.peek().span);
+            stmt_sync_to_boundary();
+            if (cursor_.at(syntax::TokenKind::kSemicolon)) cursor_.bump();
+
+            ast::Stmt empty{};
+            empty.kind = ast::StmtKind::kBlock;
+            empty.span = cursor_.peek().span;
+            empty.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+            empty.stmt_count = 0;
+            body = ast_.add_stmt(empty);
+        } else {
+            body = parse_stmt_block();
+        }
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kWhile;
@@ -343,6 +404,141 @@ namespace gaupel {
         ast::Stmt s{};
         s.kind = ast::StmtKind::kContinue;
         s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_stmt_switch() {
+        using K = syntax::TokenKind;
+
+        const Token sw = cursor_.peek();
+        cursor_.bump(); // 'switch'
+
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kSwitchHeaderExpectedLParen, cursor_.peek().span);
+            recover_to_delim(K::kLParen, K::kLBrace, K::kSemicolon);
+            cursor_.eat(K::kLParen);
+        }
+
+        ast::ExprId scrut = parse_expr();
+
+        if (!cursor_.eat(K::kRParen)) {
+            diag_report(diag::Code::kSwitchHeaderExpectedRParen, cursor_.peek().span);
+            recover_to_delim(K::kRParen, K::kLBrace, K::kSemicolon);
+            cursor_.eat(K::kRParen);
+        }
+
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kSwitchBodyExpectedLBrace, cursor_.peek().span);
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        const uint32_t case_begin = (uint32_t)ast_.switch_cases().size();
+        uint32_t case_count = 0;
+        bool has_default = false;
+
+        auto parse_case_body_block = [&](std::string_view /*ctx*/) -> ast::StmtId {
+            if (!cursor_.at(K::kLBrace)) {
+                diag_report(diag::Code::kSwitchCaseBodyExpectedBlock, cursor_.peek().span);
+                stmt_sync_to_boundary();
+                if (cursor_.at(K::kSemicolon)) cursor_.bump();
+
+                ast::Stmt empty{};
+                empty.kind = ast::StmtKind::kBlock;
+                empty.span = cursor_.peek().span;
+                empty.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+                empty.stmt_count = 0;
+                return ast_.add_stmt(empty);
+            }
+            return parse_stmt_block();
+        };
+
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            const Token t = cursor_.peek();
+
+            if (t.kind == K::kKwCase) {
+                const Token case_kw = cursor_.bump();
+
+                const Token pat = cursor_.peek();
+                if (!detail::is_case_pattern_tok(pat.kind)) {
+                    diag_report(diag::Code::kSwitchCaseExpectedPattern, pat.span);
+                    recover_to_delim(K::kColon, K::kKwCase, K::kKwDefault);
+                } else {
+                    cursor_.bump();
+                }
+
+                if (!cursor_.eat(K::kColon)) {
+                    diag_report(diag::Code::kSwitchCaseExpectedColon, cursor_.peek().span);
+                    recover_to_delim(K::kColon, K::kLBrace, K::kKwCase);
+                    cursor_.eat(K::kColon);
+                }
+
+                ast::StmtId body = parse_case_body_block("case");
+
+                ast::SwitchCase c{};
+                c.is_default = false;
+                c.pat_kind = detail::case_pat_kind_from_tok(pat);
+                c.pat_text = pat.lexeme;
+                c.body = body;
+                c.span = span_join(case_kw.span, ast_.stmt(body).span);
+
+                ast_.add_switch_case(c);
+                ++case_count;
+                continue;
+            }
+
+            if (t.kind == K::kKwDefault) {
+                const Token def_kw = cursor_.bump();
+
+                if (has_default) {
+                    diag_report(diag::Code::kSwitchDefaultDuplicate, def_kw.span);
+                }
+                has_default = true;
+
+                if (!cursor_.eat(K::kColon)) {
+                    diag_report(diag::Code::kSwitchCaseExpectedColon, cursor_.peek().span);
+                    recover_to_delim(K::kColon, K::kLBrace, K::kKwCase);
+                    cursor_.eat(K::kColon);
+                }
+
+                ast::StmtId body = parse_case_body_block("default");
+
+                ast::SwitchCase c{};
+                c.is_default = true;
+                c.pat_kind = ast::CasePatKind::kError;
+                c.body = body;
+                c.span = span_join(def_kw.span, ast_.stmt(body).span);
+
+                ast_.add_switch_case(c);
+                ++case_count;
+                continue;
+            }
+
+            // only case/default allowed
+            diag_report(diag::Code::kSwitchOnlyCaseOrDefaultAllowed, t.span);
+            recover_to_delim(K::kKwCase, K::kKwDefault, K::kRBrace);
+            if (cursor_.at(K::kKwCase) || cursor_.at(K::kKwDefault) || cursor_.at(K::kRBrace)) continue;
+            if (!cursor_.at(K::kEof)) cursor_.bump();
+        }
+
+        const Token rb = cursor_.peek();
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kSwitchBodyExpectedRBrace, cursor_.peek().span);
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+
+        if (case_count == 0) {
+            diag_report(diag::Code::kSwitchNeedsAtLeastOneCase, rb.span);
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kSwitch;
+        s.expr = scrut;
+        s.case_begin = case_begin;
+        s.case_count = case_count;
+        s.has_default = has_default;
+        s.span = span_join(sw.span, cursor_.prev().span);
         return ast_.add_stmt(s);
     }
 

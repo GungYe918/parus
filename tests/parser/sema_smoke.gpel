@@ -55,3 +55,15 @@ fn make_value() -> int {
   };
   return x;
 }
+
+// 이건 오류이지만(while안에서는 break;만 가능) 파서 단계에서 잡지 않음
+fn add() -> int {
+  while (1) {
+    break 42;
+  }
+
+  switch (1) {
+    case 1 : {}
+    case 2 : {}
+  }
+}
