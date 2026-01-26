@@ -2,6 +2,7 @@
 #pragma once
 #include <gaupel/text/Span.hpp>
 #include <gaupel/syntax/TokenKind.hpp>
+#include <gaupel/ty/Type.hpp>
 
 #include <cstdint>
 #include <string_view>
@@ -19,8 +20,11 @@ namespace gaupel::ast {
     using StmtId = uint32_t;
     inline constexpr StmtId k_invalid_stmt = 0xFFFF'FFFFu;
 
-    using TypeId = uint32_t;
-    inline constexpr TypeId k_invalid_type = 0xFFFF'FFFFu;
+    // NOTE:
+    // - TypeId/Type struct/TypeKind are owned by gaupel::ty.
+    // - AST only stores ty::TypeId as a reference.
+    using TypeId = gaupel::ty::TypeId;
+    inline constexpr TypeId k_invalid_type = gaupel::ty::kInvalidType;
 
 
     // --------------------
@@ -55,16 +59,6 @@ namespace gaupel::ast {
         
         kIfExpr,
         kBlockExpr,
-    };
-
-    // --------------------
-    // Type
-    // --------------------
-    enum class TypeKind : uint8_t {
-        kError,
-        kNamed,     // v0: Ident 기반 NamedType만 지원
-        kArray,     // T[]
-        kOptional,  // T?
     };
 
     // --------------------
@@ -187,17 +181,6 @@ namespace gaupel::ast {
         StmtId loop_body = k_invalid_stmt; // '{ ... }' block stmt id
     };
 
-    struct Type {
-        TypeKind kind{};
-        Span span{};
-        std::string_view text{}; // for kNamed
-
-        // NOTE: suffix types share this child slot:
-        // - kArray: elem = element type
-        // - kOptional: elem = inner type
-        TypeId elem = k_invalid_type;
-    };
-
     // --------------------
     // Function Decl Mode
     // --------------------
@@ -267,7 +250,6 @@ namespace gaupel::ast {
     public:
         ExprId add_expr(const Expr& e) { exprs_.push_back(e); return static_cast<ExprId>(exprs_.size() - 1); }
         StmtId add_stmt(const Stmt& s) { stmts_.push_back(s); return static_cast<StmtId>(stmts_.size() - 1); }
-        TypeId add_type(const Type& t) { types_.push_back(t); return static_cast<TypeId>(types_.size() - 1); }
 
         uint32_t add_arg(const Arg& a) { args_.push_back(a); return static_cast<uint32_t>(args_.size() - 1); }
         uint32_t add_named_group_arg(const Arg& a) { named_group_args_.push_back(a); return static_cast<uint32_t>(named_group_args_.size() - 1); }
@@ -283,10 +265,6 @@ namespace gaupel::ast {
         const Expr& expr(ExprId id) const { return exprs_[id]; }
         Expr& expr_mut(ExprId id) { return exprs_[id]; }
         const std::vector<Expr>& exprs() const { return exprs_; }
-
-        const Type& type_node(TypeId id) const { return types_[id]; }
-        std::vector<Type>& types_mut() { return types_; }
-        const std::vector<Type>& types() const { return types_; }
 
         const Stmt& stmt(StmtId id) const { return stmts_[id]; }
         Stmt& stmt_mut(StmtId id) { return stmts_[id]; }
@@ -317,7 +295,6 @@ namespace gaupel::ast {
         std::vector<Arg>  named_group_args_;
 
         std::vector<Attr> fn_attrs_;
-        std::vector<Type> types_;
         std::vector<Param> params_;
 
         std::vector<SwitchCase> switch_cases_;

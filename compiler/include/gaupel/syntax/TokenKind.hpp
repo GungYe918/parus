@@ -164,6 +164,8 @@ namespace gaupel::syntax {
             case TokenKind::kKwCommit: return "commit";
             case TokenKind::kKwRecast: return "recast";
 
+            case TokenKind::kKwClass: return "class";
+
             case TokenKind::kAt: return "@";
             case TokenKind::kArrow: return "->";
             case TokenKind::kLParen: return "(";

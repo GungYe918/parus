@@ -1,0 +1,306 @@
+// compiler/include/gaupel/ty/TypePool.hpp
+#pragma once
+#include <gaupel/ty/Type.hpp>
+#include <string_view>
+#include <vector>
+#include <string>
+#include <ostream>
+
+
+namespace gaupel::ty {
+
+    class TypePool {
+    public:
+        TypePool() {
+            // reserve: 128
+            types_.reserve(128);
+            fn_params_.reserve(256);
+
+            // [0] canonical error type
+            {
+                Type err{};
+                err.kind = Kind::kError;
+                types_.push_back(err);
+                error_id_ = 0;
+            }
+
+            // canonical builtins are created eagerly.
+            // NOTE: builtins start after error type.
+            for (int i = 0; i <= (int)Builtin::kF64; ++i) {
+                Type t{};
+                t.kind = Kind::kBuiltin;
+                t.builtin = (Builtin)i;
+                builtin_ids_.push_back((TypeId)types_.size());
+                types_.push_back(t);
+            }
+        }
+
+        TypeId error() const {  return error_id_;  }
+
+        TypeId builtin(Builtin b) const {
+            return builtin_ids_[(int)b];
+        }
+
+        const Type& get(TypeId id) const { return types_[id]; }
+
+        uint32_t count() const { return (uint32_t)types_.size(); }
+
+        // intern optional/array (simple linear search v0)
+        TypeId make_optional(TypeId elem) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kOptional && t.elem == elem) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kOptional;
+            t.elem = elem;
+            return push_(t);
+        }
+
+        TypeId make_array(TypeId elem) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kArray && t.elem == elem) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kArray;
+            t.elem = elem;
+            return push_(t);
+        }
+
+        TypeId make_named_user(std::string_view name) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kNamedUser && t.name == name) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kNamedUser;
+            t.name = name;
+            return push_(t);
+        }
+
+        // ---- function signature type interning ----
+        TypeId make_fn(TypeId ret, const TypeId* params, uint32_t param_count) {
+            // linear search v0 (ok)
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind != Kind::kFn) continue;
+                if (t.ret != ret) continue;
+                if (t.param_count != param_count) continue;
+
+                bool same = true;
+                for (uint32_t k = 0; k < param_count; ++k) {
+                    if (fn_params_[t.param_begin + k] != params[k]) { same = false; break; }
+                }
+                if (same) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kFn;
+            t.ret = ret;
+            t.param_begin = (uint32_t)fn_params_.size();
+            t.param_count = param_count;
+
+            for (uint32_t k = 0; k < param_count; ++k) fn_params_.push_back(params[k]);
+
+            return push_(t);
+        }
+
+        // convenience: ident -> (builtin or named_user)
+        TypeId intern_ident(std::string_view name) {
+            Builtin b{};
+            if (builtin_from_name(name, b)) return builtin(b);
+            return make_named_user(name);
+        }
+
+        // builtin name -> Builtin (aliases 포함)
+        static bool builtin_from_name(std::string_view name, Builtin& out) {
+            // aliases
+            if (name == "int")   { out = Builtin::kI32; return true; }
+            if (name == "uint")  { out = Builtin::kU32; return true; }
+            if (name == "float") { out = Builtin::kF64; return true; }
+
+            // exact
+            if (name == "null")   { out = Builtin::kNull; return true; }
+            if (name == "bool")   { out = Builtin::kBool; return true; }
+            if (name == "char")   { out = Builtin::kChar; return true; }
+            if (name == "string") { out = Builtin::kString; return true; }
+
+            if (name == "i8")  { out = Builtin::kI8; return true; }
+            if (name == "i16") { out = Builtin::kI16; return true; }
+            if (name == "i32") { out = Builtin::kI32; return true; }
+            if (name == "i64") { out = Builtin::kI64; return true; }
+
+            if (name == "u8")  { out = Builtin::kU8; return true; }
+            if (name == "u16") { out = Builtin::kU16; return true; }
+            if (name == "u32") { out = Builtin::kU32; return true; }
+            if (name == "u64") { out = Builtin::kU64; return true; }
+
+            if (name == "isize") { out = Builtin::kISize; return true; }
+            if (name == "usize") { out = Builtin::kUSize; return true; }
+
+            if (name == "f32") { out = Builtin::kF32; return true; }
+            if (name == "f64") { out = Builtin::kF64; return true; }
+
+            return false;
+        }
+
+        // --------------------
+        // Debug helpers
+        // --------------------
+
+        static std::string_view builtin_name(Builtin b) {
+            switch (b) {
+                case Builtin::kNull:   return "null";
+                case Builtin::kBool:   return "bool";
+                case Builtin::kChar:   return "char";
+                case Builtin::kString: return "string";
+
+                case Builtin::kI8:  return "i8";
+                case Builtin::kI16: return "i16";
+                case Builtin::kI32: return "i32";
+                case Builtin::kI64: return "i64";
+
+                case Builtin::kU8:  return "u8";
+                case Builtin::kU16: return "u16";
+                case Builtin::kU32: return "u32";
+                case Builtin::kU64: return "u64";
+
+                case Builtin::kISize: return "isize";
+                case Builtin::kUSize: return "usize";
+
+                case Builtin::kF32: return "f32";
+                case Builtin::kF64: return "f64";
+            }
+            return "<builtin?>";
+        }
+
+        std::string to_string(TypeId id) const {
+            std::string out;
+            render_into_(out, id, /*parent_ctx=*/RenderCtx::kTop);
+            return out;
+        }
+
+        void dump(std::ostream& os) const {
+            os << "TYPE_POOL (count=" << types_.size() << ")\n";
+            for (TypeId id = 0; id < (TypeId)types_.size(); ++id) {
+                const Type& t = types_[id];
+
+                os << "  [" << id << "] " << to_string(id) << "  ";
+
+                switch (t.kind) {
+                    case Kind::kError:
+                        os << "(Error)";
+                        break;
+                    case Kind::kBuiltin:
+                        os << "(Builtin=" << builtin_name(t.builtin) << ")";
+                        break;
+                    case Kind::kOptional:
+                        os << "(Optional elem=" << t.elem << ")";
+                        break;
+                    case Kind::kArray:
+                        os << "(Array elem=" << t.elem << ")";
+                        break;
+                    case Kind::kNamedUser:
+                        os << "(NamedUser name=" << t.name << ")";
+                        break;
+                    case Kind::kFn:
+                        os << "(Fn ret=" << t.ret
+                           << " params=[" << t.param_begin
+                           << ".." << (t.param_begin + t.param_count) << "])";
+                        break;
+                }
+
+                os << "\n";
+            }
+        }
+
+    private:
+        TypeId push_(const Type& t) {
+            TypeId id = (TypeId)types_.size();
+            types_.push_back(t);
+            return id;
+        }
+
+        enum class RenderCtx : uint8_t { kTop, kSuffixElem, kFnPart };
+
+        static bool needs_parens_for_suffix_(Kind k) {
+            // suffix를 붙일 때 애매해질 수 있는 형태들
+            return k == Kind::kFn;
+        }
+
+        void render_into_(std::string& out, TypeId id, RenderCtx parent_ctx) const {
+            if (id == kInvalidType) { out += "<invalid-type>"; return; }
+            if (id >= types_.size()) { out += "<bad-type-id>"; return; }
+
+            const Type& t = types_[id];
+
+            switch (t.kind) {
+                case Kind::kError:
+                    out += "<error>";
+                    return;
+
+                case Kind::kBuiltin:
+                    out += builtin_name(t.builtin);
+                    return;
+
+                case Kind::kNamedUser:
+                    out.append(t.name.data(), t.name.size());
+                    return;
+
+                case Kind::kOptional: {
+                    // elem?
+                    if (t.elem == kInvalidType) { out += "<invalid-elem>?"; return; }
+
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+
+                    if (needs_parens_for_suffix_(ek)) out += "(";
+                    render_into_(out, t.elem, RenderCtx::kSuffixElem);
+                    if (needs_parens_for_suffix_(ek)) out += ")";
+                    out += "?";
+                    return;
+                }
+
+                case Kind::kArray: {
+                    // elem[]
+                    if (t.elem == kInvalidType) { out += "<invalid-elem>[]"; return; }
+
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+
+                    // (T?)[] 처럼 명확히 하고 싶으면 Optional도 괄호 처리
+                    const bool paren =
+                        needs_parens_for_suffix_(ek) || ek == Kind::kOptional;
+
+                    if (paren) out += "(";
+                    render_into_(out, t.elem, RenderCtx::kSuffixElem);
+                    if (paren) out += ")";
+                    out += "[]";
+                    return;
+                }
+
+                case Kind::kFn: {
+                    // (T1, T2) -> R
+                    out += "fn(";
+                    for (uint32_t i = 0; i < t.param_count; ++i) {
+                        if (i) out += ", ";
+                        const TypeId pid = fn_params_[t.param_begin + i];
+                        render_into_(out, pid, RenderCtx::kFnPart);
+                    }
+                    out += ") -> ";
+                    render_into_(out, t.ret, RenderCtx::kFnPart);
+                    return;
+                }
+            }
+        }
+
+        TypeId error_id_ = kInvalidType;
+
+        std::vector<Type> types_;
+        std::vector<TypeId> fn_params_;
+        std::vector<TypeId> builtin_ids_;
+    };      
+
+} // namespace gaupel::ty

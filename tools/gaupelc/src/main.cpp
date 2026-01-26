@@ -8,6 +8,7 @@
 #include "gaupel/parse/Parser.hpp"
 #include "gaupel/ast/Nodes.hpp"
 #include "gaupel/syntax/TokenKind.hpp"
+#include "gaupel/ty/TypePool.hpp"
 
 #include "gaupel/diag/Diagnostic.hpp"
 #include "gaupel/diag/Render.hpp"
@@ -100,6 +101,7 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kBreak: return "Break";
         case K::kContinue: return "Continue";
         case K::kFnDecl: return "FnDecl";
+        case K::kSwitch: return "Switch";
         case K::kError: return "Error";
     }
     return "Unknown";
@@ -124,6 +126,8 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
         case K::kIndex: return "Index";
         case K::kError: return "Error";
         case K::kAssign: return "Assign";
+        case K::kIfExpr: return "If";
+        case K::kBlockExpr: return "Block";
     }
 
     return "Unknown";
@@ -251,19 +255,13 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
     }
 }
 
-static void dump_type(const gaupel::ast::AstArena& ast, gaupel::ast::TypeId ty) {
-    if (ty == gaupel::ast::k_invalid_type) {
-        std::cout << "<invalid-type>";
-        return;
-    }
-    const auto& t = ast.type_node(ty);
-    if (!t.text.empty()) std::cout << t.text;
-    else std::cout << "<type>";
+static void dump_type(const gaupel::ty::TypePool& types, gaupel::ty::TypeId ty) {
+    std::cout << types.to_string(ty) << " <id " << static_cast<uint32_t>(ty) << ">";
 }
 
-static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, int indent);
+static void dump_stmt(const gaupel::ast::AstArena& ast, const gaupel::ty::TypePool& types, gaupel::ast::StmtId id, int indent);
 
-static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ast::Stmt& s, int indent) {
+static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ty::TypePool& types, const gaupel::ast::Stmt& s, int indent) {
     // indent already printed by dump_stmt header line; 여기선 디테일만 출력
     for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
 
@@ -275,7 +273,7 @@ static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ast::St
     if (s.is_comptime) std::cout << " comptime=true";
 
     std::cout << " ret=";
-    dump_type(ast, s.type);
+    dump_type(types, s.type);
     std::cout << "\n";
 
     // attrs
@@ -305,7 +303,7 @@ static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ast::St
             const auto& p = ps[s.param_begin + i];
             for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
             std::cout << p.name << ": ";
-            dump_type(ast, p.type);
+            dump_type(types, p.type);
 
             if (p.has_default) {
                 std::cout << " = <default-expr>";
@@ -320,11 +318,11 @@ static void dump_fn_decl(const gaupel::ast::AstArena& ast, const gaupel::ast::St
     // body
     for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
     std::cout << "body:\n";
-    dump_stmt(ast, s.a, indent + 2);
+    dump_stmt(ast, types, s.a, indent + 2);
 }
 
 /// @brief stmt 1개를 출력하고, 필요한 경우 하위 노드를 출력
-static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, int indent) {
+static void dump_stmt(const gaupel::ast::AstArena& ast, const gaupel::ty::TypePool& types, gaupel::ast::StmtId id, int indent) {
     const auto& s = ast.stmt(id);
     for (int i = 0; i < indent; ++i) std::cout << "  ";
 
@@ -337,8 +335,8 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
         std::cout << " name=" << s.name;
 
         if (s.type != gaupel::ast::k_invalid_type) {
-            const auto& ty = ast.type_node(s.type);
-            if (!ty.text.empty()) std::cout << " type=" << ty.text;
+            std::cout << " type=";
+            dump_type(types, s.type);
         }
     }
     std::cout << "\n";
@@ -363,12 +361,12 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
 
             for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
             std::cout << "Then:\n";
-            dump_stmt(ast, s.a, indent + 2);
+            dump_stmt(ast, types, s.a, indent + 2);
 
             if (s.b != gaupel::ast::k_invalid_stmt) {
                 for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
                 std::cout << "Else:\n";
-                dump_stmt(ast, s.b, indent + 2);
+                dump_stmt(ast, types, s.b, indent + 2);
             }
             break;
 
@@ -379,7 +377,7 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
 
             for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
             std::cout << "Body:\n";
-            dump_stmt(ast, s.a, indent + 2);
+            dump_stmt(ast, types, s.a, indent + 2);
             break;
 
         case gaupel::ast::StmtKind::kReturn:
@@ -391,13 +389,13 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id, 
         case gaupel::ast::StmtKind::kBlock: {
             const auto& kids = ast.stmt_children();
             for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                dump_stmt(ast, kids[s.stmt_begin + i], indent + 1);
+                dump_stmt(ast, types, kids[s.stmt_begin + i], indent + 1);
             }
             break;
         }
 
         case gaupel::ast::StmtKind::kFnDecl:
-            dump_fn_decl(ast, s, indent);
+            dump_fn_decl(ast, types, s, indent);
             break;
 
         default:
@@ -425,13 +423,17 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag, max_errors);
+    gaupel::ty::TypePool types;
+    gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_expr();
     gaupel::passes::check_pipe_hole(ast, root, bag);
 
     std::cout << "\nAST:\n";
     dump_expr(ast, root, 0);
+
+    std::cout << "\nTYPES:\n";
+    types.dump(std::cout);
 
     return flush_diags(bag, lang, sm, context_lines);
 }
@@ -447,12 +449,16 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag, max_errors);
+    gaupel::ty::TypePool types;
+    gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_stmt();
 
     std::cout << "\nAST(STMT):\n";
-    dump_stmt(ast, root, 0);
+    dump_stmt(ast, types, root, 0);
+
+    std::cout << "\nTYPES:\n";
+    types.dump(std::cout);
 
     return flush_diags(bag, lang, sm, context_lines);
 }
@@ -469,12 +475,16 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
     dump_tokens(tokens);
 
     gaupel::ast::AstArena ast;
-    gaupel::Parser p(tokens, ast, &bag, max_errors);
+    gaupel::ty::TypePool types;
+    gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_program();
 
     std::cout << "\nAST(PROGRAM):\n";
-    dump_stmt(ast, root, 0);
+    dump_stmt(ast, types, root, 0);
+
+    std::cout << "\nTYPES:\n";
+    types.dump(std::cout);
 
     return flush_diags(bag, lang, sm, context_lines);
 }

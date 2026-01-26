@@ -91,14 +91,14 @@ namespace gaupel {
             return false;
         }
 
-        ast::TypeId ty = parse_type();
+        auto ty = parse_type(); // ParsedType { id, span }
 
         bool has_default = false;
         ast::ExprId def = ast::k_invalid_expr;
 
         // '=' 위치(span) 기억: 기본값 식이 누락됐을 때 span 계산에 사용
         bool saw_eq = false;
-        Span eq_span = ast_.type_node(ty).span; // placeholder
+        Span eq_span = ty.span; // placeholder
 
         if (cursor_.at(K::kAssign)) {
             const Token eq = cursor_.bump(); // '='
@@ -136,7 +136,7 @@ namespace gaupel {
 
         ast::Param p{};
         p.name = name;
-        p.type = ty;
+        p.type = ty.id;
         p.is_named_group = is_named_group;
         p.has_default = has_default;
         p.default_expr = def;
@@ -146,7 +146,7 @@ namespace gaupel {
         // - named-group 기본값 + expr 있음: expr 끝까지
         // - named-group 기본값 + expr 없음: '=' 까지
         // - positional에서 '=' 금지였던 케이스: 소비한 토큰까지(span을 최대한 넓혀서 에러 구간 포함)
-        Span end = ast_.type_node(ty).span;
+        Span end = ty.span;
 
         if (has_default && def != ast::k_invalid_expr) {
             end = ast_.expr(def).span;
@@ -377,7 +377,7 @@ namespace gaupel {
             cursor_.bump();
         }
 
-        ast::TypeId ret_ty = parse_type();
+        auto ret_ty = parse_type();
 
         // 9) Block
         ast::StmtId body = parse_stmt_required_block("fn");
@@ -392,7 +392,7 @@ namespace gaupel {
         s.span = span_join(start, end_sp);
 
         s.name = name;
-        s.type = ret_ty;
+        s.type = ret_ty.id;
         s.a = body;
 
         s.is_export = is_export;

@@ -4,7 +4,7 @@
 
 namespace gaupel {
 
-    ast::TypeId Parser::parse_type() {
+    Parser::ParsedType Parser::parse_type() {
         using K = syntax::TokenKind;
 
         const Token t = cursor_.peek();
@@ -18,21 +18,17 @@ namespace gaupel {
             // (함수 파라미터/리턴 타입 컨텍스트에서 자주 나오는 follow set)
             recover_to_delim(K::kComma, K::kRParen, K::kLBrace);
 
-            ast::Type ty{};
-            ty.kind = ast::TypeKind::kError;
-            ty.span = t.span;
-            ty.text = "type_error";
-            return ast_.add_type(ty);
+            ParsedType bad{};
+            bad.id = types_.error();
+            bad.span = t.span;
+            return bad;
         }
 
         cursor_.bump(); // consume ident
 
-        ast::Type base{};
-        base.kind = ast::TypeKind::kNamed;
-        base.span = t.span;
-        base.text = t.lexeme;
-
-        ast::TypeId cur = ast_.add_type(base);
+        // base: builtin or named user
+        ty::TypeId cur = types_.intern_ident(t.lexeme);
+        Span cur_span = t.span;
 
         bool saw_optional = false;
 
@@ -50,12 +46,10 @@ namespace gaupel {
                 }
                 const Token rb = cursor_.prev();
 
-                ast::Type arr{};
-                arr.kind = ast::TypeKind::kArray;
-                arr.elem = cur;
-                arr.span = span_join(lb.span, rb.span);
+                cur = types_.make_array(cur);
+                cur_span = span_join(cur_span, rb.span);
+                (void)lb; // lb는 span_join에 필요하면 확장 가능. v0는 rb 기준으로 충분.
 
-                cur = ast_.add_type(arr);
                 continue;
             }
 
@@ -68,19 +62,19 @@ namespace gaupel {
                 }
                 saw_optional = true;
 
-                ast::Type opt{};
-                opt.kind = ast::TypeKind::kOptional;
-                opt.elem = cur;
-                opt.span = span_join(ast_.type_node(cur).span, q.span);
+                cur = types_.make_optional(cur);
+                cur_span = span_join(cur_span, q.span);
 
-                cur = ast_.add_type(opt);
                 continue;
             }
 
             break;
         }
 
-        return cur;
+        ParsedType out{};
+        out.id = cur;
+        out.span = cur_span;
+        return out;
     }
 
 } // namespace gaupel

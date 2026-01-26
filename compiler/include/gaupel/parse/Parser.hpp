@@ -3,6 +3,7 @@
 #include <gaupel/parse/Cursor.hpp>
 #include <gaupel/ast/Nodes.hpp>
 #include <gaupel/diag/Diagnostic.hpp>
+#include <gaupel/ty/TypePool.hpp>
 
 #include <vector>
 #include <utility>
@@ -14,9 +15,10 @@ namespace gaupel {
     public:
         Parser(const std::vector<Token>& tokens,
                ast::AstArena& ast,
+               ty::TypePool& types,
                diag::Bag* diags = nullptr,
                uint32_t max_errors = 64)
-            : cursor_(tokens), ast_(ast), diags_(diags), max_errors_(max_errors) {
+            : cursor_(tokens), ast_(ast), types_(types), diags_(diags), max_errors_(max_errors) {
 
             // Lexer 단계에서 UTF-8 fatal이 발생한 경우, 파싱은 즉시 중단 상태로 취급
             if (diags_ && diags_->has_code(diag::Code::kInvalidUtf8)) {
@@ -60,6 +62,10 @@ namespace gaupel {
         //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export, fn)
         bool is_decl_start(syntax::TokenKind k) const;
 
+        bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
+
+        static bool is_expr_with_block_kind(ast::ExprKind k);
+
         // --------------------
         // expr
         // --------------------
@@ -95,8 +101,13 @@ namespace gaupel {
         // type
         // --------------------
 
+        struct ParsedType {
+            ty::TypeId id = ty::kInvalidType;
+            Span span{};
+        };
+
         //  타입 파싱(v0: NamedType).
-        ast::TypeId parse_type();
+        ParsedType parse_type();
 
         // --------------------
         // stmt
@@ -134,11 +145,6 @@ namespace gaupel {
 
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
-
-        bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
-
-        static bool is_expr_with_block_kind(ast::ExprKind k);
-
 
         // --------------------
         // decl
@@ -193,6 +199,8 @@ namespace gaupel {
 
         Cursor cursor_;
         ast::AstArena& ast_;
+        ty::TypePool& types_; // <-- add
+
         diag::Bag* diags_ = nullptr;
 
         uint32_t last_diag_lo_ = 0xFFFFFFFFu;

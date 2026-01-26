@@ -246,7 +246,7 @@ namespace gaupel {
             diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier");
         }
 
-        ast::TypeId type_id = ast::k_invalid_type;
+        auto type_id = ast::k_invalid_type;
 
         if (!is_set) {
             if (!cursor_.at(syntax::TokenKind::kColon)) {
@@ -254,7 +254,7 @@ namespace gaupel {
                             "':' (type annotation required for let)");
             } else {
                 cursor_.bump();
-                type_id = parse_type();
+                type_id = parse_type().id;
             }
         } else {
             if (cursor_.at(syntax::TokenKind::kColon)) {
