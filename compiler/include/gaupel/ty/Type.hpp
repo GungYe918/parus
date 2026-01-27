@@ -15,7 +15,6 @@ namespace gaupel::ty {
 
         kBool,
         kChar,
-        kString,
 
         kI8,  kI16,  kI32,  kI64,
         kU8,  kU16,  kU32,  kU64,
@@ -31,6 +30,9 @@ namespace gaupel::ty {
         kArray,    // T[]
         kNamedUser, // user-defined type name (v0: unresolved/class later)
 
+        kBorrow,     // &T / &mut T
+        kEscape,     // &&T 
+
         kFn,        // (T1, T2, ...) -> R
     };
 
@@ -45,7 +47,10 @@ namespace gaupel::ty {
 
         // kNamedUser
         std::string_view name{};
-    
+
+        // kBorrow
+        bool borrow_is_mut = false;
+        
         // kFn
         TypeId ret = kInvalidType;
         uint32_t param_begin = 0;

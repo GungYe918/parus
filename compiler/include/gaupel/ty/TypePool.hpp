@@ -82,6 +82,31 @@ namespace gaupel::ty {
             return push_(t);
         }
 
+        TypeId make_borrow(TypeId elem, bool is_mut) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kBorrow && t.elem == elem && t.borrow_is_mut == is_mut) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kBorrow;
+            t.elem = elem;
+            t.borrow_is_mut = is_mut;
+            return push_(t);
+        }
+
+        TypeId make_escape(TypeId elem) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kEscape && t.elem == elem) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kEscape;
+            t.elem = elem;
+            return push_(t);
+        }
+
         // ---- function signature type interning ----
         TypeId make_fn(TypeId ret, const TypeId* params, uint32_t param_count) {
             // linear search v0 (ok)
@@ -127,7 +152,6 @@ namespace gaupel::ty {
             if (name == "null")   { out = Builtin::kNull; return true; }
             if (name == "bool")   { out = Builtin::kBool; return true; }
             if (name == "char")   { out = Builtin::kChar; return true; }
-            if (name == "string") { out = Builtin::kString; return true; }
 
             if (name == "i8")  { out = Builtin::kI8; return true; }
             if (name == "i16") { out = Builtin::kI16; return true; }
@@ -157,7 +181,6 @@ namespace gaupel::ty {
                 case Builtin::kNull:   return "null";
                 case Builtin::kBool:   return "bool";
                 case Builtin::kChar:   return "char";
-                case Builtin::kString: return "string";
 
                 case Builtin::kI8:  return "i8";
                 case Builtin::kI16: return "i16";
@@ -207,6 +230,12 @@ namespace gaupel::ty {
                     case Kind::kNamedUser:
                         os << "(NamedUser name=" << t.name << ")";
                         break;
+                    case Kind::kBorrow:
+                        os << "(Borrow mut=" << (t.borrow_is_mut ? 1 : 0) << " elem=" << t.elem << ")";
+                        break;
+                    case Kind::kEscape:
+                        os << "(Escape elem=" << t.elem << ")";
+                        break;
                     case Kind::kFn:
                         os << "(Fn ret=" << t.ret
                            << " params=[" << t.param_begin
@@ -229,6 +258,10 @@ namespace gaupel::ty {
 
         static bool needs_parens_for_suffix_(Kind k) {
             // suffix를 붙일 때 애매해질 수 있는 형태들
+            return k == Kind::kFn;
+        }
+
+        static bool needs_parens_for_prefix_(Kind k) {
             return k == Kind::kFn;
         }
 
@@ -278,6 +311,32 @@ namespace gaupel::ty {
                     render_into_(out, t.elem, RenderCtx::kSuffixElem);
                     if (paren) out += ")";
                     out += "[]";
+                    return;
+                }
+
+                case Kind::kBorrow: {
+                    if (t.elem == kInvalidType) { out += (t.borrow_is_mut ? "&mut <invalid>" : "&<invalid>"); return; }
+
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+
+                    out += "&";
+                    if (t.borrow_is_mut) out += "mut ";
+
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_(out, t.elem, RenderCtx::kTop);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
+                    return;
+                }
+
+                case Kind::kEscape: {
+                    if (t.elem == kInvalidType) { out += "&&<invalid>"; return; }
+
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+
+                    out += "&&";
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_(out, t.elem, RenderCtx::kTop);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
                     return;
                 }
 

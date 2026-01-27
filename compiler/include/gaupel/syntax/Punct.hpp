@@ -15,7 +15,7 @@ namespace gaupel::syntax {
     };
 
     
-    inline constexpr std::array<PunctEntry, 40> k_punct_table = {{
+    inline constexpr std::array<PunctEntry, 41> k_punct_table = {{
         {"..:", TokenKind::kDotDotColon},
         {"..",  TokenKind::kDotDot},
 
@@ -28,6 +28,7 @@ namespace gaupel::syntax {
         {">>", TokenKind::kShiftRight},
 
         {"&&",  TokenKind::kAmpAmp},
+        {"&",   TokenKind::kAmp},
         {"||",  TokenKind::kPipePipe},
 
         {"==",  TokenKind::kEqEq},

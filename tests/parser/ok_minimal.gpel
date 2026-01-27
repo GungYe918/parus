@@ -67,7 +67,7 @@ fn add() -> int {
     ;
   }
 }
-*/
+
 
 // L1: header + block
 loop (v in xs) { v; };
@@ -129,3 +129,9 @@ let x: u32 = if (a) { 5 } else 4;
 // IE4: tail semicolon in value-required branch
 let x: u32 = if (a) { 5 } else { 4; };
 // -> kBlockTailSemicolonNotAllowed (+ tail=4로 복구)
+*/
+
+fn f(a: i32, b: bool) -> i64 { }
+fn g(cb: fn(i32, i32) -> i32) -> void {  }
+fn h(x: float) -> f32 {  }   // float alias -> f64 (정책 유지)
+fn u(x: string) -> void { } // 이제 string은 builtin 아님: NamedUser("string")로 간다(= stdlib 타입로 간주)

@@ -93,6 +93,7 @@ namespace gaupel::syntax {
         kBang,     // !
         kCaret,    // ^
 
+        kAmp,      // &
         kAmpAmp,   // &&
         kPipePipe, // ||
 
@@ -196,6 +197,7 @@ namespace gaupel::syntax {
             case TokenKind::kBang: return "!";
             case TokenKind::kCaret: return "^";
             case TokenKind::kAmpAmp: return "&&";
+            case TokenKind::kAmp:    return "&";
             case TokenKind::kPipePipe: return "||";
 
             case TokenKind::kEqEq: return "==";
