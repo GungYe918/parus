@@ -66,6 +66,14 @@ namespace gaupel {
 
         static bool is_expr_with_block_kind(ast::ExprKind k);
 
+        std::pair<uint32_t, uint32_t> parse_path_segments(); // returns (begin,count) in arena.path_segs
+        
+        std::string_view parse_module_path_to_string(bool& out_is_angle);
+        
+        ty::TypeId parse_ffi_signature_type(); // parses "<RetType (Types...)>"
+        
+        void parse_ffi_struct_body(uint32_t& out_begin, uint32_t& out_count);
+
         // --------------------
         // expr
         // --------------------
@@ -142,6 +150,9 @@ namespace gaupel {
 
         // switch 파싱
         ast::StmtId parse_stmt_switch();
+
+        // use stmt 파싱
+        ast::StmtId parse_stmt_use();
 
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);

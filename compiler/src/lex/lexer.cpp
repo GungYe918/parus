@@ -327,9 +327,13 @@ namespace gaupel {
         if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
         if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }
 
-        if (t.lexeme == "switch")  { t.kind = syntax::TokenKind::kKwSwitch;    return t; }
-        if (t.lexeme == "case")    { t.kind = syntax::TokenKind::kKwCase;      return t; }
-        if (t.lexeme == "default") { t.kind = syntax::TokenKind::kKwDefault;   return t; }
+        if (t.lexeme == "switch")   { t.kind = syntax::TokenKind::kKwSwitch;    return t; }
+        if (t.lexeme == "case")     { t.kind = syntax::TokenKind::kKwCase;      return t; }
+        if (t.lexeme == "default")  { t.kind = syntax::TokenKind::kKwDefault;   return t; }
+
+        if (t.lexeme == "use")      { t.kind = syntax::TokenKind::kKwUse;       return t; }
+        if (t.lexeme == "module")   { t.kind = syntax::TokenKind::kKwModule;    return t; }        
+        if (t.lexeme == "as")       { t.kind = syntax::TokenKind::kKwAs;        return t; }
 
         if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }

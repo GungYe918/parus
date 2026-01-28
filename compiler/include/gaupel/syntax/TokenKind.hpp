@@ -59,6 +59,10 @@ namespace gaupel::syntax {
         kKwPure,
         kKwComptime,
 
+        kKwUse,
+        kKwModule,
+        kKwAs,
+
         // punct / delimiters
         kAt,       // @
         kArrow,    // ->
@@ -115,6 +119,7 @@ namespace gaupel::syntax {
 
         kDotDot,       // ..
         kDotDotColon,  // ..:
+        kColonColon, // :: - path separator
 
         // for convenience in parser recovery
         kUnknownPunct,
@@ -160,6 +165,11 @@ namespace gaupel::syntax {
 
             case TokenKind::kKwPure: return "pure";
             case TokenKind::kKwComptime: return "comptime";
+
+            case TokenKind::kKwUse: return "use";
+            case TokenKind::kKwModule: return "module";
+            case TokenKind::kKwAs: return "as";
+
             case TokenKind::kKwPub: return "pub";
             case TokenKind::kKwSub: return "sub";
             case TokenKind::kKwCommit: return "commit";
@@ -213,6 +223,7 @@ namespace gaupel::syntax {
             case TokenKind::kPipeRev:    return "<|";
             case TokenKind::kDotDot: return "..";
             case TokenKind::kDotDotColon: return "..:";
+            case TokenKind::kColonColon: return "::";
 
             case TokenKind::kUnknownPunct: return "unknown_punct";
         }

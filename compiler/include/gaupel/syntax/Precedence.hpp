@@ -103,6 +103,8 @@ namespace gaupel::syntax {
             case TokenKind::kPlus:
             case TokenKind::kMinus:
             case TokenKind::kPlusPlus:
+            case TokenKind::kAmp:
+            case TokenKind::kAmpAmp:
                 return PrefixInfo{95};
             default:
                 return std::nullopt;

@@ -143,11 +143,6 @@ namespace gaupel::ty {
 
         // builtin name -> Builtin (aliases 포함)
         static bool builtin_from_name(std::string_view name, Builtin& out) {
-            // aliases
-            if (name == "int")   { out = Builtin::kI32; return true; }
-            if (name == "uint")  { out = Builtin::kU32; return true; }
-            if (name == "float") { out = Builtin::kF64; return true; }
-
             // exact
             if (name == "null")   { out = Builtin::kNull; return true; }
             if (name == "bool")   { out = Builtin::kBool; return true; }

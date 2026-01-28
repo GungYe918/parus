@@ -5,6 +5,7 @@
 #include <gaupel/ty/Type.hpp>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -83,6 +84,9 @@ namespace gaupel::ast {
 
         // decl-like
         kFnDecl,
+
+        // use
+        kUse,
     };
 
     // --------------------
@@ -154,6 +158,12 @@ namespace gaupel::ast {
         Span span{};
     };
 
+    struct FfiField {
+        TypeId type = k_invalid_type;
+        std::string_view name{};
+        Span span{};
+    };
+
     // --------------------
     // Expr/Type/Stmt nodes
     // --------------------
@@ -188,6 +198,17 @@ namespace gaupel::ast {
         kNone = 0,
         kPub,
         kSub,
+    };
+
+    // use stmt
+    enum class UseKind : uint8_t {
+        kError,
+        kTypeAlias,    // use NewT = u32;
+        kPathAlias,    // use A::B = name;
+        kTextSubst,    // use PI 3.14f;
+        kModuleImport, // use module <x/y> as alias;
+        kFFIFunc,      // use func::ffi<sig> name;
+        kFFIStruct,    // use struct::ffi Name { ... }
     };
 
     struct Stmt {
@@ -241,6 +262,30 @@ namespace gaupel::ast {
         uint32_t case_begin = 0;
         uint32_t case_count = 0;
         bool has_default = false;
+
+        // ---- use ----
+        UseKind use_kind = UseKind::kError;
+
+        // 공통: "use" 뒤 첫 ident (alias name / subst name / type alias name / ffi symbol name 등)
+        std::string_view use_name{};
+
+        // --- TypeAlias: name = TypeId (Stmt.type 사용) ---
+        // --- TextSubst: name + expr (Stmt.expr 사용) ---
+        // --- FFIFunc:  use_name + type(fn signature TypeId in Stmt.type) ---
+
+        // PathAlias: path segments slice + rhs ident
+        uint32_t use_path_begin = 0;
+        uint32_t use_path_count = 0;
+        std::string_view use_rhs_ident{}; // "= Ident" 의 Ident
+
+        // ModuleImport: module_path + alias
+        std::string_view use_module_path{};
+        bool use_module_is_angle = false; // <...> 인지 "..." 인지
+        std::string_view use_module_alias{}; // as Ident
+
+        // FFIStruct: struct name(use_name) + fields slice
+        uint32_t use_field_begin = 0;
+        uint32_t use_field_count = 0;
     };
 
     // --------------------
@@ -258,6 +303,21 @@ namespace gaupel::ast {
         uint32_t add_param(const Param& p) {  params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1);  }
 
         uint32_t add_switch_case(const SwitchCase& c) {  switch_cases_.push_back(c); return (uint32_t)switch_cases_.size() - 1;  }
+
+        uint32_t add_ffi_field(const FfiField& f) {
+            ffi_fields_.push_back(f);
+            return (uint32_t)ffi_fields_.size() - 1;
+        }
+
+        std::string_view add_owned_string(std::string s) {
+            owned_strings_.push_back(std::move(s));
+            return owned_strings_.back();
+        }
+
+        uint32_t add_path_seg(std::string_view s) {
+            path_segs_.push_back(s);
+            return (uint32_t)path_segs_.size() - 1;
+        }
 
         uint32_t add_stmt_child(StmtId id) {  stmt_children_.push_back(id); return static_cast<uint32_t>(stmt_children_.size() - 1);  }
 
@@ -285,6 +345,12 @@ namespace gaupel::ast {
         const std::vector<SwitchCase>& switch_cases() const {  return switch_cases_;  }
         std::vector<SwitchCase>& switch_cases_mut() {  return switch_cases_;  }  
 
+        const std::vector<FfiField>& ffi_fields() const { return ffi_fields_; }
+        std::vector<FfiField>& ffi_fields_mut() { return ffi_fields_; }
+
+        const std::vector<std::string_view>& path_segs() const { return path_segs_; }
+        std::vector<std::string_view>& path_segs_mut() { return path_segs_; }
+
         const std::vector<StmtId>& stmt_children() const { return stmt_children_; }
         std::vector<StmtId>& stmt_children_mut() { return stmt_children_; }
 
@@ -298,6 +364,9 @@ namespace gaupel::ast {
         std::vector<Param> params_;
 
         std::vector<SwitchCase> switch_cases_;
+        std::vector<FfiField> ffi_fields_;
+        std::vector<std::string> owned_strings_;
+        std::vector<std::string_view> path_segs_;
 
         std::vector<StmtId> stmt_children_;
     };

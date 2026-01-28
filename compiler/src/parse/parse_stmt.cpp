@@ -103,6 +103,7 @@ namespace gaupel {
         if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_stmt_break();
         if (tok.kind == syntax::TokenKind::kKwContinue) return parse_stmt_continue();
         if (tok.kind == syntax::TokenKind::kKwSwitch)   return parse_stmt_switch();
+        if (tok.kind == syntax::TokenKind::kKwUse)      return parse_stmt_use();
         if (tok.kind == syntax::TokenKind::kKwLet
         ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_stmt_var();
         if (tok.kind == syntax::TokenKind::kKwPub 
@@ -575,6 +576,169 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
+    std::pair<uint32_t, uint32_t> Parser::parse_path_segments() {
+        using K = syntax::TokenKind;
+
+        // Path := Ident ('::' Ident)*
+        uint32_t begin = (uint32_t)ast_.path_segs().size();
+        uint32_t count = 0;
+
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (path segment)");
+            return { begin, count };
+        }
+
+        cursor_.bump();
+        ast_.add_path_seg(first.lexeme);
+        ++count;
+
+        while (cursor_.at(K::kColonColon)) {
+            cursor_.bump(); // ::
+
+            const Token seg = cursor_.peek();
+            if (seg.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
+                break;
+            }
+            cursor_.bump();
+            ast_.add_path_seg(seg.lexeme);
+            ++count;
+        }
+
+        return { begin, count };
+    }
+
+    std::string_view Parser::parse_module_path_to_string(bool& out_is_angle) {
+        using K = syntax::TokenKind;
+        out_is_angle = false;
+
+        // ModulePath := "<...>" | StringLit
+        if (cursor_.at(K::kStringLit)) {
+            const Token s = cursor_.bump();
+            return s.lexeme; // lexer가 따옴표 포함/미포함 어느쪽이든 그대로 보관
+        }
+
+        // '<' 는 TokenKind::kLt 로 들어옴
+        if (!cursor_.at(K::kLt)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "< or string literal");
+            return {};
+        }
+
+        out_is_angle = true;
+        cursor_.bump(); // '<'
+
+        std::string acc;
+
+        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+            const Token t = cursor_.bump();
+
+            // lexeme이 있으면 그대로, 없으면 kind name 사용(예: eof 같은)
+            if (!t.lexeme.empty()) acc.append(t.lexeme.data(), t.lexeme.size());
+            else {
+                auto nm = syntax::token_kind_name(t.kind);
+                acc.append(nm.data(), nm.size());
+            }
+        }
+
+        if (!cursor_.eat(K::kGt)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+            recover_to_delim(K::kGt, K::kSemicolon);
+            cursor_.eat(K::kGt);
+        }
+
+        return ast_.add_owned_string(std::move(acc));
+    }
+
+    ty::TypeId Parser::parse_ffi_signature_type() {
+        using K = syntax::TokenKind;
+        // FFISignature := Type "(" (Type ("," Type)*)? ")"
+        // 전체는 use func::ffi "<" FFISignature ">" Ident;
+        // 여기서는 "<" 를 이미 소비한 상태라고 가정하지 않고, 호출자가 관리.
+        auto ret = parse_type();
+        if (ret.id == ty::kInvalidType) ret.id = types_.error();
+
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            recover_to_delim(K::kLParen, K::kGt, K::kRParen);
+            cursor_.eat(K::kLParen);
+        }
+
+        // params (Type list)
+        std::vector<ty::TypeId> ps;
+
+        if (!cursor_.at(K::kRParen)) {
+            while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+                auto pt = parse_type();
+                if (pt.id == ty::kInvalidType) pt.id = types_.error();
+                ps.push_back(pt.id);
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kRParen)) break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        if (!cursor_.eat(K::kRParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+            recover_to_delim(K::kRParen, K::kGt);
+            cursor_.eat(K::kRParen);
+        }
+
+        return types_.make_fn(ret.id, ps.data(), (uint32_t)ps.size());
+    }
+
+    void Parser::parse_ffi_struct_body(uint32_t& out_begin, uint32_t& out_count) {
+        using K = syntax::TokenKind;
+        out_begin = (uint32_t)ast_.ffi_fields().size();
+        out_count = 0;
+        
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
+            auto ft = parse_type();
+
+            const Token name = cursor_.peek();
+            if (name.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, name.span, "identifier (ffi field name)");
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+                continue;
+            }
+            cursor_.bump();
+
+            Span end = name.span;
+
+            if (!cursor_.eat(K::kSemicolon)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ";");
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+            } else {
+                end = cursor_.prev().span;
+            }
+
+            ast::FfiField f{};
+            f.type = (ft.id == ty::kInvalidType) ? types_.error() : ft.id;
+            f.name = name.lexeme;
+            f.span = span_join(ft.span, end);
+
+            ast_.add_ffi_field(f);
+            ++out_count;
+        }
+
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+    }
+
     // stmt 경계까지 스킵
     void Parser::stmt_sync_to_boundary() {
         while (!cursor_.at(syntax::TokenKind::kSemicolon) &&
@@ -582,6 +746,188 @@ namespace gaupel {
                !cursor_.at(syntax::TokenKind::kEof)) {
             cursor_.bump();
         }
+    }
+
+    ast::StmtId Parser::parse_stmt_use() {
+        using K = syntax::TokenKind;
+        const Token use_kw = cursor_.bump(); // 'use'
+    
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kUse;
+        s.span = use_kw.span;
+        s.use_kind = ast::UseKind::kError;
+
+        // ---- lookahead: "module" ----
+        if (cursor_.at(K::kKwModule)) {
+            cursor_.bump(); // module
+
+            bool is_angle = false;
+            std::string_view mpath = parse_module_path_to_string(is_angle);
+
+            if (!cursor_.eat(K::kKwAs)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "as");
+                recover_to_delim(K::kKwAs, K::kSemicolon);
+                cursor_.eat(K::kKwAs);
+            }
+
+            const Token al = cursor_.peek();
+            if (al.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, al.span, "identifier (module alias)");
+            } else {
+                cursor_.bump();
+                s.use_kind = ast::UseKind::kModuleImport;
+                s.use_module_path = mpath;
+                s.use_module_is_angle = is_angle;
+                s.use_module_alias = al.lexeme;
+            }
+
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
+        // ---- FFI: func::ffi / struct::ffi ----
+        // pattern: Ident '::' Ident ...
+        if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColonColon && cursor_.peek(2).kind == K::kIdent) {
+            const Token head = cursor_.peek();       // func / struct
+            const Token tail = cursor_.peek(2);      // ffi
+            const bool is_func_ffi = (head.lexeme == "func"   && tail.lexeme == "ffi");
+            const bool is_struct_ffi= (head.lexeme == "struct" && tail.lexeme == "ffi");
+
+            if (is_func_ffi) {
+                cursor_.bump(); // func
+                cursor_.bump(); // ::
+                cursor_.bump(); // ffi
+
+                if (!cursor_.eat(K::kLt)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "<");
+                    recover_to_delim(K::kLt, K::kSemicolon, K::kGt);
+                    cursor_.eat(K::kLt);
+                }
+
+                ty::TypeId sig = parse_ffi_signature_type();
+
+                if (!cursor_.eat(K::kGt)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                    recover_to_delim(K::kGt, K::kSemicolon);
+                    cursor_.eat(K::kGt);
+                }
+
+                const Token fname = cursor_.peek();
+                if (fname.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, fname.span, "identifier (ffi function name)");
+                } else {
+                    cursor_.bump();
+                    s.use_kind = ast::UseKind::kFFIFunc;
+                    s.use_name = fname.lexeme;
+                    s.type = sig; // fn signature type id
+                }
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+
+            if (is_struct_ffi) {
+                cursor_.bump(); // struct
+                cursor_.bump(); // ::
+                cursor_.bump(); // ffi
+
+                const Token sname = cursor_.peek();
+                if (sname.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, sname.span, "identifier (ffi struct name)");
+                } else {
+                    cursor_.bump();
+                    s.use_kind = ast::UseKind::kFFIStruct;
+                    s.use_name = sname.lexeme;
+                }
+
+                uint32_t fb = 0, fc = 0;
+                parse_ffi_struct_body(fb, fc);
+                s.use_field_begin = fb;
+                s.use_field_count = fc;
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+        }
+
+        // ---- common forms start with Ident ----
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (use target)");
+            cursor_.bump();
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
+        // We need to decide among:
+        // 1) TypeAlias: Ident '=' Type
+        // 2) TextSubst: Ident Expr
+        // 3) PathAlias: Path '=' Ident   (Path starts with Ident and may include ::)
+        //
+        // We'll parse a path first (Ident + ::...).
+        auto [pb, pc] = parse_path_segments();
+
+        // If next is '=' => PathAlias (if pc>=2) OR TypeAlias (if pc==1 and lhs is single ident)
+        if (cursor_.at(K::kAssign)) {
+            cursor_.bump(); // '='
+
+            if (pc == 1) {
+                // could be type alias: use Name = Type;
+                auto ty = parse_type();
+                s.use_kind = ast::UseKind::kTypeAlias;
+                s.use_name = ast_.path_segs()[pb]; // lhs ident
+                s.type = (ty.id == ty::kInvalidType) ? types_.error() : ty.id;
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            } else {
+                // path alias: use A::B = name;
+                const Token rhs = cursor_.peek();
+                if (rhs.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (path alias target)");
+                } else {
+                    cursor_.bump();
+                    s.use_kind = ast::UseKind::kPathAlias;
+                    s.use_path_begin = pb;
+                    s.use_path_count = pc;
+                    s.use_rhs_ident = rhs.lexeme;
+                }
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+        }
+
+        // Otherwise: TextSubst must have exactly one ident on lhs (not a path)
+        if (pc != 1) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expected '=' for path alias");
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
+        // TextSubst: use NAME Expr;
+        s.use_kind = ast::UseKind::kTextSubst;
+        s.use_name = ast_.path_segs()[pb];
+
+        // expr가 없으면(바로 ';') 진단
+        if (cursor_.at(K::kSemicolon)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expression (use substitution)");
+            cursor_.bump(); // consume ';'
+            s.span = span_join(use_kw.span, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        s.expr = parse_expr();
+        Span end = stmt_consume_semicolon_or_recover(ast_.expr(s.expr).span);
+        s.span = span_join(use_kw.span, end);
+        return ast_.add_stmt(s);
     }
 
     // ';'가 없으면 다음 경계까지 복구 후 가능한 경우 ';' 소비

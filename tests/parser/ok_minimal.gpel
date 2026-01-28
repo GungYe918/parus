@@ -135,3 +135,6 @@ fn f(a: i32, b: bool) -> i64 { }
 fn g(cb: fn(i32, i32) -> i32) -> void {  }
 fn h(x: float) -> f32 {  }   // float alias -> f64 (정책 유지)
 fn u(x: string) -> void { } // 이제 string은 builtin 아님: NamedUser("string")로 간다(= stdlib 타입로 간주)
+
+use T = i32;
+use module <dfsdf/df> as T;
