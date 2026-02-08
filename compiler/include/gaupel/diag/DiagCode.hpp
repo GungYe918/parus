@@ -122,11 +122,32 @@ namespace gaupel::diag {
         kDuplicateDecl,         // 같은 스코프 중복 선언
         kShadowing,             // shadowing 발생(경고용)
         kShadowingNotAllowed,   // shadowing을 에러로 승격
-        kSetOnUndeclared,       // set이 선언되지 않은 변수에 적용됨
-
+        
         // ---- use parsing ----
         kUseTextSubstExprExpected,     // use NAME ;  (값 누락)
         kUseTextSubstTrailingTokens,   // use NAME <expr> ... ; (expr 이후 ; 전 잔여 토큰)
+
+        // =========================
+        // tyck (TYPE CHECK)
+        // =========================
+        kTypeErrorGeneric,      // args[0] = message
+        kTypeLetInitMismatch,   // args[0]=var, args[1]=expected, args[2]=got
+        kTypeSetAssignMismatch, // args[0]=var, args[1]=expected, args[2]=got
+        kTypeArgCountMismatch,  // args[0]=expected, args[1]=got
+        kTypeArgTypeMismatch,   // args[0]=index, args[1]=expected, args[2]=got
+        kTypeReturnOutsideFn,   // (no args)
+        kTypeReturnExprRequired,// (no args)
+        kTypeUnaryBangMustBeBool,// args[0]=got
+        kTypeBinaryOperandsMustMatch,// args[0]=lhs, args[1]=rhs
+        kTypeCompareOperandsMustMatch,// args[0]=lhs, args[1]=rhs
+        kTypeBorrowNotAllowedInPureComptime, // (no args)
+        kTypeEscapeNotAllowedInPureComptime, // (no args)
+        kTypeMismatch,          // args[0]=expected, args[1]=got
+        kTypeNotCallable,       // args[0]=got_type
+        kTypeCondMustBeBool,    // args[0]=got_type
+        kTypeIndexMustBeUSize,  // args[0]=got_type
+        kTypeIndexNonArray,     // args[0]=base_type
+        kSetCannotInferFromNull // set <name> = null; is not allowed
     };
 
 } // namespace gaupel::diag

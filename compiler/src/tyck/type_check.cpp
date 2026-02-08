@@ -1,6 +1,8 @@
 // compiler/src/tyck/type_check.cpp
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/syntax/TokenKind.hpp>
+#include <gaupel/diag/Diagnostic.hpp>
+#include <gaupel/diag/DiagCode.hpp>
 
 #include <sstream>
 
@@ -33,11 +35,47 @@ namespace gaupel::tyck {
     // --------------------
     // errors
     // --------------------
+
+    void TypeChecker::diag_(diag::Code code, Span sp) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, sp);
+        diag_bag_->add(std::move(d));
+    }
+
+    void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, sp);
+        d.add_arg(a0);
+        diag_bag_->add(std::move(d));
+    }
+
+    void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, sp);
+        d.add_arg(a0);
+        d.add_arg(a1);
+        diag_bag_->add(std::move(d));
+    }
+
+    void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kError, code, sp);
+        d.add_arg(a0);
+        d.add_arg(a1);
+        d.add_arg(a2);
+        diag_bag_->add(std::move(d));
+    }
+
     void TypeChecker::err_(Span sp, std::string msg) {
+        // 1) TyckResult(errors)
         TyError e{};
         e.span = sp;
-        e.message = std::move(msg);
+        e.message = msg;
         result_.errors.push_back(std::move(e));
+
+        // NOTE:
+        // - err_()는 저장용으로만 사용
+        // - 사용자 출력은 항상 diag_(Code, args...)만 사용
     }
 
     // --------------------
@@ -159,7 +197,7 @@ namespace gaupel::tyck {
                 return;
 
             case ast::StmtKind::kVar:
-                check_stmt_var_(s);
+                check_stmt_var_(sid);
                 return;
 
             case ast::StmtKind::kIf:
@@ -208,64 +246,110 @@ namespace gaupel::tyck {
         sym_.pop_scope();
     }
 
-    void TypeChecker::check_stmt_var_(const ast::Stmt& s) {
-        // let/set
+    bool fits_int_(std::string_view text, ty::Builtin dst) {
+        // text는 AST에 저장된 리터럴 원문 (예: "4", "-1")
+        long long v = 0;
+        try { v = std::stoll(std::string(text)); }
+        catch (...) { return false; }
+
+        switch (dst) {
+            case ty::Builtin::kI8:   return v >= -128 && v <= 127;
+            case ty::Builtin::kI16:  return v >= -32768 && v <= 32767;
+            case ty::Builtin::kI32:  return v >= -2147483648LL && v <= 2147483647LL;
+            case ty::Builtin::kI64:  return true;
+            // unsigned도 원하면 추가
+            default: return false;
+        }
+    }
+
+    void TypeChecker::check_stmt_var_(ast::StmtId sid) {
+        ast::Stmt& s = ast_.stmt_mut(sid); // mutable access (AST에 타입 기록 위해)
+
+        // ----------------------------------------
+        // let: explicit type required (기존 로직 유지 + diag 강화)
+        // ----------------------------------------
         if (!s.is_set) {
-            // let name: Type (= init)?
             if (s.type == ty::kInvalidType) {
+                diag_(diag::Code::kVarDeclTypeAnnotationRequired, s.span);
                 err_(s.span, "let requires an explicit declared type");
             }
 
-            // init 타입 검사(있으면)
             ty::TypeId init_t = ty::kInvalidType;
             if (s.init != ast::k_invalid_expr) {
                 init_t = check_expr_(s.init);
 
                 if (s.type != ty::kInvalidType && !can_assign_(s.type, init_t)) {
-                    std::ostringstream oss;
-                    oss << "cannot initialize let '" << s.name
-                        << "': expected " << types_.to_string(s.type)
-                        << ", got " << types_.to_string(init_t);
-                    err_(s.span, oss.str());
+                    diag_(diag::Code::kTypeLetInitMismatch, s.span,
+                        s.name, types_.to_string(s.type), types_.to_string(init_t));
+                    err_(s.span, "let init mismatch");
                 }
             }
 
-            // 현재 스코프에 삽입 (top-level은 pass1에서 이미 넣었지만 block var는 여기서 넣음)
             ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
+
             auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, vt, s.span);
-            if (!ins.ok && ins.is_duplicate) {
-                err_(s.span, "duplicate symbol (var): " + std::string(s.name));
+            if (!ins.ok) {
+                if (ins.is_duplicate) {
+                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    err_(s.span, "duplicate symbol (var): " + std::string(s.name));
+                } else if (ins.is_shadowing) {
+                    // 정책은 나중에 옵션화 가능. 일단 경고/에러는 name-resolve 단계와 정렬하는 편이 좋다.
+                    diag_(diag::Code::kShadowing, s.span, s.name);
+                }
             }
+
+            // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
+            s.type = vt;
             return;
         }
 
-        // set name = init (type annotation 금지 정책은 파서 레벨에서 이미 처리한다고 가정)
-        auto id = sym_.lookup(s.name);
-        if (!id) {
-            err_(s.span, "set refers to unknown variable: " + std::string(s.name));
-            if (s.init != ast::k_invalid_expr) (void)check_expr_(s.init);
-            return;
-        }
-
-        const auto& sym = sym_.symbol(*id);
-        if (sym.kind != sema::SymbolKind::kVar) {
-            err_(s.span, "set target is not a variable: " + std::string(s.name));
-        }
-
+        // ----------------------------------------
+        // set: type inference declaration
+        //   - must have initializer
+        //   - must NOT infer from null (set x = null; 금지)
+        //   - infer = RHS type (v0)
+        //   - record inferred type into AST (s.type)
+        // ----------------------------------------
         if (s.init == ast::k_invalid_expr) {
+            // 파서가 막았더라도 방어
             err_(s.span, "set requires initializer expression");
+            s.type = types_.error();
             return;
         }
 
+        // (A) RHS 타입 계산
         ty::TypeId rhs = check_expr_(s.init);
-        ty::TypeId dst = sym.declared_type;
-        if (!can_assign_(dst, rhs)) {
-            std::ostringstream oss;
-            oss << "cannot assign to '" << s.name
-                << "': expected " << types_.to_string(dst)
-                << ", got " << types_.to_string(rhs);
-            err_(s.span, oss.str());
+
+        // (B) set x = null; 금지 (정확히 null literal/Null 타입)
+        //     - rhs 타입이 null인 것만으로도 걸 수 있지만,
+        //       더 정확한 메시지/정책 위해 expr kind도 같이 확인.
+        const ast::Expr& init_e = ast_.expr(s.init);
+        const bool rhs_is_null_lit = (init_e.kind == ast::ExprKind::kNullLit);
+        if (rhs_is_null_lit || rhs == types_.builtin(ty::Builtin::kNull)) {
+            diag_(diag::Code::kSetCannotInferFromNull, s.span, s.name);
+            err_(s.span, "set cannot infer type from null (use let with explicit optional type)");
+            rhs = types_.error(); // 계속 진행용
         }
+
+        // (C) 추론 타입 확정 (v0: RHS 그대로)
+        ty::TypeId inferred = rhs;
+        if (inferred == ty::kInvalidType) inferred = types_.error();
+
+        // (D) 현재 스코프에 선언으로 삽입
+        auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, inferred, s.span);
+        if (!ins.ok) {
+            if (ins.is_duplicate) {
+                diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                err_(s.span, "duplicate symbol (var): " + std::string(s.name));
+            } else if (ins.is_shadowing) {
+                // 섀도잉 정책은 옵션화 가능.
+                // 지금은 일단 경고로 기록(또는 프로젝트 정책이 "불가"면 kShadowingNotAllowed로 바꿔)
+                diag_(diag::Code::kShadowing, s.span, s.name);
+            }
+        }
+
+        // (E) AST에 “추론된 타입” 기록 (후속 패스/IR 친화)
+        s.type = inferred;
     }
 
     void TypeChecker::check_stmt_if_(const ast::Stmt& s) {
@@ -309,10 +393,9 @@ namespace gaupel::tyck {
 
         ty::TypeId v = check_expr_(s.expr);
         if (!can_assign_(rt, v)) {
-            std::ostringstream oss;
-            oss << "return type mismatch: expected " << types_.to_string(rt)
-                << ", got " << types_.to_string(v);
-            err_(s.span, oss.str());
+            diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), types_.to_string(v));
+
+            err_(s.span, "return mismatch"); // 저장만 수행, 출력은 위 diag_ 하나로 종결
         }
     }
 
@@ -465,7 +548,8 @@ namespace gaupel::tyck {
             case ast::ExprKind::kIdent: {
                 auto id = sym_.lookup(e.text);
                 if (!id) {
-                    err_(e.span, "unknown identifier: " + std::string(e.text));
+                    diag_(diag::Code::kUndefinedName, e.span, e.text);
+                    err_(e.span, "unknown identifier"); // 저장용
                     t = types_.error();
                 } else {
                     t = sym_.symbol(*id).declared_type;
@@ -588,11 +672,13 @@ namespace gaupel::tyck {
         // & / && 는 place 필요 + pure/comptime 금지 (너의 정책 반영)
         if (e.op == K::kAmp) {
             if (!is_place_expr_(e.a)) {
-                err_(e.span, "borrow '&' requires a place expression (ident/index)");
+                diag_(diag::Code::kBorrowOperandMustBePlace, e.span);
+                err_(e.span, "borrow needs place");
                 return types_.error();
             }
             if (fn_ctx_.is_pure || fn_ctx_.is_comptime) {
-                err_(e.span, "borrow '&' is not allowed in pure/comptime functions (recommended rule)");
+                diag_(diag::Code::kTypeBorrowNotAllowedInPureComptime, e.span);
+                err_(e.span, "borrow not allowed in pure/comptime");
                 return types_.error();
             }
             // mut은 unary op에 저장되는 구조가 아직 없으니 v0에서는 &만 지원.

@@ -531,18 +531,17 @@ static int run_all(
     // TYCK (type check)
     // -----------------------
     {
-        gaupel::tyck::TypeChecker tc(ast, types);
+        // diag::Bag에 바로 적재
+        gaupel::tyck::TypeChecker tc(ast, types, bag);
         auto r = tc.check_program(root);
 
+        // 중복 방지를 위해 여기서는 r.errors를 직접 출력하지 않는다.
+        // (필요하면 디버그 플래그로만 출력)
         std::cout << "\nTYCK:\n";
         if (r.errors.empty()) {
             std::cout << "tyck ok.\n";
         } else {
-            for (const auto& e : r.errors) {
-                // diag::Bag와 아직 연결하지 않았으므로 일단 간단 출력
-                // (나중에 Diagnostic으로 브릿지하면 context 출력도 가능)
-                std::cerr << "error: [" << e.span.lo << "," << e.span.hi << ") " << e.message << "\n";
-            }
+            std::cout << "tyck errors: " << r.errors.size() << "\n";
         }
     }
 

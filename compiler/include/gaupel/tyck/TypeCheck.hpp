@@ -4,6 +4,7 @@
 #include <gaupel/ty/TypePool.hpp>
 #include <gaupel/sema/SymbolTable.hpp>
 #include <gaupel/text/Span.hpp>
+#include <gaupel/diag/Diagnostic.hpp>
 
 #include <cstdint>
 #include <string>
@@ -32,6 +33,11 @@ namespace gaupel::tyck {
         TypeChecker(ast::AstArena& ast, ty::TypePool& types)
             : ast_(ast), types_(types) {}
 
+        TypeChecker(ast::AstArena& ast, ty::TypePool& types, diag::Bag& bag)
+            : ast_(ast), types_(types), diag_bag_(&bag) {}
+
+        void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
+
         // program(StmtId) 하나를 타입체크
         TyckResult check_program(ast::StmtId program_stmt);
 
@@ -45,7 +51,7 @@ namespace gaupel::tyck {
         // stmt
         void check_stmt_(ast::StmtId sid);
         void check_stmt_block_(const ast::Stmt& s);
-        void check_stmt_var_(const ast::Stmt& s);
+        void check_stmt_var_(ast::StmtId sid);
         void check_stmt_if_(const ast::Stmt& s);
         void check_stmt_while_(const ast::Stmt& s);
         void check_stmt_return_(const ast::Stmt& s);
@@ -68,7 +74,14 @@ namespace gaupel::tyck {
         // --------------------
         // helpers
         // --------------------
+
         void err_(Span sp, std::string msg);
+
+        // 코드/args 기반 진단 헬퍼
+        void diag_(diag::Code code, Span sp);
+        void diag_(diag::Code code, Span sp, std::string_view a0);
+        void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
+        void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2);
 
         bool is_place_expr_(ast::ExprId eid) const;
 
@@ -110,6 +123,8 @@ namespace gaupel::tyck {
 
         // for "string literal" placeholder type
         ty::TypeId string_type_ = ty::kInvalidType;
+
+        diag::Bag* diag_bag_ = nullptr;
 
         ast::AstArena& ast_;
         ty::TypePool& types_;

@@ -202,11 +202,9 @@ namespace gaupel::passes {
                     // let: 새 선언
                     declare_var_like(sema::SymbolKind::kVar, s.name, s.type, s.span, sym, bag, opt);
                 } else {
-                    // set: 반드시 기존에 선언된 변수여야 함
-                    if (!sym.lookup(s.name)) {
-                        report(bag, diag::Severity::kError, diag::Code::kSetOnUndeclared, s.span, s.name);
-                    }
-                    // set 자체는 새 심볼을 만들지 않음
+                    // set: v0+ 의미 = 타입추론 선언
+                    // - 심볼을 새로 등록 (declared_type이 없으면 invalid로 넣고, tyck에서 채우거나 error 처리)
+                    declare_var_like(sema::SymbolKind::kVar, s.name, s.type, s.span, sym, bag, opt);
                 }
                 return;
             }

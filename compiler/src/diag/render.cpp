@@ -99,10 +99,31 @@ namespace gaupel::diag {
             case Code::kDuplicateDecl: return "DuplicateDecl";
             case Code::kShadowing: return "Shadowing";
             case Code::kShadowingNotAllowed: return "ShadowingNotAllowed";
-            case Code::kSetOnUndeclared: return "SetOnUndeclared";
 
             case Code::kUseTextSubstExprExpected:   return "UseTextSubstExprExpected";
             case Code::kUseTextSubstTrailingTokens: return "UseTextSubstTrailingTokens";
+
+            // =========================
+            // tyck (TYPE CHECK)
+            // =========================
+            case Code::kTypeErrorGeneric:     return "TypeErrorGeneric";
+            case Code::kTypeLetInitMismatch:  return "TypeLetInitMismatch";
+            case Code::kTypeSetAssignMismatch:return "TypeSetAssignMismatch";
+            case Code::kTypeArgCountMismatch: return "TypeArgCountMismatch";
+            case Code::kTypeArgTypeMismatch:  return "TypeArgTypeMismatch";
+            case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
+            case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
+            case Code::kTypeUnaryBangMustBeBool:return "TypeUnaryBangMustBeBool";
+            case Code::kTypeBinaryOperandsMustMatch:return "TypeBinaryOperandsMustMatch";
+            case Code::kTypeCompareOperandsMustMatch:return "TypeCompareOperandsMustMatch";
+            case Code::kTypeBorrowNotAllowedInPureComptime:return "TypeBorrowNotAllowedInPureComptime";
+            case Code::kTypeEscapeNotAllowedInPureComptime:return "TypeEscapeNotAllowedInPureComptime";
+            case Code::kTypeMismatch:         return "TypeMismatch";
+            case Code::kTypeNotCallable:      return "TypeNotCallable";
+            case Code::kTypeCondMustBeBool:   return "TypeCondMustBeBool";
+            case Code::kTypeIndexMustBeUSize: return "TypeIndexMustBeUSize";
+            case Code::kTypeIndexNonArray:    return "TypeIndexNonArray";
+            case Code::kSetCannotInferFromNull: return "SetCannotInferFromNull";
         }
 
         return "Unknown";
@@ -179,10 +200,31 @@ namespace gaupel::diag {
             case Code::kDuplicateDecl: return "duplicate declaration '{0}' in the same scope";
             case Code::kShadowing: return "declaration '{0}' shadows an outer declaration";
             case Code::kShadowingNotAllowed: return "shadowing is not allowed: '{0}'";
-            case Code::kSetOnUndeclared: return "'set' requires a previously declared variable: '{0}'";
 
             case Code::kUseTextSubstExprExpected: return "use substitution requires an expression (e.g., use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "unexpected tokens after use substitution expression; expected ';'";
+
+            // =========================
+            // tyck (TYPE CHECK)
+            // =========================
+            case Code::kTypeErrorGeneric: /* args[0] = message */ return "{0}";
+            case Code::kTypeLetInitMismatch: return "cannot initialize let '{0}': expected {1}, got {2}";
+            case Code::kTypeSetAssignMismatch:return "cannot assign to '{0}': expected {1}, got {2}";
+            case Code::kTypeArgCountMismatch: return "argument count mismatch: expected {0}, got {1}";
+            case Code::kTypeArgTypeMismatch:  return "argument type mismatch at #{0}: expected {1}, got {2}";
+            case Code::kTypeReturnOutsideFn:  return "return outside of function";
+            case Code::kTypeReturnExprRequired:return "return expression is required (no 'unit' type yet)";
+            case Code::kTypeUnaryBangMustBeBool:return "operator '!' requires bool (got {0})";
+            case Code::kTypeBinaryOperandsMustMatch:return "binary arithmetic requires both operands to have the same type (lhs={0}, rhs={1})";
+            case Code::kTypeCompareOperandsMustMatch:return "comparison requires both operands to have the same type (lhs={0}, rhs={1})";
+            case Code::kTypeBorrowNotAllowedInPureComptime:return "borrow '&' is not allowed in pure/comptime functions";
+            case Code::kTypeEscapeNotAllowedInPureComptime:return "escape '&&' is not allowed in pure/comptime functions";
+            case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "type mismatch: expected {0}, got {1}";
+            case Code::kTypeNotCallable: /* args[0]=got_type */ return "cannot call non-function type {0}";
+            case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "condition must be bool (got {0})";
+            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index expression must be usize (got {0})";
+            case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
+            case Code::kSetCannotInferFromNull: return "set <name> = null; is not allowed";
         }
 
         return "unknown diagnostic";
@@ -261,10 +303,31 @@ namespace gaupel::diag {
             case Code::kDuplicateDecl: return "같은 스코프에서 '{0}'이(가) 중복 선언되었습니다";
             case Code::kShadowing: return "'{0}'이(가) 바깥 선언을 가립니다(shadowing)";
             case Code::kShadowingNotAllowed: return "shadowing이 금지되었습니다: '{0}'";
-            case Code::kSetOnUndeclared: return "'set'은 이미 선언된 변수에만 사용할 수 있습니다: '{0}'";
 
             case Code::kUseTextSubstExprExpected: return "use 치환에는 식이 필요합니다 (예: use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "use 치환 식 뒤에 예상치 못한 토큰이 있습니다. ';'가 필요합니다";
+
+            // =========================
+            // tyck (TYPE CHECK)
+            // =========================
+            case Code::kTypeErrorGeneric: /* args[0] = message */ return "{0}";
+            case Code::kTypeLetInitMismatch: return "let '{0}' 초기화 실패: 기대 {1}, 실제 {2}";
+            case Code::kTypeSetAssignMismatch:return "'{0}'에 대입할 수 없습니다: 기대 {1}, 실제 {2}";
+            case Code::kTypeArgCountMismatch: return "인자 개수가 맞지 않습니다: 기대 {0}개, 실제 {1}개";
+            case Code::kTypeArgTypeMismatch:  return "{0}번째 인자 타입이 맞지 않습니다: 기대 {1}, 실제 {2}";
+            case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
+            case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 unit 타입이 없습니다)";
+            case Code::kTypeUnaryBangMustBeBool:return "'!' 연산자는 bool에만 사용할 수 있습니다(현재 {0})";
+            case Code::kTypeBinaryOperandsMustMatch:return "산술 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
+            case Code::kTypeCompareOperandsMustMatch:return "비교 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
+            case Code::kTypeBorrowNotAllowedInPureComptime:return "pure/comptime 함수에서는 '&'를 사용할 수 없습니다";
+            case Code::kTypeEscapeNotAllowedInPureComptime:return "pure/comptime 함수에서는 '&&'를 사용할 수 없습니다";
+            case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "타입이 일치하지 않습니다: 기대 {0}, 실제 {1}";
+            case Code::kTypeNotCallable: /* args[0]=got_type */ return "함수가 아닌 타입 {0}은(는) 호출할 수 없습니다";
+            case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";
+            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스 식은 usize여야 합니다(현재 {0})";
+            case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
+            case Code::kSetCannotInferFromNull: return "set x = null;은 금지입니다. let x: T? = null;처럼 타입을 명시하세요.";
         }
 
         return "알 수 없는 진단";

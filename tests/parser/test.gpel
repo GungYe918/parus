@@ -6,6 +6,6 @@ use Math::add = add_i32;
 
 fn add(a: i32, b: i32) -> i32 {
     let x: i32? = null;
-    let y: i32 = null;
+    set y = 9999999999999999999;
     return a + b;
 }
