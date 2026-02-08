@@ -1,6 +1,8 @@
 // compiler/src/parse/parse_decl.cpp
 #include <gaupel/parse/Parser.hpp>
 #include <gaupel/syntax/TokenKind.hpp>
+#include <gaupel/ty/Type.hpp>
+#include <gaupel/ty/TypePool.hpp> 
 
 #include <utility>
 #include <unordered_set>
@@ -12,8 +14,8 @@ namespace gaupel {
         using K = syntax::TokenKind;
         return k == K::kAt
             || k == K::kKwExport
-            || k == K::kKwFn;
-            // pub/sub는 class 내부에서만: 여기서 제거
+            || k == K::kKwFn
+            || k == K::kKwUse;
     }
 
     // decl 엔트리. 현재는 fn decl만 decl로 취급한다.
@@ -22,6 +24,12 @@ namespace gaupel {
 
         const Token& t = cursor_.peek();
 
+        // ---- use is treated as a top-level decl (policy) ----
+        if (t.kind == K::kKwUse) {
+            return parse_decl_use();
+        }
+
+        // fn decl
         if (t.kind == K::kAt || t.kind == K::kKwExport || t.kind == K::kKwFn) {
             return parse_decl_fn();
         }
@@ -33,6 +41,11 @@ namespace gaupel {
         s.kind = ast::StmtKind::kError;
         s.span = t.span;
         return ast_.add_stmt(s);
+    }
+
+    // decl-level use: just forward to stmt use parser (AST node is still StmtKind::kUse)
+    ast::StmtId Parser::parse_decl_use() {
+        return parse_stmt_use();
     }
 
     // '@attr' 리스트를 파싱하여 AST arena에 저장한다.
@@ -299,9 +312,10 @@ namespace gaupel {
             cursor_.bump();
         }
 
-        // 3) fn (NOTE: pub/sub는 class 전용이므로 여기서 금지)
+        // 3) fn
         if (!cursor_.at(K::kKwFn)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "fn");
+
             stmt_sync_to_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
 
@@ -322,19 +336,19 @@ namespace gaupel {
             bool progressed = false;
 
             if (cursor_.at(K::kKwPure)) {
-                if (!is_pure_kw) is_pure_kw = true;
+                is_pure_kw = true;
                 cursor_.bump();
                 progressed = true;
             } else if (cursor_.at(K::kKwComptime)) {
-                if (!is_comptime_kw) is_comptime_kw = true;
+                is_comptime_kw = true;
                 cursor_.bump();
                 progressed = true;
             } else if (cursor_.at(K::kKwCommit)) {
-                if (!is_commit) is_commit = true;
+                is_commit = true;
                 cursor_.bump();
                 progressed = true;
             } else if (cursor_.at(K::kKwRecast)) {
-                if (!is_recast) is_recast = true;
+                is_recast = true;
                 cursor_.bump();
                 progressed = true;
             }
@@ -350,6 +364,7 @@ namespace gaupel {
             cursor_.bump();
         } else {
             diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (function name)");
+            // 회복: name이 없더라도 계속 진행해서 파서 흐름 유지
         }
 
         // 6) '?' (throwing)
@@ -366,8 +381,10 @@ namespace gaupel {
 
         // 8) '->' ReturnType
         if (!cursor_.at(K::kArrow)) {
+            // tolerate "- >" split as "-""gt"
             if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
-                cursor_.bump(); cursor_.bump();
+                cursor_.bump();
+                cursor_.bump();
             } else {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
                 recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
@@ -397,7 +414,7 @@ namespace gaupel {
 
         s.is_export = is_export;
 
-        // ---- IMPORTANT: class에서만 pub/sub 허용. 여기선 None 고정 ----
+        // class에서만 pub/sub 허용: 여기선 None 고정
         s.fn_mode = ast::FnMode::kNone;
 
         s.is_throwing = is_throwing;

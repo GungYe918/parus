@@ -105,6 +105,8 @@ namespace gaupel {
         // loop expr 파싱
         ast::ExprId parse_expr_loop(int ternary_depth);
 
+        ast::ExprId parse_use_literal_expr_or_error();
+
         // --------------------
         // type
         // --------------------
@@ -166,6 +168,9 @@ namespace gaupel {
 
         //  함수 선언(스펙 6.1)을 파싱
         ast::StmtId parse_decl_fn();
+
+        // use구문 파싱
+        ast::StmtId parse_decl_use();
 
         //  '@attr' 리스트를 파싱하여 arena에 저장
         std::pair<uint32_t, uint32_t> parse_decl_fn_attr_list();

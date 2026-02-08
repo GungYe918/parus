@@ -45,12 +45,19 @@ namespace gaupel::diag {
         kNamedGroupLabelMustBeIdent,     // label must be identifier (e.g., x: 1)
         kNamedGroupLabelUnderscoreReserved, // '_' cannot be a label; only allowed as value
 
+        // ---- var parsing ----
+        kVarDeclTypeAnnotationRequired,   // let requires ': Type'
+        kVarDeclTypeAnnotationNotAllowed, // set must NOT have ': Type'
+
         // fn param default rules
         kFnParamDefaultNotAllowedOutsideNamedGroup, // positional param can't have "= expr"
         kFnParamDefaultExprExpected,                // named-group param has "=", but expr missing
 
         // fn param named-group count
         kFnOnlyOneNamedGroupAllowed,
+        
+        // fn body parsing rule
+        kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
 
         // pub/sub misuse
         kPubSubOnlyAllowedInClass,
@@ -101,6 +108,25 @@ namespace gaupel::diag {
         kBorrowOperandMustBePlace,
         kEscapeOperandMustBePlace,
         kEscapeOperandMustNotBeBorrow,
+
+        // =========================
+        // passes / sema
+        // =========================
+
+        // top-level 규칙 (Rust처럼 top-level은 decl-only)
+        kTopLevelMustBeBlock,   // parse_program 결과가 block이 아닐 때
+        kTopLevelDeclOnly,      // 최상위에서 stmt 금지
+
+        // name resolve
+        kUndefinedName,         // 선언되지 않은 이름 사용
+        kDuplicateDecl,         // 같은 스코프 중복 선언
+        kShadowing,             // shadowing 발생(경고용)
+        kShadowingNotAllowed,   // shadowing을 에러로 승격
+        kSetOnUndeclared,       // set이 선언되지 않은 변수에 적용됨
+
+        // ---- use parsing ----
+        kUseTextSubstExprExpected,     // use NAME ;  (값 누락)
+        kUseTextSubstTrailingTokens,   // use NAME <expr> ... ; (expr 이후 ; 전 잔여 토큰)
     };
 
 } // namespace gaupel::diag

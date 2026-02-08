@@ -54,6 +54,10 @@ namespace gaupel::diag {
             case Code::kFnParamDefaultExprExpected:                return "FnParamDefaultExprExpected";
             case Code::kNamedGroupLabelMustBeIdent: return "NamedGroupLabelMustBeIdent";
             case Code::kNamedGroupLabelUnderscoreReserved: return "NamedGroupLabelUnderscoreReserved";
+
+            case Code::kVarDeclTypeAnnotationRequired: return "VarDeclTypeAnnotationRequired";
+            case Code::kVarDeclTypeAnnotationNotAllowed: return "VarDeclTypeAnnotationNotAllowed";
+
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
             case Code::kTypeNameExpected: return "TypeNameExpected";
@@ -84,9 +88,21 @@ namespace gaupel::diag {
             case Code::kSwitchNeedsAtLeastOneCase:   return "SwitchNeedsAtLeastOneCase";
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "SwitchOnlyCaseOrDefaultAllowed";
             case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
-            case Code::kBorrowOperandMustBePlace: return "kBorrowOperandMustBePlace";
-            case Code::kEscapeOperandMustBePlace: return "kEscapeOperandMustBePlace";
-            case Code::kEscapeOperandMustNotBeBorrow: return "kEscapeOperandMustNotBeBorrow";
+            case Code::kBorrowOperandMustBePlace: return "BorrowOperandMustBePlace";
+            case Code::kEscapeOperandMustBePlace: return "EscapeOperandMustBePlace";
+            case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
+
+            case Code::kTopLevelMustBeBlock: return "TopLevelMustBeBlock";
+            case Code::kTopLevelDeclOnly: return "TopLevelDeclOnly";
+
+            case Code::kUndefinedName: return "UndefinedName";
+            case Code::kDuplicateDecl: return "DuplicateDecl";
+            case Code::kShadowing: return "Shadowing";
+            case Code::kShadowingNotAllowed: return "ShadowingNotAllowed";
+            case Code::kSetOnUndeclared: return "SetOnUndeclared";
+
+            case Code::kUseTextSubstExprExpected:   return "UseTextSubstExprExpected";
+            case Code::kUseTextSubstTrailingTokens: return "UseTextSubstTrailingTokens";
         }
 
         return "Unknown";
@@ -116,6 +132,10 @@ namespace gaupel::diag {
             case Code::kFnParamDefaultExprExpected: return "default expression expected after '='";
             case Code::kNamedGroupLabelMustBeIdent: return "named-group label must be an identifier";
             case Code::kNamedGroupLabelUnderscoreReserved: return "'_' cannot be used as a named-group label; use it only as a value (e.g., x: _)";
+
+            case Code::kVarDeclTypeAnnotationRequired: return "type annotation is required for 'let' (use: let x: T = ...;)";
+            case Code::kVarDeclTypeAnnotationNotAllowed: return "type annotation is no allowed for 'set' (use: set x = ...;)";
+
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
             case Code::kTypeNameExpected: return "type name expected";
@@ -151,6 +171,18 @@ namespace gaupel::diag {
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
             case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
             case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
+
+            case Code::kTopLevelMustBeBlock: return "internal: program root must be a block";
+            case Code::kTopLevelDeclOnly: return "top-level allows declarations only";
+
+            case Code::kUndefinedName: return "use of undeclared name '{0}'";
+            case Code::kDuplicateDecl: return "duplicate declaration '{0}' in the same scope";
+            case Code::kShadowing: return "declaration '{0}' shadows an outer declaration";
+            case Code::kShadowingNotAllowed: return "shadowing is not allowed: '{0}'";
+            case Code::kSetOnUndeclared: return "'set' requires a previously declared variable: '{0}'";
+
+            case Code::kUseTextSubstExprExpected: return "use substitution requires an expression (e.g., use NAME 123;)";
+            case Code::kUseTextSubstTrailingTokens: return "unexpected tokens after use substitution expression; expected ';'";
         }
 
         return "unknown diagnostic";
@@ -179,6 +211,10 @@ namespace gaupel::diag {
             case Code::kFnParamDefaultExprExpected: return "'=' 뒤에는 기본값 식이 와야 합니다";
             case Code::kNamedGroupLabelMustBeIdent: return "named-group의 라벨은 식별자(ident)여야 합니다";
             case Code::kNamedGroupLabelUnderscoreReserved: return "'_'는 named-group의 라벨로 사용할 수 없습니다. 값 위치에서만 사용하세요(예: x: _)";
+
+            case Code::kVarDeclTypeAnnotationRequired: return "let 선언은 타입을 명시해야 합니다 (예: let x: T = ...;)";
+            case Code::kVarDeclTypeAnnotationNotAllowed: return "set 선언에 타입을 명시하는 것은 허용되지 않습니다 (예: set x = ...;)";
+
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
@@ -214,9 +250,21 @@ namespace gaupel::diag {
 
             case Code::kVarMutMustFollowKw: return "'mut'는 'let/set' 바로 뒤에만 올 수 있습니다 (예: set mut x = ...)";
 
-            case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
-            case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
-            case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
+            case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
+            case Code::kEscapeOperandMustBePlace: return "'&&'의 피연산자는 place expression이어야 합니다";
+            case Code::kEscapeOperandMustNotBeBorrow: return "'&&'는 borrow('& ...')에 적용할 수 없습니다";
+
+            case Code::kTopLevelMustBeBlock: return "내부 오류: 프로그램 루트는 블록이어야 합니다";
+            case Code::kTopLevelDeclOnly: return "최상위에서는 decl만 허용됩니다";
+
+            case Code::kUndefinedName: return "선언되지 않은 이름 '{0}'을(를) 사용했습니다";
+            case Code::kDuplicateDecl: return "같은 스코프에서 '{0}'이(가) 중복 선언되었습니다";
+            case Code::kShadowing: return "'{0}'이(가) 바깥 선언을 가립니다(shadowing)";
+            case Code::kShadowingNotAllowed: return "shadowing이 금지되었습니다: '{0}'";
+            case Code::kSetOnUndeclared: return "'set'은 이미 선언된 변수에만 사용할 수 있습니다: '{0}'";
+
+            case Code::kUseTextSubstExprExpected: return "use 치환에는 식이 필요합니다 (예: use NAME 123;)";
+            case Code::kUseTextSubstTrailingTokens: return "use 치환 식 뒤에 예상치 못한 토큰이 있습니다. ';'가 필요합니다";
         }
 
         return "알 수 없는 진단";

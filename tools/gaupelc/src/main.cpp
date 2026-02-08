@@ -27,7 +27,12 @@ static void print_usage() {
         << "  --expr \"<expr>\" [--lang en|ko] [--context N]\n"
         << "  --stmt \"<stmt>\" [--lang en|ko] [--context N]\n"
         << "  --all  \"<program>\" [--lang en|ko] [--context N]\n"
-        << "  --file <path> [--lang en|ko] [--context N]\n";
+        << "  --file <path> [--lang en|ko] [--context N]\n"
+        << "\n"
+        << "Options:\n"
+        << "  -fmax-errors=N\n"
+        << "  -Wshadow            (emit warning on shadowing)\n"
+        << "  -Werror=shadow      (treat shadowing as error)\n";
 }
 
 static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& args) {
@@ -75,6 +80,22 @@ static uint32_t parse_context(const std::vector<std::string_view>& args) {
         }
     }
     return 2; // 기본: 위/아래 2줄
+}
+
+static gaupel::passes::ShadowingMode parse_shadowing_mode(const std::vector<std::string_view>& args) {
+    using M = gaupel::passes::ShadowingMode;
+
+    bool warn = false;
+    bool err  = false;
+
+    for (auto a : args) {
+        if (a == "-Wshadow") warn = true;
+        if (a == "-Werror=shadow") err = true;
+    }
+
+    if (err)  return M::kError;
+    if (warn) return M::kWarn;
+    return M::kAllow;
 }
 
 /// @brief 토큰 목록 출력
@@ -439,7 +460,13 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
 }
 
 /// @brief stmt 1개 파싱 실행
-static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, uint32_t max_errors) {
+static int run_stmt(
+    std::string_view src_arg,
+    gaupel::diag::Language lang,
+    uint32_t context_lines,
+    uint32_t max_errors,
+    const gaupel::passes::PassOptions& pass_opt
+) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add("<stmt>", src_owned);
@@ -453,7 +480,9 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_stmt();
-    gaupel::passes::run_all_on_stmt(ast, root, bag);
+
+    gaupel::sema::SymbolTable sym;
+    gaupel::passes::run_all_on_stmt(ast, root, sym, bag, pass_opt);
 
     std::cout << "\nAST(STMT):\n";
     dump_stmt(ast, types, root, 0);
@@ -466,7 +495,14 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
 
 
 /// @brief 프로그램(여러 stmt) 파싱 실행
-static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32_t context_lines, std::string_view name, uint32_t max_errors) {
+static int run_all(
+    std::string_view src_arg,
+    gaupel::diag::Language lang,
+    uint32_t context_lines,
+    std::string_view name,
+    uint32_t max_errors,
+    const gaupel::passes::PassOptions& pass_opt
+) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
     const uint32_t file_id = sm.add(std::string(name), std::move(src_owned));
@@ -480,8 +516,12 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_program();
-    gaupel::passes::run_all_on_stmt(ast, root, bag);
 
+    gaupel::sema::SymbolTable sym;
+    // 프로그램 기준으로 돌리고 싶으면 run_all_on_program()을 호출하는 게 더 정확함.
+    // 지금은 parse_program() 결과가 stmt-root이므로 run_all_on_stmt로도 OK.
+    gaupel::passes::run_all_on_program(ast, root, sym, bag, pass_opt);
+    
     std::cout << "\nAST(PROGRAM):\n";
     dump_stmt(ast, types, root, 0);
 
@@ -493,7 +533,13 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
 
 
 /// @brief 파일을 읽어서 프로그램 모드로 파싱
-static int run_file(const std::string& path, gaupel::diag::Language lang, uint32_t context_lines, uint32_t max_errors) {
+static int run_file(
+    const std::string& path,
+    gaupel::diag::Language lang,
+    uint32_t context_lines,
+    uint32_t max_errors,
+    const gaupel::passes::PassOptions& pass_opt
+) {
     std::string content;
     std::string err;
 
@@ -503,7 +549,7 @@ static int run_file(const std::string& path, gaupel::diag::Language lang, uint32
     }
 
     std::string norm = gaupel::normalize_path(path);
-    return run_all(content, lang, context_lines, norm, max_errors);
+    return run_all(content, lang, context_lines, norm, max_errors, pass_opt);
 }
 
 int main(int argc, char** argv) {
@@ -517,7 +563,6 @@ int main(int argc, char** argv) {
     args.reserve(static_cast<size_t>(argc - 1));
     for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
 
-    // --version can appear anywhere
     for (auto a : args) {
         if (a == "--version") {
             std::cout << gaupel::k_version_string << "\n";
@@ -528,6 +573,9 @@ int main(int argc, char** argv) {
     const auto lang = parse_lang(args);
     const auto context_lines = parse_context(args);
     const auto max_errors = parse_max_errors(args);
+
+    gaupel::passes::PassOptions pass_opt{};
+    pass_opt.name_resolve.shadowing = parse_shadowing_mode(args);
 
     auto find_flag = [&](std::string_view key) -> std::optional<size_t> {
         for (size_t i = 0; i < args.size(); ++i) {
@@ -549,7 +597,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --stmt requires a string\n";
             return 1;
         }
-        return run_stmt(args[*i + 1], lang, context_lines, max_errors);
+        return run_stmt(args[*i + 1], lang, context_lines, max_errors, pass_opt);
     }
 
     if (auto i = find_flag("--all")) {
@@ -557,7 +605,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --all requires a string\n";
             return 1;
         }
-        return run_all(args[*i + 1], lang, context_lines, "<all>", max_errors);
+        return run_all(args[*i + 1], lang, context_lines, "<all>", max_errors, pass_opt);
     }
 
     if (auto i = find_flag("--file")) {
@@ -565,7 +613,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --file requires a path\n";
             return 1;
         }
-        return run_file(std::string(args[*i + 1]), lang, context_lines, max_errors);
+        return run_file(std::string(args[*i + 1]), lang, context_lines, max_errors, pass_opt);
     }
 
     print_usage();

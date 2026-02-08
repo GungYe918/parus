@@ -1,14 +1,4 @@
-/*
-fn aa(a: i32, b: bool) -> i64 {
-    return &&&a;
-}*/
-
-x |> f(v: _);
-
-f(v: _) <| x;
-
-&x;
-
-&arr[i];
-
-&f();
+use module "std/io" as io;
+use newT = MyType;
+use PI 3.14159;
+use Math::add = add_i32;

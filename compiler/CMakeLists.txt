@@ -13,6 +13,8 @@ add_library(gaupel_compiler STATIC
   src/passes/check_pipe_hole.cpp
   src/passes/check_place_expr.cpp
   src/passes/check_pub_commit.cpp
+  src/passes/check_top_level_decl_only.cpp
+  src/passes/name_resolve.cpp
   src/passes/passes.cpp
   src/os/file.cpp
 )

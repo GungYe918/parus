@@ -30,6 +30,33 @@ namespace gaupel::detail {
         }
     }
 
+    // local helper: "looks like a value-ish name" (v0 heuristic to block `use foo = bar;`)
+    static bool is_lower_alpha_only(std::string_view s) {
+        if (s.empty()) return false;
+        for (char c : s) {
+            if (!(c >= 'a' && c <= 'z')) return false;
+        }
+        return true;
+    }
+
+    static bool contains_digit(std::string_view s) {
+        for (char c : s) {
+            if (c >= '0' && c <= '9') return true;
+        }
+        return false;
+    }
+
+    static bool is_textsubst_literal_tok(syntax::TokenKind k) {
+        using K = syntax::TokenKind;
+        return k == K::kIntLit
+            || k == K::kFloatLit
+            || k == K::kStringLit
+            || k == K::kCharLit
+            || k == K::kKwTrue
+            || k == K::kKwFalse
+            || k == K::kKwNull;
+    }
+
 } // namespace gaupel::detail
 
 namespace gaupel {
@@ -125,6 +152,48 @@ namespace gaupel {
 
         return parse_stmt_expr();
     }
+
+    // build a literal expr from current token (must be one of literal tokens)
+    ast::ExprId Parser::parse_use_literal_expr_or_error() {
+        using K = syntax::TokenKind;
+
+        const Token t = cursor_.peek();
+        if (!detail::is_textsubst_literal_tok(t.kind)) {
+            diag_report(diag::Code::kUnexpectedToken, t.span, "literal (use substitution)");
+            // recovery: try to parse an expr to move forward, but this may emit extra diags.
+            // safer recovery: just bump one token if not EOF
+            if (!cursor_.at(K::kEof)) cursor_.bump();
+
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = t.span;
+            e.text = "use_textsubst_non_literal";
+            return ast_.add_expr(e);
+        }
+
+        cursor_.bump();
+
+        ast::Expr e{};
+        e.span = t.span;
+        e.text = t.lexeme;
+
+        switch (t.kind) {
+            case K::kIntLit:    e.kind = ast::ExprKind::kIntLit;    break;
+            case K::kFloatLit:  e.kind = ast::ExprKind::kFloatLit;  break;
+            case K::kStringLit: e.kind = ast::ExprKind::kStringLit; break;
+            case K::kCharLit:   e.kind = ast::ExprKind::kCharLit;   break;
+            case K::kKwTrue:
+            case K::kKwFalse:   e.kind = ast::ExprKind::kBoolLit;   break;
+            case K::kKwNull:    e.kind = ast::ExprKind::kNullLit;   break;
+            default:
+                e.kind = ast::ExprKind::kError;
+                e.text = "use_textsubst_unreachable";
+                break;
+        }
+
+        return ast_.add_expr(e);
+    }
+
 
     // '{ ... }' 블록 파싱
     ast::StmtId Parser::parse_stmt_block() {
@@ -251,16 +320,14 @@ namespace gaupel {
 
         if (!is_set) {
             if (!cursor_.at(syntax::TokenKind::kColon)) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "':' (type annotation required for let)");
+                diag_report(diag::Code::kVarDeclTypeAnnotationRequired, cursor_.peek().span);
             } else {
                 cursor_.bump();
                 type_id = parse_type().id;
             }
         } else {
             if (cursor_.at(syntax::TokenKind::kColon)) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "type annotation not allowed for set");
+                diag_report(diag::Code::kVarDeclTypeAnnotationNotAllowed, cursor_.peek().span);
                 cursor_.bump();
                 (void)parse_type();
             }
@@ -579,7 +646,7 @@ namespace gaupel {
     std::pair<uint32_t, uint32_t> Parser::parse_path_segments() {
         using K = syntax::TokenKind;
 
-        // Path := Ident ('::' Ident)*
+        // Path := Ident (('::' | ':' ':') Ident)*
         uint32_t begin = (uint32_t)ast_.path_segs().size();
         uint32_t count = 0;
 
@@ -593,9 +660,21 @@ namespace gaupel {
         ast_.add_path_seg(first.lexeme);
         ++count;
 
-        while (cursor_.at(K::kColonColon)) {
-            cursor_.bump(); // ::
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.at(K::kColonColon)) {
+                cursor_.bump();
+                return true;
+            }
+            // lexer가 '::'를 ':' ':'로 쪼개서 내는 경우 흡수
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
 
+        while (eat_coloncolon()) {
             const Token seg = cursor_.peek();
             if (seg.kind != K::kIdent) {
                 diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
@@ -750,14 +829,15 @@ namespace gaupel {
 
     ast::StmtId Parser::parse_stmt_use() {
         using K = syntax::TokenKind;
+
         const Token use_kw = cursor_.bump(); // 'use'
-    
+
         ast::Stmt s{};
         s.kind = ast::StmtKind::kUse;
         s.span = use_kw.span;
         s.use_kind = ast::UseKind::kError;
 
-        // ---- lookahead: "module" ----
+        // ---- 1) module import ----
         if (cursor_.at(K::kKwModule)) {
             cursor_.bump(); // module
 
@@ -786,125 +866,79 @@ namespace gaupel {
             return ast_.add_stmt(s);
         }
 
-        // ---- FFI: func::ffi / struct::ffi ----
-        // pattern: Ident '::' Ident ...
-        if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColonColon && cursor_.peek(2).kind == K::kIdent) {
-            const Token head = cursor_.peek();       // func / struct
-            const Token tail = cursor_.peek(2);      // ffi
-            const bool is_func_ffi = (head.lexeme == "func"   && tail.lexeme == "ffi");
-            const bool is_struct_ffi= (head.lexeme == "struct" && tail.lexeme == "ffi");
+        // ---- (v0) NOTE: FFI parsing is disabled entirely ----
+        // v1에서 `use func::ffi <sig> name;`, `use struct::ffi Name { ... }` 등을 추가.
 
-            if (is_func_ffi) {
-                cursor_.bump(); // func
-                cursor_.bump(); // ::
-                cursor_.bump(); // ffi
-
-                if (!cursor_.eat(K::kLt)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "<");
-                    recover_to_delim(K::kLt, K::kSemicolon, K::kGt);
-                    cursor_.eat(K::kLt);
-                }
-
-                ty::TypeId sig = parse_ffi_signature_type();
-
-                if (!cursor_.eat(K::kGt)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-                    recover_to_delim(K::kGt, K::kSemicolon);
-                    cursor_.eat(K::kGt);
-                }
-
-                const Token fname = cursor_.peek();
-                if (fname.kind != K::kIdent) {
-                    diag_report(diag::Code::kUnexpectedToken, fname.span, "identifier (ffi function name)");
-                } else {
-                    cursor_.bump();
-                    s.use_kind = ast::UseKind::kFFIFunc;
-                    s.use_name = fname.lexeme;
-                    s.type = sig; // fn signature type id
-                }
-
-                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
-                s.span = span_join(use_kw.span, end);
-                return ast_.add_stmt(s);
-            }
-
-            if (is_struct_ffi) {
-                cursor_.bump(); // struct
-                cursor_.bump(); // ::
-                cursor_.bump(); // ffi
-
-                const Token sname = cursor_.peek();
-                if (sname.kind != K::kIdent) {
-                    diag_report(diag::Code::kUnexpectedToken, sname.span, "identifier (ffi struct name)");
-                } else {
-                    cursor_.bump();
-                    s.use_kind = ast::UseKind::kFFIStruct;
-                    s.use_name = sname.lexeme;
-                }
-
-                uint32_t fb = 0, fc = 0;
-                parse_ffi_struct_body(fb, fc);
-                s.use_field_begin = fb;
-                s.use_field_count = fc;
-
-                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
-                s.span = span_join(use_kw.span, end);
-                return ast_.add_stmt(s);
-            }
-        }
-
-        // ---- common forms start with Ident ----
+        // ---- 2) common forms: must start with Ident ----
         const Token first = cursor_.peek();
         if (first.kind != K::kIdent) {
             diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (use target)");
-            cursor_.bump();
+            if (!cursor_.at(K::kEof)) cursor_.bump();
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);
         }
 
-        // We need to decide among:
-        // 1) TypeAlias: Ident '=' Type
-        // 2) TextSubst: Ident Expr
-        // 3) PathAlias: Path '=' Ident   (Path starts with Ident and may include ::)
-        //
-        // We'll parse a path first (Ident + ::...).
+        // parse path first: Ident ('::' Ident)*
         auto [pb, pc] = parse_path_segments();
 
-        // If next is '=' => PathAlias (if pc>=2) OR TypeAlias (if pc==1 and lhs is single ident)
+        // ---- 2-a) '=' present -> TypeAlias (pc==1) or PathAlias (pc>=2) ----
         if (cursor_.at(K::kAssign)) {
             cursor_.bump(); // '='
 
             if (pc == 1) {
-                // could be type alias: use Name = Type;
+                // v0 policy: forbid symbol-alias-looking case `use foo = bar;`
+                const std::string_view lhs = ast_.path_segs()[pb];
+
+                const Token rhs0 = cursor_.peek();
+                if (rhs0.kind == K::kIdent) {
+                    const std::string_view rhs = rhs0.lexeme;
+
+                    const bool looks_like_value_alias =
+                        detail::is_lower_alpha_only(lhs) &&
+                        detail::is_lower_alpha_only(rhs) &&
+                        !detail::contains_digit(rhs);
+
+                    if (looks_like_value_alias) {
+                        diag_report(diag::Code::kUnexpectedToken, rhs0.span,
+                                    "type name (v0: `use foo = bar;` value-alias is not supported)");
+                        cursor_.bump();
+                        Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                        s.span = span_join(use_kw.span, end);
+                        return ast_.add_stmt(s);
+                    }
+                }
+
+                // treat as type alias: use Name = Type;
                 auto ty = parse_type();
+
                 s.use_kind = ast::UseKind::kTypeAlias;
-                s.use_name = ast_.path_segs()[pb]; // lhs ident
+                s.use_name = ast_.path_segs()[pb];
                 s.type = (ty.id == ty::kInvalidType) ? types_.error() : ty.id;
 
                 Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
                 s.span = span_join(use_kw.span, end);
                 return ast_.add_stmt(s);
-            } else {
-                // path alias: use A::B = name;
-                const Token rhs = cursor_.peek();
-                if (rhs.kind != K::kIdent) {
-                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (path alias target)");
-                } else {
-                    cursor_.bump();
-                    s.use_kind = ast::UseKind::kPathAlias;
-                    s.use_path_begin = pb;
-                    s.use_path_count = pc;
-                    s.use_rhs_ident = rhs.lexeme;
-                }
-
-                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
-                s.span = span_join(use_kw.span, end);
-                return ast_.add_stmt(s);
             }
+
+            // pc >= 2: path alias: use A::B = name;
+            const Token rhs = cursor_.peek();
+            if (rhs.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (path alias target)");
+            } else {
+                cursor_.bump();
+                s.use_kind = ast::UseKind::kPathAlias;
+                s.use_path_begin = pb;
+                s.use_path_count = pc;
+                s.use_rhs_ident = rhs.lexeme;
+            }
+
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
         }
 
-        // Otherwise: TextSubst must have exactly one ident on lhs (not a path)
+        // ---- 2-b) no '=' -> TextSubst (pc must be 1) ----
         if (pc != 1) {
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expected '=' for path alias");
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
@@ -912,19 +946,27 @@ namespace gaupel {
             return ast_.add_stmt(s);
         }
 
-        // TextSubst: use NAME Expr;
+        // TextSubst: use NAME <expr>;
         s.use_kind = ast::UseKind::kTextSubst;
         s.use_name = ast_.path_segs()[pb];
 
-        // expr가 없으면(바로 ';') 진단
+        // 값이 아예 없는 경우
         if (cursor_.at(K::kSemicolon)) {
-            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expression (use substitution)");
+            diag_report(diag::Code::kUseTextSubstExprExpected, cursor_.peek().span);
             cursor_.bump(); // consume ';'
             s.span = span_join(use_kw.span, cursor_.prev().span);
             return ast_.add_stmt(s);
         }
 
+        // v0: 파싱 단계에서는 expr를 허용한다 (literal 강제 금지)
         s.expr = parse_expr();
+
+        // expr 뒤에 ';'가 안 보이면 잔여 토큰이 있다는 뜻 → 전용 진단 + 복구
+        if (!cursor_.at(K::kSemicolon)) {
+            diag_report(diag::Code::kUseTextSubstTrailingTokens, cursor_.peek().span);
+            recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+        }
+
         Span end = stmt_consume_semicolon_or_recover(ast_.expr(s.expr).span);
         s.span = span_join(use_kw.span, end);
         return ast_.add_stmt(s);
