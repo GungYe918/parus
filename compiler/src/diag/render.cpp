@@ -84,6 +84,9 @@ namespace gaupel::diag {
             case Code::kSwitchNeedsAtLeastOneCase:   return "SwitchNeedsAtLeastOneCase";
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "SwitchOnlyCaseOrDefaultAllowed";
             case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
+            case Code::kBorrowOperandMustBePlace: return "kBorrowOperandMustBePlace";
+            case Code::kEscapeOperandMustBePlace: return "kEscapeOperandMustBePlace";
+            case Code::kEscapeOperandMustNotBeBorrow: return "kEscapeOperandMustNotBeBorrow";
         }
 
         return "Unknown";
@@ -145,7 +148,9 @@ namespace gaupel::diag {
             case Code::kSwitchNeedsAtLeastOneCase:  return "switch must contain at least one 'case' clause";
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "only 'case'/'default' clauses are allowed inside switch body";
             case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after 'let'/'set' (e.g., 'set mut x = ...')";
-
+            case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
+            case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
+            case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
         }
 
         return "unknown diagnostic";
@@ -208,6 +213,10 @@ namespace gaupel::diag {
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "switch 본문에는 case/default 절만 올 수 있습니다";
 
             case Code::kVarMutMustFollowKw: return "'mut'는 'let/set' 바로 뒤에만 올 수 있습니다 (예: set mut x = ...)";
+
+            case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
+            case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
+            case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
         }
 
         return "알 수 없는 진단";

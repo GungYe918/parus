@@ -32,22 +32,51 @@ namespace gaupel {
         //
         // so: &&int?  == &&(int?)
         // and user can override by parentheses: (&&int)? , &&(int?) , etc.
+        //
+        // EXTRA RULE (requested):
+        //   To avoid visually/semantically ambiguous chains like "&&&T" or "&&&&T",
+        //   we forbid 3 or more consecutive '&' characters that come from adjacent
+        //   prefix tokens without parentheses separation.
+        //
+        //   Allowed examples:
+        //     &&( &T )
+        //     (&(&T))          // uses parentheses to make intent explicit
+        //     &mut &&T         // "mut" breaks adjacency visually, allowed by default
+        //
+        //   Forbidden examples:
+        //     &&&T
+        //     &&&&T
+        //     &&&T?
+        //
+        // If forbidden pattern appears, we emit an error and return error type
+        // (but still try to recover by parsing the rest).
 
         auto parse_primary = [&]() -> ParsedType {
             const Token s = cursor_.peek();
 
             // ---- fn(...) -> R ----
+            // IMPORTANT:
+            // 타입 문맥에서만 "fn (" 형태를 함수 타입으로 인정한다.
+            // "fn Ident ..." (함수 선언 헤더처럼 보이는 형태)는 타입 파서가 과소비하지 않도록
+            // 여기서 즉시 에러로 처리하고 토큰을 많이 먹지 않는다.
             if (cursor_.at(K::kKwFn)) {
+                if (cursor_.peek(1).kind != K::kLParen) {
+                    // fn 타입이 아닌데 type 위치에 등장한 경우: 과도한 recover 금지
+                    diag_report(diag::Code::kUnexpectedToken, s.span, "type (expected 'fn(' for function type)");
+                    cursor_.bump(); // consume only 'fn' to ensure progress
+
+                    ParsedType out{};
+                    out.id = types_.error();
+                    out.span = s.span;
+                    return out;
+                }
+
                 cursor_.bump(); // 'fn'
 
                 // '('
-                if (!cursor_.eat(K::kLParen)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-                    recover_to_delim(K::kLParen, K::kArrow, K::kRParen);
-                    cursor_.eat(K::kLParen);
-                }
+                cursor_.bump(); // '(' guaranteed by lookahead
 
-                // params
+                // params (TypeList?)
                 std::vector<ty::TypeId> params;
                 Span last = s.span;
 
@@ -75,7 +104,6 @@ namespace gaupel {
 
                 // '->'
                 if (!cursor_.at(K::kArrow)) {
-                    // 기존 코드처럼 "-""?>" 형태 복구도 가능
                     diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
                     recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
                     cursor_.eat(K::kArrow);
@@ -187,35 +215,91 @@ namespace gaupel {
             Token tok{};
         };
 
+        // Track adjacency amp-run to forbid "&&&" style.
+        // We count how many '&' characters appear consecutively from adjacent prefix tokens.
+        // 'mut' breaks adjacency (it is a separate token), so "&mut&&T" is not considered "&&&".
+        bool saw_ambiguous_amp_run = false;
+        int  amp_run_chars = 0;       // consecutive '&' chars from adjacent prefix tokens
+        bool prev_was_amp_token = false;
+
+        Span amp_run_start{};
+        Span amp_run_end{};
+
+        auto bump_amp_run = [&](const Token& amp_tok) {
+            int add = 0;
+            if (amp_tok.kind == K::kAmp) add = 1;
+            else if (amp_tok.kind == K::kAmpAmp) add = 2;
+
+            if (prev_was_amp_token) {
+                amp_run_chars += add;
+                amp_run_end = amp_tok.span;
+            } else {
+                amp_run_chars = add;
+                amp_run_start = amp_tok.span;
+                amp_run_end = amp_tok.span;
+            }
+
+            prev_was_amp_token = true;
+
+            if (amp_run_chars >= 3) {
+                saw_ambiguous_amp_run = true;
+            }
+        };
+
+        auto break_amp_run = [&]() {
+            prev_was_amp_token = false;
+            amp_run_chars = 0;
+            amp_run_start = {};
+            amp_run_end = {};
+        };
+
         std::vector<PrefixOp> ops;
         for (;;) {
-            // single '&' token kind name depends on your TokenKind.
-            // 여기서는 kAmp를 가정한다. (기존 punct table에 추가돼 있어야 함)
             if (cursor_.at(K::kAmp)) {
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kBorrow;
                 op.tok = cursor_.bump(); // '&'
+                bump_amp_run(op.tok);
 
                 // optional 'mut'
                 if (cursor_.at(K::kKwMut)) {
                     cursor_.bump();
                     op.is_mut = true;
+
+                    // "mut" visually/lexically breaks "&" adjacency, so reset run here.
+                    break_amp_run();
                 }
 
                 ops.push_back(op);
                 continue;
             }
 
-            // '&&' (escape)
             if (cursor_.at(K::kAmpAmp)) {
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kEscape;
                 op.tok = cursor_.bump(); // '&&'
+                bump_amp_run(op.tok);
+
                 ops.push_back(op);
                 continue;
             }
 
+            // any other token breaks adjacency
+            break_amp_run();
             break;
+        }
+
+        // If we saw "&&&" (or worse) as an adjacent prefix run, force parentheses usage.
+        // We still parse the suffix to recover, but the resulting type becomes error.
+        if (saw_ambiguous_amp_run) {
+            Span sp = amp_run_start;
+            if (amp_run_end.hi) sp = span_join(amp_run_start, amp_run_end);
+
+            diag_report(
+                diag::Code::kUnexpectedToken,
+                sp,
+                "ambiguous '&' prefix chain (3+ consecutive '&'). Use parentheses, e.g. &&(&T) or &(&&T)"
+            );
         }
 
         // operand is suffix-type (so suffix is tighter than prefix)
@@ -232,6 +316,11 @@ namespace gaupel {
                 out.id = types_.make_escape(out.id);
                 out.span = span_join(op.tok.span, out.span);
             }
+        }
+
+        if (saw_ambiguous_amp_run) {
+            // Force error type id, but keep the best-effort span.
+            out.id = types_.error();
         }
 
         return out;

@@ -11,7 +11,9 @@ add_library(gaupel_compiler STATIC
   src/parse/parse_type.cpp
   src/ast/nodes.cpp
   src/passes/check_pipe_hole.cpp
+  src/passes/check_place_expr.cpp
   src/passes/check_pub_commit.cpp
+  src/passes/passes.cpp
   src/os/file.cpp
 )
 

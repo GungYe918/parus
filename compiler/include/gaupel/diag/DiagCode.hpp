@@ -96,6 +96,11 @@ namespace gaupel::diag {
 
         // ---- var parsing ----
         kVarMutMustFollowKw,        // "set mut x"만 허용, "set x mut" 금지
+
+        // ---- &, &&관련 ----
+        kBorrowOperandMustBePlace,
+        kEscapeOperandMustBePlace,
+        kEscapeOperandMustNotBeBorrow,
     };
 
 } // namespace gaupel::diag

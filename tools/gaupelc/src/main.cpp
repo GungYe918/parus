@@ -15,7 +15,7 @@
 #include "gaupel/diag/DiagCode.hpp"
 #include "gaupel/text/SourceManager.hpp"
 
-#include "gaupel/passes/CheckPipeHole.hpp"
+#include "gaupel/passes/Passes.hpp"
 #include <gaupel/os/File.hpp>
 
 
@@ -427,7 +427,7 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_expr();
-    gaupel::passes::check_pipe_hole(ast, root, bag);
+    gaupel::passes::run_all_on_expr(ast, root, bag);
 
     std::cout << "\nAST:\n";
     dump_expr(ast, root, 0);
@@ -453,6 +453,7 @@ static int run_stmt(std::string_view src_arg, gaupel::diag::Language lang, uint3
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_stmt();
+    gaupel::passes::run_all_on_stmt(ast, root, bag);
 
     std::cout << "\nAST(STMT):\n";
     dump_stmt(ast, types, root, 0);
@@ -479,6 +480,7 @@ static int run_all(std::string_view src_arg, gaupel::diag::Language lang, uint32
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_program();
+    gaupel::passes::run_all_on_stmt(ast, root, bag);
 
     std::cout << "\nAST(PROGRAM):\n";
     dump_stmt(ast, types, root, 0);

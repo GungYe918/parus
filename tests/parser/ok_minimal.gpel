@@ -138,3 +138,7 @@ fn u(x: string) -> void { } // 이제 string은 builtin 아님: NamedUser("strin
 
 use T = i32;
 use module <dfsdf/df> as T;
+
+fn aa(a: i32, b: bool) -> i64 {
+    return &&&a;
+}
