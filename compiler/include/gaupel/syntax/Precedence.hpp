@@ -54,7 +54,6 @@ namespace gaupel::syntax {
                 return InfixInfo{40, Assoc::kLeft};
 
             // logical and
-            case TokenKind::kAmpAmp:
             case TokenKind::kKwAnd:
                 return InfixInfo{50, Assoc::kLeft};
 

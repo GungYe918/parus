@@ -77,6 +77,8 @@ namespace gaupel::syntax {
         kColon,     // :
         kSemicolon, // ;
         kQuestion,  // ?
+        kQuestionQuestion,        // ??     (null-coalescing)
+        kQuestionQuestionAssign,  // ??=    (null-coalescing assign)
 
         // operators
         kAssign,      // =
@@ -189,6 +191,8 @@ namespace gaupel::syntax {
             case TokenKind::kColon: return ":";
             case TokenKind::kSemicolon: return ";";
             case TokenKind::kQuestion: return "?";
+            case TokenKind::kQuestionQuestion: return "??";
+            case TokenKind::kQuestionQuestionAssign: return "??=";
 
             case TokenKind::kAssign: return "=";
             case TokenKind::kPlusAssign: return "+=";

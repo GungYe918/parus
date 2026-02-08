@@ -70,10 +70,6 @@ namespace gaupel {
         
         std::string_view parse_module_path_to_string(bool& out_is_angle);
         
-        ty::TypeId parse_ffi_signature_type(); // parses "<RetType (Types...)>"
-        
-        void parse_ffi_struct_body(uint32_t& out_begin, uint32_t& out_count);
-
         // --------------------
         // expr
         // --------------------
