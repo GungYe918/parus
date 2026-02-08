@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 #include <unordered_map>
+#include <optional> 
 
 
 namespace gaupel::sema {

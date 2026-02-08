@@ -148,13 +148,37 @@ namespace gaupel {
                 return out;
             }
 
-            // ---- Ident type ----
+            // ---- Ident / Path type ----
+            //   Ident ('::' Ident)*
             if (cursor_.at(K::kIdent)) {
-                const Token name = cursor_.bump();
+                const Token first = cursor_.bump();
+
+                std::vector<std::string_view> segs;
+                segs.reserve(4);
+                segs.push_back(first.lexeme);
+
+                Span last_span = first.span;
+
+                // Path tail: :: Ident
+                while (cursor_.at(K::kColonColon)) {
+                    const Token cc = cursor_.bump(); // '::'
+                    (void)cc;
+
+                    const Token next = cursor_.peek();
+                    if (!cursor_.at(K::kIdent)) {
+                        // recover: path expects an ident after '::'
+                        diag_report(diag::Code::kExpectedToken, next.span, "identifier after '::'");
+                        break;
+                    }
+
+                    const Token seg = cursor_.bump();
+                    segs.push_back(seg.lexeme);
+                    last_span = seg.span;
+                }
 
                 ParsedType out{};
-                out.id = types_.intern_ident(name.lexeme); // builtin or named user
-                out.span = name.span;
+                out.id = types_.intern_path(segs.data(), (uint32_t)segs.size());
+                out.span = span_join(first.span, last_span);
                 return out;
             }
 

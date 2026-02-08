@@ -15,6 +15,7 @@ namespace gaupel::ty {
             // reserve: 128
             types_.reserve(128);
             fn_params_.reserve(256);
+            user_path_segs_.reserve(256);
 
             // [0] canonical error type
             {
@@ -45,6 +46,52 @@ namespace gaupel::ty {
 
         uint32_t count() const { return (uint32_t)types_.size(); }
 
+        // ---- user-defined named type (path) interning ----
+        // Stores path segments as a slice into user_path_segs_ to avoid string flatten.
+        //
+        // Example: Foo::Bar::Baz is stored as segs ["Foo","Bar","Baz"].
+        TypeId make_named_user_path(const std::string_view* segs, uint32_t seg_count) {
+            if (!segs || seg_count == 0) {
+                Type t{};
+                t.kind = Kind::kNamedUser;
+                t.path_begin = 0;
+                t.path_count = 0;
+                return push_(t);
+            }
+
+            // linear search v0: compare segment slices
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind != Kind::kNamedUser) continue;
+                if (t.path_count != seg_count) continue;
+
+                bool same = true;
+                for (uint32_t k = 0; k < seg_count; ++k) {
+                    if (user_path_segs_[t.path_begin + k] != segs[k]) { same = false; break; }
+                }
+                if (same) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kNamedUser;
+            t.path_begin = (uint32_t)user_path_segs_.size();
+            t.path_count = seg_count;
+
+            for (uint32_t k = 0; k < seg_count; ++k) user_path_segs_.push_back(segs[k]);
+
+            return push_(t);
+        }
+
+        // Convenience: intern a path
+        TypeId intern_path(const std::string_view* segs, uint32_t seg_count) {
+            // Builtin is only allowed for single-segment identifiers.
+            if (segs && seg_count == 1) {
+                Builtin b{};
+                if (builtin_from_name(segs[0], b)) return builtin(b);
+            }
+            return make_named_user_path(segs, seg_count);
+        }
+
         // intern optional/array (simple linear search v0)
         TypeId make_optional(TypeId elem) {
             for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
@@ -67,18 +114,6 @@ namespace gaupel::ty {
             Type t{};
             t.kind = Kind::kArray;
             t.elem = elem;
-            return push_(t);
-        }
-
-        TypeId make_named_user(std::string_view name) {
-            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
-                const auto& t = types_[i];
-                if (t.kind == Kind::kNamedUser && t.name == name) return i;
-            }
-
-            Type t{};
-            t.kind = Kind::kNamedUser;
-            t.name = name;
             return push_(t);
         }
 
@@ -134,11 +169,22 @@ namespace gaupel::ty {
             return push_(t);
         }
 
+        // ---- fn signature introspection ----
+        bool is_fn(TypeId id) const {
+            return id != kInvalidType && id < types_.size() && types_[id].kind == Kind::kFn;
+        }
+
+        TypeId fn_param_at(TypeId fn, uint32_t i) const {
+            if (!is_fn(fn)) return error();
+            const Type& t = types_[fn];
+            if (i >= t.param_count) return error();
+            return fn_params_[t.param_begin + i];
+        }
+
         // convenience: ident -> (builtin or named_user)
         TypeId intern_ident(std::string_view name) {
-            Builtin b{};
-            if (builtin_from_name(name, b)) return builtin(b);
-            return make_named_user(name);
+            const std::string_view segs[1] = { name };
+            return intern_path(segs, 1);
         }
 
         // builtin name -> Builtin (aliases 포함)
@@ -222,9 +268,19 @@ namespace gaupel::ty {
                     case Kind::kArray:
                         os << "(Array elem=" << t.elem << ")";
                         break;
-                    case Kind::kNamedUser:
-                        os << "(NamedUser name=" << t.name << ")";
+                    case Kind::kNamedUser: {
+                        os << "(NamedUser path=";
+                        if (t.path_count == 0) {
+                            os << "<empty>";
+                        } else {
+                            for (uint32_t k = 0; k < t.path_count; ++k) {
+                                if (k) os << "::";
+                                os << user_path_segs_[t.path_begin + k];
+                            }
+                        }
+                        os << ")";
                         break;
+                    }
                     case Kind::kBorrow:
                         os << "(Borrow mut=" << (t.borrow_is_mut ? 1 : 0) << " elem=" << t.elem << ")";
                         break;
@@ -275,9 +331,16 @@ namespace gaupel::ty {
                     out += builtin_name(t.builtin);
                     return;
 
-                case Kind::kNamedUser:
-                    out.append(t.name.data(), t.name.size());
+                case Kind::kNamedUser: {
+                    if (t.path_count == 0) { out += "<user-type?>"; return; }
+
+                    for (uint32_t k = 0; k < t.path_count; ++k) {
+                        if (k) out += "::";
+                        const auto seg = user_path_segs_[t.path_begin + k];
+                        out.append(seg.data(), seg.size());
+                    }
                     return;
+                }
 
                 case Kind::kOptional: {
                     // elem?
@@ -355,6 +418,7 @@ namespace gaupel::ty {
         std::vector<Type> types_;
         std::vector<TypeId> fn_params_;
         std::vector<TypeId> builtin_ids_;
+        std::vector<std::string_view> user_path_segs_;
     };      
 
 } // namespace gaupel::ty

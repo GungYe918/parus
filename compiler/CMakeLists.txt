@@ -17,6 +17,7 @@ add_library(gaupel_compiler STATIC
   src/passes/name_resolve.cpp
   src/passes/passes.cpp
   src/os/file.cpp
+  src/tyck/type_check.cpp
 )
 
 target_include_directories(gaupel_compiler

@@ -26,14 +26,14 @@ namespace gaupel::ty {
     enum class Kind : uint8_t {
         kError,
         kBuiltin,
-        kOptional, // T?
-        kArray,    // T[]
-        kNamedUser, // user-defined type name (v0: unresolved/class later)
+        kOptional,  // T?
+        kArray,     // T[]
+        kNamedUser, // user-defined type name (NOW: path slice)
 
-        kBorrow,     // &T / &mut T
-        kEscape,     // &&T 
+        kBorrow,    // &T / &mut T
+        kEscape,    // &&T
 
-        kFn,        // (T1, T2, ...) -> R
+        kFn,        // fn(T1, T2, ...) -> R
     };
 
     struct Type {
@@ -42,15 +42,16 @@ namespace gaupel::ty {
         // kBuiltin
         Builtin builtin = Builtin::kNull;
 
-        // kOptional / kArray
+        // kOptional / kArray / kBorrow / kEscape
         TypeId elem = kInvalidType;
 
-        // kNamedUser
-        std::string_view name{};
+        // kNamedUser: path slice (no string flatten!)
+        uint32_t path_begin = 0;
+        uint32_t path_count = 0;
 
         // kBorrow
         bool borrow_is_mut = false;
-        
+
         // kFn
         TypeId ret = kInvalidType;
         uint32_t param_begin = 0;

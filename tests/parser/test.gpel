@@ -2,3 +2,10 @@ use module "std/io" as io;
 use newT = MyType;
 use PI 3.14159;
 use Math::add = add_i32;
+
+
+fn add(a: i32, b: i32) -> i32 {
+    let x: i32? = null;
+    let y: i32 = null;
+    return a + b;
+}
