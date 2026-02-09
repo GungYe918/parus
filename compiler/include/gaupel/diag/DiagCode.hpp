@@ -147,7 +147,14 @@ namespace gaupel::diag {
         kTypeCondMustBeBool,    // args[0]=got_type
         kTypeIndexMustBeUSize,  // args[0]=got_type
         kTypeIndexNonArray,     // args[0]=base_type
-        kSetCannotInferFromNull // set <name> = null; is not allowed
+        kSetCannotInferFromNull, // set <name> = null; is not allowed
+
+        // ---- integer literal / inference ----
+        kIntLiteralInvalid,          // args[0]=text
+        kIntLiteralOverflow,         // args[0]=text, args[1]=target (e.g., "i128" or "u128")
+        kIntLiteralNeedsTypeContext, // (no args) "{integer}" requires context
+        kIntLiteralDoesNotFit,       // args[0]=target, args[1]=value (shortened)
+        kIntToFloatNotAllowed,       // args[0]=float_type
     };
 
 } // namespace gaupel::diag

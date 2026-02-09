@@ -169,7 +169,22 @@ namespace gaupel::sema {
             return r;
         }
 
+        // ----------------------------
+        // for tyck / passes
+        // ----------------------------
+
         const Symbol& symbol(uint32_t id) const { return symbols_[id]; }
+
+        Symbol& symbol_mut(uint32_t id) { return symbols_[id]; }
+
+        // 타입 갱신: SymbolId 기반으로 declared_type을 바꿀 수 있어야 한다.
+        // (set 추론 확정, deferred integer 확정 등)
+        bool update_declared_type(uint32_t id, ty::TypeId new_type) {
+            if (id >= symbols_.size()) return false;
+            symbols_[id].declared_type = new_type;
+            return true;
+        }
+
         const std::vector<Symbol>& symbols() const { return symbols_; }
         const std::vector<Shadowing>& shadowings() const { return shadowings_; }
 

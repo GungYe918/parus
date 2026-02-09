@@ -18,6 +18,7 @@ add_library(gaupel_compiler STATIC
   src/passes/passes.cpp
   src/os/file.cpp
   src/tyck/type_check.cpp
+  src/num/big_int.cpp
 )
 
 target_include_directories(gaupel_compiler

@@ -5,6 +5,7 @@
 #include <gaupel/sema/SymbolTable.hpp>
 #include <gaupel/text/Span.hpp>
 #include <gaupel/diag/Diagnostic.hpp>
+#include <gaupel/num/BigInt.hpp>
 
 #include <cstdint>
 #include <string>
@@ -133,14 +134,22 @@ namespace gaupel::tyck {
         // Deferred integer inference
         // ----------------------------------------
         struct PendingInt {
-            __int128 value = 0;
-            bool has_value = false;     // currently only literal-backed
+            num::BigInt value{};
+            bool has_value = false;     // literal-backed only
             bool resolved = false;
             ty::TypeId resolved_type = ty::kInvalidType;
         };
 
-        // key by variable name for v0 (later: key by SymbolId once SymbolTable exposes stable ids)
-        std::unordered_map<std::string, PendingInt> pending_int_;
+        // By SymbolId: set x = <int literal> ;  (var-level origin)
+        std::unordered_map<uint32_t, PendingInt> pending_int_sym_;
+
+        // By ExprId: any integer literal expression (and optionally propagated)
+        std::unordered_map<uint32_t, PendingInt> pending_int_expr_;
+
+        // (TypeChecker private) inferred integer("{integer}")를 expected 정수 타입으로 확정 시도
+        bool resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected);
+        bool infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const;
+        static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
     };
 
 } // namespace gaupel::tyck

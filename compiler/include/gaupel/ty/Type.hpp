@@ -13,6 +13,9 @@ namespace gaupel::ty {
     enum class Builtin : uint8_t {
         kNull,
 
+        kUnit,
+        kNever,
+
         kBool,
         kChar,
 
@@ -24,7 +27,7 @@ namespace gaupel::ty {
         
         kISize, kUSize,
 
-        kF32, kF64,
+        kF32, kF64, kF128,
 
         // -------------------------------------------------
         // INTERNAL ONLY (user cannot spell these type names)

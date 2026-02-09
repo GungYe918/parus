@@ -8,6 +8,7 @@ namespace gaupel {
         using K = syntax::TokenKind;
 
         const Token start = cursor_.peek();
+        (void)start;
 
         // --------------------
         // type grammar (v0)

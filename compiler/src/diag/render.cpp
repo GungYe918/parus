@@ -124,6 +124,13 @@ namespace gaupel::diag {
             case Code::kTypeIndexMustBeUSize: return "TypeIndexMustBeUSize";
             case Code::kTypeIndexNonArray:    return "TypeIndexNonArray";
             case Code::kSetCannotInferFromNull: return "SetCannotInferFromNull";
+
+            case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
+            case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
+            case Code::kIntLiteralNeedsTypeContext: return "IntLiteralNeedsTypeContext";
+            case Code::kIntLiteralDoesNotFit: return "IntLiteralDoesNotFit";
+            case Code::kIntToFloatNotAllowed: return "IntToFloatNotAllowed";
+
         }
 
         return "Unknown";
@@ -225,6 +232,12 @@ namespace gaupel::diag {
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index expression must be usize (got {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
             case Code::kSetCannotInferFromNull: return "set <name> = null; is not allowed";
+
+            case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
+            case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
+            case Code::kIntLiteralNeedsTypeContext: return "integer literal needs a type context; add an explicit type (e.g., i32) or provide a typed destination";
+            case Code::kIntLiteralDoesNotFit: return "integer literal does not fit into '{0}'";
+            case Code::kIntToFloatNotAllowed: return "cannot use an inferred integer in '{f64}' context (no implicit int->float)";
         }
 
         return "unknown diagnostic";
@@ -327,7 +340,13 @@ namespace gaupel::diag {
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스 식은 usize여야 합니다(현재 {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
-            case Code::kSetCannotInferFromNull: return "set x = null;은 금지입니다. let x: T? = null;처럼 타입을 명시하세요.";
+            case Code::kSetCannotInferFromNull: return "set x = null;은 허용되지 않습니다. let x: T? = null;처럼 타입을 명시하세요.";
+
+            case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
+            case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
+            case Code::kIntLiteralNeedsTypeContext: return "정수 리터럴은 타입 컨텍스트가 필요합니다. (예: i32)처럼 명시하거나, 타입이 정해진 대상에 대입하세요.";
+            case Code::kIntLiteralDoesNotFit: return "정수 리터럴이 '{0}' 범위를 벗어납니다";
+            case Code::kIntToFloatNotAllowed: return "추론 정수는 '{f64}' 컨텍스트에서 사용할 수 없습니다(암시적 int->float 변환 없음)";
         }
 
         return "알 수 없는 진단";

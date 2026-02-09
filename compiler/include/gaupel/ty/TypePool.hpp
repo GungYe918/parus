@@ -191,6 +191,10 @@ namespace gaupel::ty {
         static bool builtin_from_name(std::string_view name, Builtin& out) {
             // exact
             if (name == "null")   { out = Builtin::kNull; return true; }
+
+            if (name == "unit")  { out = Builtin::kUnit; return true; }
+            if (name == "never") { out = Builtin::kNever; return true; }
+
             if (name == "bool")   { out = Builtin::kBool; return true; }
             if (name == "char")   { out = Builtin::kChar; return true; }
 
@@ -211,6 +215,7 @@ namespace gaupel::ty {
 
             if (name == "f32") { out = Builtin::kF32; return true; }
             if (name == "f64") { out = Builtin::kF64; return true; }
+            if (name == "f128") { out = Builtin::kF128; return true; }
 
             // NOTE:
             // - Builtin::kInferInteger is INTERNAL ONLY.
@@ -225,6 +230,10 @@ namespace gaupel::ty {
         static std::string_view builtin_name(Builtin b) {
             switch (b) {
                 case Builtin::kNull:   return "null";
+
+                case Builtin::kUnit:  return "unit";
+                case Builtin::kNever: return "never";
+
                 case Builtin::kBool:   return "bool";
                 case Builtin::kChar:   return "char";
 
@@ -245,6 +254,7 @@ namespace gaupel::ty {
 
                 case Builtin::kF32: return "f32";
                 case Builtin::kF64: return "f64";
+                case Builtin::kF128: return "f128";
 
                 case Builtin::kInferInteger: return "{integer}";
             }
