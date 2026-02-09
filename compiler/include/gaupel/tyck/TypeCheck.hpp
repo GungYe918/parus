@@ -124,10 +124,23 @@ namespace gaupel::tyck {
         // for "string literal" placeholder type
         ty::TypeId string_type_ = ty::kInvalidType;
 
-        diag::Bag* diag_bag_ = nullptr;
 
         ast::AstArena& ast_;
         ty::TypePool& types_;
+        diag::Bag* diag_bag_ = nullptr;
+
+        // ----------------------------------------
+        // Deferred integer inference
+        // ----------------------------------------
+        struct PendingInt {
+            __int128 value = 0;
+            bool has_value = false;     // currently only literal-backed
+            bool resolved = false;
+            ty::TypeId resolved_type = ty::kInvalidType;
+        };
+
+        // key by variable name for v0 (later: key by SymbolId once SymbolTable exposes stable ids)
+        std::unordered_map<std::string, PendingInt> pending_int_;
     };
 
 } // namespace gaupel::tyck

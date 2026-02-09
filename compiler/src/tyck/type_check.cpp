@@ -5,6 +5,7 @@
 #include <gaupel/diag/DiagCode.hpp>
 
 #include <sstream>
+#include <unordered_map>
 
 
 namespace gaupel::tyck {
@@ -171,11 +172,67 @@ namespace gaupel::tyck {
         }
     }
 
+    static bool fits_builtin_int_(__int128 v, ty::Builtin dst) {
+        const __int128 I8_MIN = -128, I8_MAX = 127;
+        const __int128 I16_MIN = -32768, I16_MAX = 32767;
+        const __int128 I32_MIN = -((__int128)1 << 31), I32_MAX = (((__int128)1 << 31) - 1);
+        const __int128 I64_MIN = -((__int128)1 << 63), I64_MAX = (((__int128)1 << 63) - 1);
+        const __int128 I128_MIN = -((__int128)1 << 127);
+        const __int128 I128_MAX = (((__int128)1 << 127) - 1);
+
+        switch (dst) {
+            case ty::Builtin::kI8:   return v >= I8_MIN && v <= I8_MAX;
+            case ty::Builtin::kI16:  return v >= I16_MIN && v <= I16_MAX;
+            case ty::Builtin::kI32:  return v >= I32_MIN && v <= I32_MAX;
+            case ty::Builtin::kI64:  return v >= I64_MIN && v <= I64_MAX;
+            case ty::Builtin::kI128: return v >= I128_MIN && v <= I128_MAX;
+
+            // u*는 음수 금지. v가 음수면 false.
+            case ty::Builtin::kU8:   return v >= 0 && v <= 255;
+            case ty::Builtin::kU16:  return v >= 0 && v <= 65535;
+            case ty::Builtin::kU32:  return v >= 0 && v <= (((__int128)1 << 32) - 1);
+            case ty::Builtin::kU64:  return v >= 0 && v <= (((__int128)1 << 64) - 1);
+            case ty::Builtin::kU128: return v >= 0; // __int128로는 상한(2^128-1) 표현 불가 -> v0에서 양수면 "일단 가능" 처리
+
+            default: return false;
+        }
+    }
+
+    static ty::Builtin pick_smallest_signed_int_(__int128 v) {
+        if (fits_builtin_int_(v, ty::Builtin::kI8))   return ty::Builtin::kI8;
+        if (fits_builtin_int_(v, ty::Builtin::kI16))  return ty::Builtin::kI16;
+        if (fits_builtin_int_(v, ty::Builtin::kI32))  return ty::Builtin::kI32;
+        if (fits_builtin_int_(v, ty::Builtin::kI64))  return ty::Builtin::kI64;
+        return ty::Builtin::kI128;
+    }
+
     // --------------------
     // pass 2: check
     // --------------------
     void TypeChecker::second_pass_check_program_(ast::StmtId program_stmt) {
         check_stmt_(program_stmt);
+
+        // ----------------------------------------
+        // Finalize unresolved deferred integers:
+        // - If a set-var inferred as "{integer}" is never consumed in a way that fixes the type,
+        //   we pick the smallest signed integer type that fits (i8..i128).
+        // - This keeps DX friendly and avoids leaving IR in an unresolved state.
+        // ----------------------------------------
+        for (auto& kv : pending_int_) {
+            PendingInt& pi = kv.second;
+            if (!pi.has_value) continue;
+            if (pi.resolved) continue;
+
+            // pick smallest signed type
+            ty::Builtin b = pick_smallest_signed_int_(pi.value);
+            pi.resolved = true;
+            pi.resolved_type = types_.builtin(b);
+
+            // NOTE:
+            // v0에서는 SymbolTable에 직접 type mutation API가 없으므로,
+            // 실제 소비 지점에서는 pending_int_를 우선 확인하는 방식으로 동작하게 된다.
+            // (다음 단계에서 SymbolTable이 SymbolId 기반으로 타입 갱신을 지원하면 여기서 반영)
+        }
     }
 
     // --------------------
@@ -246,19 +303,52 @@ namespace gaupel::tyck {
         sym_.pop_scope();
     }
 
-    bool fits_int_(std::string_view text, ty::Builtin dst) {
+    static bool parse_i128_(std::string_view text, __int128& out) {
         // text는 AST에 저장된 리터럴 원문 (예: "4", "-1")
-        long long v = 0;
-        try { v = std::stoll(std::string(text)); }
-        catch (...) { return false; }
+        // 10진 정수만 가정(v0). 필요하면 0x/0b는 Lexer 단계에서 별도 토큰화 후 확장.
+        if (text.size() == 0) return false;
 
-        switch (dst) {
-            case ty::Builtin::kI8:   return v >= -128 && v <= 127;
-            case ty::Builtin::kI16:  return v >= -32768 && v <= 32767;
-            case ty::Builtin::kI32:  return v >= -2147483648LL && v <= 2147483647LL;
-            case ty::Builtin::kI64:  return true;
-            // unsigned도 원하면 추가
-            default: return false;
+        bool neg = false;
+        size_t i = 0;
+        if (text[0] == '-') { neg = true; i = 1; }
+        if (i >= text.size()) return false;
+
+        __int128 v = 0;
+
+        // i128 범위 체크를 위해 절대값을 unsigned로 받지 않고,
+        // "v = v*10 + d"에서 overflow를 직접 감지한다.
+        for (; i < text.size(); ++i) {
+            char c = text[i];
+            if (c < '0' || c > '9') return false;
+            int d = c - '0';
+
+            // overflow 체크: v*10 + d 가 i128 절대범위를 넘는지
+            // signed i128 최대:  2^127 - 1
+            // signed i128 최소: -2^127
+            const __int128 I128_MAX = (((__int128)1 << 126) - 1) * 2 + 1; // 2^127 - 1
+            const __int128 I128_MIN = -((__int128)1 << 127);
+
+            if (!neg) {
+                if (v > (I128_MAX - d) / 10) return false;
+                v = v * 10 + d;
+            } else {
+                // 음수는 최소 -2^127 까지 허용
+                // out = -(abs). abs는 2^127 까지 가능
+                const __int128 ABS_MIN = ((__int128)1 << 127); // 2^127
+                // 여기서는 v를 abs로 누적한다.
+                if (v > (ABS_MIN - d) / 10) return false;
+                v = v * 10 + d;
+            }
+        }
+
+        if (!neg) {
+            out = v;
+            return true;
+        } else {
+            const __int128 ABS_MIN = ((__int128)1 << 127);
+            if (v == ABS_MIN) { out = -ABS_MIN; return true; } // exactly i128 min
+            out = -v;
+            return true;
         }
     }
 
@@ -331,8 +421,28 @@ namespace gaupel::tyck {
             rhs = types_.error(); // 계속 진행용
         }
 
-        // (C) 추론 타입 확정 (v0: RHS 그대로)
+        // (C) 추론 타입 확정
+        //     - 정수 리터럴은 Rust처럼 "{integer}" placeholder로 보류한다.
+        //     - 실제 i8~i128 선택/확정은 "소비될 때" 수행한다.
         ty::TypeId inferred = rhs;
+        if (init_e.kind == ast::ExprKind::kIntLit) {
+            __int128 v = 0;
+            if (!parse_i128_(init_e.text, v)) {
+                err_(init_e.span, "integer literal is out of range for i128 (overflow)");
+                inferred = types_.error();
+            } else {
+                inferred = types_.builtin(ty::Builtin::kInferInteger);
+
+                PendingInt pi{};
+                pi.value = v;
+                pi.has_value = true;
+                pi.resolved = false;
+                pi.resolved_type = ty::kInvalidType;
+
+                pending_int_[std::string(s.name)] = pi;
+            }
+        }
+
         if (inferred == ty::kInvalidType) inferred = types_.error();
 
         // (D) 현재 스코프에 선언으로 삽입
@@ -520,8 +630,9 @@ namespace gaupel::tyck {
                 break;
 
             case ast::ExprKind::kIntLit:
-                // v0: default i64
-                t = types_.builtin(ty::Builtin::kI64);
+                // v1: Rust-like unsuffixed integer -> internal placeholder "{integer}"
+                // 실제 i8~i128 확정은 소비될 때 수행한다.
+                t = types_.builtin(ty::Builtin::kInferInteger);
                 break;
 
             case ast::ExprKind::kFloatLit:
@@ -636,6 +747,47 @@ namespace gaupel::tyck {
         // null -> T? 허용
         if (is_null_(src) && is_optional_(dst)) return true;
 
+        // -------------------------------------------------
+        // "{integer}" placeholder rules (Rust-like)
+        // - placeholder can be assigned ONLY into an integer type (signed/unsigned),
+        //   and only if the literal value fits.
+        // - placeholder -> float is NOT allowed (no implicit int->float).
+        // -------------------------------------------------
+        const auto& dt = types_.get(dst);
+        const auto& st = types_.get(src);
+
+        auto is_int_builtin = [&](ty::Builtin b) -> bool {
+            return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
+                   b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
+                   b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
+                   b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
+                   b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+        };
+
+        auto is_float_builtin = [&](ty::Builtin b) -> bool {
+            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64;
+        };
+
+        const bool dst_is_builtin = (dt.kind == ty::Kind::kBuiltin);
+        const bool src_is_builtin = (st.kind == ty::Kind::kBuiltin);
+
+        if (dst_is_builtin && src_is_builtin &&
+            st.builtin == ty::Builtin::kInferInteger) {
+
+            if (is_float_builtin(dt.builtin)) {
+                // set x = 5; then let c: f64 = x;  => ERROR
+                return false;
+            }
+
+            if (!is_int_builtin(dt.builtin)) {
+                return false;
+            }
+
+            // literal-backed placeholder만 v1에서 허용
+            // (이 함수는 const이므로 실제 해소는 다른 곳에서 수행; 여기서는 "가능성"만 판단)
+            return true;
+        }
+
         return false;
     }
 
@@ -731,6 +883,88 @@ namespace gaupel::tyck {
         ty::TypeId lt = check_expr_(e.a);
         ty::TypeId rt = check_expr_(e.b);
 
+        auto is_builtin = [&](ty::TypeId t) -> bool {
+            return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
+        };
+
+        auto builtin_of = [&](ty::TypeId t) -> ty::Builtin {
+            return types_.get(t).builtin;
+        };
+
+        auto is_infer_int = [&](ty::TypeId t) -> bool {
+            return is_builtin(t) && builtin_of(t) == ty::Builtin::kInferInteger;
+        };
+
+        auto is_float = [&](ty::TypeId t) -> bool {
+            if (!is_builtin(t)) return false;
+            auto b = builtin_of(t);
+            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64;
+        };
+
+        auto is_int = [&](ty::TypeId t) -> bool {
+            if (!is_builtin(t)) return false;
+            auto b = builtin_of(t);
+            return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
+                   b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
+                   b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
+                   b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
+                   b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+        };
+
+        auto resolve_placeholder_to_ = [&](ty::TypeId expected) -> bool {
+            // v1: placeholder는 "set var = int literal"로부터만 생긴다고 가정하고,
+            // 이름 기반으로 pending_int_에서 값 얻어온다.
+            //
+            // - 좌/우 expr이 ident가 아닌 경우(직접 리터럴)는 아직 pending에 없을 수 있음.
+            //   그 경우는 e.a/e.b에서 text를 직접 파싱한다.
+            auto resolve_expr = [&](ast::ExprId eid) -> bool {
+                const ast::Expr& ex = ast_.expr(eid);
+
+                __int128 v = 0;
+                bool ok = false;
+
+                if (ex.kind == ast::ExprKind::kIntLit) {
+                    ok = parse_i128_(ex.text, v);
+                } else if (ex.kind == ast::ExprKind::kIdent) {
+                    auto it = pending_int_.find(std::string(ex.text));
+                    if (it != pending_int_.end() && it->second.has_value) {
+                        v = it->second.value;
+                        ok = true;
+
+                        // 이미 다른 타입으로 확정된 상태인데, 여기 expected와 다르면 에러
+                        if (it->second.resolved && it->second.resolved_type != expected) {
+                            err_(ex.span, "deferred integer already resolved to a different type");
+                            return false;
+                        }
+                    }
+                }
+
+                if (!ok) return false;
+
+                // expected 범위 체크
+                const auto& et = types_.get(expected);
+                if (et.kind != ty::Kind::kBuiltin) return false;
+
+                if (!fits_builtin_int_(v, et.builtin)) {
+                    err_(ex.span, "integer literal does not fit the required type");
+                    return false;
+                }
+
+                // ident면 resolve 기록
+                if (ex.kind == ast::ExprKind::kIdent) {
+                    auto& pi = pending_int_[std::string(ex.text)];
+                    pi.resolved = true;
+                    pi.resolved_type = expected;
+                }
+                return true;
+            };
+
+            bool okA = true, okB = true;
+            if (is_infer_int(lt)) okA = resolve_expr(e.a);
+            if (is_infer_int(rt)) okB = resolve_expr(e.b);
+            return okA && okB;
+        };
+
         // == / != 에서 null 비교 제한:
         // - (T? == null) OK
         // - (T  == null) ERROR
@@ -751,8 +985,30 @@ namespace gaupel::tyck {
         // 논리 and/or는 키워드로 처리한다고 했으니 여기선 &&/|| 안 다룸
         // 간단 산술: + - * / % 는 "좌우 타입 동일"만 허용
         if (e.op == K::kPlus || e.op == K::kMinus || e.op == K::kStar || e.op == K::kSlash || e.op == K::kPercent) {
+            // float 컨텍스트에 placeholder가 끼면 즉시 에러 (no implicit int->float)
+            if ((is_float(lt) && is_infer_int(rt)) || (is_float(rt) && is_infer_int(lt))) {
+                err_(e.span, "cannot use deferred integer '{integer}' in float arithmetic (no implicit int->float)");
+                return types_.error();
+            }
+
+            // placeholder + concrete int => placeholder를 concrete로 확정
+            if (is_infer_int(lt) && is_int(rt)) {
+                if (!resolve_placeholder_to_(rt)) return types_.error();
+                return rt;
+            }
+            if (is_infer_int(rt) && is_int(lt)) {
+                if (!resolve_placeholder_to_(lt)) return types_.error();
+                return lt;
+            }
+
+            // placeholder + placeholder => 아직 타입 결정 불가 (v1: 그대로 placeholder 유지)
+            if (is_infer_int(lt) && is_infer_int(rt)) {
+                return types_.builtin(ty::Builtin::kInferInteger);
+            }
+
+            // 핵심: i32 + i64 같은 이종 연산은 에러 (Rust처럼 강제)
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
-                err_(e.span, "binary arithmetic requires both operands to have the same type (v0 rule)");
+                err_(e.span, "binary arithmetic requires both operands to have the same type (no implicit promotion)");
                 return types_.error();
             }
             return lt;
@@ -760,6 +1016,12 @@ namespace gaupel::tyck {
 
         // 비교 < <= > >= : 동일 타입만
         if (e.op == K::kLt || e.op == K::kLtEq || e.op == K::kGt || e.op == K::kGtEq) {
+            // placeholder 비교는 컨텍스트가 부족하니 v1에서 금지(원하면 여기서도 해소 규칙 추가 가능)
+            if (is_infer_int(lt) || is_infer_int(rt)) {
+                err_(e.span, "comparison with deferred integer '{integer}' needs an explicit integer type context");
+                return types_.builtin(ty::Builtin::kBool);
+            }
+
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
                 err_(e.span, "comparison requires both operands to have the same type (v0 rule)");
             }

@@ -192,7 +192,7 @@ namespace gaupel::syntax {
             case TokenKind::kSemicolon: return ";";
             case TokenKind::kQuestion: return "?";
             case TokenKind::kQuestionQuestion: return "??";
-            case TokenKind::kQuestionQuestionAssign: return "??=";
+            case TokenKind::kQuestionQuestionAssign: return "?" "?="; // "??=" but avoids trigraph
 
             case TokenKind::kAssign: return "=";
             case TokenKind::kPlusAssign: return "+=";

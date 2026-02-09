@@ -27,7 +27,7 @@ namespace gaupel::ty {
 
             // canonical builtins are created eagerly.
             // NOTE: builtins start after error type.
-            for (int i = 0; i <= (int)Builtin::kF64; ++i) {
+            for (int i = 0; i <= (int)Builtin::kInferInteger; ++i) {
                 Type t{};
                 t.kind = Kind::kBuiltin;
                 t.builtin = (Builtin)i;
@@ -194,15 +194,17 @@ namespace gaupel::ty {
             if (name == "bool")   { out = Builtin::kBool; return true; }
             if (name == "char")   { out = Builtin::kChar; return true; }
 
-            if (name == "i8")  { out = Builtin::kI8; return true; }
-            if (name == "i16") { out = Builtin::kI16; return true; }
-            if (name == "i32") { out = Builtin::kI32; return true; }
-            if (name == "i64") { out = Builtin::kI64; return true; }
+            if (name == "i8")   { out = Builtin::kI8; return true; }
+            if (name == "i16")  { out = Builtin::kI16; return true; }
+            if (name == "i32")  { out = Builtin::kI32; return true; }
+            if (name == "i64")  { out = Builtin::kI64; return true; }
+            if (name == "i128") { out = Builtin::kI128; return true; }
 
-            if (name == "u8")  { out = Builtin::kU8; return true; }
-            if (name == "u16") { out = Builtin::kU16; return true; }
-            if (name == "u32") { out = Builtin::kU32; return true; }
-            if (name == "u64") { out = Builtin::kU64; return true; }
+            if (name == "u8")   { out = Builtin::kU8; return true; }
+            if (name == "u16")  { out = Builtin::kU16; return true; }
+            if (name == "u32")  { out = Builtin::kU32; return true; }
+            if (name == "u64")  { out = Builtin::kU64; return true; }
+            if (name == "u128") { out = Builtin::kU128; return true; }
 
             if (name == "isize") { out = Builtin::kISize; return true; }
             if (name == "usize") { out = Builtin::kUSize; return true; }
@@ -210,6 +212,9 @@ namespace gaupel::ty {
             if (name == "f32") { out = Builtin::kF32; return true; }
             if (name == "f64") { out = Builtin::kF64; return true; }
 
+            // NOTE:
+            // - Builtin::kInferInteger is INTERNAL ONLY.
+            // - Users must not be able to spell it in source.
             return false;
         }
 
@@ -223,21 +228,25 @@ namespace gaupel::ty {
                 case Builtin::kBool:   return "bool";
                 case Builtin::kChar:   return "char";
 
-                case Builtin::kI8:  return "i8";
-                case Builtin::kI16: return "i16";
-                case Builtin::kI32: return "i32";
-                case Builtin::kI64: return "i64";
+                case Builtin::kI8:   return "i8";
+                case Builtin::kI16:  return "i16";
+                case Builtin::kI32:  return "i32";
+                case Builtin::kI64:  return "i64";
+                case Builtin::kI128: return "i128";
 
-                case Builtin::kU8:  return "u8";
-                case Builtin::kU16: return "u16";
-                case Builtin::kU32: return "u32";
-                case Builtin::kU64: return "u64";
+                case Builtin::kU8:   return "u8";
+                case Builtin::kU16:  return "u16";
+                case Builtin::kU32:  return "u32";
+                case Builtin::kU64:  return "u64";
+                case Builtin::kU128: return "u128";
 
                 case Builtin::kISize: return "isize";
                 case Builtin::kUSize: return "usize";
 
                 case Builtin::kF32: return "f32";
                 case Builtin::kF64: return "f64";
+
+                case Builtin::kInferInteger: return "{integer}";
             }
             return "<builtin?>";
         }
@@ -316,7 +325,7 @@ namespace gaupel::ty {
             return k == Kind::kFn;
         }
 
-        void render_into_(std::string& out, TypeId id, RenderCtx parent_ctx) const {
+        void render_into_(std::string& out, TypeId id, RenderCtx /*parent_ctx*/) const {
             if (id == kInvalidType) { out += "<invalid-type>"; return; }
             if (id >= types_.size()) { out += "<bad-type-id>"; return; }
 

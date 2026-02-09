@@ -16,11 +16,20 @@ namespace gaupel::ty {
         kBool,
         kChar,
 
-        kI8,  kI16,  kI32,  kI64,
-        kU8,  kU16,  kU32,  kU64,
+        // signed integers
+        kI8,  kI16,  kI32,  kI64, kI128,
+        
+        // unsigned integers
+        kU8,  kU16,  kU32,  kU64, kU128,
+        
         kISize, kUSize,
 
         kF32, kF64,
+
+        // -------------------------------------------------
+        // INTERNAL ONLY (user cannot spell these type names)
+        // -------------------------------------------------
+        kInferInteger, // "{integer}" placeholder (Rust-like unsuffixed integer)
     };
 
     enum class Kind : uint8_t {
