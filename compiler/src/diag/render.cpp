@@ -49,6 +49,7 @@ namespace gaupel::diag {
             case Code::kCallArgMixNotAllowed: return "CallArgMixNotAllowed";
             case Code::kNamedGroupEntryExpectedColon: return "NamedGroupEntryExpectedColon";
             case Code::kCallOnlyOneNamedGroupAllowed: return "CallOnlyOneNamedGroupAllowed";
+            case Code::kFnReturnTypeRequired: return "FnReturnTypeRequired";
             case Code::kAttrNameExpectedAfterAt:      return "AttrNameExpectedAfterAt";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "FnParamDefaultNotAllowedOutsideNamedGroup";
             case Code::kFnParamDefaultExprExpected:                return "FnParamDefaultExprExpected";
@@ -125,12 +126,18 @@ namespace gaupel::diag {
             case Code::kTypeIndexNonArray:    return "TypeIndexNonArray";
             case Code::kSetCannotInferFromNull: return "SetCannotInferFromNull";
 
+            case Code::kAssignLhsMustBePlace: return "AssignLhsMustBePlace";
+            case Code::kPostfixOperandMustBePlace: return "PostfixOperandMustBePlace";
+
             case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
             case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
             case Code::kIntLiteralNeedsTypeContext: return "IntLiteralNeedsTypeContext";
             case Code::kIntLiteralDoesNotFit: return "IntLiteralDoesNotFit";
             case Code::kIntToFloatNotAllowed: return "IntToFloatNotAllowed";
 
+            case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
+            case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
+            case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
         }
 
         return "Unknown";
@@ -162,7 +169,7 @@ namespace gaupel::diag {
             case Code::kNamedGroupLabelUnderscoreReserved: return "'_' cannot be used as a named-group label; use it only as a value (e.g., x: _)";
 
             case Code::kVarDeclTypeAnnotationRequired: return "type annotation is required for 'let' (use: let x: T = ...;)";
-            case Code::kVarDeclTypeAnnotationNotAllowed: return "type annotation is no allowed for 'set' (use: set x = ...;)";
+            case Code::kVarDeclTypeAnnotationNotAllowed: return "type annotation is not allowed for 'set' (use: set x = ...;)";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
@@ -231,13 +238,21 @@ namespace gaupel::diag {
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "condition must be bool (got {0})";
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index expression must be usize (got {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
-            case Code::kSetCannotInferFromNull: return "set <name> = null; is not allowed";
+            case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "cannot infer type from null in 'set' (use: let {0}: T? = null; with an explicit optional type)";
 
-            case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
-            case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
+            case Code::kIntLiteralInvalid: return "invalid integer literal '{0}'";
+            case Code::kIntLiteralOverflow: return "integer literal '{0}' overflows target type {1}";
+
             case Code::kIntLiteralNeedsTypeContext: return "integer literal needs a type context; add an explicit type (e.g., i32) or provide a typed destination";
             case Code::kIntLiteralDoesNotFit: return "integer literal does not fit into '{0}'";
-            case Code::kIntToFloatNotAllowed: return "cannot use an inferred integer in '{f64}' context (no implicit int->float)";
+            case Code::kIntToFloatNotAllowed: return "cannot use a deferred integer in {0} context (no implicit int->float)";
+
+            case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
+            case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
+            case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
+
+            case Code::kAssignLhsMustBePlace: return "assignment left-hand side must be a place expression (ident/index)";
+            case Code::kPostfixOperandMustBePlace: return "postfix operator requires a place expression (ident/index)";
         }
 
         return "unknown diagnostic";
@@ -340,13 +355,24 @@ namespace gaupel::diag {
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스 식은 usize여야 합니다(현재 {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
-            case Code::kSetCannotInferFromNull: return "set x = null;은 허용되지 않습니다. let x: T? = null;처럼 타입을 명시하세요.";
+            
+            case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "set에서 null로는 타입을 추론할 수 없습니다. (예: let {0}: T? = null; 처럼 옵셔널 타입을 명시하세요)";
+            
+            case Code::kIntLiteralInvalid: return "정수 리터럴이 올바르지 않습니다: '{0}'";
+            case Code::kIntLiteralOverflow: /* args[0]=text, args[1]=target */ return "정수 리터럴 '{0}'이(가) 대상 타입 {1}에서 오버플로우됩니다";
 
-            case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
-            case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
             case Code::kIntLiteralNeedsTypeContext: return "정수 리터럴은 타입 컨텍스트가 필요합니다. (예: i32)처럼 명시하거나, 타입이 정해진 대상에 대입하세요.";
             case Code::kIntLiteralDoesNotFit: return "정수 리터럴이 '{0}' 범위를 벗어납니다";
-            case Code::kIntToFloatNotAllowed: return "추론 정수는 '{f64}' 컨텍스트에서 사용할 수 없습니다(암시적 int->float 변환 없음)";
+            
+            
+            case Code::kIntToFloatNotAllowed: /* args[0]=float_type */ return "지연된 정수 리터럴은 {0} 컨텍스트에서 사용할 수 없습니다(암시적 int->float 변환 없음)";
+
+            case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
+            case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
+            case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
+
+            case Code::kAssignLhsMustBePlace: return "대입문의 왼쪽은 place expression(ident/index)이어야 합니다";
+            case Code::kPostfixOperandMustBePlace: return "후위 연산자는 place expression(ident/index)에만 적용할 수 있습니다";
         }
 
         return "알 수 없는 진단";

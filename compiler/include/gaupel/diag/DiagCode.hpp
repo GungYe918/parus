@@ -149,12 +149,20 @@ namespace gaupel::diag {
         kTypeIndexNonArray,     // args[0]=base_type
         kSetCannotInferFromNull, // set <name> = null; is not allowed
 
+        // ---- place requirement (tyck) ----
+        kAssignLhsMustBePlace,      // (no args)
+        kPostfixOperandMustBePlace, // (no args)
+
         // ---- integer literal / inference ----
         kIntLiteralInvalid,          // args[0]=text
         kIntLiteralOverflow,         // args[0]=text, args[1]=target (e.g., "i128" or "u128")
         kIntLiteralNeedsTypeContext, // (no args) "{integer}" requires context
         kIntLiteralDoesNotFit,       // args[0]=target, args[1]=value (shortened)
         kIntToFloatNotAllowed,       // args[0]=float_type
+
+        kBreakOutsideLoop,
+        kContinueOutsideLoop,
+        kBlockExprValueExpected
     };
 
 } // namespace gaupel::diag

@@ -1,144 +1,15 @@
-/*
-fn add(a: int) -> int {
-  switch (1) {
-    case 1: {}
-    case 2: {}
-    default : { return 42; }
-  }
+fn main() -> i32 {
+    let x: i32 = 10;
+    let y: i32 = 20;
 
-  return 42;
-}
+    // 기본 산술
+    let z: i32 = x + y;
 
-switch (tok) {
-  case Foo: { return 1; }
-}
+    // while ( ... ) { ... }
+    let mut i: i32 = 0;
+    while (i < 3) {
+        i = i + 1;
+    }
 
-switch (v) {
-  case true: { return 1; }
-  case false: { return 0; }
-  case null: { return 2; }
-}
-
-switch (ch) {
-  case 'A': { return 10; }
-  case "hi": { return 20; }
-}
-
-// |> 연산자 테스트
-a |> f(x: _, y: 1);
-f(x: _, y: 1) <| a;
-a |> f(_, 1);
-a |> f({x: _, y: 1});
-
-// 비트 쉬프트 연산 테스트
-a >> 2;
-b << 6;
-
-fn add() -> int {
-  
-  // 이건 변수 대입
-  set x = loop (x in xs) {
-    break 42;
-  };
-  
-  // 이건 그냥 제어문
-  loop(x in xs) {
-    break 42;
-  }
-
-  // loop 블럭 
-  loop {
-    break 42;
-  }
-
-  if (a) {
-
-  } else {
-
-  }
-
-  let x : u32 = if (a) {
-    5
-  } else {
-    4;
-  };
-
-  if (a) {
-    ;
-  }
-}
-
-
-// L1: header + block
-loop (v in xs) { v; };
-
-// L2: no header (infinite)
-loop { tick(); }
-
-// L3: loop as expression in let (tail value)
-let x: u32 = { loop { break 3; } }; // (break expr 지원 시)
-
-// L4: loop in expr-block as stmt (no semicolon required)
-loop { step(); }
-
-// I1: expr-if basic
-let x: u32 = if (a) { 5 } else { 4 };
-
-// I2: else-if chain
-let y: u32 =
-  if (a) { 1 }
-  else if (b) { 2 }
-  else { 3 };
-
-// I3: if-expr inside block tail
-let z: u32 = {
-  let t: u32 = 10;
-  if (t > 0) { t } else { 0 }
-};
-
-// I4: if used as statement inside expr-block (no semicolon)
-if (a) { foo(); } else { bar(); }
-
-
-
-// error case
-// E1: missing '('
-loop v in xs { v; }      // -> kLoopHeaderExpectedLParen (이미 구현)
-
-// E2: header var not ident
-loop (123 in xs) { }     // -> kLoopHeaderVarExpectedIdent
-
-// E3: missing 'in'
-loop (v xs) { }          // -> kLoopHeaderExpectedIn
-
-// E4: missing body block
-loop (v in xs) v;        // -> kLoopBodyExpectedBlock
-
-// IE1: missing else for expr-if
-let x: u32 = if (a) { 5 }; 
-// -> kIfExprMissingElse
-
-// IE2: then not a block
-let x: u32 = if (a) 5 else { 4 };
-// -> kIfExprThenExpectedBlock (+ recovery)
-
-// IE3: else not a block / not else-if
-let x: u32 = if (a) { 5 } else 4;
-// -> kIfExprElseExpectedBlock
-
-// IE4: tail semicolon in value-required branch
-let x: u32 = if (a) { 5 } else { 4; };
-// -> kBlockTailSemicolonNotAllowed (+ tail=4로 복구)
-*/
-
-fn f(a: i32, b: bool) -> i64 { }
-fn g(cb: fn(i32, i32) -> i32) -> void {  }
-fn h(x: float) -> f32 {  }   // float alias -> f64 (정책 유지)
-fn u(x: string) -> void { } // 이제 string은 builtin 아님: NamedUser("string")로 간다(= stdlib 타입로 간주)
-
-use T = i32;
-use module <dfsdf/df> as T;
-
-fn aa(a: i32, b: bool) -> i64 {
-    return &&&a;
+    return z;
 }

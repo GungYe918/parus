@@ -332,7 +332,7 @@ namespace gaupel::tyck {
                 return;
 
             case ast::StmtKind::kExprStmt:
-                if (s.expr != ast::k_invalid_expr) (void)check_expr_(s.expr);
+                if (s.expr != ast::k_invalid_expr) (void)check_expr_(s.expr, Slot::kDiscard);
                 return;
 
             case ast::StmtKind::kBlock:
@@ -355,10 +355,34 @@ namespace gaupel::tyck {
                 check_stmt_return_(s);
                 return;
 
-            case ast::StmtKind::kBreak:
-            case ast::StmtKind::kContinue:
-                // loop context는 나중에 확장
+            case ast::StmtKind::kBreak: {
+                // break expr? 는 loop 결과 타입을 만든다.
+                if (!in_loop_()) {
+                    diag_(diag::Code::kBreakOutsideLoop, s.span);
+                    err_(s.span, "break outside loop");
+                    if (s.expr != ast::k_invalid_expr) (void)check_expr_(s.expr, Slot::kValue);
+                    return;
+                }
+
+                if (s.expr == ast::k_invalid_expr) {
+                    // break;
+                    note_break_(types_.builtin(ty::Builtin::kNull), /*is_value_break=*/false);
+                    return;
+                }
+
+                // break expr;
+                ty::TypeId bt = check_expr_(s.expr, Slot::kValue);
+                note_break_(bt, /*is_value_break=*/true);
                 return;
+            }
+
+            case ast::StmtKind::kContinue: {
+                if (!in_loop_()) {
+                    diag_(diag::Code::kContinueOutsideLoop, s.span);
+                    err_(s.span, "continue outside loop");
+                }
+                return;
+            }
 
             case ast::StmtKind::kSwitch:
                 check_stmt_switch_(s);
@@ -369,7 +393,6 @@ namespace gaupel::tyck {
                 return;
 
             case ast::StmtKind::kUse:
-                // use는 타입체커에서 보통 "심볼/타입/FFI 등록" 패스로 처리
                 return;
 
             case ast::StmtKind::kError:
@@ -378,7 +401,6 @@ namespace gaupel::tyck {
     }
 
     void TypeChecker::check_stmt_block_(const ast::Stmt& s) {
-        // 새 스코프
         sym_.push_scope();
 
         for (uint32_t i = 0; i < s.stmt_count; ++i) {
@@ -521,6 +543,7 @@ namespace gaupel::tyck {
         if (s.expr != ast::k_invalid_expr) {
             ty::TypeId ct = check_expr_(s.expr);
             if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+                diag_(diag::Code::kTypeCondMustBeBool, ast_.expr(s.expr).span, types_.to_string(ct));
                 err_(s.span, "if condition must be bool");
             }
         }
@@ -532,6 +555,7 @@ namespace gaupel::tyck {
         if (s.expr != ast::k_invalid_expr) {
             ty::TypeId ct = check_expr_(s.expr);
             if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+                diag_(diag::Code::kTypeCondMustBeBool, ast_.expr(s.expr).span, types_.to_string(ct));
                 err_(s.span, "while condition must be bool");
             }
         }
@@ -540,6 +564,7 @@ namespace gaupel::tyck {
 
     void TypeChecker::check_stmt_return_(const ast::Stmt& s) {
         if (!fn_ctx_.in_fn) {
+            diag_(diag::Code::kTypeReturnOutsideFn, s.span);
             err_(s.span, "return outside of function");
             if (s.expr != ast::k_invalid_expr) (void)check_expr_(s.expr);
             return;
@@ -555,6 +580,8 @@ namespace gaupel::tyck {
             if (rt == types_.builtin(ty::Builtin::kUnit)) {
                 return;
             }
+
+            diag_(diag::Code::kTypeReturnExprRequired, s.span);
             err_(s.span, "return expression is required (function does not return unit)");
             return;
         }
@@ -671,15 +698,32 @@ namespace gaupel::tyck {
     // --------------------
     // expr: memoized dispatcher
     // --------------------
-    ty::TypeId TypeChecker::check_expr_(ast::ExprId eid) {
+    ty::TypeId TypeChecker::check_expr_(ast::ExprId eid, Slot slot) {
         if (eid == ast::k_invalid_expr) return types_.error();
         if (eid >= expr_type_cache_.size()) return types_.error();
 
-        if (expr_type_cache_[eid] != ty::kInvalidType) {
-            return expr_type_cache_[eid];
+        const ast::Expr& e = ast_.expr(eid);
+
+        // NOTE(slot-sensitive caching)
+        // - 일부 expr는 "Value vs Discard" 컨텍스트에 따라 진단/타입 규칙이 달라질 수 있다.
+        // - 특히 block-expr는 Slot::kValue에서 tail이 없으면 에러를 내야 한다.
+        //   그런데 Discard 컨텍스트에서 먼저 체크되며 캐시에 타입이 박히면,
+        //   나중에 Value 컨텍스트에서 재방문해도 진단이 발생하지 않는 버그가 생긴다.
+        //
+        // 정책:
+        // - Slot에 의존하는 expr(kind)가 있다면, 그 expr는 "Value에서만 캐시"하거나
+        //   아예 캐시를 우회해서 컨텍스트별로 재검사한다.
+        const bool slot_sensitive =
+            (e.kind == ast::ExprKind::kBlockExpr); // v0: currently only block-expr depends on slot
+
+        // memoized
+        // - slot-sensitive expr는 Value에서만 캐시를 신뢰한다.
+        if (!slot_sensitive || slot == Slot::kValue) {
+            if (expr_type_cache_[eid] != ty::kInvalidType) {
+                return expr_type_cache_[eid];
+            }
         }
 
-        const ast::Expr& e = ast_.expr(eid);
         ty::TypeId t = types_.error();
 
         switch (e.kind) {
@@ -688,11 +732,8 @@ namespace gaupel::tyck {
                 break;
 
             case ast::ExprKind::kIntLit: {
-                // v1: Rust-like unsuffixed integer -> internal placeholder "{integer}"
-                // 실제 i8~i128 확정은 "소비될 때" 수행한다.
                 t = types_.builtin(ty::Builtin::kInferInteger);
 
-                // expr-level pending: 모든 int literal은 expr 단위로 값을 보존한다.
                 num::BigInt v;
                 if (!num::BigInt::parse_dec(e.text, v)) {
                     diag_(diag::Code::kIntLiteralInvalid, e.span, e.text);
@@ -709,21 +750,16 @@ namespace gaupel::tyck {
             }
 
             case ast::ExprKind::kFloatLit: {
-                // v1: suffix-based float typing
-                // Accept:
-                //  - 1.0f32 / 1.0f64 / 1.0f128
-                //  - default: f64
                 std::string_view tx = e.text;
 
                 auto ends_with = [](std::string_view s, std::string_view suf) -> bool {
                     return s.size() >= suf.size() && s.substr(s.size() - suf.size()) == suf;
                 };
 
-                if (ends_with(tx, "f32"))  t = types_.builtin(ty::Builtin::kF32);
+                if (ends_with(tx, "f32"))       t = types_.builtin(ty::Builtin::kF32);
                 else if (ends_with(tx, "f64"))  t = types_.builtin(ty::Builtin::kF64);
                 else if (ends_with(tx, "f128")) t = types_.builtin(ty::Builtin::kF128);
-                else t = types_.builtin(ty::Builtin::kF64);
-
+                else                            t = types_.builtin(ty::Builtin::kF64);
                 break;
             }
 
@@ -747,15 +783,12 @@ namespace gaupel::tyck {
                 auto id = sym_.lookup(e.text);
                 if (!id) {
                     diag_(diag::Code::kUndefinedName, e.span, e.text);
-                    err_(e.span, "unknown identifier"); // 저장용
+                    err_(e.span, "unknown identifier");
                     t = types_.error();
                 } else {
                     t = sym_.symbol(*id).declared_type;
                     if (t == ty::kInvalidType) t = types_.error();
 
-                    // expr-level pending 연결:
-                    // ident의 타입이 {integer}이고 sym pending에 값이 있으면,
-                    // 이 식 자체도 pending value를 "가진 것"으로 취급해 컨텍스트 해소를 가능하게 한다.
                     const auto& tt = types_.get(t);
                     if (tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger) {
                         auto it = pending_int_sym_.find(*id);
@@ -801,20 +834,30 @@ namespace gaupel::tyck {
                 break;
 
             case ast::ExprKind::kIfExpr:
-                t = check_expr_if_(e);
+                t = check_expr_if_(e, slot);
                 break;
 
             case ast::ExprKind::kBlockExpr:
-                t = check_expr_block_(e);
+                t = check_expr_block_(e, slot);
                 break;
 
             case ast::ExprKind::kLoop:
-                t = check_expr_loop_(e);
+                t = check_expr_loop_(e, slot);
                 break;
         }
 
-        expr_type_cache_[eid] = t;
+        // caching policy:
+        // - slot-sensitive expr는 Value 컨텍스트에서만 캐시한다.
+        //   (Discard에서의 결과를 캐시하면, 나중에 Value에서 필요한 진단이 누락될 수 있다.)
+        if (!slot_sensitive || slot == Slot::kValue) {
+            expr_type_cache_[eid] = t;
+        }
+
         return t;
+    }
+
+    ty::TypeId TypeChecker::check_expr_(ast::ExprId eid) {
+        return check_expr_(eid, Slot::kValue);
     }
 
     // --------------------
@@ -836,6 +879,26 @@ namespace gaupel::tyck {
 
     bool TypeChecker::is_error_(ty::TypeId t) const {
         return t == types_.error() || types_.get(t).kind == ty::Kind::kError;
+    }
+
+    void TypeChecker::note_break_(ty::TypeId t, bool is_value_break) {
+        if (loop_stack_.empty()) return;
+
+        LoopCtx& lc = loop_stack_.back();
+        lc.has_any_break = true;
+
+        if (!is_value_break) {
+            lc.has_null_break = true;
+            return;
+        }
+
+        lc.has_value_break = true;
+
+        if (lc.joined_value == ty::kInvalidType) {
+            lc.joined_value = t;
+        } else {
+            lc.joined_value = unify_(lc.joined_value, t);
+        }
     }
 
     bool TypeChecker::can_assign_(ty::TypeId dst, ty::TypeId src) const {
@@ -944,10 +1007,12 @@ namespace gaupel::tyck {
 
         if (e.op == K::kAmpAmp) {
             if (!is_place_expr_(e.a)) {
+                diag_(diag::Code::kEscapeOperandMustBePlace, e.span);
                 err_(e.span, "escape '&&' requires a place expression (ident/index)");
                 return types_.error();
             }
             if (fn_ctx_.is_pure || fn_ctx_.is_comptime) {
+                diag_(diag::Code::kTypeEscapeNotAllowedInPureComptime, e.span);
                 err_(e.span, "escape '&&' is not allowed in pure/comptime functions (recommended rule)");
                 return types_.error();
             }
@@ -957,6 +1022,7 @@ namespace gaupel::tyck {
         // 기타 unary: v0에서는 최소만
         if (e.op == K::kBang) {
             if (at != types_.builtin(ty::Builtin::kBool) && !is_error_(at)) {
+                diag_(diag::Code::kTypeUnaryBangMustBeBool, e.span, types_.to_string(at));
                 err_(e.span, "operator '!' requires bool");
             }
             return types_.builtin(ty::Builtin::kBool);
@@ -973,6 +1039,7 @@ namespace gaupel::tyck {
     ty::TypeId TypeChecker::check_expr_postfix_unary_(const ast::Expr& e) {
         // v0: postfix ++만 있다고 가정
         if (!is_place_expr_(e.a)) {
+            diag_(diag::Code::kPostfixOperandMustBePlace, e.span);
             err_(e.span, "postfix operator requires a place expression");
             return types_.error();
         }
@@ -1055,6 +1122,7 @@ namespace gaupel::tyck {
 
             // 이종 산술 금지 (no promotion)
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
+                diag_(diag::Code::kTypeBinaryOperandsMustMatch, e.span, types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "binary arithmetic requires both operands to have the same type (no implicit promotion)");
                 return types_.error();
             }
@@ -1071,6 +1139,7 @@ namespace gaupel::tyck {
             }
 
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
+                diag_(diag::Code::kTypeCompareOperandsMustMatch, e.span, types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "comparison requires both operands to have the same type (v0 rule)");
             }
             return types_.builtin(ty::Builtin::kBool);
@@ -1082,6 +1151,7 @@ namespace gaupel::tyck {
     ty::TypeId TypeChecker::check_expr_assign_(const ast::Expr& e) {
         // e.a = lhs, e.b = rhs
         if (!is_place_expr_(e.a)) {
+            diag_(diag::Code::kAssignLhsMustBePlace, e.span);
             err_(e.span, "assignment lhs must be a place expression (ident/index)");
         }
         ty::TypeId lt = check_expr_(e.a);
@@ -1198,6 +1268,7 @@ namespace gaupel::tyck {
 
         // index는 usize 권장(일단 usize만 허용)
         if (it != types_.builtin(ty::Builtin::kUSize) && !is_error_(it)) {
+            diag_(diag::Code::kTypeIndexMustBeUSize, ast_.expr(e.b).span, types_.to_string(it));
             err_(e.span, "index expression must be usize (v0 rule)");
         }
 
@@ -1206,6 +1277,7 @@ namespace gaupel::tyck {
             return t.elem;
         }
 
+        diag_(diag::Code::kTypeIndexNonArray, e.span, types_.to_string(bt));
         err_(e.span, "indexing is only supported on array types (T[]) in v0");
         return types_.error();
     }
@@ -1214,52 +1286,148 @@ namespace gaupel::tyck {
     // if-expr / block-expr / loop-expr
     // --------------------
     ty::TypeId TypeChecker::check_expr_if_(const ast::Expr& e) {
-        // v0: ExprKind::kIfExpr 의 slot 배치는 프로젝트 규칙에 따라 다를 수 있다.
-        // 여기서는 a=cond, b=then expr(or block-expr id), c=else expr(or block-expr id) 로 가정한다.
-        // (네 파서 구현에 맞춰 slot 매핑만 맞추면 됨)
-        ty::TypeId ct = check_expr_(e.a);
+        return check_expr_if_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_if_(const ast::Expr& e, Slot slot) {
+        ty::TypeId ct = check_expr_(e.a, Slot::kValue);
         if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+            diag_(diag::Code::kTypeCondMustBeBool, ast_.expr(e.a).span, types_.to_string(ct));
             err_(e.span, "if-expr condition must be bool");
         }
 
-        ty::TypeId t_then = check_expr_(e.b);
-        ty::TypeId t_else = check_expr_(e.c);
+        // branches are always value-checked as expressions
+        ty::TypeId t_then = check_expr_(e.b, Slot::kValue);
+        ty::TypeId t_else = check_expr_(e.c, Slot::kValue);
+
+        (void)slot; // currently result type doesn't depend on slot
         return unify_(t_then, t_else);
     }
 
     ty::TypeId TypeChecker::check_expr_block_(const ast::Expr& e) {
-        // v0: block expr은 내부적으로 StmtId(블록) 를 참조하거나,
-        // Expr 슬롯에 stmt id를 넣는 식으로 구현했을 수 있다.
-        // 현재 Nodes.hpp에서는 Expr에 loop_body(StmtId)가 있고, block-expr용 stmt 슬롯은 없다.
-        //
-        // 따라서: "block-expr"은 일단 error로 두되,
-        // 네 파서가 block-expr을 "StmtKind::kBlock"을 만들고 tail expr을 별도 노드에 두는 구조라면
-        // 그 구조에 맞춰 여기만 채우면 된다.
-        err_(e.span, "block-expr typing is not wired yet (need parser slot mapping to a block stmt)");
-        return types_.error();
+        return check_expr_block_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_block_(const ast::Expr& e, Slot slot) {
+        // Mapping assumption:
+        //  - e.a: StmtId of block stmt
+        //  - e.b: tail ExprId (optional)
+        const ast::StmtId block_sid = (ast::StmtId)e.a;
+        if (block_sid == ast::k_invalid_stmt) {
+            err_(e.span, "block-expr has no block stmt id");
+            return types_.error();
+        }
+
+        const ast::Stmt& bs = ast_.stmt(block_sid);
+        if (bs.kind != ast::StmtKind::kBlock) {
+            err_(e.span, "block-expr target is not a block stmt");
+            return types_.error();
+        }
+
+        // block expr introduces a scope (like block stmt)
+        sym_.push_scope();
+
+        // all child statements are checked in statement context
+        for (uint32_t i = 0; i < bs.stmt_count; ++i) {
+            const ast::StmtId cid = ast_.stmt_children()[bs.stmt_begin + i];
+            check_stmt_(cid);
+        }
+
+        // tail
+        ty::TypeId out = types_.builtin(ty::Builtin::kNull);
+        if (e.b != ast::k_invalid_expr) {
+            out = check_expr_(e.b, Slot::kValue);
+        } else {
+            // tail absent => null
+            out = types_.builtin(ty::Builtin::kNull);
+
+            // Slot::Value에서는 tail 요구 (v0 안전 정책)
+            if (slot == Slot::kValue) {
+                diag_(diag::Code::kBlockExprValueExpected, e.span);
+                err_(e.span, "value expected: block-expr in value context must have a tail expression");
+            }
+        }
+
+        sym_.pop_scope();
+        return out;
     }
 
     ty::TypeId TypeChecker::check_expr_loop_(const ast::Expr& e) {
-        // loop expr은 보통 unit/never를 반환하거나,
-        // body tail을 값으로 쓰는 언어라면 값이 될 수도 있음.
-        // 현재는 타입 시스템에 unit이 없으니 error로 둔다.
-        //
-        // loop 헤더/이터레이터 타입 시스템은 다음 단계에서 확장:
-        // - range
-        // - iter protocol
-        // - loop var binding type
-        if (e.loop_body != ast::k_invalid_stmt) {
-            sym_.push_scope();
-            // loop var는 v0에서 unknown -> error로 등록
-            if (e.loop_var.size() > 0) {
+        return check_expr_loop_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_loop_(const ast::Expr& e, Slot /*slot*/) {
+        // loop result type comes ONLY from breaks, plus optional null if:
+        // - break; exists, or
+        // - iter-loop can naturally end
+
+        LoopCtx lc{};
+        lc.may_natural_end = e.loop_has_header; // iter loop => natural end => null
+        lc.joined_value = ty::kInvalidType;
+
+        // loop scope: variable binding + body scope
+        sym_.push_scope();
+
+        // header: loop (v in xs) { ... }
+        if (e.loop_has_header) {
+            // v0: loop var type unknown => error (until iter protocol exists)
+            if (!e.loop_var.empty()) {
                 sym_.insert(sema::SymbolKind::kVar, e.loop_var, types_.error(), e.span);
             }
-            if (e.loop_iter != ast::k_invalid_expr) (void)check_expr_(e.loop_iter);
-            check_stmt_(e.loop_body);
-            sym_.pop_scope();
+            if (e.loop_iter != ast::k_invalid_expr) {
+                (void)check_expr_(e.loop_iter, Slot::kValue);
+            }
         }
 
-        return types_.builtin(ty::Builtin::kNever);
+        // push loop ctx
+        loop_stack_.push_back(lc);
+
+        // body is a block stmt
+        if (e.loop_body != ast::k_invalid_stmt) {
+            check_stmt_(e.loop_body);
+        } else {
+            err_(e.span, "loop has no body");
+        }
+
+        // pop loop ctx
+        LoopCtx done = loop_stack_.back();
+        loop_stack_.pop_back();
+
+        sym_.pop_scope();
+
+        // Decide loop type:
+        // 1) no breaks:
+        //   - iter loop: natural end => null
+        //   - infinite loop: never
+        if (!done.has_any_break) {
+            if (done.may_natural_end) {
+                return types_.builtin(ty::Builtin::kNull);
+            }
+            return types_.builtin(ty::Builtin::kNever);
+        }
+
+        // 2) breaks exist:
+        // 2-a) no value breaks => only break; (and/or natural end) => null
+        if (!done.has_value_break) {
+            return types_.builtin(ty::Builtin::kNull);
+        }
+
+        // 2-b) value breaks exist => base type = joined_value
+        ty::TypeId base = done.joined_value;
+        if (base == ty::kInvalidType) base = types_.error();
+
+        // If null is mixed in (break; or natural end), result becomes optional
+        const bool has_null = done.has_null_break || done.may_natural_end;
+
+        if (!has_null) {
+            return base;
+        }
+
+        // base already optional? keep it. if base is null, keep null.
+        if (is_null_(base)) return base;
+        if (is_optional_(base)) return base;
+
+        return types_.make_optional(base);
     }
 
 } // namespace gaupel::tyck

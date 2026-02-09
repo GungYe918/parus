@@ -9,3 +9,46 @@ fn add(a: i32, b: i32) -> i32 {
     set y = 9999999999999999999;
     return a + b;
 }
+
+/* --- 아직은 함수 오버로딩 미지원
+fn add() -> u32 {
+    return 42;
+}*/
+
+/* --- 아직 배열 파싱을 못함.
+fn div(a: i32, b: i32) -> u32 {
+    let xs: i32[] = [1, 2, 3, 4];
+    loop (x in xs) {
+
+    }
+}*/
+
+/*
+fn main() -> i32 {
+    let x: i32 = 10;
+    let y: i32 = 20;
+
+    // 기본 산술
+    let z: i32 = x + y;
+
+    // while ( ... ) { ... }
+    let mut i: i32 = 0;
+    while (i < 3) {
+        i = i + 1;
+    }
+
+    return z;
+}*/
+
+fn main2() -> i32 {
+    let cond: bool = true;
+
+    let x: i32 =
+        if cond {
+            10
+        } else {
+            20
+        };
+
+    return x;
+}

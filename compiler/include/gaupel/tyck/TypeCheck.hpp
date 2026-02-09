@@ -43,6 +43,28 @@ namespace gaupel::tyck {
         TyckResult check_program(ast::StmtId program_stmt);
 
     private:
+
+        // --------------------
+        // Slot (value/discard)
+        // --------------------
+        enum class Slot : uint8_t {
+            kValue,    // value is required
+            kDiscard,  // value can be discarded
+        };
+
+        // --------------------
+        // Loop context stack (break type collection)
+        // --------------------
+        struct LoopCtx {
+            bool has_any_break = false;        // break; or break expr;
+            bool has_value_break = false;      // break expr; existed
+            bool has_null_break = false;       // break; existed
+            bool may_natural_end = false;      // iter-loop natural end -> null
+            ty::TypeId joined_value = ty::kInvalidType; // join of break expr types
+        };
+
+        std::vector<LoopCtx> loop_stack_;
+
         // --------------------
         // core
         // --------------------
@@ -61,6 +83,7 @@ namespace gaupel::tyck {
 
         // expr
         ty::TypeId check_expr_(ast::ExprId eid);
+        ty::TypeId check_expr_(ast::ExprId eid, Slot slot);
         ty::TypeId check_expr_unary_(const ast::Expr& e);
         ty::TypeId check_expr_postfix_unary_(const ast::Expr& e);
         ty::TypeId check_expr_binary_(const ast::Expr& e);
@@ -71,6 +94,10 @@ namespace gaupel::tyck {
         ty::TypeId check_expr_if_(const ast::Expr& e);
         ty::TypeId check_expr_block_(const ast::Expr& e);
         ty::TypeId check_expr_loop_(const ast::Expr& e);
+
+        ty::TypeId check_expr_if_(const ast::Expr& e, Slot slot);    // overload
+        ty::TypeId check_expr_block_(const ast::Expr& e, Slot slot); // overload
+        ty::TypeId check_expr_loop_(const ast::Expr& e, Slot slot);  // overload
 
         // --------------------
         // helpers
@@ -91,6 +118,9 @@ namespace gaupel::tyck {
 
         bool is_null_(ty::TypeId t) const;
         bool is_error_(ty::TypeId t) const;
+
+        bool in_loop_() const { return !loop_stack_.empty(); }
+        void note_break_(ty::TypeId t, bool is_value_break);
 
         // "대입/초기화" 호환성:
         // - exact match OK
