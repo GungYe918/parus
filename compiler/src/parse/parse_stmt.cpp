@@ -297,54 +297,94 @@ namespace gaupel {
 
     // let/set 파싱
     ast::StmtId Parser::parse_stmt_var() {
-        const Token& kw = cursor_.peek();
-        const bool is_set = (kw.kind == syntax::TokenKind::kKwSet);
-        cursor_.bump();
+        using K = syntax::TokenKind;
 
+        const Token kw = cursor_.peek();
+        const bool is_set = (kw.kind == K::kKwSet);
+        cursor_.bump(); // consume 'let' or 'set'
+
+        // ---- mut ----
         bool is_mut = false;
-        if (cursor_.at(syntax::TokenKind::kKwMut)) {
-            is_mut = true;
-            cursor_.bump();
+        if (cursor_.at(K::kKwMut)) {
+            // 정책: set mut 는 금지지만 토큰은 소비해서 흐름을 안정화
+            if (is_set) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "`mut` is not allowed with `set`");
+            } else {
+                is_mut = true;
+            }
+            cursor_.bump(); // consume 'mut' anyway
         }
 
-        const Token& name_tok = cursor_.peek();
+        // ---- name ----
         std::string_view name{};
-        if (name_tok.kind == syntax::TokenKind::kIdent) {
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier");
+            // 이름이 없으면 이후 전체가 꼬이기 쉬우므로 강하게 복구한다.
+            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (variable name)");
+
+            // stmt 경계까지 정렬
+            stmt_sync_to_boundary();
+            if (cursor_.at(K::kSemicolon)) cursor_.bump();
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(kw.span, cursor_.prev().span);
+            return ast_.add_stmt(s);
         }
 
-        auto type_id = ast::k_invalid_type;
+        // ---- type annotation ----
+        ast::TypeId type_id = ast::k_invalid_type;
 
         if (!is_set) {
-            if (!cursor_.at(syntax::TokenKind::kColon)) {
+            // let: ':' required
+            if (!cursor_.eat(K::kColon)) {
                 diag_report(diag::Code::kVarDeclTypeAnnotationRequired, cursor_.peek().span);
+
+                // recovery:
+                // - 다음이 '=' 이면 "타입 누락 + 초기화만 존재" 케이스
+                // - 아니면 ';' 또는 '}' 까지 스킵
+                if (!cursor_.at(K::kAssign)) {
+                    recover_to_delim(K::kAssign, K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kAssign); // 있으면 이후 init 파싱으로 연결
+                }
             } else {
-                cursor_.bump();
+                // parse type normally
                 type_id = parse_type().id;
             }
         } else {
-            if (cursor_.at(syntax::TokenKind::kColon)) {
+            // set: ':' not allowed
+            if (cursor_.at(K::kColon)) {
                 diag_report(diag::Code::kVarDeclTypeAnnotationNotAllowed, cursor_.peek().span);
-                cursor_.bump();
-                (void)parse_type();
+                cursor_.bump(); // ':'
+                (void)parse_type(); // consume and discard to keep stream stable
             }
         }
 
+        // ---- initializer ----
         ast::ExprId init = ast::k_invalid_expr;
 
-        if (cursor_.at(syntax::TokenKind::kAssign)) {
-            cursor_.bump();
-            init = parse_expr();
+        if (cursor_.eat(K::kAssign)) {
+            // "= <expr>"
+            // (바로 ';'면 expr 누락)
+            if (cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expression (initializer)");
+                // init invalid 유지
+            } else {
+                init = parse_expr();
+            }
         } else {
+            // '=' missing
             if (is_set) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "'=' initializer required for set");
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "'=' initializer required for `set`");
+                // recovery: ';' or '}' 까지 맞춰서 이후 stmt들이 안 꼬이게 한다.
+                recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
             }
         }
 
+        // ---- ';' or recover ----
         const Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         ast::Stmt s{};

@@ -86,6 +86,7 @@ namespace gaupel::tyck {
         const ast::Stmt& prog = ast_.stmt(program_stmt);
         if (prog.kind != ast::StmtKind::kBlock) {
             err_(prog.span, "program root is not a block stmt");
+            diag_(diag::Code::kUnexpectedToken, prog.span, "program root is not a block");
             return;
         }
 
@@ -134,6 +135,7 @@ namespace gaupel::tyck {
                         if (pt == ty::kInvalidType) {
                             // 파라미터 타입이 비어있으면 일단 error로 채우고 계속
                             err_(p.span, "parameter requires an explicit type");
+                            diag_(diag::Code::kUnexpectedToken, p.span, std::string_view(p.name));
                             pt = types_.error();
                             bad_param = true;
                         }
@@ -150,6 +152,7 @@ namespace gaupel::tyck {
                 auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
                 if (!ins.ok && ins.is_duplicate) {
                     err_(s.span, "duplicate symbol (function): " + std::string(s.name));
+                    diag_(diag::Code::kUnexpectedToken, s.span, s.name);
                 }
                 continue;
             }
@@ -224,17 +227,18 @@ namespace gaupel::tyck {
     }
 
     bool TypeChecker::resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected) {
+        if (eid == ast::k_invalid_expr) return false;
+
         // expected는 builtin int여야 한다.
         const auto& et = types_.get(expected);
         if (et.kind != ty::Kind::kBuiltin) return false;
 
-        // float 컨텍스트면 즉시 에러
-        if (et.builtin == ty::Builtin::kF32 || et.builtin == ty::Builtin::kF64) {
+        // float 컨텍스트면 즉시 에러 (암시적 int->float 금지)
+        if (et.builtin == ty::Builtin::kF32 || et.builtin == ty::Builtin::kF64 || et.builtin == ty::Builtin::kF128) {
             diag_(diag::Code::kIntToFloatNotAllowed, ast_.expr(eid).span, types_.to_string(expected));
             return false;
         }
 
-        // int/uint/isize/usize만 허용
         auto is_int_builtin = [&](ty::Builtin b) -> bool {
             return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
@@ -244,26 +248,95 @@ namespace gaupel::tyck {
         };
         if (!is_int_builtin(et.builtin)) return false;
 
+        const ast::Expr& e = ast_.expr(eid);
+
+        // ------------------------------------------------------------
+        // (1) 합성 표현식: expected를 "아래로" 전파해서 내부 {integer}를 확정한다.
+        //     - if-expr: then/else로 전파
+        //     - ternary: b/c로 전파
+        //     - block-expr: tail로 전파
+        //
+        // 여기서 중요한 점:
+        // - 이 expr 자체에서 "정수 literal 값"을 뽑으려고 하면 안 된다.
+        // - 내부 리터럴들이 fit+resolve만 되면 상위 expr은 자연히 expected 타입으로 수렴한다.
+        // ------------------------------------------------------------
+        auto mark_resolved_here = [&](bool has_value, const num::BigInt& v) {
+            auto& pe = pending_int_expr_[(uint32_t)eid];
+            if (has_value) {
+                pe.value = v;
+                pe.has_value = true;
+            }
+            pe.resolved = true;
+            pe.resolved_type = expected;
+        };
+
+        switch (e.kind) {
+            case ast::ExprKind::kIfExpr: {
+                bool ok_then = (e.b != ast::k_invalid_expr) ? resolve_infer_int_in_context_(e.b, expected) : true;
+                bool ok_else = (e.c != ast::k_invalid_expr) ? resolve_infer_int_in_context_(e.c, expected) : true;
+
+                if (ok_then && ok_else) {
+                    // if-expr 자체는 "값"을 직접 가지지 않으므로 value는 기록하지 않는다.
+                    mark_resolved_here(/*has_value=*/false, num::BigInt{});
+                    return true;
+                }
+                // branch 중 하나라도 해소 실패하면: 여기서 "컨텍스트 없음" 진단은 내지 말고 그냥 실패 리턴.
+                // (실제 원인은 내부에서 fit 실패/unknown 등의 진단으로 이미 찍힌다.)
+                return false;
+            }
+
+            case ast::ExprKind::kTernary: {
+                bool ok_b = (e.b != ast::k_invalid_expr) ? resolve_infer_int_in_context_(e.b, expected) : true;
+                bool ok_c = (e.c != ast::k_invalid_expr) ? resolve_infer_int_in_context_(e.c, expected) : true;
+
+                if (ok_b && ok_c) {
+                    mark_resolved_here(/*has_value=*/false, num::BigInt{});
+                    return true;
+                }
+                return false;
+            }
+
+            case ast::ExprKind::kBlockExpr: {
+                // mapping assumption in your code:
+                // - e.a: StmtId of block
+                // - e.b: tail ExprId (optional)
+                if (e.b != ast::k_invalid_expr) {
+                    bool ok_tail = resolve_infer_int_in_context_(e.b, expected);
+                    if (ok_tail) {
+                        mark_resolved_here(/*has_value=*/false, num::BigInt{});
+                        return true;
+                    }
+                    return false;
+                }
+                // tail이 없으면 null로 수렴하므로 integer expected로는 해소 불가
+                return false;
+            }
+
+            default:
+                break;
+        }
+
+        // ------------------------------------------------------------
+        // (2) 리프/값 추적 가능한 케이스: IntLit / Ident({integer})
+        // ------------------------------------------------------------
         num::BigInt v;
         if (!infer_int_value_of_expr_(eid, v)) {
-            // 값이 없으면(예: placeholder가 연산을 거쳐 값 추적이 불가) 컨텍스트만으로는 확정 불가
-            diag_(diag::Code::kIntLiteralNeedsTypeContext, ast_.expr(eid).span);
+            // 값이 없으면(예: 연산을 거쳐 값 추적이 불가) 컨텍스트만으로는 확정 불가
+            // 단, 위의 합성 expr들은 여기로 오지 않게 했으니, 이 진단은 "진짜 리프 해소 실패"에만 뜬다.
+            diag_(diag::Code::kIntLiteralNeedsTypeContext, e.span);
             return false;
         }
 
         if (!fits_builtin_int_big_(v, et.builtin)) {
-            diag_(diag::Code::kIntLiteralDoesNotFit, ast_.expr(eid).span,
+            diag_(diag::Code::kIntLiteralDoesNotFit, e.span,
                 types_.to_string(expected), v.to_string(64));
             return false;
         }
 
-        // 여기서 “expr 자체 타입”을 바꾸는 모델은 현재 TypeId 시스템 상 불가능(Expr에 TypeId 저장 X, 캐시만 있음)
-        // 대신: ident라면 심볼 타입을 확정하고 pending_sym에도 기록한다.
-        const ast::Expr& e = ast_.expr(eid);
+        // ident라면 심볼 타입 확정 반영
         if (e.kind == ast::ExprKind::kIdent) {
             auto sid = sym_.lookup(e.text);
             if (sid) {
-                // sym이 {integer}로 선언된 경우에만 확정 반영
                 const auto& st = types_.get(sym_.symbol(*sid).declared_type);
                 if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
                     sym_.update_declared_type(*sid, expected);
@@ -276,12 +349,14 @@ namespace gaupel::tyck {
             }
         }
 
-        // expr pending에도 resolved 표시(진단/디버그 용)
-        auto& pe = pending_int_expr_[(uint32_t)eid];
-        pe.value = v;
-        pe.has_value = true;
-        pe.resolved = true;
-        pe.resolved_type = expected;
+        // expr pending resolved 표시
+        {
+            auto& pe = pending_int_expr_[(uint32_t)eid];
+            pe.value = v;
+            pe.has_value = true;
+            pe.resolved = true;
+            pe.resolved_type = expected;
+        }
 
         return true;
     }

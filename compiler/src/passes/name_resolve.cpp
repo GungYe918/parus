@@ -21,7 +21,7 @@ namespace gaupel::passes {
     // -----------------------
     // Expr walk (Ident 체크)
     // -----------------------
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, sema::SymbolTable& sym, diag::Bag& bag);
+    static void walk_expr(const ast::AstArena& ast, ast::ExprId root, sema::SymbolTable& sym, diag::Bag& bag);
 
     static void walk_call_args(
         const ast::AstArena& ast,
@@ -51,62 +51,133 @@ namespace gaupel::passes {
         }
     }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, sema::SymbolTable& sym, diag::Bag& bag) {
-        if (id == ast::k_invalid_expr) return;
-        const auto& e = ast.expr(id);
+    static void walk_expr(const ast::AstArena& ast, ast::ExprId root, sema::SymbolTable& sym, diag::Bag& bag) {
+        if (root == ast::k_invalid_expr) return;
 
-        switch (e.kind) {
-            case ast::ExprKind::kIdent: {
-                // 식별자 사용은 반드시 선언되어야 함
-                if (!sym.lookup(e.text)) {
-                    report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
+        const uint32_t expr_count = (uint32_t)ast.exprs().size();
+
+        auto is_valid_expr_id = [&](ast::ExprId id) -> bool {
+            return id != ast::k_invalid_expr && (uint32_t)id < expr_count;
+        };
+
+        // visited: 사이클/중복 방문 차단 (v0에선 충분)
+        std::vector<uint8_t> visited;
+        visited.resize(expr_count, 0);
+
+        // 명시적 스택으로 DFS
+        std::vector<ast::ExprId> stack;
+        stack.reserve(64);
+        stack.push_back(root);
+
+        while (!stack.empty()) {
+            ast::ExprId id = stack.back();
+            stack.pop_back();
+
+            if (!is_valid_expr_id(id)) continue;
+            if (visited[(uint32_t)id]) continue;
+            visited[(uint32_t)id] = 1;
+
+            const auto& e = ast.expr(id);
+
+            switch (e.kind) {
+                case ast::ExprKind::kIdent: {
+                    if (!sym.lookup(e.text)) {
+                        report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
+                    }
+                    break;
                 }
-                break;
+
+                case ast::ExprKind::kUnary:
+                case ast::ExprKind::kPostfixUnary: {
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    break;
+                }
+
+                case ast::ExprKind::kBinary:
+                case ast::ExprKind::kAssign: {
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    break;
+                }
+
+                case ast::ExprKind::kTernary: {
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    break;
+                }
+
+                case ast::ExprKind::kIndex: {
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    break;
+                }
+
+                case ast::ExprKind::kCall: {
+                    // callee
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+
+                    // args (positional + named-group)
+                    const auto& args = ast.args();
+                    const auto& ng   = ast.named_group_args();
+
+                    // 방어: 범위 체크
+                    const uint32_t arg_end = e.arg_begin + e.arg_count;
+                    if (e.arg_begin < args.size() && arg_end <= args.size()) {
+                        for (uint32_t i = 0; i < e.arg_count; ++i) {
+                            const auto& a = args[e.arg_begin + i];
+
+                            if (a.kind == ast::ArgKind::kNamedGroup) {
+                                const uint32_t ng_end = a.child_begin + a.child_count;
+                                if (a.child_begin < ng.size() && ng_end <= ng.size()) {
+                                    for (uint32_t j = 0; j < a.child_count; ++j) {
+                                        const auto& entry = ng[a.child_begin + j];
+                                        if (!entry.is_hole && is_valid_expr_id(entry.expr)) {
+                                            stack.push_back(entry.expr);
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+
+                            if (!a.is_hole && is_valid_expr_id(a.expr)) {
+                                stack.push_back(a.expr);
+                            }
+                        }
+                    }
+                    break;
+                }
+
+                case ast::ExprKind::kLoop: {
+                    if (is_valid_expr_id(e.loop_iter)) stack.push_back(e.loop_iter);
+                    // loop body stmt는 stmt walker에서 처리
+                    break;
+                }
+
+                case ast::ExprKind::kIfExpr: {
+                    // v0에서 가장 자주 터지는 구간:
+                    // - then/else를 StmtId로 저장해놓고 ExprId 슬롯(e.b/e.c)에 억지로 넣는 경우가 많음
+                    // 그래서 조건(e.a)만 확실히 ExprId로 보고,
+                    // 나머지는 "ExprId 범위 안일 때만" 따라간다.
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    break;
+                }
+
+                case ast::ExprKind::kBlockExpr: {
+                    // block expr 또한 v0에서 stmt/expr id 혼선 가능성이 큼.
+                    // 일단 ExprId 범위 안일 때만 따라간다.
+                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    break;
+                }
+
+                default:
+                    // literals, null, hole, error 등: 자식 없음
+                    break;
             }
-
-            case ast::ExprKind::kUnary:
-            case ast::ExprKind::kPostfixUnary:
-                walk_expr(ast, e.a, sym, bag);
-                break;
-
-            case ast::ExprKind::kBinary:
-            case ast::ExprKind::kAssign:
-                walk_expr(ast, e.a, sym, bag);
-                walk_expr(ast, e.b, sym, bag);
-                break;
-
-            case ast::ExprKind::kTernary:
-                walk_expr(ast, e.a, sym, bag);
-                walk_expr(ast, e.b, sym, bag);
-                walk_expr(ast, e.c, sym, bag);
-                break;
-
-            case ast::ExprKind::kCall:
-                walk_expr(ast, e.a, sym, bag);
-                walk_call_args(ast, e.arg_begin, e.arg_count, sym, bag);
-                break;
-
-            case ast::ExprKind::kIndex:
-                walk_expr(ast, e.a, sym, bag);
-                walk_expr(ast, e.b, sym, bag);
-                break;
-
-            case ast::ExprKind::kLoop:
-                // loop header expr
-                if (e.loop_iter != ast::k_invalid_expr) walk_expr(ast, e.loop_iter, sym, bag);
-                // loop body stmt는 stmt walker가 처리
-                break;
-
-            case ast::ExprKind::kIfExpr:
-            case ast::ExprKind::kBlockExpr:
-                // v0: 연결이 확정되면 확장
-                if (e.a != ast::k_invalid_expr) walk_expr(ast, e.a, sym, bag);
-                if (e.b != ast::k_invalid_expr) walk_expr(ast, e.b, sym, bag);
-                if (e.c != ast::k_invalid_expr) walk_expr(ast, e.c, sym, bag);
-                break;
-
-            default:
-                break;
         }
     }
 
