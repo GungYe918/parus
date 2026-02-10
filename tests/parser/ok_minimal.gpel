@@ -1,6 +1,15 @@
-fn pick(a: i32, b: i32) -> i32 { return a + b; }
+fn f() -> i32 { return 1; }
+fn g() -> i32 { return 2; }
 
 fn main() -> i32 {
-    let x: i32 = pick(1, 2);
-    return x;
+    let x: i32? = null;
+    let y: i64? = x as? i64; // 이건 ok
+
+    let a: i32 = 1; 
+    let b: i64 = a as i64; // OK 
+    let c: i32? = null; 
+    let d: i64? = c as? i64; // OK (null-safe) 
+    let e: i64 = c as! i64;
+
+    let p: i32 = x ?? 2;
 }

@@ -34,7 +34,11 @@ namespace gaupel::syntax {
             case TokenKind::kStarAssign:
             case TokenKind::kSlashAssign:
             case TokenKind::kPercentAssign: 
+            case TokenKind::kQuestionQuestionAssign:
                 return InfixInfo{10, Assoc::kRight};
+
+            case TokenKind::kQuestionQuestion:
+                return InfixInfo{25, Assoc::kRight};
 
             // ternary handled specially (not here)
 

@@ -150,6 +150,11 @@ namespace gaupel::diag {
             case Code::kTyckCastMissingTargetType: return "TyckCastMissingTargetType";
             case Code::kTyckCastNullToNonOptional: return "TyckCastNullToNonOptional";
             case Code::kTyckCastNotAllowed: return "TyckCastNotAllowed";
+
+            case Code::kTypeNullCoalesceLhsMustBeOptional: return "TypeNullCoalesceLhsMustBeOptional";
+            case Code::kTypeNullCoalesceRhsMismatch:       return "TypeNullCoalesceRhsMismatch";
+            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "TypeNullCoalesceAssignLhsMustBeOptional";
+            case Code::kTypeNullCoalesceAssignRhsMismatch:       return "TypeNullCoalesceAssignRhsMismatch";
         }
 
         return "Unknown";
@@ -278,6 +283,15 @@ namespace gaupel::diag {
             case Code::kTyckCastMissingTargetType: return "cast expression is missing its target type";
             case Code::kTyckCastNullToNonOptional: return "cannot cast 'null' to non-optional type '{0}'";
             case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
+
+            // args: {0}=lhs_type
+            case Code::kTypeNullCoalesceLhsMustBeOptional: return "operator '??' requires an optional lhs (got {0})";
+            // args: {0}=elem_type, {1}=rhs_type
+            case Code::kTypeNullCoalesceRhsMismatch: return "operator '??' requires rhs assignable to {0} (got {1})";
+            // args: {0}=lhs_type
+            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "operator '??=' requires an optional lhs (got {0})";
+            // args: {0}=elem_type, {1}=rhs_type
+            case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '??=' requires rhs assignable to {0} (got {1})";
         }
 
         return "unknown diagnostic";
@@ -411,6 +425,15 @@ namespace gaupel::diag {
             case Code::kTyckCastMissingTargetType: return "cast expression is missing its target type";
             case Code::kTyckCastNullToNonOptional: return "cannot cast 'null' to non-optional type '{0}'";
             case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
+
+            // args: {0}=lhs_type
+            case Code::kTypeNullCoalesceLhsMustBeOptional: return "'??' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
+            // args: {0}=elem_type, {1}=rhs_type
+            case Code::kTypeNullCoalesceRhsMismatch: return "'??' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
+            // args: {0}=lhs_type
+            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "'??=' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
+            // args: {0}=elem_type, {1}=rhs_type
+            case Code::kTypeNullCoalesceAssignRhsMismatch: return "'??=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
         }
 
         return "알 수 없는 진단";

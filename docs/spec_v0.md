@@ -1460,61 +1460,130 @@ let found: int = loop (v in xs) {
 ### 7.6.3 타입 캐스팅 (as, as?, as!)
 
 Gaupel은 Rust와 유사하게 암시적 타입 변환을 허용하지 않으며, 타입이 다른 값들 사이의 연산(i32 + i64 등)은 컴파일 에러이다.
-명시적 변환이 필요한 경우 as 계열 캐스팅을 사용한다.
+명시적 변환이 필요한 경우 `as` 계열 캐스팅 연산자를 사용한다.
+
+`as` 계열 캐스팅은 다음 세 가지 의미를 가진다.
+
+* 값 변환을 수행하는 **일반 캐스팅 (`as`)**
+* 실패 가능성이 있는 캐스팅을 안전하게 수행하는 **옵셔널 캐스팅 (`as?`)**
+* 실패 시 런타임 오류를 발생시키는 **강제 캐스팅 (`as!`)**
+
+이 설계는 Swift, C# 등의 safe cast/forced cast 모델과 유사하며, 향후 다운캐스트·런타임 타입 검사·참조 타입 변환 등으로 확장될 수 있도록 정의된다.
 
 ⸻
 
 #### 7.6.3.1 캐스팅 연산자 종류와 의미
-	•	일반 캐스팅: expr as T
-	•	값이 반드시 존재하는(non-null) 상황에서의 명시적 변환.
-	•	T?(optional) 값을 자동으로 해소하지 않는다.
-	•	옵셔널 안전 캐스팅: expr as? T
-	•	피연산자가 null이면 결과는 null.
-	•	피연산자가 non-null이면 캐스팅을 수행하고, 결과를 optional로 감싼다.
-	•	결과 타입은 항상 T?로 정규화된다.
-	•	강제 캐스팅(unwrap 포함): expr as! T
-	•	피연산자가 null이면 런타임에서 trap(크래시) 한다.
-	•	피연산자가 non-null이면 unwrap 후 캐스팅을 수행하여 T를 반환한다.
-	•	컴파일러가 null임을 정적으로 확정할 수 있으면 컴파일 에러로 처리할 수 있다.
 
-as?, as!는 v0에서 optional 해소(unwrapping) 규칙을 명시적으로 표현하기 위한 문법이며, 향후 다운캐스트 등 “실패 가능한 캐스팅”이 추가되더라도 동일한 의미를 유지한다.
+• 일반 캐스팅: `expr as T`
+• 명시적 타입 변환을 수행한다.
+• optional(`T?`) 값을 자동으로 해소(unwrapping)하지 않는다.
+• 캐스팅 실패 가능성이 없는 변환에 사용된다.
 
-⸻
+예:
 
-#### 7.6.3.2 타입 규칙(결과 타입)
-	•	expr as T의 결과 타입은 T
-	•	expr as? T의 결과 타입은 T?
-	•	단, T가 이미 T?이면 결과는 T?로 유지된다. (T??는 존재하지 않는다)
-	•	expr as! T의 결과 타입은 T
+```gaupel
+let a: i32 = 1;
+let b: i64 = a as i64;
+```
 
-⸻
+---
 
-#### 7.6.3.3 Optional과의 상호작용
-as는 optional을 자동 해소하지 않는다. optional 값을 T로 만들고 싶다면 as? 또는 as!를 사용해야 한다.
+• 옵셔널 안전 캐스팅: `expr as? T`
+• 캐스팅이 실패하면 결과는 `null`이다.
+• 성공하면 `T` 값을 optional로 감싼 `T?`를 반환한다.
+• 입력 값이 `null`이면 결과도 `null`이다.
+• 결과 타입은 항상 `T?`로 정규화된다.
 
+이 연산자는 주로 다음 상황을 위해 존재한다.
+
+* 런타임 타입 검사 기반 다운캐스트 (v1 이후)
+* 실패 가능 변환
+* nullable 값 안전 변환
+
+예:
+
+```gaupel
 let x: i32? = null;
-
-let a: i32  = x as i32;    // 에러: optional은 as로 해소되지 않음
-let b: i32? = x as? i32;   // OK: null이면 null
-let c: i32  = x as! i32;   // OK(런타임): null이면 trap
-
-non-null 값에도 as?는 사용할 수 있으며, 이 경우 결과는 T?로 “승격”된다.
+let y: i64? = x as? i64;   // null 유지
 
 let a: i32 = 1;
-let b: i64? = a as? i64;   // OK: 항상 non-null이지만 타입은 i64?
+let b: i64? = a as? i64;   // 성공 -> i64?
+```
 
+---
+
+• 강제 캐스팅: `expr as! T`
+• 캐스팅이 실패하면 런타임 trap(크래시)이 발생한다.
+• 성공하면 `T` 값을 반환한다.
+• 컴파일러가 실패 가능성을 정적으로 확정할 수 있으면 컴파일 에러로 처리할 수 있다.
+
+예:
+
+```gaupel
+let x: i32? = null;
+let z: i64 = x as! i64;   // 런타임 trap
+```
+
+---
+
+#### 7.6.3.2 타입 규칙(결과 타입)
+
+• `expr as T` -> 결과 타입은 `T`
+• `expr as? T` -> 결과 타입은 `T?`
+• 단, `T`가 이미 optional이면 결과는 `T?` 유지 (`T??` 없음)
+• `expr as! T` -> 결과 타입은 `T`
+
+Optional 중첩은 허용되지 않으며, 항상 단일 optional로 정규화된다.
+
+⸻
+
+#### 7.6.3.3 Optional 값과 캐스팅
+
+`as`는 optional 값을 자동으로 해소하지 않는다.
+
+```gaupel
+let x: i32? = null;
+
+let a: i32  = x as i32;   // 에러: optional 자동 해소 없음
+let b: i32? = x as? i32;  // OK: 실패 시 null
+let c: i32  = x as! i32;  // OK(런타임): 실패 시 trap
+```
+
+---
+
+Optional 값에 대해 변환을 수행할 때는 **optional chaining 기반 캐스팅을 권장한다.**
+
+예:
+
+```gaupel
+let x: i32? = 10;
+let y: i64? = x?.(as i64);
+```
+
+의미:
+
+* `x == null` -> 결과 `null`
+* 값 존재 -> `as i64` 변환 후 optional로 반환
+
+이는 optional 값을 변환할 때 가장 명확하고 권장되는 패턴이다.
+
+(향후 표준 라이브러리에서 `map` 등의 함수형 변환 API가 제공될 수 있다.)
 
 ⸻
 
 #### 7.6.3.4 v0 허용 변환 범위(권장)
-v0 단계에서는 as 계열을 기본 스칼라 타입 간의 명시적 변환에 한정하는 것을 권장한다.
-	•	정수 ↔ 정수
-	•	정수 ↔ 부동소수점
-	•	(선택) bool ↔ 정수/부동소수점은 v0에서 금지하거나, 명시적인 표준 라이브러리 함수로만 제공할 수 있다.
-	•	문자열/클래스/참조/핸들 기반의 변환 및 다운캐스트는 v1 이후로 확장한다.
 
-v0에서는 손실(overflow/precision loss) 여부를 캐스팅 자체에서 금지하지 않는다.
-손실 비허용 변환(checked/saturating/wrapping 등)은 표준 라이브러리에서 별도 API로 제공한다.
+v0 단계에서는 `as` 계열 캐스팅을 기본 스칼라 타입 변환에 한정하는 것을 권장한다.
+
+• 정수 ↔ 정수
+• 정수 ↔ 부동소수점
+• bool ↔ 숫자 변환은 권장하지 않으며 필요 시 표준 라이브러리 함수로 제공
+• 문자열/객체/참조 타입 캐스팅 및 다운캐스트는 v1 이후 확장 예정
+
+또한:
+
+* overflow/precision loss 여부는 캐스팅 자체에서 검사하지 않는다.
+* checked/saturating/wrapping 변환은 표준 라이브러리 API로 제공한다.
 
 ⸻
 
@@ -1522,16 +1591,17 @@ v0에서는 손실(overflow/precision loss) 여부를 캐스팅 자체에서 금
 
 ```gaupel
 let a: i32 = 1;
-let b: i64 = a as i64;       // OK
+let b: i64 = a as i64;
 
 let x: i32? = null;
-let y: i64? = x as? i64;     // OK (null-safe)
-let z: i64  = x as! i64;     // OK (null이면 trap)
+let y: i64? = x as? i64;     // 안전 캐스트
+let z: i64  = x as! i64;     // 실패 시 trap
 
-캐스팅을 통해 optional 타입으로 승격도 가능하다.
+let x: i32? = 10;
+let y: i64? = x?.(as i64);   // optional chaining cast
 
-let a: i32  = 10;
-let b: i32? = a as i32?;     // OK
+let a: i32 = 10;
+let b: i32? = a as? i32;     // safe cast -> optional
 ```
 
 ---

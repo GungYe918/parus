@@ -35,9 +35,7 @@ namespace gaupel::tyck {
 
         // string literal 타입(필요 시)
         if (string_type_ == ty::kInvalidType) {
-            // 지금은 string builtin이 없으니, placeholder로 error()를 쓰거나
-            // NamedUser("string")로 박아도 됨. 정책 선택.
-            // 여기선 error 타입으로 둠.
+            // 지금은 string builtin이 없으니 placeholder로 error() 사용
             string_type_ = types_.error();
         }
 
@@ -51,7 +49,6 @@ namespace gaupel::tyck {
 
         const ast::Stmt& root = ast_.stmt(program_stmt);
         if (root.kind != ast::StmtKind::kBlock) {
-            // top-level must be block
             if (diag_bag_) diag_(diag::Code::kTopLevelMustBeBlock, root.span);
             result_.ok = false;
             return result_;
@@ -59,46 +56,27 @@ namespace gaupel::tyck {
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
-        // - 전역 스코프에 함수 이름을 먼저 insert
-        // - (use/type-alias 등도 원하면 여기서 추가 가능)
+        // - 전역 스코프에 "함수 시그니처 타입(ty::Kind::kFn)"을 먼저 등록한다.
+        // - 기존 check_program() 내부의 "invalid 타입으로 insert"하던 루프가
+        //   거의 모든 TypeNotCallable 증상의 원인이었으므로 제거하고,
+        //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
-        // NOTE: block children는 stmt_children_ 슬라이스임!
-        for (uint32_t i = 0; i < root.stmt_count; ++i) {
-            const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
-            const ast::Stmt& cs = ast_.stmt(child_id);
-
-            if (cs.kind == ast::StmtKind::kFnDecl) {
-                // 함수 심볼 삽입: declared_type에는 fn signature type을 넣는 게 이상적이지만
-                // 지금은 ret type만 cs.type에 있으니, v0는 kind만 Fn으로 등록.
-                // (원하면 types_.make_fn(...)으로 signature TypeId를 만들어 넣어도 됨)
-                auto ins = sym_.insert(sema::SymbolKind::kFn, cs.name, /*declared_type=*/ty::kInvalidType, cs.span);
-                if (!ins.ok && diag_bag_) {
-                    if (ins.is_duplicate) diag_(diag::Code::kDuplicateDecl, cs.span, cs.name);
-                    // shadowing은 top-level에선 사실상 duplicate와 동일하게 취급해도 됨
-                }
-            }
-
-            // 정책상 top-level decl-only를 강제한다면 여기서 검사 가능:
-            // if (cs.kind != ast::StmtKind::kFnDecl && cs.kind != ast::StmtKind::kUse) { ... }
-        }
+        first_pass_collect_top_level_(program_stmt);
 
         // ---------------------------------------------------------
         // PASS 2: 실제 타입체크
-        // - root는 글로벌 scope이므로 push_scope() 하지 않는다.
-        // - 대신 “블록 처리 함수”가 scope를 어떻게 다룰지 정책을 통일해야 함.
-        //   (여기서는: 최상위 block은 scope를 새로 안 파고,
-        //    함수/내부 block에서만 push)
+        // - top-level block은 "scope 생성 없이" 자식만 순회한다.
+        //   (중요: check_stmt_block_은 scope를 push하므로,
+        //    root를 check_stmt_로 보내면 top-level이 새 스코프가 되어
+        //    PASS1에서 등록한 전역 심볼이 가려질 수 있다.)
         // ---------------------------------------------------------
-        // top-level block은 “scope 생성 없이” 자식들을 순회한다.
         for (uint32_t i = 0; i < root.stmt_count; ++i) {
             const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
             check_stmt_(child_id);
-            if (!result_.ok) {
-                // 계속 진행할지 중단할지는 정책. 여기선 계속.
-            }
+            // 에러가 나도 계속 진행(정책)
         }
 
-        // result_.expr_types 반영
+        // 결과 반영
         result_.expr_types = expr_type_cache_;
         return result_;
     }
@@ -1214,6 +1192,70 @@ namespace gaupel::tyck {
     // binary / assign / ternary
     // --------------------
     ty::TypeId TypeChecker::check_expr_binary_(const ast::Expr& e) {
+        // NOTE:
+        // - v0 정책: binary는 기본적으로 "builtin fast-path"만 처리한다.
+        // - 추후 operator overloading을 넣을 때도,
+        //   여기 구조를 (A) builtin (B) overload fallback 으로 유지하면 된다.
+
+        // ------------------------------------------------------------
+        // Null-Coalescing: ??  (Swift/C# 스타일 축약)
+        //
+        //  a ?? b
+        //   - a: Optional(T?) or null
+        //   - if a is T? then b must be assignable to T
+        //   - result type: T (non-optional)
+        //
+        // v0 추가 정책:
+        //   - lhs가 null literal인 경우 "null ?? x"를 금지하지 않고,
+        //     그냥 결과를 rhs 타입으로 둔다. (원하면 경고/에러로 강화 가능)
+        // ------------------------------------------------------------
+        if (e.op == K::kQuestionQuestion) {
+            ty::TypeId lt = check_expr_(e.a);
+            ty::TypeId rt = check_expr_(e.b);
+
+            // error short-circuit
+            if (is_error_(lt) || is_error_(rt)) return types_.error();
+
+            // lhs가 null이면 rhs로 수렴(정책)
+            if (is_null_(lt)) {
+                return rt;
+            }
+
+            // lhs는 optional 이어야 한다
+            if (!is_optional_(lt)) {
+                diag_(diag::Code::kTypeNullCoalesceLhsMustBeOptional, e.span, types_.to_string(lt));
+                err_(e.span, "operator '??' requires optional lhs");
+                return types_.error();
+            }
+
+            ty::TypeId elem = optional_elem_(lt);
+            if (elem == ty::kInvalidType) {
+                // 방어: Optional인데 elem이 invalid인 경우
+                err_(e.span, "optional elem type is invalid");
+                return types_.error();
+            }
+
+            // rhs가 {integer}면 elem 컨텍스트로 해소 시도
+            {
+                const auto& st = types_.get(rt);
+                if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(e.b, elem);
+                    rt = check_expr_(e.b);
+                }
+            }
+
+            // rhs는 elem에 대입 가능해야 함
+            if (!can_assign_(elem, rt)) {
+                diag_(diag::Code::kTypeNullCoalesceRhsMismatch, e.span,
+                    types_.to_string(elem), types_.to_string(rt));
+                err_(e.span, "operator '??' rhs mismatch");
+                return types_.error();
+            }
+
+            // 결과는 non-optional elem
+            return elem;
+        }
+
         ty::TypeId lt = check_expr_(e.a);
         ty::TypeId rt = check_expr_(e.b);
 
@@ -1355,6 +1397,72 @@ namespace gaupel::tyck {
     }
 
     ty::TypeId TypeChecker::check_expr_assign_(const ast::Expr& e) {
+        // NOTE:
+        // - v0: assign expr는 (1) place 체크, (2) rhs 체크, (3) can_assign 검사로 끝낸다.
+        // - compound-assign(+= 등)도 현재는 "단순 대입 호환"만 보는 형태.
+        // - NEW: ??= 는 제어흐름 의미가 있으므로 별도 규칙을 강제한다.
+
+        // ------------------------------------------------------------
+        // Null-Coalescing Assign: ??=
+        //
+        //  x ??= y
+        //   - lhs must be place
+        //   - lhs type must be Optional(T?)
+        //   - rhs must be assignable to T
+        //   - expression result type: lhs type (T?)  (IR lowering/일관성에 유리)
+        // ------------------------------------------------------------
+        if (e.op == K::kQuestionQuestionAssign) {
+            // e.a = lhs, e.b = rhs
+            if (!is_place_expr_(e.a)) {
+                diag_(diag::Code::kAssignLhsMustBePlace, e.span);
+                err_(e.span, "assignment lhs must be a place expression (ident/index)");
+                // 그래도 rhs는 검사해서 에러 누락 방지
+                (void)check_expr_(e.b);
+                return types_.error();
+            }
+
+            ty::TypeId lt = check_expr_(e.a);
+            ty::TypeId rt = check_expr_(e.b);
+
+            if (is_error_(lt) || is_error_(rt)) return types_.error();
+
+            // lhs는 optional이어야 한다
+            if (!is_optional_(lt)) {
+                diag_(diag::Code::kTypeNullCoalesceAssignLhsMustBeOptional, e.span, types_.to_string(lt));
+                err_(e.span, "operator '??=' requires optional lhs");
+                return types_.error();
+            }
+
+            ty::TypeId elem = optional_elem_(lt);
+            if (elem == ty::kInvalidType) {
+                err_(e.span, "optional elem type is invalid");
+                return types_.error();
+            }
+
+            // RHS가 {integer}면, elem 타입 컨텍스트로 해소 시도
+            {
+                const auto& st = types_.get(rt);
+                if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(e.b, elem);
+                    rt = check_expr_(e.b);
+                }
+            }
+
+            // rhs는 elem에 assign 가능해야 함
+            if (!can_assign_(elem, rt)) {
+                diag_(diag::Code::kTypeNullCoalesceAssignRhsMismatch, e.span,
+                    types_.to_string(elem), types_.to_string(rt));
+                err_(e.span, "operator '??=' rhs mismatch");
+                return types_.error();
+            }
+
+            // 결과 타입은 lhs 타입(T?)로 유지
+            return lt;
+        }
+
+        // ------------------------------------------------------------
+        // 기존 '=' / 기타 대입류 (현 로직 유지)
+        // ------------------------------------------------------------
         // e.a = lhs, e.b = rhs
         if (!is_place_expr_(e.a)) {
             diag_(diag::Code::kAssignLhsMustBePlace, e.span);
@@ -1663,84 +1771,79 @@ namespace gaupel::tyck {
             return types_.error();
         }
 
-        // Normalize target/result by cast kind:
-        // - as      : result is T, no optional unwrapping.
-        // - as?     : result is T? (wrap to optional if needed), optional-aware on operand:
-        //            - if operand is U? then treat as (U -> T) and result becomes T?
-        //            - if operand is null then result is null (T?)
-        // - as!     : result is T, optional-aware on operand:
-        //            - if operand is U? then treat as (U -> T) but null traps at runtime
+        // ------------------------------------------------------------
+        // 7.6.3 semantics (Swift/C#-like):
+        //
+        //   expr as  T   -> T     (no optional auto-unwrapping)
+        //   expr as? T   -> T?    (always optional-normalized, no T??)
+        //   expr as! T   -> T     (runtime trap on failure)
+        //
+        // Optional rules:
+        // - `as`  : optional 값을 자동 해소하지 않는다.
+        // - `as?` : 입력이 null이면 결과 null, 성공하면 T 값을 T?로 반환
+        // - `as!` : 입력이 null이거나 변환 실패 시 trap(런타임)
+        //
+        // v0 scope:
+        // - numeric scalar casts only (int<->int, int<->float, float<->float)
+        // - future: runtime-checked downcast / ref casts in v1+
+        // ------------------------------------------------------------
+
         auto make_optional_if_needed = [&](ty::TypeId t) -> ty::TypeId {
             if (t == ty::kInvalidType) return types_.error();
             if (is_optional_(t)) return t;
             return types_.make_optional(t);
         };
 
-        // Result type
+        // (A) 결과 타입 계산: as?만 항상 optional-normalize
         ty::TypeId result_t = target_t;
         if (e.cast_kind == ast::CastKind::kAsOptional) {
             result_t = make_optional_if_needed(target_t);
         }
 
-        // Optional-aware operand normalization (ONLY for as? / as!)
+        // (B) operand가 null인 경우
         const bool operand_is_null = is_null_(operand_t);
-        const bool operand_is_opt  = is_optional_(operand_t);
-
-        // If operand is null:
-        // - as?  : allowed => returns null (T?)
-        // - as!  : allowed => always traps at runtime, but type is T (v0: allow)
-        // - as   : only allowed if target is optional (null -> T?); otherwise disallow
         if (operand_is_null) {
+            // null as? T  -> null (T?)
             if (e.cast_kind == ast::CastKind::kAsOptional) {
-                // null as? T => null of type T?
-                return result_t;
-            }
-            if (e.cast_kind == ast::CastKind::kAsForce) {
-                // null as! T => trap at runtime, but type-check passes as T
-                // (Optional: could emit a warning diagnostic in the future.)
-                // Still disallow "null as! T" if you want stricter compile-time, but v0 keeps it simple.
-                return result_t;
+                return result_t; // T?
             }
 
-            // plain "as": null -> only optional target
-            if (is_optional_(result_t)) return result_t;
+            // null as! T  -> runtime trap, but type is T
+            if (e.cast_kind == ast::CastKind::kAsForce) {
+                return result_t; // T
+            }
+
+            // null as T:
+            // - only allowed when T is optional (null -> T?)
+            // - otherwise error (no implicit unwrap / no null-to-nonopt)
+            if (is_optional_(result_t)) {
+                return result_t;
+            }
 
             diag_(diag::Code::kTyckCastNullToNonOptional, e.span, types_.to_string(result_t));
             err_(e.span, "cannot cast null to non-optional type");
             return types_.error();
         }
 
-        // Operand type used for compatibility check:
-        // - as      : use operand_t as-is
-        // - as? / as!: if operand is optional, unwrap for checking (U? -> U)
+        // (C) operand가 optional(U?)인 경우:
+        // - as   : optional 자동 해소 없음 -> U? 를 그대로 검사해야 함 (대부분 비허용이 정상)
+        // - as?  : null-safe/실패가능 -> 검사 단계에서는 U로 unwrap해서 "값이 있을 때 변환 가능?"만 본다
+        // - as!  : 강제 -> 검사 단계에서는 U로 unwrap해서 변환 가능성만 보고, null은 런타임 trap로 처리
+        const bool operand_is_opt = is_optional_(operand_t);
+
         ty::TypeId check_operand_t = operand_t;
         if ((e.cast_kind == ast::CastKind::kAsOptional || e.cast_kind == ast::CastKind::kAsForce) && operand_is_opt) {
             ty::TypeId elem = optional_elem_(operand_t);
             check_operand_t = (elem == ty::kInvalidType) ? types_.error() : elem;
         }
 
-        // check target is "target_t" (not result_t)
+        // (D) 변환 가능성 체크는 "target_t" 기준으로 한다.
+        //     - as?의 결과가 T?인 것과 별개로, 변환 자체는 T로 되는지 확인해야 한다.
         ty::TypeId check_target_t = target_t;
 
-        const auto ok_assign_like = [&](ty::TypeId dst, ty::TypeId src) -> bool {
-            // allow "{integer}" to be resolved by explicit cast target
-            const auto& st = types_.get(src);
-            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                // try resolve using explicit cast target (must be integer type)
-                (void)resolve_infer_int_in_context_(operand_eid, dst);
-                // re-read operand type (still might remain infer-int if cast target is float, etc.)
-                src = check_expr_(operand_eid, Slot::kValue);
-                // NOTE: if we were in as?/as! and operand was optional, we still want to treat
-                // infer-int as non-optional; infer-int itself can't be optional in v0.
-            }
-            return can_assign_(dst, src);
-        };
-
-        // ---- policy v0: explicit cast rules (minimal but structured) ----
-        // We do NOT implement runtime-checked downcast yet.
-        // We allow:
-        //  1) assignment-compatible casts (same as can_assign)
-        //  2) numeric builtin <-> numeric builtin (explicit only)
+        // ------------------------------------------------------------
+        // helper: builtin predicates
+        // ------------------------------------------------------------
         auto is_builtin = [&](ty::TypeId t) -> bool {
             return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
         };
@@ -1761,56 +1864,67 @@ namespace gaupel::tyck {
             }
         };
 
-        auto numeric_explicit_ok = [&](ty::TypeId dst, ty::TypeId src) -> bool {
-            // allow numeric cast among builtin numeric types
-            if (!is_numeric_builtin(dst)) return false;
-            if (!is_numeric_builtin(src)) return false;
+        // ------------------------------------------------------------
+        // (E) "{integer}" placeholder 처리:
+        // - 명시적 cast는 강력한 "컨텍스트"이므로,
+        //   정수 타겟으로는 여기서 resolve 시도 가능.
+        // - float 타겟으로 cast하는 경우는 resolve_infer_int_in_context_를 호출하면
+        //   (네 정책상) IntToFloatNotAllowed 진단이 날 수 있으므로 호출하지 않는다.
+        //   (float로 가고 싶다면 literal에 f32/f64 suffix를 붙이거나,
+        //    향후 별도 정책을 도입하면 된다.)
+        // ------------------------------------------------------------
+        auto try_resolve_infer_int_by_cast_target = [&]() {
+            const auto& st = types_.get(check_operand_t);
+            if (!(st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger)) return;
 
-            // IMPORTANT: explicit cast path allows int<->float here.
-            // (implicit int->float remains forbidden elsewhere)
-            return true;
+            const auto& dt = types_.get(check_target_t);
+            if (dt.kind != ty::Kind::kBuiltin) return;
+
+            auto is_int_builtin = [&](ty::Builtin b) -> bool {
+                return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
+                    b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
+                    b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
+                    b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
+                    b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+            };
+
+            auto is_float_builtin = [&](ty::Builtin b) -> bool {
+                return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
+            };
+
+            if (is_int_builtin(dt.builtin)) {
+                (void)resolve_infer_int_in_context_(operand_eid, check_target_t);
+                // NOTE: expr cache가 이미 {integer}로 박혀있을 수 있으니
+                // check_operand_t는 논리적으로만 업데이트한다고 가정(필요하면 재-read).
+            } else if (is_float_builtin(dt.builtin)) {
+                // explicit cast to float is allowed conceptually,
+                // but we do NOT resolve infer-int here to avoid "implicit int->float" diag.
+                // (policy v0; can be revisited later)
+            }
         };
 
-        // 1) assignment-like compatibility
-        if (ok_assign_like(check_target_t, check_operand_t)) {
-            // For as? we already normalized result to T?
+        // ------------------------------------------------------------
+        // (F) 허용 규칙(v0):
+        // 1) 같은 타입 (T -> T)
+        // 2) builtin numeric <-> builtin numeric (explicit cast only)
+        // 3) (향후) 다운캐스트/런타임 타입 검사: v1+
+        //
+        // IMPORTANT:
+        // - `as`는 optional 자동 해소가 없으므로,
+        //   U? as T 같은 것은 일반적으로 허용되지 않는다.
+        // - `as?`/`as!`는 검사 시 unwrap(U? -> U) 후 변환 가능성만 체크한다.
+        // ------------------------------------------------------------
+
+        // 1) identical
+        if (check_operand_t == check_target_t) {
             return result_t;
         }
 
-        // 2) numeric explicit casts
-        if (numeric_explicit_ok(check_target_t, check_operand_t)) {
+        // 2) resolve "{integer}" with cast target when possible
+        try_resolve_infer_int_by_cast_target();
 
-            // ONLY when operand is deferred integer "{integer}"
-            const auto& st = types_.get(check_operand_t);
-            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-
-                const auto& dt = types_.get(check_target_t);
-                if (dt.kind == ty::Kind::kBuiltin) {
-
-                    auto is_int_builtin = [&](ty::Builtin b) -> bool {
-                        return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
-                            b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
-                            b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
-                            b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
-                            b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
-                    };
-
-                    auto is_float_builtin = [&](ty::Builtin b) -> bool {
-                        return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
-                    };
-
-                    // resolve only for integer targets
-                    if (is_int_builtin(dt.builtin)) {
-                        (void)resolve_infer_int_in_context_(operand_eid, check_target_t);
-                    }
-                    // explicit cast {integer} -> float is allowed here,
-                    // but resolve_infer_int_in_context_ must NOT be called (it would emit IntToFloatNotAllowed).
-                    else if (is_float_builtin(dt.builtin)) {
-                        // no-op
-                    }
-                }
-            }
-
+        // 3) numeric explicit casts
+        if (is_numeric_builtin(check_target_t) && is_numeric_builtin(check_operand_t)) {
             return result_t;
         }
 

@@ -176,6 +176,15 @@ namespace gaupel::diag {
         kTyckCastMissingTargetType,
         kTyckCastNullToNonOptional,   // arg0: target type string
         kTyckCastNotAllowed,          // arg0: from, arg1: to
+
+        // ---- ??, ??= ----
+        kTypeNullCoalesceLhsMustBeOptional,
+        kTypeNullCoalesceRhsMismatch,
+
+        kTypeNullCoalesceAssignLhsMustBeOptional,
+        kTypeNullCoalesceAssignRhsMismatch,
+
+        
     };
 
 } // namespace gaupel::diag
