@@ -788,16 +788,19 @@ namespace gaupel {
         s.span = use_kw.span;
         s.use_kind = ast::UseKind::kError;
 
-        // ---- 1) module import ----
+        // ------------------------------------------------------------
+        // 1) module import
+        //    use module <x/y> as alias;
+        // ------------------------------------------------------------
         if (cursor_.at(K::kKwModule)) {
-            cursor_.bump(); // module
+            cursor_.bump(); // 'module'
 
             bool is_angle = false;
             std::string_view mpath = parse_module_path_to_string(is_angle);
 
             if (!cursor_.eat(K::kKwAs)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "as");
-                recover_to_delim(K::kKwAs, K::kSemicolon);
+                recover_to_delim(K::kKwAs, K::kSemicolon, K::kEof);
                 cursor_.eat(K::kKwAs);
             }
 
@@ -806,6 +809,7 @@ namespace gaupel {
                 diag_report(diag::Code::kUnexpectedToken, al.span, "identifier (module alias)");
             } else {
                 cursor_.bump();
+
                 s.use_kind = ast::UseKind::kModuleImport;
                 s.use_module_path = mpath;
                 s.use_module_is_angle = is_angle;
@@ -817,30 +821,64 @@ namespace gaupel {
             return ast_.add_stmt(s);
         }
 
-        // ---- (v0) NOTE: FFI parsing is disabled entirely ----
-        // v1에서 `use func::ffi <sig> name;`, `use struct::ffi Name { ... }` 등을 추가.
-
-        // ---- 2) common forms: must start with Ident ----
+        // ------------------------------------------------------------
+        // 2) non-module forms must start with Ident (path head)
+        //    - TypeAlias:   use NewT (=|as) Type;
+        //    - PathAlias:   use A::B (=|as) name;
+        //    - TextSubst:   use PI 3.14;
+        // ------------------------------------------------------------
         const Token first = cursor_.peek();
         if (first.kind != K::kIdent) {
             diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (use target)");
             if (!cursor_.at(K::kEof)) cursor_.bump();
+
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);
         }
 
-        // parse path first: Ident ('::' Ident)*
+        // parse path: Ident ('::' Ident)*
         auto [pb, pc] = parse_path_segments();
 
-        // ---- 2-a) '=' present -> TypeAlias (pc==1) or PathAlias (pc>=2) ----
-        if (cursor_.at(K::kAssign)) {
-            cursor_.bump(); // '='
+        // separator can be '=' or 'as'
+        const bool has_assign = cursor_.at(K::kAssign);
+        const bool has_as     = cursor_.at(K::kKwAs);
 
-            if (pc == 1) {
-                // v0 policy: forbid symbol-alias-looking case `use foo = bar;`
+        // ------------------------------------------------------------
+        // 2-A) alias forms: ( '=' | 'as' )
+        // ------------------------------------------------------------
+        if (has_assign || has_as) {
+            if (has_assign) {
+                cursor_.bump(); // '='
+            } else {
+                cursor_.bump(); // 'as'
+            }
+
+            // ---- PathAlias: pc >= 2, RHS must be Ident ----
+            if (pc >= 2) {
+                const Token rhs = cursor_.peek();
+                if (rhs.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (use path alias name)");
+                } else {
+                    cursor_.bump();
+
+                    s.use_kind = ast::UseKind::kPathAlias;
+                    s.use_path_begin = pb;
+                    s.use_path_count = pc;
+                    s.use_rhs_ident = rhs.lexeme;
+                }
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+
+            // ---- pc == 1: TypeAlias (but keep v0 heuristic: forbid value-alias-looking cases) ----
+            {
                 const std::string_view lhs = ast_.path_segs()[pb];
 
+                // If RHS is Ident and looks like value-alias (lowercase-only), keep old policy:
+                // forbid `use foo (=|as) bar;` when both are lowercase-only and rhs has no digit.
                 const Token rhs0 = cursor_.peek();
                 if (rhs0.kind == K::kIdent) {
                     const std::string_view rhs = rhs0.lexeme;
@@ -852,75 +890,56 @@ namespace gaupel {
 
                     if (looks_like_value_alias) {
                         diag_report(diag::Code::kUnexpectedToken, rhs0.span,
-                                    "type name (v0: `use foo = bar;` value-alias is not supported)");
+                                    "value-like alias is not allowed here (use TypeAlias or PathAlias).");
+                        // recovery: consume rhs ident to stabilize stream
                         cursor_.bump();
+
                         Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
                         s.span = span_join(use_kw.span, end);
                         return ast_.add_stmt(s);
                     }
                 }
 
-                // treat as type alias: use Name = Type;
+                // Parse Type (v0: NamedType). This also happily consumes Ident RHS.
                 auto ty = parse_type();
 
                 s.use_kind = ast::UseKind::kTypeAlias;
-                s.use_name = ast_.path_segs()[pb];
-                s.type = (ty.id == ty::kInvalidType) ? types_.error() : ty.id;
+                s.use_name = lhs;
+                s.type = ty.id;
 
                 Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
                 s.span = span_join(use_kw.span, end);
                 return ast_.add_stmt(s);
             }
-
-            // pc >= 2: path alias: use A::B = name;
-            const Token rhs = cursor_.peek();
-            if (rhs.kind != K::kIdent) {
-                diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (path alias target)");
-            } else {
-                cursor_.bump();
-                s.use_kind = ast::UseKind::kPathAlias;
-                s.use_path_begin = pb;
-                s.use_path_count = pc;
-                s.use_rhs_ident = rhs.lexeme;
-            }
-
-            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
-            s.span = span_join(use_kw.span, end);
-            return ast_.add_stmt(s);
         }
 
-        // ---- 2-b) no '=' -> TextSubst (pc must be 1) ----
+        // ------------------------------------------------------------
+        // 2-B) Text substitution: use NAME LITERAL;
+        //      Only allowed when pc == 1 (single ident)
+        // ------------------------------------------------------------
         if (pc != 1) {
-            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expected '=' for path alias");
+            // e.g. "use A::B 123;" is nonsensical in v0
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "expected '=' or 'as' after use-path");
+            // recovery: sync to ';'
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);
         }
 
-        // TextSubst: use NAME <expr>;
-        s.use_kind = ast::UseKind::kTextSubst;
-        s.use_name = ast_.path_segs()[pb];
+        // TextSubst payload must be a literal token (not general expr) in v0.
+        {
+            const std::string_view name = ast_.path_segs()[pb];
+            s.use_kind = ast::UseKind::kTextSubst;
+            s.use_name = name;
 
-        // 값이 아예 없는 경우
-        if (cursor_.at(K::kSemicolon)) {
-            diag_report(diag::Code::kUseTextSubstExprExpected, cursor_.peek().span);
-            cursor_.bump(); // consume ';'
-            s.span = span_join(use_kw.span, cursor_.prev().span);
+            // literal-only payload
+            s.expr = parse_use_literal_expr_or_error();
+
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);
         }
-
-        // v0: 파싱 단계에서는 expr를 허용한다 (literal 강제 금지)
-        s.expr = parse_expr();
-
-        // expr 뒤에 ';'가 안 보이면 잔여 토큰이 있다는 뜻 → 전용 진단 + 복구
-        if (!cursor_.at(K::kSemicolon)) {
-            diag_report(diag::Code::kUseTextSubstTrailingTokens, cursor_.peek().span);
-            recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
-        }
-
-        Span end = stmt_consume_semicolon_or_recover(ast_.expr(s.expr).span);
-        s.span = span_join(use_kw.span, end);
-        return ast_.add_stmt(s);
     }
 
     // ';'가 없으면 다음 경계까지 복구 후 가능한 경우 ';' 소비
