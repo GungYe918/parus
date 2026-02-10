@@ -491,6 +491,32 @@ namespace gaupel {
 
         using K = syntax::TokenKind;
 
+        // helper: 다음 토큰이 "표현식 시작"인지(= ternary의 then-branch 시작 가능) 판정
+        auto is_expr_start = [&](K k) -> bool {
+            // prefix 연산자로 시작 가능하면 expr-start
+            if (syntax::prefix_info(k).has_value()) return true;
+
+            switch (k) {
+                // primary starters
+                case K::kIntLit:
+                case K::kFloatLit:
+                case K::kStringLit:
+                case K::kCharLit:
+                case K::kIdent:
+                case K::kHole:
+                case K::kKwTrue:
+                case K::kKwFalse:
+                case K::kKwNull:
+                case K::kKwIf:
+                case K::kKwLoop:
+                case K::kLParen:
+                case K::kLBrace:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
         while (1) {
             const Token t = cursor_.peek();
 
@@ -521,7 +547,7 @@ namespace gaupel {
             }
 
             // ----------------------------
-            // NEW: cast postfix  (as / as? / as!)
+            // cast postfix  (as / as? / as!)
             //   expr as T
             //   expr as? T
             //   expr as! T
@@ -545,8 +571,6 @@ namespace gaupel {
 
                 // Type required
                 const Token ty_first = cursor_.peek();
-                // type-start가 아닌데도 들어오면, 파서 흐름 유지를 위해 한 토큰 넘기고 error node로 감싼다.
-                // (정확한 type-start 판정은 type 파서가 담당)
                 auto parsed_ty = parse_type();
 
                 if (parsed_ty.id == ty::kInvalidType) {
@@ -559,10 +583,52 @@ namespace gaupel {
                 e.cast_kind = ck;
                 e.cast_type = parsed_ty.id;
 
-                // span: base .. type (type이 invalid면 op까지라도)
                 Span end = parsed_ty.span.hi ? parsed_ty.span : op_span;
                 e.span = span_join(ast_.expr(base).span, end);
 
+                base = ast_.add_expr(e);
+                continue;
+            }
+
+            // ----------------------------
+            // postfix '?' / '!'  (unwrap / try / force-unwrap 계열)
+            //
+            // IMPORTANT:
+            // '?'는 ternary (?:) 와 충돌할 수 있음.
+            // - 다음 토큰이 expr-start 이면: "a ? b : c"로 보고 postfix 단계에서 먹지 않는다.
+            // - 다음 토큰이 expr-start가 아니면: "a?" postfix로 소비한다.
+            //
+            // 예)
+            //   cond ? 1 : 2      -> 여기 '?' 다음은 intLit(=expr-start) => ternary
+            //   foo()? : bar()    -> '?' 다음은 ':'(=expr-start 아님) => postfix '?' 허용
+            //   (x?) + 1          -> '?' 다음은 '+'(prefix_info('+')는 있을 수 있으나,
+            //                         여기서는 peek(1)이 '+'이므로 expr-start로 보지 않음)
+            // ----------------------------
+            if (t.kind == K::kQuestion) {
+                const Token next = cursor_.peek(1);
+
+                // ternary로 시작할 가능성이 높으면 postfix '?'는 여기서 소비하지 않음
+                if (is_expr_start(next.kind)) {
+                    break; // pratt loop에서 ternary 처리
+                }
+
+                const Token op = cursor_.bump(); // '?'
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kPostfixUnary;
+                e.op = op.kind;
+                e.a = base;
+                e.span = span_join(ast_.expr(base).span, op.span);
+                base = ast_.add_expr(e);
+                continue;
+            }
+
+            if (t.kind == K::kBang) {
+                const Token op = cursor_.bump(); // '!'
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kPostfixUnary;
+                e.op = op.kind;
+                e.a = base;
+                e.span = span_join(ast_.expr(base).span, op.span);
                 base = ast_.add_expr(e);
                 continue;
             }

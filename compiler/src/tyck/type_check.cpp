@@ -1664,14 +1664,63 @@ namespace gaupel::tyck {
         }
 
         // Normalize target/result by cast kind:
-        // - as      : result is T
-        // - as?     : result is T?   (wrap to optional if needed)
-        // - as!     : result is T    (force)
+        // - as      : result is T, no optional unwrapping.
+        // - as?     : result is T? (wrap to optional if needed), optional-aware on operand:
+        //            - if operand is U? then treat as (U -> T) and result becomes T?
+        //            - if operand is null then result is null (T?)
+        // - as!     : result is T, optional-aware on operand:
+        //            - if operand is U? then treat as (U -> T) but null traps at runtime
         auto make_optional_if_needed = [&](ty::TypeId t) -> ty::TypeId {
             if (t == ty::kInvalidType) return types_.error();
             if (is_optional_(t)) return t;
             return types_.make_optional(t);
         };
+
+        // Result type
+        ty::TypeId result_t = target_t;
+        if (e.cast_kind == ast::CastKind::kAsOptional) {
+            result_t = make_optional_if_needed(target_t);
+        }
+
+        // Optional-aware operand normalization (ONLY for as? / as!)
+        const bool operand_is_null = is_null_(operand_t);
+        const bool operand_is_opt  = is_optional_(operand_t);
+
+        // If operand is null:
+        // - as?  : allowed => returns null (T?)
+        // - as!  : allowed => always traps at runtime, but type is T (v0: allow)
+        // - as   : only allowed if target is optional (null -> T?); otherwise disallow
+        if (operand_is_null) {
+            if (e.cast_kind == ast::CastKind::kAsOptional) {
+                // null as? T => null of type T?
+                return result_t;
+            }
+            if (e.cast_kind == ast::CastKind::kAsForce) {
+                // null as! T => trap at runtime, but type-check passes as T
+                // (Optional: could emit a warning diagnostic in the future.)
+                // Still disallow "null as! T" if you want stricter compile-time, but v0 keeps it simple.
+                return result_t;
+            }
+
+            // plain "as": null -> only optional target
+            if (is_optional_(result_t)) return result_t;
+
+            diag_(diag::Code::kTyckCastNullToNonOptional, e.span, types_.to_string(result_t));
+            err_(e.span, "cannot cast null to non-optional type");
+            return types_.error();
+        }
+
+        // Operand type used for compatibility check:
+        // - as      : use operand_t as-is
+        // - as? / as!: if operand is optional, unwrap for checking (U? -> U)
+        ty::TypeId check_operand_t = operand_t;
+        if ((e.cast_kind == ast::CastKind::kAsOptional || e.cast_kind == ast::CastKind::kAsForce) && operand_is_opt) {
+            ty::TypeId elem = optional_elem_(operand_t);
+            check_operand_t = (elem == ty::kInvalidType) ? types_.error() : elem;
+        }
+
+        // check target is "target_t" (not result_t)
+        ty::TypeId check_target_t = target_t;
 
         const auto ok_assign_like = [&](ty::TypeId dst, ty::TypeId src) -> bool {
             // allow "{integer}" to be resolved by explicit cast target
@@ -1679,7 +1728,10 @@ namespace gaupel::tyck {
             if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
                 // try resolve using explicit cast target (must be integer type)
                 (void)resolve_infer_int_in_context_(operand_eid, dst);
+                // re-read operand type (still might remain infer-int if cast target is float, etc.)
                 src = check_expr_(operand_eid, Slot::kValue);
+                // NOTE: if we were in as?/as! and operand was optional, we still want to treat
+                // infer-int as non-optional; infer-int itself can't be optional in v0.
             }
             return can_assign_(dst, src);
         };
@@ -1689,7 +1741,6 @@ namespace gaupel::tyck {
         // We allow:
         //  1) assignment-compatible casts (same as can_assign)
         //  2) numeric builtin <-> numeric builtin (explicit only)
-        //  3) null -> optional target (as/as!/as?) are OK
         auto is_builtin = [&](ty::TypeId t) -> bool {
             return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
         };
@@ -1715,33 +1766,25 @@ namespace gaupel::tyck {
             if (!is_numeric_builtin(dst)) return false;
             if (!is_numeric_builtin(src)) return false;
 
-            // IMPORTANT: this is explicit cast path, so int<->float is allowed here.
+            // IMPORTANT: explicit cast path allows int<->float here.
             // (implicit int->float remains forbidden elsewhere)
             return true;
         };
 
-        // compute the “semantic target” for checking based on cast kind
-        ty::TypeId check_target = target_t;
-        ty::TypeId result_t = target_t;
-
-        if (e.cast_kind == ast::CastKind::kAsOptional) {
-            result_t = make_optional_if_needed(target_t);
-            check_target = target_t; // check compatibility into T, then wrap to T?
-        }
-
         // 1) assignment-like compatibility
-        if (ok_assign_like(check_target, operand_t)) {
+        if (ok_assign_like(check_target_t, check_operand_t)) {
+            // For as? we already normalized result to T?
             return result_t;
         }
 
         // 2) numeric explicit casts
-        if (numeric_explicit_ok(check_target, operand_t)) {
+        if (numeric_explicit_ok(check_target_t, check_operand_t)) {
 
             // ONLY when operand is deferred integer "{integer}"
-            const auto& st = types_.get(operand_t);
+            const auto& st = types_.get(check_operand_t);
             if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
 
-                const auto& dt = types_.get(check_target);
+                const auto& dt = types_.get(check_target_t);
                 if (dt.kind == ty::Kind::kBuiltin) {
 
                     auto is_int_builtin = [&](ty::Builtin b) -> bool {
@@ -1758,26 +1801,17 @@ namespace gaupel::tyck {
 
                     // resolve only for integer targets
                     if (is_int_builtin(dt.builtin)) {
-                        (void)resolve_infer_int_in_context_(operand_eid, check_target);
+                        (void)resolve_infer_int_in_context_(operand_eid, check_target_t);
                     }
                     // explicit cast {integer} -> float is allowed here,
                     // but resolve_infer_int_in_context_ must NOT be called (it would emit IntToFloatNotAllowed).
                     else if (is_float_builtin(dt.builtin)) {
-                        // no-op (keep it deferred; backend/lowering can handle literal->float cast)
+                        // no-op
                     }
                 }
             }
 
             return result_t;
-        }
-
-        // 3) null -> optional target via explicit cast:
-        //    (null as T?) or (null as? T) etc. is OK; but null as T is NOT OK.
-        if (is_null_(operand_t)) {
-            if (is_optional_(result_t)) return result_t;
-            diag_(diag::Code::kTyckCastNullToNonOptional, e.span, types_.to_string(result_t));
-            err_(e.span, "cannot cast null to non-optional type");
-            return types_.error();
         }
 
         // Otherwise: not allowed (future: runtime checked downcast)
@@ -1786,5 +1820,5 @@ namespace gaupel::tyck {
         err_(e.span, "cast not allowed");
         return types_.error();
     }
-    
+
 } // namespace gaupel::tyck
