@@ -127,6 +127,12 @@ namespace gaupel::passes {
                     break;
                 }
 
+                case ast::ExprKind::kCast: {
+                    // cast operand만 이름해결 하면 됨
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
+                    break;
+                }
+
                 case ast::ExprKind::kUnary:
                 case ast::ExprKind::kPostfixUnary: {
                     if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);

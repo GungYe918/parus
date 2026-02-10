@@ -489,28 +489,80 @@ namespace gaupel {
             return ast_.add_expr(e);
         }
 
+        using K = syntax::TokenKind;
+
         while (1) {
             const Token t = cursor_.peek();
 
-            if (t.kind == syntax::TokenKind::kLParen) {
+            // call
+            if (t.kind == K::kLParen) {
                 const Token lp = cursor_.bump();
                 base = parse_expr_call(base, lp, ternary_depth);
                 continue;
             }
 
-            if (t.kind == syntax::TokenKind::kLBracket) {
+            // index
+            if (t.kind == K::kLBracket) {
                 const Token lb = cursor_.bump();
                 base = parse_expr_index(base, lb, ternary_depth);
                 continue;
             }
 
-            if (t.kind == syntax::TokenKind::kPlusPlus) {
+            // postfix ++
+            if (t.kind == K::kPlusPlus) {
                 const Token op = cursor_.bump();
                 ast::Expr e{};
                 e.kind = ast::ExprKind::kPostfixUnary;
                 e.op = op.kind;
                 e.a = base;
                 e.span = span_join(ast_.expr(base).span, op.span);
+                base = ast_.add_expr(e);
+                continue;
+            }
+
+            // ----------------------------
+            // NEW: cast postfix  (as / as? / as!)
+            //   expr as T
+            //   expr as? T
+            //   expr as! T
+            // ----------------------------
+            if (t.kind == K::kKwAs) {
+                const Token as_kw = cursor_.bump(); // 'as'
+
+                ast::CastKind ck = ast::CastKind::kAs;
+                Span op_span = as_kw.span;
+
+                // as? / as!
+                if (cursor_.at(K::kQuestion)) {
+                    const Token q = cursor_.bump();
+                    ck = ast::CastKind::kAsOptional;
+                    op_span = span_join(op_span, q.span);
+                } else if (cursor_.at(K::kBang)) {
+                    const Token b = cursor_.bump();
+                    ck = ast::CastKind::kAsForce;
+                    op_span = span_join(op_span, b.span);
+                }
+
+                // Type required
+                const Token ty_first = cursor_.peek();
+                // type-start가 아닌데도 들어오면, 파서 흐름 유지를 위해 한 토큰 넘기고 error node로 감싼다.
+                // (정확한 type-start 판정은 type 파서가 담당)
+                auto parsed_ty = parse_type();
+
+                if (parsed_ty.id == ty::kInvalidType) {
+                    diag_report(diag::Code::kUnexpectedToken, ty_first.span, "type after 'as'");
+                }
+
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kCast;
+                e.a = base;
+                e.cast_kind = ck;
+                e.cast_type = parsed_ty.id;
+
+                // span: base .. type (type이 invalid면 op까지라도)
+                Span end = parsed_ty.span.hi ? parsed_ty.span : op_span;
+                e.span = span_join(ast_.expr(base).span, end);
+
                 base = ast_.add_expr(e);
                 continue;
             }

@@ -1,10 +1,4 @@
-fn main() -> i32 {
-
-    // while ( ... ) { ... }
-    let mut i: i32 = 0;
-    while (i < 3) {
-        i = i + 1;
-    }
-
-    return 42;
+fn main_three() -> i32 {
+    let x: i32 = 10;
+    let y: i64 = x as i64;
 }

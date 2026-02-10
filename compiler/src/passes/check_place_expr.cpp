@@ -102,8 +102,12 @@ namespace gaupel::passes {
         switch (e.kind) {
             case ast::ExprKind::kUnary:
             case ast::ExprKind::kPostfixUnary:
-                // unary 규칙 검사
                 check_unary_place_rules(ast, e, bag);
+                walk_expr(ast, e.a, bag);
+                break;
+
+            case ast::ExprKind::kCast:
+                // cast는 place가 아니지만 operand는 검사해야 함
                 walk_expr(ast, e.a, bag);
                 break;
 
@@ -131,8 +135,6 @@ namespace gaupel::passes {
 
             case ast::ExprKind::kLoop:
                 if (e.loop_iter != ast::k_invalid_expr) walk_expr(ast, e.loop_iter, bag);
-                // loop_body는 stmt이므로 Passes(총괄) 쪽에서 stmt 루트들에 대해 run_all_on_stmt가 책임지는게 깔끔하지만,
-                // 이 pass는 expr 루트 기반으로 도는 구조라서 여기서는 expr만 검사.
                 break;
 
             default:

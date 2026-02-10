@@ -54,5 +54,12 @@ fn main_three() -> i32 {
             20
         };
 
+    let a: i32 = 1;
+    let b: i64 = a as i64;       // OK
+
+    let c: i32? = null;
+    let d: i64? = c as? i64;     // OK (null-safe)
+    let e: i64  = c as! i64;     // OK (null이면 trap)
+
     return x;
 }

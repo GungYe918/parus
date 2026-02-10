@@ -109,6 +109,7 @@ namespace gaupel::tyck {
 
     void TypeChecker::diag_(diag::Code code, Span sp) {
         if (!diag_bag_) return;
+        result_.ok = false;
         diag::Diagnostic d(diag::Severity::kError, code, sp);
         diag_bag_->add(std::move(d));
     }
@@ -1002,6 +1003,10 @@ namespace gaupel::tyck {
             case ast::ExprKind::kLoop:
                 t = check_expr_loop_(e, slot);
                 break;
+
+            case ast::ExprKind::kCast:
+                t = check_expr_cast_(e);
+                break;
         }
 
         // caching policy:
@@ -1633,4 +1638,153 @@ namespace gaupel::tyck {
         return types_.make_optional(base);
     }
 
+    // --------------------
+    // cast
+    // --------------------
+    ty::TypeId TypeChecker::check_expr_cast_(const ast::Expr& e) {
+        // AST contract:
+        // - e.a: operand
+        // - e.cast_type: target type
+        // - e.cast_kind: as / as? / as!
+        const ast::ExprId operand_eid = e.a;
+
+        if (operand_eid == ast::k_invalid_expr) {
+            diag_(diag::Code::kTyckCastMissingOperand, e.span);
+            err_(e.span, "cast missing operand");
+            return types_.error();
+        }
+
+        ty::TypeId operand_t = check_expr_(operand_eid, Slot::kValue);
+
+        ty::TypeId target_t = e.cast_type;
+        if (target_t == ty::kInvalidType) {
+            diag_(diag::Code::kTyckCastMissingTargetType, e.span);
+            err_(e.span, "cast missing target type");
+            return types_.error();
+        }
+
+        // Normalize target/result by cast kind:
+        // - as      : result is T
+        // - as?     : result is T?   (wrap to optional if needed)
+        // - as!     : result is T    (force)
+        auto make_optional_if_needed = [&](ty::TypeId t) -> ty::TypeId {
+            if (t == ty::kInvalidType) return types_.error();
+            if (is_optional_(t)) return t;
+            return types_.make_optional(t);
+        };
+
+        const auto ok_assign_like = [&](ty::TypeId dst, ty::TypeId src) -> bool {
+            // allow "{integer}" to be resolved by explicit cast target
+            const auto& st = types_.get(src);
+            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                // try resolve using explicit cast target (must be integer type)
+                (void)resolve_infer_int_in_context_(operand_eid, dst);
+                src = check_expr_(operand_eid, Slot::kValue);
+            }
+            return can_assign_(dst, src);
+        };
+
+        // ---- policy v0: explicit cast rules (minimal but structured) ----
+        // We do NOT implement runtime-checked downcast yet.
+        // We allow:
+        //  1) assignment-compatible casts (same as can_assign)
+        //  2) numeric builtin <-> numeric builtin (explicit only)
+        //  3) null -> optional target (as/as!/as?) are OK
+        auto is_builtin = [&](ty::TypeId t) -> bool {
+            return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
+        };
+
+        auto is_numeric_builtin = [&](ty::TypeId t) -> bool {
+            if (!is_builtin(t)) return false;
+            auto b = types_.get(t).builtin;
+            switch (b) {
+                case ty::Builtin::kI8: case ty::Builtin::kI16: case ty::Builtin::kI32:
+                case ty::Builtin::kI64: case ty::Builtin::kI128:
+                case ty::Builtin::kU8: case ty::Builtin::kU16: case ty::Builtin::kU32:
+                case ty::Builtin::kU64: case ty::Builtin::kU128:
+                case ty::Builtin::kISize: case ty::Builtin::kUSize:
+                case ty::Builtin::kF32: case ty::Builtin::kF64: case ty::Builtin::kF128:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        auto numeric_explicit_ok = [&](ty::TypeId dst, ty::TypeId src) -> bool {
+            // allow numeric cast among builtin numeric types
+            if (!is_numeric_builtin(dst)) return false;
+            if (!is_numeric_builtin(src)) return false;
+
+            // IMPORTANT: this is explicit cast path, so int<->float is allowed here.
+            // (implicit int->float remains forbidden elsewhere)
+            return true;
+        };
+
+        // compute the “semantic target” for checking based on cast kind
+        ty::TypeId check_target = target_t;
+        ty::TypeId result_t = target_t;
+
+        if (e.cast_kind == ast::CastKind::kAsOptional) {
+            result_t = make_optional_if_needed(target_t);
+            check_target = target_t; // check compatibility into T, then wrap to T?
+        }
+
+        // 1) assignment-like compatibility
+        if (ok_assign_like(check_target, operand_t)) {
+            return result_t;
+        }
+
+        // 2) numeric explicit casts
+        if (numeric_explicit_ok(check_target, operand_t)) {
+
+            // ONLY when operand is deferred integer "{integer}"
+            const auto& st = types_.get(operand_t);
+            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+
+                const auto& dt = types_.get(check_target);
+                if (dt.kind == ty::Kind::kBuiltin) {
+
+                    auto is_int_builtin = [&](ty::Builtin b) -> bool {
+                        return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
+                            b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
+                            b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
+                            b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
+                            b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+                    };
+
+                    auto is_float_builtin = [&](ty::Builtin b) -> bool {
+                        return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
+                    };
+
+                    // resolve only for integer targets
+                    if (is_int_builtin(dt.builtin)) {
+                        (void)resolve_infer_int_in_context_(operand_eid, check_target);
+                    }
+                    // explicit cast {integer} -> float is allowed here,
+                    // but resolve_infer_int_in_context_ must NOT be called (it would emit IntToFloatNotAllowed).
+                    else if (is_float_builtin(dt.builtin)) {
+                        // no-op (keep it deferred; backend/lowering can handle literal->float cast)
+                    }
+                }
+            }
+
+            return result_t;
+        }
+
+        // 3) null -> optional target via explicit cast:
+        //    (null as T?) or (null as? T) etc. is OK; but null as T is NOT OK.
+        if (is_null_(operand_t)) {
+            if (is_optional_(result_t)) return result_t;
+            diag_(diag::Code::kTyckCastNullToNonOptional, e.span, types_.to_string(result_t));
+            err_(e.span, "cannot cast null to non-optional type");
+            return types_.error();
+        }
+
+        // Otherwise: not allowed (future: runtime checked downcast)
+        diag_(diag::Code::kTyckCastNotAllowed, e.span,
+            types_.to_string(operand_t), types_.to_string(result_t));
+        err_(e.span, "cast not allowed");
+        return types_.error();
+    }
+    
 } // namespace gaupel::tyck

@@ -145,6 +145,11 @@ namespace gaupel::diag {
             case Code::kTypeAssignMismatch:        return "TypeAssignMismatch";
             case Code::kTypeTernaryCondMustBeBool: return "TypeTernaryCondMustBeBool";
             case Code::kTypeUnresolvedHole:        return "TypeUnresolvedHole";
+
+            case Code::kTyckCastMissingOperand: return "TyckCastMissingOperand";
+            case Code::kTyckCastMissingTargetType: return "TyckCastMissingTargetType";
+            case Code::kTyckCastNullToNonOptional: return "TyckCastNullToNonOptional";
+            case Code::kTyckCastNotAllowed: return "TyckCastNotAllowed";
         }
 
         return "Unknown";
@@ -269,6 +274,10 @@ namespace gaupel::diag {
             case Code::kTypeTernaryCondMustBeBool: return "ternary condition must be bool (got {0})";
             case Code::kTypeUnresolvedHole: return "unresolved hole '_' in expression";
 
+            case Code::kTyckCastMissingOperand: return "cast expression is missing its operand";
+            case Code::kTyckCastMissingTargetType: return "cast expression is missing its target type";
+            case Code::kTyckCastNullToNonOptional: return "cannot cast 'null' to non-optional type '{0}'";
+            case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
         }
 
         return "unknown diagnostic";
@@ -397,6 +406,11 @@ namespace gaupel::diag {
             case Code::kTypeAssignMismatch: return "대입할 수 없습니다: 기대 {0}, 실제 {1}";
             case Code::kTypeTernaryCondMustBeBool: return "삼항 조건식은 bool이어야 합니다(현재 {0})";
             case Code::kTypeUnresolvedHole: return "식에서 '_'(hole)이 해소되지 않았습니다";
+
+            case Code::kTyckCastMissingOperand: return "cast expression is missing its operand";
+            case Code::kTyckCastMissingTargetType: return "cast expression is missing its target type";
+            case Code::kTyckCastNullToNonOptional: return "cannot cast 'null' to non-optional type '{0}'";
+            case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
         }
 
         return "알 수 없는 진단";

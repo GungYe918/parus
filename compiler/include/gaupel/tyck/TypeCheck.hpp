@@ -94,10 +94,12 @@ namespace gaupel::tyck {
         ty::TypeId check_expr_if_(const ast::Expr& e);
         ty::TypeId check_expr_block_(const ast::Expr& e);
         ty::TypeId check_expr_loop_(const ast::Expr& e);
+        ty::TypeId check_expr_cast_(const ast::Expr& e);
 
         ty::TypeId check_expr_if_(const ast::Expr& e, Slot slot);    // overload
         ty::TypeId check_expr_block_(const ast::Expr& e, Slot slot); // overload
         ty::TypeId check_expr_loop_(const ast::Expr& e, Slot slot);  // overload
+
 
         // --------------------
         // helpers

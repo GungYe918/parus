@@ -169,7 +169,13 @@ namespace gaupel::diag {
         kTypeParamDefaultMismatch,     // args[0]=param_name, args[1]=expected, args[2]=got
         kTypeAssignMismatch,           // args[0]=expected, args[1]=got
         kTypeTernaryCondMustBeBool,    // args[0]=got_type
-        kTypeUnresolvedHole            // (no args)
+        kTypeUnresolvedHole,           // (no args)
+
+        // type casting
+        kTyckCastMissingOperand,
+        kTyckCastMissingTargetType,
+        kTyckCastNullToNonOptional,   // arg0: target type string
+        kTyckCastNotAllowed,          // arg0: from, arg1: to
     };
 
 } // namespace gaupel::diag

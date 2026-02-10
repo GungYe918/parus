@@ -133,6 +133,8 @@ namespace gaupel::passes {
     }
 
     static void walk_expr(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag) {
+        if (id == ast::k_invalid_expr) return;
+
         const auto& e = ast.expr(id);
 
         switch (e.kind) {
@@ -156,10 +158,14 @@ namespace gaupel::passes {
                 walk_expr(ast, e.c, bag);
                 break;
 
+            case ast::ExprKind::kCast:
+                // cast operand만 순회하면 됨 (type은 Expr 트리가 아님)
+                walk_expr(ast, e.a, bag);
+                break;
+
             case ast::ExprKind::kCall: {
                 walk_expr(ast, e.a, bag);
 
-                // 일반 call 내부 인자들도 walk (pipe 검증은 validate_pipe_call에서 별도 수행)
                 const auto& args = ast.args();
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
                     const auto& a = args[e.arg_begin + i];

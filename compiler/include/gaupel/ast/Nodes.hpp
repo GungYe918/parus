@@ -60,6 +60,8 @@ namespace gaupel::ast {
         
         kIfExpr,
         kBlockExpr,
+
+        kCast,
     };
 
     // --------------------
@@ -164,6 +166,12 @@ namespace gaupel::ast {
         Span span{};
     };
 
+    enum class CastKind : uint8_t {
+        kAs,        // expr as T
+        kAsOptional,// expr as? T
+        kAsForce,   // expr as! T
+    };
+
     // --------------------
     // Expr/Type/Stmt nodes
     // --------------------
@@ -189,6 +197,10 @@ namespace gaupel::ast {
         std::string_view loop_var{};       // v
         ExprId loop_iter = k_invalid_expr; // xs (또는 range expr)
         StmtId loop_body = k_invalid_stmt; // '{ ... }' block stmt id
+
+        // cast payload
+        TypeId cast_type = k_invalid_type;
+        CastKind cast_kind = CastKind::kAs;
     };
 
     // --------------------

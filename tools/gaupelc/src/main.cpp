@@ -152,6 +152,7 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
         case K::kIfExpr: return "If";
         case K::kLoop: return "Loop";
         case K::kBlockExpr: return "Block";
+        case K::kCast: return "Cast";
     }
 
     return "Unknown";
