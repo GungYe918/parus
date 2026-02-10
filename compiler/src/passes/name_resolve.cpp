@@ -19,6 +19,7 @@ namespace gaupel::passes {
         bag.add(std::move(d));
     }
 
+    [[maybe_unused]]
     static void report_int(diag::Bag& bag, diag::Severity sev, diag::Code code, Span span, int v0) {
         diag::Diagnostic d(sev, code, span);
         d.add_arg_int(v0);

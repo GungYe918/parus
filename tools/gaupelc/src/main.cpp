@@ -119,6 +119,7 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kVar: return "Var";
         case K::kIf: return "If";
         case K::kWhile: return "While";
+        case K::kUse:  return "Use";
         case K::kReturn: return "Return";
         case K::kBreak: return "Break";
         case K::kContinue: return "Continue";
@@ -149,6 +150,7 @@ static const char* expr_kind_name(gaupel::ast::ExprKind k) {
         case K::kError: return "Error";
         case K::kAssign: return "Assign";
         case K::kIfExpr: return "If";
+        case K::kLoop: return "Loop";
         case K::kBlockExpr: return "Block";
     }
 

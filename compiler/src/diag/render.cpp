@@ -169,6 +169,7 @@ namespace gaupel::diag {
             case Code::kCallArgMixNotAllowed: return "mixing labeled and positional arguments is not allowed";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry must be 'label: expr' or 'label: _'";
             case Code::kCallOnlyOneNamedGroupAllowed: return "only one named-group '{ ... }' is allowed in a call";
+            case Code::kFnReturnTypeRequired: return "function return type is required (use: fn name(...) -> T { ... })";
             case Code::kAttrNameExpectedAfterAt: return "attribute name expected after '@'";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "default value is only allowed inside named-group '{ ... }'";
             case Code::kFnParamDefaultExprExpected: return "default expression expected after '='";
@@ -290,6 +291,7 @@ namespace gaupel::diag {
             case Code::kPipeHolePositionalNotAllowed: return "'_'는 파이프 호출에서 위치 인자로 사용할 수 없습니다";
             case Code::kCallArgMixNotAllowed: return "라벨 인자와 위치 인자를 섞어 호출할 수 없습니다";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry는 'label: expr' 또는 'label: _' 형태여야 합니다";
+            case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: fn name(...) -> T { ... })";
             case Code::kCallOnlyOneNamedGroupAllowed: return "호출 인자에서 named-group '{ ... }'는 1개만 허용됩니다";
             case Code::kAttrNameExpectedAfterAt: return "'@' 뒤에는 attribute 이름이 와야 합니다";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "기본값은 named-group '{ ... }' 안에서만 사용할 수 있습니다";

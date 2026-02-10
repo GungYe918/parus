@@ -57,7 +57,7 @@ namespace gaupel::syntax {
         {",",   TokenKind::kComma},
         {":",   TokenKind::kColon},
         {";",   TokenKind::kSemicolon},
-        {"??=", TokenKind::kQuestionQuestionAssign},
+        {"?" "?=", TokenKind::kQuestionQuestionAssign},
 
         {"??",  TokenKind::kQuestionQuestion},
         {"?",   TokenKind::kQuestion},

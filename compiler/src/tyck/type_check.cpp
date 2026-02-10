@@ -583,6 +583,7 @@ namespace gaupel::tyck {
                 // 컨텍스트 해소: let x: i32 = 123; 같은 케이스에서 RHS가 {integer}면 여기서 확정
                 if (s.type != ty::kInvalidType) {
                     const auto& st = types_.get(s.type);
+                    (void)st;
                     const auto& it = types_.get(init_t);
                     if (it.kind == ty::Kind::kBuiltin && it.builtin == ty::Builtin::kInferInteger) {
                         (void)resolve_infer_int_in_context_(s.init, s.type);
