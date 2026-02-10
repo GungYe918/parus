@@ -138,6 +138,13 @@ namespace gaupel::diag {
             case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
             case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
             case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
+
+            case Code::kTypeParamTypeRequired:     return "TypeParamTypeRequired";
+            case Code::kTypeDuplicateParam:        return "TypeDuplicateParam";
+            case Code::kTypeParamDefaultMismatch:  return "TypeParamDefaultMismatch";
+            case Code::kTypeAssignMismatch:        return "TypeAssignMismatch";
+            case Code::kTypeTernaryCondMustBeBool: return "TypeTernaryCondMustBeBool";
+            case Code::kTypeUnresolvedHole:        return "TypeUnresolvedHole";
         }
 
         return "Unknown";
@@ -227,7 +234,7 @@ namespace gaupel::diag {
             case Code::kTypeArgCountMismatch: return "argument count mismatch: expected {0}, got {1}";
             case Code::kTypeArgTypeMismatch:  return "argument type mismatch at #{0}: expected {1}, got {2}";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
-            case Code::kTypeReturnExprRequired:return "return expression is required (no 'unit' type yet)";
+            case Code::kTypeReturnExprRequired: return "return expression is required (function does not return unit)";
             case Code::kTypeUnaryBangMustBeBool:return "operator '!' requires bool (got {0})";
             case Code::kTypeBinaryOperandsMustMatch:return "binary arithmetic requires both operands to have the same type (lhs={0}, rhs={1})";
             case Code::kTypeCompareOperandsMustMatch:return "comparison requires both operands to have the same type (lhs={0}, rhs={1})";
@@ -247,12 +254,20 @@ namespace gaupel::diag {
             case Code::kIntLiteralDoesNotFit: return "integer literal does not fit into '{0}'";
             case Code::kIntToFloatNotAllowed: return "cannot use a deferred integer in {0} context (no implicit int->float)";
 
-            case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
-            case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
-            case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
+            case Code::kBreakOutsideLoop: return "break is only allowed inside a loop";
+            case Code::kContinueOutsideLoop: return "continue is only allowed inside a loop";
+            case Code::kBlockExprValueExpected: return "value expected: block expression in value context must have a tail expression";
 
             case Code::kAssignLhsMustBePlace: return "assignment left-hand side must be a place expression (ident/index)";
             case Code::kPostfixOperandMustBePlace: return "postfix operator requires a place expression (ident/index)";
+
+            case Code::kTypeParamTypeRequired: return "parameter '{0}' requires an explicit type";
+            case Code::kTypeDuplicateParam: return "duplicate parameter name '{0}'";
+            case Code::kTypeParamDefaultMismatch: return "default value type mismatch for parameter '{0}': expected {1}, got {2}";
+            case Code::kTypeAssignMismatch: return "cannot assign: expected {0}, got {1}";
+            case Code::kTypeTernaryCondMustBeBool: return "ternary condition must be bool (got {0})";
+            case Code::kTypeUnresolvedHole: return "unresolved hole '_' in expression";
+
         }
 
         return "unknown diagnostic";
@@ -367,12 +382,19 @@ namespace gaupel::diag {
             
             case Code::kIntToFloatNotAllowed: /* args[0]=float_type */ return "지연된 정수 리터럴은 {0} 컨텍스트에서 사용할 수 없습니다(암시적 int->float 변환 없음)";
 
-            case Code::kBreakOutsideLoop: return "BreakOutsideLoop";
-            case Code::kContinueOutsideLoop: return "ContinueOutsideLoop";
-            case Code::kBlockExprValueExpected: return "BlockExprValueExpected";
+            case Code::kBreakOutsideLoop: return "break는 loop 안에서만 사용할 수 있습니다";
+            case Code::kContinueOutsideLoop: return "continue는 loop 안에서만 사용할 수 있습니다";
+            case Code::kBlockExprValueExpected: return "값이 필요합니다: value 컨텍스트의 block 표현식은 tail 식이 있어야 합니다";
 
             case Code::kAssignLhsMustBePlace: return "대입문의 왼쪽은 place expression(ident/index)이어야 합니다";
             case Code::kPostfixOperandMustBePlace: return "후위 연산자는 place expression(ident/index)에만 적용할 수 있습니다";
+
+            case Code::kTypeParamTypeRequired: return "파라미터 '{0}'에는 타입이 필요합니다";
+            case Code::kTypeDuplicateParam: return "파라미터 이름 '{0}'이(가) 중복되었습니다";
+            case Code::kTypeParamDefaultMismatch: return "파라미터 '{0}'의 기본값 타입이 맞지 않습니다: 기대 {1}, 실제 {2}";
+            case Code::kTypeAssignMismatch: return "대입할 수 없습니다: 기대 {0}, 실제 {1}";
+            case Code::kTypeTernaryCondMustBeBool: return "삼항 조건식은 bool이어야 합니다(현재 {0})";
+            case Code::kTypeUnresolvedHole: return "식에서 '_'(hole)이 해소되지 않았습니다";
         }
 
         return "알 수 없는 진단";

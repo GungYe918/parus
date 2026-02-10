@@ -156,7 +156,7 @@ namespace gaupel::tyck {
         const ast::Stmt& prog = ast_.stmt(program_stmt);
         if (prog.kind != ast::StmtKind::kBlock) {
             err_(prog.span, "program root is not a block stmt");
-            diag_(diag::Code::kUnexpectedToken, prog.span, "program root is not a block");
+            diag_(diag::Code::kTopLevelMustBeBlock, prog.span);
             return;
         }
 
@@ -205,7 +205,7 @@ namespace gaupel::tyck {
                         if (pt == ty::kInvalidType) {
                             // 파라미터 타입이 비어있으면 일단 error로 채우고 계속
                             err_(p.span, "parameter requires an explicit type");
-                            diag_(diag::Code::kUnexpectedToken, p.span, std::string_view(p.name));
+                            diag_(diag::Code::kTypeParamTypeRequired, p.span, p.name);
                             pt = types_.error();
                             bad_param = true;
                         }
@@ -222,7 +222,7 @@ namespace gaupel::tyck {
                 auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
                 if (!ins.ok && ins.is_duplicate) {
                     err_(s.span, "duplicate symbol (function): " + std::string(s.name));
-                    diag_(diag::Code::kUnexpectedToken, s.span, s.name);
+                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
                 }
                 continue;
             }
@@ -820,6 +820,7 @@ namespace gaupel::tyck {
             auto ins = sym_.insert(sema::SymbolKind::kVar, p.name, pt, p.span);
             if (!ins.ok && ins.is_duplicate) {
                 err_(p.span, "duplicate parameter name: " + std::string(p.name));
+                diag_(diag::Code::kTypeDuplicateParam, p.span, p.name);
             }
 
             if (p.has_default && p.default_expr != ast::k_invalid_expr) {
@@ -829,6 +830,8 @@ namespace gaupel::tyck {
                     oss << "default value type mismatch for param '" << p.name
                         << "': expected " << types_.to_string(pt)
                         << ", got " << types_.to_string(dt);
+                    diag_(diag::Code::kTypeParamDefaultMismatch, p.span,
+                            p.name, types_.to_string(pt), types_.to_string(dt));
                     err_(p.span, oss.str());
                 }
             }
@@ -955,6 +958,7 @@ namespace gaupel::tyck {
 
             case ast::ExprKind::kHole:
                 err_(e.span, "unresolved hole '_' in expression");
+                diag_(diag::Code::kTypeUnresolvedHole, e.span);
                 t = types_.error();
                 break;
 
@@ -1363,10 +1367,11 @@ namespace gaupel::tyck {
         }
 
         if (!can_assign_(lt, rt)) {
-            std::ostringstream oss;
-            oss << "cannot assign: expected " << types_.to_string(lt)
-                << ", got " << types_.to_string(rt);
-            err_(e.span, oss.str());
+            diag_(
+                diag::Code::kTypeAssignMismatch, e.span,
+                types_.to_string(lt), types_.to_string(rt)
+            );
+            err_(e.span, "assign mismatch");
         }
         return lt;
     }
@@ -1375,6 +1380,7 @@ namespace gaupel::tyck {
         // a ? b : c
         ty::TypeId ct = check_expr_(e.a);
         if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+            diag_(diag::Code::kTypeTernaryCondMustBeBool, e.span, types_.to_string(ct));
             err_(e.span, "ternary condition must be bool");
         }
         ty::TypeId t1 = check_expr_(e.b);

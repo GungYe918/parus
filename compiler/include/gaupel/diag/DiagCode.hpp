@@ -162,7 +162,14 @@ namespace gaupel::diag {
 
         kBreakOutsideLoop,
         kContinueOutsideLoop,
-        kBlockExprValueExpected
+        kBlockExprValueExpected,
+
+        kTypeParamTypeRequired,        // args[0]=param_name
+        kTypeDuplicateParam,           // args[0]=param_name
+        kTypeParamDefaultMismatch,     // args[0]=param_name, args[1]=expected, args[2]=got
+        kTypeAssignMismatch,           // args[0]=expected, args[1]=got
+        kTypeTernaryCondMustBeBool,    // args[0]=got_type
+        kTypeUnresolvedHole            // (no args)
     };
 
 } // namespace gaupel::diag
