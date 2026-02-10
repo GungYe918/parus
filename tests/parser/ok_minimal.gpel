@@ -12,4 +12,5 @@ fn main() -> i32 {
     let e: i64 = c as! i64;
 
     let p: i32 = x ?? 2;
+    p = 4;
 }

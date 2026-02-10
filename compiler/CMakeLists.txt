@@ -13,6 +13,8 @@ add_library(gaupel_compiler STATIC
     src/passes/check_top_level_decl_only.cpp
     src/passes/name_resolve.cpp
     src/passes/passes.cpp
+    src/sir/mut_analysis.cpp
+    src/sir/sir_builder.cpp
     src/os/file.cpp
     src/tyck/type_check.cpp
     src/num/big_int.cpp

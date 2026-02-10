@@ -17,6 +17,10 @@
 
 #include "gaupel/passes/Passes.hpp"
 #include "gaupel/tyck/TypeCheck.hpp"
+
+#include "gaupel/sir/Builder.hpp"
+#include "gaupel/sir/MutAnalysis.hpp"
+
 #include <gaupel/os/File.hpp>
 
 
@@ -452,7 +456,9 @@ static int run_expr(std::string_view src_arg, gaupel::diag::Language lang, uint3
     gaupel::Parser p(tokens, ast, types, &bag, max_errors);
 
     auto root = p.parse_expr();
-    gaupel::passes::run_all_on_expr(ast, root, bag);
+
+    // NOTE: Passes.hpp에선 run_all_on_expr가 아니라 run_on_expr만 제공됨
+    gaupel::passes::run_on_expr(ast, root, bag);
 
     std::cout << "\nAST:\n";
     dump_expr(ast, root, 0);
@@ -485,8 +491,10 @@ static int run_stmt(
 
     auto root = p.parse_stmt();
 
-    gaupel::sema::SymbolTable sym;
-    gaupel::passes::run_all_on_stmt(ast, root, sym, bag, pass_opt);
+    // -----------------------
+    // PASSES (official API)
+    // -----------------------
+    auto pres = gaupel::passes::run_on_stmt_tree(ast, root, bag, pass_opt);
 
     std::cout << "\nAST(STMT):\n";
     dump_stmt(ast, types, root, 0);
@@ -494,9 +502,9 @@ static int run_stmt(
     std::cout << "\nTYPES:\n";
     types.dump(std::cout);
 
+    // (원하면) pres.sym / pres.name_resolve를 활용한 후속 단계 추가 가능
     return flush_diags(bag, lang, sm, context_lines);
 }
-
 
 /// @brief 프로그램(여러 stmt) 파싱 실행
 static int run_all(
@@ -521,8 +529,13 @@ static int run_all(
 
     auto root = p.parse_program();
 
-    gaupel::sema::SymbolTable sym;
-    gaupel::passes::run_all_on_program(ast, root, sym, bag, pass_opt);
+    // -----------------------
+    // PASSES (official API)
+    //
+    // - Top-level decl only 체크 포함
+    // - NameResolve 포함(심볼테이블 + nres 생성)
+    // -----------------------
+    auto pres = gaupel::passes::run_on_program(ast, root, bag, pass_opt);
 
     std::cout << "\nAST(PROGRAM):\n";
     dump_stmt(ast, types, root, 0);
@@ -533,19 +546,39 @@ static int run_all(
     // -----------------------
     // TYCK (type check)
     // -----------------------
+    gaupel::tyck::TyckResult tyck_res;
     {
-        // diag::Bag에 바로 적재
         gaupel::tyck::TypeChecker tc(ast, types, bag);
-        auto r = tc.check_program(root);
+        tyck_res = tc.check_program(root);
 
-        // 중복 방지를 위해 여기서는 r.errors를 직접 출력하지 않는다.
-        // (필요하면 디버그 플래그로만 출력)
         std::cout << "\nTYCK:\n";
-        if (r.errors.empty()) {
+        if (tyck_res.errors.empty()) {
             std::cout << "tyck ok.\n";
         } else {
-            std::cout << "tyck errors: " << r.errors.size() << "\n";
+            std::cout << "tyck errors: " << tyck_res.errors.size() << "\n";
         }
+    }
+
+    // -----------------------
+    // SIR BUILD + MUT ANALYSIS
+    // -----------------------
+    {
+        gaupel::sir::BuildOptions bopt{};
+        auto m = gaupel::sir::build_sir_module(
+            ast,
+            root,
+            pres.sym,          // <- Passes가 만든 공식 심볼 테이블 사용
+            pres.name_resolve, // <- Passes가 만든 공식 NameResolve 결과 사용
+            tyck_res,
+            types,
+            bopt
+        );
+
+        auto mut = gaupel::sir::analyze_mut(m, bag);
+
+        // (원하면) mut 결과 간단 출력
+        std::cout << "\nMUT:\n";
+        std::cout << "tracked symbols: " << mut.by_symbol.size() << "\n";
     }
 
     // 기존 diag 출력(lex/parse/pass 에러)
