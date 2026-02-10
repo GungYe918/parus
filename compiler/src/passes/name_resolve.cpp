@@ -3,9 +3,16 @@
 #include <gaupel/diag/DiagCode.hpp>
 #include <gaupel/diag/Diagnostic.hpp>
 
+#include <cstdint>
+#include <string_view>
+#include <vector>
+
 
 namespace gaupel::passes {
 
+    // -----------------------------------------------------------------------------
+    // Diagnostics helpers
+    // -----------------------------------------------------------------------------
     static void report(diag::Bag& bag, diag::Severity sev, diag::Code code, Span span, std::string_view a0 = {}) {
         diag::Diagnostic d(sev, code, span);
         if (!a0.empty()) d.add_arg(a0);
@@ -18,51 +25,83 @@ namespace gaupel::passes {
         bag.add(std::move(d));
     }
 
-    // -----------------------
-    // Expr walk (Ident 체크)
-    // -----------------------
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId root, sema::SymbolTable& sym, diag::Bag& bag);
+    // -----------------------------------------------------------------------------
+    // Core invariants (v0 parser quirks)
+    //
+    // 1) BlockExpr stores a *StmtId* inside Expr::a (casted to ExprId slot).
+    //    - parse_expr_block(): out.kind = kBlockExpr
+    //      out.a = (ExprId)block_stmt_id
+    //      out.b = tail_expr_id (or invalid)
+    //
+    // 2) Loop expr stores:
+    //    - loop_iter : ExprId
+    //    - loop_body : StmtId
+    //
+    // This pass MUST treat these fields with the correct id-space, otherwise
+    // "UndefinedName: x" false positives can happen due to ExprId/StmtId index aliasing.
+    // -----------------------------------------------------------------------------
 
-    static void walk_call_args(
+    // -----------------------
+    // Forward declarations
+    // -----------------------
+    static void walk_stmt(
         const ast::AstArena& ast,
-        uint32_t arg_begin,
-        uint32_t arg_count,
+        ast::StmtId id,
         sema::SymbolTable& sym,
-        diag::Bag& bag
-    ) {
-        const auto& args = ast.args();
-        for (uint32_t i = 0; i < arg_count; ++i) {
-            const auto& a = args[arg_begin + i];
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    );
 
-            if (a.kind == ast::ArgKind::kNamedGroup) {
-                const auto& ng = ast.named_group_args();
-                for (uint32_t j = 0; j < a.child_count; ++j) {
-                    const auto& entry = ng[a.child_begin + j];
-                    if (!entry.is_hole && entry.expr != ast::k_invalid_expr) {
-                        walk_expr(ast, entry.expr, sym, bag);
-                    }
-                }
-                continue;
-            }
+    // -----------------------
+    // Id validation helpers
+    // -----------------------
+    struct IdRanges {
+        uint32_t expr_count = 0;
+        uint32_t stmt_count = 0;
+        uint32_t arg_count = 0;
+        uint32_t ng_count = 0;
+        uint32_t stmt_children_count = 0;
+        uint32_t param_count = 0;
+        uint32_t switch_case_count = 0;
+    };
 
-            if (!a.is_hole && a.expr != ast::k_invalid_expr) {
-                walk_expr(ast, a.expr, sym, bag);
-            }
-        }
+    static IdRanges ranges_of_(const ast::AstArena& ast) {
+        IdRanges r{};
+        r.expr_count = (uint32_t)ast.exprs().size();
+        r.stmt_count = (uint32_t)ast.stmts().size();
+        r.arg_count = (uint32_t)ast.args().size();
+        r.ng_count = (uint32_t)ast.named_group_args().size();
+        r.stmt_children_count = (uint32_t)ast.stmt_children().size();
+        r.param_count = (uint32_t)ast.params().size();
+        r.switch_case_count = (uint32_t)ast.switch_cases().size();
+        return r;
     }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId root, sema::SymbolTable& sym, diag::Bag& bag) {
+    static bool is_valid_expr_id_(const IdRanges& r, ast::ExprId id) {
+        return id != ast::k_invalid_expr && (uint32_t)id < r.expr_count;
+    }
+
+    static bool is_valid_stmt_id_(const IdRanges& r, ast::StmtId id) {
+        return id != ast::k_invalid_stmt && (uint32_t)id < r.stmt_count;
+    }
+
+    // -----------------------------------------------------------------------------
+    // Expr walk (Ident 체크)
+    // -----------------------------------------------------------------------------
+    static void walk_expr(
+        const ast::AstArena& ast,
+        ast::ExprId root,
+        sema::SymbolTable& sym,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    ) {
         if (root == ast::k_invalid_expr) return;
 
-        const uint32_t expr_count = (uint32_t)ast.exprs().size();
-
-        auto is_valid_expr_id = [&](ast::ExprId id) -> bool {
-            return id != ast::k_invalid_expr && (uint32_t)id < expr_count;
-        };
+        const IdRanges r = ranges_of_(ast);
 
         // visited: 사이클/중복 방문 차단 (v0에선 충분)
         std::vector<uint8_t> visited;
-        visited.resize(expr_count, 0);
+        visited.resize(r.expr_count, 0);
 
         // 명시적 스택으로 DFS
         std::vector<ast::ExprId> stack;
@@ -73,7 +112,7 @@ namespace gaupel::passes {
             ast::ExprId id = stack.back();
             stack.pop_back();
 
-            if (!is_valid_expr_id(id)) continue;
+            if (!is_valid_expr_id_(r, id)) continue;
             if (visited[(uint32_t)id]) continue;
             visited[(uint32_t)id] = 1;
 
@@ -89,33 +128,33 @@ namespace gaupel::passes {
 
                 case ast::ExprKind::kUnary:
                 case ast::ExprKind::kPostfixUnary: {
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
                     break;
                 }
 
                 case ast::ExprKind::kBinary:
                 case ast::ExprKind::kAssign: {
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
-                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
                     break;
                 }
 
                 case ast::ExprKind::kTernary: {
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
-                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
-                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
                     break;
                 }
 
                 case ast::ExprKind::kIndex: {
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
-                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
                     break;
                 }
 
                 case ast::ExprKind::kCall: {
                     // callee
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
 
                     // args (positional + named-group)
                     const auto& args = ast.args();
@@ -123,16 +162,16 @@ namespace gaupel::passes {
 
                     // 방어: 범위 체크
                     const uint32_t arg_end = e.arg_begin + e.arg_count;
-                    if (e.arg_begin < args.size() && arg_end <= args.size()) {
+                    if (e.arg_begin < r.arg_count && arg_end <= r.arg_count) {
                         for (uint32_t i = 0; i < e.arg_count; ++i) {
                             const auto& a = args[e.arg_begin + i];
 
                             if (a.kind == ast::ArgKind::kNamedGroup) {
                                 const uint32_t ng_end = a.child_begin + a.child_count;
-                                if (a.child_begin < ng.size() && ng_end <= ng.size()) {
+                                if (a.child_begin < r.ng_count && ng_end <= r.ng_count) {
                                     for (uint32_t j = 0; j < a.child_count; ++j) {
                                         const auto& entry = ng[a.child_begin + j];
-                                        if (!entry.is_hole && is_valid_expr_id(entry.expr)) {
+                                        if (!entry.is_hole && is_valid_expr_id_(r, entry.expr)) {
                                             stack.push_back(entry.expr);
                                         }
                                     }
@@ -140,7 +179,7 @@ namespace gaupel::passes {
                                 continue;
                             }
 
-                            if (!a.is_hole && is_valid_expr_id(a.expr)) {
+                            if (!a.is_hole && is_valid_expr_id_(r, a.expr)) {
                                 stack.push_back(a.expr);
                             }
                         }
@@ -149,28 +188,53 @@ namespace gaupel::passes {
                 }
 
                 case ast::ExprKind::kLoop: {
-                    if (is_valid_expr_id(e.loop_iter)) stack.push_back(e.loop_iter);
-                    // loop body stmt는 stmt walker에서 처리
+                    // loop header expr
+                    if (is_valid_expr_id_(r, e.loop_iter)) stack.push_back(e.loop_iter);
+
+                    // IMPORTANT:
+                    // loop body is a StmtId (do NOT treat it as ExprId)
+                    if (is_valid_stmt_id_(r, e.loop_body)) {
+                        walk_stmt(ast, e.loop_body, sym, bag, opt);
+                    }
                     break;
                 }
 
                 case ast::ExprKind::kIfExpr: {
-                    // v0에서 가장 자주 터지는 구간:
-                    // - then/else를 StmtId로 저장해놓고 ExprId 슬롯(e.b/e.c)에 억지로 넣는 경우가 많음
-                    // 그래서 조건(e.a)만 확실히 ExprId로 보고,
-                    // 나머지는 "ExprId 범위 안일 때만" 따라간다.
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
-                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
-                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    // v0 parse_expr_if(): cond=a, then=b, else=c  (then/else are ExprId(BlockExpr))
+                    // BUT for old/buggy trees, b/c might accidentally contain StmtId.
+                    if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
+
+                    if (is_valid_expr_id_(r, e.b)) {
+                        stack.push_back(e.b);
+                    } else {
+                        const ast::StmtId sb = (ast::StmtId)e.b;
+                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, sb, sym, bag, opt);
+                    }
+
+                    if (is_valid_expr_id_(r, e.c)) {
+                        stack.push_back(e.c);
+                    } else {
+                        const ast::StmtId sc = (ast::StmtId)e.c;
+                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, sc, sym, bag, opt);
+                    }
                     break;
                 }
 
                 case ast::ExprKind::kBlockExpr: {
                     // block expr 또한 v0에서 stmt/expr id 혼선 가능성이 큼.
-                    // 일단 ExprId 범위 안일 때만 따라간다.
-                    if (is_valid_expr_id(e.a)) stack.push_back(e.a);
-                    if (is_valid_expr_id(e.b)) stack.push_back(e.b);
-                    if (is_valid_expr_id(e.c)) stack.push_back(e.c);
+                    // IMPORTANT (current parser):
+                    // - e.a : StmtId (block stmt), stored in ExprId slot by convention
+                    // - e.b : tail ExprId (or invalid)
+                    const ast::StmtId blk = (ast::StmtId)e.a;
+                    if (is_valid_stmt_id_(r, blk)) {
+                        walk_stmt(ast, blk, sym, bag, opt);
+                    }
+
+                    // tail expr (value of block)
+                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
+
+                    // legacy / future-proof: if someone used c as tail, keep it safe
+                    if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
                     break;
                 }
 
@@ -181,18 +245,9 @@ namespace gaupel::passes {
         }
     }
 
-    // -----------------------
+    // -----------------------------------------------------------------------------
     // Stmt walk + scope
-    // -----------------------
-    static void walk_stmt(const ast::AstArena& ast, ast::StmtId id, sema::SymbolTable& sym, diag::Bag& bag, const NameResolveOptions& opt);
-
-    static void walk_block_children(const ast::AstArena& ast, const ast::Stmt& s, sema::SymbolTable& sym, diag::Bag& bag, const NameResolveOptions& opt) {
-        const auto& kids = ast.stmt_children();
-        for (uint32_t i = 0; i < s.stmt_count; ++i) {
-            walk_stmt(ast, kids[s.stmt_begin + i], sym, bag, opt);
-        }
-    }
-
+    // -----------------------------------------------------------------------------
     static void declare_var_like(
         sema::SymbolKind kind,
         std::string_view name,
@@ -224,8 +279,37 @@ namespace gaupel::passes {
             }
         }
     }
-    
-    static void walk_fn_decl(const ast::AstArena& ast, const ast::Stmt& fn, sema::SymbolTable& sym, diag::Bag& bag, const NameResolveOptions& opt) {
+
+    static void walk_block_children_(
+        const ast::AstArena& ast,
+        const ast::Stmt& s,
+        sema::SymbolTable& sym,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    ) {
+        const IdRanges r = ranges_of_(ast);
+        const auto& kids = ast.stmt_children();
+
+        // 방어: 범위 체크 (깨진 AST에서도 out-of-range 방지)
+        const uint32_t begin = s.stmt_begin;
+        const uint32_t end = s.stmt_begin + s.stmt_count;
+        if (begin >= r.stmt_children_count) return;
+        if (end > r.stmt_children_count) return;
+
+        for (uint32_t i = begin; i < end; ++i) {
+            walk_stmt(ast, kids[i], sym, bag, opt);
+        }
+    }
+
+    static void walk_fn_decl_(
+        const ast::AstArena& ast,
+        const ast::Stmt& fn,
+        sema::SymbolTable& sym,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    ) {
+        const IdRanges r = ranges_of_(ast);
+
         // 1) 함수 이름은 현재 스코프(보통 top-level)에 등록
         declare_var_like(sema::SymbolKind::kFn, fn.name, fn.type, fn.span, sym, bag, opt);
 
@@ -234,13 +318,19 @@ namespace gaupel::passes {
 
         // 3) 파라미터 선언 등록
         const auto& ps = ast.params();
-        for (uint32_t i = 0; i < fn.param_count; ++i) {
-            const auto& p = ps[fn.param_begin + i];
-            declare_var_like(sema::SymbolKind::kVar, p.name, p.type, p.span, sym, bag, opt);
+        const uint32_t pb = fn.param_begin;
+        const uint32_t pe = fn.param_begin + fn.param_count;
 
-            // default expr 내부 이름 사용 검사
-            if (p.has_default && p.default_expr != ast::k_invalid_expr) {
-                walk_expr(ast, p.default_expr, sym, bag);
+        if (pb < r.param_count && pe <= r.param_count) {
+            for (uint32_t i = pb; i < pe; ++i) {
+                const auto& p = ps[i];
+
+                declare_var_like(sema::SymbolKind::kVar, p.name, p.type, p.span, sym, bag, opt);
+
+                // default expr 내부 이름 사용 검사
+                if (p.has_default && p.default_expr != ast::k_invalid_expr) {
+                    walk_expr(ast, p.default_expr, sym, bag, opt);
+                }
             }
         }
 
@@ -250,8 +340,18 @@ namespace gaupel::passes {
         sym.pop_scope();
     }
 
-    static void walk_stmt(const ast::AstArena& ast, ast::StmtId id, sema::SymbolTable& sym, diag::Bag& bag, const NameResolveOptions& opt) {
+    static void walk_stmt(
+        const ast::AstArena& ast,
+        ast::StmtId id,
+        sema::SymbolTable& sym,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    ) {
         if (id == ast::k_invalid_stmt) return;
+
+        const IdRanges r = ranges_of_(ast);
+        if (!is_valid_stmt_id_(r, id)) return;
+
         const auto& s = ast.stmt(id);
 
         switch (s.kind) {
@@ -259,14 +359,14 @@ namespace gaupel::passes {
                 return;
 
             case ast::StmtKind::kExprStmt:
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
                 return;
 
             case ast::StmtKind::kVar: {
                 // let/set 공통: init expr 먼저 검사(러스트는 선언 RHS에서 이전 스코프를 보게 됨)
                 // "let x = x" 같은 케이스는 바깥 x를 참조(새 x는 아직 스코프에 없음) 형태가 자연스럽다.
                 if (s.init != ast::k_invalid_expr) {
-                    walk_expr(ast, s.init, sym, bag);
+                    walk_expr(ast, s.init, sym, bag, opt);
                 }
 
                 if (!s.is_set) {
@@ -282,24 +382,24 @@ namespace gaupel::passes {
 
             case ast::StmtKind::kBlock:
                 sym.push_scope();
-                walk_block_children(ast, s, sym, bag, opt);
+                walk_block_children_(ast, s, sym, bag, opt);
                 sym.pop_scope();
                 return;
 
             case ast::StmtKind::kIf:
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
                 // then/else는 블록 자체가 push_scope를 하므로 여기선 그대로
                 walk_stmt(ast, s.a, sym, bag, opt);
                 walk_stmt(ast, s.b, sym, bag, opt);
                 return;
 
             case ast::StmtKind::kWhile:
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
                 walk_stmt(ast, s.a, sym, bag, opt);
                 return;
 
             case ast::StmtKind::kReturn:
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
                 return;
 
             case ast::StmtKind::kBreak:
@@ -307,24 +407,29 @@ namespace gaupel::passes {
                 return;
 
             case ast::StmtKind::kFnDecl:
-                walk_fn_decl(ast, s, sym, bag, opt);
+                walk_fn_decl_(ast, s, sym, bag, opt);
                 return;
 
             case ast::StmtKind::kSwitch: {
                 // switch cond
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
 
                 // 각 case body는 block이고, block walker가 스코프를 만들 것
                 const auto& cs = ast.switch_cases();
-                for (uint32_t i = 0; i < s.case_count; ++i) {
-                    walk_stmt(ast, cs[s.case_begin + i].body, sym, bag, opt);
+                const uint32_t cb = s.case_begin;
+                const uint32_t ce = s.case_begin + s.case_count;
+
+                if (cb < r.switch_case_count && ce <= r.switch_case_count) {
+                    for (uint32_t i = cb; i < ce; ++i) {
+                        walk_stmt(ast, cs[i].body, sym, bag, opt);
+                    }
                 }
                 return;
             }
 
             case ast::StmtKind::kUse:
                 // use 문에서 expr가 쓰일 수 있으니 검사
-                walk_expr(ast, s.expr, sym, bag);
+                walk_expr(ast, s.expr, sym, bag, opt);
 
                 // TODO:
                 // use_type_alias / module alias / ffi struct 등의 “decl 성격”을
@@ -336,6 +441,9 @@ namespace gaupel::passes {
         }
     }
 
+    // -----------------------------------------------------------------------------
+    // Public API
+    // -----------------------------------------------------------------------------
     void name_resolve_stmt_tree(
         const ast::AstArena& ast,
         ast::StmtId root,

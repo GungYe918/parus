@@ -1,10 +1,4 @@
-// WTF????
 fn main() -> i32 {
-    let x: i32 = 10;
-    let y: i32 = 20;
-
-    // 기본 산술
-    let z: i32 = x + y;
 
     // while ( ... ) { ... }
     let mut i: i32 = 0;
@@ -12,5 +6,5 @@ fn main() -> i32 {
         i = i + 1;
     }
 
-    return z;
+    return 42;
 }

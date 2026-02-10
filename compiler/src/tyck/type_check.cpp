@@ -16,19 +16,89 @@ namespace gaupel::tyck {
     // public entry
     // --------------------
     TyckResult TypeChecker::check_program(ast::StmtId program_stmt) {
-        result_ = {};
-        expr_type_cache_.clear();
-        expr_type_cache_.resize(ast_.exprs().size(), ty::kInvalidType);
+        // -----------------------------
+        // HARD RESET (매 호출 독립 보장)
+        // -----------------------------
+        result_ = TyckResult{};
+        loop_stack_.clear();
+        fn_ctx_ = FnCtx{};
+        pending_int_sym_.clear();
+        pending_int_expr_.clear();
 
-        // placeholder "string" type: user-type "string"
+        // sym_ “완전 초기화”
+        // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
+        sym_ = sema::SymbolTable{};
+
+        // expr type cache: AST exprs 크기에 맞춰 리셋
+        expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
+
+        // string literal 타입(필요 시)
         if (string_type_ == ty::kInvalidType) {
-            string_type_ = types_.intern_ident("string");
+            // 지금은 string builtin이 없으니, placeholder로 error()를 쓰거나
+            // NamedUser("string")로 박아도 됨. 정책 선택.
+            // 여기선 error 타입으로 둠.
+            string_type_ = types_.error();
         }
 
-        first_pass_collect_top_level_(program_stmt);
-        second_pass_check_program_(program_stmt);
+        // ------------------------------------------
+        // Sanity: program은 Block이어야 한다 (정책)
+        // ------------------------------------------
+        if (program_stmt == ast::k_invalid_stmt) {
+            result_.ok = false;
+            return result_;
+        }
 
-        result_.ok = result_.errors.empty();
+        const ast::Stmt& root = ast_.stmt(program_stmt);
+        if (root.kind != ast::StmtKind::kBlock) {
+            // top-level must be block
+            if (diag_bag_) diag_(diag::Code::kTopLevelMustBeBlock, root.span);
+            result_.ok = false;
+            return result_;
+        }
+
+        // ---------------------------------------------------------
+        // PASS 1: Top-level decl precollect (mutual recursion 지원)
+        // - 전역 스코프에 함수 이름을 먼저 insert
+        // - (use/type-alias 등도 원하면 여기서 추가 가능)
+        // ---------------------------------------------------------
+        // NOTE: block children는 stmt_children_ 슬라이스임!
+        for (uint32_t i = 0; i < root.stmt_count; ++i) {
+            const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
+            const ast::Stmt& cs = ast_.stmt(child_id);
+
+            if (cs.kind == ast::StmtKind::kFnDecl) {
+                // 함수 심볼 삽입: declared_type에는 fn signature type을 넣는 게 이상적이지만
+                // 지금은 ret type만 cs.type에 있으니, v0는 kind만 Fn으로 등록.
+                // (원하면 types_.make_fn(...)으로 signature TypeId를 만들어 넣어도 됨)
+                auto ins = sym_.insert(sema::SymbolKind::kFn, cs.name, /*declared_type=*/ty::kInvalidType, cs.span);
+                if (!ins.ok && diag_bag_) {
+                    if (ins.is_duplicate) diag_(diag::Code::kDuplicateDecl, cs.span, cs.name);
+                    // shadowing은 top-level에선 사실상 duplicate와 동일하게 취급해도 됨
+                }
+            }
+
+            // 정책상 top-level decl-only를 강제한다면 여기서 검사 가능:
+            // if (cs.kind != ast::StmtKind::kFnDecl && cs.kind != ast::StmtKind::kUse) { ... }
+        }
+
+        // ---------------------------------------------------------
+        // PASS 2: 실제 타입체크
+        // - root는 글로벌 scope이므로 push_scope() 하지 않는다.
+        // - 대신 “블록 처리 함수”가 scope를 어떻게 다룰지 정책을 통일해야 함.
+        //   (여기서는: 최상위 block은 scope를 새로 안 파고,
+        //    함수/내부 block에서만 push)
+        // ---------------------------------------------------------
+        // top-level block은 “scope 생성 없이” 자식들을 순회한다.
+        for (uint32_t i = 0; i < root.stmt_count; ++i) {
+            const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
+            check_stmt_(child_id);
+            if (!result_.ok) {
+                // 계속 진행할지 중단할지는 정책. 여기선 계속.
+            }
+        }
+
+        // result_.expr_types 반영
         result_.expr_types = expr_type_cache_;
         return result_;
     }
@@ -475,12 +545,20 @@ namespace gaupel::tyck {
         }
     }
 
+    
     void TypeChecker::check_stmt_block_(const ast::Stmt& s) {
-        sym_.push_scope();
+        // s.kind == kBlock 가정
+        // 블록 진입 시 새 스코프 생성
+        const uint32_t scope_id = sym_.push_scope();
+        (void)scope_id; // 디버그용이면 남겨두기
+
+        // s.stmt_begin/count 는 ast_.stmt_children()의 slice
+        const auto& children = ast_.stmt_children();
 
         for (uint32_t i = 0; i < s.stmt_count; ++i) {
-            const ast::StmtId cid = ast_.stmt_children()[s.stmt_begin + i];
+            const ast::StmtId cid = children[s.stmt_begin + i];
             check_stmt_(cid);
+            // 에러가 나도 계속 진행할지 정책(여기선 계속)
         }
 
         sym_.pop_scope();
@@ -1157,47 +1235,65 @@ namespace gaupel::tyck {
                 b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
         };
 
-        // == / != : null 비교 제한 유지
+        // ------------------------------------------------------------
+        // Equality: == / !=
+        // ------------------------------------------------------------
         if (e.op == K::kEqEq || e.op == K::kBangEq) {
+            // null == null : ok
             if (is_null_(lt) && is_null_(rt)) {
                 return types_.builtin(ty::Builtin::kBool);
             }
+
+            // null comparison rule: null is only comparable with optional
             if (is_null_(lt) && !is_optional_(rt)) {
+                diag_(diag::Code::kTypeCompareOperandsMustMatch, e.span,
+                    types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "null comparison is only allowed with optional types (rhs is not optional)");
+                return types_.builtin(ty::Builtin::kBool);
             }
             if (is_null_(rt) && !is_optional_(lt)) {
+                diag_(diag::Code::kTypeCompareOperandsMustMatch, e.span,
+                    types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "null comparison is only allowed with optional types (lhs is not optional)");
+                return types_.builtin(ty::Builtin::kBool);
             }
+
+            // v0: other equality just returns bool (strict typing could be enforced later)
             return types_.builtin(ty::Builtin::kBool);
         }
 
-        // 산술: + - * / %
+        // ------------------------------------------------------------
+        // Arithmetic: + - * / %
+        // ------------------------------------------------------------
         if (e.op == K::kPlus || e.op == K::kMinus || e.op == K::kStar || e.op == K::kSlash || e.op == K::kPercent) {
-            // float 컨텍스트에 {integer}가 섞이면 즉시 에러 (암시적 int->float 금지)
+            // float + {integer} is forbidden (no implicit int->float)
             if ((is_float(lt) && is_infer_int(rt)) || (is_float(rt) && is_infer_int(lt))) {
+                diag_(diag::Code::kIntToFloatNotAllowed, e.span, "float-arithmetic");
                 err_(e.span, "cannot use deferred integer '{integer}' in float arithmetic (no implicit int->float)");
                 return types_.error();
             }
 
-            // {integer} + concrete int => {integer}를 concrete 쪽 타입으로 해소
+            // {integer} + concrete int => resolve {integer} to concrete int
             if (is_infer_int(lt) && is_int(rt)) {
                 if (!resolve_infer_int_in_context_(e.a, rt)) return types_.error();
-                // 결과 타입은 rhs에 맞춘다
+                lt = rt;
                 return rt;
             }
             if (is_infer_int(rt) && is_int(lt)) {
                 if (!resolve_infer_int_in_context_(e.b, lt)) return types_.error();
+                rt = lt;
                 return lt;
             }
 
-            // {integer} + {integer} => 아직 결정 불가
+            // {integer} + {integer} => still {integer}
             if (is_infer_int(lt) && is_infer_int(rt)) {
                 return types_.builtin(ty::Builtin::kInferInteger);
             }
 
-            // 이종 산술 금지 (no promotion)
+            // no implicit promotion: operands must match
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
-                diag_(diag::Code::kTypeBinaryOperandsMustMatch, e.span, types_.to_string(lt), types_.to_string(rt));
+                diag_(diag::Code::kTypeBinaryOperandsMustMatch, e.span,
+                    types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "binary arithmetic requires both operands to have the same type (no implicit promotion)");
                 return types_.error();
             }
@@ -1205,21 +1301,46 @@ namespace gaupel::tyck {
             return lt;
         }
 
-        // 비교 < <= > >= : 동일 타입만
+        // ------------------------------------------------------------
+        // Comparison: < <= > >=
+        // ------------------------------------------------------------
         if (e.op == K::kLt || e.op == K::kLtEq || e.op == K::kGt || e.op == K::kGtEq) {
-            // {integer} 비교는 타입 컨텍스트 필요 (v1: 금지)
-            if (is_infer_int(lt) || is_infer_int(rt)) {
+            // If one side is concrete int and the other is {integer}, resolve it like arithmetic.
+            if (is_infer_int(lt) && is_int(rt)) {
+                if (!resolve_infer_int_in_context_(e.a, rt)) {
+                    // resolve function should have emitted diag if needed, but keep safety:
+                    diag_(diag::Code::kIntLiteralNeedsTypeContext, ast_.expr(e.a).span);
+                    err_(e.span, "failed to resolve deferred integer on lhs in comparison");
+                    return types_.builtin(ty::Builtin::kBool);
+                }
+                lt = rt;
+            } else if (is_infer_int(rt) && is_int(lt)) {
+                if (!resolve_infer_int_in_context_(e.b, lt)) {
+                    diag_(diag::Code::kIntLiteralNeedsTypeContext, ast_.expr(e.b).span);
+                    err_(e.span, "failed to resolve deferred integer on rhs in comparison");
+                    return types_.builtin(ty::Builtin::kBool);
+                }
+                rt = lt;
+            } else if (is_infer_int(lt) || is_infer_int(rt)) {
+                // {integer} vs {integer} (or vs non-int) => needs explicit context
+                diag_(diag::Code::kIntLiteralNeedsTypeContext, e.span);
                 err_(e.span, "comparison with deferred integer '{integer}' needs an explicit integer type context");
                 return types_.builtin(ty::Builtin::kBool);
             }
 
+            // v0 strict rule: types must match
             if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
-                diag_(diag::Code::kTypeCompareOperandsMustMatch, e.span, types_.to_string(lt), types_.to_string(rt));
+                diag_(diag::Code::kTypeCompareOperandsMustMatch, e.span,
+                    types_.to_string(lt), types_.to_string(rt));
                 err_(e.span, "comparison requires both operands to have the same type (v0 rule)");
             }
+
             return types_.builtin(ty::Builtin::kBool);
         }
 
+        // ------------------------------------------------------------
+        // TODO: logical ops, bitwise ops, pipe, etc.
+        // ------------------------------------------------------------
         return types_.error();
     }
 

@@ -40,7 +40,11 @@ fn main() -> i32 {
     return z;
 }
 
-fn main2() -> i32 {
+fn main_two() -> i32 {
+    return 42;
+}
+
+fn main_three() -> i32 {
     let cond: bool = true;
 
     let x: i32 =
