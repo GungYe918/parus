@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 #include <optional>
+#include <unordered_map> 
 
 
 namespace gaupel::tyck {
@@ -190,6 +191,13 @@ namespace gaupel::tyck {
         // Mut tracking (tyck-level)
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
+
+        // name -> fn decl stmt id (top-level only)
+        // NOTE: std::string을 key로 쓰는 이유:
+        // - string_view는 AST storage lifetime에 의존하는데,
+        //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.
+        std::unordered_map<std::string, ast::StmtId> fn_decl_by_name_;
+
     };
 
 } // namespace gaupel::tyck

@@ -140,6 +140,9 @@ namespace gaupel::tyck {
             return;
         }
 
+        // ensure map is reset for each check_program call
+        fn_decl_by_name_.clear();
+
         // global scope는 SymbolTable이 이미 push되어 있음.
         for (uint32_t i = 0; i < prog.stmt_count; ++i) {
             const ast::StmtId cid = ast_.stmt_children()[prog.stmt_begin + i];
@@ -149,54 +152,51 @@ namespace gaupel::tyck {
             // top-level fn decl
             // ----------------------------
             if (s.kind == ast::StmtKind::kFnDecl) {
+                // record decl id for named-group validation at call-site
+                if (!s.name.empty()) {
+                    fn_decl_by_name_[std::string(s.name)] = cid;
+                }
+
                 // 1) 우선 Stmt.type이 fn 시그니처로 이미 채워져 있으면 그대로 사용
                 ty::TypeId sig = s.type;
-                if (sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn) {
-                    // ok
-                } else {
-                    // 2) 아니면 tyck에서 시그니처를 직접 구성한다.
-                    //    - ret: (가능하면 stmt에 저장된 ret type 사용)
-                    //    - params: ast params slice에서 타입 수집
-                    //
-                    // NOTE: 현재 AST 출력에서 `ret=i32 <id 6>`이 보이는 걸로 봐서
-                    //       "함수 반환 타입"은 어딘가에 이미 TypeId로 들어있을 가능성이 크다.
-                    //       그런데 이 파일의 v0 코드는 그걸 s.type 하나로만 접근하고 있어 충돌이 난다.
-                    //
-                    // 여기서는 "s.type가 fn이 아니면 반환 타입이라고 가정"하는 fallback을 둔다.
+
+                if (!(sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn)) {
+                    // 2) 아니면 tyck에서 직접 구성
                     ty::TypeId ret = ty::kInvalidType;
 
-                    // (A) s.type가 builtin/user type 같은 "반환 타입"으로 들어온 케이스를 우선 처리
+                    // (A) s.type가 "반환 타입"으로 들어온 케이스 fallback
                     if (sig != ty::kInvalidType && types_.get(sig).kind != ty::Kind::kFn) {
                         ret = sig;
                     }
-
-                    // (B) 그래도 없으면 error로 둔다(파서가 별도 필드에 ret를 저장한다면 여기서 이어붙이면 됨)
                     if (ret == ty::kInvalidType) ret = types_.error();
 
-                    // params 수집
-                    std::vector<ty::TypeId> params;
-                    params.reserve(s.param_count);
+                    // IMPORTANT:
+                    // signature params should be positional-only.
+                    // If parser already filled s.positional_param_count, use it.
+                    uint32_t pos_cnt = 0;
+                    if (s.positional_param_count != 0 || s.param_count == 0) {
+                        pos_cnt = s.positional_param_count;
+                    } else {
+                        // fallback for older AST: assume all are positional
+                        pos_cnt = s.param_count;
+                    }
 
-                    bool bad_param = false;
-                    for (uint32_t pi = 0; pi < s.param_count; ++pi) {
+                    std::vector<ty::TypeId> params;
+                    params.reserve(pos_cnt);
+
+                    for (uint32_t pi = 0; pi < pos_cnt; ++pi) {
                         const auto& p = ast_.params()[s.param_begin + pi];
                         ty::TypeId pt = p.type;
 
                         if (pt == ty::kInvalidType) {
-                            // 파라미터 타입이 비어있으면 일단 error로 채우고 계속
                             err_(p.span, "parameter requires an explicit type");
                             diag_(diag::Code::kTypeParamTypeRequired, p.span, p.name);
                             pt = types_.error();
-                            bad_param = true;
                         }
                         params.push_back(pt);
                     }
 
-                    sig = types_.make_fn(ret, params.data(), (uint32_t)params.size());
-
-                    // (선택) 시그니처를 못 만들 정도의 치명상은 아니니 별도 에러를 굳이 추가하지 않음.
-                    // bad_param이면 위에서 이미 파라미터별 에러를 넣었다.
-                    (void)bad_param;
+                    sig = types_.make_fn(ret, params.empty() ? nullptr : params.data(), (uint32_t)params.size());
                 }
 
                 auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
@@ -1522,7 +1522,7 @@ namespace gaupel::tyck {
                 return types_.error();
             }
 
-            // NEW: mut check
+            // mut check
             if (auto sid = root_place_symbol_(e.a)) {
                 if (!is_mutable_symbol_(*sid)) {
                     // NOTE: 새 diag code 필요
@@ -1633,39 +1633,117 @@ namespace gaupel::tyck {
             // 그래도 args는 검사해서 에러 누락 방지
             for (uint32_t i = 0; i < e.arg_count; ++i) {
                 const auto& a = ast_.args()[e.arg_begin + i];
-                if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
+                if (a.kind == ast::ArgKind::kNamedGroup) {
+                    for (uint32_t k = 0; k < a.child_count; ++k) {
+                        const auto& ca = ast_.named_group_args()[a.child_begin + k];
+                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                    }
+                } else {
+                    if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
+                }
             }
             return types_.error();
         }
 
-        // v0: positional only 검사 (named-group/label은 후속 단계에서 확장)
-        // ArgKind::kNamedGroup도 일단 child들을 검사해준다.
+        // ------------------------------------------------------------
+        // 0) split args: positional vs named-group (and validate "at most one group")
+        // ------------------------------------------------------------
         uint32_t positional_count = 0;
+        int32_t named_group_arg_index = -1; // index in args slice (not global)
         for (uint32_t i = 0; i < e.arg_count; ++i) {
             const auto& a = ast_.args()[e.arg_begin + i];
-            if (a.kind == ast::ArgKind::kNamedGroup) continue;
-            positional_count++;
-        }
-
-        if (positional_count != ct.param_count) {
-            diag_(diag::Code::kTypeArgCountMismatch, e.span,
-                std::to_string(ct.param_count), std::to_string(positional_count));
-            err_(e.span, "argument count mismatch");
-        }
-
-        // 실제 타입 검사
-        uint32_t pi = 0;
-        for (uint32_t i = 0; i < e.arg_count; ++i) {
-            const auto& a = ast_.args()[e.arg_begin + i];
-
             if (a.kind == ast::ArgKind::kNamedGroup) {
-                // 그룹 자체: 내부 child 검사
-                for (uint32_t k = 0; k < a.child_count; ++k) {
-                    const auto& ca = ast_.named_group_args()[a.child_begin + k];
-                    if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                if (named_group_arg_index >= 0) {
+                    // multiple groups
+                    diag_(diag::Code::kDuplicateDecl, a.span, "{named-group}");
+                    err_(a.span, "multiple named-group arguments are not allowed (only one { ... } group)");
+                } else {
+                    named_group_arg_index = (int32_t)i;
                 }
                 continue;
             }
+            positional_count++;
+        }
+
+        // ------------------------------------------------------------
+        // 1) find callee fn decl meta if possible (Ident-only in v0)
+        // ------------------------------------------------------------
+        const ast::Stmt* fn_decl = nullptr;
+        ast::StmtId fn_decl_id = ast::k_invalid_stmt;
+
+        // v0: Only when callee is Ident and points to a top-level fn decl
+        {
+            const ast::Expr& callee_expr = ast_.expr(e.a);
+            if (callee_expr.kind == ast::ExprKind::kIdent) {
+                auto it = fn_decl_by_name_.find(std::string(callee_expr.text));
+                if (it != fn_decl_by_name_.end()) {
+                    fn_decl_id = it->second;
+                    fn_decl = &ast_.stmt(fn_decl_id);
+                    // safety: ensure it's actually a fn decl
+                    if (fn_decl->kind != ast::StmtKind::kFnDecl) {
+                        fn_decl = nullptr;
+                        fn_decl_id = ast::k_invalid_stmt;
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
+        // 2) positional count check
+        // - Prefer FnDecl.positional_param_count when available.
+        // - Fallback to signature param_count otherwise.
+        // ------------------------------------------------------------
+        uint32_t expected_positional = ct.param_count;
+        bool decl_has_named_group = false;
+        uint32_t decl_total_param_count = 0;
+        uint32_t decl_positional_count = 0;
+
+        if (fn_decl) {
+            decl_has_named_group = fn_decl->has_named_group;
+            decl_total_param_count = fn_decl->param_count;
+            decl_positional_count = fn_decl->positional_param_count;
+
+            // positional-only signature 정책이므로, 이 둘은 같아야 정상.
+            // (불일치가 나면 parser/ir mismatch이므로 sig 기준으로만 간다.)
+            if (decl_positional_count == ct.param_count) {
+                expected_positional = decl_positional_count;
+            } else {
+                expected_positional = ct.param_count;
+            }
+        }
+
+        if (positional_count != expected_positional) {
+            diag_(diag::Code::kTypeArgCountMismatch, e.span,
+                std::to_string(expected_positional), std::to_string(positional_count));
+            err_(e.span, "positional argument count mismatch");
+        }
+
+        // ------------------------------------------------------------
+        // 3) named-group availability check
+        // ------------------------------------------------------------
+        const bool call_has_named_group = (named_group_arg_index >= 0);
+
+        if (call_has_named_group) {
+            if (!fn_decl) {
+                // we cannot validate labels/required/defaults without decl meta
+                // still typecheck the group expressions, but report a conservative error
+                err_(e.span, "named-group arguments require a direct function declaration (callee must be an identifier in v0)");
+            } else if (!decl_has_named_group) {
+                // function does not accept named-group
+                err_(e.span, "callee does not accept named-group arguments");
+            }
+        } else {
+            // no group provided
+            // ok (even if decl has named group, defaults may cover everything)
+        }
+
+        // ------------------------------------------------------------
+        // 4) positional type check (signature-based, since signature is positional-only)
+        // ------------------------------------------------------------
+        uint32_t pi = 0;
+        for (uint32_t i = 0; i < e.arg_count; ++i) {
+            const auto& a = ast_.args()[e.arg_begin + i];
+            if (a.kind == ast::ArgKind::kNamedGroup) continue;
 
             ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
 
@@ -1684,11 +1762,145 @@ namespace gaupel::tyck {
                 if (!can_assign_(expected, at)) {
                     diag_(diag::Code::kTypeArgTypeMismatch, a.span,
                         std::to_string(pi), types_.to_string(expected), types_.to_string(at));
-                    err_(a.span, "argument type mismatch");
+                    err_(a.span, "positional argument type mismatch");
                 }
             }
 
             pi++;
+        }
+
+        // ------------------------------------------------------------
+        // 5) named-group validation & type check (decl-meta based)
+        // ------------------------------------------------------------
+        if (call_has_named_group) {
+            const auto& group_arg = ast_.args()[e.arg_begin + (uint32_t)named_group_arg_index];
+
+            // Always typecheck group children expressions (even if errors)
+            // But do proper validation only if we have FnDecl.
+            if (!fn_decl) {
+                for (uint32_t k = 0; k < group_arg.child_count; ++k) {
+                    const auto& ca = ast_.named_group_args()[group_arg.child_begin + k];
+                    if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                }
+            } else {
+                // Build a lookup table for named params in decl:
+                // named params are those in params slice after positional_param_count
+                // and/or with p.is_named_group flag.
+                struct NamedParamInfo {
+                    uint32_t param_index_in_decl = 0;  // within decl params slice
+                    ty::TypeId type = ty::kInvalidType;
+                    bool has_default = false;
+                    Span span{};
+                };
+
+                std::unordered_map<std::string, NamedParamInfo> named_param_map;
+                named_param_map.reserve(16);
+
+                const uint32_t begin = fn_decl->param_begin;
+                const uint32_t total = fn_decl->param_count;
+                const uint32_t posc  = fn_decl->positional_param_count;
+
+                for (uint32_t idx = posc; idx < total; ++idx) {
+                    const auto& p = ast_.params()[begin + idx];
+
+                    // if AST has explicit flag, honor it; otherwise treat tail as named-group
+                    // (Most of your AST already has p.is_named_group)
+                    const bool is_named = p.is_named_group || (idx >= posc);
+
+                    if (!is_named) continue;
+
+                    NamedParamInfo info{};
+                    info.param_index_in_decl = idx;
+                    info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
+                    info.has_default = p.has_default;
+                    info.span = p.span;
+
+                    named_param_map.emplace(std::string(p.name), info);
+                }
+
+                // Track provided labels
+                std::unordered_map<std::string, Span> provided;
+                provided.reserve(group_arg.child_count);
+
+                // 5-1) validate each provided named arg
+                for (uint32_t k = 0; k < group_arg.child_count; ++k) {
+                    const auto& ca = ast_.named_group_args()[group_arg.child_begin + k];
+
+                    // check expr first (so we still catch inner errors)
+                    ty::TypeId at = (ca.expr != ast::k_invalid_expr) ? check_expr_(ca.expr) : types_.error();
+
+                    // duplicate label
+                    const std::string label = std::string(ca.label);
+                    if (provided.find(label) != provided.end()) {
+                        diag_(diag::Code::kDuplicateDecl, ca.span, ca.label);
+                        err_(ca.span, "duplicate named argument label: " + label);
+                        continue;
+                    }
+                    provided.emplace(label, ca.span);
+
+                    // unknown label
+                    auto itp = named_param_map.find(label);
+                    if (itp == named_param_map.end()) {
+                        diag_(diag::Code::kUndefinedName, ca.span, ca.label);
+                        err_(ca.span, "unknown named argument label: " + label);
+                        continue;
+                    }
+
+                    // type check against expected param type
+                    ty::TypeId expected = itp->second.type;
+
+                    // resolve deferred integer if needed
+                    const auto& st = types_.get(at);
+                    if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                        if (ca.expr != ast::k_invalid_expr) {
+                            (void)resolve_infer_int_in_context_(ca.expr, expected);
+                            at = check_expr_(ca.expr);
+                        }
+                    }
+
+                    if (!can_assign_(expected, at)) {
+                        // use ArgTypeMismatch with a "virtual index" = decl param index
+                        diag_(diag::Code::kTypeArgTypeMismatch, ca.span,
+                            std::to_string(itp->second.param_index_in_decl),
+                            types_.to_string(expected),
+                            types_.to_string(at));
+                        err_(ca.span, "named argument type mismatch: " + label);
+                    }
+                }
+
+                // 5-2) check missing required named params (no default and not provided)
+                for (const auto& kv : named_param_map) {
+                    const std::string& label = kv.first;
+                    const NamedParamInfo& info = kv.second;
+
+                    if (info.has_default) continue;           // optional via default
+                    if (provided.find(label) != provided.end()) continue;
+
+                    // Missing required named argument
+                    // (No dedicated diag code exists in the snippet, so store detailed TyError;
+                    //  if you have/plan a diag code like kMissingNamedArg, swap it in here.)
+                    err_(fn_decl->span, "missing required named argument: " + label);
+                }
+            }
+        } else {
+            // call has no named-group:
+            // if decl has required named params with no default, this is an error.
+            if (fn_decl && fn_decl->has_named_group) {
+                const uint32_t begin = fn_decl->param_begin;
+                const uint32_t total = fn_decl->param_count;
+                const uint32_t posc  = fn_decl->positional_param_count;
+
+                for (uint32_t idx = posc; idx < total; ++idx) {
+                    const auto& p = ast_.params()[begin + idx];
+                    const bool is_named = p.is_named_group || (idx >= posc);
+                    if (!is_named) continue;
+
+                    if (!p.has_default) {
+                        err_(e.span, "missing required named argument group (at least '" + std::string(p.name) + "')");
+                        break;
+                    }
+                }
+            }
         }
 
         return ct.ret;
