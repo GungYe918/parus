@@ -825,6 +825,63 @@ namespace gaupel::tyck {
         }
 
         // ----------------------------
+        // 3.5) return 누락 검사 (v0: 구조 기반 보수 분석)
+        // ----------------------------
+        auto is_unit = [&](ty::TypeId t) -> bool {
+            return t == types_.builtin(ty::Builtin::kUnit);
+        };
+        auto is_never = [&](ty::TypeId t) -> bool {
+            return t == types_.builtin(ty::Builtin::kNever);
+        };
+
+        // 반환 타입이 unit/never면 "끝까지 도달" 허용
+        const ty::TypeId fn_ret = fn_ctx_.ret;
+
+        if (!is_unit(fn_ret) && !is_never(fn_ret)) {
+            // body가 항상 return 하는지 검사
+            auto stmt_always_returns = [&](auto&& self, ast::StmtId sid) -> bool {
+                if (sid == ast::k_invalid_stmt) return false;
+                const ast::Stmt& st = ast_.stmt(sid);
+
+                switch (st.kind) {
+                    case ast::StmtKind::kReturn:
+                        return true;
+
+                    case ast::StmtKind::kBlock: {
+                        // v0 정책: block의 마지막 stmt가 항상 return이면 block이 항상 return
+                        if (st.stmt_count == 0) return false;
+                        const auto& children = ast_.stmt_children();
+                        const ast::StmtId last = children[st.stmt_begin + (st.stmt_count - 1)];
+                        return self(self, last);
+                    }
+
+                    case ast::StmtKind::kIf: {
+                        // then/else 둘 다 return해야 if가 return
+                        if (st.a == ast::k_invalid_stmt) return false;
+                        if (st.b == ast::k_invalid_stmt) return false;
+                        return self(self, st.a) && self(self, st.b);
+                    }
+
+                    // while/loop/switch 등은 v0에서 보수적으로 false
+                    case ast::StmtKind::kWhile:
+                    case ast::StmtKind::kSwitch:
+                        return false;
+
+                    default:
+                        return false;
+                }
+            };
+
+            const bool ok_all_paths = stmt_always_returns(stmt_always_returns, s.a);
+            if (!ok_all_paths) {
+                // 여기서 “return 누락” 진단
+                // (diag code는 새로 만드는 게 정석: kMissingReturn)
+                diag_(diag::Code::kMissingReturn, s.span, s.name);
+                err_(s.span, "missing return on some control path");
+            }
+        }
+
+        // ----------------------------
         // 4) 종료
         // ----------------------------
         fn_ctx_ = saved;

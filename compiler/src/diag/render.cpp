@@ -125,6 +125,7 @@ namespace gaupel::diag {
             case Code::kTypeIndexMustBeUSize: return "TypeIndexMustBeUSize";
             case Code::kTypeIndexNonArray:    return "TypeIndexNonArray";
             case Code::kSetCannotInferFromNull: return "SetCannotInferFromNull";
+            case Code::kMissingReturn: return "MissingReturn";
 
             case Code::kAssignLhsMustBePlace: return "AssignLhsMustBePlace";
             case Code::kPostfixOperandMustBePlace: return "PostfixOperandMustBePlace";
@@ -257,6 +258,7 @@ namespace gaupel::diag {
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index expression must be usize (got {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "cannot infer type from null in 'set' (use: let {0}: T? = null; with an explicit optional type)";
+            case Code::kMissingReturn: return "missing return";
 
             case Code::kIntLiteralInvalid: return "invalid integer literal '{0}'";
             case Code::kIntLiteralOverflow: return "integer literal '{0}' overflows target type {1}";
@@ -397,6 +399,7 @@ namespace gaupel::diag {
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
             
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "set에서 null로는 타입을 추론할 수 없습니다. (예: let {0}: T? = null; 처럼 옵셔널 타입을 명시하세요)";
+            case Code::kMissingReturn: return "missing return";
             
             case Code::kIntLiteralInvalid: return "정수 리터럴이 올바르지 않습니다: '{0}'";
             case Code::kIntLiteralOverflow: /* args[0]=text, args[1]=target */ return "정수 리터럴 '{0}'이(가) 대상 타입 {1}에서 오버플로우됩니다";

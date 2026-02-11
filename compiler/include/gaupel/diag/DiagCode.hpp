@@ -148,6 +148,7 @@ namespace gaupel::diag {
         kTypeIndexMustBeUSize,  // args[0]=got_type
         kTypeIndexNonArray,     // args[0]=base_type
         kSetCannotInferFromNull, // set <name> = null; is not allowed
+        kMissingReturn,         // return is missing
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)
