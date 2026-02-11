@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <string_view>
 #include <vector>
+#include <unordered_set>
 
 
 namespace gaupel::passes {
@@ -68,9 +69,16 @@ namespace gaupel::passes {
         return id != ast::k_invalid_stmt && (uint32_t)id < r.stmt_count;
     }
 
+    static bool is_valid_param_index_(const IdRanges& r, uint32_t pid) {
+        return pid < r.param_count;
+    }
+
     static void ensure_result_sized_(const IdRanges& r, NameResolveResult& out) {
-        if (out.expr_to_symbol.size() != r.expr_count || out.stmt_to_symbol.size() != r.stmt_count) {
-            out.reset_sizes(r.expr_count, r.stmt_count);
+        if (out.expr_to_resolved.size() != r.expr_count ||
+            out.stmt_to_resolved.size() != r.stmt_count ||
+            out.param_to_resolved.size() != r.param_count)
+        {
+            out.reset_sizes(r.expr_count, r.stmt_count, r.param_count);
         }
     }
 
@@ -86,6 +94,24 @@ namespace gaupel::passes {
         ScopeGuard& operator=(const ScopeGuard&) = delete;
     };
 
+    // -----------------------------------------------------------------------------
+    // ResolvedSymbol table helpers
+    // -----------------------------------------------------------------------------
+    static NameResolveResult::ResolvedId add_resolved_(
+        NameResolveResult& out,
+        BindingKind bind,
+        uint32_t sym_id,
+        Span span
+    ) {
+        ResolvedSymbol rs{};
+        rs.bind = bind;
+        rs.sym = sym_id;
+        rs.span = span;
+
+        out.resolved.push_back(rs);
+        return (NameResolveResult::ResolvedId)(out.resolved.size() - 1);
+    }
+
     // forward
     static void walk_stmt(
         const ast::AstArena& ast,
@@ -94,7 +120,8 @@ namespace gaupel::passes {
         sema::SymbolTable& sym,
         diag::Bag& bag,
         const NameResolveOptions& opt,
-        NameResolveResult& out
+        NameResolveResult& out,
+        std::unordered_set<uint32_t>& param_symbol_ids
     );
 
     // -----------------------------------------------------------------------------
@@ -141,7 +168,8 @@ namespace gaupel::passes {
         sema::SymbolTable& sym,
         diag::Bag& bag,
         const NameResolveOptions& opt,
-        NameResolveResult& out
+        NameResolveResult& out,
+        std::unordered_set<uint32_t>& param_symbol_ids
     ) {
         (void)opt;
         if (root == ast::k_invalid_expr) return;
@@ -170,7 +198,21 @@ namespace gaupel::passes {
                     if (!sid) {
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
                     } else {
-                        out.expr_to_symbol[idx] = (uint32_t)(*sid);
+                        // BindingKind 결정:
+                        // - v0에서는 "param인지"가 중요하므로, pass 내부에서 param symbol id set을 유지한다.
+                        BindingKind bk = BindingKind::kLocalVar;
+                        if (param_symbol_ids.find(*sid) != param_symbol_ids.end()) {
+                            bk = BindingKind::kParam;
+                        } else {
+                            // fallback by SymbolKind (확장 대비)
+                            const auto& symobj = sym.symbol(*sid);
+                            if (symobj.kind == sema::SymbolKind::kFn) bk = BindingKind::kFn;
+                            else if (symobj.kind == sema::SymbolKind::kType) bk = BindingKind::kType;
+                            else bk = BindingKind::kLocalVar;
+                        }
+
+                        const auto rid = add_resolved_(out, bk, (uint32_t)(*sid), e.span);
+                        out.expr_to_resolved[idx] = rid;
                     }
                     break;
                 }
@@ -234,7 +276,7 @@ namespace gaupel::passes {
 
                     // IMPORTANT: loop body is StmtId.
                     if (is_valid_stmt_id_(r, e.loop_body)) {
-                        walk_stmt(ast, r, e.loop_body, sym, bag, opt, out);
+                        walk_stmt(ast, r, e.loop_body, sym, bag, opt, out, param_symbol_ids);
                     }
                     break;
                 }
@@ -247,14 +289,14 @@ namespace gaupel::passes {
                         stack.push_back(e.b);
                     } else {
                         const ast::StmtId sb = (ast::StmtId)e.b;
-                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, r, sb, sym, bag, opt, out);
+                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, r, sb, sym, bag, opt, out, param_symbol_ids);
                     }
 
                     if (is_valid_expr_id_(r, e.c)) {
                         stack.push_back(e.c);
                     } else {
                         const ast::StmtId sc = (ast::StmtId)e.c;
-                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, r, sc, sym, bag, opt, out);
+                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, r, sc, sym, bag, opt, out, param_symbol_ids);
                     }
                     break;
                 }
@@ -265,7 +307,7 @@ namespace gaupel::passes {
                     // - e.b : tail ExprId (or invalid)
                     const ast::StmtId blk = (ast::StmtId)e.a;
                     if (is_valid_stmt_id_(r, blk)) {
-                        walk_stmt(ast, r, blk, sym, bag, opt, out);
+                        walk_stmt(ast, r, blk, sym, bag, opt, out, param_symbol_ids);
                     }
                     if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
                     if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
@@ -289,7 +331,8 @@ namespace gaupel::passes {
         sema::SymbolTable& sym,
         diag::Bag& bag,
         const NameResolveOptions& opt,
-        NameResolveResult& out
+        NameResolveResult& out,
+        std::unordered_set<uint32_t>& param_symbol_ids
     ) {
         const auto& kids = ast.stmt_children();
         const uint32_t begin = s.stmt_begin;
@@ -300,7 +343,7 @@ namespace gaupel::passes {
         if (end > r.stmt_children_count) return;
 
         for (uint32_t i = begin; i < end; ++i) {
-            walk_stmt(ast, r, kids[i], sym, bag, opt, out);
+            walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids);
         }
     }
 
@@ -314,7 +357,8 @@ namespace gaupel::passes {
         sema::SymbolTable& sym,
         diag::Bag& bag,
         const NameResolveOptions& opt,
-        NameResolveResult& out
+        NameResolveResult& out,
+        std::unordered_set<uint32_t>& param_symbol_ids
     ) {
         if (!is_valid_stmt_id_(r, id)) return;
         ensure_result_sized_(r, out);
@@ -326,43 +370,44 @@ namespace gaupel::passes {
                 return;
 
             case ast::StmtKind::kExprStmt:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
                 return;
 
             case ast::StmtKind::kVar: {
                 // init 먼저
                 if (s.init != ast::k_invalid_expr) {
-                    walk_expr(ast, r, s.init, sym, bag, opt, out);
+                    walk_expr(ast, r, s.init, sym, bag, opt, out, param_symbol_ids);
                 }
 
                 auto ins = declare_(sema::SymbolKind::kVar, s.name, s.type, s.span, sym, bag, opt);
 
                 // decl stmt 기록(중복이어도 id는 남기지 않는 게 안전)
                 if (!ins.is_duplicate) {
-                    out.stmt_to_symbol[(uint32_t)id] = ins.symbol_id;
+                    const auto rid = add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
                 }
                 return;
             }
 
             case ast::StmtKind::kBlock: {
                 ScopeGuard g(sym);
-                walk_block_children_(ast, r, s, sym, bag, opt, out);
+                walk_block_children_(ast, r, s, sym, bag, opt, out, param_symbol_ids);
                 return;
             }
 
             case ast::StmtKind::kIf:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
-                walk_stmt(ast, r, s.a, sym, bag, opt, out);
-                walk_stmt(ast, r, s.b, sym, bag, opt, out);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
+                walk_stmt(ast, r, s.b, sym, bag, opt, out, param_symbol_ids);
                 return;
 
             case ast::StmtKind::kWhile:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
-                walk_stmt(ast, r, s.a, sym, bag, opt, out);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
                 return;
 
             case ast::StmtKind::kReturn:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
                 return;
 
             case ast::StmtKind::kBreak:
@@ -373,7 +418,8 @@ namespace gaupel::passes {
                 // 1) 함수 이름을 현재 스코프에 등록 + stmt 기록
                 auto fins = declare_(sema::SymbolKind::kFn, s.name, s.type, s.span, sym, bag, opt);
                 if (!fins.is_duplicate) {
-                    out.stmt_to_symbol[(uint32_t)id] = fins.symbol_id;
+                    const auto rid = add_resolved_(out, BindingKind::kFn, fins.symbol_id, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
                 }
 
                 // 2) 함수 바디 스코프
@@ -388,29 +434,36 @@ namespace gaupel::passes {
                         const auto& p = ps[i];
 
                         // param is var
-                        (void)declare_(sema::SymbolKind::kVar, p.name, p.type, p.span, sym, bag, opt);
+                        auto pins = declare_(sema::SymbolKind::kVar, p.name, p.type, p.span, sym, bag, opt);
+
+                        // param binding 기록 (SymbolId -> param set, param index -> resolved)
+                        if (!pins.is_duplicate && is_valid_param_index_(r, i)) {
+                            param_symbol_ids.insert(pins.symbol_id);
+                            const auto prid = add_resolved_(out, BindingKind::kParam, pins.symbol_id, p.span);
+                            out.param_to_resolved[i] = prid;
+                        }
 
                         // default expr 내부 이름 사용 검사
                         if (p.has_default && p.default_expr != ast::k_invalid_expr) {
-                            walk_expr(ast, r, p.default_expr, sym, bag, opt, out);
+                            walk_expr(ast, r, p.default_expr, sym, bag, opt, out, param_symbol_ids);
                         }
                     }
                 }
 
                 // 4) body
-                walk_stmt(ast, r, s.a, sym, bag, opt, out);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
                 return;
             }
 
             case ast::StmtKind::kSwitch: {
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
 
                 const uint32_t cb = s.case_begin;
                 const uint32_t ce = s.case_begin + s.case_count;
                 if (cb < r.switch_case_count && ce <= r.switch_case_count) {
                     const auto& cs = ast.switch_cases();
                     for (uint32_t i = cb; i < ce; ++i) {
-                        walk_stmt(ast, r, cs[i].body, sym, bag, opt, out);
+                        walk_stmt(ast, r, cs[i].body, sym, bag, opt, out, param_symbol_ids);
                     }
                 }
                 return;
@@ -418,7 +471,8 @@ namespace gaupel::passes {
 
             case ast::StmtKind::kUse:
                 // NOTE: use의 선언성(별칭/타입별칭 등)을 심볼로 올릴지 여부는 스펙 결정 후 확장.
-                walk_expr(ast, r, s.expr, sym, bag, opt, out);
+                // 지금은 expr만 검사한다.
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
                 return;
 
             default:
@@ -438,8 +492,13 @@ namespace gaupel::passes {
         NameResolveResult& out_result
     ) {
         const IdRanges r = ranges_of_(ast);
-        out_result.reset_sizes(r.expr_count, r.stmt_count);
-        walk_stmt(ast, r, root, sym, bag, opt, out_result);
+        out_result.reset_sizes(r.expr_count, r.stmt_count, r.param_count);
+
+        // v0: param id 분류를 위해 pass 내부 상태로 "param symbol ids"를 유지한다.
+        std::unordered_set<uint32_t> param_symbol_ids;
+        param_symbol_ids.reserve(64);
+
+        walk_stmt(ast, r, root, sym, bag, opt, out_result, param_symbol_ids);
     }
 
 } // namespace gaupel::passes

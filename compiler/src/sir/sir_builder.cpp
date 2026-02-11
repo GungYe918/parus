@@ -10,15 +10,20 @@ namespace gaupel::sir {
     }
 
     // -----------------------------
-    // NEW: NameResolveResult 기반 심볼 resolve
+    // NameResolveResult 기반 심볼 resolve
     // -----------------------------
     static SymbolId resolve_symbol_from_expr(
         const passes::NameResolveResult& nres,
         gaupel::ast::ExprId eid
     ) {
         if (eid == gaupel::ast::k_invalid_expr) return k_invalid_symbol;
-        if ((size_t)eid >= nres.expr_to_symbol.size()) return k_invalid_symbol;
-        return nres.expr_to_symbol[eid];
+        if ((size_t)eid >= nres.expr_to_resolved.size()) return k_invalid_symbol;
+
+        const auto rid = nres.expr_to_resolved[(uint32_t)eid];
+        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
+        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
+
+        return (SymbolId)nres.resolved[rid].sym;
     }
 
     static SymbolId resolve_symbol_from_stmt(
@@ -26,26 +31,60 @@ namespace gaupel::sir {
         gaupel::ast::StmtId sid
     ) {
         if (sid == gaupel::ast::k_invalid_stmt) return k_invalid_symbol;
-        if ((size_t)sid >= nres.stmt_to_symbol.size()) return k_invalid_symbol;
-        return nres.stmt_to_symbol[sid];
+        if ((size_t)sid >= nres.stmt_to_resolved.size()) return k_invalid_symbol;
+
+        const auto rid = nres.stmt_to_resolved[(uint32_t)sid];
+        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
+        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
+
+        return (SymbolId)nres.resolved[rid].sym;
     }
 
-    // place 분류(tyck의 is_place_expr_와 규칙 맞추기)
+    static SymbolId resolve_symbol_from_param_index(
+        const passes::NameResolveResult& nres,
+        uint32_t param_index
+    ) {
+        if ((size_t)param_index >= nres.param_to_resolved.size()) return k_invalid_symbol;
+
+        const auto rid = nres.param_to_resolved[param_index];
+        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
+        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
+
+        return (SymbolId)nres.resolved[rid].sym;
+    }
+
+    // -----------------------------
+    // Place classification (v0 fixed)
+    // -----------------------------
     static PlaceClass classify_place_from_ast(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId eid) {
         if (eid == gaupel::ast::k_invalid_expr) return PlaceClass::kNotPlace;
         const auto& e = ast.expr(eid);
-        if (e.kind == gaupel::ast::ExprKind::kIdent) return PlaceClass::kLocal;
-        if (e.kind == gaupel::ast::ExprKind::kIndex) return PlaceClass::kIndex;
-        return PlaceClass::kNotPlace;
+
+        switch (e.kind) {
+            case gaupel::ast::ExprKind::kIdent:
+                return PlaceClass::kLocal;
+            case gaupel::ast::ExprKind::kIndex:
+                return PlaceClass::kIndex;
+
+            // future:
+            // case gaupel::ast::ExprKind::kField: return PlaceClass::kField;
+            default:
+                return PlaceClass::kNotPlace;
+        }
     }
 
+    // -----------------------------
+    // Effect classification (v0 fixed)
+    // -----------------------------
     static EffectClass classify_effect(ValueKind k) {
         switch (k) {
             case ValueKind::kAssign:
             case ValueKind::kPostfixInc:
                 return EffectClass::kMayWrite;
+
             case ValueKind::kCall:
                 return EffectClass::kUnknown;
+
             default:
                 return EffectClass::kPure;
         }
@@ -54,6 +93,7 @@ namespace gaupel::sir {
     // forward decl
     static ValueId lower_expr(
         Module& m,
+        bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
@@ -63,6 +103,7 @@ namespace gaupel::sir {
 
     static uint32_t lower_stmt_into_block(
         Module& m,
+        bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
@@ -72,6 +113,7 @@ namespace gaupel::sir {
 
     static BlockId lower_block_stmt(
         Module& m,
+        bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
@@ -89,7 +131,7 @@ namespace gaupel::sir {
 
         for (uint32_t i = 0; i < bs.stmt_count; ++i) {
             const auto child = ast.stmt_children()[bs.stmt_begin + i];
-            (void)lower_stmt_into_block(m, ast, sym, nres, tyck, child);
+            (void)lower_stmt_into_block(m, out_has_any_write, ast, sym, nres, tyck, child);
             m.blocks[bid].stmt_count++;
         }
 
@@ -98,83 +140,99 @@ namespace gaupel::sir {
 
     static ValueId lower_expr(
         Module& m,
+        bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
         gaupel::ast::ExprId eid
     ) {
-        (void)sym; // SIR builder는 이제 sym.lookup를 사용하지 않음(심볼은 nres가 제공)
+        (void)sym; // SIR builder does not sym.lookup (nres provides SymbolId)
 
         if (eid == gaupel::ast::k_invalid_expr) return k_invalid_value;
 
         const auto& e = ast.expr(eid);
+
         Value v{};
         v.span = e.span;
         v.type = type_of_ast_expr(tyck, eid);
 
         switch (e.kind) {
             case gaupel::ast::ExprKind::kIntLit:
-                v.kind = ValueKind::kIntLit; v.text = e.text; break;
+                v.kind = ValueKind::kIntLit;
+                v.text = e.text;
+                break;
             case gaupel::ast::ExprKind::kFloatLit:
-                v.kind = ValueKind::kFloatLit; v.text = e.text; break;
+                v.kind = ValueKind::kFloatLit;
+                v.text = e.text;
+                break;
             case gaupel::ast::ExprKind::kStringLit:
-                v.kind = ValueKind::kStringLit; v.text = e.text; break;
+                v.kind = ValueKind::kStringLit;
+                v.text = e.text;
+                break;
             case gaupel::ast::ExprKind::kCharLit:
-                v.kind = ValueKind::kCharLit; v.text = e.text; break;
+                v.kind = ValueKind::kCharLit;
+                v.text = e.text;
+                break;
             case gaupel::ast::ExprKind::kBoolLit:
-                v.kind = ValueKind::kBoolLit; v.text = e.text; break;
+                v.kind = ValueKind::kBoolLit;
+                v.text = e.text;
+                break;
             case gaupel::ast::ExprKind::kNullLit:
-                v.kind = ValueKind::kNullLit; break;
+                v.kind = ValueKind::kNullLit;
+                break;
 
             case gaupel::ast::ExprKind::kIdent: {
                 v.kind = ValueKind::kLocal;
                 v.text = e.text;
-                v.sym  = resolve_symbol_from_expr(nres, eid);
+                v.sym = resolve_symbol_from_expr(nres, eid);
                 break;
             }
 
             case gaupel::ast::ExprKind::kUnary: {
                 v.kind = ValueKind::kUnary;
                 v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
                 break;
             }
 
             case gaupel::ast::ExprKind::kPostfixUnary: {
-                v.kind = ValueKind::kPostfixInc; // v0: postfix++ only
+                // v0: postfix++ only
+                v.kind = ValueKind::kPostfixInc;
                 v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
                 break;
             }
 
             case gaupel::ast::ExprKind::kBinary: {
                 v.kind = ValueKind::kBinary;
                 v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
-                v.b = lower_expr(m, ast, sym, nres, tyck, e.b);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
                 break;
             }
 
             case gaupel::ast::ExprKind::kAssign: {
                 v.kind = ValueKind::kAssign;
                 v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
-                v.b = lower_expr(m, ast, sym, nres, tyck, e.b);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
                 break;
             }
 
             case gaupel::ast::ExprKind::kTernary: {
+                // keep as if-expr in SIR
                 v.kind = ValueKind::kIfExpr;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
-                v.b = lower_expr(m, ast, sym, nres, tyck, e.b);
-                v.c = lower_expr(m, ast, sym, nres, tyck, e.c);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.c);
                 break;
             }
 
             case gaupel::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a); // callee
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a); // callee
+
                 v.arg_begin = (uint32_t)m.args.size();
                 v.arg_count = 0;
 
@@ -185,13 +243,22 @@ namespace gaupel::sir {
                     sa.has_label = aa.has_label;
                     sa.is_hole = aa.is_hole;
                     sa.label = aa.label;
-                    sa.kind = (aa.kind == gaupel::ast::ArgKind::kPositional) ? ArgKind::kPositional :
-                            (aa.kind == gaupel::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
-                            ArgKind::kNamedGroup;
+
+                    sa.kind =
+                        (aa.kind == gaupel::ast::ArgKind::kPositional) ? ArgKind::kPositional :
+                        (aa.kind == gaupel::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
+                        ArgKind::kNamedGroup;
+
+                    // NOTE: NamedGroup children lowering is “structural only” in v0:
+                    // - Your AST already flattens args; named-group itself is an ArgKind::kNamedGroup
+                    // - child_begin/count are preserved by the parser in AST Arg for NamedGroup
+                    sa.child_begin = aa.child_begin;
+                    sa.child_count = aa.child_count;
 
                     if (aa.expr != gaupel::ast::k_invalid_expr) {
-                        sa.value = lower_expr(m, ast, sym, nres, tyck, aa.expr);
+                        sa.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
                     }
+
                     m.add_arg(sa);
                     v.arg_count++;
                 }
@@ -200,19 +267,23 @@ namespace gaupel::sir {
 
             case gaupel::ast::ExprKind::kIndex: {
                 v.kind = ValueKind::kIndex;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
-                v.b = lower_expr(m, ast, sym, nres, tyck, e.b);
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
                 break;
             }
 
             case gaupel::ast::ExprKind::kCast: {
                 v.kind = ValueKind::kCast;
-                v.a = lower_expr(m, ast, sym, nres, tyck, e.a);
-                v.b = k_invalid_value;
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
                 v.op = (uint32_t)e.cast_kind;
                 break;
             }
 
+            // v0 not-lowered-yet expr kinds
+            case gaupel::ast::ExprKind::kHole:
+            case gaupel::ast::ExprKind::kLoop:
+            case gaupel::ast::ExprKind::kIfExpr:
+            case gaupel::ast::ExprKind::kBlockExpr:
             default:
                 v.kind = ValueKind::kError;
                 break;
@@ -221,12 +292,16 @@ namespace gaupel::sir {
         v.place = classify_place_from_ast(ast, eid);
         v.effect = classify_effect(v.kind);
 
+        if (v.effect == EffectClass::kMayWrite) {
+            out_has_any_write = true;
+        }
+
         return m.add_value(v);
     }
-    
-    
+
     static uint32_t lower_stmt_into_block(
         Module& m,
+        bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
@@ -236,13 +311,14 @@ namespace gaupel::sir {
         (void)sym;
 
         const auto& s = ast.stmt(sid);
+
         Stmt out{};
         out.span = s.span;
 
         switch (s.kind) {
             case gaupel::ast::StmtKind::kExprStmt:
                 out.kind = StmtKind::kExprStmt;
-                out.expr = lower_expr(m, ast, sym, nres, tyck, s.expr);
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 break;
 
             case gaupel::ast::StmtKind::kVar: {
@@ -250,14 +326,14 @@ namespace gaupel::sir {
                 out.is_set = s.is_set;
                 out.is_mut = s.is_mut;
                 out.name = s.name;
-                out.init = lower_expr(m, ast, sym, nres, tyck, s.init);
+                out.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
 
-                // 심볼은 decl stmt 기준으로 가져온다.
+                // decl symbol from stmt
                 out.sym = resolve_symbol_from_stmt(nres, sid);
 
-                // declared_type 정책:
-                // - let: annotation 그대로(s.type)
-                // - set: init의 tyck 결과를 declared_type로 저장(추론 확정 시점까지 힌트)
+                // declared_type policy:
+                // - let: annotation (s.type)
+                // - set: inferred from init (tyck)
                 if (!s.is_set) {
                     out.declared_type = s.type;
                 } else {
@@ -268,25 +344,25 @@ namespace gaupel::sir {
 
             case gaupel::ast::StmtKind::kIf:
                 out.kind = StmtKind::kIfStmt;
-                out.expr = lower_expr(m, ast, sym, nres, tyck, s.expr);
-                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, ast, sym, nres, tyck, s.a);
-                if (s.b != gaupel::ast::k_invalid_stmt) out.b = lower_block_stmt(m, ast, sym, nres, tyck, s.b);
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                if (s.b != gaupel::ast::k_invalid_stmt) out.b = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.b);
                 break;
 
             case gaupel::ast::StmtKind::kWhile:
                 out.kind = StmtKind::kWhileStmt;
-                out.expr = lower_expr(m, ast, sym, nres, tyck, s.expr);
-                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, ast, sym, nres, tyck, s.a);
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
                 break;
 
             case gaupel::ast::StmtKind::kReturn:
                 out.kind = StmtKind::kReturn;
-                out.expr = lower_expr(m, ast, sym, nres, tyck, s.expr);
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 break;
 
             case gaupel::ast::StmtKind::kBreak:
                 out.kind = StmtKind::kBreak;
-                out.expr = lower_expr(m, ast, sym, nres, tyck, s.expr);
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 break;
 
             case gaupel::ast::StmtKind::kContinue:
@@ -298,10 +374,20 @@ namespace gaupel::sir {
                 break;
         }
 
+        // statement-level write hint
+        // (var decl itself is not necessarily a write; init may have write)
         return m.add_stmt(out);
     }
-    
-    
+
+    static FnMode lower_fn_mode(gaupel::ast::FnMode m) {
+        switch (m) {
+            case gaupel::ast::FnMode::kPub: return FnMode::kPub;
+            case gaupel::ast::FnMode::kSub: return FnMode::kSub;
+            case gaupel::ast::FnMode::kNone:
+            default: return FnMode::kNone;
+        }
+    }
+
     Module build_sir_module(
         const ast::AstArena& ast,
         ast::StmtId program_root,
@@ -316,11 +402,11 @@ namespace gaupel::sir {
 
         Module m{};
 
-        // program root는 block이라고 가정
+        // program root must be a block
         const auto& prog = ast.stmt(program_root);
 
         for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-            auto sid = ast.stmt_children()[prog.stmt_begin + i];
+            const auto sid = ast.stmt_children()[prog.stmt_begin + i];
             const auto& s = ast.stmt(sid);
 
             if (s.kind != ast::StmtKind::kFnDecl) {
@@ -330,19 +416,77 @@ namespace gaupel::sir {
             Func f{};
             f.span = s.span;
             f.name = s.name;
-            f.sig  = s.type;
+            f.sig = s.type;
 
-            // ret 추출(best effort)
+            // ret extract (best effort)
             if (f.sig != k_invalid_type && types.get(f.sig).kind == gaupel::ty::Kind::kFn) {
                 f.ret = types.get(f.sig).ret;
             }
 
-            // fn decl 심볼도 stmt_to_symbol로
+            // decl symbol (fn name)
             f.sym = resolve_symbol_from_stmt(nres, sid);
 
-            if (s.a != ast::k_invalid_stmt) {
-                f.entry = lower_block_stmt(m, ast, sym, nres, tyck, s.a);
+            // --- qualifiers / mode (fn decl까지 보존) ---
+            f.is_export = s.is_export;
+            f.fn_mode = lower_fn_mode(s.fn_mode);
+
+            f.is_pure = s.is_pure;
+            f.is_comptime = s.is_comptime;
+
+            f.is_commit = s.is_commit;
+            f.is_recast = s.is_recast;
+
+            f.is_throwing = s.is_throwing;
+
+            f.positional_param_count = s.positional_param_count;
+            f.has_named_group = s.has_named_group;
+
+            // --- attrs slice ---
+            f.attr_begin = (uint32_t)m.attrs.size();
+            f.attr_count = 0;
+            for (uint32_t ai = 0; ai < s.attr_count; ++ai) {
+                const auto& aa = ast.fn_attrs()[s.attr_begin + ai];
+                Attr sa{};
+                sa.name = aa.name;
+                sa.span = aa.span;
+                m.add_attr(sa);
+                f.attr_count++;
             }
+
+            // --- params slice ---
+            f.param_begin = (uint32_t)m.params.size();
+            f.param_count = 0;
+
+            bool has_any_write = false;
+
+            for (uint32_t pi = 0; pi < s.param_count; ++pi) {
+                const uint32_t param_index = s.param_begin + pi;
+                const auto& p = ast.params()[param_index];
+
+                Param sp{};
+                sp.name = p.name;
+                sp.type = p.type;
+                sp.is_named_group = p.is_named_group;
+                sp.span = p.span;
+
+                sp.has_default = p.has_default;
+                if (p.has_default && p.default_expr != ast::k_invalid_expr) {
+                    sp.default_value = lower_expr(m, has_any_write, ast, sym, nres, tyck, p.default_expr);
+                }
+
+                // param SymbolId binding: now fixed via param_to_resolved table
+                sp.sym = resolve_symbol_from_param_index(nres, param_index);
+
+                m.add_param(sp);
+                f.param_count++;
+            }
+
+            // --- body ---
+            if (s.a != ast::k_invalid_stmt) {
+                f.entry = lower_block_stmt(m, has_any_write, ast, sym, nres, tyck, s.a);
+            }
+
+            f.has_any_write = has_any_write;
 
             m.add_func(f);
         }

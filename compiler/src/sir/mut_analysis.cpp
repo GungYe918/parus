@@ -9,6 +9,7 @@ namespace gaupel::sir {
     }
 
     MutAnalysisResult analyze_mut(const Module& m, diag::Bag& bag) {
+        (void)bag;
         MutAnalysisResult out{};
 
         // 1) decl 스캔: VarDecl로 declared_mut/is_set 채우기

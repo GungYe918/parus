@@ -14,3 +14,8 @@ fn main() -> i32 {
     let p: i32 = x ?? 2;
     p = 4;
 }
+
+fn add(a: i32, b: i32) -> i32 {
+    let c: i32 = a + b;
+    return c;
+}

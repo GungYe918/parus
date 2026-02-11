@@ -23,14 +23,13 @@ namespace gaupel::sir {
     using FuncId = uint32_t;
     static constexpr FuncId k_invalid_func = 0xFFFF'FFFFu;
 
-    // SymbolId는 sema::SymbolTable이 uint32_t로 관리하므로 그대로 사용
+    // SymbolId: sema::SymbolTable uses uint32_t ids (keep as-is)
     using SymbolId = uint32_t;
     static constexpr SymbolId k_invalid_symbol = 0xFFFF'FFFFu;
 
     // ---------------------------------------------
     // Value kind
     // ---------------------------------------------
-
     enum class ValueKind : uint8_t {
         kError,
 
@@ -42,20 +41,25 @@ namespace gaupel::sir {
         kBoolLit,
         kNullLit,
 
-        // names
-        kLocal,     // local var reference (resolved SymbolId)
-        kGlobal,    // (future) module global ref
-        kParam,     // (future) direct param ref
+        // names / references
+        kLocal,     // resolved SymbolId (locals + params in v0)
+        kGlobal,    // reserved (future)
+        kParam,     // reserved (future direct param ref)
+
+        // composite literals (v0 예정)
+        kArrayLit,  // [1,2,3]  (future lowering; keep slot)
+        kFieldInit, // field{...} / struct literal (future)
 
         // ops
         kUnary,
         kBinary,
-        kAssign,        // place = value
+        kAssign,        // place = value (or compound assigns lowered later)
         kPostfixInc,    // place++
         kCall,
         kIndex,
+        kField,         // place/value: a.b (future)
 
-        // control expr (SIR에서는 “expr 형태”만 남기고, stmt CFG는 OIR에서 만들 수도 있음)
+        // control expr (kept structured in SIR; CFG may be formed later)
         kIfExpr,
         kBlockExpr,
         kLoopExpr,
@@ -64,19 +68,25 @@ namespace gaupel::sir {
         kCast,
     };
 
-    // place classification (OIR 힌트용)
+    // ---------------------------------------------
+    // Place / Effect (v0 fixed spec)
+    // ---------------------------------------------
     enum class PlaceClass : uint8_t {
         kNotPlace = 0,
+
+        // v0
         kLocal,          // x
         kIndex,          // a[i]
-        // future: field, deref, etc.
+
+        // future
+        kField,          // a.b
+        kDeref,          // *p
     };
 
-    // side-effect classification (초기 v0)
     enum class EffectClass : uint8_t {
-        kPure = 0,
-        kMayWrite,       // assign/postfix++ 등
-        kUnknown,        // call 같은 것 (추후 pure/can_write 분석)
+        kPure = 0,       // guaranteed no observable side effects
+        kMayWrite,       // may mutate state/memory (assign/++/etc.)
+        kUnknown,        // effect unknown (calls/ffi/etc.)
     };
 
     // ---------------------------------------------
@@ -85,38 +95,43 @@ namespace gaupel::sir {
     struct Value {
         ValueKind kind = ValueKind::kError;
         gaupel::Span span{};
-        TypeId type = k_invalid_type;     // tyck result 기반
+        TypeId type = k_invalid_type;     // from tyck
 
-        // generic slots
+        // generic slots (interpret by kind)
         uint32_t op = 0;                  // TokenKind or small opcode
         ValueId a = k_invalid_value;
         ValueId b = k_invalid_value;
         ValueId c = k_invalid_value;
 
-        // for literals / ident
+        // literals / identifiers (raw text)
         std::string_view text{};
 
         // resolved symbol (for kLocal)
         SymbolId sym = k_invalid_symbol;
 
-        // meta
+        // meta classification
         PlaceClass place = PlaceClass::kNotPlace;
         EffectClass effect = EffectClass::kPure;
 
-        // call args (slice)
+        // call/array args (slice into Module::args)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
     };
 
+    // ---------------------------------------------
+    // Call Args (mirrors AST args; named-group preserved)
+    // ---------------------------------------------
     enum class ArgKind : uint8_t { kPositional, kLabeled, kNamedGroup };
 
     struct Arg {
         ArgKind kind = ArgKind::kPositional;
+
         bool has_label = false;
         bool is_hole = false;
         std::string_view label{};
         ValueId value = k_invalid_value;
 
+        // for NamedGroup: children are stored as adjacent Arg entries
         uint32_t child_begin = 0;
         uint32_t child_count = 0;
 
@@ -124,7 +139,33 @@ namespace gaupel::sir {
     };
 
     // ---------------------------------------------
-    // Block (SIR 단계에서는 “stmt 나열”을 그대로 보존)
+    // Attributes (fn-level)
+    // ---------------------------------------------
+    struct Attr {
+        std::string_view name{};
+        gaupel::Span span{};
+    };
+
+    // ---------------------------------------------
+    // Function Params (fn decl까지 보존)
+    // ---------------------------------------------
+    struct Param {
+        std::string_view name{};
+        TypeId type = k_invalid_type;
+
+        bool has_default = false;
+        ValueId default_value = k_invalid_value;
+
+        bool is_named_group = false;      // comes from "{ ... }" param section
+
+        // NOTE: resolved symbol for param will be fixed next turn
+        SymbolId sym = k_invalid_symbol;
+
+        gaupel::Span span{};
+    };
+
+    // ---------------------------------------------
+    // Block / Stmt (structured statements kept)
     // ---------------------------------------------
     enum class StmtKind : uint8_t {
         kError,
@@ -135,7 +176,7 @@ namespace gaupel::sir {
         kReturn,
         kBreak,
         kContinue,
-        kSwitch,    // future
+        kSwitch,    // reserved (future)
     };
 
     struct Stmt {
@@ -145,19 +186,19 @@ namespace gaupel::sir {
         // common payload
         ValueId expr = k_invalid_value;
 
-        // structured
+        // structured blocks
         BlockId a = k_invalid_block;  // then/body
         BlockId b = k_invalid_block;  // else
 
         // var decl
         bool is_set = false;   // let=false, set=true
-        bool is_mut = false;   // declared mut keyword (AST의 is_mut)
+        bool is_mut = false;
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
-        TypeId declared_type = k_invalid_type; // let의 annotation or set의 inferred
+        TypeId declared_type = k_invalid_type;
         ValueId init = k_invalid_value;
 
-        // block children slice
+        // block children slice (optional; if you ever inline blocks as stmts)
         uint32_t stmt_begin = 0;
         uint32_t stmt_count = 0;
     };
@@ -168,33 +209,76 @@ namespace gaupel::sir {
         uint32_t stmt_count = 0;
     };
 
+    // ---------------------------------------------
+    // Function Decl metadata (fn decl까지)
+    // ---------------------------------------------
+    enum class FnMode : uint8_t {
+        kNone = 0,
+        kPub,
+        kSub,
+    };
+
     struct Func {
         gaupel::Span span{};
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
 
+        // signature types
         TypeId sig = k_invalid_type;     // ty::Kind::kFn
         TypeId ret = k_invalid_type;
 
+        // decl qualifiers
+        bool is_export = false;
+        FnMode fn_mode = FnMode::kNone;
+
+        bool is_pure = false;
+        bool is_comptime = false;
+
+        // reserved qualifiers (future)
+        bool is_commit = false;
+        bool is_recast = false;
+
+        bool is_throwing = false;
+
+        // attrs / params slices
+        uint32_t attr_begin = 0;
+        uint32_t attr_count = 0;
+
+        uint32_t param_begin = 0;
+        uint32_t param_count = 0;
+
+        uint32_t positional_param_count = 0;
+        bool has_named_group = false;
+
+        // body
         BlockId entry = k_invalid_block;
 
-        // mut analysis 결과 힌트(함수 단위)
+        // hint: whether any stmt/value in this func may write
         bool has_any_write = false;
     };
 
-    struct Module {
+    class Module {
+    public:
         std::vector<Value> values;
         std::vector<Arg> args;
+
+        std::vector<Attr> attrs;
+        std::vector<Param> params;
+
         std::vector<Stmt> stmts;
         std::vector<Block> blocks;
         std::vector<Func> funcs;
 
         // helpers
-        ValueId add_value(const Value& v) { values.push_back(v); return (ValueId)values.size()-1; }
-        uint32_t add_arg(const Arg& a) { args.push_back(a); return (uint32_t)args.size()-1; }
-        uint32_t add_stmt(const Stmt& s) { stmts.push_back(s); return (uint32_t)stmts.size()-1; }
-        BlockId add_block(const Block& b) { blocks.push_back(b); return (BlockId)blocks.size()-1; }
-        FuncId add_func(const Func& f) { funcs.push_back(f); return (FuncId)funcs.size()-1; }
+        ValueId add_value(const Value& v)   {  values.push_back(v); return (ValueId)values.size() - 1;  }
+        uint32_t add_arg(const Arg& a)      {  args.push_back(a); return (uint32_t)args.size() - 1;     }
+
+        uint32_t add_attr(const Attr& a)    {  attrs.push_back(a); return (uint32_t)attrs.size() - 1;   }
+        uint32_t add_param(const Param& p)  {  params.push_back(p); return (uint32_t)params.size() - 1; }
+
+        uint32_t add_stmt(const Stmt& s)    {  stmts.push_back(s); return (uint32_t)stmts.size() - 1;   }
+        BlockId add_block(const Block& b)   {  blocks.push_back(b); return (BlockId)blocks.size() - 1;  }
+        FuncId add_func(const Func& f)      {  funcs.push_back(f); return (FuncId)funcs.size() - 1;     }
     };
 
-} // gaupel::sir
+} // namespace gaupel::sir
