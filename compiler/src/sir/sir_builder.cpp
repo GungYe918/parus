@@ -618,12 +618,10 @@ namespace gaupel::sir {
             Func f{};
             f.span = s.span;
             f.name = s.name;
-            f.sig = s.type;
-
-            // ret extract (best effort)
-            if (f.sig != k_invalid_type && types.get(f.sig).kind == gaupel::ty::Kind::kFn) {
-                f.ret = types.get(f.sig).ret;
-            }
+            
+            // signature & ret
+            f.sig = s.type;        // now guaranteed fn type
+            f.ret = s.fn_ret;      // exact syntactic return type
 
             // decl symbol (fn name)
             f.sym = resolve_symbol_from_stmt(nres, sid);
@@ -668,6 +666,7 @@ namespace gaupel::sir {
                 Param sp{};
                 sp.name = p.name;
                 sp.type = p.type;
+                sp.is_mut = p.is_mut; 
                 sp.is_named_group = p.is_named_group;
                 sp.span = p.span;
 

@@ -84,32 +84,49 @@ namespace gaupel {
     bool Parser::parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name) {
         using K = syntax::TokenKind;
 
-        const Token first = cursor_.peek();
+        const Token start_tok = cursor_.peek();
+        Span start_span = start_tok.span;
+
+        // ---- optional 'mut' before param name ----
+        bool is_mut = false;
+        if (cursor_.at(K::kKwMut)) {
+            is_mut = true;
+            start_span = cursor_.bump().span; // start span becomes 'mut'
+        }
+
+        const Token name_tok = cursor_.peek();
 
         std::string_view name{};
-        if (first.kind == K::kIdent) {
-            name = first.lexeme;
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (param name)");
+            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (param name)");
             recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
             return false;
         }
 
         if (out_name) *out_name = name;
 
+        // ':'
         if (!cursor_.eat(K::kColon)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
             recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
             return false;
         }
 
+        // Type
         auto ty = parse_type(); // ParsedType { id, span }
 
+        // default
+        //
+        // NOTE (SPEC 6.1.2 / 6.1.4):
+        // - DefaultOpt := "=" Expr | ε 는 positional / named-group 모두 문법적으로 허용.
+        // - "v0 권장: named-group에서 적극 권장" 은 semantic/tyck 정책으로 두고,
+        //   parser는 선언 문법을 그대로 수용한다.
         bool has_default = false;
         ast::ExprId def = ast::k_invalid_expr;
 
-        // '=' 위치(span) 기억: 기본값 식이 누락됐을 때 span 계산에 사용
         bool saw_eq = false;
         Span eq_span = ty.span; // placeholder
 
@@ -117,66 +134,45 @@ namespace gaupel {
             const Token eq = cursor_.bump(); // '='
             saw_eq = true;
             eq_span = eq.span;
+            has_default = true;
 
-            // ---- 새 룰: 기본값은 named-group '{...}' 안에서만 허용 ----
-            if (!is_named_group) {
-                diag_report(diag::Code::kFnParamDefaultNotAllowedOutsideNamedGroup, eq.span);
-
-                // 복구: "= expr" 형태면 expr는 소비해서 토큰 흐름을 안정화
-                // ("= , ) } eof" 는 expr를 소비하지 않음)
-                const auto nk = cursor_.peek().kind;
-                if (!(nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof)) {
-                    (void)parse_expr(); // discard
-                }
-
-                // 저장은 금지: AST에는 기본값이 없는 것으로 남긴다.
-                has_default = false;
+            const auto nk = cursor_.peek().kind;
+            if (nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof) {
+                // "= <expr>" 에서 expr 누락
+                diag_report(diag::Code::kFnParamDefaultExprExpected, eq_span);
                 def = ast::k_invalid_expr;
             } else {
-                // named-group 안에서는 정상적으로 기본값 파싱
-                has_default = true;
-
-                // ---- 기본값 식 누락 방지: "= , ) }" 같은 케이스 ----
-                const auto nk = cursor_.peek().kind;
-                if (nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof) {
-                    diag_report(diag::Code::kFnParamDefaultExprExpected, eq_span);
-                    // def는 invalid 유지
-                } else {
-                    def = parse_expr();
-                }
+                def = parse_expr();
             }
         }
 
         ast::Param p{};
         p.name = name;
         p.type = ty.id;
+        p.is_mut = is_mut;                  // NEW
         p.is_named_group = is_named_group;
         p.has_default = has_default;
         p.default_expr = def;
 
-        // span 계산:
-        // - 기본: type 끝까지
-        // - named-group 기본값 + expr 있음: expr 끝까지
-        // - named-group 기본값 + expr 없음: '=' 까지
-        // - positional에서 '=' 금지였던 케이스: 소비한 토큰까지(span을 최대한 넓혀서 에러 구간 포함)
+        // span end
         Span end = ty.span;
-
         if (has_default && def != ast::k_invalid_expr) {
             end = ast_.expr(def).span;
         } else if (has_default && def == ast::k_invalid_expr) {
             end = eq_span;
-        } else if (!has_default && saw_eq && !is_named_group) {
-            // 금지된 "= ..." 를 읽고 버린 경우, 최소 '=' 또는 그 뒤 expr까지 포함
+        } else if (!has_default && saw_eq) {
             end = cursor_.prev().span;
         }
 
-        p.span = span_join(first.span, end);
+        // start span: either 'mut' span (if present) or name span
+        Span real_start = is_mut ? start_span : name_tok.span;
+        p.span = span_join(real_start, end);
+
         ast_.add_param(p);
         return true;
     }
 
     // 함수 파라미터 목록을 파싱한다. (positional + optional named-group)
-    // 정책(v0): named-group은 최대 1개만 허용.
     void Parser::parse_decl_fn_params(
         uint32_t& out_param_begin,
         uint32_t& out_param_count,
@@ -201,67 +197,71 @@ namespace gaupel {
             return;
         }
 
-        // ---- 중복 검사 (positional / named-group 분리) ----
         std::unordered_set<std::string_view> seen_pos;
         std::unordered_set<std::string_view> seen_named;
 
         bool consumed_named_group = false;
 
+        auto parse_named_group_section = [&]() {
+            // entering at '{'
+            if (consumed_named_group) {
+                diag_report(diag::Code::kFnOnlyOneNamedGroupAllowed, cursor_.peek().span);
+                cursor_.bump(); // '{'
+                recover_to_delim(K::kRBrace, K::kRParen);
+                cursor_.eat(K::kRBrace);
+                out_has_named_group = true;
+                consumed_named_group = true;
+                return;
+            }
+
+            consumed_named_group = true;
+            out_has_named_group = true;
+
+            cursor_.bump(); // '{'
+
+            while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
+                std::string_view pname{};
+                const bool ok = parse_decl_fn_one_param(/*is_named_group=*/true, &pname);
+                if (ok) {
+                    if (!seen_named.insert(pname).second) {
+                        // NOTE: 전용 diag code가 있으면 그걸 쓰는 게 더 좋다.
+                        diag_report(diag::Code::kUnexpectedToken, cursor_.prev().span,
+                                    "duplicate named-group parameter");
+                    }
+                    ++out_param_count;
+                }
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kRBrace)) break; // trailing comma
+                    continue;
+                }
+                break;
+            }
+
+            if (!cursor_.eat(K::kRBrace)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+                recover_to_delim(K::kRBrace, K::kRParen, K::kArrow);
+                cursor_.eat(K::kRBrace);
+            }
+        };
+
         while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
 
-            // allow ", { ... }"
+            // allow: "(, { ... })" or "(..., { ... })"  => optional comma before '{' (SPEC NamedGroupOpt)
             if (cursor_.at(K::kComma) && cursor_.peek(1).kind == K::kLBrace) {
                 cursor_.bump();
             }
 
+            // named-group section
             if (cursor_.at(K::kLBrace)) {
-                if (consumed_named_group) {
-                    // named-group 2개 이상 금지
-                    diag_report(diag::Code::kFnOnlyOneNamedGroupAllowed, cursor_.peek().span);
-                    // 복구: 다음 '}' 또는 ')'까지 스킵
-                    cursor_.bump();
-                    recover_to_delim(K::kRBrace, K::kRParen);
-                    cursor_.eat(K::kRBrace);
-                    // 이후 계속 파싱하지 않고 종료(정상 흐름도 named-group 이후 종료)
-                    consumed_named_group = true;
-                    out_has_named_group = true;
-                    break;
+                parse_named_group_section();
+
+                // named-group 이후에는 ')'만 와야 한다 (엄격, SPEC상 NamedGroupOpt는 마지막)
+                if (cursor_.eat(K::kComma)) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.prev().span,
+                                "no parameters allowed after named-group");
+                    recover_to_delim(K::kRParen, K::kArrow, K::kLBrace);
                 }
-
-                consumed_named_group = true;
-                out_has_named_group = true;
-
-                cursor_.bump(); // '{'
-
-                if (!cursor_.at(K::kRBrace)) {
-                    while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
-                        std::string_view pname{};
-                        const bool ok = parse_decl_fn_one_param(/*is_named_group=*/true, &pname);
-                        if (ok) {
-                            if (!seen_named.insert(pname).second) {
-                                diag_report(diag::Code::kUnexpectedToken, cursor_.prev().span,
-                                            "duplicate named-group parameter");
-                            }
-                            ++out_param_count;
-                        } else {
-                            // 실패해도 카운트는 올리지 않음
-                        }
-
-                        if (cursor_.eat(K::kComma)) {
-                            if (cursor_.at(K::kRBrace)) break; // trailing comma
-                            continue;
-                        }
-                        break;
-                    }
-                }
-
-                if (!cursor_.eat(K::kRBrace)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
-                    recover_to_delim(K::kRBrace, K::kRParen, K::kArrow);
-                    cursor_.eat(K::kRBrace);
-                }
-
-                // named-group 이후는 ')'만 기대
                 break;
             }
 
@@ -292,7 +292,6 @@ namespace gaupel {
             cursor_.eat(K::kRParen);
         }
     }
-
 
     // 함수 선언(스펙 6.1)을 파싱한다.
     // - qualifier 순서 유연화(가능 범위 내에서 전진하며 수집)
@@ -334,25 +333,15 @@ namespace gaupel {
 
         for (;;) {
             bool progressed = false;
-
             if (cursor_.at(K::kKwPure)) {
-                is_pure_kw = true;
-                cursor_.bump();
-                progressed = true;
+                is_pure_kw = true; cursor_.bump(); progressed = true;
             } else if (cursor_.at(K::kKwComptime)) {
-                is_comptime_kw = true;
-                cursor_.bump();
-                progressed = true;
+                is_comptime_kw = true; cursor_.bump(); progressed = true;
             } else if (cursor_.at(K::kKwCommit)) {
-                is_commit = true;
-                cursor_.bump();
-                progressed = true;
+                is_commit = true; cursor_.bump(); progressed = true;
             } else if (cursor_.at(K::kKwRecast)) {
-                is_recast = true;
-                cursor_.bump();
-                progressed = true;
+                is_recast = true; cursor_.bump(); progressed = true;
             }
-
             if (!progressed) break;
         }
 
@@ -364,7 +353,6 @@ namespace gaupel {
             cursor_.bump();
         } else {
             diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (function name)");
-            // 회복: name이 없더라도 계속 진행해서 파서 흐름 유지
         }
 
         // 6) '?' (throwing)
@@ -381,10 +369,8 @@ namespace gaupel {
 
         // 8) '->' ReturnType
         if (!cursor_.at(K::kArrow)) {
-            // tolerate "- >" split as "-""gt"
             if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
-                cursor_.bump();
-                cursor_.bump();
+                cursor_.bump(); cursor_.bump();
             } else {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
                 recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
@@ -395,6 +381,34 @@ namespace gaupel {
         }
 
         auto ret_ty = parse_type();
+
+        // ------------------------------------------------------------------
+        // FIX (핵심):
+        // TypePool의 fn 시그니처에는 "positional 파라미터"만 포함한다.
+        // named-group 파라미터는 시그니처에 넣지 말고,
+        // FnDecl 메타(param list + flags)로만 보관한 뒤 tyck에서 별도 검증한다.
+        //
+        // 예)
+        //   fn sub(a,b,{clamp})  -> sig: fn(i32,i32)->i32   (positional_count=2)
+        //   fn mul({a,b})        -> sig: fn()->i32          (positional_count=0)
+        //   fn div(a,b,{rounding=0,bias}) -> sig: fn(i32,i32)->i32
+        // ------------------------------------------------------------------
+        ty::TypeId sig_id = ty::kInvalidType;
+        {
+            std::vector<ty::TypeId> pts;
+            pts.reserve(positional_count);
+
+            for (uint32_t i = 0; i < positional_count; ++i) {
+                const auto& p = ast_.params()[param_begin + i];
+                pts.push_back(p.type);
+            }
+
+            sig_id = types_.make_fn(
+                ret_ty.id,
+                pts.empty() ? nullptr : pts.data(),
+                (uint32_t)pts.size()
+            );
+        }
 
         // 9) Block
         ast::StmtId body = parse_stmt_required_block("fn");
@@ -409,12 +423,13 @@ namespace gaupel {
         s.span = span_join(start, end_sp);
 
         s.name = name;
-        s.type = ret_ty.id;
+
+        s.type = sig_id;          // signature: positional-only
+        s.fn_ret = ret_ty.id;
+
         s.a = body;
 
         s.is_export = is_export;
-
-        // class에서만 pub/sub 허용: 여기선 None 고정
         s.fn_mode = ast::FnMode::kNone;
 
         s.is_throwing = is_throwing;
@@ -427,11 +442,11 @@ namespace gaupel {
         s.attr_count = attr_count;
 
         s.param_begin = param_begin;
-        s.param_count = param_count;
-        s.positional_param_count = positional_count;
+        s.param_count = param_count;                 // total params (positional + named-group)
+        s.positional_param_count = positional_count; // positional only
         s.has_named_group = has_named_group;
 
         return ast_.add_stmt(s);
     }
-
+    
 } // namespace gaupel

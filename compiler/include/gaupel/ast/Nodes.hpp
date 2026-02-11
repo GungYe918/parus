@@ -130,6 +130,8 @@ namespace gaupel::ast {
         std::string_view name{};
         TypeId type = k_invalid_type;
 
+        bool is_mut = false;
+
         // default 값: "= Expr"
         bool has_default = false;
         ExprId default_expr = k_invalid_expr;
@@ -262,6 +264,8 @@ namespace gaupel::ast {
         bool is_export = false;
         
         FnMode fn_mode = FnMode::kNone;
+
+        TypeId fn_ret = k_invalid_type;
 
         bool is_pure = false;         // qualifier 키워드형
         bool is_comptime = false;     // qualifier 키워드형

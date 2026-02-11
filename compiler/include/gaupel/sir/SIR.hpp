@@ -172,6 +172,8 @@ namespace gaupel::sir {
         std::string_view name{};
         TypeId type = k_invalid_type;
 
+        bool is_mut = false;
+
         bool has_default = false;
         ValueId default_value = k_invalid_value;
 

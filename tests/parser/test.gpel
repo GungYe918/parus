@@ -65,8 +65,12 @@ fn main_three() -> i32 {
     return x;
 }
 
-fn main_four() -> i32 {
-    set x = 5;
-    x = 9;
+fn paint(x: i32, { color: i32, alpha: i32 }) -> i32 {
+    return x;
+}
+
+fn mmain() -> i32 {
+    //paint(10, { color: 3, alpha: 5 });
+
     return 42;
 }

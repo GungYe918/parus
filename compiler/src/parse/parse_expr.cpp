@@ -4,6 +4,9 @@
 #include <gaupel/syntax/TokenKind.hpp>
 #include <gaupel/diag/DiagCode.hpp>
 
+#include <unordered_set>
+#include <string_view>
+
 
 namespace gaupel {
 
@@ -681,10 +684,14 @@ namespace gaupel {
         uint32_t begin = (uint32_t)ast_.named_group_args().size();
         uint32_t count = 0;
 
+        // SPEC 6.1.6: '{}' 내부 라벨 중복 금지
+        std::unordered_set<std::string_view> seen_labels;
+
         if (!cursor_.at(K::kRBrace)) {
             while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
                 const Token first = cursor_.peek();
 
+                // '{ name: Expr, ... }' 에서 name ':' 강제
                 if (!(first.kind == K::kIdent && cursor_.peek(1).kind == K::kColon)) {
                     diag_report(diag::Code::kNamedGroupEntryExpectedColon, first.span);
                     recover_to_delim(K::kComma, K::kRBrace);
@@ -694,6 +701,11 @@ namespace gaupel {
 
                 cursor_.bump(); // label
                 cursor_.bump(); // ':'
+
+                // duplicate label check
+                if (!seen_labels.insert(first.lexeme).second) {
+                    diag_report(diag::Code::kUnexpectedToken, first.span, "duplicate named-group label");
+                }
 
                 ast::Arg entry{};
                 entry.kind = ast::ArgKind::kLabeled;
@@ -748,16 +760,34 @@ namespace gaupel {
         uint32_t begin = static_cast<uint32_t>(ast_.args().size());
         uint32_t count = 0;
 
+        // ------------------------------------------------------------
+        // SPEC 6.1.5: 호출 모드는 3가지 뿐
+        //   (A) positional call: f(e1,e2,...)           (no labels, no {})
+        //   (B) labeled call:    f(a:e1,b:e2,...)       (all labeled, no {})
+        //   (C) pos+named-group: f(pos..., {x:e,...})   (outside=positional only, {} last)
+        // ------------------------------------------------------------
+        enum class CallMode : uint8_t {
+            kUnknown,
+            kPositional,
+            kLabeled,
+            kPositionalPlusNamedGroup,
+        };
+
+        CallMode mode = CallMode::kUnknown;
         bool seen_named_group = false;
+
+        // helper: emit the canonical "mix not allowed" diagnostic
+        auto diag_mix = [&](Span sp) {
+            diag_report(diag::Code::kCallArgMixNotAllowed, sp);
+        };
 
         if (!cursor_.at(K::kRParen)) {
             while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
-                size_t before = cursor_.pos();
-
-                ast::Arg a{};
+                const size_t before = cursor_.pos();
 
                 // named-group arg: '{' ... '}'
                 if (cursor_.at(K::kLBrace)) {
+                    // ---- enforce: only one '{}' ----
                     if (seen_named_group) {
                         diag_report(diag::Code::kCallOnlyOneNamedGroupAllowed, cursor_.peek().span);
                         recover_to_delim(K::kComma, K::kRParen);
@@ -765,11 +795,65 @@ namespace gaupel {
                         continue;
                     }
 
+                    // ---- enforce: '{}' is not allowed in labeled-call mode ----
+                    if (mode == CallMode::kLabeled) {
+                        // labeled call은 f(a:1,b:2) 형태만 (SPEC 6.1.5(B))
+                        diag_mix(cursor_.peek().span);
+                    }
+
+                    // ---- enforce: once '{}' appears, mode becomes PositionalPlusNamedGroup ----
+                    if (mode == CallMode::kUnknown) mode = CallMode::kPositionalPlusNamedGroup;
+                    if (mode == CallMode::kPositional) mode = CallMode::kPositionalPlusNamedGroup;
+
+                    // if we were already in PositionalPlusNamedGroup, ok
+                    // if we were in Labeled, we already diag'ed above
+
                     seen_named_group = true;
-                    a = parse_call_named_group_arg(ternary_depth);
-                } else {
-                    // normal arg (positional or labeled)
-                    a = parse_call_arg(ternary_depth);
+
+                    ast::Arg g = parse_call_named_group_arg(ternary_depth);
+                    ast_.add_arg(g);
+                    ++count;
+
+                    // ---- enforce: '{}' must be the last argument group ----
+                    // allow optional trailing comma before ')', but no more args.
+                    if (cursor_.eat(K::kComma)) {
+                        if (!cursor_.at(K::kRParen)) {
+                            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                                        "no arguments allowed after named-group");
+                            recover_to_delim(K::kRParen);
+                        }
+                    }
+                    break; // '{}' ends the call-arg list in v0 spec
+                }
+
+                // normal arg (positional or labeled)
+                ast::Arg a = parse_call_arg(ternary_depth);
+
+                // ---- update/validate mode by arg kind ----
+                if (a.kind == ast::ArgKind::kLabeled) {
+                    if (mode == CallMode::kUnknown) mode = CallMode::kLabeled;
+                    else if (mode == CallMode::kPositional || mode == CallMode::kPositionalPlusNamedGroup) {
+                        // SPEC 6.1.5: 혼합 금지 (pos + labeled) / (pos+{} + labeled)
+                        diag_mix(a.span.hi ? a.span : cursor_.prev().span);
+                        // keep parsing; semantic stage will reject harder if needed
+                        mode = CallMode::kLabeled; // best-effort to stabilize
+                    }
+                } else { // positional
+                    if (mode == CallMode::kUnknown) mode = CallMode::kPositional;
+                    else if (mode == CallMode::kLabeled) {
+                        // SPEC 6.1.5: 혼합 금지 (labeled + positional)
+                        diag_mix(a.span.hi ? a.span : cursor_.prev().span);
+                        mode = CallMode::kPositional; // best-effort
+                    } else if (mode == CallMode::kPositionalPlusNamedGroup) {
+                        // '{}'를 이미 봤다면 positional이 뒤에 올 수 없다 (SPEC 6.1.5(C))
+                        diag_report(diag::Code::kUnexpectedToken, a.span, "no positional args allowed after named-group");
+                    }
+                }
+
+                // if '{}' already appeared earlier, we shouldn't reach here because we break above,
+                // but keep a guard just in case.
+                if (seen_named_group) {
+                    diag_report(diag::Code::kUnexpectedToken, a.span, "no arguments allowed after named-group");
                 }
 
                 ast_.add_arg(a);
@@ -802,28 +886,12 @@ namespace gaupel {
             cursor_.eat(K::kRParen);
         }
 
-        // ---- call arg mix rule: labeled + positional mixing not allowed ----
-        {
-            uint32_t labeled = 0;
-            uint32_t positional = 0;
-
-            const auto& args = ast_.args();
-            for (uint32_t i = 0; i < count; ++i) {
-                const auto& a = args[begin + i];
-
-                // named-group 자체는 mix 판정에서 제외(원하면 포함시켜도 됨)
-                if (a.kind == ast::ArgKind::kNamedGroup) continue;
-
-                if (a.has_label) ++labeled;
-                else ++positional;
-            }
-
-            if (labeled > 0 && positional > 0) {
-                // 어디를 span으로 찍을지: call의 '(' 위치 or 첫 섞인 arg 위치
-                // 여기선 call 전체 범위의 시작( lparen_tok ) 근처를 사용
-                diag_report(diag::Code::kCallArgMixNotAllowed, lparen_tok.span);
-            }
-        }
+        // ------------------------------------------------------------
+        // Final consistency checks (SPEC-aligned)
+        // - labeled call: no '{}' allowed (enforced during parse)
+        // - pos+named-group call: outside must be positional only (enforced during parse)
+        // - positional call: no labels and no '{}' (enforced during parse)
+        // ------------------------------------------------------------
 
         ast::Expr e{};
         e.kind = ast::ExprKind::kCall;
