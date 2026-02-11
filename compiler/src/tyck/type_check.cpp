@@ -24,6 +24,7 @@ namespace gaupel::tyck {
         fn_ctx_ = FnCtx{};
         pending_int_sym_.clear();
         pending_int_expr_.clear();
+        sym_is_mut_.clear();
 
         // sym_ “완전 초기화”
         // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
@@ -561,12 +562,10 @@ namespace gaupel::tyck {
 
                 // 컨텍스트 해소: let x: i32 = 123; 같은 케이스에서 RHS가 {integer}면 여기서 확정
                 if (s.type != ty::kInvalidType) {
-                    const auto& st = types_.get(s.type);
-                    (void)st;
                     const auto& it = types_.get(init_t);
                     if (it.kind == ty::Kind::kBuiltin && it.builtin == ty::Builtin::kInferInteger) {
                         (void)resolve_infer_int_in_context_(s.init, s.type);
-                        init_t = check_expr_(s.init); // 캐시된 타입이 바뀌진 않지만, 논리적으로 재평가 의도
+                        init_t = check_expr_(s.init); // 논리적 재평가 의도
                     }
                 }
 
@@ -585,9 +584,13 @@ namespace gaupel::tyck {
                     diag_(diag::Code::kDuplicateDecl, s.span, s.name);
                     err_(s.span, "duplicate symbol (var): " + std::string(s.name));
                 } else if (ins.is_shadowing) {
-                    // 정책은 나중에 옵션화 가능. 일단 경고/에러는 name-resolve 단계와 정렬하는 편이 좋다.
                     diag_(diag::Code::kShadowing, s.span, s.name);
                 }
+            }
+
+            // NEW: mut tracking (let mut / let)
+            if (ins.ok) {
+                sym_is_mut_[ins.symbol_id] = s.is_mut;
             }
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
@@ -612,9 +615,7 @@ namespace gaupel::tyck {
         // (A) RHS 타입 계산
         ty::TypeId rhs = check_expr_(s.init);
 
-        // (B) set x = null; 금지 (정확히 null literal/Null 타입)
-        //     - rhs 타입이 null인 것만으로도 걸 수 있지만,
-        //       더 정확한 메시지/정책 위해 expr kind도 같이 확인.
+        // (B) set x = null; 금지
         const ast::Expr& init_e = ast_.expr(s.init);
         const bool rhs_is_null_lit = (init_e.kind == ast::ExprKind::kNullLit);
         if (rhs_is_null_lit || rhs == types_.builtin(ty::Builtin::kNull)) {
@@ -624,11 +625,9 @@ namespace gaupel::tyck {
         }
 
         // (C) 추론 타입 확정
-        //     - 정수 리터럴은 Rust처럼 "{integer}" placeholder로 보류한다.
-        //     - 실제 i8~i128 선택/확정은 "소비될 때" 수행한다.
         ty::TypeId inferred = rhs;
 
-        // (D) 현재 스코프에 선언으로 삽입 (여기서 SymbolId를 얻어야 pending을 sym-id로 저장 가능)
+        // (D) 현재 스코프에 선언으로 삽입
         auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, inferred, s.span);
         if (!ins.ok) {
             if (ins.is_duplicate) {
@@ -637,10 +636,13 @@ namespace gaupel::tyck {
                 s.type = types_.error();
                 return;
             } else if (ins.is_shadowing) {
-                // 섀도잉 정책은 옵션화 가능.
-                // 지금은 일단 경고로 기록(또는 프로젝트 정책이 "불가"면 kShadowingNotAllowed로 바꿔)
                 diag_(diag::Code::kShadowing, s.span, s.name);
             }
+        }
+
+        // NEW: mut tracking (set mut / set)
+        if (ins.ok) {
+            sym_is_mut_[ins.symbol_id] = s.is_mut;
         }
 
         // (E) set x = <int literal> 이면: declared_type을 "{integer}"로 바꾸고 pending을 sym-id로 저장
@@ -650,10 +652,10 @@ namespace gaupel::tyck {
                 diag_(diag::Code::kIntLiteralInvalid, init_e.span, init_e.text);
                 err_(init_e.span, "invalid integer literal");
                 inferred = types_.error();
-                sym_.update_declared_type(ins.symbol_id, inferred);
+                if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
             } else {
                 inferred = types_.builtin(ty::Builtin::kInferInteger);
-                sym_.update_declared_type(ins.symbol_id, inferred);
+                if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
 
                 PendingInt pi{};
                 pi.value = v;
@@ -661,13 +663,13 @@ namespace gaupel::tyck {
                 pi.resolved = false;
                 pi.resolved_type = ty::kInvalidType;
 
-                pending_int_sym_[ins.symbol_id] = pi;
+                if (ins.ok) pending_int_sym_[ins.symbol_id] = pi;
             }
         }
 
         if (inferred == ty::kInvalidType) inferred = types_.error();
 
-        // (F) AST에 “추론된 타입” 기록 (후속 패스/IR 친화)
+        // (F) AST에 “추론된 타입” 기록
         s.type = inferred;
     }
 
@@ -1172,6 +1174,38 @@ namespace gaupel::tyck {
         return types_.error();
     }
 
+    // v0: place(ident/index)에서 "근원 로컬 심볼"을 최대한 뽑는다.
+    // - ident      => sym id
+    // - index(a,i) => a가 ident면 그 sym id (v0 보수 규칙)
+    std::optional<uint32_t> TypeChecker::root_place_symbol_(ast::ExprId place) const {
+        if (place == ast::k_invalid_expr) return std::nullopt;
+        const ast::Expr& e = ast_.expr(place);
+
+        if (e.kind == ast::ExprKind::kIdent) {
+            auto sid = sym_.lookup(e.text);
+            if (!sid) return std::nullopt;
+            return *sid;
+        }
+
+        if (e.kind == ast::ExprKind::kIndex) {
+            // 가정: e.a = base, e.b = index
+            const ast::Expr& base = ast_.expr(e.a);
+            if (base.kind == ast::ExprKind::kIdent) {
+                auto sid = sym_.lookup(base.text);
+                if (!sid) return std::nullopt;
+                return *sid;
+            }
+        }
+
+        return std::nullopt;
+    }
+
+    bool TypeChecker::is_mutable_symbol_(uint32_t sym_id) const {
+        auto it = sym_is_mut_.find(sym_id);
+        if (it == sym_is_mut_.end()) return false;
+        return it->second;
+    }
+
     // place expr (v0: Ident, Index만 place로 인정)
     bool TypeChecker::is_place_expr_(ast::ExprId eid) const {
         if (eid == ast::k_invalid_expr) return false;
@@ -1235,12 +1269,21 @@ namespace gaupel::tyck {
     }
 
     ty::TypeId TypeChecker::check_expr_postfix_unary_(const ast::Expr& e) {
-        // v0: postfix ++만 있다고 가정
         if (!is_place_expr_(e.a)) {
             diag_(diag::Code::kPostfixOperandMustBePlace, e.span);
             err_(e.span, "postfix operator requires a place expression");
             return types_.error();
         }
+
+        // mut check (x++ is a write)
+        // - place가 가리키는 심볼이 mut가 아니면 무조건 에러
+        if (auto sid = root_place_symbol_(e.a)) {
+            if (!is_mutable_symbol_(*sid)) {
+                diag_(diag::Code::kWriteToImmutable, e.span);
+                err_(e.span, "cannot apply postfix ++ to an immutable variable (declare it with `mut`)");
+            }
+        }
+
         ty::TypeId at = check_expr_(e.a);
         return at;
     }
@@ -1467,15 +1510,25 @@ namespace gaupel::tyck {
         //   - lhs type must be Optional(T?)
         //   - rhs must be assignable to T
         //   - expression result type: lhs type (T?)  (IR lowering/일관성에 유리)
+        //
+        // 이 연산도 "write" 이므로 mut 검사 대상이다.
         // ------------------------------------------------------------
         if (e.op == K::kQuestionQuestionAssign) {
             // e.a = lhs, e.b = rhs
             if (!is_place_expr_(e.a)) {
                 diag_(diag::Code::kAssignLhsMustBePlace, e.span);
                 err_(e.span, "assignment lhs must be a place expression (ident/index)");
-                // 그래도 rhs는 검사해서 에러 누락 방지
                 (void)check_expr_(e.b);
                 return types_.error();
+            }
+
+            // NEW: mut check
+            if (auto sid = root_place_symbol_(e.a)) {
+                if (!is_mutable_symbol_(*sid)) {
+                    // NOTE: 새 diag code 필요
+                    diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
+                    err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+                }
             }
 
             ty::TypeId lt = check_expr_(e.a);
@@ -1483,7 +1536,6 @@ namespace gaupel::tyck {
 
             if (is_error_(lt) || is_error_(rt)) return types_.error();
 
-            // lhs는 optional이어야 한다
             if (!is_optional_(lt)) {
                 diag_(diag::Code::kTypeNullCoalesceAssignLhsMustBeOptional, e.span, types_.to_string(lt));
                 err_(e.span, "operator '??=' requires optional lhs");
@@ -1505,7 +1557,6 @@ namespace gaupel::tyck {
                 }
             }
 
-            // rhs는 elem에 assign 가능해야 함
             if (!can_assign_(elem, rt)) {
                 diag_(diag::Code::kTypeNullCoalesceAssignRhsMismatch, e.span,
                     types_.to_string(elem), types_.to_string(rt));
@@ -1513,7 +1564,6 @@ namespace gaupel::tyck {
                 return types_.error();
             }
 
-            // 결과 타입은 lhs 타입(T?)로 유지
             return lt;
         }
 
@@ -1524,7 +1574,17 @@ namespace gaupel::tyck {
         if (!is_place_expr_(e.a)) {
             diag_(diag::Code::kAssignLhsMustBePlace, e.span);
             err_(e.span, "assignment lhs must be a place expression (ident/index)");
+        } else {
+            // NEW: mut check
+            if (auto sid = root_place_symbol_(e.a)) {
+                if (!is_mutable_symbol_(*sid)) {
+                    // NOTE: 새 diag code 필요
+                    diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
+                    err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+                }
+            }
         }
+
         ty::TypeId lt = check_expr_(e.a);
         ty::TypeId rt = check_expr_(e.b);
 

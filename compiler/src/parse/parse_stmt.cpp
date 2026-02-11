@@ -306,13 +306,10 @@ namespace gaupel {
         // ---- mut ----
         bool is_mut = false;
         if (cursor_.at(K::kKwMut)) {
-            // 정책: set mut 는 금지지만 토큰은 소비해서 흐름을 안정화
-            if (is_set) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "`mut` is not allowed with `set`");
-            } else {
-                is_mut = true;
-            }
-            cursor_.bump(); // consume 'mut' anyway
+            // 정책 변경:
+            // - set은 타입추론 키워드이므로, set mut 도 당연히 허용한다.
+            is_mut = true;
+            cursor_.bump(); // consume 'mut'
         }
 
         // ---- name ----

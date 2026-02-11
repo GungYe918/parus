@@ -185,6 +185,8 @@ namespace gaupel::diag {
         kTypeNullCoalesceAssignLhsMustBeOptional,
         kTypeNullCoalesceAssignRhsMismatch,
 
+        // ---- mut check ----
+        kWriteToImmutable
         
     };
 

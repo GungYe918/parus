@@ -156,6 +156,8 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceRhsMismatch:       return "TypeNullCoalesceRhsMismatch";
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "TypeNullCoalesceAssignLhsMustBeOptional";
             case Code::kTypeNullCoalesceAssignRhsMismatch:       return "TypeNullCoalesceAssignRhsMismatch";
+
+            case Code::kWriteToImmutable: return "WriteToImmutable";
         }
 
         return "Unknown";
@@ -294,6 +296,8 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "operator '??=' requires an optional lhs (got {0})";
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '??=' requires rhs assignable to {0} (got {1})";
+
+            case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
 
         return "unknown diagnostic";
@@ -437,6 +441,8 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "'??=' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "'??=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
+
+            case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }
 
         return "알 수 없는 진단";

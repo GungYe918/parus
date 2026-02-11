@@ -8,65 +8,89 @@ namespace gaupel::sir {
         return v.place == PlaceClass::kLocal && v.sym != k_invalid_symbol;
     }
 
-    MutAnalysisResult analyze_mut(const Module& m, diag::Bag& bag) {
-        (void)bag;
-        MutAnalysisResult out{};
+    static std::optional<SymbolId> root_written_symbol(const Module& m, ValueId lhs) {
+        if (lhs == k_invalid_value) return std::nullopt;
+        if (lhs >= m.values.size()) return std::nullopt;
 
-        // 1) decl 스캔: VarDecl로 declared_mut/is_set 채우기
+        const Value& v = m.values[lhs];
+
+        // direct local
+        if (v.kind == ValueKind::kLocal && v.sym != k_invalid_symbol) {
+            return v.sym;
+        }
+
+        // index write: a[i] = ...
+        if (v.kind == ValueKind::kIndex) {
+            // v.a = base, v.b = index
+            if (v.a == k_invalid_value) return std::nullopt;
+            const Value& base = m.values[v.a];
+            if (base.kind == ValueKind::kLocal && base.sym != k_invalid_symbol) {
+                return base.sym;
+            }
+        }
+
+        // future: field/deref/etc.
+        return std::nullopt;
+    }
+
+    MutAnalysisResult analyze_mut(const Module& m, diag::Bag& bag) {
+        MutAnalysisResult r{};
+
+        // 1) Collect declared mut info from var decl stmts
         for (const auto& st : m.stmts) {
             if (st.kind != StmtKind::kVarDecl) continue;
             if (st.sym == k_invalid_symbol) continue;
 
-            auto& mi = out.by_symbol[st.sym];
-            mi.declared_mut = st.is_mut;
-            mi.is_set = st.is_set;
-
-            // v0 정책: set은 mutable binding으로 취급
-            if (st.is_set) mi.declared_mut = true;
+            MutInfo& info = r.by_symbol[st.sym];
+            info.declared_mut = st.is_mut;
+            info.is_set = st.is_set;
         }
 
-        // 2) write 스캔: values에서 Assign/PostfixInc
-        for (const auto& v : m.values) {
+        // helper: report illegal write once (but we can allow multiple if you want)
+        auto report_illegal = [&](Span sp, SymbolId sym, const char* what) {
+            (void)sym;
+            // NOTE: diag code는 새로 추가 필요 (kWriteToImmutable 등)
+            diag::Diagnostic d(diag::Severity::kError, diag::Code::kWriteToImmutable, sp);
+            d.add_arg(what);
+            bag.add(std::move(d));
+        };
+
+        // 2) Walk values: assign / postfix++ are writes
+        for (uint32_t vid = 0; vid < (uint32_t)m.values.size(); ++vid) {
+            const Value& v = m.values[vid];
+
             if (v.kind == ValueKind::kAssign) {
-                // v.a = place, v.b = value
-                if (v.a == k_invalid_value) continue;
-                const auto& place = m.values[v.a];
+                // v.a = lhs, v.b = rhs
+                auto sid = root_written_symbol(m, v.a);
+                if (!sid) continue;
 
-                if (is_local_place(place)) {
-                    auto& mi = out.by_symbol[place.sym];
-                    mi.ever_written = true;
+                MutInfo& info = r.by_symbol[*sid];
+                info.ever_written = true;
 
-                    if (!mi.declared_mut) {
-                        mi.illegal_write = true;
-
-                        // diag code는 프로젝트에 맞춰 추가/연결해줘야 함.
-                        // 아래는 “자리만” 잡아둔 형태.
-                        // diag::Diagnostic d(diag::Severity::kError, diag::Code::kMutWriteToImmutable, v.span);
-                        // d.add_arg(place.text);
-                        // bag.add(std::move(d));
-                    }
-                } else {
-                    // index write 등: v0에서는 허용(추후 borrow/alias에서 다룸)
+                if (!info.declared_mut) {
+                    info.illegal_write = true;
+                    report_illegal(v.span, *sid, "assignment");
                 }
+                continue;
             }
 
             if (v.kind == ValueKind::kPostfixInc) {
-                if (v.a == k_invalid_value) continue;
-                const auto& place = m.values[v.a];
+                // v.a = place
+                auto sid = root_written_symbol(m, v.a);
+                if (!sid) continue;
 
-                if (is_local_place(place)) {
-                    auto& mi = out.by_symbol[place.sym];
-                    mi.ever_written = true;
+                MutInfo& info = r.by_symbol[*sid];
+                info.ever_written = true;
 
-                    if (!mi.declared_mut) {
-                        mi.illegal_write = true;
-                        // 위와 동일하게 diag 연결
-                    }
+                if (!info.declared_mut) {
+                    info.illegal_write = true;
+                    report_illegal(v.span, *sid, "postfix++");
                 }
+                continue;
             }
         }
 
-        return out;
+        return r;
     }
 
 } // namespace gaupel::sir

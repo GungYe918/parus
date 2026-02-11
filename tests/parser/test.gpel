@@ -64,3 +64,9 @@ fn main_three() -> i32 {
 
     return x;
 }
+
+fn main_four() -> i32 {
+    set x = 5;
+    x = 9;
+    return 42;
+}

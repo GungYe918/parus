@@ -113,6 +113,9 @@ namespace gaupel::tyck {
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2);
 
+        std::optional<uint32_t> root_place_symbol_(ast::ExprId place) const;
+        bool is_mutable_symbol_(uint32_t sym_id) const;
+
         bool is_place_expr_(ast::ExprId eid) const;
 
         bool is_optional_(ty::TypeId t) const;
@@ -182,6 +185,11 @@ namespace gaupel::tyck {
         bool resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected);
         bool infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const;
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
+
+        // ----------------------------------------
+        // Mut tracking (tyck-level)
+        // ----------------------------------------
+        std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
     };
 
 } // namespace gaupel::tyck
