@@ -1,3 +1,4 @@
+// test.gpel
 use module "std/io" as io;
 use newT = MyType;
 use PI 3.14159;

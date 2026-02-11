@@ -201,6 +201,16 @@ namespace gaupel::ast {
         // cast payload
         TypeId cast_type = k_invalid_type;
         CastKind cast_kind = CastKind::kAs;
+
+        // -----------------------------------------
+        // target/expected type (from tyck)
+        //
+        // - "이 expr이 놓인 자리에서 요구되는 타입"
+        // - 실제 expr의 타입(tyck.expr_types)와는 다를 수 있다.
+        //   예) return slot, assignment RHS slot, call arg slot, cast operand slot 등
+        // - v0에선 optional 정규화/캐스팅 규칙/진단 메시지 강화에 특히 유용.
+        // -----------------------------------------
+        TypeId target_type = k_invalid_type;
     };
 
     // --------------------

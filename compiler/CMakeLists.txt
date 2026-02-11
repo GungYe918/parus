@@ -13,11 +13,20 @@ add_library(gaupel_compiler STATIC
     src/passes/check_top_level_decl_only.cpp
     src/passes/name_resolve.cpp
     src/passes/passes.cpp
-    src/sir/mut_analysis.cpp
-    src/sir/sir_builder.cpp
+    
     src/os/file.cpp
     src/tyck/type_check.cpp
     src/num/big_int.cpp
+
+    # SIR
+    src/sir/mut_analysis.cpp
+    src/sir/sir_builder.cpp
+
+    # OIR
+    src/oir/oir_builder.cpp
+    src/oir/oir_passes.cpp
+    src/oir/oir_print.cpp
+    src/oir/oir_verify.cpp
 )
 
 target_include_directories(gaupel_compiler

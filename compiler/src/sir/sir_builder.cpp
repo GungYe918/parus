@@ -138,6 +138,85 @@ namespace gaupel::sir {
         return bid;
     }
 
+    // -----------------------------
+    // helper: lower "maybe expr id" that might actually be a StmtId (legacy/quirk)
+    // -----------------------------
+    static bool is_valid_expr_id_(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id) {
+        return id != gaupel::ast::k_invalid_expr && (size_t)id < ast.exprs().size();
+    }
+    static bool is_valid_stmt_id_(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id) {
+        return id != gaupel::ast::k_invalid_stmt && (size_t)id < ast.stmts().size();
+    }
+
+    // Create a "block expression value" from a block stmt id (tail optional).
+    static ValueId lower_block_value_(
+        Module& m,
+        bool& out_has_any_write,
+        const gaupel::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        gaupel::ast::StmtId block_sid,
+        gaupel::ast::ExprId tail_eid,
+        gaupel::Span span,
+        TypeId forced_type // optional: if you want to override; otherwise k_invalid_type
+    ) {
+        Value bv{};
+        bv.kind = ValueKind::kBlockExpr;
+        bv.span = span;
+
+        // block expr "type" policy:
+        // - prefer forced_type if provided
+        // - else if tail exists, use tail type
+        // - else unknown
+        if (forced_type != k_invalid_type) {
+            bv.type = forced_type;
+        } else if (tail_eid != gaupel::ast::k_invalid_expr) {
+            bv.type = type_of_ast_expr(tyck, tail_eid);
+        } else {
+            bv.type = k_invalid_type;
+        }
+
+        const BlockId bid = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, block_sid);
+        bv.a = (ValueId)bid; // NOTE: BlockId stored in ValueId slot by convention.
+
+        if (tail_eid != gaupel::ast::k_invalid_expr) {
+            bv.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, tail_eid);
+        }
+
+        bv.place = PlaceClass::kNotPlace;
+        bv.effect = EffectClass::kPure; // the block may contain effects, but SIR value itself is structural
+        return m.add_value(bv);
+    }
+
+    static ValueId lower_expr_or_stmt_as_value_(
+        Module& m,
+        bool& out_has_any_write,
+        const gaupel::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        gaupel::ast::ExprId maybe_expr,
+        gaupel::Span span,
+        TypeId expected
+    ) {
+        // Normal path: ExprId.
+        if (is_valid_expr_id_(ast, maybe_expr)) {
+            return lower_expr(m, out_has_any_write, ast, sym, nres, tyck, maybe_expr);
+        }
+
+        // Legacy/quirk path: treat it as StmtId.
+        const gaupel::ast::StmtId sid = (gaupel::ast::StmtId)maybe_expr;
+        if (is_valid_stmt_id_(ast, sid)) {
+            // wrap the statement-block as a block-expression value.
+            return lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck, sid,
+                                      gaupel::ast::k_invalid_expr, span, expected);
+        }
+
+        // fallback
+        return k_invalid_value;
+    }
+
     static ValueId lower_expr(
         Module& m,
         bool& out_has_any_write,
@@ -229,39 +308,152 @@ namespace gaupel::sir {
                 break;
             }
 
+            case gaupel::ast::ExprKind::kIfExpr: {
+                // structured if-expr:
+                // - v.a = cond
+                // - v.b = then value (or wrapped block)
+                // - v.c = else value (or wrapped block)
+                v.kind = ValueKind::kIfExpr;
+
+                // cond is always ExprId in v0.
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+
+                // then / else may be ExprId or StmtId (legacy quirk)
+                v.b = lower_expr_or_stmt_as_value_(m, out_has_any_write, ast, sym, nres, tyck, e.b, e.span, v.type);
+                v.c = lower_expr_or_stmt_as_value_(m, out_has_any_write, ast, sym, nres, tyck, e.c, e.span, v.type);
+                break;
+            }
+
+            case gaupel::ast::ExprKind::kBlockExpr: {
+                // IMPORTANT (current parser):
+                // - e.a : StmtId (block stmt), stored in ExprId slot by convention
+                // - e.b : tail ExprId (or invalid)
+                // - e.c : reserved
+                const gaupel::ast::StmtId blk = (gaupel::ast::StmtId)e.a;
+                if (is_valid_stmt_id_(ast, blk)) {
+                    // create dedicated kBlockExpr node, return it directly (no extra wrapper)
+                    return lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck,
+                                            blk, e.b, e.span, v.type);
+                }
+                v.kind = ValueKind::kError;
+                break;
+            }
+
+            case gaupel::ast::ExprKind::kLoop: {
+                // loop expr lowering:
+                // - v.op   : loop_has_header (0/1)
+                // - v.text : loop_var (if any)
+                // - v.a    : iter value
+                // - v.b    : BlockId (stored in ValueId slot)
+                v.kind = ValueKind::kLoopExpr;
+                v.op = e.loop_has_header ? 1u : 0u;
+                v.text = e.loop_var;
+
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.loop_iter);
+
+                const gaupel::ast::StmtId body = e.loop_body;
+                if (is_valid_stmt_id_(ast, body)) {
+                    const BlockId bid = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, body);
+                    v.b = (ValueId)bid; // BlockId stored in ValueId slot by convention.
+                } else {
+                    v.b = k_invalid_value;
+                }
+
+                break;
+            }
+
             case gaupel::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
-                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a); // callee
 
+                // callee
+                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+
+                // args slice into Module::args
                 v.arg_begin = (uint32_t)m.args.size();
                 v.arg_count = 0;
 
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
                     const auto& aa = ast.args()[e.arg_begin + i];
-                    Arg sa{};
-                    sa.span = aa.span;
-                    sa.has_label = aa.has_label;
-                    sa.is_hole = aa.is_hole;
-                    sa.label = aa.label;
 
-                    sa.kind =
+                    // Parent entry (one per "argument slot" in AST args list)
+                    Arg parent{};
+                    parent.span = aa.span;
+                    parent.has_label = aa.has_label;
+                    parent.is_hole = aa.is_hole;
+                    parent.label = aa.label;
+
+                    parent.kind =
                         (aa.kind == gaupel::ast::ArgKind::kPositional) ? ArgKind::kPositional :
                         (aa.kind == gaupel::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
                         ArgKind::kNamedGroup;
 
-                    // NOTE: NamedGroup children lowering is “structural only” in v0:
-                    // - Your AST already flattens args; named-group itself is an ArgKind::kNamedGroup
-                    // - child_begin/count are preserved by the parser in AST Arg for NamedGroup
-                    sa.child_begin = aa.child_begin;
-                    sa.child_count = aa.child_count;
+                    if (aa.kind == gaupel::ast::ArgKind::kNamedGroup) {
+                        // NamedGroup children are stored in ast.named_group_args().
+                        //
+                        // SIR policy:
+                        // - emit ONE parent Arg with kind=kNamedGroup
+                        // - then emit children Args as adjacent entries in Module::args
+                        // - patch parent.child_begin/child_count after children emitted
 
-                    if (aa.expr != gaupel::ast::k_invalid_expr) {
-                        sa.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
+                        parent.value = k_invalid_value;
+
+                        const uint32_t parent_idx = m.add_arg(parent);
+                        v.arg_count++;
+
+                        const uint32_t child_begin = (uint32_t)m.args.size();
+                        uint32_t child_emitted = 0;
+
+                        const uint32_t ng_begin = aa.child_begin;
+                        const uint32_t ng_end   = aa.child_begin + aa.child_count;
+
+                        if (ng_begin < (uint32_t)ast.named_group_args().size() &&
+                            ng_end   <= (uint32_t)ast.named_group_args().size()) {
+
+                            for (uint32_t j = 0; j < aa.child_count; ++j) {
+                                const auto& child = ast.named_group_args()[aa.child_begin + j];
+
+                                Arg sc{};
+                                sc.span = child.span;
+                                sc.has_label = child.has_label;
+                                sc.is_hole = child.is_hole;
+                                sc.label = child.label;
+
+                                sc.kind =
+                                    (child.kind == gaupel::ast::ArgKind::kPositional) ? ArgKind::kPositional :
+                                    (child.kind == gaupel::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
+                                    ArgKind::kNamedGroup; // (shouldn't nest in v0)
+
+                                if (!child.is_hole && child.expr != gaupel::ast::k_invalid_expr) {
+                                    sc.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, child.expr);
+                                } else {
+                                    sc.value = k_invalid_value;
+                                }
+
+                                m.add_arg(sc);
+                                v.arg_count++;
+                                child_emitted++;
+                            }
+                        }
+
+                        // patch parent now that children are emitted
+                        m.args[parent_idx].child_begin = child_begin;
+                        m.args[parent_idx].child_count = child_emitted;
+
+                        continue; // IMPORTANT: keep processing remaining args
                     }
 
-                    m.add_arg(sa);
+                    // Non-named-group: normal value
+                    if (!aa.is_hole && aa.expr != gaupel::ast::k_invalid_expr) {
+                        parent.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
+                    } else {
+                        parent.value = k_invalid_value;
+                    }
+
+                    m.add_arg(parent);
                     v.arg_count++;
+                    continue; // IMPORTANT: keep processing remaining args
                 }
+
                 break;
             }
 
@@ -274,16 +466,26 @@ namespace gaupel::sir {
 
             case gaupel::ast::ExprKind::kCast: {
                 v.kind = ValueKind::kCast;
+
+                // operand
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+
+                // cast kind: as / as? / as!
                 v.op = (uint32_t)e.cast_kind;
+
+                // cast target type: "T"
+                v.cast_to = e.cast_type;
+
+                // v.type is already set at function entry:
+                //   v.type = type_of_ast_expr(tyck, eid);
+                // so dump/lowering can use:
+                //   - cast_to for syntactic target
+                //   - type for normalized RESULT type (as? => T?)
                 break;
             }
 
             // v0 not-lowered-yet expr kinds
             case gaupel::ast::ExprKind::kHole:
-            case gaupel::ast::ExprKind::kLoop:
-            case gaupel::ast::ExprKind::kIfExpr:
-            case gaupel::ast::ExprKind::kBlockExpr:
             default:
                 v.kind = ValueKind::kError;
                 break;
@@ -298,7 +500,7 @@ namespace gaupel::sir {
 
         return m.add_value(v);
     }
-
+        
     static uint32_t lower_stmt_into_block(
         Module& m,
         bool& out_has_any_write,

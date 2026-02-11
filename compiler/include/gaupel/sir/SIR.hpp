@@ -95,7 +95,7 @@ namespace gaupel::sir {
     struct Value {
         ValueKind kind = ValueKind::kError;
         gaupel::Span span{};
-        TypeId type = k_invalid_type;     // from tyck
+        TypeId type = k_invalid_type;     // from tyck (RESULT type)
 
         // generic slots (interpret by kind)
         uint32_t op = 0;                  // TokenKind or small opcode
@@ -116,6 +116,25 @@ namespace gaupel::sir {
         // call/array args (slice into Module::args)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
+
+        // -----------------------------------------
+        // place element type
+        //
+        // - Value.type: "read/result type" (load 결과 타입)
+        // - place_elem_type: place가 가리키는 element 타입 (slot element)
+        //   예) future: a[i]에서 결과 타입과 place element 타입이 달라질 수 있음
+        // - v0에서는 Local만 place이고 보통 type==place_elem_type 이지만,
+        //   OIR lowering을 깔끔하게 하기 위해 분리 필드 제공.
+        // -----------------------------------------
+        TypeId place_elem_type = k_invalid_type;
+
+        // -----------------------------------------
+        // cast target type for kCast
+        // - Value.type is the RESULT type (already from tyck)
+        // - cast_to is the syntactic "T" in "expr as T / as? T / as! T"
+        //   (tyck가 결과 타입을 정규화(T?) 하더라도, 원래 목표 T를 잃지 않게 저장)
+        // -----------------------------------------
+        TypeId cast_to = k_invalid_type;
     };
 
     // ---------------------------------------------

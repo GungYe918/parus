@@ -18,8 +18,16 @@
 #include "gaupel/passes/Passes.hpp"
 #include "gaupel/tyck/TypeCheck.hpp"
 
+// SIR
+#include "gaupel/sir/SIR.hpp"
 #include "gaupel/sir/Builder.hpp"
 #include "gaupel/sir/MutAnalysis.hpp"
+
+// OIR
+#include "gaupel/oir/OIR.hpp"
+#include "gaupel/oir/Builder.hpp"
+#include "gaupel/oir/Verify.hpp"
+#include "gaupel/oir/Inst.hpp"
 
 #include <gaupel/os/File.hpp>
 
@@ -31,13 +39,14 @@ static void print_usage() {
         << "  --version\n"
         << "  --expr \"<expr>\" [--lang en|ko] [--context N]\n"
         << "  --stmt \"<stmt>\" [--lang en|ko] [--context N]\n"
-        << "  --all  \"<program>\" [--lang en|ko] [--context N]\n"
-        << "  --file <path> [--lang en|ko] [--context N]\n"
+        << "  --all  \"<program>\" [--lang en|ko] [--context N] [--dump oir]\n"
+        << "  --file <path> [--lang en|ko] [--context N] [--dump oir]\n"
         << "\n"
         << "Options:\n"
         << "  -fmax-errors=N\n"
         << "  -Wshadow            (emit warning on shadowing)\n"
-        << "  -Werror=shadow      (treat shadowing as error)\n";
+        << "  -Werror=shadow      (treat shadowing as error)\n"
+        << "  --dump oir          (dump OIR after SIR build)\n";
 }
 
 static gaupel::diag::Language parse_lang(const std::vector<std::string_view>& args) {
@@ -113,6 +122,313 @@ static void dump_tokens(const std::vector<gaupel::Token>& tokens) {
     }
 }
 
+static const char* sir_value_kind_name(gaupel::sir::ValueKind k) {
+    using K = gaupel::sir::ValueKind;
+    switch (k) {
+        case K::kError: return "Error";
+        case K::kIntLit: return "IntLit";
+        case K::kFloatLit: return "FloatLit";
+        case K::kStringLit: return "StringLit";
+        case K::kCharLit: return "CharLit";
+        case K::kBoolLit: return "BoolLit";
+        case K::kNullLit: return "NullLit";
+        case K::kLocal: return "Local";
+        case K::kGlobal: return "Global";
+        case K::kParam: return "Param";
+        case K::kArrayLit: return "ArrayLit";
+        case K::kFieldInit: return "FieldInit";
+        case K::kUnary: return "Unary";
+        case K::kBinary: return "Binary";
+        case K::kAssign: return "Assign";
+        case K::kPostfixInc: return "PostfixInc";
+        case K::kCall: return "Call";
+        case K::kIndex: return "Index";
+        case K::kField: return "Field";
+        case K::kIfExpr: return "IfExpr";
+        case K::kBlockExpr: return "BlockExpr";
+        case K::kLoopExpr: return "LoopExpr";
+        case K::kCast: return "Cast";
+    }
+    return "Unknown";
+}
+
+static const char* sir_stmt_kind_name(gaupel::sir::StmtKind k) {
+    using K = gaupel::sir::StmtKind;
+    switch (k) {
+        case K::kError: return "Error";
+        case K::kExprStmt: return "ExprStmt";
+        case K::kVarDecl: return "VarDecl";
+        case K::kIfStmt: return "IfStmt";
+        case K::kWhileStmt: return "WhileStmt";
+        case K::kReturn: return "Return";
+        case K::kBreak: return "Break";
+        case K::kContinue: return "Continue";
+        case K::kSwitch: return "Switch";
+    }
+    return "Unknown";
+}
+
+static const char* sir_place_class_name(gaupel::sir::PlaceClass p) {
+    using P = gaupel::sir::PlaceClass;
+    switch (p) {
+        case P::kNotPlace: return "NotPlace";
+        case P::kLocal:    return "Local";
+        case P::kIndex:    return "Index";
+        case P::kField:    return "Field";
+        case P::kDeref:    return "Deref";
+    }
+    return "Unknown";
+}
+
+static const char* sir_effect_class_name(gaupel::sir::EffectClass e) {
+    using E = gaupel::sir::EffectClass;
+    switch (e) {
+        case E::kPure:     return "Pure";
+        case E::kMayWrite: return "MayWrite";
+        case E::kUnknown:  return "Unknown";
+    }
+    return "Unknown";
+}
+
+static const char* ast_cast_kind_name(gaupel::ast::CastKind k) {
+    using K = gaupel::ast::CastKind;
+    switch (k) {
+        case K::kAs:         return "as";
+        case K::kAsOptional: return "as?";
+        case K::kAsForce:    return "as!";
+    }
+    return "as(?)";
+}
+
+static void dump_sir_module(const gaupel::sir::Module& m, const gaupel::ty::TypePool& types) {
+    using namespace gaupel;
+
+    std::cout << "\nSIR:\n";
+    std::cout << "  funcs=" << m.funcs.size()
+              << " blocks=" << m.blocks.size()
+              << " stmts=" << m.stmts.size()
+              << " values=" << m.values.size()
+              << " args=" << m.args.size()
+              << "\n";
+
+    // funcs
+    for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
+        const auto& f = m.funcs[fi];
+
+        std::cout << "\n  fn #" << fi
+                  << " name=" << f.name
+                  << " sym=" << f.sym
+                  << " entry=" << f.entry
+                  << " has_any_write=" << (f.has_any_write ? "true" : "false")
+                  << "\n";
+
+        std::cout << "    sig=" << types.to_string(f.sig) << " <id " << (uint32_t)f.sig << ">\n";
+        std::cout << "    ret=" << types.to_string(f.ret) << " <id " << (uint32_t)f.ret << ">\n";
+
+        // blocks + statements (v0: entry block only)
+        if (f.entry != sir::k_invalid_block && (size_t)f.entry < m.blocks.size()) {
+            const auto& b = m.blocks[f.entry];
+            std::cout << "    block #" << f.entry
+                      << " stmt_begin=" << b.stmt_begin
+                      << " stmt_count=" << b.stmt_count
+                      << "\n";
+
+            for (uint32_t i = 0; i < b.stmt_count; ++i) {
+                const uint32_t sid = b.stmt_begin + i;
+                if ((size_t)sid >= m.stmts.size()) break;
+
+                const auto& s = m.stmts[sid];
+                std::cout << "      stmt #" << sid
+                          << " " << sir_stmt_kind_name(s.kind);
+
+                if (s.kind == sir::StmtKind::kVarDecl) {
+                    std::cout << " name=" << s.name
+                              << " sym=" << s.sym
+                              << " mut=" << (s.is_mut ? "true" : "false")
+                              << " set=" << (s.is_set ? "true" : "false")
+                              << " decl_ty=" << types.to_string(s.declared_type) << " <id " << (uint32_t)s.declared_type << ">"
+                              << " init=" << s.init;
+                } else {
+                    if (s.expr != sir::k_invalid_value) std::cout << " expr=" << s.expr;
+                    if (s.a != sir::k_invalid_block) std::cout << " a=" << s.a;
+                    if (s.b != sir::k_invalid_block) std::cout << " b=" << s.b;
+                }
+                std::cout << "\n";
+            }
+        }
+    }
+
+    // values
+    std::cout << "\n  values:\n";
+    for (size_t vi = 0; vi < m.values.size(); ++vi) {
+        const auto& v = m.values[vi];
+
+        std::cout << "    v#" << vi
+                  << " " << sir_value_kind_name(v.kind)
+                  << " ty=" << types.to_string(v.type) << " <id " << (uint32_t)v.type << ">"
+                  << " place=" << sir_place_class_name(v.place)
+                  << " effect=" << sir_effect_class_name(v.effect)
+                  << " a=" << v.a << " b=" << v.b << " c=" << v.c;
+
+        if (!v.text.empty()) std::cout << " text=" << v.text;
+        if (v.sym != sir::k_invalid_symbol) std::cout << " sym=" << v.sym;
+
+        if (v.kind == sir::ValueKind::kCall) {
+            std::cout << " arg_begin=" << v.arg_begin
+                      << " arg_count=" << v.arg_count;
+        }
+
+        if (v.kind == sir::ValueKind::kCast) {
+            auto ck = (gaupel::ast::CastKind)v.op;
+            std::cout << " cast_kind=" << ast_cast_kind_name(ck)
+                      << " cast_to=" << types.to_string(v.cast_to) << " <id " << (uint32_t)v.cast_to << ">";
+        }
+
+        std::cout << "\n";
+    }
+}
+
+static const char* oir_effect_name(gaupel::oir::Effect e) {
+    using E = gaupel::oir::Effect;
+    switch (e) {
+        case E::Pure: return "Pure";
+        case E::MayReadMem: return "MayReadMem";
+        case E::MayWriteMem: return "MayWriteMem";
+        case E::MayTrap: return "MayTrap";
+        case E::Call: return "Call";
+    }
+    return "Unknown";
+}
+
+static const char* oir_binop_name(gaupel::oir::BinOp op) {
+    using O = gaupel::oir::BinOp;
+    switch (op) {
+        case O::Add: return "Add";
+        case O::Lt: return "Lt";
+        case O::NullCoalesce: return "NullCoalesce";
+    }
+    return "BinOp(?)";
+}
+
+static const char* oir_cast_kind_name(gaupel::oir::CastKind k) {
+    using K = gaupel::oir::CastKind;
+    switch (k) {
+        case K::As:  return "as";
+        case K::AsQ: return "as?";
+        case K::AsB: return "as!";
+    }
+    return "cast(?)";
+}
+
+static void dump_oir_module(const gaupel::oir::Module& m, const gaupel::ty::TypePool& types) {
+    using namespace gaupel;
+
+    std::cout << "\nOIR:\n";
+    std::cout << "  funcs=" << m.funcs.size()
+              << " blocks=" << m.blocks.size()
+              << " insts=" << m.insts.size()
+              << " values=" << m.values.size()
+              << "\n";
+
+    // funcs + blocks
+    for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
+        const auto& f = m.funcs[fi];
+        std::cout << "\n  fn #" << fi
+                  << " name=" << f.name
+                  << " ret=" << types.to_string((ty::TypeId)f.ret_ty) << " <id " << f.ret_ty << ">"
+                  << " entry=" << f.entry
+                  << " blocks=" << f.blocks.size()
+                  << "\n";
+
+        for (auto bbid : f.blocks) {
+            if (bbid == oir::kInvalidId || (size_t)bbid >= m.blocks.size()) continue;
+            const auto& b = m.blocks[bbid];
+
+            std::cout << "    bb #" << bbid
+                      << " params=" << b.params.size()
+                      << " insts=" << b.insts.size()
+                      << " term=" << (b.has_term ? "yes" : "no")
+                      << "\n";
+
+            // params
+            for (size_t pi = 0; pi < b.params.size(); ++pi) {
+                auto vid = b.params[pi];
+                if ((size_t)vid >= m.values.size()) continue;
+                const auto& vv = m.values[vid];
+                std::cout << "      param v" << vid
+                          << " ty=" << types.to_string((ty::TypeId)vv.ty) << " <id " << vv.ty << ">\n";
+            }
+
+            // insts
+            for (auto iid : b.insts) {
+                if ((size_t)iid >= m.insts.size()) continue;
+                const auto& inst = m.insts[iid];
+
+                std::cout << "      i" << iid
+                          << " eff=" << oir_effect_name(inst.eff);
+
+                if (inst.result != oir::kInvalidId) {
+                    if ((size_t)inst.result < m.values.size()) {
+                        const auto& rv = m.values[inst.result];
+                        std::cout << " -> v" << inst.result
+                                  << " ty=" << types.to_string((ty::TypeId)rv.ty) << " <id " << rv.ty << ">";
+                    } else {
+                        std::cout << " -> v" << inst.result << " <bad-value-id>";
+                    }
+                }
+                std::cout << " : ";
+
+                std::visit([&](auto&& x) {
+                    using T = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<T, oir::InstConstInt>) {
+                        std::cout << "ConstInt \"" << x.text << "\"";
+                    } else if constexpr (std::is_same_v<T, oir::InstConstBool>) {
+                        std::cout << "ConstBool " << (x.value ? "true" : "false");
+                    } else if constexpr (std::is_same_v<T, oir::InstConstNull>) {
+                        std::cout << "ConstNull";
+                    } else if constexpr (std::is_same_v<T, oir::InstBinOp>) {
+                        std::cout << "BinOp " << oir_binop_name(x.op)
+                                  << " v" << x.lhs << ", v" << x.rhs;
+                    } else if constexpr (std::is_same_v<T, oir::InstCast>) {
+                        std::cout << "Cast " << oir_cast_kind_name(x.kind)
+                                  << " to=" << types.to_string((ty::TypeId)x.to) << " <id " << x.to << ">"
+                                  << " v" << x.src;
+                    } else if constexpr (std::is_same_v<T, oir::InstAllocaLocal>) {
+                        std::cout << "AllocaLocal slot_ty="
+                                  << types.to_string((ty::TypeId)x.slot_ty) << " <id " << x.slot_ty << ">";
+                    } else if constexpr (std::is_same_v<T, oir::InstLoad>) {
+                        std::cout << "Load slot=v" << x.slot;
+                    } else if constexpr (std::is_same_v<T, oir::InstStore>) {
+                        std::cout << "Store slot=v" << x.slot << " val=v" << x.value;
+                    } else {
+                        std::cout << "<unknown inst>";
+                    }
+                }, inst.data);
+
+                std::cout << "\n";
+            }
+
+            // terminator
+            if (b.has_term) {
+                std::visit([&](auto&& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, oir::TermRet>) {
+                        if (!t.has_value) std::cout << "      term: ret\n";
+                        else std::cout << "      term: ret v" << t.value << "\n";
+                    } else if constexpr (std::is_same_v<T, oir::TermBr>) {
+                        std::cout << "      term: br bb#" << t.target
+                                  << " args=" << t.args.size() << "\n";
+                    } else if constexpr (std::is_same_v<T, oir::TermCondBr>) {
+                        std::cout << "      term: condbr v" << t.cond
+                                  << " then=bb#" << t.then_bb
+                                  << " else=bb#" << t.else_bb
+                                  << "\n";
+                    }
+                }, b.term);
+            }
+        }
+    }
+}
 /// @brief StmtKind를 사람이 읽기 쉬운 이름으로 변경
 static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
     using K = gaupel::ast::StmtKind;
@@ -194,6 +510,17 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
         std::cout << " text=" << e.text;
     }
 
+    // NEW: expected type slot (id only; 실제 문자열은 types가 필요하니 여기선 id만)
+    if (e.target_type != gaupel::ast::k_invalid_type) {
+        std::cout << " target_ty=<id " << (uint32_t)e.target_type << ">";
+    }
+
+    // cast details
+    if (e.kind == gaupel::ast::ExprKind::kCast) {
+        std::cout << " cast_to=<id " << (uint32_t)e.cast_type << ">"
+                  << " cast_kind=" << (int)e.cast_kind;
+    }
+
     std::cout << " span=[" << e.span.lo << "," << e.span.hi << ")\n";
 
     switch (e.kind) {
@@ -273,10 +600,19 @@ static void dump_expr(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id, 
             break;
         }
 
-
         case gaupel::ast::ExprKind::kIndex:
             dump_expr(ast, e.a, indent + 1);
             dump_expr(ast, e.b, indent + 1);
+            break;
+
+        case gaupel::ast::ExprKind::kIfExpr:
+            dump_expr(ast, e.a, indent + 1);
+            dump_expr(ast, e.b, indent + 1);
+            dump_expr(ast, e.c, indent + 1);
+            break;
+
+        case gaupel::ast::ExprKind::kCast:
+            dump_expr(ast, e.a, indent + 1);
             break;
 
         default:
@@ -513,7 +849,8 @@ static int run_all(
     uint32_t context_lines,
     std::string_view name,
     uint32_t max_errors,
-    const gaupel::passes::PassOptions& pass_opt
+    const gaupel::passes::PassOptions& pass_opt,
+    bool dump_oir
 ) {
     gaupel::SourceManager sm;
     std::string src_owned(src_arg);
@@ -529,12 +866,6 @@ static int run_all(
 
     auto root = p.parse_program();
 
-    // -----------------------
-    // PASSES (official API)
-    //
-    // - Top-level decl only 체크 포함
-    // - NameResolve 포함(심볼테이블 + nres 생성)
-    // -----------------------
     auto pres = gaupel::passes::run_on_program(ast, root, bag, pass_opt);
 
     std::cout << "\nAST(PROGRAM):\n";
@@ -543,59 +874,56 @@ static int run_all(
     std::cout << "\nTYPES:\n";
     types.dump(std::cout);
 
-    // -----------------------
-    // TYCK (type check)
-    // -----------------------
+    // TYCK
     gaupel::tyck::TyckResult tyck_res;
     {
         gaupel::tyck::TypeChecker tc(ast, types, bag);
         tyck_res = tc.check_program(root);
 
         std::cout << "\nTYCK:\n";
-        if (tyck_res.errors.empty()) {
-            std::cout << "tyck ok.\n";
-        } else {
-            std::cout << "tyck errors: " << tyck_res.errors.size() << "\n";
-        }
+        if (tyck_res.errors.empty()) std::cout << "tyck ok.\n";
+        else std::cout << "tyck errors: " << tyck_res.errors.size() << "\n";
     }
 
-    // -----------------------
     // SIR BUILD + MUT ANALYSIS
-    // -----------------------
+    gaupel::sir::Module sir_mod;
     {
         gaupel::sir::BuildOptions bopt{};
-        auto m = gaupel::sir::build_sir_module(
+        sir_mod = gaupel::sir::build_sir_module(
             ast,
             root,
-            pres.sym,          // <- Passes가 만든 공식 심볼 테이블 사용
-            pres.name_resolve, // <- Passes가 만든 공식 NameResolve 결과 사용
+            pres.sym,
+            pres.name_resolve,
             tyck_res,
             types,
             bopt
         );
 
-        auto mut = gaupel::sir::analyze_mut(m, bag);
+        dump_sir_module(sir_mod, types);
 
-        // (원하면) mut 결과 간단 출력
+        auto mut = gaupel::sir::analyze_mut(sir_mod, bag);
         std::cout << "\nMUT:\n";
         std::cout << "tracked symbols: " << mut.by_symbol.size() << "\n";
     }
 
-    // 기존 diag 출력(lex/parse/pass 에러)
+    // OIR (optional)
+    if (dump_oir) {
+        gaupel::oir::Builder ob(sir_mod, types);
+        auto oir_res = ob.build();
+
+        dump_oir_module(oir_res.mod, types);
+
+        auto verrs = gaupel::oir::verify(oir_res.mod);
+        std::cout << "\nOIR VERIFY:\n";
+        if (verrs.empty()) {
+            std::cout << "verify ok.\n";
+        } else {
+            std::cout << "verify errors: " << verrs.size() << "\n";
+            for (auto& e : verrs) std::cout << "  - " << e.msg << "\n";
+        }
+    }
+
     int diag_rc = flush_diags(bag, lang, sm, context_lines);
-
-    // tyck 오류가 있었다면 종료코드 1로 맞추기 위해,
-    // 여기서는 tyck 결과를 다시 돌리지 않도록 "한 번만" 계산하도록 구조화하는 게 이상적이지만,
-    // 현재는 간단히 위에서 출력만 했으므로,
-    // 정책: diag_rc가 0이더라도 tyck에서 에러가 나오면 1로 만들고 싶다면 아래처럼 개선 가능.
-    //
-    // 지금은 "tyck 에러도 실패"로 취급하는 방향이 보통이므로,
-    // 위 tyck를 변수로 저장해서 여기서 rc를 조정하자.
-
-    // 개선 버전(중복 실행 없이):
-    // - 위 tyck 블록을 변수로 빼는 방식이 필요함.
-    // 현재 요구사항은 "연동 + 타입 파싱/테스트"이므로,
-    // 일단 출력/실행이 정상인 상태를 우선한다.
     return diag_rc;
 }
 
@@ -605,7 +933,8 @@ static int run_file(
     gaupel::diag::Language lang,
     uint32_t context_lines,
     uint32_t max_errors,
-    const gaupel::passes::PassOptions& pass_opt
+    const gaupel::passes::PassOptions& pass_opt,
+    bool dump_oir
 ) {
     std::string content;
     std::string err;
@@ -616,7 +945,7 @@ static int run_file(
     }
 
     std::string norm = gaupel::normalize_path(path);
-    return run_all(content, lang, context_lines, norm, max_errors, pass_opt);
+    return run_all(content, lang, context_lines, norm, max_errors, pass_opt, dump_oir);
 }
 
 int main(int argc, char** argv) {
@@ -630,6 +959,7 @@ int main(int argc, char** argv) {
     args.reserve(static_cast<size_t>(argc - 1));
     for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
 
+    // --version
     for (auto a : args) {
         if (a == "--version") {
             std::cout << gaupel::k_version_string << "\n";
@@ -650,6 +980,15 @@ int main(int argc, char** argv) {
         }
         return std::nullopt;
     };
+    
+    bool dump_oir = false;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--dump") {
+            if (i + 1 < args.size() && args[i + 1] == "oir") dump_oir = true;
+        } else if (args[i] == "--dump-oir") {
+            dump_oir = true; // compatibility
+        }
+    }
 
     if (auto i = find_flag("--expr")) {
         if (*i + 1 >= args.size()) {
@@ -672,7 +1011,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --all requires a string\n";
             return 1;
         }
-        return run_all(args[*i + 1], lang, context_lines, "<all>", max_errors, pass_opt);
+        return run_all(args[*i + 1], lang, context_lines, "<all>", max_errors, pass_opt, dump_oir);
     }
 
     if (auto i = find_flag("--file")) {
@@ -680,7 +1019,7 @@ int main(int argc, char** argv) {
             std::cerr << "error: --file requires a path\n";
             return 1;
         }
-        return run_file(std::string(args[*i + 1]), lang, context_lines, max_errors, pass_opt);
+        return run_file(std::string(args[*i + 1]), lang, context_lines, max_errors, pass_opt, dump_oir);
     }
 
     print_usage();
