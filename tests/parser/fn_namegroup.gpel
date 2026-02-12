@@ -17,7 +17,6 @@ fn mul({ a: i32, b: i32 }) -> i32 {
     return a * b;
 }
 
-// mixed but useful: positional + named-group(필수+선택 섞기)
 fn div(a: i32, b: i32, { rounding: i32 = 0, bias: i32 }) -> i32 {
     // bias는 필수(named group, default 없음) → 호출에서 반드시 제공
     return a / b + rounding + bias;
@@ -36,7 +35,7 @@ fn main() -> i32 {
     set r3 = sub(30, 12, { clamp: 1 });
 
     // (4) positional + named-group call (named group 내부 순서 무관, 필수 bias 제공)
-    set r4 = div(100, 5, { bias: 2, rounding: 1 });
+    set r4 = div(100, 5, { rounding: 5 }); // 여기서는 bias부분을 채우지 않았지만 오류로 잡히지 않음. 
         
     
     return 42;

@@ -1627,10 +1627,7 @@ namespace gaupel::tyck {
         ty::TypeId callee_t = check_expr_(e.a);
         const auto& ct = types_.get(callee_t);
 
-        if (ct.kind != ty::Kind::kFn) {
-            diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
-            err_(e.span, "call target is not a function");
-            // 그래도 args는 검사해서 에러 누락 방지
+        auto check_all_arg_exprs_only = [&]() {
             for (uint32_t i = 0; i < e.arg_count; ++i) {
                 const auto& a = ast_.args()[e.arg_begin + i];
                 if (a.kind == ast::ArgKind::kNamedGroup) {
@@ -1642,27 +1639,72 @@ namespace gaupel::tyck {
                     if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
                 }
             }
+        };
+
+        if (ct.kind != ty::Kind::kFn) {
+            diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
+            err_(e.span, "call target is not a function");
+            check_all_arg_exprs_only();
             return types_.error();
         }
 
         // ------------------------------------------------------------
-        // 0) split args: positional vs named-group (and validate "at most one group")
+        // 0) split args + call form classification
         // ------------------------------------------------------------
-        uint32_t positional_count = 0;
-        int32_t named_group_arg_index = -1; // index in args slice (not global)
+        std::vector<const ast::Arg*> outside_positional;
+        std::vector<const ast::Arg*> outside_labeled;
+        const ast::Arg* group_arg = nullptr;
+
+        bool has_duplicate_group = false;
+        Span duplicate_group_span{};
+
         for (uint32_t i = 0; i < e.arg_count; ++i) {
             const auto& a = ast_.args()[e.arg_begin + i];
+
             if (a.kind == ast::ArgKind::kNamedGroup) {
-                if (named_group_arg_index >= 0) {
-                    // multiple groups
-                    diag_(diag::Code::kDuplicateDecl, a.span, "{named-group}");
-                    err_(a.span, "multiple named-group arguments are not allowed (only one { ... } group)");
+                if (group_arg != nullptr) {
+                    has_duplicate_group = true;
+                    if (duplicate_group_span.hi == 0) duplicate_group_span = a.span;
                 } else {
-                    named_group_arg_index = (int32_t)i;
+                    group_arg = &a;
                 }
                 continue;
             }
-            positional_count++;
+
+            const bool is_labeled = a.has_label || (a.kind == ast::ArgKind::kLabeled);
+            if (is_labeled) outside_labeled.push_back(&a);
+            else outside_positional.push_back(&a);
+        }
+
+        enum class CallForm : uint8_t {
+            kPositional,
+            kLabeled,
+            kPositionalPlusNamedGroup,
+            kMixedInvalid,
+        };
+
+        CallForm form = CallForm::kPositional;
+        if (group_arg != nullptr) {
+            form = outside_labeled.empty() ? CallForm::kPositionalPlusNamedGroup
+                                        : CallForm::kMixedInvalid;
+        } else {
+            if (!outside_labeled.empty() && !outside_positional.empty()) form = CallForm::kMixedInvalid;
+            else if (!outside_labeled.empty()) form = CallForm::kLabeled;
+            else form = CallForm::kPositional;
+        }
+
+        if (has_duplicate_group) {
+            diag_(diag::Code::kCallOnlyOneNamedGroupAllowed, duplicate_group_span);
+            err_(duplicate_group_span, "only one named-group '{ ... }' is allowed in a call");
+            check_all_arg_exprs_only();
+            return ct.ret;
+        }
+
+        if (form == CallForm::kMixedInvalid) {
+            diag_(diag::Code::kCallArgMixNotAllowed, e.span);
+            err_(e.span, "mixing labeled and positional arguments is not allowed");
+            check_all_arg_exprs_only();
+            return ct.ret;
         }
 
         // ------------------------------------------------------------
@@ -1671,7 +1713,6 @@ namespace gaupel::tyck {
         const ast::Stmt* fn_decl = nullptr;
         ast::StmtId fn_decl_id = ast::k_invalid_stmt;
 
-        // v0: Only when callee is Ident and points to a top-level fn decl
         {
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kIdent) {
@@ -1679,7 +1720,6 @@ namespace gaupel::tyck {
                 if (it != fn_decl_by_name_.end()) {
                     fn_decl_id = it->second;
                     fn_decl = &ast_.stmt(fn_decl_id);
-                    // safety: ensure it's actually a fn decl
                     if (fn_decl->kind != ast::StmtKind::kFnDecl) {
                         fn_decl = nullptr;
                         fn_decl_id = ast::k_invalid_stmt;
@@ -1689,217 +1729,320 @@ namespace gaupel::tyck {
         }
 
         // ------------------------------------------------------------
-        // 2) positional count check
-        // - Prefer FnDecl.positional_param_count when available.
-        // - Fallback to signature param_count otherwise.
+        // 2) fallback: decl meta가 없으면 기존 signature 기반으로만 검사
         // ------------------------------------------------------------
-        uint32_t expected_positional = ct.param_count;
-        bool decl_has_named_group = false;
-        uint32_t decl_total_param_count = 0;
-        uint32_t decl_positional_count = 0;
+        if (!fn_decl) {
+            const uint32_t provided_non_group =
+                static_cast<uint32_t>(outside_positional.size() + outside_labeled.size());
 
-        if (fn_decl) {
-            decl_has_named_group = fn_decl->has_named_group;
-            decl_total_param_count = fn_decl->param_count;
-            decl_positional_count = fn_decl->positional_param_count;
-
-            // positional-only signature 정책이므로, 이 둘은 같아야 정상.
-            // (불일치가 나면 parser/ir mismatch이므로 sig 기준으로만 간다.)
-            if (decl_positional_count == ct.param_count) {
-                expected_positional = decl_positional_count;
-            } else {
-                expected_positional = ct.param_count;
-            }
-        }
-
-        if (positional_count != expected_positional) {
-            diag_(diag::Code::kTypeArgCountMismatch, e.span,
-                std::to_string(expected_positional), std::to_string(positional_count));
-            err_(e.span, "positional argument count mismatch");
-        }
-
-        // ------------------------------------------------------------
-        // 3) named-group availability check
-        // ------------------------------------------------------------
-        const bool call_has_named_group = (named_group_arg_index >= 0);
-
-        if (call_has_named_group) {
-            if (!fn_decl) {
-                // we cannot validate labels/required/defaults without decl meta
-                // still typecheck the group expressions, but report a conservative error
-                err_(e.span, "named-group arguments require a direct function declaration (callee must be an identifier in v0)");
-            } else if (!decl_has_named_group) {
-                // function does not accept named-group
-                err_(e.span, "callee does not accept named-group arguments");
-            }
-        } else {
-            // no group provided
-            // ok (even if decl has named group, defaults may cover everything)
-        }
-
-        // ------------------------------------------------------------
-        // 4) positional type check (signature-based, since signature is positional-only)
-        // ------------------------------------------------------------
-        uint32_t pi = 0;
-        for (uint32_t i = 0; i < e.arg_count; ++i) {
-            const auto& a = ast_.args()[e.arg_begin + i];
-            if (a.kind == ast::ArgKind::kNamedGroup) continue;
-
-            ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
-
-            if (pi < ct.param_count) {
-                ty::TypeId expected = types_.fn_param_at(callee_t, pi);
-
-                // 컨텍스트 해소: arg가 {integer}면 param 타입으로 해소 시도
-                const auto& st = types_.get(at);
-                if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                    if (a.expr != ast::k_invalid_expr) {
-                        (void)resolve_infer_int_in_context_(a.expr, expected);
-                        at = check_expr_(a.expr);
-                    }
-                }
-
-                if (!can_assign_(expected, at)) {
-                    diag_(diag::Code::kTypeArgTypeMismatch, a.span,
-                        std::to_string(pi), types_.to_string(expected), types_.to_string(at));
-                    err_(a.span, "positional argument type mismatch");
-                }
+            if (provided_non_group != ct.param_count) {
+                diag_(diag::Code::kTypeArgCountMismatch, e.span,
+                    std::to_string(ct.param_count), std::to_string(provided_non_group));
+                err_(e.span, "argument count mismatch");
             }
 
-            pi++;
-        }
+            uint32_t pi = 0;
+            for (uint32_t i = 0; i < e.arg_count; ++i) {
+                const auto& a = ast_.args()[e.arg_begin + i];
 
-        // ------------------------------------------------------------
-        // 5) named-group validation & type check (decl-meta based)
-        // ------------------------------------------------------------
-        if (call_has_named_group) {
-            const auto& group_arg = ast_.args()[e.arg_begin + (uint32_t)named_group_arg_index];
-
-            // Always typecheck group children expressions (even if errors)
-            // But do proper validation only if we have FnDecl.
-            if (!fn_decl) {
-                for (uint32_t k = 0; k < group_arg.child_count; ++k) {
-                    const auto& ca = ast_.named_group_args()[group_arg.child_begin + k];
-                    if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
-                }
-            } else {
-                // Build a lookup table for named params in decl:
-                // named params are those in params slice after positional_param_count
-                // and/or with p.is_named_group flag.
-                struct NamedParamInfo {
-                    uint32_t param_index_in_decl = 0;  // within decl params slice
-                    ty::TypeId type = ty::kInvalidType;
-                    bool has_default = false;
-                    Span span{};
-                };
-
-                std::unordered_map<std::string, NamedParamInfo> named_param_map;
-                named_param_map.reserve(16);
-
-                const uint32_t begin = fn_decl->param_begin;
-                const uint32_t total = fn_decl->param_count;
-                const uint32_t posc  = fn_decl->positional_param_count;
-
-                for (uint32_t idx = posc; idx < total; ++idx) {
-                    const auto& p = ast_.params()[begin + idx];
-
-                    // if AST has explicit flag, honor it; otherwise treat tail as named-group
-                    // (Most of your AST already has p.is_named_group)
-                    const bool is_named = p.is_named_group || (idx >= posc);
-
-                    if (!is_named) continue;
-
-                    NamedParamInfo info{};
-                    info.param_index_in_decl = idx;
-                    info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
-                    info.has_default = p.has_default;
-                    info.span = p.span;
-
-                    named_param_map.emplace(std::string(p.name), info);
+                if (a.kind == ast::ArgKind::kNamedGroup) {
+                    for (uint32_t k = 0; k < a.child_count; ++k) {
+                        const auto& ca = ast_.named_group_args()[a.child_begin + k];
+                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                    }
+                    continue;
                 }
 
-                // Track provided labels
-                std::unordered_map<std::string, Span> provided;
-                provided.reserve(group_arg.child_count);
+                ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
 
-                // 5-1) validate each provided named arg
-                for (uint32_t k = 0; k < group_arg.child_count; ++k) {
-                    const auto& ca = ast_.named_group_args()[group_arg.child_begin + k];
+                if (pi < ct.param_count) {
+                    ty::TypeId expected = types_.fn_param_at(callee_t, pi);
 
-                    // check expr first (so we still catch inner errors)
-                    ty::TypeId at = (ca.expr != ast::k_invalid_expr) ? check_expr_(ca.expr) : types_.error();
-
-                    // duplicate label
-                    const std::string label = std::string(ca.label);
-                    if (provided.find(label) != provided.end()) {
-                        diag_(diag::Code::kDuplicateDecl, ca.span, ca.label);
-                        err_(ca.span, "duplicate named argument label: " + label);
-                        continue;
-                    }
-                    provided.emplace(label, ca.span);
-
-                    // unknown label
-                    auto itp = named_param_map.find(label);
-                    if (itp == named_param_map.end()) {
-                        diag_(diag::Code::kUndefinedName, ca.span, ca.label);
-                        err_(ca.span, "unknown named argument label: " + label);
-                        continue;
-                    }
-
-                    // type check against expected param type
-                    ty::TypeId expected = itp->second.type;
-
-                    // resolve deferred integer if needed
                     const auto& st = types_.get(at);
                     if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                        if (ca.expr != ast::k_invalid_expr) {
-                            (void)resolve_infer_int_in_context_(ca.expr, expected);
-                            at = check_expr_(ca.expr);
+                        if (a.expr != ast::k_invalid_expr) {
+                            (void)resolve_infer_int_in_context_(a.expr, expected);
+                            at = check_expr_(a.expr);
                         }
                     }
 
                     if (!can_assign_(expected, at)) {
-                        // use ArgTypeMismatch with a "virtual index" = decl param index
-                        diag_(diag::Code::kTypeArgTypeMismatch, ca.span,
-                            std::to_string(itp->second.param_index_in_decl),
-                            types_.to_string(expected),
-                            types_.to_string(at));
-                        err_(ca.span, "named argument type mismatch: " + label);
+                        diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                            std::to_string(pi), types_.to_string(expected), types_.to_string(at));
+                        err_(a.span, "argument type mismatch");
                     }
                 }
 
-                // 5-2) check missing required named params (no default and not provided)
-                for (const auto& kv : named_param_map) {
-                    const std::string& label = kv.first;
-                    const NamedParamInfo& info = kv.second;
+                ++pi;
+            }
 
-                    if (info.has_default) continue;           // optional via default
-                    if (provided.find(label) != provided.end()) continue;
+            if (group_arg) {
+                std::string msg = "named-group arguments require a direct function declaration lookup in v0";
+                diag_(diag::Code::kTypeErrorGeneric, group_arg->span, msg);
+                err_(group_arg->span, msg);
+            }
 
-                    // Missing required named argument
-                    // (No dedicated diag code exists in the snippet, so store detailed TyError;
-                    //  if you have/plan a diag code like kMissingNamedArg, swap it in here.)
-                    err_(fn_decl->span, "missing required named argument: " + label);
+            return ct.ret;
+        }
+
+        // ------------------------------------------------------------
+        // 3) build param metadata from declaration
+        // ------------------------------------------------------------
+        struct ParamInfo {
+            uint32_t decl_index = 0;
+            std::string_view name{};
+            ty::TypeId type = ty::kInvalidType;
+            bool has_default = false;
+            Span span{};
+        };
+
+        std::vector<ParamInfo> positional_params;
+        std::vector<ParamInfo> named_params;
+
+        std::unordered_map<std::string, ParamInfo> all_params_by_name;
+        std::unordered_map<std::string, ParamInfo> named_params_by_name;
+
+        const uint32_t decl_total = fn_decl->param_count;
+        uint32_t decl_positional = fn_decl->positional_param_count;
+        if (decl_positional > decl_total) decl_positional = decl_total;
+
+        positional_params.reserve(decl_positional);
+        named_params.reserve(decl_total - decl_positional);
+        all_params_by_name.reserve(decl_total);
+        named_params_by_name.reserve(decl_total - decl_positional);
+
+        for (uint32_t idx = 0; idx < decl_total; ++idx) {
+            const auto& p = ast_.params()[fn_decl->param_begin + idx];
+
+            ParamInfo info{};
+            info.decl_index = idx;
+            info.name = p.name;
+            info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
+            info.has_default = p.has_default;
+            info.span = p.span;
+
+            const bool is_named = p.is_named_group || (idx >= decl_positional);
+            if (is_named) {
+                named_params.push_back(info);
+                named_params_by_name.emplace(std::string(info.name), info);
+            } else {
+                positional_params.push_back(info);
+            }
+
+            auto ins = all_params_by_name.emplace(std::string(info.name), info);
+            if (!ins.second) {
+                diag_(diag::Code::kDuplicateDecl, p.span, p.name);
+                err_(p.span, "duplicate parameter label in function declaration: " + std::string(p.name));
+            }
+        }
+
+        const bool decl_has_named_group = !named_params.empty();
+
+        auto emit_count_too_many = [&](uint32_t expected_max, uint32_t got, Span sp, std::string_view ctx) {
+            if (got <= expected_max) return;
+            diag_(diag::Code::kTypeArgCountMismatch, sp,
+                std::to_string(expected_max), std::to_string(got));
+            err_(sp, std::string(ctx) + " argument count mismatch");
+        };
+
+        auto emit_missing_required = [&](const ParamInfo& p, bool named) {
+            std::string msg = named
+                ? ("missing required named argument '" + std::string(p.name) + "'")
+                : ("missing required argument '" + std::string(p.name) + "'");
+            diag_(diag::Code::kTypeErrorGeneric, p.span, msg);
+            err_(p.span, msg);
+        };
+
+        auto check_arg_against_param = [&](const ast::Arg& a, const ParamInfo& p) {
+            ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
+
+            const auto& st = types_.get(at);
+            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                if (a.expr != ast::k_invalid_expr) {
+                    (void)resolve_infer_int_in_context_(a.expr, p.type);
+                    at = check_expr_(a.expr);
                 }
             }
-        } else {
-            // call has no named-group:
-            // if decl has required named params with no default, this is an error.
-            if (fn_decl && fn_decl->has_named_group) {
-                const uint32_t begin = fn_decl->param_begin;
-                const uint32_t total = fn_decl->param_count;
-                const uint32_t posc  = fn_decl->positional_param_count;
 
-                for (uint32_t idx = posc; idx < total; ++idx) {
-                    const auto& p = ast_.params()[begin + idx];
-                    const bool is_named = p.is_named_group || (idx >= posc);
-                    if (!is_named) continue;
+            if (!can_assign_(p.type, at)) {
+                diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                    std::to_string(p.decl_index), types_.to_string(p.type), types_.to_string(at));
+                err_(a.span, "argument type mismatch for parameter '" + std::string(p.name) + "'");
+            }
+        };
 
-                    if (!p.has_default) {
-                        err_(e.span, "missing required named argument group (at least '" + std::string(p.name) + "')");
-                        break;
+        // ------------------------------------------------------------
+        // 4) call-form specific matching
+        // ------------------------------------------------------------
+        switch (form) {
+            case CallForm::kPositional: {
+                // A) positional call: f(v1, v2, ...)
+                // + compat: named-only 함수(fn({a,b}))에 대해 f(v1,v2) 허용
+                if (!outside_labeled.empty()) {
+                    diag_(diag::Code::kCallArgMixNotAllowed, e.span);
+                    err_(e.span, "mixing labeled and positional arguments is not allowed");
+                    check_all_arg_exprs_only();
+                    return ct.ret;
+                }
+
+                const uint32_t got = static_cast<uint32_t>(outside_positional.size());
+
+                if (!positional_params.empty()) {
+                    emit_count_too_many(static_cast<uint32_t>(positional_params.size()), got, e.span, "positional");
+
+                    const uint32_t bound =
+                        (got < positional_params.size()) ? got : static_cast<uint32_t>(positional_params.size());
+
+                    for (uint32_t i = 0; i < bound; ++i) {
+                        check_arg_against_param(*outside_positional[i], positional_params[i]);
+                    }
+
+                    for (uint32_t i = bound; i < positional_params.size(); ++i) {
+                        if (!positional_params[i].has_default) emit_missing_required(positional_params[i], /*named=*/false);
+                    }
+
+                    // named-group 파라미터는 call에서 제공되지 않았으므로 required 체크
+                    for (const auto& np : named_params) {
+                        if (!np.has_default) emit_missing_required(np, /*named=*/true);
+                    }
+                } else if (!named_params.empty()) {
+                    // named-only compat: declaration order로 positional 바인딩
+                    emit_count_too_many(static_cast<uint32_t>(named_params.size()), got, e.span,
+                                        "positional(named-only compat)");
+
+                    const uint32_t bound =
+                        (got < named_params.size()) ? got : static_cast<uint32_t>(named_params.size());
+
+                    for (uint32_t i = 0; i < bound; ++i) {
+                        check_arg_against_param(*outside_positional[i], named_params[i]);
+                    }
+
+                    for (uint32_t i = bound; i < named_params.size(); ++i) {
+                        if (!named_params[i].has_default) emit_missing_required(named_params[i], /*named=*/true);
+                    }
+                } else {
+                    emit_count_too_many(0, got, e.span, "positional");
+                    for (const auto* pa : outside_positional) {
+                        if (pa->expr != ast::k_invalid_expr) (void)check_expr_(pa->expr);
                     }
                 }
+
+                break;
+            }
+
+            case CallForm::kLabeled: {
+                // B) labeled call: f(a:v1, b:v2, ...)
+                std::unordered_map<std::string, const ast::Arg*> provided;
+                provided.reserve(outside_labeled.size());
+
+                for (const auto* la : outside_labeled) {
+                    const std::string label(la->label);
+
+                    auto ins = provided.emplace(label, la);
+                    if (!ins.second) {
+                        diag_(diag::Code::kDuplicateDecl, la->span, la->label);
+                        err_(la->span, "duplicate argument label '" + label + "'");
+                        if (la->expr != ast::k_invalid_expr) (void)check_expr_(la->expr);
+                        continue;
+                    }
+
+                    auto it = all_params_by_name.find(label);
+                    if (it == all_params_by_name.end()) {
+                        std::string msg = "unknown argument label '" + label + "'";
+                        diag_(diag::Code::kTypeErrorGeneric, la->span, msg);
+                        err_(la->span, msg);
+                        if (la->expr != ast::k_invalid_expr) (void)check_expr_(la->expr);
+                        continue;
+                    }
+
+                    check_arg_against_param(*la, it->second);
+                }
+
+                for (const auto& pp : positional_params) {
+                    if (!pp.has_default && provided.find(std::string(pp.name)) == provided.end()) {
+                        emit_missing_required(pp, /*named=*/false);
+                    }
+                }
+                for (const auto& np : named_params) {
+                    if (!np.has_default && provided.find(std::string(np.name)) == provided.end()) {
+                        emit_missing_required(np, /*named=*/true);
+                    }
+                }
+
+                break;
+            }
+
+            case CallForm::kPositionalPlusNamedGroup: {
+                // C) positional + named-group: f(pos..., {x:v, y:v})
+                const uint32_t got_pos = static_cast<uint32_t>(outside_positional.size());
+                emit_count_too_many(static_cast<uint32_t>(positional_params.size()), got_pos, e.span, "positional");
+
+                const uint32_t bound =
+                    (got_pos < positional_params.size()) ? got_pos : static_cast<uint32_t>(positional_params.size());
+
+                for (uint32_t i = 0; i < bound; ++i) {
+                    check_arg_against_param(*outside_positional[i], positional_params[i]);
+                }
+
+                for (uint32_t i = bound; i < positional_params.size(); ++i) {
+                    if (!positional_params[i].has_default) emit_missing_required(positional_params[i], /*named=*/false);
+                }
+
+                if (!group_arg) break;
+
+                if (!decl_has_named_group) {
+                    std::string msg = "callee does not declare a named-group parameter section";
+                    diag_(diag::Code::kTypeErrorGeneric, group_arg->span, msg);
+                    err_(group_arg->span, msg);
+
+                    for (uint32_t k = 0; k < group_arg->child_count; ++k) {
+                        const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
+                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                    }
+                    break;
+                }
+
+                std::unordered_map<std::string, const ast::Arg*> provided_named;
+                provided_named.reserve(group_arg->child_count);
+
+                for (uint32_t k = 0; k < group_arg->child_count; ++k) {
+                    const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
+                    const std::string label(ca.label);
+
+                    auto ins = provided_named.emplace(label, &ca);
+                    if (!ins.second) {
+                        diag_(diag::Code::kDuplicateDecl, ca.span, ca.label);
+                        err_(ca.span, "duplicate named argument label '" + label + "'");
+                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                        continue;
+                    }
+
+                    auto it = named_params_by_name.find(label);
+                    if (it == named_params_by_name.end()) {
+                        std::string msg = "unknown named argument label '" + label + "'";
+                        diag_(diag::Code::kTypeErrorGeneric, ca.span, msg);
+                        err_(ca.span, msg);
+                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+                        continue;
+                    }
+
+                    check_arg_against_param(ca, it->second);
+                }
+
+                for (const auto& np : named_params) {
+                    if (!np.has_default &&
+                        provided_named.find(std::string(np.name)) == provided_named.end()) {
+                        emit_missing_required(np, /*named=*/true);
+                    }
+                }
+
+                break;
+            }
+
+            case CallForm::kMixedInvalid: {
+                // 위에서 이미 return 처리됨. 방어용.
+                check_all_arg_exprs_only();
+                break;
             }
         }
 
