@@ -120,10 +120,10 @@ namespace gaupel {
 
         // default
         //
-        // NOTE (SPEC 6.1.2 / 6.1.4):
-        // - DefaultOpt := "=" Expr | ε 는 positional / named-group 모두 문법적으로 허용.
-        // - "v0 권장: named-group에서 적극 권장" 은 semantic/tyck 정책으로 두고,
-        //   parser는 선언 문법을 그대로 수용한다.
+        // POLICY CHANGE:
+        // - default 값은 named-group 파라미터에서만 허용한다.
+        // - positional 파라미터에서 '='를 만나면 진단 후 recovery를 위해 식은 소비하되,
+        //   AST에는 default를 기록하지 않는다.
         bool has_default = false;
         ast::ExprId def = ast::k_invalid_expr;
 
@@ -134,22 +134,38 @@ namespace gaupel {
             const Token eq = cursor_.bump(); // '='
             saw_eq = true;
             eq_span = eq.span;
-            has_default = true;
 
-            const auto nk = cursor_.peek().kind;
-            if (nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof) {
-                // "= <expr>" 에서 expr 누락
-                diag_report(diag::Code::kFnParamDefaultExprExpected, eq_span);
+            if (!is_named_group) {
+                // 위치 파라미터 default 금지
+                diag_report(diag::Code::kFnParamDefaultNotAllowedOutsideNamedGroup, eq_span);
+
+                // recovery: 가능한 경우 우변 식을 소비해 다음 파라미터/토큰으로 정렬
+                const auto nk = cursor_.peek().kind;
+                if (!(nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof)) {
+                    (void)parse_expr();
+                }
+
+                // has_default/def는 기록하지 않음 (정책 강제)
+                has_default = false;
                 def = ast::k_invalid_expr;
             } else {
-                def = parse_expr();
+                has_default = true;
+
+                const auto nk = cursor_.peek().kind;
+                if (nk == K::kComma || nk == K::kRParen || nk == K::kRBrace || nk == K::kEof) {
+                    // "= <expr>" 에서 expr 누락
+                    diag_report(diag::Code::kFnParamDefaultExprExpected, eq_span);
+                    def = ast::k_invalid_expr;
+                } else {
+                    def = parse_expr();
+                }
             }
         }
 
         ast::Param p{};
         p.name = name;
         p.type = ty.id;
-        p.is_mut = is_mut;                  // NEW
+        p.is_mut = is_mut;
         p.is_named_group = is_named_group;
         p.has_default = has_default;
         p.default_expr = def;
@@ -158,10 +174,12 @@ namespace gaupel {
         Span end = ty.span;
         if (has_default && def != ast::k_invalid_expr) {
             end = ast_.expr(def).span;
-        } else if (has_default && def == ast::k_invalid_expr) {
+        } else if (saw_eq) {
+            // '='를 봤지만 default를 기록하지 않았거나(expr 누락/금지), 최소 '='까지는 span에 포함
             end = eq_span;
-        } else if (!has_default && saw_eq) {
-            end = cursor_.prev().span;
+            if (cursor_.prev().span.hi >= eq_span.hi) {
+                end = cursor_.prev().span;
+            }
         }
 
         // start span: either 'mut' span (if present) or name span

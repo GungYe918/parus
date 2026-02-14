@@ -805,7 +805,26 @@ namespace gaupel::tyck {
                 diag_(diag::Code::kTypeDuplicateParam, p.span, p.name);
             }
 
-            if (p.has_default && p.default_expr != ast::k_invalid_expr) {
+            // POLICY CHANGE:
+            // positional 파라미터 기본값 금지 (named-group에서만 허용)
+            if (!p.is_named_group && p.has_default) {
+                Span sp = p.span;
+                if (p.default_expr != ast::k_invalid_expr) {
+                    sp = ast_.expr(p.default_expr).span;
+                }
+                diag_(diag::Code::kFnParamDefaultNotAllowedOutsideNamedGroup, sp);
+                err_(sp, "default value is only allowed inside named-group '{ ... }'");
+
+                // recovery/부수 오류 확인용으로 default expr는 체크는 하되,
+                // 이 default를 유효 규칙으로 인정하지 않는다.
+                if (p.default_expr != ast::k_invalid_expr) {
+                    (void)check_expr_(p.default_expr);
+                }
+                continue;
+            }
+
+            // named-group default만 타입 검사
+            if (p.is_named_group && p.has_default && p.default_expr != ast::k_invalid_expr) {
                 ty::TypeId dt = check_expr_(p.default_expr);
                 if (!can_assign_(pt, dt)) {
                     std::ostringstream oss;
@@ -1793,6 +1812,7 @@ namespace gaupel::tyck {
             std::string_view name{};
             ty::TypeId type = ty::kInvalidType;
             bool has_default = false;
+            bool is_named = false;
             Span span{};
         };
 
@@ -1814,14 +1834,16 @@ namespace gaupel::tyck {
         for (uint32_t idx = 0; idx < decl_total; ++idx) {
             const auto& p = ast_.params()[fn_decl->param_begin + idx];
 
+            const bool is_named = p.is_named_group || (idx >= decl_positional);
+
             ParamInfo info{};
             info.decl_index = idx;
             info.name = p.name;
             info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
-            info.has_default = p.has_default;
+            info.has_default = is_named ? p.has_default : false; // positional default 정책 차단
+            info.is_named = is_named;
             info.span = p.span;
 
-            const bool is_named = p.is_named_group || (idx >= decl_positional);
             if (is_named) {
                 named_params.push_back(info);
                 named_params_by_name.emplace(std::string(info.name), info);
@@ -1845,12 +1867,12 @@ namespace gaupel::tyck {
             err_(sp, std::string(ctx) + " argument count mismatch");
         };
 
-        auto emit_missing_required = [&](const ParamInfo& p, bool named) {
+        auto emit_missing_required = [&](const ParamInfo& p, bool named, Span report_span) {
             std::string msg = named
                 ? ("missing required named argument '" + std::string(p.name) + "'")
                 : ("missing required argument '" + std::string(p.name) + "'");
-            diag_(diag::Code::kTypeErrorGeneric, p.span, msg);
-            err_(p.span, msg);
+            diag_(diag::Code::kTypeErrorGeneric, report_span, msg);
+            err_(report_span, msg);
         };
 
         auto check_arg_against_param = [&](const ast::Arg& a, const ParamInfo& p) {
@@ -1871,6 +1893,15 @@ namespace gaupel::tyck {
             }
         };
 
+        auto emit_named_group_requires_brace_diag = [&](Span sp, uint32_t pos_expected, uint32_t got_total) {
+            uint32_t extras = (got_total > pos_expected) ? (got_total - pos_expected) : 0;
+            std::string msg = "callee has named-group params; extra positional arguments (" +
+                            std::to_string(extras) +
+                            ") are not allowed. Pass them with '{ ... }' labels.";
+            diag_(diag::Code::kTypeErrorGeneric, sp, msg);
+            err_(sp, msg);
+        };
+
         // ------------------------------------------------------------
         // 4) call-form specific matching
         // ------------------------------------------------------------
@@ -1888,22 +1919,37 @@ namespace gaupel::tyck {
                 const uint32_t got = static_cast<uint32_t>(outside_positional.size());
 
                 if (!positional_params.empty()) {
-                    emit_count_too_many(static_cast<uint32_t>(positional_params.size()), got, e.span, "positional");
-
-                    const uint32_t bound =
-                        (got < positional_params.size()) ? got : static_cast<uint32_t>(positional_params.size());
+                    const uint32_t pos_expected = static_cast<uint32_t>(positional_params.size());
+                    const uint32_t bound = (got < pos_expected) ? got : pos_expected;
 
                     for (uint32_t i = 0; i < bound; ++i) {
                         check_arg_against_param(*outside_positional[i], positional_params[i]);
                     }
 
-                    for (uint32_t i = bound; i < positional_params.size(); ++i) {
-                        if (!positional_params[i].has_default) emit_missing_required(positional_params[i], /*named=*/false);
+                    // 핵심 UX 수정:
+                    // named-group이 있는 함수에서 positional이 초과되면
+                    // 단순 "expected N, got M" 대신 정책 메시지를 낸다.
+                    if (decl_has_named_group && got > pos_expected) {
+                        for (uint32_t i = pos_expected; i < got; ++i) {
+                            if (outside_positional[i]->expr != ast::k_invalid_expr) {
+                                (void)check_expr_(outside_positional[i]->expr);
+                            }
+                        }
+                        emit_named_group_requires_brace_diag(e.span, pos_expected, got);
+                        return ct.ret;
                     }
 
-                    // named-group 파라미터는 call에서 제공되지 않았으므로 required 체크
+                    // named-group 없는 일반 함수면 기존 count mismatch 유지
+                    if (!decl_has_named_group) {
+                        emit_count_too_many(pos_expected, got, e.span, "positional");
+                    }
+
+                    for (uint32_t i = bound; i < pos_expected; ++i) {
+                        emit_missing_required(positional_params[i], /*named=*/false, e.span);
+                    }
+
                     for (const auto& np : named_params) {
-                        if (!np.has_default) emit_missing_required(np, /*named=*/true);
+                        if (!np.has_default) emit_missing_required(np, /*named=*/true, e.span);
                     }
                 } else if (!named_params.empty()) {
                     // named-only compat: declaration order로 positional 바인딩
@@ -1918,7 +1964,7 @@ namespace gaupel::tyck {
                     }
 
                     for (uint32_t i = bound; i < named_params.size(); ++i) {
-                        if (!named_params[i].has_default) emit_missing_required(named_params[i], /*named=*/true);
+                        if (!named_params[i].has_default) emit_missing_required(named_params[i], /*named=*/true, e.span);
                     }
                 } else {
                     emit_count_too_many(0, got, e.span, "positional");
@@ -1959,13 +2005,14 @@ namespace gaupel::tyck {
                 }
 
                 for (const auto& pp : positional_params) {
-                    if (!pp.has_default && provided.find(std::string(pp.name)) == provided.end()) {
-                        emit_missing_required(pp, /*named=*/false);
+                    if (provided.find(std::string(pp.name)) == provided.end()) {
+                        emit_missing_required(pp, /*named=*/false, e.span);
                     }
                 }
+
                 for (const auto& np : named_params) {
                     if (!np.has_default && provided.find(std::string(np.name)) == provided.end()) {
-                        emit_missing_required(np, /*named=*/true);
+                        emit_missing_required(np, /*named=*/true, e.span);
                     }
                 }
 
@@ -1985,15 +2032,17 @@ namespace gaupel::tyck {
                 }
 
                 for (uint32_t i = bound; i < positional_params.size(); ++i) {
-                    if (!positional_params[i].has_default) emit_missing_required(positional_params[i], /*named=*/false);
+                    emit_missing_required(positional_params[i], /*named=*/false, e.span);
                 }
 
                 if (!group_arg) break;
 
+                const Span named_report_span = group_arg->span.hi ? group_arg->span : e.span;
+
                 if (!decl_has_named_group) {
                     std::string msg = "callee does not declare a named-group parameter section";
-                    diag_(diag::Code::kTypeErrorGeneric, group_arg->span, msg);
-                    err_(group_arg->span, msg);
+                    diag_(diag::Code::kTypeErrorGeneric, named_report_span, msg);
+                    err_(named_report_span, msg);
 
                     for (uint32_t k = 0; k < group_arg->child_count; ++k) {
                         const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
@@ -2032,7 +2081,7 @@ namespace gaupel::tyck {
                 for (const auto& np : named_params) {
                     if (!np.has_default &&
                         provided_named.find(std::string(np.name)) == provided_named.end()) {
-                        emit_missing_required(np, /*named=*/true);
+                        emit_missing_required(np, /*named=*/true, named_report_span);
                     }
                 }
 

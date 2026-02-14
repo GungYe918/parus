@@ -28,6 +28,8 @@ fn main() -> i32 {
     // (1) positional call
     set r1 = add(10, 20);
 
+    set rr = add(b: 20, a: 30);
+
     // (2) labeled call (기존 규칙: 전부 라벨)
     set r2 = add(a: 7, b: 5);
 
@@ -35,7 +37,7 @@ fn main() -> i32 {
     set r3 = sub(30, 12, { clamp: 1 });
 
     // (4) positional + named-group call (named group 내부 순서 무관, 필수 bias 제공)
-    set r4 = div(100, 5, { rounding: 5 }); // 여기서는 bias부분을 채우지 않았지만 오류로 잡히지 않음. 
+    // set r4 = div(100, 5, { rounding: 5 }); // 여기서는 bias부분을 채우지 않음 -> 오류
         
     
     return 42;
