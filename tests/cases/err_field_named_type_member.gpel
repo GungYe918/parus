@@ -1,0 +1,12 @@
+// 비허용 케이스: field 멤버는 POD 내장 값 타입만 허용한다.
+field Inner {
+    i32 x;
+}
+
+field Outer {
+    Inner item;
+}
+
+fn main() -> i32 {
+    return 0i32;
+}

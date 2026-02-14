@@ -68,6 +68,18 @@ namespace gaupel::passes {
                     break;
                 }
 
+                case ast::StmtKind::kFieldDecl:
+                    // field 멤버는 타입 + 이름만 있으므로 expr 없음
+                    break;
+
+                case ast::StmtKind::kActsDecl: {
+                    const auto& kids = ast.stmt_children();
+                    for (uint32_t i = 0; i < st.stmt_count; ++i) {
+                        on_stmt(kids[st.stmt_begin + i]);
+                    }
+                    break;
+                }
+
                 case ast::StmtKind::kSwitch: {
                     on_expr(st.expr);
                     const auto& cs = ast.switch_cases();

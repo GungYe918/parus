@@ -3,6 +3,7 @@
 #include <gaupel/passes/Passes.hpp>
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/sir/Builder.hpp>
+#include <gaupel/sir/Verify.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -64,6 +65,19 @@ namespace {
         auto pres = run_passes(prog);
         auto ty = run_tyck(prog);
 
+        const std::string file_name = p.filename().string();
+        const bool expect_error = (file_name.rfind("err_", 0) == 0);
+
+        if (expect_error) {
+            const bool has_any_error = prog.bag.has_error() || !ty.errors.empty();
+            bool ok = true;
+            ok &= require_(has_any_error, "expected diagnostics for err_ case, but none were emitted");
+            if (!ok) {
+                std::cerr << "    file: " << p.filename().string() << "\n";
+            }
+            return ok;
+        }
+
         bool ok = true;
         ok &= require_(!prog.bag.has_error(), "file case emitted parser/sema diagnostics");
         ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
@@ -78,6 +92,8 @@ namespace {
         );
 
         ok &= require_(!mod.funcs.empty(), "file case must lower at least one function to SIR");
+        const auto verrs = gaupel::sir::verify_module(mod);
+        ok &= require_(verrs.empty(), "SIR verifier failed for file case");
         if (!ok) {
             std::cerr << "    file: " << p.filename().string() << "\n";
         }
@@ -223,8 +239,10 @@ namespace {
         const auto mod = gaupel::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
+        const auto verrs = gaupel::sir::verify_module(mod);
 
         ok &= require_(!mod.funcs.empty(), "SIR module must contain at least one function");
+        ok &= require_(verrs.empty(), "SIR verifier must pass on declared_type test");
         if (!ok) return false;
 
         const auto& fn = mod.funcs.front();
@@ -245,6 +263,81 @@ namespace {
         }
 
         ok &= require_(found_x, "SIR entry block must contain var decl for 'x'");
+        return ok;
+    }
+
+    static bool test_sir_control_flow_block_layout() {
+        // while body / loop body / if branch stmt가 entry block에 섞이면 안 된다.
+        const std::string src = R"(
+            fn f1() -> i32 {
+                set mut n = 0i32;
+                while (n < 1i32) {
+                    n = n + 1i32;
+                }
+                return n;
+            }
+
+            fn f2() -> i32 {
+                set x = loop {
+                    break 7i32;
+                };
+                return x;
+            }
+
+            fn f3() -> i32 {
+                let cond: bool = true;
+                if (cond) {
+                    return 1i32;
+                } else {
+                    return 2i32;
+                }
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "control-flow layout source must type-check cleanly");
+        ok &= require_(ty.errors.empty(), "control-flow layout source must not emit tyck errors");
+        if (!ok) return false;
+
+        gaupel::sir::BuildOptions bopt{};
+        const auto mod = gaupel::sir::build_sir_module(
+            p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
+        );
+        const auto verrs = gaupel::sir::verify_module(mod);
+        ok &= require_(verrs.empty(), "SIR verifier must pass on control-flow layout test");
+        ok &= require_(mod.funcs.size() >= 3, "expected at least 3 lowered functions");
+        if (!ok) return false;
+
+        auto check_entry_stmt_kinds = [&](size_t fi, std::vector<gaupel::sir::StmtKind> expected) {
+            if (fi >= mod.funcs.size()) return false;
+            const auto& fn = mod.funcs[fi];
+            if (fn.entry == gaupel::sir::k_invalid_block || (size_t)fn.entry >= mod.blocks.size()) return false;
+            const auto& b = mod.blocks[fn.entry];
+            if (b.stmt_count != expected.size()) return false;
+            for (uint32_t i = 0; i < b.stmt_count; ++i) {
+                const uint32_t sid = b.stmt_begin + i;
+                if ((size_t)sid >= mod.stmts.size()) return false;
+                if (mod.stmts[sid].kind != expected[i]) return false;
+            }
+            return true;
+        };
+
+        ok &= require_(
+            check_entry_stmt_kinds(0, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kWhileStmt, gaupel::sir::StmtKind::kReturn}),
+            "f1 entry block stmt order must be [VarDecl, WhileStmt, Return]"
+        );
+        ok &= require_(
+            check_entry_stmt_kinds(1, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kReturn}),
+            "f2 entry block stmt order must be [VarDecl, Return]"
+        );
+        ok &= require_(
+            check_entry_stmt_kinds(2, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kIfStmt}),
+            "f3 entry block stmt order must be [VarDecl, IfStmt]"
+        );
         return ok;
     }
 
@@ -294,6 +387,7 @@ int main() {
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
+        {"sir_control_flow_block_layout", test_sir_control_flow_block_layout},
         {"file_cases_directory", test_file_cases_directory},
     };
 

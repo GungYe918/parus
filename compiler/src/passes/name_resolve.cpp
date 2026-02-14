@@ -472,6 +472,34 @@ namespace gaupel::passes {
                 return;
             }
 
+            case ast::StmtKind::kFieldDecl: {
+                auto ins = declare_(sema::SymbolKind::kField, s.name, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (!ins.is_duplicate) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, ins.symbol_id, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+                return;
+            }
+
+            case ast::StmtKind::kActsDecl: {
+                auto ins = declare_(sema::SymbolKind::kAct, s.name, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (!ins.is_duplicate) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, ins.symbol_id, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+
+                ScopeGuard g(sym);
+                const auto& kids = ast.stmt_children();
+                const uint32_t begin = s.stmt_begin;
+                const uint32_t end = s.stmt_begin + s.stmt_count;
+                if (begin < r.stmt_children_count && end <= r.stmt_children_count) {
+                    for (uint32_t i = begin; i < end; ++i) {
+                        walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids);
+                    }
+                }
+                return;
+            }
+
             case ast::StmtKind::kSwitch: {
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
 

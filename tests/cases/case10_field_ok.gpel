@@ -1,0 +1,10 @@
+// 허용 케이스: field는 POD 값 타입 멤버를 가진다.
+field Vec2 {
+    i32 x;
+    u32 y;
+    f32 z;
+}
+
+fn main() -> i32 {
+    return 0i32;
+}

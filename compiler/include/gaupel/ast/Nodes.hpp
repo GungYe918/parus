@@ -86,6 +86,8 @@ namespace gaupel::ast {
 
         // decl-like
         kFnDecl,
+        kFieldDecl,
+        kActsDecl,
 
         // use
         kUse,
@@ -163,6 +165,12 @@ namespace gaupel::ast {
     };
 
     struct FfiField {
+        TypeId type = k_invalid_type;
+        std::string_view name{};
+        Span span{};
+    };
+
+    struct FieldMember {
         TypeId type = k_invalid_type;
         std::string_view name{};
         Span span{};
@@ -289,6 +297,10 @@ namespace gaupel::ast {
         uint32_t case_count = 0;
         bool has_default = false;
 
+        // ---- field decl ----
+        uint32_t field_member_begin = 0;
+        uint32_t field_member_count = 0;
+
         // ---- use ----
         UseKind use_kind = UseKind::kError;
 
@@ -335,6 +347,11 @@ namespace gaupel::ast {
             return (uint32_t)ffi_fields_.size() - 1;
         }
 
+        uint32_t add_field_member(const FieldMember& f) {
+            field_members_.push_back(f);
+            return (uint32_t)field_members_.size() - 1;
+        }
+
         std::string_view add_owned_string(std::string s) {
             owned_strings_.push_back(std::move(s));
             return owned_strings_.back();
@@ -374,6 +391,9 @@ namespace gaupel::ast {
         const std::vector<FfiField>& ffi_fields() const { return ffi_fields_; }
         std::vector<FfiField>& ffi_fields_mut() { return ffi_fields_; }
 
+        const std::vector<FieldMember>& field_members() const { return field_members_; }
+        std::vector<FieldMember>& field_members_mut() { return field_members_; }
+
         const std::vector<std::string_view>& path_segs() const { return path_segs_; }
         std::vector<std::string_view>& path_segs_mut() { return path_segs_; }
 
@@ -391,6 +411,7 @@ namespace gaupel::ast {
 
         std::vector<SwitchCase> switch_cases_;
         std::vector<FfiField> ffi_fields_;
+        std::vector<FieldMember> field_members_;
         std::vector<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;
 

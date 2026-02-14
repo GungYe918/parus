@@ -46,6 +46,8 @@ namespace gaupel::syntax {
         // ---- keywords (decl / control) ----
         kKwExport,
         kKwFn,
+        kKwField,
+        kKwActs,
         kKwClass,
         kKwSwitch,
         kKwCase,
@@ -149,6 +151,8 @@ namespace gaupel::syntax {
 
             case TokenKind::kKwFn: return "fn";
             case TokenKind::kKwExport: return "export";
+            case TokenKind::kKwField: return "field";
+            case TokenKind::kKwActs: return "acts";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
             case TokenKind::kKwIf:  return "if";

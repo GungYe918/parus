@@ -21,6 +21,7 @@ add_library(gaupel_compiler STATIC
     # SIR
     src/sir/mut_analysis.cpp
     src/sir/sir_builder.cpp
+    src/sir/sir_verify.cpp
 
     # OIR
     src/oir/oir_builder.cpp

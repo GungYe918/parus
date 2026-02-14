@@ -410,6 +410,30 @@ namespace gaupel::tyck {
                 continue;
             }
 
+            // ----------------------------
+            // top-level field decl
+            // ----------------------------
+            if (s.kind == ast::StmtKind::kFieldDecl) {
+                auto ins = sym_.insert(sema::SymbolKind::kField, s.name, ty::kInvalidType, s.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    err_(s.span, "duplicate symbol (field): " + std::string(s.name));
+                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                }
+                continue;
+            }
+
+            // ----------------------------
+            // top-level acts decl
+            // ----------------------------
+            if (s.kind == ast::StmtKind::kActsDecl) {
+                auto ins = sym_.insert(sema::SymbolKind::kAct, s.name, ty::kInvalidType, s.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    err_(s.span, "duplicate symbol (acts): " + std::string(s.name));
+                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                }
+                continue;
+            }
+
             // use / unknown / other: pass1에서는 스킵
         }
     }
@@ -437,6 +461,43 @@ namespace gaupel::tyck {
 
             default: return false;
         }
+    }
+
+    /// @brief field 멤버로 허용할 POD 값 내장 타입인지 판정한다.
+    bool TypeChecker::is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id) {
+        if (id == ty::kInvalidType) return false;
+        const auto& t = types.get(id);
+        if (t.kind != ty::Kind::kBuiltin) return false;
+
+        using B = ty::Builtin;
+        switch (t.builtin) {
+            case B::kBool:
+            case B::kChar:
+            case B::kI8:
+            case B::kI16:
+            case B::kI32:
+            case B::kI64:
+            case B::kI128:
+            case B::kU8:
+            case B::kU16:
+            case B::kU32:
+            case B::kU64:
+            case B::kU128:
+            case B::kISize:
+            case B::kUSize:
+            case B::kF32:
+            case B::kF64:
+            case B::kF128:
+                return true;
+
+            case B::kNull:
+            case B::kUnit:
+            case B::kNever:
+            case B::kInferInteger:
+                return false;
+        }
+
+        return false;
     }
 
     bool TypeChecker::infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const {
@@ -722,6 +783,14 @@ namespace gaupel::tyck {
 
             case ast::StmtKind::kFnDecl:
                 check_stmt_fn_decl_(s);
+                return;
+
+            case ast::StmtKind::kFieldDecl:
+                check_stmt_field_decl_(sid);
+                return;
+
+            case ast::StmtKind::kActsDecl:
+                check_stmt_acts_decl_(s);
                 return;
 
             case ast::StmtKind::kUse:
@@ -1142,6 +1211,68 @@ namespace gaupel::tyck {
         // 4) 종료
         // ----------------------------
         fn_ctx_ = saved;
+        sym_.pop_scope();
+    }
+
+    /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.
+    void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
+        const ast::Stmt& s = ast_.stmt(sid);
+
+        const uint32_t begin = s.field_member_begin;
+        const uint32_t end = s.field_member_begin + s.field_member_count;
+        if (begin >= ast_.field_members().size() || end > ast_.field_members().size()) {
+            diag_(diag::Code::kTypeErrorGeneric, s.span, "field member range is out of AST bounds");
+            err_(s.span, "invalid field member range");
+            return;
+        }
+
+        for (uint32_t i = begin; i < end; ++i) {
+            const auto& m = ast_.field_members()[i];
+            if (is_field_pod_value_type_(types_, m.type)) {
+                continue;
+            }
+
+            std::ostringstream oss;
+            oss << "field member '" << m.name
+                << "' must use a POD value builtin type (e.g., i32/u32/f32/bool/char), got "
+                << types_.to_string(m.type);
+            diag_(diag::Code::kTypeErrorGeneric, m.span, oss.str());
+            err_(m.span, oss.str());
+        }
+    }
+
+    /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
+    void TypeChecker::check_stmt_acts_decl_(const ast::Stmt& s) {
+        sym_.push_scope();
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = s.stmt_begin;
+        const uint32_t end = s.stmt_begin + s.stmt_count;
+
+        // acts 멤버 함수의 상호 참조를 위해 먼저 시그니처를 predeclare한다.
+        if (begin < kids.size() && end <= kids.size()) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const auto sid = kids[i];
+                if (sid == ast::k_invalid_stmt) continue;
+                const auto& member = ast_.stmt(sid);
+                if (member.kind != ast::StmtKind::kFnDecl) continue;
+
+                auto ins = sym_.insert(sema::SymbolKind::kFn, member.name, member.type, member.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    diag_(diag::Code::kDuplicateDecl, member.span, member.name);
+                    err_(member.span, "duplicate acts member function name");
+                }
+            }
+
+            for (uint32_t i = begin; i < end; ++i) {
+                const auto sid = kids[i];
+                if (sid == ast::k_invalid_stmt) continue;
+                const auto& member = ast_.stmt(sid);
+                if (member.kind != ast::StmtKind::kFnDecl) continue;
+                check_stmt_fn_decl_(member);
+            }
+        }
+
         sym_.pop_scope();
     }
 

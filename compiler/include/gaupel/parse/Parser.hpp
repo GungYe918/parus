@@ -59,7 +59,7 @@ namespace gaupel {
         //  중단 상태인지 확인
         bool is_aborted() const { return aborted_; }
 
-        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export, fn)
+        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export, fn, field, acts)
         bool is_decl_start(syntax::TokenKind k) const;
 
         bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
@@ -164,6 +164,12 @@ namespace gaupel {
 
         //  함수 선언(스펙 6.1)을 파싱
         ast::StmtId parse_decl_fn();
+
+        //  field 선언 파싱
+        ast::StmtId parse_decl_field();
+
+        //  acts 선언 파싱 (v0: 일반 acts A { ... }만 지원)
+        ast::StmtId parse_decl_acts();
 
         // use구문 파싱
         ast::StmtId parse_decl_use();

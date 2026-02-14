@@ -31,6 +31,8 @@ namespace gaupel::passes {
 
             const bool ok =
                 (s.kind == ast::StmtKind::kFnDecl) ||
+                (s.kind == ast::StmtKind::kFieldDecl) ||
+                (s.kind == ast::StmtKind::kActsDecl) ||
                 (s.kind == ast::StmtKind::kUse);
 
             if (!ok) {
@@ -41,4 +43,3 @@ namespace gaupel::passes {
     }
 
 }
-

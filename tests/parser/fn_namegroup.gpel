@@ -17,8 +17,9 @@ fn mul({ a: i32, b: i32 }) -> i32 {
     return a * b;
 }
 
-fn div(a: i32, b: i32, { rounding: i32 = 0, bias: i32 }) -> i32 {
-    // bias는 필수(named group, default 없음) → 호출에서 반드시 제공
+@comptime
+export fn div(a: i32, b: i32, { rounding: i32 = 0, bias: i32 }) -> i32 {
+    // bias는 필수(named group, default 없음) -> 호출에서 반드시 제공
     return a / b + rounding + bias;
 }
 

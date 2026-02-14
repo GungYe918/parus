@@ -82,6 +82,8 @@ namespace gaupel::tyck {
         void check_stmt_return_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
         void check_stmt_fn_decl_(const ast::Stmt& s);
+        void check_stmt_field_decl_(ast::StmtId sid);
+        void check_stmt_acts_decl_(const ast::Stmt& s);
 
         // expr
         ty::TypeId check_expr_(ast::ExprId eid);
@@ -187,6 +189,7 @@ namespace gaupel::tyck {
         bool resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected);
         bool infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const;
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
+        static bool is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id);
 
         // ----------------------------------------
         // Mut tracking (tyck-level)

@@ -1,0 +1,8 @@
+// 비허용 케이스: field 멤버에 optional 타입(i32?)은 금지한다.
+field BadOptional {
+    i32? maybe;
+}
+
+fn main() -> i32 {
+    return 0i32;
+}

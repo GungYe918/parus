@@ -2,6 +2,7 @@
 #include <string_view>
 #include <vector>
 #include <optional>
+#include <queue>
 
 #include "gaupel/Version.hpp"
 #include "gaupel/lex/Lexer.hpp"
@@ -22,6 +23,7 @@
 #include "gaupel/sir/SIR.hpp"
 #include "gaupel/sir/Builder.hpp"
 #include "gaupel/sir/MutAnalysis.hpp"
+#include "gaupel/sir/Verify.hpp"
 
 // OIR
 #include "gaupel/oir/OIR.hpp"
@@ -200,6 +202,190 @@ static const char* ast_cast_kind_name(gaupel::ast::CastKind k) {
     return "as(?)";
 }
 
+static void collect_sir_blocks_from_value_(
+    const gaupel::sir::Module& m,
+    gaupel::sir::ValueId root,
+    std::vector<uint8_t>& seen_values,
+    std::vector<uint8_t>& queued_blocks,
+    std::queue<gaupel::sir::BlockId>& q
+) {
+    using namespace gaupel::sir;
+    if (root == k_invalid_value || (size_t)root >= m.values.size()) return;
+    if (seen_values[root]) return;
+    seen_values[root] = 1;
+
+    auto push_block = [&](BlockId bid) {
+        if (bid == k_invalid_block || (size_t)bid >= m.blocks.size()) return;
+        if (queued_blocks[bid]) return;
+        queued_blocks[bid] = 1;
+        q.push(bid);
+    };
+    auto push_value = [&](ValueId vid) {
+        collect_sir_blocks_from_value_(m, vid, seen_values, queued_blocks, q);
+    };
+
+    const auto& v = m.values[root];
+    switch (v.kind) {
+        case ValueKind::kUnary:
+        case ValueKind::kPostfixInc:
+        case ValueKind::kCast:
+            push_value(v.a);
+            break;
+
+        case ValueKind::kBinary:
+        case ValueKind::kAssign:
+        case ValueKind::kIndex:
+            push_value(v.a);
+            push_value(v.b);
+            break;
+
+        case ValueKind::kIfExpr:
+            push_value(v.a);
+            push_value(v.b);
+            push_value(v.c);
+            break;
+
+        case ValueKind::kLoopExpr:
+            push_value(v.a);
+            push_block((BlockId)v.b);
+            break;
+
+        case ValueKind::kBlockExpr:
+            push_block((BlockId)v.a);
+            push_value(v.b);
+            break;
+
+        case ValueKind::kCall:
+            push_value(v.a);
+            if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
+                for (uint32_t i = 0; i < v.arg_count; ++i) {
+                    const auto& a = m.args[v.arg_begin + i];
+                    if (a.kind == ArgKind::kNamedGroup) {
+                        if ((uint64_t)a.child_begin + (uint64_t)a.child_count <= (uint64_t)m.args.size()) {
+                            for (uint32_t j = 0; j < a.child_count; ++j) {
+                                push_value(m.args[a.child_begin + j].value);
+                            }
+                        }
+                    } else {
+                        push_value(a.value);
+                    }
+                }
+            }
+            break;
+
+        default:
+            break;
+    }
+}
+
+static void collect_sir_blocks_from_stmt_(
+    const gaupel::sir::Module& m,
+    const gaupel::sir::Stmt& s,
+    std::vector<uint8_t>& seen_values,
+    std::vector<uint8_t>& queued_blocks,
+    std::queue<gaupel::sir::BlockId>& q
+) {
+    using namespace gaupel::sir;
+    auto push_block = [&](BlockId bid) {
+        if (bid == k_invalid_block || (size_t)bid >= m.blocks.size()) return;
+        if (queued_blocks[bid]) return;
+        queued_blocks[bid] = 1;
+        q.push(bid);
+    };
+
+    switch (s.kind) {
+        case StmtKind::kExprStmt:
+            collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+            break;
+
+        case StmtKind::kVarDecl:
+            collect_sir_blocks_from_value_(m, s.init, seen_values, queued_blocks, q);
+            break;
+
+        case StmtKind::kIfStmt:
+            collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+            push_block(s.a);
+            push_block(s.b);
+            break;
+
+        case StmtKind::kWhileStmt:
+            collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+            push_block(s.a);
+            break;
+
+        case StmtKind::kReturn:
+        case StmtKind::kBreak:
+            collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+            break;
+
+        default:
+            break;
+    }
+}
+
+static std::vector<gaupel::sir::BlockId> collect_reachable_sir_blocks_(
+    const gaupel::sir::Module& m,
+    gaupel::sir::BlockId entry
+) {
+    using namespace gaupel::sir;
+    std::vector<BlockId> out;
+    if (entry == k_invalid_block || (size_t)entry >= m.blocks.size()) return out;
+
+    std::vector<uint8_t> seen_blocks(m.blocks.size(), 0);
+    std::vector<uint8_t> queued_blocks(m.blocks.size(), 0);
+    std::vector<uint8_t> seen_values(m.values.size(), 0);
+    std::queue<BlockId> q;
+
+    q.push(entry);
+    queued_blocks[entry] = 1;
+
+    while (!q.empty()) {
+        const BlockId bid = q.front();
+        q.pop();
+        if (seen_blocks[bid]) continue;
+        seen_blocks[bid] = 1;
+        out.push_back(bid);
+
+        const auto& b = m.blocks[bid];
+        for (uint32_t i = 0; i < b.stmt_count; ++i) {
+            const uint32_t sid = b.stmt_begin + i;
+            if ((size_t)sid >= m.stmts.size()) break;
+            collect_sir_blocks_from_stmt_(m, m.stmts[sid], seen_values, queued_blocks, q);
+        }
+    }
+
+    return out;
+}
+
+static void dump_one_sir_stmt_(
+    const gaupel::sir::Module& m,
+    const gaupel::ty::TypePool& types,
+    uint32_t sid,
+    const gaupel::sir::Stmt& s
+) {
+    using namespace gaupel::sir;
+    std::cout << "      stmt #" << sid
+              << " " << sir_stmt_kind_name(s.kind);
+
+    if (s.kind == StmtKind::kVarDecl) {
+        std::cout << " name=" << s.name
+                  << " sym=" << s.sym
+                  << " mut=" << (s.is_mut ? "true" : "false")
+                  << " set=" << (s.is_set ? "true" : "false")
+                  << " decl_ty=" << types.to_string(s.declared_type) << " <id " << (uint32_t)s.declared_type << ">"
+                  << " init=" << s.init;
+    } else {
+        if (s.expr != k_invalid_value) std::cout << " expr=" << s.expr;
+        if (s.a != k_invalid_block) std::cout << " a=" << s.a;
+        if (s.b != k_invalid_block) std::cout << " b=" << s.b;
+    }
+
+    std::cout << " span=[" << s.span.lo << "," << s.span.hi << ")";
+    std::cout << "\n";
+
+    (void)m;
+}
+
 static void dump_sir_module(const gaupel::sir::Module& m, const gaupel::ty::TypePool& types) {
     using namespace gaupel;
 
@@ -209,9 +395,49 @@ static void dump_sir_module(const gaupel::sir::Module& m, const gaupel::ty::Type
               << " stmts=" << m.stmts.size()
               << " values=" << m.values.size()
               << " args=" << m.args.size()
+              << " params=" << m.params.size()
+              << " attrs=" << m.attrs.size()
+              << " fields=" << m.fields.size()
+              << " field_members=" << m.field_members.size()
+              << " acts=" << m.acts.size()
               << "\n";
 
-    // funcs
+    if (!m.fields.empty()) {
+        std::cout << "\n  fields:\n";
+        for (size_t fi = 0; fi < m.fields.size(); ++fi) {
+            const auto& f = m.fields[fi];
+            std::cout << "    field #" << fi
+                      << " name=" << f.name
+                      << " sym=" << f.sym
+                      << " export=" << (f.is_export ? "true" : "false")
+                      << " members=" << f.member_count
+                      << "\n";
+
+            for (uint32_t i = 0; i < f.member_count; ++i) {
+                const uint32_t mid = f.member_begin + i;
+                if ((size_t)mid >= m.field_members.size()) break;
+                const auto& mem = m.field_members[mid];
+                std::cout << "      member#" << mid
+                          << " " << mem.name
+                          << ": " << types.to_string(mem.type) << " <id " << (uint32_t)mem.type << ">"
+                          << "\n";
+            }
+        }
+    }
+
+    if (!m.acts.empty()) {
+        std::cout << "\n  acts:\n";
+        for (size_t ai = 0; ai < m.acts.size(); ++ai) {
+            const auto& a = m.acts[ai];
+            std::cout << "    acts #" << ai
+                      << " name=" << a.name
+                      << " sym=" << a.sym
+                      << " export=" << (a.is_export ? "true" : "false")
+                      << " funcs=" << a.func_count
+                      << "\n";
+        }
+    }
+
     for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
         const auto& f = m.funcs[fi];
 
@@ -220,45 +446,71 @@ static void dump_sir_module(const gaupel::sir::Module& m, const gaupel::ty::Type
                   << " sym=" << f.sym
                   << " entry=" << f.entry
                   << " has_any_write=" << (f.has_any_write ? "true" : "false")
+                  << " acts_member=" << (f.is_acts_member ? "true" : "false")
+                  << " owner_acts=" << f.owner_acts
                   << "\n";
 
         std::cout << "    sig=" << types.to_string(f.sig) << " <id " << (uint32_t)f.sig << ">\n";
         std::cout << "    ret=" << types.to_string(f.ret) << " <id " << (uint32_t)f.ret << ">\n";
 
-        // blocks + statements (v0: entry block only)
-        if (f.entry != sir::k_invalid_block && (size_t)f.entry < m.blocks.size()) {
-            const auto& b = m.blocks[f.entry];
-            std::cout << "    block #" << f.entry
+        std::cout << "    attrs (" << f.attr_count << "):\n";
+        for (uint32_t i = 0; i < f.attr_count; ++i) {
+            const uint32_t aid = f.attr_begin + i;
+            if ((size_t)aid >= m.attrs.size()) break;
+            std::cout << "      @" << m.attrs[aid].name << " (aid=" << aid << ")\n";
+        }
+
+        std::cout << "    params (" << f.param_count << "):\n";
+        for (uint32_t i = 0; i < f.param_count; ++i) {
+            const uint32_t pid = f.param_begin + i;
+            if ((size_t)pid >= m.params.size()) break;
+            const auto& p = m.params[pid];
+            std::cout << "      p#" << pid
+                      << " name=" << p.name
+                      << " sym=" << p.sym
+                      << " ty=" << types.to_string(p.type) << " <id " << (uint32_t)p.type << ">"
+                      << " mut=" << (p.is_mut ? "true" : "false")
+                      << " named_group=" << (p.is_named_group ? "true" : "false")
+                      << " default=" << (p.has_default ? "yes" : "no");
+            if (p.has_default) std::cout << " default_value=" << p.default_value;
+            std::cout << "\n";
+        }
+
+        const auto reachable = collect_reachable_sir_blocks_(m, f.entry);
+        std::cout << "    reachable_blocks=" << reachable.size() << "\n";
+        for (auto bid : reachable) {
+            if ((size_t)bid >= m.blocks.size()) continue;
+            const auto& b = m.blocks[bid];
+            std::cout << "    block #" << bid
                       << " stmt_begin=" << b.stmt_begin
                       << " stmt_count=" << b.stmt_count
-                      << "\n";
-
+                      << " span=[" << b.span.lo << "," << b.span.hi << ")\n";
             for (uint32_t i = 0; i < b.stmt_count; ++i) {
                 const uint32_t sid = b.stmt_begin + i;
                 if ((size_t)sid >= m.stmts.size()) break;
-
-                const auto& s = m.stmts[sid];
-                std::cout << "      stmt #" << sid
-                          << " " << sir_stmt_kind_name(s.kind);
-
-                if (s.kind == sir::StmtKind::kVarDecl) {
-                    std::cout << " name=" << s.name
-                              << " sym=" << s.sym
-                              << " mut=" << (s.is_mut ? "true" : "false")
-                              << " set=" << (s.is_set ? "true" : "false")
-                              << " decl_ty=" << types.to_string(s.declared_type) << " <id " << (uint32_t)s.declared_type << ">"
-                              << " init=" << s.init;
-                } else {
-                    if (s.expr != sir::k_invalid_value) std::cout << " expr=" << s.expr;
-                    if (s.a != sir::k_invalid_block) std::cout << " a=" << s.a;
-                    if (s.b != sir::k_invalid_block) std::cout << " b=" << s.b;
-                }
-                std::cout << "\n";
+                dump_one_sir_stmt_(m, types, sid, m.stmts[sid]);
             }
         }
     }
 
-    // values
+    std::cout << "\n  args:\n";
+    for (size_t ai = 0; ai < m.args.size(); ++ai) {
+        const auto& a = m.args[ai];
+        std::cout << "    arg#" << ai
+                  << " kind=" << (a.kind == sir::ArgKind::kPositional ? "positional"
+                                   : a.kind == sir::ArgKind::kLabeled ? "labeled" : "named_group")
+                  << " label=";
+        if (a.has_label) std::cout << a.label;
+        else std::cout << "<none>";
+        std::cout << " hole=" << (a.is_hole ? "true" : "false")
+                  << " value=" << a.value;
+        if (a.kind == sir::ArgKind::kNamedGroup) {
+            std::cout << " child_begin=" << a.child_begin
+                      << " child_count=" << a.child_count;
+        }
+        std::cout << "\n";
+    }
+
     std::cout << "\n  values:\n";
     for (size_t vi = 0; vi < m.values.size(); ++vi) {
         const auto& v = m.values[vi];
@@ -276,6 +528,12 @@ static void dump_sir_module(const gaupel::sir::Module& m, const gaupel::ty::Type
         if (v.kind == sir::ValueKind::kCall) {
             std::cout << " arg_begin=" << v.arg_begin
                       << " arg_count=" << v.arg_count;
+        }
+        if (v.kind == sir::ValueKind::kLoopExpr) {
+            std::cout << " loop_body_block=" << (gaupel::sir::BlockId)v.b;
+        }
+        if (v.kind == sir::ValueKind::kBlockExpr) {
+            std::cout << " block_id=" << (gaupel::sir::BlockId)v.a;
         }
 
         if (v.kind == sir::ValueKind::kCast) {
@@ -444,6 +702,8 @@ static const char* stmt_kind_name(gaupel::ast::StmtKind k) {
         case K::kBreak: return "Break";
         case K::kContinue: return "Continue";
         case K::kFnDecl: return "FnDecl";
+        case K::kFieldDecl: return "FieldDecl";
+        case K::kActsDecl: return "ActsDecl";
         case K::kSwitch: return "Switch";
         case K::kError: return "Error";
     }
@@ -763,6 +1023,29 @@ static void dump_stmt(const gaupel::ast::AstArena& ast, const gaupel::ty::TypePo
             dump_fn_decl(ast, types, s, indent);
             break;
 
+        case gaupel::ast::StmtKind::kFieldDecl: {
+            const uint32_t begin = s.field_member_begin;
+            const uint32_t end = s.field_member_begin + s.field_member_count;
+            if (begin < ast.field_members().size() && end <= ast.field_members().size()) {
+                for (uint32_t i = begin; i < end; ++i) {
+                    const auto& m = ast.field_members()[i];
+                    for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
+                    std::cout << "member " << m.name << ": ";
+                    dump_type(types, m.type);
+                    std::cout << " span=[" << m.span.lo << "," << m.span.hi << ")\n";
+                }
+            }
+            break;
+        }
+
+        case gaupel::ast::StmtKind::kActsDecl: {
+            const auto& kids = ast.stmt_children();
+            for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                dump_stmt(ast, types, kids[s.stmt_begin + i], indent + 1);
+            }
+            break;
+        }
+
         default:
             break;
     }
@@ -887,6 +1170,7 @@ static int run_all(
 
     // SIR BUILD + MUT ANALYSIS
     gaupel::sir::Module sir_mod;
+    bool sir_verify_ok = true;
     {
         gaupel::sir::BuildOptions bopt{};
         sir_mod = gaupel::sir::build_sir_module(
@@ -900,6 +1184,18 @@ static int run_all(
         );
 
         dump_sir_module(sir_mod, types);
+
+        const auto sir_verrs = gaupel::sir::verify_module(sir_mod);
+        std::cout << "\nSIR VERIFY:\n";
+        if (sir_verrs.empty()) {
+            std::cout << "verify ok.\n";
+        } else {
+            sir_verify_ok = false;
+            std::cout << "verify errors: " << sir_verrs.size() << "\n";
+            for (const auto& e : sir_verrs) {
+                std::cout << "  - " << e.msg << "\n";
+            }
+        }
 
         auto mut = gaupel::sir::analyze_mut(sir_mod, bag);
         std::cout << "\nMUT:\n";
@@ -924,6 +1220,7 @@ static int run_all(
     }
 
     int diag_rc = flush_diags(bag, lang, sm, context_lines);
+    if (!sir_verify_ok) return 1;
     return diag_rc;
 }
 

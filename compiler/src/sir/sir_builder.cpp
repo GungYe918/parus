@@ -114,6 +114,74 @@ namespace gaupel::sir {
         }
     }
 
+    static EffectClass join_effect_(EffectClass a, EffectClass b) {
+        auto rank = [](EffectClass e) -> int {
+            switch (e) {
+                case EffectClass::kPure: return 0;
+                case EffectClass::kMayWrite: return 1;
+                case EffectClass::kUnknown: return 2;
+            }
+            return 2;
+        };
+        return (rank(a) >= rank(b)) ? a : b;
+    }
+
+    static EffectClass effect_of_block_(const Module& m, BlockId bid);
+
+    static EffectClass effect_of_stmt_(const Module& m, const Stmt& s) {
+        EffectClass eff = EffectClass::kPure;
+
+        auto join_value = [&](ValueId vid) {
+            if (vid != k_invalid_value && (size_t)vid < m.values.size()) {
+                eff = join_effect_(eff, m.values[vid].effect);
+            }
+        };
+        auto join_block = [&](BlockId blk) {
+            eff = join_effect_(eff, effect_of_block_(m, blk));
+        };
+
+        switch (s.kind) {
+            case StmtKind::kExprStmt:
+            case StmtKind::kReturn:
+            case StmtKind::kBreak:
+                join_value(s.expr);
+                break;
+
+            case StmtKind::kVarDecl:
+                join_value(s.init);
+                break;
+
+            case StmtKind::kIfStmt:
+                join_value(s.expr);
+                if (s.a != k_invalid_block) join_block(s.a);
+                if (s.b != k_invalid_block) join_block(s.b);
+                break;
+
+            case StmtKind::kWhileStmt:
+                join_value(s.expr);
+                if (s.a != k_invalid_block) join_block(s.a);
+                break;
+
+            default:
+                break;
+        }
+
+        return eff;
+    }
+
+    static EffectClass effect_of_block_(const Module& m, BlockId bid) {
+        if (bid == k_invalid_block || (size_t)bid >= m.blocks.size()) return EffectClass::kPure;
+        const auto& b = m.blocks[bid];
+
+        EffectClass eff = EffectClass::kPure;
+        for (uint32_t i = 0; i < b.stmt_count; ++i) {
+            const uint32_t sid = b.stmt_begin + i;
+            if ((size_t)sid >= m.stmts.size()) break;
+            eff = join_effect_(eff, effect_of_stmt_(m, m.stmts[sid]));
+        }
+        return eff;
+    }
+
     // forward decl
     static ValueId lower_expr(
         Module& m,
@@ -125,7 +193,7 @@ namespace gaupel::sir {
         gaupel::ast::ExprId eid
     );
 
-    static uint32_t lower_stmt_into_block(
+    static Stmt lower_stmt_(
         Module& m,
         bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
@@ -145,18 +213,25 @@ namespace gaupel::sir {
         gaupel::ast::StmtId block_sid
     ) {
         const auto& bs = ast.stmt(block_sid);
+        if (bs.kind != gaupel::ast::StmtKind::kBlock) {
+            return k_invalid_block;
+        }
 
         Block b{};
         b.span = bs.span;
         b.stmt_begin = (uint32_t)m.stmts.size();
-        b.stmt_count = 0;
+        b.stmt_count = bs.stmt_count;
 
         BlockId bid = m.add_block(b);
 
+        // Reserve fixed contiguous slots for this block's direct statements.
+        // Nested blocks lower into slots appended after this reserved range.
+        m.stmts.resize((size_t)m.blocks[bid].stmt_begin + (size_t)m.blocks[bid].stmt_count);
+
         for (uint32_t i = 0; i < bs.stmt_count; ++i) {
             const auto child = ast.stmt_children()[bs.stmt_begin + i];
-            (void)lower_stmt_into_block(m, out_has_any_write, ast, sym, nres, tyck, child);
-            m.blocks[bid].stmt_count++;
+            m.stmts[m.blocks[bid].stmt_begin + i] =
+                lower_stmt_(m, out_has_any_write, ast, sym, nres, tyck, child);
         }
 
         return bid;
@@ -209,7 +284,13 @@ namespace gaupel::sir {
         }
 
         bv.place = PlaceClass::kNotPlace;
-        bv.effect = EffectClass::kPure; // the block may contain effects, but SIR value itself is structural
+        bv.effect = effect_of_block_(m, bid);
+        if (bv.b != k_invalid_value && (size_t)bv.b < m.values.size()) {
+            bv.effect = join_effect_(bv.effect, m.values[bv.b].effect);
+        }
+        if (bv.effect == EffectClass::kMayWrite) {
+            out_has_any_write = true;
+        }
         return m.add_value(bv);
     }
 
@@ -517,6 +598,46 @@ namespace gaupel::sir {
 
         v.place = classify_place_from_ast(ast, eid);
         v.effect = classify_effect(v.kind);
+        auto join_child = [&](ValueId cid) {
+            if (cid != k_invalid_value && (size_t)cid < m.values.size()) {
+                v.effect = join_effect_(v.effect, m.values[cid].effect);
+            }
+        };
+
+        switch (v.kind) {
+            case ValueKind::kUnary:
+            case ValueKind::kPostfixInc:
+            case ValueKind::kCast:
+                join_child(v.a);
+                break;
+
+            case ValueKind::kBinary:
+            case ValueKind::kAssign:
+            case ValueKind::kIndex:
+                join_child(v.a);
+                join_child(v.b);
+                break;
+
+            case ValueKind::kIfExpr:
+                join_child(v.a);
+                join_child(v.b);
+                join_child(v.c);
+                break;
+
+            case ValueKind::kCall:
+                join_child(v.a);
+                break;
+
+            case ValueKind::kLoopExpr: {
+                join_child(v.a);
+                const BlockId body = (BlockId)v.b;
+                v.effect = join_effect_(v.effect, effect_of_block_(m, body));
+                break;
+            }
+
+            default:
+                break;
+        }
 
         if (v.effect == EffectClass::kMayWrite) {
             out_has_any_write = true;
@@ -524,8 +645,8 @@ namespace gaupel::sir {
 
         return m.add_value(v);
     }
-        
-    static uint32_t lower_stmt_into_block(
+
+    static Stmt lower_stmt_(
         Module& m,
         bool& out_has_any_write,
         const gaupel::ast::AstArena& ast,
@@ -603,14 +724,18 @@ namespace gaupel::sir {
                 out.kind = StmtKind::kContinue;
                 break;
 
+            case gaupel::ast::StmtKind::kBlock:
+                out.kind = StmtKind::kExprStmt;
+                out.expr = lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck, sid,
+                                            gaupel::ast::k_invalid_expr, s.span, k_invalid_type);
+                break;
+
             default:
                 out.kind = StmtKind::kError;
                 break;
         }
 
-        // statement-level write hint
-        // (var decl itself is not necessarily a write; init may have write)
-        return m.add_stmt(out);
+        return out;
     }
 
     static FnMode lower_fn_mode(gaupel::ast::FnMode m) {
@@ -620,6 +745,135 @@ namespace gaupel::sir {
             case gaupel::ast::FnMode::kNone:
             default: return FnMode::kNone;
         }
+    }
+
+    /// @brief AST 함수 선언 1개를 SIR Func로 lower하여 모듈에 추가한다.
+    static FuncId lower_func_decl_(
+        Module& m,
+        const gaupel::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        gaupel::ast::StmtId sid,
+        bool is_acts_member,
+        ActsId owner_acts
+    ) {
+        const auto& s = ast.stmt(sid);
+        if (s.kind != ast::StmtKind::kFnDecl) {
+            return k_invalid_func;
+        }
+
+        Func f{};
+        f.span = s.span;
+        f.name = s.name;
+
+        // signature & ret
+        f.sig = s.type;
+        f.ret = s.fn_ret;
+
+        // decl symbol (fn name)
+        f.sym = resolve_symbol_from_stmt(nres, sid);
+
+        // qualifiers / mode
+        f.is_export = s.is_export;
+        f.fn_mode = lower_fn_mode(s.fn_mode);
+
+        f.is_pure = s.is_pure;
+        f.is_comptime = s.is_comptime;
+        f.is_commit = s.is_commit;
+        f.is_recast = s.is_recast;
+        f.is_throwing = s.is_throwing;
+
+        f.positional_param_count = s.positional_param_count;
+        f.has_named_group = s.has_named_group;
+        f.is_acts_member = is_acts_member;
+        f.owner_acts = owner_acts;
+
+        // attrs slice
+        f.attr_begin = (uint32_t)m.attrs.size();
+        f.attr_count = 0;
+        for (uint32_t ai = 0; ai < s.attr_count; ++ai) {
+            const auto& aa = ast.fn_attrs()[s.attr_begin + ai];
+            Attr sa{};
+            sa.name = aa.name;
+            sa.span = aa.span;
+            m.add_attr(sa);
+            f.attr_count++;
+        }
+
+        // params slice
+        f.param_begin = (uint32_t)m.params.size();
+        f.param_count = 0;
+
+        bool has_any_write = false;
+        for (uint32_t pi = 0; pi < s.param_count; ++pi) {
+            const uint32_t param_index = s.param_begin + pi;
+            const auto& p = ast.params()[param_index];
+
+            Param sp{};
+            sp.name = p.name;
+            sp.type = p.type;
+            sp.is_mut = p.is_mut;
+            sp.is_named_group = p.is_named_group;
+            sp.span = p.span;
+
+            sp.has_default = p.has_default;
+            if (p.has_default && p.default_expr != ast::k_invalid_expr) {
+                sp.default_value = lower_expr(m, has_any_write, ast, sym, nres, tyck, p.default_expr);
+            }
+
+            // param SymbolId binding
+            sp.sym = resolve_symbol_from_param_index(nres, param_index);
+
+            m.add_param(sp);
+            f.param_count++;
+        }
+
+        // body
+        if (s.a != ast::k_invalid_stmt) {
+            f.entry = lower_block_stmt(m, has_any_write, ast, sym, nres, tyck, s.a);
+        }
+
+        f.has_any_write = has_any_write;
+        return m.add_func(f);
+    }
+
+    /// @brief AST field 선언을 SIR field 메타로 lower한다.
+    static FieldId lower_field_decl_(
+        Module& m,
+        const gaupel::ast::AstArena& ast,
+        const passes::NameResolveResult& nres,
+        gaupel::ast::StmtId sid
+    ) {
+        const auto& s = ast.stmt(sid);
+        if (s.kind != ast::StmtKind::kFieldDecl) {
+            return k_invalid_field;
+        }
+
+        FieldDecl f{};
+        f.span = s.span;
+        f.name = s.name;
+        f.is_export = s.is_export;
+        f.sym = resolve_symbol_from_stmt(nres, sid);
+
+        f.member_begin = (uint32_t)m.field_members.size();
+        f.member_count = 0;
+
+        const uint32_t begin = s.field_member_begin;
+        const uint32_t end = s.field_member_begin + s.field_member_count;
+        if (begin < ast.field_members().size() && end <= ast.field_members().size()) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const auto& am = ast.field_members()[i];
+                FieldMember sm{};
+                sm.name = am.name;
+                sm.type = am.type;
+                sm.span = am.span;
+                m.add_field_member(sm);
+                f.member_count++;
+            }
+        }
+
+        return m.add_field(f);
     }
 
     Module build_sir_module(
@@ -638,91 +892,57 @@ namespace gaupel::sir {
         Module m{};
 
         // program root must be a block
+        if (program_root == ast::k_invalid_stmt || (size_t)program_root >= ast.stmts().size()) {
+            return m;
+        }
         const auto& prog = ast.stmt(program_root);
+        if (prog.kind != ast::StmtKind::kBlock) {
+            return m;
+        }
 
         for (uint32_t i = 0; i < prog.stmt_count; ++i) {
             const auto sid = ast.stmt_children()[prog.stmt_begin + i];
             const auto& s = ast.stmt(sid);
 
-            if (s.kind != ast::StmtKind::kFnDecl) {
+            if (s.kind == ast::StmtKind::kFnDecl) {
+                (void)lower_func_decl_(m, ast, sym, nres, tyck, sid, /*is_acts_member=*/false, k_invalid_acts);
                 continue;
             }
 
-            Func f{};
-            f.span = s.span;
-            f.name = s.name;
-            
-            // signature & ret
-            f.sig = s.type;        // now guaranteed fn type
-            f.ret = s.fn_ret;      // exact syntactic return type
-
-            // decl symbol (fn name)
-            f.sym = resolve_symbol_from_stmt(nres, sid);
-
-            // --- qualifiers / mode (fn decl까지 보존) ---
-            f.is_export = s.is_export;
-            f.fn_mode = lower_fn_mode(s.fn_mode);
-
-            f.is_pure = s.is_pure;
-            f.is_comptime = s.is_comptime;
-
-            f.is_commit = s.is_commit;
-            f.is_recast = s.is_recast;
-
-            f.is_throwing = s.is_throwing;
-
-            f.positional_param_count = s.positional_param_count;
-            f.has_named_group = s.has_named_group;
-
-            // --- attrs slice ---
-            f.attr_begin = (uint32_t)m.attrs.size();
-            f.attr_count = 0;
-            for (uint32_t ai = 0; ai < s.attr_count; ++ai) {
-                const auto& aa = ast.fn_attrs()[s.attr_begin + ai];
-                Attr sa{};
-                sa.name = aa.name;
-                sa.span = aa.span;
-                m.add_attr(sa);
-                f.attr_count++;
+            if (s.kind == ast::StmtKind::kFieldDecl) {
+                (void)lower_field_decl_(m, ast, nres, sid);
+                continue;
             }
 
-            // --- params slice ---
-            f.param_begin = (uint32_t)m.params.size();
-            f.param_count = 0;
+            if (s.kind == ast::StmtKind::kActsDecl) {
+                ActsDecl a{};
+                a.span = s.span;
+                a.name = s.name;
+                a.sym = resolve_symbol_from_stmt(nres, sid);
+                a.is_export = s.is_export;
+                a.func_begin = (uint32_t)m.funcs.size();
+                a.func_count = 0;
 
-            bool has_any_write = false;
+                const ActsId aid = m.add_acts(a);
 
-            for (uint32_t pi = 0; pi < s.param_count; ++pi) {
-                const uint32_t param_index = s.param_begin + pi;
-                const auto& p = ast.params()[param_index];
+                const uint32_t begin = s.stmt_begin;
+                const uint32_t end = s.stmt_begin + s.stmt_count;
+                const auto& kids = ast.stmt_children();
+                if (begin < kids.size() && end <= kids.size()) {
+                    for (uint32_t k = begin; k < end; ++k) {
+                        const auto member_sid = kids[k];
+                        if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
+                        if (ast.stmt(member_sid).kind != ast::StmtKind::kFnDecl) continue;
 
-                Param sp{};
-                sp.name = p.name;
-                sp.type = p.type;
-                sp.is_mut = p.is_mut; 
-                sp.is_named_group = p.is_named_group;
-                sp.span = p.span;
-
-                sp.has_default = p.has_default;
-                if (p.has_default && p.default_expr != ast::k_invalid_expr) {
-                    sp.default_value = lower_expr(m, has_any_write, ast, sym, nres, tyck, p.default_expr);
+                        const FuncId fid = lower_func_decl_(m, ast, sym, nres, tyck, member_sid,
+                                                            /*is_acts_member=*/true, aid);
+                        if (fid != k_invalid_func) {
+                            m.acts[aid].func_count++;
+                        }
+                    }
                 }
-
-                // param SymbolId binding: now fixed via param_to_resolved table
-                sp.sym = resolve_symbol_from_param_index(nres, param_index);
-
-                m.add_param(sp);
-                f.param_count++;
+                continue;
             }
-
-            // --- body ---
-            if (s.a != ast::k_invalid_stmt) {
-                f.entry = lower_block_stmt(m, has_any_write, ast, sym, nres, tyck, s.a);
-            }
-
-            f.has_any_write = has_any_write;
-
-            m.add_func(f);
         }
 
         return m;

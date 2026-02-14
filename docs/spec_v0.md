@@ -983,8 +983,8 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 fn g(a: int) -> int { return 1; }
 fn g(a: int, b: int = 0) -> int { return 2; }
 
-set x = g(1);      // (기본값 채우기 없이) g(a:int) 가 정확매칭 → 1
-set y = g(1, 2);   // g(a:int, b:int=0) → 2
+set x = g(1);      // (기본값 채우기 없이) g(a:int) 가 정확매칭 -> 1
+set y = g(1, 2);   // g(a:int, b:int=0) -> 2
 ```
 
 #### 2) named group은 완전히 별도 구역이라 충돌이 줄어듦(권장)
@@ -993,8 +993,8 @@ set y = g(1, 2);   // g(a:int, b:int=0) → 2
 fn h(a: int) -> int { return 10; }
 fn h(a: int, {b: int = 0}) -> int { return 20; }
 
-set p = h(1);           // h(a:int) 정확매칭 → 10
-set q = h(1, {b: 2});   // named-group 버전 → 20
+set p = h(1);           // h(a:int) 정확매칭 -> 10
+set q = h(1, {b: 2});   // named-group 버전 -> 20
 ```
 
 #### 3) 모호해지는 경우는 “ambiguous”로 강제 차단
@@ -1008,7 +1008,7 @@ fn k(a: int, {b: int = 0}) -> int { return 2; }
 // - k(a:int, {b:int=0}) : named group 자체를 생략 가능한가? (v0 정책에 따라 다름)
 //
 // v0 권장: named group은 "비어있는 {}"를 자동으로 가정하지 않는다.
-// → k(1)은 첫 번째만 후보가 되어 1로 결정.
+// -> k(1)은 첫 번째만 후보가 되어 1로 결정.
 // 만약 named group 생략을 자동 허용하면, 여기서 ambiguous 위험이 커짐.
 ```
 
@@ -1406,8 +1406,8 @@ set x = loop {
 
 따라서:
 
-* `break expr;` → 결과는 `T`
-* `break;` 또는 자연 종료 → 결과는 `null`
+* `break expr;` -> 결과는 `T`
+* `break;` 또는 자연 종료 -> 결과는 `null`
 
 결과적으로, 순회 루프의 타입은 **`T?`** 이다.
 
@@ -2065,7 +2065,7 @@ KIND 태그 정의(v0):
 
 ---
 
-### (3) lowering 규칙(표현식 → IR 관점)
+### (3) lowering 규칙(표현식 -> IR 관점)
 
 `&&x`는 다음 성질을 만족하도록 lowering 된다.
 
@@ -2198,7 +2198,7 @@ fn f() -> void {
 ctrl 기반 증명:
 
 * `ctrl.kind=STACK_SLOT`이고 `h`가 외부로 전달되지 않음이 증명되면
-  → handle 생성은 100% 제거 가능
+  -> handle 생성은 100% 제거 가능
 
 ---
 
@@ -2231,7 +2231,7 @@ ctrl 연계:
 
 ---
 
-#### 최적화 5) Stack-slot → caller-slot 재로워링: 탈출 시점에서만 구체화
+#### 최적화 5) Stack-slot -> caller-slot 재로워링: 탈출 시점에서만 구체화
 
 패턴:
 
@@ -3605,8 +3605,8 @@ operator(++post)(self x: &mut T) -> T { ... }
 
 타입이 `T`일 때, 현재 스코프에서:
 
-1. `use acts Foo for T;`가 존재하면 → **활성 세트 = Foo**
-2. 없으면 → **활성 세트 = 기본 acts (`acts for T`)**
+1. `use acts Foo for T;`가 존재하면 -> **활성 세트 = Foo**
+2. 없으면 -> **활성 세트 = 기본 acts (`acts for T`)**
 
 추가 규칙(v0):
 

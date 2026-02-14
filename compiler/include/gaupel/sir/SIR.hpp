@@ -23,6 +23,12 @@ namespace gaupel::sir {
     using FuncId = uint32_t;
     static constexpr FuncId k_invalid_func = 0xFFFF'FFFFu;
 
+    using FieldId = uint32_t;
+    static constexpr FieldId k_invalid_field = 0xFFFF'FFFFu;
+
+    using ActsId = uint32_t;
+    static constexpr ActsId k_invalid_acts = 0xFFFF'FFFFu;
+
     // SymbolId: sema::SymbolTable uses uint32_t ids (keep as-is)
     using SymbolId = uint32_t;
     static constexpr SymbolId k_invalid_symbol = 0xFFFF'FFFFu;
@@ -276,6 +282,36 @@ namespace gaupel::sir {
 
         // hint: whether any stmt/value in this func may write
         bool has_any_write = false;
+
+        // acts 소속 함수 여부 (일반 top-level fn이면 false)
+        bool is_acts_member = false;
+        ActsId owner_acts = k_invalid_acts;
+    };
+
+    struct FieldMember {
+        std::string_view name{};
+        TypeId type = k_invalid_type;
+        gaupel::Span span{};
+    };
+
+    struct FieldDecl {
+        gaupel::Span span{};
+        std::string_view name{};
+        SymbolId sym = k_invalid_symbol;
+        bool is_export = false;
+
+        uint32_t member_begin = 0;
+        uint32_t member_count = 0;
+    };
+
+    struct ActsDecl {
+        gaupel::Span span{};
+        std::string_view name{};
+        SymbolId sym = k_invalid_symbol;
+        bool is_export = false;
+
+        uint32_t func_begin = 0;
+        uint32_t func_count = 0;
     };
 
     class Module {
@@ -289,6 +325,9 @@ namespace gaupel::sir {
         std::vector<Stmt> stmts;
         std::vector<Block> blocks;
         std::vector<Func> funcs;
+        std::vector<FieldMember> field_members;
+        std::vector<FieldDecl> fields;
+        std::vector<ActsDecl> acts;
 
         // helpers
         ValueId add_value(const Value& v)   {  values.push_back(v); return (ValueId)values.size() - 1;  }
@@ -300,6 +339,9 @@ namespace gaupel::sir {
         uint32_t add_stmt(const Stmt& s)    {  stmts.push_back(s); return (uint32_t)stmts.size() - 1;   }
         BlockId add_block(const Block& b)   {  blocks.push_back(b); return (BlockId)blocks.size() - 1;  }
         FuncId add_func(const Func& f)      {  funcs.push_back(f); return (FuncId)funcs.size() - 1;     }
+        uint32_t add_field_member(const FieldMember& f) { field_members.push_back(f); return (uint32_t)field_members.size() - 1; }
+        FieldId add_field(const FieldDecl& f)           { fields.push_back(f); return (FieldId)fields.size() - 1; }
+        ActsId add_acts(const ActsDecl& a)              { acts.push_back(a); return (ActsId)acts.size() - 1; }
     };
 
 } // namespace gaupel::sir
