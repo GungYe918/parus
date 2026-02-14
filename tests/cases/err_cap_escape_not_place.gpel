@@ -1,0 +1,5 @@
+// 비허용 케이스: && 피연산자는 place expression이어야 한다.
+fn main() -> unit {
+  set h = &&(1i32 + 2i32);
+  return;
+}

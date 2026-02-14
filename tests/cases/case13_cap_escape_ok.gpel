@@ -1,0 +1,5 @@
+// 허용 케이스: && escape 기본 사용 (return 경계)
+fn make() -> &&i32 {
+  let mut x: i32 = 42i32;
+  return &&x;
+}

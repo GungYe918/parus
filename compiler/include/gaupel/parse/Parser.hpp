@@ -83,6 +83,9 @@ namespace gaupel {
         //  primary(리터럴/식별자/괄호 등) 파싱
         ast::ExprId parse_expr_primary(int ternary_depth);
 
+        /// @brief 배열 리터럴(`[e0, e1, ...]`)을 파싱한다.
+        ast::ExprId parse_expr_array_lit(int ternary_depth);
+
         //  postfix(call/index/++) 연속 파싱
         ast::ExprId parse_expr_postfix(ast::ExprId base, int ternary_depth);
 

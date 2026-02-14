@@ -1,5 +1,6 @@
 // compiler/src/sir/sir_builder_expr_stmt.cpp
 #include "sir_builder_internal.hpp"
+#include <gaupel/syntax/TokenKind.hpp>
 
 
 namespace gaupel::sir::detail {
@@ -56,6 +57,22 @@ namespace gaupel::sir::detail {
             }
 
             case gaupel::ast::ExprKind::kUnary: {
+                if (e.op == gaupel::syntax::TokenKind::kAmp) {
+                    v.kind = ValueKind::kBorrow;
+                    v.borrow_is_mut = e.unary_is_mut;
+                    v.op = (uint32_t)e.op;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, e.a);
+                    break;
+                }
+                if (e.op == gaupel::syntax::TokenKind::kAmpAmp) {
+                    v.kind = ValueKind::kEscape;
+                    v.op = (uint32_t)e.op;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, e.a);
+                    break;
+                }
+
                 v.kind = ValueKind::kUnary;
                 v.op = (uint32_t)e.op;
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -244,6 +261,36 @@ namespace gaupel::sir::detail {
                 break;
             }
 
+            case gaupel::ast::ExprKind::kArrayLit: {
+                v.kind = ValueKind::kArrayLit;
+                v.arg_begin = (uint32_t)m.args.size();
+                v.arg_count = 0;
+
+                const auto& args = ast.args();
+                const uint32_t end = e.arg_begin + e.arg_count;
+                if (e.arg_begin < args.size() && end <= args.size()) {
+                    for (uint32_t i = 0; i < e.arg_count; ++i) {
+                        const auto& aa = args[e.arg_begin + i];
+
+                        Arg item{};
+                        item.kind = ArgKind::kPositional;
+                        item.has_label = false;
+                        item.is_hole = aa.is_hole;
+                        item.span = aa.span;
+
+                        if (!aa.is_hole && aa.expr != gaupel::ast::k_invalid_expr) {
+                            item.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
+                        } else {
+                            item.value = k_invalid_value;
+                        }
+
+                        m.add_arg(item);
+                        v.arg_count++;
+                    }
+                }
+                break;
+            }
+
             case gaupel::ast::ExprKind::kIndex: {
                 v.kind = ValueKind::kIndex;
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -288,6 +335,8 @@ namespace gaupel::sir::detail {
 
         switch (v.kind) {
             case ValueKind::kUnary:
+            case ValueKind::kBorrow:
+            case ValueKind::kEscape:
             case ValueKind::kPostfixInc:
             case ValueKind::kCast:
                 join_child(v.a);
@@ -308,6 +357,14 @@ namespace gaupel::sir::detail {
 
             case ValueKind::kCall:
                 join_child(v.a);
+                break;
+
+            case ValueKind::kArrayLit:
+                if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        join_child(m.args[v.arg_begin + i].value);
+                    }
+                }
                 break;
 
             case ValueKind::kLoopExpr: {

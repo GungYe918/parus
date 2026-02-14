@@ -41,6 +41,7 @@ namespace gaupel::ast {
         kCharLit,
         kBoolLit,
         kNullLit,
+        kArrayLit,
         kIdent,
         kHole,     // "_" expression (특히 pipe-hole / call hole 용)
 
@@ -194,6 +195,10 @@ namespace gaupel::ast {
         ExprId a = k_invalid_expr;
         ExprId b = k_invalid_expr;
         ExprId c = k_invalid_expr;
+
+        // unary payload
+        // - kUnary && op==kAmp 인 경우 "&mut x"를 표현하기 위해 사용
+        bool unary_is_mut = false;
 
         // literals / identifiers
         std::string_view text{};

@@ -170,6 +170,10 @@ namespace gaupel::tyck {
                 t = check_expr_index_(e);
                 break;
 
+            case ast::ExprKind::kArrayLit:
+                t = check_expr_array_lit_(e);
+                break;
+
             case ast::ExprKind::kIfExpr:
                 t = check_expr_if_(e, slot);
                 break;
@@ -254,15 +258,27 @@ namespace gaupel::tyck {
         // null -> T? 허용
         if (is_null_(src) && is_optional_(dst)) return true;
 
+        const auto& dt = types_.get(dst);
+        const auto& st = types_.get(src);
+
+        // array assignability (v0)
+        // - elem type must be assignable
+        // - dst T[] accepts src T[] and src T[N]
+        // - dst T[N] accepts only src T[N] with same N
+        if (dt.kind == ty::Kind::kArray && st.kind == ty::Kind::kArray) {
+            if (dt.array_has_size) {
+                if (!st.array_has_size) return false;
+                if (dt.array_size != st.array_size) return false;
+            }
+            return can_assign_(dt.elem, st.elem);
+        }
+
         // -------------------------------------------------
         // "{integer}" placeholder rules (Rust-like)
         // - placeholder can be assigned ONLY into an integer type (signed/unsigned),
         //   and only if the literal value fits (checked at resolution site).
         // - placeholder -> float is NOT allowed (no implicit int->float).
         // -------------------------------------------------
-        const auto& dt = types_.get(dst);
-        const auto& st = types_.get(src);
-
         auto is_int_builtin = [&](ty::Builtin b) -> bool {
             return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
@@ -347,50 +363,88 @@ namespace gaupel::tyck {
         return it->second;
     }
 
+    /// @brief range 식(`a..b`, `a..:b`)인지 확인한다.
+    bool TypeChecker::is_range_expr_(ast::ExprId eid) const {
+        if (eid == ast::k_invalid_expr) return false;
+        const auto& e = ast_.expr(eid);
+        if (e.kind != ast::ExprKind::kBinary) return false;
+        return e.op == K::kDotDot || e.op == K::kDotDotColon;
+    }
+
+    /// @brief 인덱스/슬라이스 경계에 허용되는 정수 타입인지 확인한다.
+    bool TypeChecker::is_index_int_type_(ty::TypeId t) const {
+        if (t == ty::kInvalidType || is_error_(t)) return false;
+        const auto& tt = types_.get(t);
+        if (tt.kind != ty::Kind::kBuiltin) return false;
+
+        switch (tt.builtin) {
+            case ty::Builtin::kI8:
+            case ty::Builtin::kI16:
+            case ty::Builtin::kI32:
+            case ty::Builtin::kI64:
+            case ty::Builtin::kI128:
+            case ty::Builtin::kU8:
+            case ty::Builtin::kU16:
+            case ty::Builtin::kU32:
+            case ty::Builtin::kU64:
+            case ty::Builtin::kU128:
+            case ty::Builtin::kISize:
+            case ty::Builtin::kUSize:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     // place expr (v0: Ident, Index만 place로 인정)
     bool TypeChecker::is_place_expr_(ast::ExprId eid) const {
         if (eid == ast::k_invalid_expr) return false;
         const auto& e = ast_.expr(eid);
-        return e.kind == ast::ExprKind::kIdent || e.kind == ast::ExprKind::kIndex;
+        if (e.kind == ast::ExprKind::kIdent) return true;
+        if (e.kind == ast::ExprKind::kIndex) {
+            // range index는 slice 생성용 view이므로 v0에서 write/place로 취급하지 않는다.
+            if (is_range_expr_(e.b)) return false;
+            return is_place_expr_(e.a);
+        }
+        return false;
     }
 
     // --------------------
     // unary / postfix unary
     // --------------------
     ty::TypeId TypeChecker::check_expr_unary_(const ast::Expr& e) {
-        // e.op, e.a
-        ty::TypeId at = check_expr_(e.a);
-
-        // & / && 는 place 필요 + pure/comptime 금지 (너의 정책 반영)
+        // NOTE:
+        // - '&' / '&mut' / '&&' 의 의미 규칙(place, escape, conflict 등)은
+        //   capability 단계에서 독립적으로 검사한다.
+        // - tyck는 여기서 "결과 타입 계산"만 수행한다.
         if (e.op == K::kAmp) {
-            if (!is_place_expr_(e.a)) {
-                diag_(diag::Code::kBorrowOperandMustBePlace, e.span);
-                err_(e.span, "borrow needs place");
-                return types_.error();
+            // slice borrow: &x[a..b], &mut x[a..:b]
+            if (e.a != ast::k_invalid_expr) {
+                const auto& opnd = ast_.expr(e.a);
+                if (opnd.kind == ast::ExprKind::kIndex && is_range_expr_(opnd.b)) {
+                    // index expression 쪽에서 base/경계 타입 검사를 모두 수행한다.
+                    ty::TypeId view_t = check_expr_(e.a);
+                    const auto& vt = types_.get(view_t);
+                    if (vt.kind != ty::Kind::kArray) {
+                        diag_(diag::Code::kTypeIndexNonArray, e.span, types_.to_string(view_t));
+                        err_(e.span, "slicing is only supported on array types (T[] / T[N]) in v0");
+                        return types_.error();
+                    }
+                    return types_.make_borrow(view_t, /*is_mut=*/e.unary_is_mut);
+                }
             }
-            if (fn_ctx_.is_pure || fn_ctx_.is_comptime) {
-                diag_(diag::Code::kTypeBorrowNotAllowedInPureComptime, e.span);
-                err_(e.span, "borrow not allowed in pure/comptime");
-                return types_.error();
-            }
-            // mut은 unary op에 저장되는 구조가 아직 없으니 v0에서는 &만 지원.
-            // (&mut)은 이후 AST/Parser 확장 시 여기에서 반영 가능.
-            return types_.make_borrow(at, /*is_mut=*/false);
+
+            ty::TypeId at = check_expr_(e.a);
+            return types_.make_borrow(at, /*is_mut=*/e.unary_is_mut);
         }
 
         if (e.op == K::kAmpAmp) {
-            if (!is_place_expr_(e.a)) {
-                diag_(diag::Code::kEscapeOperandMustBePlace, e.span);
-                err_(e.span, "escape '&&' requires a place expression (ident/index)");
-                return types_.error();
-            }
-            if (fn_ctx_.is_pure || fn_ctx_.is_comptime) {
-                diag_(diag::Code::kTypeEscapeNotAllowedInPureComptime, e.span);
-                err_(e.span, "escape '&&' is not allowed in pure/comptime functions (recommended rule)");
-                return types_.error();
-            }
+            ty::TypeId at = check_expr_(e.a);
             return types_.make_escape(at);
         }
+
+        // e.op, e.a
+        ty::TypeId at = check_expr_(e.a);
 
         // 기타 unary: v0에서는 최소만
         if (e.op == K::kBang) {
@@ -761,27 +815,136 @@ namespace gaupel::tyck {
     }
 
     // --------------------
-    // call / index
+    // call / array / index
     // --------------------
+    ty::TypeId TypeChecker::check_expr_array_lit_(const ast::Expr& e) {
+        // Array literal uses ast.args() slice: e.arg_begin..e.arg_begin+e.arg_count
+        if (e.arg_count == 0) {
+            diag_(diag::Code::kTypeErrorGeneric, e.span, "empty array literal needs an explicit contextual type in v0");
+            err_(e.span, "empty array literal requires a contextual type (v0)");
+            return types_.make_array(types_.error(), /*has_size=*/true, /*size=*/0);
+        }
+
+        const auto& args = ast_.args();
+        const uint32_t end = e.arg_begin + e.arg_count;
+        if (e.arg_begin >= args.size() || end > args.size()) {
+            err_(e.span, "array literal element range is out of AST bounds");
+            return types_.error();
+        }
+
+        ty::TypeId elem = ty::kInvalidType;
+        bool has_error = false;
+
+        for (uint32_t i = 0; i < e.arg_count; ++i) {
+            const auto& a = args[e.arg_begin + i];
+            if (a.expr == ast::k_invalid_expr) {
+                has_error = true;
+                continue;
+            }
+
+            ty::TypeId t = check_expr_(a.expr);
+            if (is_error_(t)) {
+                has_error = true;
+                continue;
+            }
+
+            if (elem == ty::kInvalidType) {
+                elem = t;
+                continue;
+            }
+
+            if (elem == t) continue;
+
+            const auto& et = types_.get(elem);
+            const auto& tt = types_.get(t);
+            const bool elem_is_infer = (et.kind == ty::Kind::kBuiltin && et.builtin == ty::Builtin::kInferInteger);
+            const bool t_is_infer = (tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger);
+
+            if (elem_is_infer && is_index_int_type_(t)) {
+                (void)resolve_infer_int_in_context_(args[e.arg_begin].expr, t);
+                elem = t;
+                continue;
+            }
+
+            if (t_is_infer && is_index_int_type_(elem)) {
+                (void)resolve_infer_int_in_context_(a.expr, elem);
+                continue;
+            }
+
+            diag_(diag::Code::kTypeBinaryOperandsMustMatch, a.span, types_.to_string(elem), types_.to_string(t));
+            err_(a.span, "array literal elements must have one unified type");
+            has_error = true;
+        }
+
+        if (elem == ty::kInvalidType) elem = types_.error();
+        if (has_error) elem = types_.error();
+
+        return types_.make_array(elem, /*has_size=*/true, e.arg_count);
+    }
+
     ty::TypeId TypeChecker::check_expr_index_(const ast::Expr& e) {
         // e.a = base, e.b = index expr
-        ty::TypeId bt = check_expr_(e.a);
+        ty::TypeId base_t = check_expr_(e.a);
+        ty::TypeId arr_t = base_t;
+
+        const auto& bt = types_.get(base_t);
+        if (bt.kind == ty::Kind::kBorrow) {
+            const auto& inner = types_.get(bt.elem);
+            if (inner.kind == ty::Kind::kArray) {
+                arr_t = bt.elem;
+            }
+        }
+
+        const auto& t = types_.get(arr_t);
+        if (t.kind != ty::Kind::kArray) {
+            diag_(diag::Code::kTypeIndexNonArray, e.span, types_.to_string(base_t));
+            err_(e.span, "indexing is only supported on array types (T[] / T[N]) in v0");
+            return types_.error();
+        }
+
+        // slice range: x[a..b], x[a..:b]
+        if (is_range_expr_(e.b)) {
+            const auto& r = ast_.expr(e.b);
+            auto check_bound = [&](ast::ExprId bid) {
+                if (bid == ast::k_invalid_expr) return;
+                ty::TypeId bt = check_expr_(bid);
+                if (is_error_(bt)) return;
+
+                const auto& btt = types_.get(bt);
+                if (btt.kind == ty::Kind::kBuiltin && btt.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(bid, types_.builtin(ty::Builtin::kUSize));
+                    bt = check_expr_(bid);
+                }
+
+                if (!is_index_int_type_(bt)) {
+                    diag_(diag::Code::kTypeIndexMustBeUSize, ast_.expr(bid).span, types_.to_string(bt));
+                    err_(e.span, "slice bounds must be integer type in v0");
+                }
+            };
+
+            check_bound(r.a);
+            check_bound(r.b);
+
+            // slicing result is unsized element view (T[])
+            return types_.make_array(t.elem);
+        }
+
         ty::TypeId it = check_expr_(e.b);
+        if (!is_error_(it)) {
+            const auto& itt = types_.get(it);
+            if (itt.kind == ty::Kind::kBuiltin && itt.builtin == ty::Builtin::kInferInteger) {
+                (void)resolve_infer_int_in_context_(e.b, types_.builtin(ty::Builtin::kUSize));
+                it = check_expr_(e.b);
+            }
+        }
 
-        // index는 usize 권장(일단 usize만 허용)
-        if (it != types_.builtin(ty::Builtin::kUSize) && !is_error_(it)) {
+        // index는 정수 타입만 허용(v0)
+        if (!is_error_(it) && !is_index_int_type_(it)) {
             diag_(diag::Code::kTypeIndexMustBeUSize, ast_.expr(e.b).span, types_.to_string(it));
-            err_(e.span, "index expression must be usize (v0 rule)");
+            err_(e.span, "index expression must be integer type in v0");
         }
 
-        const auto& t = types_.get(bt);
-        if (t.kind == ty::Kind::kArray) {
-            return t.elem;
-        }
-
-        diag_(diag::Code::kTypeIndexNonArray, e.span, types_.to_string(bt));
-        err_(e.span, "indexing is only supported on array types (T[]) in v0");
-        return types_.error();
+        return t.elem;
     }
 
     // --------------------

@@ -3,7 +3,6 @@
 
 #include <gaupel/passes/CheckPipeHole.hpp>
 #include <gaupel/passes/CheckTopLevelDeclOnly.hpp>
-#include <gaupel/passes/CheckPlaceExpr.hpp>
 
 
 namespace gaupel::passes {
@@ -11,7 +10,6 @@ namespace gaupel::passes {
     void run_on_expr(const ast::AstArena& ast, ast::ExprId root, diag::Bag& bag) {
         if (root == ast::k_invalid_expr) return;
         check_pipe_hole(ast, root, bag);
-        check_place_expr(ast, root, bag);
     }
 
     // stmt 트리를 훑으며 expr 루트들을 run_on_expr로 넘기기 위한 워커

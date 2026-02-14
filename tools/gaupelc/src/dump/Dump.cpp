@@ -37,6 +37,8 @@ namespace gaupelc::dump {
             case K::kParam: return "Param";
             case K::kArrayLit: return "ArrayLit";
             case K::kFieldInit: return "FieldInit";
+            case K::kBorrow: return "Borrow";
+            case K::kEscape: return "Escape";
             case K::kUnary: return "Unary";
             case K::kBinary: return "Binary";
             case K::kAssign: return "Assign";
@@ -161,6 +163,7 @@ namespace gaupelc::dump {
             case K::kCharLit: return "CharLit";
             case K::kBoolLit: return "BoolLit";
             case K::kNullLit: return "NullLit";
+            case K::kArrayLit: return "ArrayLit";
             case K::kIdent: return "Ident";
             case K::kHole: return "Hole";
             case K::kUnary: return "Unary";
@@ -219,6 +222,8 @@ namespace gaupelc::dump {
         const auto& v = m.values[root];
         switch (v.kind) {
             case ValueKind::kUnary:
+            case ValueKind::kBorrow:
+            case ValueKind::kEscape:
             case ValueKind::kPostfixInc:
             case ValueKind::kCast:
                 push_value(v.a);
@@ -261,6 +266,14 @@ namespace gaupelc::dump {
                         } else {
                             push_value(a.value);
                         }
+                    }
+                }
+                break;
+
+            case ValueKind::kArrayLit:
+                if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        push_value(m.args[v.arg_begin + i].value);
                     }
                 }
                 break;
@@ -516,8 +529,12 @@ namespace gaupelc::dump {
 
             if (!v.text.empty()) std::cout << " text=" << v.text;
             if (v.sym != sir::k_invalid_symbol) std::cout << " sym=" << v.sym;
+            if (v.origin_sym != sir::k_invalid_symbol) std::cout << " origin_sym=" << v.origin_sym;
+            if (v.kind == sir::ValueKind::kBorrow) {
+                std::cout << " borrow_mut=" << (v.borrow_is_mut ? "true" : "false");
+            }
 
-            if (v.kind == sir::ValueKind::kCall) {
+            if (v.kind == sir::ValueKind::kCall || v.kind == sir::ValueKind::kArrayLit) {
                 std::cout << " arg_begin=" << v.arg_begin
                         << " arg_count=" << v.arg_count;
             }
@@ -709,6 +726,11 @@ namespace gaupelc::dump {
         if (e.op != gaupel::syntax::TokenKind::kError) {
             std::cout << " op=" << gaupel::syntax::token_kind_name(e.op);
         }
+        if (e.kind == gaupel::ast::ExprKind::kUnary &&
+            e.op == gaupel::syntax::TokenKind::kAmp &&
+            e.unary_is_mut) {
+            std::cout << " unary_mut=true";
+        }
         if (!e.text.empty()) {
             std::cout << " text=" << e.text;
         }
@@ -795,6 +817,22 @@ namespace gaupelc::dump {
                             dump_expr(ast, a.expr, indent + 2);
                         }
                     }
+                }
+                break;
+            }
+
+            case gaupel::ast::ExprKind::kArrayLit: {
+                const auto& args = ast.args();
+                for (uint32_t i = 0; i < e.arg_count; ++i) {
+                    const auto& a = args[e.arg_begin + i];
+                    for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
+                    std::cout << "Elem[" << i << "]";
+                    if (a.is_hole || a.expr == gaupel::ast::k_invalid_expr) {
+                        std::cout << " _\n";
+                        continue;
+                    }
+                    std::cout << "\n";
+                    dump_expr(ast, a.expr, indent + 2);
                 }
                 break;
             }

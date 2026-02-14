@@ -1,10 +1,10 @@
 // tools/gaupelc/src/main.cpp
 #include "cli/Options.hpp"
 #include "driver/Runner.hpp"
-
 #include <gaupel/Version.hpp>
 
 #include <iostream>
+
 
 int main(int argc, char** argv) {
     if (argc <= 1) {

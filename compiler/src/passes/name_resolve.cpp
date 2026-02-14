@@ -271,6 +271,20 @@ namespace gaupel::passes {
                     break;
                 }
 
+                case ast::ExprKind::kArrayLit: {
+                    const uint32_t arg_end = e.arg_begin + e.arg_count;
+                    if (e.arg_begin < r.arg_count && arg_end <= r.arg_count) {
+                        const auto& args = ast.args();
+                        for (uint32_t i = 0; i < e.arg_count; ++i) {
+                            const auto& a = args[e.arg_begin + i];
+                            if (!a.is_hole && is_valid_expr_id_(r, a.expr)) {
+                                stack.push_back(a.expr);
+                            }
+                        }
+                    }
+                    break;
+                }
+
                 case ast::ExprKind::kLoop: {
                     // loop expression introduces its own scope for header var.
                     ScopeGuard g(sym);

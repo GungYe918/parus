@@ -188,6 +188,8 @@ namespace gaupel::sir {
 
             switch (v.kind) {
                 case ValueKind::kUnary:
+                case ValueKind::kBorrow:
+                case ValueKind::kEscape:
                 case ValueKind::kPostfixInc:
                 case ValueKind::kCast:
                     need_child(v.a, "a");
@@ -260,6 +262,26 @@ namespace gaupel::sir {
                         if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
                             std::ostringstream oss;
                             oss << "value #" << vid << " call arg has invalid value id " << a.value;
+                            push_error_(errs, oss.str());
+                        }
+                    }
+                    break;
+                }
+
+                case ValueKind::kArrayLit: {
+                    const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                    if (arg_end > (uint64_t)m.args.size()) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid << " array literal has out-of-range args slice";
+                        push_error_(errs, oss.str());
+                        break;
+                    }
+
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto& a = m.args[v.arg_begin + i];
+                        if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
+                            std::ostringstream oss;
+                            oss << "value #" << vid << " array literal element has invalid value id " << a.value;
                             push_error_(errs, oss.str());
                         }
                     }

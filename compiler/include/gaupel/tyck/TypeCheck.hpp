@@ -95,6 +95,7 @@ namespace gaupel::tyck {
         ty::TypeId check_expr_ternary_(const ast::Expr& e);
         ty::TypeId check_expr_call_(const ast::Expr& e);
         ty::TypeId check_expr_index_(const ast::Expr& e);
+        ty::TypeId check_expr_array_lit_(const ast::Expr& e);
         ty::TypeId check_expr_if_(const ast::Expr& e);
         ty::TypeId check_expr_block_(const ast::Expr& e);
         ty::TypeId check_expr_loop_(const ast::Expr& e);
@@ -121,6 +122,8 @@ namespace gaupel::tyck {
         bool is_mutable_symbol_(uint32_t sym_id) const;
 
         bool is_place_expr_(ast::ExprId eid) const;
+        bool is_range_expr_(ast::ExprId eid) const;
+        bool is_index_int_type_(ty::TypeId t) const;
 
         bool is_optional_(ty::TypeId t) const;
         ty::TypeId optional_elem_(ty::TypeId opt) const;

@@ -2,6 +2,7 @@
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/parse/CMakeLists.txt)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/tyck/CMakeLists.txt)
 include(${CMAKE_CURRENT_SOURCE_DIR}/src/sir/CMakeLists.txt)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/cap/CMakeLists.txt)
 
 add_library(gaupel_compiler STATIC
     src/diag/render.cpp
@@ -16,6 +17,7 @@ add_library(gaupel_compiler STATIC
     src/passes/check_top_level_decl_only.cpp
     src/passes/name_resolve.cpp
     src/passes/passes.cpp
+    ${GAUPEL_CAP_SOURCES}
 
     src/os/file.cpp
     ${GAUPEL_TYCK_SOURCES}

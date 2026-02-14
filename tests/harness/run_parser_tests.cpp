@@ -1,6 +1,7 @@
 #include <gaupel/lex/Lexer.hpp>
 #include <gaupel/parse/Parser.hpp>
 #include <gaupel/passes/Passes.hpp>
+#include <gaupel/cap/CapabilityCheck.hpp>
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/sir/Builder.hpp>
 #include <gaupel/sir/Verify.hpp>
@@ -41,6 +42,16 @@ namespace {
         return tc.check_program(p.root);
     }
 
+    static gaupel::cap::CapabilityResult run_cap(
+        ParsedProgram& p,
+        const gaupel::passes::PassResults& pres,
+        const gaupel::tyck::TyckResult& ty
+    ) {
+        return gaupel::cap::run_capability_check(
+            p.ast, p.root, pres.name_resolve, ty, p.types, p.bag
+        );
+    }
+
     static bool require_(bool cond, const char* msg) {
         if (cond) return true;
         std::cerr << "  - " << msg << "\n";
@@ -64,6 +75,7 @@ namespace {
         auto prog = parse_program(src);
         auto pres = run_passes(prog);
         auto ty = run_tyck(prog);
+        auto cap = run_cap(prog, pres, ty);
 
         const std::string file_name = p.filename().string();
         const bool expect_error = (file_name.rfind("err_", 0) == 0);
@@ -81,6 +93,7 @@ namespace {
         bool ok = true;
         ok &= require_(!prog.bag.has_error(), "file case emitted parser/sema diagnostics");
         ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
+        ok &= require_(cap.ok, "file case emitted capability errors");
         if (!ok) {
             std::cerr << "    file: " << p.filename().string() << "\n";
             return false;

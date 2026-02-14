@@ -135,6 +135,7 @@ namespace gaupel {
         struct PrefixOp {
             K kind{};
             Span span{};
+            bool is_mut = false; // for '&mut'
         };
 
         std::vector<PrefixOp> ops;
@@ -182,10 +183,25 @@ namespace gaupel {
             if (!syntax::prefix_info(t.kind).has_value()) break;
 
             const Token op = cursor_.bump();
-            ops.push_back(PrefixOp{ op.kind, op.span });
+            PrefixOp p{};
+            p.kind = op.kind;
+            p.span = op.span;
+
+            const bool has_mut_suffix = (op.kind == K::kAmp && cursor_.at(K::kKwMut));
+            if (has_mut_suffix) {
+                // "&mut <place>" expression
+                cursor_.bump();
+                p.is_mut = true;
+            }
+
+            ops.push_back(p);
 
             if (op.kind == K::kAmp || op.kind == K::kAmpAmp) {
                 bump_amp_run(op);
+                if (has_mut_suffix) {
+                    // "mut" token breaks "& adjacency" intentionally.
+                    break_amp_run();
+                }
             } else {
                 // other prefix ops break "& run"
                 break_amp_run();
@@ -201,6 +217,7 @@ namespace gaupel {
             ast::Expr e{};
             e.kind = ast::ExprKind::kUnary;
             e.op = ops[(size_t)i].kind;
+            e.unary_is_mut = ops[(size_t)i].is_mut;
             e.a = rhs;
             e.span = span_join(ops[(size_t)i].span, ast_.expr(rhs).span);
             rhs = ast_.add_expr(e);
@@ -227,6 +244,52 @@ namespace gaupel {
         }
 
         return rhs;
+    }
+
+    /// @brief 배열 리터럴(`[e0, e1, ...]`)을 파싱한다.
+    ast::ExprId Parser::parse_expr_array_lit(int ternary_depth) {
+        using K = syntax::TokenKind;
+
+        const Token lb = cursor_.peek();
+        diag_expect(K::kLBracket);
+
+        const uint32_t begin = static_cast<uint32_t>(ast_.args().size());
+        uint32_t count = 0;
+
+        if (!cursor_.at(K::kRBracket)) {
+            while (!cursor_.at(K::kRBracket) && !cursor_.at(K::kEof)) {
+                ast::ExprId item = parse_expr_pratt(0, ternary_depth);
+                item = parse_expr_postfix(item, ternary_depth);
+
+                ast::Arg a{};
+                a.kind = ast::ArgKind::kPositional;
+                a.expr = item;
+                a.span = ast_.expr(item).span;
+                ast_.add_arg(a);
+                ++count;
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kRBracket)) break; // trailing comma
+                    continue;
+                }
+                break;
+            }
+        }
+
+        Token rb = cursor_.peek();
+        if (!cursor_.eat(K::kRBracket)) {
+            diag_report(diag::Code::kExpectedToken, rb.span, "]");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            rb = cursor_.peek();
+            cursor_.eat(K::kRBracket);
+        }
+
+        ast::Expr out{};
+        out.kind = ast::ExprKind::kArrayLit;
+        out.arg_begin = begin;
+        out.arg_count = count;
+        out.span = span_join(lb.span, rb.span);
+        return ast_.add_expr(out);
     }
 
     ast::ExprId Parser::parse_expr_primary(int ternary_depth) {
@@ -285,6 +348,10 @@ namespace gaupel {
             e.span = t.span;
             e.text = t.lexeme;
             return ast_.add_expr(e);
+        }
+
+        if (t.kind == syntax::TokenKind::kLBracket) {
+            return parse_expr_array_lit(ternary_depth);
         }
 
         if (t.kind == syntax::TokenKind::kIdent) {
@@ -385,6 +452,7 @@ namespace gaupel {
                 case K::kKwLoop:
                 case K::kLParen:
                 case K::kLBrace:
+                case K::kLBracket:
                     return true;
                 default:
                     return false;

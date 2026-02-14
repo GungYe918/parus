@@ -105,15 +105,22 @@ namespace gaupel::ty {
             return push_(t);
         }
 
-        TypeId make_array(TypeId elem) {
+        /// @brief 배열 타입을 intern한다. `has_size=true`이면 `T[N]`, 아니면 `T[]`이다.
+        TypeId make_array(TypeId elem, bool has_size = false, uint32_t size = 0) {
             for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
                 const auto& t = types_[i];
-                if (t.kind == Kind::kArray && t.elem == elem) return i;
+                if (t.kind != Kind::kArray) continue;
+                if (t.elem != elem) continue;
+                if (t.array_has_size != has_size) continue;
+                if (has_size && t.array_size != size) continue;
+                return i;
             }
 
             Type t{};
             t.kind = Kind::kArray;
             t.elem = elem;
+            t.array_has_size = has_size;
+            t.array_size = size;
             return push_(t);
         }
 
@@ -285,7 +292,10 @@ namespace gaupel::ty {
                         os << "(Optional elem=" << t.elem << ")";
                         break;
                     case Kind::kArray:
-                        os << "(Array elem=" << t.elem << ")";
+                        os << "(Array elem=" << t.elem
+                           << " sized=" << (t.array_has_size ? 1 : 0);
+                        if (t.array_has_size) os << " size=" << t.array_size;
+                        os << ")";
                         break;
                     case Kind::kNamedUser: {
                         os << "(NamedUser path=";
@@ -375,7 +385,7 @@ namespace gaupel::ty {
                 }
 
                 case Kind::kArray: {
-                    // elem[]
+                    // elem[] / elem[N]
                     if (t.elem == kInvalidType) { out += "<invalid-elem>[]"; return; }
 
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
@@ -387,7 +397,13 @@ namespace gaupel::ty {
                     if (paren) out += "(";
                     render_into_(out, t.elem, RenderCtx::kSuffixElem);
                     if (paren) out += ")";
-                    out += "[]";
+                    if (t.array_has_size) {
+                        out += "[";
+                        out += std::to_string(t.array_size);
+                        out += "]";
+                    } else {
+                        out += "[]";
+                    }
                     return;
                 }
 
@@ -395,6 +411,18 @@ namespace gaupel::ty {
                     if (t.elem == kInvalidType) { out += (t.borrow_is_mut ? "&mut <invalid>" : "&<invalid>"); return; }
 
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    if (ek == Kind::kArray) {
+                        const auto& arr = types_[t.elem];
+                        if (!arr.array_has_size) {
+                            // slice-borrow 표기: &[T] / &mut [T]
+                            out += "&";
+                            if (t.borrow_is_mut) out += "mut ";
+                            out += "[";
+                            render_into_(out, arr.elem, RenderCtx::kTop);
+                            out += "]";
+                            return;
+                        }
+                    }
 
                     out += "&";
                     if (t.borrow_is_mut) out += "mut ";

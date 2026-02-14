@@ -1,0 +1,15 @@
+// 허용 케이스: & / &mut 기본 사용
+fn main() -> unit {
+  let mut x: i32 = 1i32;
+  {
+    set rx = &x;
+  }
+  set rw = &mut x;
+
+  {
+    let y: i32 = 7i32;
+    set ry = &y;
+  }
+
+  return;
+}

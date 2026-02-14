@@ -1,5 +1,6 @@
 // compiler/src/sir/sir_builder_common.cpp
 #include "sir_builder_internal.hpp"
+#include <gaupel/syntax/TokenKind.hpp>
 
 
 namespace gaupel::sir::detail {
@@ -25,6 +26,23 @@ namespace gaupel::sir::detail {
         if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
 
         return (SymbolId)nres.resolved[rid].sym;
+    }
+
+    SymbolId resolve_root_place_symbol_from_expr(
+        const gaupel::ast::AstArena& ast,
+        const passes::NameResolveResult& nres,
+        gaupel::ast::ExprId eid
+    ) {
+        if (eid == gaupel::ast::k_invalid_expr) return k_invalid_symbol;
+        const auto& e = ast.expr(eid);
+
+        if (e.kind == gaupel::ast::ExprKind::kIdent) {
+            return resolve_symbol_from_expr(nres, eid);
+        }
+        if (e.kind == gaupel::ast::ExprKind::kIndex) {
+            return resolve_root_place_symbol_from_expr(ast, nres, e.a);
+        }
+        return k_invalid_symbol;
     }
 
     SymbolId resolve_symbol_from_stmt(
@@ -88,8 +106,18 @@ namespace gaupel::sir::detail {
         switch (e.kind) {
             case gaupel::ast::ExprKind::kIdent:
                 return PlaceClass::kLocal;
-            case gaupel::ast::ExprKind::kIndex:
+            case gaupel::ast::ExprKind::kIndex: {
+                // slice range index(a..b / a..:b)는 view 생성식으로 취급하여 place에서 제외한다.
+                if (e.b != gaupel::ast::k_invalid_expr) {
+                    const auto& ie = ast.expr(e.b);
+                    if (ie.kind == gaupel::ast::ExprKind::kBinary &&
+                        (ie.op == gaupel::syntax::TokenKind::kDotDot ||
+                         ie.op == gaupel::syntax::TokenKind::kDotDotColon)) {
+                        return PlaceClass::kNotPlace;
+                    }
+                }
                 return PlaceClass::kIndex;
+            }
 
             // future:
             // case gaupel::ast::ExprKind::kField: return PlaceClass::kField;
@@ -105,6 +133,7 @@ namespace gaupel::sir::detail {
         switch (k) {
             case ValueKind::kAssign:
             case ValueKind::kPostfixInc:
+            case ValueKind::kEscape:
                 return EffectClass::kMayWrite;
 
             case ValueKind::kCall:

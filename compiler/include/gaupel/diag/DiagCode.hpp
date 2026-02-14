@@ -108,6 +108,13 @@ namespace gaupel::diag {
         kBorrowOperandMustBePlace,
         kEscapeOperandMustBePlace,
         kEscapeOperandMustNotBeBorrow,
+        kBorrowMutRequiresMutablePlace,
+        kBorrowMutConflict,
+        kBorrowMutDirectAccessConflict,
+        kBorrowEscapeFromReturn,
+        kBorrowEscapeToStorage,
+        kUseAfterEscapeMove,
+        kEscapeWhileMutBorrowActive,
 
         // =========================
         // passes / sema

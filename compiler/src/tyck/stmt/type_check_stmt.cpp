@@ -145,10 +145,28 @@ namespace gaupel::tyck {
             if (s.init != ast::k_invalid_expr) {
                 init_t = check_expr_(s.init);
 
-                // 컨텍스트 해소: let x: i32 = 123; 같은 케이스에서 RHS가 {integer}면 여기서 확정
+                // 컨텍스트 해소:
+                // - let x: i32 = 123;
+                // - let x: i32[] = [1, 2, 3];
+                // 같은 케이스에서 RHS 내부의 {integer}를 declared type 문맥으로 확정한다.
                 if (s.type != ty::kInvalidType) {
-                    const auto& it = types_.get(init_t);
-                    if (it.kind == ty::Kind::kBuiltin && it.builtin == ty::Builtin::kInferInteger) {
+                    auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
+                        if (tid == ty::kInvalidType) return false;
+                        const auto& tt = types_.get(tid);
+                        switch (tt.kind) {
+                            case ty::Kind::kBuiltin:
+                                return tt.builtin == ty::Builtin::kInferInteger;
+                            case ty::Kind::kOptional:
+                            case ty::Kind::kArray:
+                            case ty::Kind::kBorrow:
+                            case ty::Kind::kEscape:
+                                return self(tt.elem, self);
+                            default:
+                                return false;
+                        }
+                    };
+
+                    if (type_contains_infer_int(init_t, type_contains_infer_int)) {
                         (void)resolve_infer_int_in_context_(s.init, s.type);
                         init_t = check_expr_(s.init); // 논리적 재평가 의도
                     }

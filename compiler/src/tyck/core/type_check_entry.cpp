@@ -386,8 +386,61 @@ namespace gaupel::tyck {
     bool TypeChecker::resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected) {
         if (eid == ast::k_invalid_expr) return false;
 
-        // expected는 builtin int여야 한다.
         const auto& et = types_.get(expected);
+
+        // ------------------------------------------------------------
+        // (0) aggregate context: array
+        // - expected가 array인 경우, array literal의 각 원소로 컨텍스트를 내려준다.
+        // - 원소 타입에 {integer}가 포함된 경우에만 재귀 해소를 시도한다.
+        // ------------------------------------------------------------
+        if (et.kind == ty::Kind::kArray) {
+            const ast::Expr& e = ast_.expr(eid);
+            if (e.kind != ast::ExprKind::kArrayLit) return false;
+            if (et.array_has_size && e.arg_count != et.array_size) return false;
+
+            auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
+                if (tid == ty::kInvalidType) return false;
+                const auto& tt = types_.get(tid);
+                switch (tt.kind) {
+                    case ty::Kind::kBuiltin:
+                        return tt.builtin == ty::Builtin::kInferInteger;
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kEscape:
+                        return self(tt.elem, self);
+                    default:
+                        return false;
+                }
+            };
+
+            bool ok_all = true;
+            const auto& args = ast_.args();
+            const uint32_t end = e.arg_begin + e.arg_count;
+            if (e.arg_begin >= args.size() || end > args.size()) return false;
+
+            for (uint32_t i = 0; i < e.arg_count; ++i) {
+                const auto& a = args[e.arg_begin + i];
+                if (a.expr == ast::k_invalid_expr) continue;
+
+                ty::TypeId elem_t = check_expr_(a.expr);
+                if (!type_contains_infer_int(elem_t, type_contains_infer_int)) continue;
+
+                if (!resolve_infer_int_in_context_(a.expr, et.elem)) {
+                    ok_all = false;
+                }
+            }
+
+            if (ok_all) {
+                if ((size_t)eid < expr_type_cache_.size()) {
+                    expr_type_cache_[eid] = expected;
+                }
+                return true;
+            }
+            return false;
+        }
+
+        // expected는 builtin int여야 한다.
         if (et.kind != ty::Kind::kBuiltin) return false;
 
         // float 컨텍스트면 즉시 에러 (암시적 int->float 금지)

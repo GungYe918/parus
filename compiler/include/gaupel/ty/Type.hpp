@@ -57,6 +57,12 @@ namespace gaupel::ty {
         // kOptional / kArray / kBorrow / kEscape
         TypeId elem = kInvalidType;
 
+        // kArray
+        // - false: unsized array/slice element type (T[])
+        // - true : fixed-size array (T[N])
+        bool array_has_size = false;
+        uint32_t array_size = 0;
+
         // kNamedUser: path slice (no string flatten!)
         uint32_t path_begin = 0;
         uint32_t path_count = 0;

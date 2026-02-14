@@ -5,6 +5,7 @@
 
 #include <gaupel/Version.hpp>
 #include <gaupel/ast/Nodes.hpp>
+#include <gaupel/cap/CapabilityCheck.hpp>
 #include <gaupel/diag/DiagCode.hpp>
 #include <gaupel/diag/Diagnostic.hpp>
 #include <gaupel/diag/Render.hpp>
@@ -147,6 +148,16 @@ namespace gaupelc::driver {
                 std::cout << "\nTYCK:\n";
                 if (tyck_res.errors.empty()) std::cout << "tyck ok.\n";
                 else std::cout << "tyck errors: " << tyck_res.errors.size() << "\n";
+            }
+
+            std::cout << "\nCAP:\n";
+            const auto cap_res = gaupel::cap::run_capability_check(
+                ast, root, pres.name_resolve, tyck_res, types, bag
+            );
+            if (cap_res.ok) {
+                std::cout << "capability ok.\n";
+            } else {
+                std::cout << "capability errors: " << cap_res.error_count << "\n";
             }
 
             gaupel::sir::Module sir_mod;

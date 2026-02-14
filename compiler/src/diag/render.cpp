@@ -92,6 +92,13 @@ namespace gaupel::diag {
             case Code::kBorrowOperandMustBePlace: return "BorrowOperandMustBePlace";
             case Code::kEscapeOperandMustBePlace: return "EscapeOperandMustBePlace";
             case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
+            case Code::kBorrowMutRequiresMutablePlace: return "BorrowMutRequiresMutablePlace";
+            case Code::kBorrowMutConflict: return "BorrowMutConflict";
+            case Code::kBorrowMutDirectAccessConflict: return "BorrowMutDirectAccessConflict";
+            case Code::kBorrowEscapeFromReturn: return "BorrowEscapeFromReturn";
+            case Code::kBorrowEscapeToStorage: return "BorrowEscapeToStorage";
+            case Code::kUseAfterEscapeMove: return "UseAfterEscapeMove";
+            case Code::kEscapeWhileMutBorrowActive: return "EscapeWhileMutBorrowActive";
 
             case Code::kTopLevelMustBeBlock: return "TopLevelMustBeBlock";
             case Code::kTopLevelDeclOnly: return "TopLevelDeclOnly";
@@ -227,6 +234,13 @@ namespace gaupel::diag {
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
             case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
             case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
+            case Code::kBorrowMutRequiresMutablePlace: return "&mut requires a mutable place";
+            case Code::kBorrowMutConflict: return "cannot create borrow: an active mutable borrow already exists for this place";
+            case Code::kBorrowMutDirectAccessConflict: return "cannot access this place directly while an active '&mut' borrow exists";
+            case Code::kBorrowEscapeFromReturn: return "borrow value cannot be returned (non-escaping rule)";
+            case Code::kBorrowEscapeToStorage: return "borrow value cannot be stored in an escaping/long-lived storage";
+            case Code::kUseAfterEscapeMove: return "value was moved by '&&' and cannot be used afterwards";
+            case Code::kEscapeWhileMutBorrowActive: return "cannot apply '&&' while an active '&mut' borrow exists for this place";
 
             case Code::kTopLevelMustBeBlock: return "internal: program root must be a block";
             case Code::kTopLevelDeclOnly: return "top-level allows declarations only";
@@ -369,6 +383,13 @@ namespace gaupel::diag {
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
             case Code::kEscapeOperandMustBePlace: return "'&&'의 피연산자는 place expression이어야 합니다";
             case Code::kEscapeOperandMustNotBeBorrow: return "'&&'는 borrow('& ...')에 적용할 수 없습니다";
+            case Code::kBorrowMutRequiresMutablePlace: return "'&mut'는 mutable place에만 적용할 수 있습니다";
+            case Code::kBorrowMutConflict: return "이미 활성화된 '&mut' borrow가 있어 추가 borrow를 만들 수 없습니다";
+            case Code::kBorrowMutDirectAccessConflict: return "활성 '&mut' borrow가 있는 동안에는 해당 place를 직접 접근할 수 없습니다";
+            case Code::kBorrowEscapeFromReturn: return "borrow 값은 반환할 수 없습니다(비탈출 규칙)";
+            case Code::kBorrowEscapeToStorage: return "borrow 값은 탈출/장수명 저장소에 저장할 수 없습니다";
+            case Code::kUseAfterEscapeMove: return "'&&'로 move된 값은 이후 사용할 수 없습니다";
+            case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
 
             case Code::kTopLevelMustBeBlock: return "내부 오류: 프로그램 루트는 블록이어야 합니다";
             case Code::kTopLevelDeclOnly: return "최상위에서는 decl만 허용됩니다";

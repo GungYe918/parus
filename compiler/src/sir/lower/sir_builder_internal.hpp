@@ -11,6 +11,13 @@ namespace gaupel::sir::detail {
     /// @brief AST expression 노드에서 name-resolve 심볼을 찾는다.
     SymbolId resolve_symbol_from_expr(const passes::NameResolveResult& nres, gaupel::ast::ExprId eid);
 
+    /// @brief place expression의 root 심볼(ident/index.base)을 찾는다.
+    SymbolId resolve_root_place_symbol_from_expr(
+        const gaupel::ast::AstArena& ast,
+        const passes::NameResolveResult& nres,
+        gaupel::ast::ExprId eid
+    );
+
     /// @brief AST statement 노드에서 name-resolve 심볼을 찾는다.
     SymbolId resolve_symbol_from_stmt(const passes::NameResolveResult& nres, gaupel::ast::StmtId sid);
 

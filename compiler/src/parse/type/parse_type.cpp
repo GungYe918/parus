@@ -1,9 +1,41 @@
 // compiler/src/parse/parse_type.cpp
 #include <gaupel/parse/Parser.hpp>
 
+#include <charconv>
+#include <string>
 
 namespace gaupel {
-    
+
+    namespace {
+
+        /// @brief 타입 배열 길이 리터럴(예: `3`, `1_024`)을 `u32`로 파싱한다.
+        bool parse_array_size_u32_(std::string_view text, uint32_t& out) {
+            std::string digits;
+            digits.reserve(text.size());
+
+            bool saw_digit = false;
+            for (char ch : text) {
+                if (ch == '_') continue;
+                if (ch >= '0' && ch <= '9') {
+                    digits.push_back(ch);
+                    saw_digit = true;
+                    continue;
+                }
+                return false;
+            }
+            if (!saw_digit) return false;
+
+            uint32_t v = 0;
+            const char* begin = digits.data();
+            const char* end = begin + digits.size();
+            auto [ptr, ec] = std::from_chars(begin, end, v, 10);
+            if (ec != std::errc{} || ptr != end) return false;
+            out = v;
+            return true;
+        }
+
+    } // namespace
+
     Parser::ParsedType Parser::parse_type() {
         using K = syntax::TokenKind;
 
@@ -149,6 +181,28 @@ namespace gaupel {
                 return out;
             }
 
+            // ---- Slice element type sugar: [T] ----
+            // v0에서는 &[T], &mut [T] 표기를 지원하기 위해 타입 1개를 받는다.
+            if (cursor_.at(K::kLBracket)) {
+                const Token lb = cursor_.bump(); // '['
+
+                auto elem = parse_type();
+                if (elem.id == ty::kInvalidType) elem.id = types_.error();
+
+                Token rb = cursor_.peek();
+                if (!cursor_.eat(K::kRBracket)) {
+                    diag_report(diag::Code::kExpectedToken, rb.span, "]");
+                    recover_to_delim(K::kRBracket, K::kQuestion, K::kComma);
+                    rb = cursor_.peek();
+                    cursor_.eat(K::kRBracket);
+                }
+
+                ParsedType out{};
+                out.id = types_.make_array(elem.id);
+                out.span = span_join(lb.span, rb.span.hi ? rb.span : elem.span);
+                return out;
+            }
+
             // ---- Ident / Path type ----
             //   Ident ('::' Ident)*
             if (cursor_.at(K::kIdent)) {
@@ -208,9 +262,30 @@ namespace gaupel {
                     continue;
                 }
 
-                // ---- Array suffix: T[] ----
+                // ---- Array suffix: T[] / T[N] ----
                 if (cursor_.at(K::kLBracket)) {
                     const Token lb = cursor_.bump(); // '['
+
+                    bool has_size = false;
+                    uint32_t size = 0;
+
+                    if (!cursor_.at(K::kRBracket)) {
+                        const Token n = cursor_.peek();
+                        if (n.kind == K::kIntLit) {
+                            cursor_.bump();
+                            if (!parse_array_size_u32_(n.lexeme, size)) {
+                                diag_report(
+                                    diag::Code::kUnexpectedToken,
+                                    n.span,
+                                    "array size must be a decimal integer literal (u32)"
+                                );
+                            } else {
+                                has_size = true;
+                            }
+                        } else {
+                            diag_report(diag::Code::kUnexpectedToken, n.span, "array size integer literal or ']'");
+                        }
+                    }
 
                     Token rb = cursor_.peek();
                     if (!cursor_.eat(K::kRBracket)) {
@@ -220,7 +295,7 @@ namespace gaupel {
                         cursor_.eat(K::kRBracket);
                     }
 
-                    base.id = types_.make_array(base.id);
+                    base.id = types_.make_array(base.id, has_size, size);
                     base.span = span_join(base.span, rb.span.hi ? rb.span : lb.span);
                     continue;
                 }

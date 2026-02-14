@@ -57,6 +57,8 @@ namespace gaupel::sir {
         kFieldInit, // field{...} / struct literal (future)
 
         // ops
+        kBorrow,        // &x / &mut x
+        kEscape,        // &&x
         kUnary,
         kBinary,
         kAssign,        // place = value (or compound assigns lowered later)
@@ -115,6 +117,9 @@ namespace gaupel::sir {
         // resolved symbol (for kLocal)
         SymbolId sym = k_invalid_symbol;
 
+        // root symbol for capability expressions (kBorrow/kEscape)
+        SymbolId origin_sym = k_invalid_symbol;
+
         // meta classification
         PlaceClass place = PlaceClass::kNotPlace;
         EffectClass effect = EffectClass::kPure;
@@ -141,6 +146,9 @@ namespace gaupel::sir {
         //   (tyck가 결과 타입을 정규화(T?) 하더라도, 원래 목표 T를 잃지 않게 저장)
         // -----------------------------------------
         TypeId cast_to = k_invalid_type;
+
+        // kBorrow payload
+        bool borrow_is_mut = false;
     };
 
     // ---------------------------------------------
