@@ -126,6 +126,7 @@ namespace gaupel {
             case K::kStarAssign:
             case K::kSlashAssign:
             case K::kPercentAssign:
+            case K::kQuestionQuestionAssign:
                 return true;
             default:
                 return false;
@@ -1079,11 +1080,12 @@ namespace gaupel {
 
                     // normal expr-stmt with ';'
                     if (cursor_.eat(K::kSemicolon)) {
+                        const Token semi = cursor_.prev();
                         ast::Stmt s{};
                         s.kind = ast::StmtKind::kExprStmt;
                         s.expr = ex;
                         // span: from expr start to semicolon-ish (best-effort)
-                        s.span = span_join(ast_.expr(ex).span, cursor_.peek(-1).span);
+                        s.span = span_join(ast_.expr(ex).span, semi.span);
                         add_child_stmt(ast_.add_stmt(s));
                         continue;
                     }
@@ -1132,10 +1134,11 @@ namespace gaupel {
 
                 // expr stmt requires ';'
                 if (cursor_.eat(K::kSemicolon)) {
+                    const Token semi = cursor_.prev();
                     ast::Stmt s{};
                     s.kind = ast::StmtKind::kExprStmt;
                     s.expr = ex;
-                    s.span = span_join(ast_.expr(ex).span, cursor_.peek(-1).span);
+                    s.span = span_join(ast_.expr(ex).span, semi.span);
                     add_child_stmt(ast_.add_stmt(s));
                     continue;
                 }

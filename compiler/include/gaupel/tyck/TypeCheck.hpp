@@ -65,6 +65,7 @@ namespace gaupel::tyck {
         };
 
         std::vector<LoopCtx> loop_stack_;
+        uint32_t stmt_loop_depth_ = 0; // while/loop-stmt style depth (non-value loops)
 
         // --------------------
         // core
@@ -125,7 +126,7 @@ namespace gaupel::tyck {
         bool is_null_(ty::TypeId t) const;
         bool is_error_(ty::TypeId t) const;
 
-        bool in_loop_() const { return !loop_stack_.empty(); }
+        bool in_loop_() const { return !loop_stack_.empty() || stmt_loop_depth_ != 0; }
         void note_break_(ty::TypeId t, bool is_value_break);
 
         // "대입/초기화" 호환성:

@@ -177,6 +177,7 @@ namespace gaupel {
     Token Lexer::lex_number() {
         size_t start = pos_;
         bool saw_dot = false;
+        bool saw_float_suffix = false;
     
         // digits (allow '_')
         auto scan_digits = [&] {
@@ -200,14 +201,37 @@ namespace gaupel {
             scan_digits();
         }
 
-        // suffix (simplified): accept letters/numbers for now
-        while (!eof() && std::isalpha(static_cast<unsigned char>(peek()))) bump();
+        // suffix:
+        // - float: f, lf, f32/f64/f128
+        // - int:   i8/i16/i32/i64/i128, u8/u16/u32/u64/u128, isize/usize
+        // - unknown suffix is consumed as one token and validated later in tyck
+        if (!eof() && std::isalpha(static_cast<unsigned char>(peek()))) {
+            if (peek() == 'l' && peek(1) == 'f') {
+                saw_float_suffix = true;
+                bump(); // l
+                bump(); // f
+                while (!eof() && std::isdigit(static_cast<unsigned char>(peek()))) bump();
+            } else if (peek() == 'f') {
+                saw_float_suffix = true;
+                bump(); // f
+                while (!eof() && std::isdigit(static_cast<unsigned char>(peek()))) bump();
+            } else {
+                while (!eof()) {
+                    const unsigned char u = static_cast<unsigned char>(peek());
+                    if (std::isalnum(u) || peek() == '_') {
+                        bump();
+                        continue;
+                    }
+                    break;
+                }
+            }
+        }
 
         size_t end = pos_;
         Token t;
         t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(end)};
         t.lexeme = source_.substr(start, end - start);
-        t.kind = saw_dot ? syntax::TokenKind::kFloatLit : syntax::TokenKind::kIntLit;
+        t.kind = (saw_dot || saw_float_suffix) ? syntax::TokenKind::kFloatLit : syntax::TokenKind::kIntLit;
         return t;
     }
 

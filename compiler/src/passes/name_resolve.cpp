@@ -272,7 +272,24 @@ namespace gaupel::passes {
                 }
 
                 case ast::ExprKind::kLoop: {
-                    if (is_valid_expr_id_(r, e.loop_iter)) stack.push_back(e.loop_iter);
+                    // loop expression introduces its own scope for header var.
+                    ScopeGuard g(sym);
+
+                    // Iter expression should be resolved BEFORE loop variable declaration.
+                    // (loop header variable is body-local in v0 policy.)
+                    if (is_valid_expr_id_(r, e.loop_iter)) {
+                        walk_expr(ast, r, e.loop_iter, sym, bag, opt, out, param_symbol_ids);
+                    }
+
+                    if (e.loop_has_header && !e.loop_var.empty()) {
+                        (void)declare_(
+                            sema::SymbolKind::kVar,
+                            e.loop_var,
+                            ast::k_invalid_type,
+                            e.span,
+                            sym, bag, opt
+                        );
+                    }
 
                     // IMPORTANT: loop body is StmtId.
                     if (is_valid_stmt_id_(r, e.loop_body)) {

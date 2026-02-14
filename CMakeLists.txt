@@ -14,6 +14,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(GAUPEL_BUILD_TESTS "Build Gaupel tests" ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+enable_testing()
+
 add_subdirectory(compiler)
 add_subdirectory(tools/gaupelc)
 

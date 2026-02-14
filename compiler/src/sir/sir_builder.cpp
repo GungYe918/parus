@@ -53,6 +53,30 @@ namespace gaupel::sir {
         return (SymbolId)nres.resolved[rid].sym;
     }
 
+    // Resolve the most concrete type we can observe from identifier use-sites
+    // that bind to the same symbol.
+    static TypeId resolve_decl_type_from_symbol_uses(
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        SymbolId sym_id
+    ) {
+        if (sym_id == k_invalid_symbol) return k_invalid_type;
+        if (nres.expr_to_resolved.empty()) return k_invalid_type;
+
+        const uint32_t expr_n = (uint32_t)nres.expr_to_resolved.size();
+        for (uint32_t eid = 0; eid < expr_n; ++eid) {
+            const auto rid = nres.expr_to_resolved[eid];
+            if (rid == passes::NameResolveResult::k_invalid_resolved) continue;
+            if ((size_t)rid >= nres.resolved.size()) continue;
+            if ((SymbolId)nres.resolved[rid].sym != sym_id) continue;
+
+            const TypeId t = type_of_ast_expr(tyck, (gaupel::ast::ExprId)eid);
+            if (t != k_invalid_type) return t;
+        }
+
+        return k_invalid_type;
+    }
+
     // -----------------------------
     // Place classification (v0 fixed)
     // -----------------------------
@@ -510,8 +534,6 @@ namespace gaupel::sir {
         const tyck::TyckResult& tyck,
         gaupel::ast::StmtId sid
     ) {
-        (void)sym;
-
         const auto& s = ast.stmt(sid);
 
         Stmt out{};
@@ -533,13 +555,23 @@ namespace gaupel::sir {
                 // decl symbol from stmt
                 out.sym = resolve_symbol_from_stmt(nres, sid);
 
+                const bool has_sym = (out.sym != k_invalid_symbol && (size_t)out.sym < sym.symbols().size());
+                const TypeId use_derived_type = resolve_decl_type_from_symbol_uses(nres, tyck, out.sym);
+
                 // declared_type policy:
-                // - let: annotation (s.type)
-                // - set: inferred from init (tyck)
+                // - let: prefer declared symbol type, fallback annotation
+                // - set: prefer use-derived tyck type, then init tyck type, then symbol type
                 if (!s.is_set) {
-                    out.declared_type = s.type;
+                    out.declared_type = has_sym ? sym.symbol(out.sym).declared_type : k_invalid_type;
+                    if (out.declared_type == k_invalid_type) out.declared_type = s.type;
                 } else {
-                    out.declared_type = type_of_ast_expr(tyck, s.init);
+                    out.declared_type = use_derived_type;
+                    if (out.declared_type == k_invalid_type) {
+                        out.declared_type = type_of_ast_expr(tyck, s.init);
+                    }
+                    if (out.declared_type == k_invalid_type && has_sym) {
+                        out.declared_type = sym.symbol(out.sym).declared_type;
+                    }
                 }
                 break;
             }
@@ -600,6 +632,7 @@ namespace gaupel::sir {
         const BuildOptions& opt
     ) {
         (void)sym;
+        (void)types;
         (void)opt;
 
         Module m{};

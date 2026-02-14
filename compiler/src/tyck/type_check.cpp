@@ -4,6 +4,7 @@
 #include <gaupel/diag/Diagnostic.hpp>
 #include <gaupel/diag/DiagCode.hpp>
 
+#include <cctype>
 #include <sstream>
 #include <unordered_map>
 
@@ -11,6 +12,152 @@
 namespace gaupel::tyck {
 
     using K = gaupel::syntax::TokenKind;
+
+    namespace {
+
+        struct ParsedIntLiteral {
+            bool ok = false;
+            bool has_suffix = false;
+            ty::Builtin suffix = ty::Builtin::kI32;
+            std::string digits_no_sep{};
+        };
+
+        struct ParsedFloatLiteral {
+            bool ok = false;
+            ty::Builtin builtin = ty::Builtin::kF64;
+        };
+
+        static std::string strip_underscores_(std::string_view s) {
+            std::string out;
+            out.reserve(s.size());
+            for (char c : s) {
+                if (c == '_') continue;
+                out.push_back(c);
+            }
+            return out;
+        }
+
+        static bool parse_int_suffix_(std::string_view s, ty::Builtin& out) {
+            using B = ty::Builtin;
+            if (s == "i8")    { out = B::kI8; return true; }
+            if (s == "i16")   { out = B::kI16; return true; }
+            if (s == "i32")   { out = B::kI32; return true; }
+            if (s == "i64")   { out = B::kI64; return true; }
+            if (s == "i128")  { out = B::kI128; return true; }
+            if (s == "u8")    { out = B::kU8; return true; }
+            if (s == "u16")   { out = B::kU16; return true; }
+            if (s == "u32")   { out = B::kU32; return true; }
+            if (s == "u64")   { out = B::kU64; return true; }
+            if (s == "u128")  { out = B::kU128; return true; }
+            if (s == "isize") { out = B::kISize; return true; }
+            if (s == "usize") { out = B::kUSize; return true; }
+            return false;
+        }
+
+        static ParsedIntLiteral parse_int_literal_(std::string_view lit) {
+            ParsedIntLiteral out{};
+            if (lit.empty()) return out;
+
+            size_t i = 0;
+            bool saw_digit = false;
+            while (i < lit.size()) {
+                const unsigned char u = static_cast<unsigned char>(lit[i]);
+                if (std::isdigit(u)) {
+                    saw_digit = true;
+                    ++i;
+                    continue;
+                }
+                if (lit[i] == '_') {
+                    ++i;
+                    continue;
+                }
+                break;
+            }
+            if (!saw_digit) return out;
+
+            const std::string_view body = lit.substr(0, i);
+            const std::string_view suffix = lit.substr(i);
+
+            out.digits_no_sep = strip_underscores_(body);
+            if (out.digits_no_sep.empty()) return out;
+
+            if (suffix.empty()) {
+                out.ok = true;
+                out.has_suffix = false;
+                return out;
+            }
+
+            ty::Builtin b{};
+            if (!parse_int_suffix_(suffix, b)) {
+                return out;
+            }
+
+            out.ok = true;
+            out.has_suffix = true;
+            out.suffix = b;
+            return out;
+        }
+
+        static ParsedFloatLiteral parse_float_literal_(std::string_view lit) {
+            ParsedFloatLiteral out{};
+            if (lit.empty()) return out;
+
+            size_t i = 0;
+            bool saw_digit = false;
+            while (i < lit.size()) {
+                const unsigned char u = static_cast<unsigned char>(lit[i]);
+                if (std::isdigit(u)) {
+                    saw_digit = true;
+                    ++i;
+                    continue;
+                }
+                if (lit[i] == '_') {
+                    ++i;
+                    continue;
+                }
+                break;
+            }
+            if (!saw_digit) return out;
+
+            if (i < lit.size() && lit[i] == '.') {
+                ++i;
+                while (i < lit.size()) {
+                    const unsigned char u = static_cast<unsigned char>(lit[i]);
+                    if (std::isdigit(u) || lit[i] == '_') {
+                        ++i;
+                        continue;
+                    }
+                    break;
+                }
+            }
+
+            const std::string_view suffix = lit.substr(i);
+            if (suffix.empty()) {
+                out.ok = true;
+                out.builtin = ty::Builtin::kF64;
+                return out;
+            }
+
+            if (suffix == "f" || suffix == "f32") {
+                out.ok = true;
+                out.builtin = ty::Builtin::kF32;
+                return out;
+            }
+            if (suffix == "lf" || suffix == "f64") {
+                out.ok = true;
+                out.builtin = ty::Builtin::kF64;
+                return out;
+            }
+            if (suffix == "f128") {
+                out.ok = true;
+                out.builtin = ty::Builtin::kF128;
+                return out;
+            }
+
+            return out;
+        }
+
+    } // namespace
 
     // --------------------
     // public entry
@@ -21,6 +168,7 @@ namespace gaupel::tyck {
         // -----------------------------
         result_ = TyckResult{};
         loop_stack_.clear();
+        stmt_loop_depth_ = 0;
         fn_ctx_ = FnCtx{};
         pending_int_sym_.clear();
         pending_int_expr_.clear();
@@ -77,6 +225,44 @@ namespace gaupel::tyck {
             // 에러가 나도 계속 진행(정책)
         }
 
+        // ----------------------------------------
+        // Finalize unresolved deferred integers:
+        // - If an inferred integer "{integer}" is never consumed in a way that fixes the type,
+        //   pick the smallest signed integer type that fits.
+        // - Finalization applies to both symbol-backed and expression-backed pending integers.
+        // ----------------------------------------
+        auto choose_smallest_signed = [&](const num::BigInt& v) -> ty::TypeId {
+            ty::Builtin b = ty::Builtin::kI128;
+            if      (v.fits_i8())  b = ty::Builtin::kI8;
+            else if (v.fits_i16()) b = ty::Builtin::kI16;
+            else if (v.fits_i32()) b = ty::Builtin::kI32;
+            else if (v.fits_i64()) b = ty::Builtin::kI64;
+            return types_.builtin(b);
+        };
+
+        for (auto& kv : pending_int_sym_) {
+            const uint32_t sym_id = kv.first;
+            PendingInt& pi = kv.second;
+
+            if (!pi.has_value || pi.resolved) continue;
+            pi.resolved = true;
+            pi.resolved_type = choose_smallest_signed(pi.value);
+            sym_.update_declared_type(sym_id, pi.resolved_type);
+        }
+
+        for (auto& kv : pending_int_expr_) {
+            const uint32_t eid = kv.first;
+            PendingInt& pi = kv.second;
+
+            if (!pi.has_value || pi.resolved) continue;
+            pi.resolved = true;
+            pi.resolved_type = choose_smallest_signed(pi.value);
+
+            if (eid < expr_type_cache_.size()) {
+                expr_type_cache_[eid] = pi.resolved_type;
+            }
+        }
+
         // 결과 반영
         result_.expr_types = expr_type_cache_;
         return result_;
@@ -95,6 +281,7 @@ namespace gaupel::tyck {
 
     void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0) {
         if (!diag_bag_) return;
+        result_.ok = false;
         diag::Diagnostic d(diag::Severity::kError, code, sp);
         d.add_arg(a0);
         diag_bag_->add(std::move(d));
@@ -102,6 +289,7 @@ namespace gaupel::tyck {
 
     void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1) {
         if (!diag_bag_) return;
+        result_.ok = false;
         diag::Diagnostic d(diag::Severity::kError, code, sp);
         d.add_arg(a0);
         d.add_arg(a1);
@@ -110,6 +298,7 @@ namespace gaupel::tyck {
 
     void TypeChecker::diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2) {
         if (!diag_bag_) return;
+        result_.ok = false;
         diag::Diagnostic d(diag::Severity::kError, code, sp);
         d.add_arg(a0);
         d.add_arg(a1);
@@ -259,7 +448,9 @@ namespace gaupel::tyck {
 
         const ast::Expr& e = ast_.expr(eid);
         if (e.kind == ast::ExprKind::kIntLit) {
-            return num::BigInt::parse_dec(e.text, out);
+            const ParsedIntLiteral lit = parse_int_literal_(e.text);
+            if (!lit.ok) return false;
+            return num::BigInt::parse_dec(lit.digits_no_sep, out);
         }
 
         // ident의 경우: sym pending에서 찾아온다
@@ -318,6 +509,9 @@ namespace gaupel::tyck {
             }
             pe.resolved = true;
             pe.resolved_type = expected;
+            if ((size_t)eid < expr_type_cache_.size()) {
+                expr_type_cache_[eid] = expected;
+            }
         };
 
         switch (e.kind) {
@@ -408,6 +602,10 @@ namespace gaupel::tyck {
             pe.resolved_type = expected;
         }
 
+        if ((size_t)eid < expr_type_cache_.size()) {
+            expr_type_cache_[eid] = expected;
+        }
+
         return true;
     }
 
@@ -492,6 +690,15 @@ namespace gaupel::tyck {
                 if (s.expr == ast::k_invalid_expr) {
                     // break;
                     note_break_(types_.builtin(ty::Builtin::kNull), /*is_value_break=*/false);
+                    return;
+                }
+
+                // value-break는 "loop expression" 컨텍스트에서만 허용한다.
+                // (while 같은 statement-loop에서는 break 값을 받을 곳이 없다.)
+                if (loop_stack_.empty()) {
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, "break value is only allowed in loop expressions");
+                    err_(s.span, "break value is not allowed in a statement loop");
+                    (void)check_expr_(s.expr, Slot::kValue);
                     return;
                 }
 
@@ -647,23 +854,34 @@ namespace gaupel::tyck {
 
         // (E) set x = <int literal> 이면: declared_type을 "{integer}"로 바꾸고 pending을 sym-id로 저장
         if (init_e.kind == ast::ExprKind::kIntLit) {
+            const ParsedIntLiteral lit = parse_int_literal_(init_e.text);
             num::BigInt v;
-            if (!num::BigInt::parse_dec(init_e.text, v)) {
+            if (!lit.ok || !num::BigInt::parse_dec(lit.digits_no_sep, v)) {
                 diag_(diag::Code::kIntLiteralInvalid, init_e.span, init_e.text);
                 err_(init_e.span, "invalid integer literal");
                 inferred = types_.error();
                 if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
             } else {
-                inferred = types_.builtin(ty::Builtin::kInferInteger);
-                if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
+                if (lit.has_suffix) {
+                    inferred = types_.builtin(lit.suffix);
+                    if (!fits_builtin_int_big_(v, lit.suffix)) {
+                        diag_(diag::Code::kIntLiteralOverflow, init_e.span, init_e.text, types_.to_string(inferred));
+                        err_(init_e.span, "integer literal overflow");
+                        inferred = types_.error();
+                    }
+                    if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
+                } else {
+                    inferred = types_.builtin(ty::Builtin::kInferInteger);
+                    if (ins.ok) sym_.update_declared_type(ins.symbol_id, inferred);
 
-                PendingInt pi{};
-                pi.value = v;
-                pi.has_value = true;
-                pi.resolved = false;
-                pi.resolved_type = ty::kInvalidType;
+                    PendingInt pi{};
+                    pi.value = v;
+                    pi.has_value = true;
+                    pi.resolved = false;
+                    pi.resolved_type = ty::kInvalidType;
 
-                if (ins.ok) pending_int_sym_[ins.symbol_id] = pi;
+                    if (ins.ok) pending_int_sym_[ins.symbol_id] = pi;
+                }
             }
         }
 
@@ -694,7 +912,11 @@ namespace gaupel::tyck {
                 err_(s.span, "while condition must be bool");
             }
         }
-        if (s.a != ast::k_invalid_stmt) check_stmt_(s.a);
+        if (s.a != ast::k_invalid_stmt) {
+            ++stmt_loop_depth_;
+            check_stmt_(s.a);
+            if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+        }
     }
 
     void TypeChecker::check_stmt_return_(const ast::Stmt& s) {
@@ -722,6 +944,13 @@ namespace gaupel::tyck {
         }
 
         ty::TypeId v = check_expr_(s.expr);
+
+        const auto& vt0 = types_.get(v);
+        if (vt0.kind == ty::Kind::kBuiltin && vt0.builtin == ty::Builtin::kInferInteger) {
+            (void)resolve_infer_int_in_context_(s.expr, rt);
+            v = check_expr_(s.expr);
+        }
+
         if (!can_assign_(rt, v)) {
             diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), types_.to_string(v));
 
@@ -826,6 +1055,13 @@ namespace gaupel::tyck {
             // named-group default만 타입 검사
             if (p.is_named_group && p.has_default && p.default_expr != ast::k_invalid_expr) {
                 ty::TypeId dt = check_expr_(p.default_expr);
+
+                const auto& dtt = types_.get(dt);
+                if (dtt.kind == ty::Kind::kBuiltin && dtt.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(p.default_expr, pt);
+                    dt = check_expr_(p.default_expr);
+                }
+
                 if (!can_assign_(pt, dt)) {
                     std::ostringstream oss;
                     oss << "default value type mismatch for param '" << p.name
@@ -946,13 +1182,31 @@ namespace gaupel::tyck {
                 break;
 
             case ast::ExprKind::kIntLit: {
-                t = types_.builtin(ty::Builtin::kInferInteger);
-
-                num::BigInt v;
-                if (!num::BigInt::parse_dec(e.text, v)) {
+                const ParsedIntLiteral lit = parse_int_literal_(e.text);
+                if (!lit.ok) {
                     diag_(diag::Code::kIntLiteralInvalid, e.span, e.text);
                     err_(e.span, "invalid integer literal");
+                    t = types_.error();
+                    break;
+                }
+
+                num::BigInt v;
+                if (!num::BigInt::parse_dec(lit.digits_no_sep, v)) {
+                    diag_(diag::Code::kIntLiteralInvalid, e.span, e.text);
+                    err_(e.span, "invalid integer literal");
+                    t = types_.error();
+                    break;
+                }
+
+                if (lit.has_suffix) {
+                    t = types_.builtin(lit.suffix);
+                    if (!fits_builtin_int_big_(v, lit.suffix)) {
+                        diag_(diag::Code::kIntLiteralOverflow, e.span, e.text, types_.to_string(t));
+                        err_(e.span, "integer literal overflow");
+                        t = types_.error();
+                    }
                 } else {
+                    t = types_.builtin(ty::Builtin::kInferInteger);
                     PendingInt pi{};
                     pi.value = v;
                     pi.has_value = true;
@@ -964,16 +1218,15 @@ namespace gaupel::tyck {
             }
 
             case ast::ExprKind::kFloatLit: {
-                std::string_view tx = e.text;
+                const ParsedFloatLiteral lit = parse_float_literal_(e.text);
+                if (!lit.ok) {
+                    diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid float literal");
+                    err_(e.span, "invalid float literal");
+                    t = types_.error();
+                    break;
+                }
 
-                auto ends_with = [](std::string_view s, std::string_view suf) -> bool {
-                    return s.size() >= suf.size() && s.substr(s.size() - suf.size()) == suf;
-                };
-
-                if (ends_with(tx, "f32"))       t = types_.builtin(ty::Builtin::kF32);
-                else if (ends_with(tx, "f64"))  t = types_.builtin(ty::Builtin::kF64);
-                else if (ends_with(tx, "f128")) t = types_.builtin(ty::Builtin::kF128);
-                else                            t = types_.builtin(ty::Builtin::kF64);
+                t = types_.builtin(lit.builtin);
                 break;
             }
 
@@ -1150,7 +1403,7 @@ namespace gaupel::tyck {
         };
 
         auto is_float_builtin = [&](ty::Builtin b) -> bool {
-            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64;
+            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
         };
 
         const bool dst_is_builtin = (dt.kind == ty::Kind::kBuiltin);
@@ -1343,7 +1596,7 @@ namespace gaupel::tyck {
             // lhs는 optional 이어야 한다
             if (!is_optional_(lt)) {
                 diag_(diag::Code::kTypeNullCoalesceLhsMustBeOptional, e.span, types_.to_string(lt));
-                err_(e.span, "operator '??' requires optional lhs");
+                err_(e.span, "operator '?" "?' requires optional lhs");
                 return types_.error();
             }
 
@@ -1367,7 +1620,7 @@ namespace gaupel::tyck {
             if (!can_assign_(elem, rt)) {
                 diag_(diag::Code::kTypeNullCoalesceRhsMismatch, e.span,
                     types_.to_string(elem), types_.to_string(rt));
-                err_(e.span, "operator '??' rhs mismatch");
+                err_(e.span, "operator '?" "?' rhs mismatch");
                 return types_.error();
             }
 
@@ -1557,7 +1810,7 @@ namespace gaupel::tyck {
 
             if (!is_optional_(lt)) {
                 diag_(diag::Code::kTypeNullCoalesceAssignLhsMustBeOptional, e.span, types_.to_string(lt));
-                err_(e.span, "operator '??=' requires optional lhs");
+                err_(e.span, "operator '?" "?=' requires optional lhs");
                 return types_.error();
             }
 
@@ -1579,7 +1832,7 @@ namespace gaupel::tyck {
             if (!can_assign_(elem, rt)) {
                 diag_(diag::Code::kTypeNullCoalesceAssignRhsMismatch, e.span,
                     types_.to_string(elem), types_.to_string(rt));
-                err_(e.span, "operator '??=' rhs mismatch");
+                err_(e.span, "operator '?" "?=' rhs mismatch");
                 return types_.error();
             }
 
@@ -2221,7 +2474,9 @@ namespace gaupel::tyck {
 
         // body is a block stmt
         if (e.loop_body != ast::k_invalid_stmt) {
+            ++stmt_loop_depth_;
             check_stmt_(e.loop_body);
+            if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
         } else {
             err_(e.span, "loop has no body");
         }
