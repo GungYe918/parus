@@ -188,7 +188,7 @@ namespace gaupelc::driver {
                     }
                 }
 
-                auto mut = gaupel::sir::analyze_mut(sir_mod, bag);
+                auto mut = gaupel::sir::analyze_mut(sir_mod, types, bag);
                 std::cout << "\nMUT:\n";
                 std::cout << "tracked symbols: " << mut.by_symbol.size() << "\n";
             }

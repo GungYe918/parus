@@ -1,0 +1,6 @@
+// 비허용 케이스: static/boundary가 아닌 문맥에서 && 금지
+fn main() -> i32 {
+  let mut x: i32 = 1i32;
+  set h = &&x;
+  return 0i32;
+}

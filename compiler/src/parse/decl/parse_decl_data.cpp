@@ -41,7 +41,7 @@ namespace gaupel {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (field name)");
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
         }
 
         if (!cursor_.eat(K::kLBrace)) {
@@ -80,7 +80,7 @@ namespace gaupel {
                 member_name = member_name_tok.lexeme;
                 cursor_.bump();
             } else {
-                diag_report(diag::Code::kUnexpectedToken, member_name_tok.span, "identifier (field member name)");
+                diag_report(diag::Code::kFieldMemberNameExpected, member_name_tok.span);
                 recover_to_delim(K::kSemicolon, K::kRBrace);
                 cursor_.eat(K::kSemicolon);
                 continue;
@@ -158,11 +158,11 @@ namespace gaupel {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (acts name)");
+            diag_report(diag::Code::kActsNameExpected, name_tok.span);
         }
 
         if (name == "for") {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "'acts for T' is not supported yet; use 'acts A { ... }'");
+            diag_report(diag::Code::kActsForNotSupported, name_tok.span);
 
             // 현재는 acts for를 지원하지 않으므로, 선언 끝까지 통째로 스킵해 연쇄 오류를 줄인다.
             while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kEof)) {
@@ -216,7 +216,7 @@ namespace gaupel {
                 ast::StmtId mid = parse_decl_fn();
                 auto& ms = ast_.stmt_mut(mid);
                 if (ms.kind == ast::StmtKind::kFnDecl && ms.is_export) {
-                    diag_report(diag::Code::kUnexpectedToken, ms.span, "member-level 'export' is not allowed inside acts");
+                    diag_report(diag::Code::kActsMemberExportNotAllowed, ms.span);
                     ms.is_export = false;
                 }
                 members.push_back(mid);

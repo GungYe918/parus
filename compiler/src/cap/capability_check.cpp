@@ -20,10 +20,13 @@ namespace gaupel::cap {
             kBorrowOperand,
             kEscapeOperand,
             kAssignLhs,
+            kCallArg,
+            kReturnValue,
         };
 
         struct ScopeState {
             std::vector<SymbolId> activated_mut_borrows;
+            std::vector<SymbolId> activated_shared_borrows;
         };
 
         /// @brief `& / &mut / &&` capability 규칙을 함수 단위로 검사한다.
@@ -46,7 +49,7 @@ namespace gaupel::cap {
 
             /// @brief capability 체크를 수행하고 결과를 반환한다.
             CapabilityResult run() {
-                build_symbol_mutability_();
+                build_symbol_traits_();
                 enter_scope_();
                 walk_stmt_(program_root_);
                 leave_scope_();
@@ -68,9 +71,10 @@ namespace gaupel::cap {
                 return sid != ast::k_invalid_stmt && (size_t)sid < ast_.stmts().size();
             }
 
-            /// @brief 심볼 mutability 맵(SymbolId -> is_mut)을 구성한다.
-            void build_symbol_mutability_() {
+            /// @brief 심볼 trait 맵(SymbolId -> mut/static)을 구성한다.
+            void build_symbol_traits_() {
                 symbol_is_mut_.clear();
+                symbol_is_static_.clear();
 
                 const auto& stmts = ast_.stmts();
                 for (uint32_t sid = 0; sid < (uint32_t)stmts.size(); ++sid) {
@@ -79,6 +83,7 @@ namespace gaupel::cap {
                     auto sym = symbol_from_stmt_((ast::StmtId)sid);
                     if (!sym) continue;
                     symbol_is_mut_[*sym] = s.is_mut;
+                    symbol_is_static_[*sym] = s.is_static;
                 }
 
                 const auto& ps = ast_.params();
@@ -86,6 +91,7 @@ namespace gaupel::cap {
                     auto sym = symbol_from_param_(pid);
                     if (!sym) continue;
                     symbol_is_mut_[*sym] = ps[pid].is_mut;
+                    symbol_is_static_[*sym] = false;
                 }
             }
 
@@ -119,6 +125,12 @@ namespace gaupel::cap {
                     if (it->second > 0) --it->second;
                     if (it->second == 0) active_mut_borrow_count_.erase(it);
                 }
+                for (auto sym : scope.activated_shared_borrows) {
+                    auto it = active_shared_borrow_count_.find(sym);
+                    if (it == active_shared_borrow_count_.end()) continue;
+                    if (it->second > 0) --it->second;
+                    if (it->second == 0) active_shared_borrow_count_.erase(it);
+                }
                 scopes_.pop_back();
             }
 
@@ -130,10 +142,25 @@ namespace gaupel::cap {
                 }
             }
 
+            /// @brief 특정 심볼의 활성 shared borrow를 현재 스코프에 등록한다.
+            void activate_shared_borrow_(SymbolId sym) {
+                active_shared_borrow_count_[sym] += 1;
+                if (!scopes_.empty()) {
+                    scopes_.back().activated_shared_borrows.push_back(sym);
+                }
+            }
+
             /// @brief 특정 심볼에 활성 `&mut` borrow가 있는지 확인한다.
             bool has_active_mut_borrow_(SymbolId sym) const {
                 auto it = active_mut_borrow_count_.find(sym);
                 if (it == active_mut_borrow_count_.end()) return false;
+                return it->second > 0;
+            }
+
+            /// @brief 특정 심볼에 활성 shared borrow가 있는지 확인한다.
+            bool has_active_shared_borrow_(SymbolId sym) const {
+                auto it = active_shared_borrow_count_.find(sym);
+                if (it == active_shared_borrow_count_.end()) return false;
                 return it->second > 0;
             }
 
@@ -142,6 +169,18 @@ namespace gaupel::cap {
                 auto it = symbol_is_mut_.find(sym);
                 if (it == symbol_is_mut_.end()) return false;
                 return it->second;
+            }
+
+            /// @brief SymbolId가 static 저장소로 선언되었는지 확인한다.
+            bool is_symbol_static_(SymbolId sym) const {
+                auto it = symbol_is_static_.find(sym);
+                if (it == symbol_is_static_.end()) return false;
+                return it->second;
+            }
+
+            /// @brief escape operand가 경계(return/call-arg)에서 바로 사용되는지 확인한다.
+            static bool is_escape_boundary_use_(ExprUse use) {
+                return use == ExprUse::kReturnValue || use == ExprUse::kCallArg;
             }
 
             /// @brief SymbolId가 `&&`로 move-out 되었는지 확인한다.
@@ -275,7 +314,7 @@ namespace gaupel::cap {
                             walk_expr_(s.init, ExprUse::kValue);
 
                             const ty::TypeId init_t = expr_type_(s.init);
-                            if (is_borrow_type_(init_t) && fn_depth_ == 0) {
+                            if (is_borrow_type_(init_t) && (fn_depth_ == 0 || s.is_static)) {
                                 report_(diag::Code::kBorrowEscapeToStorage, s.span);
                             }
                         }
@@ -295,7 +334,7 @@ namespace gaupel::cap {
 
                     case ast::StmtKind::kReturn: {
                         if (s.expr != ast::k_invalid_expr) {
-                            walk_expr_(s.expr, ExprUse::kValue);
+                            walk_expr_(s.expr, ExprUse::kReturnValue);
                             const ty::TypeId rt = expr_type_(s.expr);
                             if (is_borrow_type_(rt)) {
                                 report_(diag::Code::kBorrowEscapeFromReturn, s.span);
@@ -352,12 +391,14 @@ namespace gaupel::cap {
             /// @brief 함수 컨텍스트를 분리하여 body를 검사한다.
             void walk_fn_decl_(const ast::Stmt& s) {
                 auto saved_active = std::move(active_mut_borrow_count_);
+                auto saved_active_shared = std::move(active_shared_borrow_count_);
                 auto saved_moved = std::move(moved_by_escape_);
                 auto saved_scopes = std::move(scopes_);
                 const bool saved_pure = fn_is_pure_;
                 const bool saved_comptime = fn_is_comptime_;
 
                 active_mut_borrow_count_.clear();
+                active_shared_borrow_count_.clear();
                 moved_by_escape_.clear();
                 scopes_.clear();
                 fn_is_pure_ = s.is_pure;
@@ -379,6 +420,7 @@ namespace gaupel::cap {
                 fn_is_pure_ = saved_pure;
                 fn_is_comptime_ = saved_comptime;
                 active_mut_borrow_count_ = std::move(saved_active);
+                active_shared_borrow_count_ = std::move(saved_active_shared);
                 moved_by_escape_ = std::move(saved_moved);
                 scopes_ = std::move(saved_scopes);
             }
@@ -397,9 +439,13 @@ namespace gaupel::cap {
                             report_(diag::Code::kUseAfterEscapeMove, e.span);
                         }
 
-                        if ((use == ExprUse::kValue || use == ExprUse::kAssignLhs) &&
+                        if ((use == ExprUse::kValue || use == ExprUse::kAssignLhs ||
+                             use == ExprUse::kCallArg || use == ExprUse::kReturnValue) &&
                             has_active_mut_borrow_(*sid)) {
                             report_(diag::Code::kBorrowMutDirectAccessConflict, e.span);
+                        }
+                        if (use == ExprUse::kAssignLhs && has_active_shared_borrow_(*sid)) {
+                            report_(diag::Code::kBorrowSharedWriteConflict, e.span);
                         }
                         return;
                     }
@@ -418,12 +464,25 @@ namespace gaupel::cap {
                                 if (e.unary_is_mut && !is_symbol_mutable_(*sid)) {
                                     report_(diag::Code::kBorrowMutRequiresMutablePlace, e.span);
                                 }
-                                const bool has_conflict = has_active_mut_borrow_(*sid);
-                                if (has_conflict) {
-                                    report_(diag::Code::kBorrowMutConflict, e.span);
-                                }
-                                if (e.unary_is_mut && !has_conflict && is_symbol_mutable_(*sid)) {
-                                    activate_mut_borrow_(*sid);
+                                const bool has_mut_conflict = has_active_mut_borrow_(*sid);
+                                const bool has_shared_conflict = has_active_shared_borrow_(*sid);
+
+                                if (e.unary_is_mut) {
+                                    if (has_mut_conflict) {
+                                        report_(diag::Code::kBorrowMutConflict, e.span);
+                                    }
+                                    if (has_shared_conflict) {
+                                        report_(diag::Code::kBorrowMutConflictWithShared, e.span);
+                                    }
+                                    if (!has_mut_conflict && !has_shared_conflict && is_symbol_mutable_(*sid)) {
+                                        activate_mut_borrow_(*sid);
+                                    }
+                                } else {
+                                    if (has_mut_conflict) {
+                                        report_(diag::Code::kBorrowSharedConflictWithMut, e.span);
+                                    } else {
+                                        activate_shared_borrow_(*sid);
+                                    }
                                 }
                             }
                             return;
@@ -450,10 +509,18 @@ namespace gaupel::cap {
                                 if (has_active_mut_borrow_(*sid)) {
                                     report_(diag::Code::kEscapeWhileMutBorrowActive, e.span);
                                 }
+                                if (has_active_shared_borrow_(*sid)) {
+                                    report_(diag::Code::kEscapeWhileBorrowActive, e.span);
+                                }
+                                if (!is_escape_boundary_use_(use) && !is_symbol_static_(*sid)) {
+                                    report_(diag::Code::kEscapeRequiresStaticOrBoundary, e.span);
+                                }
                                 if (is_symbol_moved_(*sid)) {
                                     report_(diag::Code::kUseAfterEscapeMove, e.span);
                                 }
                                 mark_symbol_moved_(*sid);
+                            } else if (!is_escape_boundary_use_(use)) {
+                                report_(diag::Code::kEscapeRequiresStaticOrBoundary, e.span);
                             }
                             return;
                         }
@@ -463,7 +530,7 @@ namespace gaupel::cap {
                     }
 
                     case ast::ExprKind::kPostfixUnary:
-                        walk_expr_(e.a, ExprUse::kValue);
+                        walk_expr_(e.a, ExprUse::kAssignLhs);
                         return;
 
                     case ast::ExprKind::kBinary:
@@ -477,14 +544,22 @@ namespace gaupel::cap {
 
                         const ty::TypeId rhs_t = expr_type_(e.b);
                         if (is_borrow_type_(rhs_t)) {
-                            const bool lhs_is_plain_local =
-                                (e.a != ast::k_invalid_expr && ast_.expr(e.a).kind == ast::ExprKind::kIdent);
+                            bool lhs_is_plain_local = false;
+                            if (e.a != ast::k_invalid_expr && ast_.expr(e.a).kind == ast::ExprKind::kIdent) {
+                                if (auto lhs_sid = root_place_symbol_(e.a)) {
+                                    lhs_is_plain_local = (fn_depth_ > 0) && !is_symbol_static_(*lhs_sid);
+                                }
+                            }
                             if (!lhs_is_plain_local || fn_depth_ == 0) {
                                 report_(diag::Code::kBorrowEscapeToStorage, e.span);
                             }
                         }
 
                         if (auto sid = root_place_symbol_(e.a)) {
+                            if (ast_.expr(e.a).kind != ast::ExprKind::kIdent &&
+                                has_active_shared_borrow_(*sid)) {
+                                report_(diag::Code::kBorrowSharedWriteConflict, e.span);
+                            }
                             clear_symbol_moved_(*sid);
                         }
                         return;
@@ -508,11 +583,11 @@ namespace gaupel::cap {
                             if (a.kind == ast::ArgKind::kNamedGroup) {
                                 for (uint32_t j = 0; j < a.child_count; ++j) {
                                     const auto& na = ngs[a.child_begin + j];
-                                    if (!na.is_hole) walk_expr_(na.expr, ExprUse::kValue);
+                                    if (!na.is_hole) walk_expr_(na.expr, ExprUse::kCallArg);
                                 }
                                 continue;
                             }
-                            if (!a.is_hole) walk_expr_(a.expr, ExprUse::kValue);
+                            if (!a.is_hole) walk_expr_(a.expr, ExprUse::kCallArg);
                         }
                         leave_scope_();
                         return;
@@ -533,7 +608,7 @@ namespace gaupel::cap {
                     }
 
                     case ast::ExprKind::kIndex:
-                        walk_expr_(e.a, ExprUse::kValue);
+                        walk_expr_(e.a, use == ExprUse::kAssignLhs ? ExprUse::kAssignLhs : ExprUse::kValue);
                         walk_expr_(e.b, ExprUse::kValue);
                         return;
 
@@ -592,7 +667,9 @@ namespace gaupel::cap {
             bool fn_is_comptime_ = false;
 
             std::unordered_map<SymbolId, bool> symbol_is_mut_;
+            std::unordered_map<SymbolId, bool> symbol_is_static_;
             std::unordered_map<SymbolId, uint32_t> active_mut_borrow_count_;
+            std::unordered_map<SymbolId, uint32_t> active_shared_borrow_count_;
             std::unordered_map<SymbolId, bool> moved_by_escape_;
             std::vector<ScopeState> scopes_;
         };

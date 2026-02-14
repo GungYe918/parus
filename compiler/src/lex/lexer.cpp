@@ -337,6 +337,7 @@ namespace gaupel {
         if (t.lexeme == "xor") { t.kind = syntax::TokenKind::kKwXor; return t; }
 
         if (t.lexeme == "mut") { t.kind = syntax::TokenKind::kKwMut; return t; }
+        if (t.lexeme == "static") { t.kind = syntax::TokenKind::kKwStatic; return t; }
 
         // stmt keywords
         if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }

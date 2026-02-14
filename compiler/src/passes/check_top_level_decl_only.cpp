@@ -30,6 +30,7 @@ namespace gaupel::passes {
             const auto& s = ast.stmt(sid);
 
             const bool ok =
+                (s.kind == ast::StmtKind::kVar) ||
                 (s.kind == ast::StmtKind::kFnDecl) ||
                 (s.kind == ast::StmtKind::kFieldDecl) ||
                 (s.kind == ast::StmtKind::kActsDecl) ||

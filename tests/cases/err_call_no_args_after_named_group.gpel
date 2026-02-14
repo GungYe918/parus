@@ -1,0 +1,9 @@
+// named-group 뒤에 추가 인자를 두면 문법 에러여야 한다.
+fn sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
+    return a - b + clamp;
+}
+
+fn main() -> i32 {
+    return sub(1, 2, { clamp: 1 }, 3);
+}
+

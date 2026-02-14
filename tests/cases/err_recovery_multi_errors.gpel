@@ -1,0 +1,15 @@
+// 비허용 케이스: 다중 구문 오류에서도 파서 복구가 진행되어야 함
+fn broken({ a: i32 = 0i32 }) -> i32 {
+  let x: i32 = ;
+  set y
+  if (x > 0i32) {
+    set t = 1i32;
+  } else {
+    set t = 2i32;
+  }
+  return x;
+}
+
+fn still_ok() -> i32 {
+  return 1i32;
+}

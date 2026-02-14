@@ -10,6 +10,33 @@
 
 namespace gaupel::tyck {
 
+    namespace {
+        /// @brief 타입이 borrow(`&T`/`&mut T`)인지 판정하고, 내부 요소 타입/가변 여부를 반환한다.
+        bool borrow_info_(
+            const ty::TypePool& types,
+            ty::TypeId t,
+            ty::TypeId& out_elem,
+            bool& out_is_mut
+        ) {
+            if (t == ty::kInvalidType) return false;
+            if (t >= types.count()) return false;
+            const auto& tt = types.get(t);
+            if (tt.kind != ty::Kind::kBorrow) return false;
+            out_elem = tt.elem;
+            out_is_mut = tt.borrow_is_mut;
+            return true;
+        }
+
+        /// @brief 값 읽기 컨텍스트에서 borrow 타입을 요소 타입으로 1단계 디케이한다.
+        ty::TypeId read_decay_borrow_(const ty::TypePool& types, ty::TypeId t) {
+            ty::TypeId elem = ty::kInvalidType;
+            bool is_mut = false;
+            if (!borrow_info_(types, t, elem, is_mut)) return t;
+            (void)is_mut;
+            return elem;
+        }
+    } // namespace
+
     
     using K = gaupel::syntax::TokenKind;
     using detail::ParsedFloatLiteral;
@@ -445,6 +472,7 @@ namespace gaupel::tyck {
 
         // e.op, e.a
         ty::TypeId at = check_expr_(e.a);
+        at = read_decay_borrow_(types_, at);
 
         // 기타 unary: v0에서는 최소만
         if (e.op == K::kBang) {
@@ -470,17 +498,22 @@ namespace gaupel::tyck {
             return types_.error();
         }
 
+        ty::TypeId at = check_expr_(e.a);
+        ty::TypeId elem = ty::kInvalidType;
+        bool is_mut_borrow = false;
+        const bool write_through_borrow = borrow_info_(types_, at, elem, is_mut_borrow) && is_mut_borrow;
+
         // mut check (x++ is a write)
         // - place가 가리키는 심볼이 mut가 아니면 무조건 에러
-        if (auto sid = root_place_symbol_(e.a)) {
-            if (!is_mutable_symbol_(*sid)) {
-                diag_(diag::Code::kWriteToImmutable, e.span);
-                err_(e.span, "cannot apply postfix ++ to an immutable variable (declare it with `mut`)");
+        if (!write_through_borrow) {
+            if (auto sid = root_place_symbol_(e.a)) {
+                if (!is_mutable_symbol_(*sid)) {
+                    diag_(diag::Code::kWriteToImmutable, e.span);
+                    err_(e.span, "cannot apply postfix ++ to an immutable variable (declare it with `mut`)");
+                }
             }
         }
-
-        ty::TypeId at = check_expr_(e.a);
-        return at;
+        return write_through_borrow ? elem : at;
     }
 
     // --------------------
@@ -553,6 +586,8 @@ namespace gaupel::tyck {
 
         ty::TypeId lt = check_expr_(e.a);
         ty::TypeId rt = check_expr_(e.b);
+        lt = read_decay_borrow_(types_, lt);
+        rt = read_decay_borrow_(types_, rt);
 
         auto is_builtin = [&](ty::TypeId t) -> bool {
             return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
@@ -717,27 +752,42 @@ namespace gaupel::tyck {
                 return types_.error();
             }
 
-            // mut check
-            if (auto sid = root_place_symbol_(e.a)) {
-                if (!is_mutable_symbol_(*sid)) {
-                    // NOTE: 새 diag code 필요
-                    diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
-                    err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+            ty::TypeId lt = check_expr_(e.a);
+            ty::TypeId lhs_target = lt;
+            {
+                ty::TypeId elem = ty::kInvalidType;
+                bool is_mut_borrow = false;
+                if (borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow) {
+                    lhs_target = elem; // &mut T place에는 T를 대입한다.
                 }
             }
 
-            ty::TypeId lt = check_expr_(e.a);
+            // mut check
+            {
+                ty::TypeId elem = ty::kInvalidType;
+                bool is_mut_borrow = false;
+                const bool write_through_borrow = borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow;
+                if (!write_through_borrow) {
+                    if (auto sid = root_place_symbol_(e.a)) {
+                        if (!is_mutable_symbol_(*sid)) {
+                            diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
+                            err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+                        }
+                    }
+                }
+            }
+
             ty::TypeId rt = check_expr_(e.b);
 
             if (is_error_(lt) || is_error_(rt)) return types_.error();
 
-            if (!is_optional_(lt)) {
-                diag_(diag::Code::kTypeNullCoalesceAssignLhsMustBeOptional, e.span, types_.to_string(lt));
+            if (!is_optional_(lhs_target)) {
+                diag_(diag::Code::kTypeNullCoalesceAssignLhsMustBeOptional, e.span, types_.to_string(lhs_target));
                 err_(e.span, "operator '?" "?=' requires optional lhs");
                 return types_.error();
             }
 
-            ty::TypeId elem = optional_elem_(lt);
+            ty::TypeId elem = optional_elem_(lhs_target);
             if (elem == ty::kInvalidType) {
                 err_(e.span, "optional elem type is invalid");
                 return types_.error();
@@ -759,7 +809,7 @@ namespace gaupel::tyck {
                 return types_.error();
             }
 
-            return lt;
+            return lhs_target;
         }
 
         // ------------------------------------------------------------
@@ -769,37 +819,51 @@ namespace gaupel::tyck {
         if (!is_place_expr_(e.a)) {
             diag_(diag::Code::kAssignLhsMustBePlace, e.span);
             err_(e.span, "assignment lhs must be a place expression (ident/index)");
-        } else {
-            // NEW: mut check
-            if (auto sid = root_place_symbol_(e.a)) {
-                if (!is_mutable_symbol_(*sid)) {
-                    // NOTE: 새 diag code 필요
-                    diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
-                    err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+        }
+
+        ty::TypeId lt = check_expr_(e.a);
+        ty::TypeId lhs_target = lt;
+        {
+            ty::TypeId elem = ty::kInvalidType;
+            bool is_mut_borrow = false;
+            if (borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow) {
+                lhs_target = elem; // &mut T place에는 T를 대입한다.
+            }
+        }
+
+        if (is_place_expr_(e.a)) {
+            ty::TypeId elem = ty::kInvalidType;
+            bool is_mut_borrow = false;
+            const bool write_through_borrow = borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow;
+            if (!write_through_borrow) {
+                if (auto sid = root_place_symbol_(e.a)) {
+                    if (!is_mutable_symbol_(*sid)) {
+                        diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
+                        err_(e.span, "cannot assign to an immutable variable (declare it with `mut`)");
+                    }
                 }
             }
         }
 
-        ty::TypeId lt = check_expr_(e.a);
         ty::TypeId rt = check_expr_(e.b);
 
         // RHS가 {integer}면, LHS 타입 컨텍스트로 해소 시도
         {
             const auto& st = types_.get(rt);
             if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                (void)resolve_infer_int_in_context_(e.b, lt);
+                (void)resolve_infer_int_in_context_(e.b, lhs_target);
                 rt = check_expr_(e.b);
             }
         }
 
-        if (!can_assign_(lt, rt)) {
+        if (!can_assign_(lhs_target, rt)) {
             diag_(
                 diag::Code::kTypeAssignMismatch, e.span,
-                types_.to_string(lt), types_.to_string(rt)
+                types_.to_string(lhs_target), types_.to_string(rt)
             );
             err_(e.span, "assign mismatch");
         }
-        return lt;
+        return lhs_target;
     }
 
     ty::TypeId TypeChecker::check_expr_ternary_(const ast::Expr& e) {
@@ -820,7 +884,7 @@ namespace gaupel::tyck {
     ty::TypeId TypeChecker::check_expr_array_lit_(const ast::Expr& e) {
         // Array literal uses ast.args() slice: e.arg_begin..e.arg_begin+e.arg_count
         if (e.arg_count == 0) {
-            diag_(diag::Code::kTypeErrorGeneric, e.span, "empty array literal needs an explicit contextual type in v0");
+            diag_(diag::Code::kTypeArrayLiteralEmptyNeedsContext, e.span);
             err_(e.span, "empty array literal requires a contextual type (v0)");
             return types_.make_array(types_.error(), /*has_size=*/true, /*size=*/0);
         }

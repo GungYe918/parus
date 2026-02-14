@@ -30,6 +30,7 @@ namespace gaupel::syntax {
         kKwXor,
 
         kKwMut,
+        kKwStatic,
         // NOTE(스펙 변경): ref 토큰은 삭제됨.
 
         // stmt keywords
@@ -148,6 +149,7 @@ namespace gaupel::syntax {
             case TokenKind::kKwNot: return "not";
             case TokenKind::kKwXor: return "xor";
             case TokenKind::kKwMut: return "mut";
+            case TokenKind::kKwStatic: return "static";
 
             case TokenKind::kKwFn: return "fn";
             case TokenKind::kKwExport: return "export";

@@ -75,11 +75,37 @@ namespace gaupel {
     // stmt/decl 혼용 엔트리
     ast::StmtId Parser::parse_stmt_any() {
         const auto& tok = cursor_.peek();
+        using K = syntax::TokenKind;
 
         // decl start => decl 파서로 위임
         if (is_decl_start(tok.kind)) {
             return parse_decl_any();
         }
+
+        /// @brief `static/mut/let/set` 조합이 변수 선언 시작인지 lookahead로 판정한다.
+        const auto is_var_stmt_start_lookahead = [&](uint32_t off) -> bool {
+            K k = cursor_.peek(off).kind;
+
+            bool seen_static = false;
+            bool seen_mut = false;
+
+            // prefix qualifier(static/mut)는 순서 무관으로 최대 1회씩 허용
+            for (;;) {
+                if (k == K::kKwStatic && !seen_static) {
+                    seen_static = true;
+                    k = cursor_.peek(++off).kind;
+                    continue;
+                }
+                if (k == K::kKwMut && !seen_mut) {
+                    seen_mut = true;
+                    k = cursor_.peek(++off).kind;
+                    continue;
+                }
+                break;
+            }
+
+            return k == K::kKwLet || k == K::kKwSet;
+        };
 
         // empty stmt: ';'
         if (tok.kind == syntax::TokenKind::kSemicolon) {
@@ -96,17 +122,20 @@ namespace gaupel {
         }
 
         // keyword stmts
-        if (tok.kind == syntax::TokenKind::kKwIf)       return parse_stmt_if();
-        if (tok.kind == syntax::TokenKind::kKwWhile)    return parse_stmt_while();
-        if (tok.kind == syntax::TokenKind::kKwReturn)   return parse_stmt_return();
-        if (tok.kind == syntax::TokenKind::kKwBreak)    return parse_stmt_break();
-        if (tok.kind == syntax::TokenKind::kKwContinue) return parse_stmt_continue();
-        if (tok.kind == syntax::TokenKind::kKwSwitch)   return parse_stmt_switch();
-        if (tok.kind == syntax::TokenKind::kKwUse)      return parse_stmt_use();
-        if (tok.kind == syntax::TokenKind::kKwLet
-        ||  tok.kind == syntax::TokenKind::kKwSet)      return parse_stmt_var();
-        if (tok.kind == syntax::TokenKind::kKwPub 
-        || tok.kind == syntax::TokenKind::kKwSub) {
+        if (tok.kind == K::kKwIf)       return parse_stmt_if();
+        if (tok.kind == K::kKwWhile)    return parse_stmt_while();
+        if (tok.kind == K::kKwReturn)   return parse_stmt_return();
+        if (tok.kind == K::kKwBreak)    return parse_stmt_break();
+        if (tok.kind == K::kKwContinue) return parse_stmt_continue();
+        if (tok.kind == K::kKwSwitch)   return parse_stmt_switch();
+        if (tok.kind == K::kKwUse)      return parse_stmt_use();
+
+        if (tok.kind == K::kKwStatic) return parse_stmt_var();
+        if (tok.kind == K::kKwLet || tok.kind == K::kKwSet) return parse_stmt_var();
+        if (tok.kind == K::kKwMut && is_var_stmt_start_lookahead(/*off=*/0)) return parse_stmt_var();
+
+        if (tok.kind == K::kKwPub 
+        || tok.kind == K::kKwSub) {
             diag_report(diag::Code::kPubSubOnlyAllowedInClass, tok.span);
             cursor_.bump(); // pub/sub 소비
 
@@ -224,21 +253,58 @@ namespace gaupel {
         return parse_stmt_block();
     }
 
-    // let/set 파싱
+    // let/set/static 변수 선언 파싱
     ast::StmtId Parser::parse_stmt_var() {
         using K = syntax::TokenKind;
 
-        const Token kw = cursor_.peek();
-        const bool is_set = (kw.kind == K::kKwSet);
-        cursor_.bump(); // consume 'let' or 'set'
+        const Token start_tok = cursor_.peek();
 
-        // ---- mut ----
+        bool is_static = false;
         bool is_mut = false;
-        if (cursor_.at(K::kKwMut)) {
-            // 정책 변경:
-            // - set은 타입추론 키워드이므로, set mut 도 당연히 허용한다.
+        bool seen_static = false;
+        bool seen_mut = false;
+
+        // prefix qualifier는 순서 무관 허용: static mut set, mut static set, ...
+        for (;;) {
+            if (cursor_.at(K::kKwStatic) && !seen_static) {
+                seen_static = true;
+                is_static = true;
+                cursor_.bump();
+                continue;
+            }
+            if (cursor_.at(K::kKwMut) && !seen_mut) {
+                seen_mut = true;
+                is_mut = true;
+                cursor_.bump();
+                continue;
+            }
+            break;
+        }
+
+        if (!cursor_.at(K::kKwLet) && !cursor_.at(K::kKwSet)) {
+            if (is_static) {
+                diag_report(diag::Code::kStaticVarExpectedLetOrSet, cursor_.peek().span);
+            } else {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'let' or 'set'");
+            }
+
+            stmt_sync_to_boundary();
+            if (cursor_.at(K::kSemicolon)) cursor_.bump();
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start_tok.span, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        const Token kw = cursor_.bump(); // consume 'let' or 'set'
+        const bool is_set = (kw.kind == K::kKwSet);
+
+        // 기존 문법 호환: let/set 뒤의 mut도 허용한다.
+        if (cursor_.at(K::kKwMut) && !seen_mut) {
             is_mut = true;
-            cursor_.bump(); // consume 'mut'
+            seen_mut = true;
+            cursor_.bump();
         }
 
         // ---- name ----
@@ -249,7 +315,7 @@ namespace gaupel {
             cursor_.bump();
         } else {
             // 이름이 없으면 이후 전체가 꼬이기 쉬우므로 강하게 복구한다.
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (variable name)");
+            diag_report(diag::Code::kVarDeclNameExpected, name_tok.span);
 
             // stmt 경계까지 정렬
             stmt_sync_to_boundary();
@@ -292,22 +358,36 @@ namespace gaupel {
         // ---- initializer ----
         ast::ExprId init = ast::k_invalid_expr;
 
+        bool static_init_diag_emitted = false;
         if (cursor_.eat(K::kAssign)) {
             // "= <expr>"
             // (바로 ';'면 expr 누락)
             if (cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof)) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "expression (initializer)");
+                if (is_static) {
+                    diag_report(diag::Code::kStaticVarRequiresInitializer, cursor_.peek().span);
+                    static_init_diag_emitted = true;
+                } else {
+                    diag_report(diag::Code::kVarDeclInitializerExpected, cursor_.peek().span);
+                }
                 // init invalid 유지
             } else {
                 init = parse_expr();
             }
         } else {
             // '=' missing
-            if (is_set) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "'=' initializer required for `set`");
+            if (is_static) {
+                diag_report(diag::Code::kStaticVarRequiresInitializer, cursor_.peek().span);
+                static_init_diag_emitted = true;
+                recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+            } else if (is_set) {
+                diag_report(diag::Code::kSetInitializerRequired, cursor_.peek().span);
                 // recovery: ';' or '}' 까지 맞춰서 이후 stmt들이 안 꼬이게 한다.
                 recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
             }
+        }
+
+        if (is_static && init == ast::k_invalid_expr && !static_init_diag_emitted) {
+            diag_report(diag::Code::kStaticVarRequiresInitializer, cursor_.peek().span);
         }
 
         // ---- ';' or recover ----
@@ -317,10 +397,11 @@ namespace gaupel {
         s.kind = ast::StmtKind::kVar;
         s.is_set = is_set;
         s.is_mut = is_mut;
+        s.is_static = is_static;
         s.name = name;
         s.type = type_id;
         s.init = init;
-        s.span = span_join(kw.span, end);
+        s.span = span_join(start_tok.span, end);
         return ast_.add_stmt(s);
     }
 

@@ -228,11 +228,7 @@ namespace gaupel {
             Span sp = amp_run_start;
             if (amp_run_end.hi) sp = span_join(amp_run_start, amp_run_end);
 
-            diag_report(
-                diag::Code::kUnexpectedToken,
-                sp,
-                "ambiguous '&' prefix chain (3+ consecutive '&'). Use parentheses, e.g. &&(&x) or &(&&x)"
-            );
+            diag_report(diag::Code::kAmbiguousAmpPrefixChain, sp);
 
             // 파서는 최대한 AST를 유지하되, 이후 단계에서 확실히 막고 싶다면
             // 여기서 Error 노드로 감싸도 된다. (지금은 진단만 발생시키고 rhs 반환)
@@ -459,6 +455,21 @@ namespace gaupel {
             }
         };
 
+        // helper: 다음 토큰이 "타입 시작"인지 판정
+        auto is_type_start = [&](K k) -> bool {
+            switch (k) {
+                case K::kAmp:
+                case K::kAmpAmp:
+                case K::kKwFn:
+                case K::kLParen:
+                case K::kLBracket:
+                case K::kIdent:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
         while (1) {
             const Token t = cursor_.peek();
 
@@ -511,12 +522,18 @@ namespace gaupel {
                     op_span = span_join(op_span, b.span);
                 }
 
-                // Type required
                 const Token ty_first = cursor_.peek();
-                auto parsed_ty = parse_type();
-
-                if (parsed_ty.id == ty::kInvalidType) {
-                    diag_report(diag::Code::kUnexpectedToken, ty_first.span, "type after 'as'");
+                ParsedType parsed_ty{};
+                if (!is_type_start(ty_first.kind)) {
+                    // "as" 뒤에 타입 시작 토큰이 없으면 전용 진단을 우선 보고한다.
+                    diag_report(diag::Code::kCastTargetTypeExpected, ty_first.span);
+                    parsed_ty.id = types_.error();
+                    parsed_ty.span = op_span;
+                } else {
+                    parsed_ty = parse_type();
+                    if (parsed_ty.id == ty::kInvalidType) {
+                        diag_report(diag::Code::kCastTargetTypeExpected, ty_first.span);
+                    }
                 }
 
                 ast::Expr e{};

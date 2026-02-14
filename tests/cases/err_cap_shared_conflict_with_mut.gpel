@@ -1,0 +1,7 @@
+// 비허용 케이스: 활성 &mut가 있으면 shared borrow(&) 생성 불가
+fn main() -> i32 {
+  let mut x: i32 = 1i32;
+  set m = &mut x;
+  set r = &x;
+  return 0i32;
+}

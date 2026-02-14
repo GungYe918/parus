@@ -1,0 +1,11 @@
+// named-group + 배열 슬라이스 borrow 호출이 정상 동작해야 한다.
+fn fold(a: i32, b: i32, { win: &[i32] }) -> i32 {
+    return a + b;
+}
+
+fn main() -> i32 {
+    let arr: i32[5] = [1, 2, 3, 4, 5];
+    set r = fold(1, 2, { win: &arr[1..:3] });
+    return r;
+}
+

@@ -66,7 +66,7 @@ namespace gaupel::tyck {
                 // value-break는 "loop expression" 컨텍스트에서만 허용한다.
                 // (while 같은 statement-loop에서는 break 값을 받을 곳이 없다.)
                 if (loop_stack_.empty()) {
-                    diag_(diag::Code::kTypeErrorGeneric, s.span, "break value is only allowed in loop expressions");
+                    diag_(diag::Code::kTypeBreakValueOnlyInLoopExpr, s.span);
                     err_(s.span, "break value is not allowed in a statement loop");
                     (void)check_expr_(s.expr, Slot::kValue);
                     return;
@@ -547,8 +547,8 @@ namespace gaupel::tyck {
 
         const uint32_t begin = s.field_member_begin;
         const uint32_t end = s.field_member_begin + s.field_member_count;
-        if (begin >= ast_.field_members().size() || end > ast_.field_members().size()) {
-            diag_(diag::Code::kTypeErrorGeneric, s.span, "field member range is out of AST bounds");
+        if (begin > ast_.field_members().size() || end > ast_.field_members().size() || begin > end) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);
             err_(s.span, "invalid field member range");
             return;
         }
@@ -563,7 +563,7 @@ namespace gaupel::tyck {
             oss << "field member '" << m.name
                 << "' must use a POD value builtin type (e.g., i32/u32/f32/bool/char), got "
                 << types_.to_string(m.type);
-            diag_(diag::Code::kTypeErrorGeneric, m.span, oss.str());
+            diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
             err_(m.span, oss.str());
         }
     }

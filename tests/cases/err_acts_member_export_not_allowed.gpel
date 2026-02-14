@@ -1,0 +1,6 @@
+// 비허용 케이스: acts 내부 멤버-level export 금지
+acts A {
+  export fn f() -> unit {
+    return;
+  }
+}

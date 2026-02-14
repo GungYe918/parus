@@ -4,6 +4,7 @@
 #include <gaupel/cap/CapabilityCheck.hpp>
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/sir/Builder.hpp>
+#include <gaupel/sir/MutAnalysis.hpp>
 #include <gaupel/sir/Verify.hpp>
 
 #include <algorithm>
@@ -81,7 +82,7 @@ namespace {
         const bool expect_error = (file_name.rfind("err_", 0) == 0);
 
         if (expect_error) {
-            const bool has_any_error = prog.bag.has_error() || !ty.errors.empty();
+            const bool has_any_error = prog.bag.has_error() || !ty.errors.empty() || !cap.ok;
             bool ok = true;
             ok &= require_(has_any_error, "expected diagnostics for err_ case, but none were emitted");
             if (!ok) {
@@ -201,7 +202,7 @@ namespace {
         auto ty = run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kTypeErrorGeneric),
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kTypeBreakValueOnlyInLoopExpr),
             "while + break value must emit type error");
         ok &= require_(!ty.errors.empty(),
             "while + break value must produce tyck error entry");
@@ -226,6 +227,424 @@ namespace {
         bool ok = true;
         ok &= require_(!p.bag.has_code(gaupel::diag::Code::kUndefinedName),
             "loop header variable must be visible in loop body");
+        return ok;
+    }
+
+    static bool test_diag_ambiguous_amp_prefix_chain() {
+        // &&&x 는 모호한 접두사 체인으로 진단되어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set x = 1i32;
+                set y = &&&x;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kAmbiguousAmpPrefixChain),
+            "&&& chain must emit AmbiguousAmpPrefixChain");
+        return ok;
+    }
+
+    static bool test_diag_call_no_args_after_named_group() {
+        // named-group 뒤에 추가 인자가 오면 전용 진단이 나와야 한다.
+        const std::string src = R"(
+            fn sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
+                return a - b + clamp;
+            }
+            fn main() -> i32 {
+                return sub(1, 2, { clamp: 1 }, 3);
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kCallNoArgsAfterNamedGroup),
+            "args after named-group must emit CallNoArgsAfterNamedGroup");
+        return ok;
+    }
+
+    static bool test_diag_var_decl_name_expected() {
+        // 변수 선언에서 이름이 빠지면 전용 진단이 나와야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                let : i32 = 1i32;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kVarDeclNameExpected),
+            "missing var name must emit VarDeclNameExpected");
+        return ok;
+    }
+
+    static bool test_diag_set_initializer_required() {
+        // set 선언은 '=' 초기화식이 반드시 필요하다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set x;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kSetInitializerRequired),
+            "set without initializer must emit SetInitializerRequired");
+        return ok;
+    }
+
+    static bool test_diag_var_initializer_expected() {
+        // '=' 뒤에 초기화식이 없으면 전용 진단이 나와야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                let x: i32 = ;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kVarDeclInitializerExpected),
+            "missing initializer expression must emit VarDeclInitializerExpected");
+        return ok;
+    }
+
+    static bool test_diag_cast_target_type_expected() {
+        // as/as?/as! 뒤에는 타입이 필요하다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set x = 1i32 as ;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kCastTargetTypeExpected),
+            "missing cast target type must emit CastTargetTypeExpected");
+        return ok;
+    }
+
+    static bool test_diag_fn_name_expected() {
+        // fn 선언에는 함수 이름 식별자가 필요하다.
+        const std::string src = R"(
+            fn (x: i32) -> i32 {
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kFnNameExpected),
+            "missing function name must emit FnNameExpected");
+        return ok;
+    }
+
+    static bool test_diag_field_member_name_expected() {
+        // field 멤버 선언은 이름 식별자가 필요하다.
+        const std::string src = R"(
+            field P {
+                i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kFieldMemberNameExpected),
+            "missing field member name must emit FieldMemberNameExpected");
+        return ok;
+    }
+
+    static bool test_diag_acts_for_not_supported() {
+        // acts for 구문은 현재 미지원 진단이 나와야 한다.
+        const std::string src = R"(
+            acts for Logger {
+                fn write(msg: i32) -> unit { return; }
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kActsForNotSupported),
+            "acts for syntax must emit ActsForNotSupported");
+        return ok;
+    }
+
+    static bool test_diag_block_tail_expr_required() {
+        // value-required block(if expr branch)에서 tail 식이 없으면 전용 진단이 나와야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set x = if (true) {
+                    set y = 1i32;
+                } else {
+                    2i32
+                };
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBlockTailExprRequired),
+            "missing tail expr in value-required block must emit BlockTailExprRequired");
+        return ok;
+    }
+
+    static bool test_cap_escape_on_slice_borrow_rejected() {
+        // slice borrow 값에 &&를 적용하면 금지되어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                let arr: i32[3] = [1, 2, 3];
+                set s = &arr[0..:1];
+                set h = &&s;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!cap.ok, "&& on slice borrow must fail capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kEscapeOperandMustNotBeBorrow),
+            "&& on slice borrow must emit EscapeOperandMustNotBeBorrow");
+        return ok;
+    }
+
+    static bool test_borrow_read_in_arithmetic_ok() {
+        // &i32 파라미터를 산술식에서 읽기 값으로 사용할 수 있어야 한다.
+        const std::string src = R"(
+            fn sum2(a: &i32, b: &i32) -> i32 {
+                return a + b;
+            }
+            fn main() -> i32 {
+                let x: i32 = 10;
+                let y: i32 = 20;
+                set s = sum2(a: &x, b: &y);
+                return s;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "borrow arithmetic source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "borrow arithmetic source must not emit tyck errors");
+        ok &= require_(cap.ok, "borrow arithmetic source must pass capability check");
+        return ok;
+    }
+
+    static bool test_mut_borrow_write_through_assignment_ok() {
+        // &mut T 바인딩은 대입을 통해 pointee 쓰기가 가능해야 한다.
+        const std::string src = R"(
+            fn inc(x: &mut i32) -> unit {
+                x = x + 1;
+                return;
+            }
+            fn main() -> i32 {
+                set mut a = 1i32;
+                inc(x: &mut a);
+                return a;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "mut-borrow write-through source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "mut-borrow write-through source must not emit tyck errors");
+        ok &= require_(cap.ok, "mut-borrow write-through source must pass capability check");
+        return ok;
+    }
+
+    static bool test_cap_shared_conflict_with_mut() {
+        // 활성 &mut borrow가 있으면 shared borrow(&)를 추가로 만들 수 없어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set mut x = 1i32;
+                set m = &mut x;
+                set r = &x;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!cap.ok, "shared borrow under active &mut must fail capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedConflictWithMut),
+            "shared borrow under active &mut must emit BorrowSharedConflictWithMut");
+        return ok;
+    }
+
+    static bool test_cap_mut_conflict_with_shared() {
+        // 활성 shared borrow가 있으면 &mut borrow를 만들 수 없어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set mut x = 1i32;
+                set r = &x;
+                set m = &mut x;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!cap.ok, "&mut under active shared borrow must fail capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowMutConflictWithShared),
+            "&mut under active shared borrow must emit BorrowMutConflictWithShared");
+        return ok;
+    }
+
+    static bool test_cap_shared_write_conflict() {
+        // 활성 shared borrow가 있는 동안에는 해당 place에 쓰기를 할 수 없어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set mut x = 1i32;
+                set r = &x;
+                x = 2i32;
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!cap.ok, "write under active shared borrow must fail capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedWriteConflict),
+            "write under active shared borrow must emit BorrowSharedWriteConflict");
+        return ok;
+    }
+
+    static bool test_escape_requires_static_or_boundary() {
+        // &&는 static place이거나 return/call-arg 경계에서만 허용되어야 한다.
+        const std::string src = R"(
+            fn main() -> i32 {
+                set x = 1i32;
+                set h = &&x;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!cap.ok, "non-boundary && on non-static place must fail capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kEscapeRequiresStaticOrBoundary),
+            "non-boundary && on non-static place must emit EscapeRequiresStaticOrBoundary");
+        return ok;
+    }
+
+    static bool test_static_allows_escape_storage() {
+        // static place는 non-boundary 문맥에서도 &&를 허용해야 한다.
+        const std::string src = R"(
+            static let G: i32 = 7i32;
+            fn main() -> i32 {
+                set h = &&G;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "static + && source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "static + && source must not emit tyck errors");
+        ok &= require_(cap.ok, "static + && source must pass capability check");
+        return ok;
+    }
+
+    static bool test_sir_mut_analysis_allows_mut_borrow_write_through() {
+        // SIR mut-analysis는 &mut write-through를 불법 쓰기로 오검출하면 안 된다.
+        const std::string src = R"(
+            fn inc(x: &mut i32) -> unit {
+                x = x + 1;
+                return;
+            }
+            fn main() -> i32 {
+                set mut a = 1i32;
+                inc(x: &mut a);
+                return a;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "mut-analysis source must not emit parser/tyck/cap diagnostics");
+        ok &= require_(ty.errors.empty(), "mut-analysis source must not emit tyck errors");
+        ok &= require_(cap.ok, "mut-analysis source must pass capability check");
+        if (!ok) return false;
+
+        gaupel::sir::BuildOptions bopt{};
+        const auto mod = gaupel::sir::build_sir_module(
+            p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
+        );
+
+        (void)gaupel::sir::analyze_mut(mod, p.types, p.bag);
+        ok &= require_(!p.bag.has_code(gaupel::diag::Code::kWriteToImmutable),
+            "SIR mut-analysis must not report WriteToImmutable for &mut write-through");
         return ok;
     }
 
@@ -399,6 +818,25 @@ int main() {
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
+        {"diag_ambiguous_amp_prefix_chain", test_diag_ambiguous_amp_prefix_chain},
+        {"diag_call_no_args_after_named_group", test_diag_call_no_args_after_named_group},
+        {"diag_var_decl_name_expected", test_diag_var_decl_name_expected},
+        {"diag_set_initializer_required", test_diag_set_initializer_required},
+        {"diag_var_initializer_expected", test_diag_var_initializer_expected},
+        {"diag_cast_target_type_expected", test_diag_cast_target_type_expected},
+        {"diag_fn_name_expected", test_diag_fn_name_expected},
+        {"diag_field_member_name_expected", test_diag_field_member_name_expected},
+        {"diag_acts_for_not_supported", test_diag_acts_for_not_supported},
+        {"diag_block_tail_expr_required", test_diag_block_tail_expr_required},
+        {"cap_escape_on_slice_borrow_rejected", test_cap_escape_on_slice_borrow_rejected},
+        {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
+        {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},
+        {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},
+        {"cap_mut_conflict_with_shared", test_cap_mut_conflict_with_shared},
+        {"cap_shared_write_conflict", test_cap_shared_write_conflict},
+        {"escape_requires_static_or_boundary", test_escape_requires_static_or_boundary},
+        {"static_allows_escape_storage", test_static_allows_escape_storage},
+        {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
         {"sir_control_flow_block_layout", test_sir_control_flow_block_layout},
         {"file_cases_directory", test_file_cases_directory},

@@ -199,8 +199,7 @@ namespace gaupel {
                     // '{}'는 항상 마지막 구역
                     if (cursor_.eat(K::kComma)) {
                         if (!cursor_.at(K::kRParen)) {
-                            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                                        "no arguments allowed after named-group");
+                            diag_report(diag::Code::kCallNoArgsAfterNamedGroup, cursor_.peek().span);
                             recover_to_delim(K::kRParen);
                         }
                     }
@@ -211,7 +210,7 @@ namespace gaupel {
                 ast::Arg a = parse_call_arg(ternary_depth);
 
                 if (seen_named_group) {
-                    diag_report(diag::Code::kUnexpectedToken, a.span, "no arguments allowed after named-group");
+                    diag_report(diag::Code::kCallNoArgsAfterNamedGroup, a.span);
                 }
 
                 const bool is_labeled = (a.kind == ast::ArgKind::kLabeled) || a.has_label;
@@ -229,9 +228,9 @@ namespace gaupel {
                     } else if (mode == CallMode::kLabeled) {
                         diag_mix(a.span.hi ? a.span : cursor_.prev().span);
                         mode = CallMode::kInvalidMixed;
-                    } else if (mode == CallMode::kPositionalPlusNamedGroup) {
-                        diag_report(diag::Code::kUnexpectedToken, a.span, "no positional args allowed after named-group");
-                    }
+                } else if (mode == CallMode::kPositionalPlusNamedGroup) {
+                        diag_report(diag::Code::kCallNoArgsAfterNamedGroup, a.span);
+                }
                 }
 
                 ast_.add_arg(a);
@@ -561,9 +560,7 @@ namespace gaupel {
         // 3) enforce tail policy (parser-level)
         // -----------------------------
         if (policy == BlockTailPolicy::kRequireValueTail && tail_expr == ast::k_invalid_expr) {
-            // 구체 코드가 없으니 generic expected-token 형태로 처리
-            // (원하면 전용 diag code로 바꾸면 됨)
-            diag_report(diag::Code::kUnexpectedToken, rb.span, "tail expression required");
+            diag_report(diag::Code::kBlockTailExprRequired, rb.span);
             // tail_expr remains invalid; tyck 단계에서도 Slot::kValue에서 추가 진단 가능
         }
 

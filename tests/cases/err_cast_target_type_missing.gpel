@@ -1,0 +1,5 @@
+// 비허용 케이스: as 뒤 대상 타입 누락
+fn main() -> i32 {
+  set x = 1i32 as ;
+  return 0i32;
+}

@@ -255,13 +255,8 @@ namespace gaupel::tyck {
             // top-level var decl
             // ----------------------------
             if (s.kind == ast::StmtKind::kVar) {
-                if (!s.is_set) {
-                    ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
-                    auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, vt, s.span);
-                    if (!ins.ok && ins.is_duplicate) {
-                        err_(s.span, "duplicate symbol (var): " + std::string(s.name));
-                    }
-                }
+                // top-level var는 precollect 대상이 아니다.
+                // 실제 선언/타입 확정은 PASS2(check_stmt_var_)에서 한 번만 처리한다.
                 continue;
             }
 

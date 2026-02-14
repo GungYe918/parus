@@ -25,6 +25,9 @@ namespace gaupel::diag {
         kUnexpectedEof,
         kTooManyErrors,      
         kNestedTernaryNotAllowed,
+        kAmbiguousAmpPrefixChain,      // ambiguous '&' prefix chain (e.g. &&&x)
+        kArraySizeExpectedIntLiteral,  // array suffix requires integer literal (T[N])
+        kArraySizeInvalidLiteral,      // array size literal is malformed/out of range
 
         // pipe + hole rules
         kPipeRhsMustBeCall,
@@ -37,7 +40,14 @@ namespace gaupel::diag {
         kPipeHolePositionalNotAllowed,
 
         // call rules
+        kDeclExpected,               // declaration expected in current context
+        kFnNameExpected,             // function name identifier is required
+        kFnParamNameExpected,        // function parameter name identifier is required
+        kFieldNameExpected,          // field declaration name identifier is required
+        kFieldMemberNameExpected,    // field member name identifier is required
+        kActsNameExpected,           // acts declaration name identifier is required
         kCallArgMixNotAllowed,
+        kCallNoArgsAfterNamedGroup,      // no extra args after named-group '{...}'
         kNamedGroupEntryExpectedColon,     // entry must be "label: expr|_"
         kCallOnlyOneNamedGroupAllowed,     // only one "{ ... }" in a call
         kAttrNameExpectedAfterAt,          // '@' must be followed by attr name
@@ -48,6 +58,11 @@ namespace gaupel::diag {
         // ---- var parsing ----
         kVarDeclTypeAnnotationRequired,   // let requires ': Type'
         kVarDeclTypeAnnotationNotAllowed, // set must NOT have ': Type'
+        kVarDeclNameExpected,             // variable name identifier is required
+        kVarDeclInitializerExpected,      // '=' present but initializer expr missing
+        kSetInitializerRequired,          // set must always have '=' initializer
+        kStaticVarExpectedLetOrSet,       // 'static' must be followed by [mut] let/set
+        kStaticVarRequiresInitializer,    // static var must have initializer
 
         // fn param default rules
         kFnParamDefaultNotAllowedOutsideNamedGroup, // positional param can't have "= expr"
@@ -55,6 +70,8 @@ namespace gaupel::diag {
 
         // fn param named-group count
         kFnOnlyOneNamedGroupAllowed,
+        kActsForNotSupported,             // acts for T is not supported yet in parser
+        kActsMemberExportNotAllowed,      // member-level export inside acts is not allowed
         
         // fn body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
@@ -63,10 +80,12 @@ namespace gaupel::diag {
         kPubSubOnlyAllowedInClass,
 
         // ---- type parsing ----
+        kTypeFnSignatureExpected, // type-context 'fn' must be followed by '('
         kTypeNameExpected,          // type name (ident) expected
         kTypeArrayMissingRBracket,  // missing ']' in T[]
         kTypeOptionalDuplicate,     // T?? 같은 중복
         kTypeRecovery,              // 타입 파싱 실패 후 동기화
+        kCastTargetTypeExpected,    // "as/as?/as!" 뒤에 타입 필요
 
         // ---- while parsing ----
         kWhileHeaderExpectedLParen,   // while ( ... ) 에서 '(' 없음
@@ -88,6 +107,7 @@ namespace gaupel::diag {
 
         // ---- expr-block tail rules ----
         kBlockTailSemicolonNotAllowed, // tail value has ';' right before '}'
+        kBlockTailExprRequired,        // value-required block is missing tail expr
 
         // ---- switch parsing ----
         kSwitchHeaderExpectedLParen,      // switch ( ... ) '(' 없음
@@ -110,11 +130,16 @@ namespace gaupel::diag {
         kEscapeOperandMustNotBeBorrow,
         kBorrowMutRequiresMutablePlace,
         kBorrowMutConflict,
+        kBorrowSharedConflictWithMut,
+        kBorrowMutConflictWithShared,
         kBorrowMutDirectAccessConflict,
+        kBorrowSharedWriteConflict,
         kBorrowEscapeFromReturn,
         kBorrowEscapeToStorage,
         kUseAfterEscapeMove,
         kEscapeWhileMutBorrowActive,
+        kEscapeWhileBorrowActive,
+        kEscapeRequiresStaticOrBoundary,
 
         // =========================
         // passes / sema
@@ -144,6 +169,7 @@ namespace gaupel::diag {
         kTypeArgTypeMismatch,   // args[0]=index, args[1]=expected, args[2]=got
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)
+        kTypeBreakValueOnlyInLoopExpr, // break value is only allowed in loop expression
         kTypeUnaryBangMustBeBool,// args[0]=got
         kTypeBinaryOperandsMustMatch,// args[0]=lhs, args[1]=rhs
         kTypeCompareOperandsMustMatch,// args[0]=lhs, args[1]=rhs
@@ -191,6 +217,11 @@ namespace gaupel::diag {
 
         kTypeNullCoalesceAssignLhsMustBeOptional,
         kTypeNullCoalesceAssignRhsMismatch,
+
+        // array / field diagnostics
+        kTypeArrayLiteralEmptyNeedsContext,
+        kTypeFieldMemberRangeInvalid,
+        kTypeFieldMemberMustBePodBuiltin, // args[0]=member, args[1]=got_type
 
         // ---- mut check ----
         kWriteToImmutable

@@ -47,7 +47,7 @@ namespace gaupel {
             return parse_decl_fn();
         }
 
-        diag_report(diag::Code::kUnexpectedToken, t.span, "declaration");
+        diag_report(diag::Code::kDeclExpected, t.span);
         cursor_.bump();
 
         ast::Stmt s{};

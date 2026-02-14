@@ -40,13 +40,23 @@ namespace gaupel::diag {
             case Code::kUnexpectedEof: return "UnexpectedEof";
             case Code::kTooManyErrors: return "TooManyErrors";
             case Code::kNestedTernaryNotAllowed: return "NestedTernaryNotAllowed";
+            case Code::kAmbiguousAmpPrefixChain: return "AmbiguousAmpPrefixChain";
+            case Code::kArraySizeExpectedIntLiteral: return "ArraySizeExpectedIntLiteral";
+            case Code::kArraySizeInvalidLiteral: return "ArraySizeInvalidLiteral";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
             case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
             case Code::kPipeHoleMustBeLabeled: return "PipeHoleMustBeLabeled";
             case Code::kPipeHoleCountMismatch: return "PipeHoleCountMismatch";
             case Code::kPipeHolePositionalNotAllowed: return "PipeHolePositionalNotAllowed";
+            case Code::kDeclExpected: return "DeclExpected";
+            case Code::kFnNameExpected: return "FnNameExpected";
+            case Code::kFnParamNameExpected: return "FnParamNameExpected";
+            case Code::kFieldNameExpected: return "FieldNameExpected";
+            case Code::kFieldMemberNameExpected: return "FieldMemberNameExpected";
+            case Code::kActsNameExpected: return "ActsNameExpected";
             case Code::kCallArgMixNotAllowed: return "CallArgMixNotAllowed";
+            case Code::kCallNoArgsAfterNamedGroup: return "CallNoArgsAfterNamedGroup";
             case Code::kNamedGroupEntryExpectedColon: return "NamedGroupEntryExpectedColon";
             case Code::kCallOnlyOneNamedGroupAllowed: return "CallOnlyOneNamedGroupAllowed";
             case Code::kFnReturnTypeRequired: return "FnReturnTypeRequired";
@@ -58,13 +68,22 @@ namespace gaupel::diag {
 
             case Code::kVarDeclTypeAnnotationRequired: return "VarDeclTypeAnnotationRequired";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "VarDeclTypeAnnotationNotAllowed";
+            case Code::kVarDeclNameExpected: return "VarDeclNameExpected";
+            case Code::kVarDeclInitializerExpected: return "VarDeclInitializerExpected";
+            case Code::kSetInitializerRequired: return "SetInitializerRequired";
+            case Code::kStaticVarExpectedLetOrSet: return "StaticVarExpectedLetOrSet";
+            case Code::kStaticVarRequiresInitializer: return "StaticVarRequiresInitializer";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
+            case Code::kActsForNotSupported: return "ActsForNotSupported";
+            case Code::kActsMemberExportNotAllowed: return "ActsMemberExportNotAllowed";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
+            case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
             case Code::kTypeNameExpected: return "TypeNameExpected";
             case Code::kTypeArrayMissingRBracket: return "TypeArrayMissingRBracket";
             case Code::kTypeOptionalDuplicate: return "TypeOptionalDuplicate";
             case Code::kTypeRecovery: return "TypeRecovery";
+            case Code::kCastTargetTypeExpected: return "CastTargetTypeExpected";
             case Code::kWhileHeaderExpectedLParen: return "WhileHeaderExpectedLParen";
             case Code::kWhileHeaderExpectedRParen: return "WhileHeaderExpectedRParen";
             case Code::kWhileBodyExpectedBlock:    return "WhileBodyExpectedBlock";
@@ -78,6 +97,7 @@ namespace gaupel::diag {
             case Code::kIfExprMissingElse: return "IfExprMissingElse";
             case Code::kIfExprBranchValueExpected: return "IfExprBranchValueExpected";
             case Code::kBlockTailSemicolonNotAllowed: return "BlockTailSemicolonNotAllowed";
+            case Code::kBlockTailExprRequired: return "BlockTailExprRequired";
             case Code::kSwitchHeaderExpectedLParen:  return "SwitchHeaderExpectedLParen";
             case Code::kSwitchHeaderExpectedRParen:  return "SwitchHeaderExpectedRParen";
             case Code::kSwitchBodyExpectedLBrace:    return "SwitchBodyExpectedLBrace";
@@ -94,11 +114,16 @@ namespace gaupel::diag {
             case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
             case Code::kBorrowMutRequiresMutablePlace: return "BorrowMutRequiresMutablePlace";
             case Code::kBorrowMutConflict: return "BorrowMutConflict";
+            case Code::kBorrowSharedConflictWithMut: return "BorrowSharedConflictWithMut";
+            case Code::kBorrowMutConflictWithShared: return "BorrowMutConflictWithShared";
             case Code::kBorrowMutDirectAccessConflict: return "BorrowMutDirectAccessConflict";
+            case Code::kBorrowSharedWriteConflict: return "BorrowSharedWriteConflict";
             case Code::kBorrowEscapeFromReturn: return "BorrowEscapeFromReturn";
             case Code::kBorrowEscapeToStorage: return "BorrowEscapeToStorage";
             case Code::kUseAfterEscapeMove: return "UseAfterEscapeMove";
             case Code::kEscapeWhileMutBorrowActive: return "EscapeWhileMutBorrowActive";
+            case Code::kEscapeWhileBorrowActive: return "EscapeWhileBorrowActive";
+            case Code::kEscapeRequiresStaticOrBoundary: return "EscapeRequiresStaticOrBoundary";
 
             case Code::kTopLevelMustBeBlock: return "TopLevelMustBeBlock";
             case Code::kTopLevelDeclOnly: return "TopLevelDeclOnly";
@@ -121,6 +146,7 @@ namespace gaupel::diag {
             case Code::kTypeArgTypeMismatch:  return "TypeArgTypeMismatch";
             case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
             case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
+            case Code::kTypeBreakValueOnlyInLoopExpr:return "TypeBreakValueOnlyInLoopExpr";
             case Code::kTypeUnaryBangMustBeBool:return "TypeUnaryBangMustBeBool";
             case Code::kTypeBinaryOperandsMustMatch:return "TypeBinaryOperandsMustMatch";
             case Code::kTypeCompareOperandsMustMatch:return "TypeCompareOperandsMustMatch";
@@ -163,6 +189,9 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceRhsMismatch:       return "TypeNullCoalesceRhsMismatch";
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "TypeNullCoalesceAssignLhsMustBeOptional";
             case Code::kTypeNullCoalesceAssignRhsMismatch:       return "TypeNullCoalesceAssignRhsMismatch";
+            case Code::kTypeArrayLiteralEmptyNeedsContext: return "TypeArrayLiteralEmptyNeedsContext";
+            case Code::kTypeFieldMemberRangeInvalid: return "TypeFieldMemberRangeInvalid";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "TypeFieldMemberMustBePodBuiltin";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -180,13 +209,23 @@ namespace gaupel::diag {
             case Code::kUnexpectedEof:  return "unexpected end of file; expected {0}";
             case Code::kTooManyErrors:  return "too many errors emitted; parsing stopped";
             case Code::kNestedTernaryNotAllowed: return "nested ternary operator is not allowed";
+            case Code::kAmbiguousAmpPrefixChain: return "ambiguous '&' prefix chain (3+ consecutive '&'); use parentheses (e.g. &&(&x) or &(&&x))";
+            case Code::kArraySizeExpectedIntLiteral: return "array size must be an integer literal (use T[N] or T[])";
+            case Code::kArraySizeInvalidLiteral: return "invalid array size literal '{0}' (expected decimal u32 range)";
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
             case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
             case Code::kPipeHoleMustBeLabeled: return "hole '_' must appear as a labeled argument value (e.g., a: _)";
             case Code::kPipeHoleCountMismatch: return "pipe call must contain exactly one labeled hole '_' (found {0})";
             case Code::kPipeHolePositionalNotAllowed: return "hole '_' is not allowed as a positional argument in pipe calls";
+            case Code::kDeclExpected: return "declaration expected";
+            case Code::kFnNameExpected: return "function name identifier is required";
+            case Code::kFnParamNameExpected: return "function parameter name identifier is required";
+            case Code::kFieldNameExpected: return "field name identifier is required";
+            case Code::kFieldMemberNameExpected: return "field member name identifier is required";
+            case Code::kActsNameExpected: return "acts name identifier is required";
             case Code::kCallArgMixNotAllowed: return "mixing labeled and positional arguments is not allowed";
+            case Code::kCallNoArgsAfterNamedGroup: return "no additional arguments are allowed after named-group '{ ... }'";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry must be 'label: expr' or 'label: _'";
             case Code::kCallOnlyOneNamedGroupAllowed: return "only one named-group '{ ... }' is allowed in a call";
             case Code::kFnReturnTypeRequired: return "function return type is required (use: fn name(...) -> T { ... })";
@@ -198,13 +237,22 @@ namespace gaupel::diag {
 
             case Code::kVarDeclTypeAnnotationRequired: return "type annotation is required for 'let' (use: let x: T = ...;)";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "type annotation is not allowed for 'set' (use: set x = ...;)";
+            case Code::kVarDeclNameExpected: return "variable declaration requires an identifier name";
+            case Code::kVarDeclInitializerExpected: return "initializer expression is required after '='";
+            case Code::kSetInitializerRequired: return "'set' declaration requires '=' initializer";
+            case Code::kStaticVarExpectedLetOrSet: return "'static' declaration must be followed by [mut] let/set";
+            case Code::kStaticVarRequiresInitializer: return "static variable requires an initializer";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
+            case Code::kActsForNotSupported: return "'acts for T' is not supported yet; use 'acts A { ... }'";
+            case Code::kActsMemberExportNotAllowed: return "member-level 'export' is not allowed inside acts";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
+            case Code::kTypeFnSignatureExpected: return "type-context 'fn' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
             case Code::kTypeArrayMissingRBracket: return "array type suffix requires closing ']'";
             case Code::kTypeOptionalDuplicate: return "duplicate optional suffix '?'";
             case Code::kTypeRecovery: return "failed to parse type; recovered";
+            case Code::kCastTargetTypeExpected: return "cast target type is required after 'as'/'as?'/'as!'";
             case Code::kWhileHeaderExpectedLParen: return "expected '(' after 'while'";
             case Code::kWhileHeaderExpectedRParen: return "expected ')' to close while header";
             case Code::kWhileBodyExpectedBlock:    return "expected while body block '{ ... }'";
@@ -219,6 +267,7 @@ namespace gaupel::diag {
             case Code::kIfExprMissingElse: return "if-expression requires an 'else' branch";
             case Code::kIfExprBranchValueExpected: return "if-expression branch must yield a value (remove trailing ';' or add a tail expression)";
             case Code::kBlockTailSemicolonNotAllowed: return "tail value in a block must not end with ';'";
+            case Code::kBlockTailExprRequired: return "block expression in value-required context must have a tail expression";
 
             case Code::kSwitchHeaderExpectedLParen: return "expected '(' after 'switch'";
             case Code::kSwitchHeaderExpectedRParen: return "expected ')' to close switch header";
@@ -236,11 +285,16 @@ namespace gaupel::diag {
             case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
             case Code::kBorrowMutRequiresMutablePlace: return "&mut requires a mutable place";
             case Code::kBorrowMutConflict: return "cannot create borrow: an active mutable borrow already exists for this place";
+            case Code::kBorrowSharedConflictWithMut: return "cannot create shared borrow '&': an active '&mut' borrow exists for this place";
+            case Code::kBorrowMutConflictWithShared: return "cannot create '&mut': active shared borrow(s) exist for this place";
             case Code::kBorrowMutDirectAccessConflict: return "cannot access this place directly while an active '&mut' borrow exists";
+            case Code::kBorrowSharedWriteConflict: return "cannot write to this place while active shared borrow(s) exist";
             case Code::kBorrowEscapeFromReturn: return "borrow value cannot be returned (non-escaping rule)";
             case Code::kBorrowEscapeToStorage: return "borrow value cannot be stored in an escaping/long-lived storage";
             case Code::kUseAfterEscapeMove: return "value was moved by '&&' and cannot be used afterwards";
             case Code::kEscapeWhileMutBorrowActive: return "cannot apply '&&' while an active '&mut' borrow exists for this place";
+            case Code::kEscapeWhileBorrowActive: return "cannot apply '&&' while an active borrow exists for this place";
+            case Code::kEscapeRequiresStaticOrBoundary: return "escaping '&&' requires static storage or direct return/call-argument boundary";
 
             case Code::kTopLevelMustBeBlock: return "internal: program root must be a block";
             case Code::kTopLevelDeclOnly: return "top-level allows declarations only";
@@ -263,6 +317,7 @@ namespace gaupel::diag {
             case Code::kTypeArgTypeMismatch:  return "argument type mismatch at #{0}: expected {1}, got {2}";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
             case Code::kTypeReturnExprRequired: return "return expression is required (function does not return unit)";
+            case Code::kTypeBreakValueOnlyInLoopExpr: return "break with value is only allowed inside loop expressions";
             case Code::kTypeUnaryBangMustBeBool:return "operator '!' requires bool (got {0})";
             case Code::kTypeBinaryOperandsMustMatch:return "binary arithmetic requires both operands to have the same type (lhs={0}, rhs={1})";
             case Code::kTypeCompareOperandsMustMatch:return "comparison requires both operands to have the same type (lhs={0}, rhs={1})";
@@ -271,7 +326,7 @@ namespace gaupel::diag {
             case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "type mismatch: expected {0}, got {1}";
             case Code::kTypeNotCallable: /* args[0]=got_type */ return "cannot call non-function type {0}";
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "condition must be bool (got {0})";
-            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index expression must be usize (got {0})";
+            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index/slice bound must be an integer type (got {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "cannot infer type from null in 'set' (use: let {0}: T? = null; with an explicit optional type)";
             case Code::kMissingReturn: return "missing return";
@@ -310,6 +365,9 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "operator '?" "?=' requires an optional lhs (got {0})";
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '?" "?=' requires rhs assignable to {0} (got {1})";
+            case Code::kTypeArrayLiteralEmptyNeedsContext: return "empty array literal requires an explicit contextual type";
+            case Code::kTypeFieldMemberRangeInvalid: return "internal: field member range is out of AST bounds";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "field member '{0}' must use a POD builtin value type (got {1})";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -326,13 +384,23 @@ namespace gaupel::diag {
             case Code::kUnexpectedEof:  return "예상치 못한 파일 끝(EOF)입니다; {0}이(가) 필요합니다";
             case Code::kTooManyErrors:  return "오류가 너무 많아 파싱을 중단합니다";
             case Code::kNestedTernaryNotAllowed: return "삼항 연산자 중첩은 허용되지 않습니다";
+            case Code::kAmbiguousAmpPrefixChain: return "'&' 접두사 체인이 모호합니다(연속 '&' 3개 이상). 괄호로 명시하세요(예: &&(&x), &(&&x))";
+            case Code::kArraySizeExpectedIntLiteral: return "배열 크기는 정수 리터럴이어야 합니다(T[N] 또는 T[] 사용)";
+            case Code::kArraySizeInvalidLiteral: return "배열 크기 리터럴 '{0}'이(가) 유효하지 않습니다(10진 u32 범위 필요)";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";
             case Code::kPipeHoleMustBeLabeled: return "'_'는 라벨 인자 값 위치에만 올 수 있습니다(예: a: _)";
             case Code::kPipeHoleCountMismatch: return "파이프 호출에는 라벨 인자 값으로 '_'가 정확히 1개 있어야 합니다(현재 {0}개)";
             case Code::kPipeHolePositionalNotAllowed: return "'_'는 파이프 호출에서 위치 인자로 사용할 수 없습니다";
+            case Code::kDeclExpected: return "이 위치에는 선언(declaration)이 필요합니다";
+            case Code::kFnNameExpected: return "함수 이름 식별자가 필요합니다";
+            case Code::kFnParamNameExpected: return "함수 파라미터 이름 식별자가 필요합니다";
+            case Code::kFieldNameExpected: return "field 이름 식별자가 필요합니다";
+            case Code::kFieldMemberNameExpected: return "field 멤버 이름 식별자가 필요합니다";
+            case Code::kActsNameExpected: return "acts 이름 식별자가 필요합니다";
             case Code::kCallArgMixNotAllowed: return "라벨 인자와 위치 인자를 섞어 호출할 수 없습니다";
+            case Code::kCallNoArgsAfterNamedGroup: return "named-group '{ ... }' 뒤에는 추가 인자를 둘 수 없습니다";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry는 'label: expr' 또는 'label: _' 형태여야 합니다";
             case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: fn name(...) -> T { ... })";
             case Code::kCallOnlyOneNamedGroupAllowed: return "호출 인자에서 named-group '{ ... }'는 1개만 허용됩니다";
@@ -344,13 +412,22 @@ namespace gaupel::diag {
 
             case Code::kVarDeclTypeAnnotationRequired: return "let 선언은 타입을 명시해야 합니다 (예: let x: T = ...;)";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "set 선언에 타입을 명시하는 것은 허용되지 않습니다 (예: set x = ...;)";
+            case Code::kVarDeclNameExpected: return "변수 선언에는 식별자 이름이 필요합니다";
+            case Code::kVarDeclInitializerExpected: return "'=' 뒤에는 초기화 식이 필요합니다";
+            case Code::kSetInitializerRequired: return "set 선언에는 '=' 초기화식이 반드시 필요합니다";
+            case Code::kStaticVarExpectedLetOrSet: return "'static' 선언 뒤에는 [mut] let/set이 와야 합니다";
+            case Code::kStaticVarRequiresInitializer: return "static 변수는 초기화식이 반드시 필요합니다";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
+            case Code::kActsForNotSupported: return "'acts for T'는 아직 지원되지 않습니다. 'acts A { ... }' 형태를 사용하세요";
+            case Code::kActsMemberExportNotAllowed: return "acts 내부 멤버 함수에는 'export'를 붙일 수 없습니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
+            case Code::kTypeFnSignatureExpected: return "타입 문맥의 'fn' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
             case Code::kTypeArrayMissingRBracket: return "배열 타입 접미사 '[]'를 닫는 ']'이(가) 필요합니다";
             case Code::kTypeOptionalDuplicate: return "nullable 접미사 '?'가 중복되었습니다";
             case Code::kTypeRecovery: return "타입 파싱에 실패하여 복구했습니다";
+            case Code::kCastTargetTypeExpected: return "'as'/'as?'/'as!' 뒤에는 대상 타입이 필요합니다";
             case Code::kWhileHeaderExpectedLParen: return "'while' 뒤에는 '('이(가) 필요합니다";
             case Code::kWhileHeaderExpectedRParen: return "while 헤더를 닫는 ')'이(가) 필요합니다";
             case Code::kWhileBodyExpectedBlock:    return "while 본문 블록 '{ ... }'이(가) 필요합니다";
@@ -366,6 +443,7 @@ namespace gaupel::diag {
             case Code::kIfExprMissingElse: return "if 표현식에는 'else' 분기가 필요합니다";
             case Code::kIfExprBranchValueExpected: return "if 표현식의 분기는 값을 반환해야 합니다(끝의 ';'를 제거하거나 tail 값을 추가하세요)";
             case Code::kBlockTailSemicolonNotAllowed: return "블록의 마지막 값에는 ';'를 붙일 수 없습니다";
+            case Code::kBlockTailExprRequired: return "값이 필요한 블록 표현식에는 tail 식이 필요합니다";
 
             case Code::kSwitchHeaderExpectedLParen: return "'switch' 뒤에는 '('이(가) 필요합니다";
             case Code::kSwitchHeaderExpectedRParen: return "switch 헤더를 닫는 ')'이(가) 필요합니다";
@@ -385,11 +463,16 @@ namespace gaupel::diag {
             case Code::kEscapeOperandMustNotBeBorrow: return "'&&'는 borrow('& ...')에 적용할 수 없습니다";
             case Code::kBorrowMutRequiresMutablePlace: return "'&mut'는 mutable place에만 적용할 수 있습니다";
             case Code::kBorrowMutConflict: return "이미 활성화된 '&mut' borrow가 있어 추가 borrow를 만들 수 없습니다";
+            case Code::kBorrowSharedConflictWithMut: return "활성 '&mut' borrow가 있는 동안에는 shared borrow('&')를 만들 수 없습니다";
+            case Code::kBorrowMutConflictWithShared: return "활성 shared borrow가 있는 동안에는 '&mut' borrow를 만들 수 없습니다";
             case Code::kBorrowMutDirectAccessConflict: return "활성 '&mut' borrow가 있는 동안에는 해당 place를 직접 접근할 수 없습니다";
+            case Code::kBorrowSharedWriteConflict: return "활성 shared borrow가 있는 동안에는 해당 place에 쓰기할 수 없습니다";
             case Code::kBorrowEscapeFromReturn: return "borrow 값은 반환할 수 없습니다(비탈출 규칙)";
             case Code::kBorrowEscapeToStorage: return "borrow 값은 탈출/장수명 저장소에 저장할 수 없습니다";
             case Code::kUseAfterEscapeMove: return "'&&'로 move된 값은 이후 사용할 수 없습니다";
             case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
+            case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
+            case Code::kEscapeRequiresStaticOrBoundary: return "'&&' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";
 
             case Code::kTopLevelMustBeBlock: return "내부 오류: 프로그램 루트는 블록이어야 합니다";
             case Code::kTopLevelDeclOnly: return "최상위에서는 decl만 허용됩니다";
@@ -412,6 +495,7 @@ namespace gaupel::diag {
             case Code::kTypeArgTypeMismatch:  return "{0}번째 인자 타입이 맞지 않습니다: 기대 {1}, 실제 {2}";
             case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
             case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 unit 타입이 없습니다)";
+            case Code::kTypeBreakValueOnlyInLoopExpr: return "값을 가진 break는 loop 표현식 안에서만 허용됩니다";
             case Code::kTypeUnaryBangMustBeBool:return "'!' 연산자는 bool에만 사용할 수 있습니다(현재 {0})";
             case Code::kTypeBinaryOperandsMustMatch:return "산술 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
             case Code::kTypeCompareOperandsMustMatch:return "비교 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
@@ -420,7 +504,7 @@ namespace gaupel::diag {
             case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "타입이 일치하지 않습니다: 기대 {0}, 실제 {1}";
             case Code::kTypeNotCallable: /* args[0]=got_type */ return "함수가 아닌 타입 {0}은(는) 호출할 수 없습니다";
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";
-            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스 식은 usize여야 합니다(현재 {0})";
+            case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스/슬라이스 경계는 정수 타입이어야 합니다(현재 {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
             
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "set에서 null로는 타입을 추론할 수 없습니다. (예: let {0}: T? = null; 처럼 옵셔널 타입을 명시하세요)";
@@ -462,6 +546,9 @@ namespace gaupel::diag {
             case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "'?" "?=' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "'?" "?=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
+            case Code::kTypeArrayLiteralEmptyNeedsContext: return "빈 배열 리터럴은 명시적 문맥 타입이 필요합니다";
+            case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: field 멤버 범위가 AST 범위를 벗어났습니다";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "field 멤버 '{0}'는 POD 내장 값 타입이어야 합니다(현재 {1})";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

@@ -1,0 +1,10 @@
+// 비허용 케이스: named-group 뒤 추가 인자 금지(+slice borrow 결합)
+fn fold(xs: &[i32], { bias: i32 = 0i32 }) -> i32 {
+  return bias;
+}
+
+fn main() -> i32 {
+  let arr: i32[3] = [1i32, 2i32, 3i32];
+  set s = &arr[0..:1];
+  return fold(xs: s, { bias: 1i32 }, 2i32);
+}

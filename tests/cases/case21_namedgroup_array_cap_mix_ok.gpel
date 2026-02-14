@@ -1,0 +1,31 @@
+// 허용 케이스: named-group + 배열 + slice borrow + &mut call 조합
+field Vec2 {
+  i32 x;
+  i32 y;
+}
+
+fn sum_slice(xs: &[i32], { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
+  let mut acc: i32 = bias;
+  let mut i: i32 = 0i32;
+  while (i < 3i32) {
+    acc = acc + (xs[i] * scale);
+    i = i + 1i32;
+  }
+  return acc;
+}
+
+fn bump(x: &mut i32, { delta: i32 = 1i32 }) -> unit {
+  x = x + delta;
+  return;
+}
+
+fn main() -> i32 {
+  let mut raw: i32[3] = [1i32, 2i32, 3i32];
+  let mut s: i32 = 0i32;
+  {
+    set window = &raw[0..:2];
+    s = sum_slice(window, { bias: 10i32, scale: 2i32 });
+  }
+  bump(&mut raw[1], { delta: 5i32 });
+  return s + raw[1];
+}

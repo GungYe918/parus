@@ -63,7 +63,7 @@ namespace gaupel {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (param name)");
+            diag_report(diag::Code::kFnParamNameExpected, name_tok.span);
             recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
             return false;
         }
@@ -332,7 +332,7 @@ namespace gaupel {
             name = name_tok.lexeme;
             cursor_.bump();
         } else {
-            diag_report(diag::Code::kUnexpectedToken, name_tok.span, "identifier (function name)");
+            diag_report(diag::Code::kFnNameExpected, name_tok.span);
         }
 
         // 6) '?' (throwing)

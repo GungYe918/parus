@@ -2,6 +2,7 @@
 #pragma once
 #include <gaupel/sir/SIR.hpp>
 #include <gaupel/diag/Diagnostic.hpp>
+#include <gaupel/ty/TypePool.hpp>
 
 #include <unordered_map>
 
@@ -20,6 +21,7 @@ namespace gaupel::sir {
 
     MutAnalysisResult analyze_mut(
         const Module& m,
+        const ty::TypePool& types,
         diag::Bag& bag
     );
 

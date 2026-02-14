@@ -1,0 +1,7 @@
+// 허용 케이스: static place는 경계 외 문맥에서도 && 가능
+static let G: i32 = 7i32;
+
+fn main() -> i32 {
+  set h = &&G;
+  return 0i32;
+}

@@ -266,6 +266,7 @@ namespace gaupel::ast {
         // ---- var ----
         bool is_set = false;          // false=let, true=set
         bool is_mut = false;
+        bool is_static = false;
         std::string_view name{};
         TypeId type = k_invalid_type;
         ExprId init = k_invalid_expr;

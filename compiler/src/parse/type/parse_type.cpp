@@ -95,7 +95,7 @@ namespace gaupel {
             if (cursor_.at(K::kKwFn)) {
                 if (cursor_.peek(1).kind != K::kLParen) {
                     // fn 타입이 아닌데 type 위치에 등장한 경우: 과도한 recover 금지
-                    diag_report(diag::Code::kUnexpectedToken, s.span, "type (expected 'fn(' for function type)");
+                    diag_report(diag::Code::kTypeFnSignatureExpected, s.span);
                     cursor_.bump(); // consume only 'fn' to ensure progress
 
                     ParsedType out{};
@@ -238,7 +238,7 @@ namespace gaupel {
             }
 
             // ---- error ----
-            diag_report(diag::Code::kUnexpectedToken, s.span, "type");
+            diag_report(diag::Code::kTypeNameExpected, s.span);
             if (!cursor_.at(K::kEof)) cursor_.bump();
 
             ParsedType out{};
@@ -274,16 +274,12 @@ namespace gaupel {
                         if (n.kind == K::kIntLit) {
                             cursor_.bump();
                             if (!parse_array_size_u32_(n.lexeme, size)) {
-                                diag_report(
-                                    diag::Code::kUnexpectedToken,
-                                    n.span,
-                                    "array size must be a decimal integer literal (u32)"
-                                );
+                                diag_report(diag::Code::kArraySizeInvalidLiteral, n.span, n.lexeme);
                             } else {
                                 has_size = true;
                             }
                         } else {
-                            diag_report(diag::Code::kUnexpectedToken, n.span, "array size integer literal or ']'");
+                            diag_report(diag::Code::kArraySizeExpectedIntLiteral, n.span);
                         }
                     }
 
@@ -395,11 +391,7 @@ namespace gaupel {
             Span sp = amp_run_start;
             if (amp_run_end.hi) sp = span_join(amp_run_start, amp_run_end);
 
-            diag_report(
-                diag::Code::kUnexpectedToken,
-                sp,
-                "ambiguous '&' prefix chain (3+ consecutive '&'). Use parentheses, e.g. &&(&T) or &(&&T)"
-            );
+            diag_report(diag::Code::kAmbiguousAmpPrefixChain, sp);
         }
 
         // operand is suffix-type (so suffix is tighter than prefix)
