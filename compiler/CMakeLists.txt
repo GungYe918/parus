@@ -40,7 +40,7 @@ target_compile_features(gaupel_compiler PUBLIC cxx_std_23)
 if (MSVC)
     target_compile_options(gaupel_compiler PRIVATE /W4 /permissive-)
 else()
-    target_compile_options(gaupel_compiler PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(gaupel_compiler PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
 endif()
 
 # Optional: faster rebuilds for clang/gcc

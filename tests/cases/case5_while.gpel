@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    set mut n = 0i32;
+    while (n < 1i32) {
+        n = n + 1i32;
+    }
+    return n;
+}

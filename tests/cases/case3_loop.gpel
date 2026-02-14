@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    set x = loop {
+        break 7i32;
+    };
+    return x;
+}

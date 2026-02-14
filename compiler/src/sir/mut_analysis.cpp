@@ -4,10 +4,6 @@
 
 namespace gaupel::sir {
 
-    static bool is_local_place(const Value& v) {
-        return v.place == PlaceClass::kLocal && v.sym != k_invalid_symbol;
-    }
-
     static std::optional<SymbolId> root_written_symbol(const Module& m, ValueId lhs) {
         if (lhs == k_invalid_value) return std::nullopt;
         if (lhs >= m.values.size()) return std::nullopt;

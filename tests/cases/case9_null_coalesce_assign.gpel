@@ -1,0 +1,5 @@
+fn main() -> i32 {
+    let mut x: i32? = null;
+    x ??= 5i32;
+    return x ?? 0i32;
+}

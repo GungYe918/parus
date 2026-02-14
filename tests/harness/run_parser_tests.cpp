@@ -4,8 +4,12 @@
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/sir/Builder.hpp>
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -40,6 +44,44 @@ namespace {
         if (cond) return true;
         std::cerr << "  - " << msg << "\n";
         return false;
+    }
+
+    static bool read_text_file_(const std::filesystem::path& p, std::string& out) {
+        std::ifstream ifs(p, std::ios::in | std::ios::binary);
+        if (!ifs) return false;
+        out.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        return true;
+    }
+
+    static bool run_file_case_(const std::filesystem::path& p) {
+        std::string src;
+        if (!read_text_file_(p, src)) {
+            std::cerr << "  - failed to read case file: " << p.string() << "\n";
+            return false;
+        }
+
+        auto prog = parse_program(src);
+        auto pres = run_passes(prog);
+        auto ty = run_tyck(prog);
+
+        bool ok = true;
+        ok &= require_(!prog.bag.has_error(), "file case emitted parser/sema diagnostics");
+        ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
+        if (!ok) {
+            std::cerr << "    file: " << p.filename().string() << "\n";
+            return false;
+        }
+
+        gaupel::sir::BuildOptions bopt{};
+        const auto mod = gaupel::sir::build_sir_module(
+            prog.ast, prog.root, pres.sym, pres.name_resolve, ty, prog.types, bopt
+        );
+
+        ok &= require_(!mod.funcs.empty(), "file case must lower at least one function to SIR");
+        if (!ok) {
+            std::cerr << "    file: " << p.filename().string() << "\n";
+        }
+        return ok;
     }
 
     static bool test_suffix_literals_work() {
@@ -206,6 +248,37 @@ namespace {
         return ok;
     }
 
+    static bool test_file_cases_directory() {
+#ifndef GAUPEL_TEST_CASE_DIR
+        std::cerr << "  - GAUPEL_TEST_CASE_DIR is not defined\n";
+        return false;
+#else
+        const std::filesystem::path case_dir{GAUPEL_TEST_CASE_DIR};
+        bool ok = true;
+
+        ok &= require_(std::filesystem::exists(case_dir), "case directory does not exist");
+        ok &= require_(std::filesystem::is_directory(case_dir), "case directory path is not a directory");
+        if (!ok) return false;
+
+        std::vector<std::filesystem::path> files;
+        for (const auto& entry : std::filesystem::directory_iterator(case_dir)) {
+            if (!entry.is_regular_file()) continue;
+            const auto& p = entry.path();
+            if (p.extension() == ".gpel") files.push_back(p);
+        }
+
+        std::sort(files.begin(), files.end());
+        ok &= require_(files.size() >= 5, "at least 5 case files are required");
+        if (!ok) return false;
+
+        for (const auto& p : files) {
+            std::cout << "  [CASE] " << p.filename().string() << "\n";
+            ok &= run_file_case_(p);
+        }
+        return ok;
+#endif
+    }
+
 } // namespace
 
 int main() {
@@ -221,6 +294,7 @@ int main() {
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
+        {"file_cases_directory", test_file_cases_directory},
     };
 
     int failed = 0;

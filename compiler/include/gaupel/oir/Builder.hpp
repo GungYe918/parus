@@ -19,7 +19,7 @@ namespace gaupel::oir {
 
     private:
         const gaupel::sir::Module& sir_;
-        const gaupel::ty::TypePool& ty_;
+        [[maybe_unused]] const gaupel::ty::TypePool& ty_;
     };
 
 } // namespace gaupel::oir

@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let a: i32 = 1i32;
+    set mut b = 2i32;
+    b = a + b;
+    return b;
+}

@@ -11,6 +11,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+if (NOT MSVC)
+  add_compile_options(-Wno-trigraphs)
+endif()
+
 option(GAUPEL_BUILD_TESTS "Build Gaupel tests" ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
