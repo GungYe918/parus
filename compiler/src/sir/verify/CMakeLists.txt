@@ -1,0 +1,3 @@
+list(APPEND GAUPEL_SIR_SOURCES
+  ${CMAKE_CURRENT_LIST_DIR}/sir_verify.cpp
+)

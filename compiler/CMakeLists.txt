@@ -1,27 +1,28 @@
 # compiler/cmake
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/parse/CMakeLists.txt)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/tyck/CMakeLists.txt)
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/sir/CMakeLists.txt)
+
 add_library(gaupel_compiler STATIC
     src/diag/render.cpp
     src/text/source_manager.cpp
     src/lex/lexer.cpp
-    src/parse/parse_decl.cpp
-    src/parse/parse_stmt.cpp
-    src/parse/parse_expr.cpp
-    src/parse/parse_type.cpp
+
+    ${GAUPEL_PARSE_SOURCES}
+
     src/passes/check_pipe_hole.cpp
     src/passes/check_place_expr.cpp
     src/passes/check_pub_commit.cpp
     src/passes/check_top_level_decl_only.cpp
     src/passes/name_resolve.cpp
     src/passes/passes.cpp
-    
+
     src/os/file.cpp
-    src/tyck/type_check.cpp
+    ${GAUPEL_TYCK_SOURCES}
     src/num/big_int.cpp
 
     # SIR
-    src/sir/mut_analysis.cpp
-    src/sir/sir_builder.cpp
-    src/sir/sir_verify.cpp
+    ${GAUPEL_SIR_SOURCES}
 
     # OIR
     src/oir/oir_builder.cpp

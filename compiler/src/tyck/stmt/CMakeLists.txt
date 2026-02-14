@@ -1,0 +1,3 @@
+list(APPEND GAUPEL_TYCK_SOURCES
+  ${CMAKE_CURRENT_LIST_DIR}/type_check_stmt.cpp
+)

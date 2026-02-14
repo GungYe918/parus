@@ -289,13 +289,13 @@ namespace gaupel::diag {
             case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
 
             // args: {0}=lhs_type
-            case Code::kTypeNullCoalesceLhsMustBeOptional: return "operator '??' requires an optional lhs (got {0})";
+            case Code::kTypeNullCoalesceLhsMustBeOptional: return "operator '?" "?' requires an optional lhs (got {0})";
             // args: {0}=elem_type, {1}=rhs_type
-            case Code::kTypeNullCoalesceRhsMismatch: return "operator '??' requires rhs assignable to {0} (got {1})";
+            case Code::kTypeNullCoalesceRhsMismatch: return "operator '?" "?' requires rhs assignable to {0} (got {1})";
             // args: {0}=lhs_type
-            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "operator '??=' requires an optional lhs (got {0})";
+            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "operator '?" "?=' requires an optional lhs (got {0})";
             // args: {0}=elem_type, {1}=rhs_type
-            case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '??=' requires rhs assignable to {0} (got {1})";
+            case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '?" "?=' requires rhs assignable to {0} (got {1})";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -434,13 +434,13 @@ namespace gaupel::diag {
             case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
 
             // args: {0}=lhs_type
-            case Code::kTypeNullCoalesceLhsMustBeOptional: return "'??' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
+            case Code::kTypeNullCoalesceLhsMustBeOptional: return "'?" "?' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
             // args: {0}=elem_type, {1}=rhs_type
-            case Code::kTypeNullCoalesceRhsMismatch: return "'??' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
+            case Code::kTypeNullCoalesceRhsMismatch: return "'?" "?' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
             // args: {0}=lhs_type
-            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "'??=' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
+            case Code::kTypeNullCoalesceAssignLhsMustBeOptional: return "'?" "?=' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";
             // args: {0}=elem_type, {1}=rhs_type
-            case Code::kTypeNullCoalesceAssignRhsMismatch: return "'??=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
+            case Code::kTypeNullCoalesceAssignRhsMismatch: return "'?" "?=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

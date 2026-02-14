@@ -1,6 +1,9 @@
 # tools/gaupelc/cmake
+include(${CMAKE_CURRENT_SOURCE_DIR}/src/CMakeLists.txt)
+
 add_executable(gaupelc
   src/main.cpp
+  ${GAUPELC_SOURCES}
 )
 
 target_link_libraries(gaupelc

@@ -2,6 +2,7 @@
 #include <gaupel/sir/MutAnalysis.hpp>
 #include <gaupel/diag/DiagCode.hpp>
 
+
 namespace gaupel::sir {
 
     static std::optional<SymbolId> root_written_symbol(const Module& m, ValueId lhs) {
