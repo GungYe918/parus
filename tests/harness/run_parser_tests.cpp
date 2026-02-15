@@ -7,6 +7,7 @@
 #include <gaupel/sir/CapabilityAnalysis.hpp>
 #include <gaupel/sir/MutAnalysis.hpp>
 #include <gaupel/sir/Verify.hpp>
+#include <gaupel/oir/Builder.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -690,6 +691,40 @@ namespace {
         return ok;
     }
 
+    static bool test_oir_gate_rejects_invalid_escape_handle() {
+        // OIR lowering 진입 전 게이트는 escape-handle verify 실패 시 lowering을 중단해야 한다.
+        const std::string src = R"(
+            static let G: i32 = 7i32;
+            fn sink(h: &&i32) -> i32 {
+                return 0i32;
+            }
+            fn main() -> i32 {
+                return sink(h: &&G);
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "OIR gate seed must parse/type-check cleanly");
+        ok &= require_(ty.errors.empty(), "OIR gate seed must not emit tyck errors");
+        ok &= require_(sir.cap.ok, "OIR gate seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "OIR gate seed must pass SIR handle verify initially");
+        ok &= require_(!sir.mod.escape_handles.empty(), "OIR gate seed must produce at least one escape handle");
+        if (!ok) return false;
+
+        sir.mod.escape_handles[0].materialize_count = 1;
+        gaupel::oir::Builder ob(sir.mod, p.types);
+        auto oir = ob.build();
+
+        ok &= require_(!oir.gate_passed, "OIR gate must fail when escape handle verify fails");
+        ok &= require_(!oir.gate_errors.empty(), "OIR gate must return at least one gate error");
+        return ok;
+    }
+
     static bool test_sir_mut_analysis_allows_mut_borrow_write_through() {
         // SIR mut-analysis는 &mut write-through를 불법 쓰기로 오검출하면 안 된다.
         const std::string src = R"(
@@ -917,6 +952,7 @@ int main() {
         {"escape_requires_static_or_boundary", test_escape_requires_static_or_boundary},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
         {"sir_handle_verify_rejects_materialized_handle", test_sir_handle_verify_rejects_materialized_handle},
+        {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
         {"sir_control_flow_block_layout", test_sir_control_flow_block_layout},

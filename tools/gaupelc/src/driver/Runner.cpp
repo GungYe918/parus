@@ -165,6 +165,7 @@ namespace gaupelc::driver {
             bool sir_verify_ok = true;
             bool sir_cap_ok = true;
             bool sir_handle_verify_ok = true;
+            bool oir_gate_ok = true;
             {
                 gaupel::sir::BuildOptions bopt{};
                 sir_mod = gaupel::sir::build_sir_module(
@@ -230,22 +231,31 @@ namespace gaupelc::driver {
                 gaupel::oir::Builder ob(sir_mod, types);
                 auto oir_res = ob.build();
 
-                dump::dump_oir_module(oir_res.mod, types);
-
-                auto verrs = gaupel::oir::verify(oir_res.mod);
-                std::cout << "\nOIR VERIFY:\n";
-                if (verrs.empty()) {
-                    std::cout << "verify ok.\n";
+                if (!oir_res.gate_passed) {
+                    oir_gate_ok = false;
+                    std::cout << "\nOIR GATE:\n";
+                    std::cout << "gate failed: " << oir_res.gate_errors.size() << "\n";
+                    for (const auto& e : oir_res.gate_errors) {
+                        std::cout << "  - " << e.msg << "\n";
+                    }
                 } else {
-                    std::cout << "verify errors: " << verrs.size() << "\n";
-                    for (auto& e : verrs) std::cout << "  - " << e.msg << "\n";
+                    dump::dump_oir_module(oir_res.mod, types);
+
+                    auto verrs = gaupel::oir::verify(oir_res.mod);
+                    std::cout << "\nOIR VERIFY:\n";
+                    if (verrs.empty()) {
+                        std::cout << "verify ok.\n";
+                    } else {
+                        std::cout << "verify errors: " << verrs.size() << "\n";
+                        for (auto& e : verrs) std::cout << "  - " << e.msg << "\n";
+                    }
                 }
             } else if (opt.dump_oir) {
                 std::cout << "\nOIR: skipped because SIR verification failed before OIR lowering.\n";
             }
 
             int diag_rc = flush_diags(bag, opt.lang, sm, opt.context_lines);
-            if (!sir_verify_ok || !sir_cap_ok || !sir_handle_verify_ok) return 1;
+            if (!sir_verify_ok || !sir_cap_ok || !sir_handle_verify_ok || !oir_gate_ok) return 1;
             return diag_rc;
         }
 

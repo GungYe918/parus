@@ -3,6 +3,7 @@
 #include <gaupel/oir/OIR.hpp>
 
 #include <gaupel/ast/Nodes.hpp>
+#include <gaupel/sir/Verify.hpp>
 #include <gaupel/syntax/TokenKind.hpp>
 
 #include <unordered_map>
@@ -556,6 +557,17 @@ namespace gaupel::oir {
     // ------------------------------------------------------------
     BuildResult Builder::build() {
         BuildResult out{};
+
+        // OIR 진입 게이트:
+        // - handle 비물질화(materialize_count==0)
+        // - static/boundary 규칙
+        // - escape 메타 일관성
+        // 위 규칙을 만족하지 않으면 OIR lowering 자체를 중단한다.
+        out.gate_errors = gaupel::sir::verify_escape_handles(sir_);
+        if (!out.gate_errors.empty()) {
+            out.gate_passed = false;
+            return out;
+        }
 
         // Build all functions in SIR module.
         // Strategy:

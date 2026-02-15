@@ -2,12 +2,19 @@
 #pragma once
 #include <gaupel/oir/Inst.hpp>
 #include <gaupel/sir/SIR.hpp>
+#include <gaupel/sir/Verify.hpp>
 #include <gaupel/ty/TypePool.hpp>
+
+#include <vector>
 
 
 namespace gaupel::oir {
 
-    struct BuildResult { Module mod; };
+    struct BuildResult {
+        Module mod;
+        bool gate_passed = true;
+        std::vector<gaupel::sir::VerifyError> gate_errors;
+    };
 
     class Builder {
     public:

@@ -1,3 +1,4 @@
+// compiler/src/sir/analysis/capability_analysis.cpp
 #include <gaupel/sir/CapabilityAnalysis.hpp>
 
 #include <gaupel/diag/DiagCode.hpp>
@@ -52,6 +53,7 @@ namespace gaupel::sir {
         struct ActiveBorrow {
             PlaceRef place{};
             bool is_mut = false;
+            SymbolId owner_sym = k_invalid_symbol; // borrow 값을 바인딩한 심볼(없으면 임시 borrow)
         };
 
         struct ScopeState {
@@ -313,14 +315,18 @@ namespace gaupel::sir {
 
             /// @brief 활성 borrow 항목이 완전히 같은지 비교한다.
             static bool active_borrow_equal_(const ActiveBorrow& a, const ActiveBorrow& b) {
-                return a.is_mut == b.is_mut && place_ref_equal_(a.place, b.place);
+                return a.is_mut == b.is_mut &&
+                       a.owner_sym == b.owner_sym &&
+                       place_ref_equal_(a.place, b.place);
             }
 
-            /// @brief borrow 집합에 중복 없이 추가한다. (동일 place의 shared/mut 충돌은 mut로 승격)
+            /// @brief borrow 집합에 중복 없이 추가한다. (같은 owner/place에서 shared/mut 충돌은 mut로 승격)
             static void append_unique_borrow_(std::vector<ActiveBorrow>& dst, const ActiveBorrow& item) {
                 for (auto& cur : dst) {
                     if (active_borrow_equal_(cur, item)) return;
-                    if (place_ref_equal_(cur.place, item.place) && cur.is_mut != item.is_mut) {
+                    if (cur.owner_sym == item.owner_sym &&
+                        place_ref_equal_(cur.place, item.place) &&
+                        cur.is_mut != item.is_mut) {
                         // 보수 규칙: 합류 후에는 stronger capability(&mut)를 유지해
                         // false-negative(충돌 누락)를 막는다.
                         cur.is_mut = true;
@@ -377,8 +383,20 @@ namespace gaupel::sir {
             }
 
             /// @brief 현재 스코프에 borrow 활성화를 등록한다.
-            void activate_borrow_(const PlaceRef& place, bool is_mut) {
-                active_borrows_.push_back(ActiveBorrow{place, is_mut});
+            void activate_borrow_(const PlaceRef& place, bool is_mut, SymbolId owner_sym) {
+                active_borrows_.push_back(ActiveBorrow{place, is_mut, owner_sym});
+            }
+
+            /// @brief 특정 심볼이 바인딩한 borrow를 해제한다(재대입/재바인딩 시점).
+            void release_owner_borrows_(SymbolId owner_sym) {
+                if (owner_sym == k_invalid_symbol) return;
+                size_t write = 0;
+                for (size_t read = 0; read < active_borrows_.size(); ++read) {
+                    if (active_borrows_[read].owner_sym == owner_sym) continue;
+                    if (write != read) active_borrows_[write] = active_borrows_[read];
+                    ++write;
+                }
+                active_borrows_.resize(write);
             }
 
             /// @brief 심볼이 mutable 선언인지 확인한다.
@@ -544,6 +562,14 @@ namespace gaupel::sir {
                 return is_symbol_static_(*root);
             }
 
+            /// @brief 대입 lhs가 plain local 심볼 바인딩인지 판정한다.
+            SymbolId local_binding_symbol_(ValueId lhs_vid) const {
+                if (lhs_vid == k_invalid_value || (size_t)lhs_vid >= m_.values.size()) return k_invalid_symbol;
+                const auto& lhs = m_.values[lhs_vid];
+                if (lhs.kind != ValueKind::kLocal) return k_invalid_symbol;
+                return lhs.sym;
+            }
+
             /// @brief escape 값이 허용된 경계 문맥인지 반환한다.
             static bool is_escape_boundary_use_(ValueUse use) {
                 return use == ValueUse::kReturnValue || use == ValueUse::kCallArg;
@@ -673,10 +699,17 @@ namespace gaupel::sir {
                         return;
 
                     case StmtKind::kVarDecl: {
-                        analyze_value_(s.init, ValueUse::kValue);
-                        if (is_borrow_type_(value_type_(s.init)) && s.is_static) {
-                            report_(diag::Code::kBorrowEscapeToStorage, s.span);
-                        }
+                            SymbolId init_owner = k_invalid_symbol;
+                            if (s.sym != k_invalid_symbol && is_borrow_type_(value_type_(s.init))) {
+                                // let/set으로 borrow를 재바인딩하는 경우 기존 owner borrow를 정리한다.
+                                release_owner_borrows_(s.sym);
+                                init_owner = s.sym;
+                            }
+
+                            analyze_value_(s.init, ValueUse::kValue, init_owner);
+                            if (is_borrow_type_(value_type_(s.init)) && s.is_static) {
+                                report_(diag::Code::kBorrowEscapeToStorage, s.span);
+                            }
                         if (is_escape_type_(value_type_(s.init)) && !s.is_static) {
                             report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
                         }
@@ -700,19 +733,23 @@ namespace gaupel::sir {
 
                     case StmtKind::kWhileStmt:
                         {
-                            // while은 0회 실행 경로가 있으므로 pre와 body 경로를 합류한다.
+                            // while 정밀 고정점:
+                            // - loop head 상태를 고정점으로 수렴시킨다.
+                            // - 종료 상태에는 "마지막 조건식 평가 효과"를 포함한다.
                             const FlowState pre = capture_flow_state_();
-                            FlowState fp = pre;
+                            FlowState head = pre;
+                            FlowState exit_from_cond = analyze_value_with_flow_(s.expr, ValueUse::kValue, head);
 
-                            for (uint32_t iter = 0; iter < 8; ++iter) {
-                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, fp);
+                            for (uint32_t iter = 0; iter < 16; ++iter) {
+                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, head);
                                 const FlowState body_out = analyze_block_with_flow_(s.a, cond_out);
-                                const FlowState merged = merge_flow_state_(pre, body_out);
-                                if (flow_state_equal_(merged, fp)) break;
-                                fp = merged;
+                                const FlowState next_head = merge_flow_state_(pre, body_out);
+                                exit_from_cond = cond_out;
+                                if (flow_state_equal_(next_head, head)) break;
+                                head = next_head;
                             }
 
-                            restore_flow_state_(fp);
+                            restore_flow_state_(merge_flow_state_(pre, exit_from_cond));
                         }
                         return;
 
@@ -726,19 +763,24 @@ namespace gaupel::sir {
 
                     case StmtKind::kDoWhileStmt:
                         {
-                            // do-while은 body를 최소 1회 실행한다.
+                            // do-while 정밀 고정점:
+                            // - body를 최소 1회 반영한 뒤 head 고정점을 수렴시킨다.
+                            // - 종료 상태에는 마지막 조건식 평가 효과를 포함한다.
                             const FlowState pre = capture_flow_state_();
-                            FlowState fp = analyze_block_with_flow_(s.a, pre);
+                            const FlowState first_body = analyze_block_with_flow_(s.a, pre);
+                            FlowState head = first_body;
+                            FlowState exit_from_cond = analyze_value_with_flow_(s.expr, ValueUse::kValue, head);
 
-                            for (uint32_t iter = 0; iter < 8; ++iter) {
-                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, fp);
+                            for (uint32_t iter = 0; iter < 16; ++iter) {
+                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, head);
                                 const FlowState body_out = analyze_block_with_flow_(s.a, cond_out);
-                                const FlowState merged = merge_flow_state_(fp, body_out);
-                                if (flow_state_equal_(merged, fp)) break;
-                                fp = merged;
+                                const FlowState next_head = merge_flow_state_(first_body, body_out);
+                                exit_from_cond = cond_out;
+                                if (flow_state_equal_(next_head, head)) break;
+                                head = next_head;
                             }
 
-                            restore_flow_state_(fp);
+                            restore_flow_state_(merge_flow_state_(first_body, exit_from_cond));
                         }
                         return;
 
@@ -767,7 +809,11 @@ namespace gaupel::sir {
             }
 
             /// @brief SIR value를 재귀 순회하며 capability 규칙을 검증한다.
-            void analyze_value_(ValueId vid, ValueUse use) {
+            void analyze_value_(
+                ValueId vid,
+                ValueUse use,
+                SymbolId borrow_owner_hint = k_invalid_symbol
+            ) {
                 if (vid == k_invalid_value || (size_t)vid >= m_.values.size()) return;
                 const auto& v = m_.values[vid];
 
@@ -780,7 +826,7 @@ namespace gaupel::sir {
                     }
 
                     case ValueKind::kBorrow: {
-                        analyze_value_(v.a, ValueUse::kBorrowOperand);
+                        analyze_value_(v.a, ValueUse::kBorrowOperand, k_invalid_symbol);
 
                         const bool place_ok = is_place_value_(v.a) || is_slice_borrow_operand_(v.a);
                         if (!place_ok) {
@@ -810,13 +856,13 @@ namespace gaupel::sir {
                                 report_(diag::Code::kBorrowMutConflictWithShared, v.span);
                             }
                             if (!has_mut_conflict && !has_shared_conflict && is_symbol_mutable_(*root)) {
-                                activate_borrow_(*place, /*is_mut=*/true);
+                                activate_borrow_(*place, /*is_mut=*/true, borrow_owner_hint);
                             }
                         } else {
                             if (has_mut_conflict) {
                                 report_(diag::Code::kBorrowSharedConflictWithMut, v.span);
                             } else {
-                                activate_borrow_(*place, /*is_mut=*/false);
+                                activate_borrow_(*place, /*is_mut=*/false, borrow_owner_hint);
                             }
                         }
                         return;
@@ -860,8 +906,22 @@ namespace gaupel::sir {
                     }
 
                     case ValueKind::kAssign: {
-                        analyze_value_(v.a, ValueUse::kAssignLhs);
-                        analyze_value_(v.b, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kAssignLhs, k_invalid_symbol);
+
+                        const SymbolId lhs_local_sym = local_binding_symbol_(v.a);
+                        const bool binds_borrow_rhs =
+                            lhs_local_sym != k_invalid_symbol &&
+                            is_borrow_type_(value_type_(v.b));
+                        if (lhs_local_sym != k_invalid_symbol) {
+                            // 대입 시 기존 바인딩 borrow 수명을 종료한다(재바인딩 모델).
+                            release_owner_borrows_(lhs_local_sym);
+                        }
+
+                        analyze_value_(
+                            v.b,
+                            ValueUse::kValue,
+                            binds_borrow_rhs ? lhs_local_sym : k_invalid_symbol
+                        );
 
                         if (is_borrow_type_(value_type_(v.b))) {
                             bool lhs_plain_local = false;
@@ -887,7 +947,7 @@ namespace gaupel::sir {
                     }
 
                     case ValueKind::kCall: {
-                        analyze_value_(v.a, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
 
                         // call 인자에서 만들어진 임시 borrow는 call 식 종료와 함께 정리한다.
                         enter_scope_();
@@ -902,13 +962,13 @@ namespace gaupel::sir {
                                     const uint32_t cid = a.child_begin + j;
                                     if ((size_t)cid >= m_.args.size()) break;
                                     const auto& ca = m_.args[cid];
-                                    if (!ca.is_hole) analyze_value_(ca.value, ValueUse::kCallArg);
+                                    if (!ca.is_hole) analyze_value_(ca.value, ValueUse::kCallArg, k_invalid_symbol);
                                 }
                                 i += 1 + a.child_count;
                                 continue;
                             }
 
-                            if (!a.is_hole) analyze_value_(a.value, ValueUse::kCallArg);
+                            if (!a.is_hole) analyze_value_(a.value, ValueUse::kCallArg, k_invalid_symbol);
                             ++i;
                         }
                         leave_scope_();
@@ -916,33 +976,33 @@ namespace gaupel::sir {
                     }
 
                     case ValueKind::kIndex:
-                        analyze_value_(v.a, ValueUse::kValue);
-                        analyze_value_(v.b, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
+                        analyze_value_(v.b, ValueUse::kValue, k_invalid_symbol);
                         check_use_after_move_(vid, use, v.span);
                         check_place_access_conflicts_(vid, use, v.span);
                         return;
 
                     case ValueKind::kField:
-                        analyze_value_(v.a, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
                         check_use_after_move_(vid, use, v.span);
                         check_place_access_conflicts_(vid, use, v.span);
                         return;
 
                     case ValueKind::kIfExpr:
-                        analyze_value_(v.a, ValueUse::kValue);
-                        analyze_value_(v.b, ValueUse::kValue);
-                        analyze_value_(v.c, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
+                        analyze_value_(v.b, ValueUse::kValue, k_invalid_symbol);
+                        analyze_value_(v.c, ValueUse::kValue, k_invalid_symbol);
                         return;
 
                     case ValueKind::kBlockExpr: {
                         const BlockId blk = (BlockId)v.a;
                         analyze_block_(blk);
-                        if (v.b != k_invalid_value) analyze_value_(v.b, ValueUse::kValue);
+                        if (v.b != k_invalid_value) analyze_value_(v.b, ValueUse::kValue, k_invalid_symbol);
                         return;
                     }
 
                     case ValueKind::kLoopExpr: {
-                        if (v.a != k_invalid_value) analyze_value_(v.a, ValueUse::kValue);
+                        if (v.a != k_invalid_value) analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
                         const BlockId body = (BlockId)v.b;
                         analyze_block_(body);
                         return;
@@ -951,12 +1011,12 @@ namespace gaupel::sir {
                     case ValueKind::kUnary:
                     case ValueKind::kPostfixInc:
                     case ValueKind::kCast:
-                        analyze_value_(v.a, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
                         return;
 
                     case ValueKind::kBinary:
-                        analyze_value_(v.a, ValueUse::kValue);
-                        analyze_value_(v.b, ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
+                        analyze_value_(v.b, ValueUse::kValue, k_invalid_symbol);
                         return;
 
                     case ValueKind::kArrayLit: {
@@ -964,7 +1024,7 @@ namespace gaupel::sir {
                         if (end <= (uint64_t)m_.args.size()) {
                             for (uint32_t i = 0; i < v.arg_count; ++i) {
                                 const auto& a = m_.args[v.arg_begin + i];
-                                if (!a.is_hole) analyze_value_(a.value, ValueUse::kValue);
+                                if (!a.is_hole) analyze_value_(a.value, ValueUse::kValue, k_invalid_symbol);
                             }
                         }
                         return;
