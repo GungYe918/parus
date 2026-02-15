@@ -1,3 +1,0 @@
-list(APPEND PARUSC_SOURCES
-  ${CMAKE_CURRENT_LIST_DIR}/Runner.cpp
-)

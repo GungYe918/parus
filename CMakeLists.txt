@@ -45,7 +45,29 @@ if(PARUS_ENABLE_BACKEND)
   add_subdirectory(backend)
 endif()
 
-add_subdirectory(tools/parusc)
+add_subdirectory(compiler/parusc)
+
+# ---------------------------
+# Two-stage build chain
+# stage1: frontend/backend libs
+# stage2: parusc tool (depends on stage1)
+# ---------------------------
+add_custom_target(parus_stage1)
+add_dependencies(parus_stage1 parus_frontend)
+if(TARGET parus_backend_aot)
+  add_dependencies(parus_stage1 parus_backend_aot)
+endif()
+if(TARGET parus_backend_jit)
+  add_dependencies(parus_stage1 parus_backend_jit)
+endif()
+if(TARGET parus_backend_wasm)
+  add_dependencies(parus_stage1 parus_backend_wasm)
+endif()
+
+add_custom_target(parus_stage2)
+if(TARGET parusc)
+  add_dependencies(parus_stage2 parus_stage1 parusc)
+endif()
 
 if(PARUS_BUILD_TESTS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")

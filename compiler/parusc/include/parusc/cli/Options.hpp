@@ -1,4 +1,4 @@
-// tools/parusc/src/cli/Options.hpp
+// compiler/parusc/include/parusc/cli/Options.hpp
 #pragma once
 
 #include <parus/diag/Render.hpp>
@@ -7,30 +7,42 @@
 #include <cstdint>
 #include <ostream>
 #include <string>
-#include <string_view>
-
+#include <vector>
 
 namespace parusc::cli {
 
+    /// @brief `parusc` 실행 모드.
     enum class Mode : uint8_t {
         kUsage,
         kVersion,
-        kExpr,
-        kStmt,
-        kAll,
-        kFile,
+        kCompile,
     };
 
+    /// @brief `-Xparus`로만 접근 가능한 내부 개발 옵션.
+    struct InternalOptions {
+        bool token_dump = false;
+        bool ast_dump = false;
+        bool sir_dump = false;
+        bool oir_dump = false;
+
+        bool emit_llvm_ir = false;
+        bool emit_object = false;
+    };
+
+    /// @brief `parusc` 최종 실행 옵션.
     struct Options {
         Mode mode = Mode::kUsage;
 
-        std::string payload{};
-        bool dump_oir = false;
+        std::vector<std::string> inputs{};
+        std::string output_path{};
+        uint8_t opt_level = 0;
+
+        bool has_xparus = false;
+        InternalOptions internal{};
 
         parus::diag::Language lang = parus::diag::Language::kEn;
         uint32_t context_lines = 2;
         uint32_t max_errors = 64;
-
         parus::passes::PassOptions pass_opt{};
 
         bool ok = true;

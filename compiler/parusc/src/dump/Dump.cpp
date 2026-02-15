@@ -1,5 +1,5 @@
-// tools/parusc/src/dump/Dump.cpp
-#include "Dump.hpp"
+// compiler/parusc/src/dump/Dump.cpp
+#include <parusc/dump/Dump.hpp>
 
 #include <parus/syntax/TokenKind.hpp>
 

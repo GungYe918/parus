@@ -1,6 +1,6 @@
-// tools/parusc/src/main.cpp
-#include "cli/Options.hpp"
-#include "driver/Runner.hpp"
+// compiler/parusc/src/main.cpp
+#include <parusc/cli/Options.hpp>
+#include <parusc/driver/Driver.hpp>
 #include <parus/Version.hpp>
 
 #include <iostream>

@@ -2,6 +2,7 @@
 
 set(_parus_aot_sources
   ${CMAKE_CURRENT_LIST_DIR}/AOTBackend.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/LLVMIRLowering.cpp
 )
 
 if(PARUS_AOT_ENABLE_LLVM)

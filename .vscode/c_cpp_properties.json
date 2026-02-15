@@ -5,7 +5,8 @@
             "includePath": [
                 "${workspaceFolder}/**",
                 "${workspaceFolder}/frontend/include/**",
-                "${workspaceFolder}/backend/include/**"
+                "${workspaceFolder}/backend/include/**",
+                "${workspaceFolder}/compiler/parusc/**"
             ],
             "defines": [],
             "cStandard": "c23",

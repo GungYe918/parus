@@ -1,19 +1,60 @@
 // backend/llvmconfig/lanes/v20/AOTLlvmV20.cpp
 #include <parus/backend/aot/AOTLLVMDispatcher.hpp>
+#include <parus/backend/aot/LLVMIRLowering.hpp>
+
+#include <fstream>
 
 namespace parus::backend::aot::detail {
 
-    /// @brief LLVM 20 lane 전용 AOT 스텁 구현.
+    /// @brief LLVM 20 lane 전용 OIR -> LLVM-IR emission 구현.
     CompileResult compile_llvm_lane_v20(
-        const parus::oir::Module&,
-        const parus::ty::TypePool&,
-        const CompileOptions&
+        const parus::oir::Module& oir,
+        const parus::ty::TypePool& types,
+        const CompileOptions& opt
     ) {
         CompileResult r{};
-        r.ok = false;
+        if (opt.emit_object) {
+            r.ok = false;
+            r.messages.push_back(CompileMessage{
+                true,
+                "Object emission is not implemented yet in LLVM lane v20. Use LLVM-IR emission."
+            });
+            return r;
+        }
+
+        const auto lowered = lower_oir_to_llvm_ir_text(
+            oir,
+            types,
+            LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        for (const auto& m : lowered.messages) r.messages.push_back(m);
+
+        if (!lowered.ok) {
+            r.ok = false;
+            r.messages.push_back(CompileMessage{
+                true,
+                "LLVM lane v20 lowering failed."
+            });
+            return r;
+        }
+
+        const std::string out_path = opt.output_path.empty() ? "a.ll" : opt.output_path;
+        std::ofstream ofs(out_path, std::ios::out | std::ios::binary);
+        if (!ofs) {
+            r.ok = false;
+            r.messages.push_back(CompileMessage{
+                true,
+                "failed to open output file: " + out_path
+            });
+            return r;
+        }
+        ofs << lowered.llvm_ir;
+        ofs.close();
+
+        r.ok = true;
         r.messages.push_back(CompileMessage{
-            true,
-            "AOT LLVM lane v20 is selected, but lowering is not implemented yet."
+            false,
+            "wrote LLVM-IR to " + out_path
         });
         return r;
     }

@@ -1,4 +1,4 @@
-// tools/parusc/src/dump/Dump.hpp
+// compiler/parusc/include/parusc/dump/Dump.hpp
 #pragma once
 
 #include <parus/ast/Nodes.hpp>
