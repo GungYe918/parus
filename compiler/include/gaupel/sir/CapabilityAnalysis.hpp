@@ -19,14 +19,15 @@ namespace gaupel::sir {
         bool ok = true;
         uint32_t error_count = 0;
         std::unordered_map<SymbolId, CapabilitySymbolState> state_by_symbol;
+        uint32_t escape_handle_count = 0;
+        uint32_t materialized_handle_count = 0;
     };
 
     /// @brief SIR 단계에서 `&`, `&mut`, `&&` capability 규칙을 정밀 분석한다.
     CapabilityAnalysisResult analyze_capabilities(
-        const Module& m,
+        Module& m,
         const ty::TypePool& types,
         diag::Bag& bag
     );
 
 } // namespace gaupel::sir
-

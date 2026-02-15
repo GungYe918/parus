@@ -97,6 +97,23 @@ namespace gaupel::sir {
         kUnknown,        // effect unknown (calls/ffi/etc.)
     };
 
+    /// @brief `&&` lowering 시 생성되는 escape handle의 storage kind를 나타낸다.
+    enum class EscapeHandleKind : uint8_t {
+        kTrivial = 0,
+        kStackSlot,
+        kCallerSlot,
+        kHeapBox,   // v0 reserved (heap not used)
+    };
+
+    /// @brief escape handle이 언어 경계에서 어떤 방식으로 소비되는지 나타낸다.
+    enum class EscapeBoundaryKind : uint8_t {
+        kNone = 0,
+        kReturn,
+        kCallArg,
+        kAbi,
+        kFfi,
+    };
+
     // ---------------------------------------------
     // Value node
     // ---------------------------------------------
@@ -335,6 +352,26 @@ namespace gaupel::sir {
         TypeId declared_type = k_invalid_type;
     };
 
+    /// @brief `&&` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).
+    struct EscapeHandleMeta {
+        ValueId escape_value = k_invalid_value;
+        Span span{};
+
+        SymbolId origin_sym = k_invalid_symbol;
+        TypeId pointee_type = k_invalid_type;
+
+        EscapeHandleKind kind = EscapeHandleKind::kTrivial;
+        EscapeBoundaryKind boundary = EscapeBoundaryKind::kNone;
+
+        bool from_static = false;
+        bool has_drop = false;
+        bool abi_pack_required = false;
+        bool ffi_pack_required = false;
+
+        // v0 규칙: OIR 진입 전 반드시 0이어야 한다.
+        uint32_t materialize_count = 0;
+    };
+
     class Module {
     public:
         std::vector<Value> values;
@@ -350,6 +387,7 @@ namespace gaupel::sir {
         std::vector<FieldDecl> fields;
         std::vector<ActsDecl> acts;
         std::vector<GlobalVarDecl> globals;
+        std::vector<EscapeHandleMeta> escape_handles;
 
         // helpers
         ValueId add_value(const Value& v)   {  values.push_back(v); return (ValueId)values.size() - 1;  }
@@ -365,6 +403,10 @@ namespace gaupel::sir {
         FieldId add_field(const FieldDecl& f)           { fields.push_back(f); return (FieldId)fields.size() - 1; }
         ActsId add_acts(const ActsDecl& a)              { acts.push_back(a); return (ActsId)acts.size() - 1; }
         uint32_t add_global(const GlobalVarDecl& g)     { globals.push_back(g); return (uint32_t)globals.size() - 1; }
+        uint32_t add_escape_handle(const EscapeHandleMeta& h) {
+            escape_handles.push_back(h);
+            return (uint32_t)escape_handles.size() - 1;
+        }
     };
 
 } // namespace gaupel::sir

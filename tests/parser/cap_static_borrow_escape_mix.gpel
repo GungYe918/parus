@@ -1,0 +1,41 @@
+// 복합 파서/시맨틱 점검용 샘플
+// - static 저장소에 && 초기값 저장
+// - 함수 내부에서 &, &mut, &&, named-group, 배열 인덱스/슬라이스 조합 사용
+
+static let G0: i32 = 11i32;
+static let G1: i32 = 22i32;
+static mut set SLOT = &&G0;
+
+fn read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
+  return (a + b) * scale + bias;
+}
+
+fn bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> unit {
+  x = x + delta;
+  return;
+}
+
+fn consume(h: &&i32) -> i32 {
+  return 0i32;
+}
+
+fn main() -> i32 {
+  let mut arr: i32[4] = [1i32, 2i32, 3i32, 4i32];
+  let mut out: i32 = 0i32;
+
+  {
+    set first = &arr[0];
+    set second = &arr[1];
+    out = read_mix(first, second, { bias: 3i32, scale: 2i32 });
+  }
+
+  bump_one(&mut arr[2], { delta: 5i32 });
+  bump_one(&mut arr[3], { delta: 7i32 });
+
+  set h0 = &&G0;
+  set h1 = &&G1;
+  set c0 = consume(h0);
+  set c1 = consume(h1);
+
+  return out + arr[2] + arr[3] + c0 + c1;
+}

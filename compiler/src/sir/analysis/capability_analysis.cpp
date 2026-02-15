@@ -43,7 +43,7 @@ namespace gaupel::sir {
         class CapabilityAnalyzer final {
         public:
             CapabilityAnalyzer(
-                const Module& m,
+                Module& m,
                 const ty::TypePool& types,
                 diag::Bag& bag
             )
@@ -51,6 +51,8 @@ namespace gaupel::sir {
 
             /// @brief 전체 모듈에 대해 capability 분석을 수행한다.
             CapabilityAnalysisResult run() {
+                m_.escape_handles.clear();
+                escape_meta_by_value_.clear();
                 collect_symbol_traits_();
 
                 for (uint32_t fid = 0; fid < (uint32_t)m_.funcs.size(); ++fid) {
@@ -70,6 +72,10 @@ namespace gaupel::sir {
                     st.active_shared_borrows = bs.shared_count;
                     st.active_mut_borrow = (bs.mut_count > 0);
                 }
+                out.escape_handle_count = (uint32_t)m_.escape_handles.size();
+                for (const auto& h : m_.escape_handles) {
+                    out.materialized_handle_count += h.materialize_count;
+                }
                 return out;
             }
 
@@ -85,6 +91,31 @@ namespace gaupel::sir {
             bool is_borrow_type_(TypeId t) const {
                 if (t == k_invalid_type || t >= types_.count()) return false;
                 return types_.get(t).kind == ty::Kind::kBorrow;
+            }
+
+            /// @brief 타입이 drop을 요구할 수 있는지 보수적으로 판정한다.
+            bool type_needs_drop_(TypeId t) const {
+                if (t == k_invalid_type || t >= types_.count()) return false;
+                const auto& tt = types_.get(t);
+                switch (tt.kind) {
+                    case ty::Kind::kError:
+                        return false;
+                    case ty::Kind::kBuiltin:
+                        return false;
+                    case ty::Kind::kBorrow:
+                        return false;
+                    case ty::Kind::kEscape:
+                        return false;
+                    case ty::Kind::kFn:
+                        return false;
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                        return type_needs_drop_(tt.elem);
+                    case ty::Kind::kNamedUser:
+                        // 사용자 정의 타입은 보수적으로 drop 필요로 본다.
+                        return true;
+                }
+                return true;
             }
 
             /// @brief SIR `ValueId`가 place(local/index)인지 확인한다.
@@ -207,6 +238,59 @@ namespace gaupel::sir {
             /// @brief escape 값이 허용된 경계 문맥인지 반환한다.
             static bool is_escape_boundary_use_(ValueUse use) {
                 return use == ValueUse::kReturnValue || use == ValueUse::kCallArg;
+            }
+
+            /// @brief 값 사용 문맥을 EscapeBoundaryKind로 변환한다.
+            static EscapeBoundaryKind boundary_from_use_(ValueUse use) {
+                switch (use) {
+                    case ValueUse::kReturnValue: return EscapeBoundaryKind::kReturn;
+                    case ValueUse::kCallArg: return EscapeBoundaryKind::kCallArg;
+                    default: return EscapeBoundaryKind::kNone;
+                }
+            }
+
+            /// @brief `&&` 값에 대한 EscapeHandle 메타를 등록/업데이트한다.
+            void register_escape_handle_(
+                ValueId escape_vid,
+                const Value& escape_value,
+                ValueUse use,
+                std::optional<SymbolId> root
+            ) {
+                if (escape_vid == k_invalid_value || (size_t)escape_vid >= m_.values.size()) return;
+
+                const bool from_static = root && is_symbol_static_(*root);
+                const EscapeBoundaryKind boundary = boundary_from_use_(use);
+
+                EscapeHandleMeta meta{};
+                meta.escape_value = escape_vid;
+                meta.span = escape_value.span;
+                meta.origin_sym = root ? *root : k_invalid_symbol;
+                meta.pointee_type = value_type_(escape_value.a);
+                meta.from_static = from_static;
+                meta.has_drop = type_needs_drop_(meta.pointee_type);
+                meta.boundary = boundary;
+
+                if (boundary == EscapeBoundaryKind::kReturn || boundary == EscapeBoundaryKind::kCallArg) {
+                    meta.kind = EscapeHandleKind::kCallerSlot;
+                } else if (from_static) {
+                    meta.kind = EscapeHandleKind::kTrivial;
+                } else {
+                    meta.kind = EscapeHandleKind::kStackSlot;
+                }
+
+                // v0: 내부는 비물질화 토큰으로 유지하고 ABI/FFI 경계에서만 패킹.
+                meta.abi_pack_required = (boundary == EscapeBoundaryKind::kAbi);
+                meta.ffi_pack_required = (boundary == EscapeBoundaryKind::kFfi);
+                meta.materialize_count = 0;
+
+                auto it = escape_meta_by_value_.find(escape_vid);
+                if (it == escape_meta_by_value_.end()) {
+                    const uint32_t idx = m_.add_escape_handle(meta);
+                    escape_meta_by_value_[escape_vid] = idx;
+                } else if ((size_t)it->second < m_.escape_handles.size()) {
+                    auto& dst = m_.escape_handles[it->second];
+                    dst = meta;
+                }
             }
 
             /// @brief 심볼 trait(is_mut/is_static)를 수집한다.
@@ -410,6 +494,7 @@ namespace gaupel::sir {
                         const auto root = (v.origin_sym != k_invalid_symbol)
                             ? std::optional<SymbolId>{v.origin_sym}
                             : root_symbol_(v.a);
+                        register_escape_handle_(vid, v, use, root);
 
                         if (root) {
                             if (has_active_mut_(*root)) {
@@ -544,7 +629,7 @@ namespace gaupel::sir {
                 }
             }
 
-            const Module& m_;
+            Module& m_;
             const ty::TypePool& types_;
             diag::Bag& bag_;
 
@@ -555,6 +640,7 @@ namespace gaupel::sir {
             std::unordered_map<SymbolId, SymbolTraits> symbol_traits_;
             std::unordered_map<SymbolId, BorrowState> active_borrows_;
             std::unordered_map<SymbolId, bool> moved_by_escape_;
+            std::unordered_map<ValueId, uint32_t> escape_meta_by_value_;
             std::vector<ScopeState> scopes_;
             std::unordered_set<BlockId> visiting_blocks_;
         };
@@ -562,7 +648,7 @@ namespace gaupel::sir {
     } // namespace
 
     CapabilityAnalysisResult analyze_capabilities(
-        const Module& m,
+        Module& m,
         const ty::TypePool& types,
         diag::Bag& bag
     ) {

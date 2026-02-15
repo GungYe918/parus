@@ -95,6 +95,31 @@ namespace gaupelc::dump {
         return "Unknown";
     }
 
+    /// @brief EscapeHandle kind를 문자열로 변환한다.
+    static const char* sir_escape_kind_name(gaupel::sir::EscapeHandleKind k) {
+        using K = gaupel::sir::EscapeHandleKind;
+        switch (k) {
+            case K::kTrivial: return "Trivial";
+            case K::kStackSlot: return "StackSlot";
+            case K::kCallerSlot: return "CallerSlot";
+            case K::kHeapBox: return "HeapBox";
+        }
+        return "Unknown";
+    }
+
+    /// @brief EscapeHandle boundary를 문자열로 변환한다.
+    static const char* sir_escape_boundary_name(gaupel::sir::EscapeBoundaryKind k) {
+        using K = gaupel::sir::EscapeBoundaryKind;
+        switch (k) {
+            case K::kNone: return "None";
+            case K::kReturn: return "Return";
+            case K::kCallArg: return "CallArg";
+            case K::kAbi: return "Abi";
+            case K::kFfi: return "Ffi";
+        }
+        return "Unknown";
+    }
+
     /// @brief OIR effect를 문자열로 변환한다.
     static const char* oir_effect_name(gaupel::oir::Effect e) {
         using E = gaupel::oir::Effect;
@@ -406,6 +431,7 @@ namespace gaupelc::dump {
                 << " fields=" << m.fields.size()
                 << " field_members=" << m.field_members.size()
                 << " acts=" << m.acts.size()
+                << " escape_handles=" << m.escape_handles.size()
                 << "\n";
 
         if (!m.fields.empty()) {
@@ -553,6 +579,26 @@ namespace gaupelc::dump {
             }
 
             std::cout << "\n";
+        }
+
+        if (!m.escape_handles.empty()) {
+            std::cout << "\n  escape_handles:\n";
+            for (size_t hi = 0; hi < m.escape_handles.size(); ++hi) {
+                const auto& h = m.escape_handles[hi];
+                std::cout << "    h#" << hi
+                        << " value=" << h.escape_value
+                        << " origin_sym=" << h.origin_sym
+                        << " pointee_ty=" << types.to_string(h.pointee_type) << " <id " << (uint32_t)h.pointee_type << ">"
+                        << " kind=" << sir_escape_kind_name(h.kind)
+                        << " boundary=" << sir_escape_boundary_name(h.boundary)
+                        << " from_static=" << (h.from_static ? "true" : "false")
+                        << " has_drop=" << (h.has_drop ? "true" : "false")
+                        << " abi_pack=" << (h.abi_pack_required ? "true" : "false")
+                        << " ffi_pack=" << (h.ffi_pack_required ? "true" : "false")
+                        << " materialize_count=" << h.materialize_count
+                        << " span=[" << h.span.lo << "," << h.span.hi << ")"
+                        << "\n";
+            }
         }
     }
 

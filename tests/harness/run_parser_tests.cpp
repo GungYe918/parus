@@ -57,6 +57,7 @@ namespace {
     struct SirRun {
         gaupel::sir::Module mod;
         std::vector<gaupel::sir::VerifyError> verify_errors;
+        std::vector<gaupel::sir::VerifyError> handle_verify_errors;
         gaupel::sir::CapabilityAnalysisResult cap;
     };
 
@@ -72,6 +73,7 @@ namespace {
         );
         out.verify_errors = gaupel::sir::verify_module(out.mod);
         out.cap = gaupel::sir::analyze_capabilities(out.mod, p.types, p.bag);
+        out.handle_verify_errors = gaupel::sir::verify_escape_handles(out.mod);
         return out;
     }
 
@@ -110,6 +112,7 @@ namespace {
                 !ty.errors.empty() ||
                 !cap.ok ||
                 !sir.verify_errors.empty() ||
+                !sir.handle_verify_errors.empty() ||
                 !sir.cap.ok;
             bool ok = true;
             ok &= require_(has_any_error, "expected diagnostics for err_ case, but none were emitted");
@@ -124,6 +127,7 @@ namespace {
         ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
         ok &= require_(cap.ok, "file case emitted AST capability errors");
         ok &= require_(sir.cap.ok, "file case emitted SIR capability errors");
+        ok &= require_(sir.handle_verify_errors.empty(), "file case failed SIR escape-handle verification");
         if (!ok) {
             std::cerr << "    file: " << p.filename().string() << "\n";
             return false;
@@ -645,6 +649,44 @@ namespace {
         return ok;
     }
 
+    static bool test_sir_handle_verify_rejects_materialized_handle() {
+        // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
+        const std::string src = R"(
+            static let G: i32 = 7i32;
+            fn main() -> i32 {
+                set h = &&G;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "materialize-count verify seed must parse/type-check cleanly");
+        ok &= require_(ty.errors.empty(), "materialize-count verify seed must not emit tyck errors");
+        ok &= require_(sir.cap.ok, "materialize-count verify seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "materialize-count verify seed must pass handle verify initially");
+        ok &= require_(!sir.mod.escape_handles.empty(), "materialize-count verify seed must produce at least one escape handle");
+        if (!ok) return false;
+
+        sir.mod.escape_handles[0].materialize_count = 1;
+        const auto verrs = gaupel::sir::verify_escape_handles(sir.mod);
+        ok &= require_(!verrs.empty(), "handle verify must fail when materialize_count is non-zero");
+
+        bool has_materialize_msg = false;
+        for (const auto& e : verrs) {
+            if (e.msg.find("materialize_count must be 0") != std::string::npos) {
+                has_materialize_msg = true;
+                break;
+            }
+        }
+        ok &= require_(has_materialize_msg, "handle verify must report materialize_count invariant violation");
+        return ok;
+    }
+
     static bool test_sir_mut_analysis_allows_mut_borrow_write_through() {
         // SIR mut-analysis는 &mut write-through를 불법 쓰기로 오검출하면 안 된다.
         const std::string src = R"(
@@ -871,6 +913,7 @@ int main() {
         {"cap_shared_write_conflict", test_cap_shared_write_conflict},
         {"escape_requires_static_or_boundary", test_escape_requires_static_or_boundary},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
+        {"sir_handle_verify_rejects_materialized_handle", test_sir_handle_verify_rejects_materialized_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
         {"sir_control_flow_block_layout", test_sir_control_flow_block_layout},

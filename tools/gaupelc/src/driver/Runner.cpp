@@ -164,6 +164,7 @@ namespace gaupelc::driver {
             gaupel::sir::Module sir_mod;
             bool sir_verify_ok = true;
             bool sir_cap_ok = true;
+            bool sir_handle_verify_ok = true;
             {
                 gaupel::sir::BuildOptions bopt{};
                 sir_mod = gaupel::sir::build_sir_module(
@@ -175,8 +176,6 @@ namespace gaupelc::driver {
                     types,
                     bopt
                 );
-
-                dump::dump_sir_module(sir_mod, types);
 
                 const auto sir_verrs = gaupel::sir::verify_module(sir_mod);
                 std::cout << "\nSIR VERIFY:\n";
@@ -202,9 +201,27 @@ namespace gaupelc::driver {
                     sir_cap_ok = false;
                     std::cout << "capability errors: " << sir_cap.error_count << "\n";
                 }
+                std::cout << "escape handles: " << sir_cap.escape_handle_count
+                          << ", materialized handles: " << sir_cap.materialized_handle_count
+                          << "\n";
+
+                // Capability 분석으로 채워진 EscapeHandle 메타를 반영한 상태를 덤프한다.
+                dump::dump_sir_module(sir_mod, types);
+
+                const auto handle_verrs = gaupel::sir::verify_escape_handles(sir_mod);
+                std::cout << "\nSIR HANDLE VERIFY:\n";
+                if (handle_verrs.empty()) {
+                    std::cout << "verify ok.\n";
+                } else {
+                    sir_handle_verify_ok = false;
+                    std::cout << "verify errors: " << handle_verrs.size() << "\n";
+                    for (const auto& e : handle_verrs) {
+                        std::cout << "  - " << e.msg << "\n";
+                    }
+                }
             }
 
-            if (opt.dump_oir) {
+            if (opt.dump_oir && sir_verify_ok && sir_cap_ok && sir_handle_verify_ok) {
                 gaupel::oir::Builder ob(sir_mod, types);
                 auto oir_res = ob.build();
 
@@ -218,10 +235,12 @@ namespace gaupelc::driver {
                     std::cout << "verify errors: " << verrs.size() << "\n";
                     for (auto& e : verrs) std::cout << "  - " << e.msg << "\n";
                 }
+            } else if (opt.dump_oir) {
+                std::cout << "\nOIR: skipped because SIR verification failed before OIR lowering.\n";
             }
 
             int diag_rc = flush_diags(bag, opt.lang, sm, opt.context_lines);
-            if (!sir_verify_ok || !sir_cap_ok) return 1;
+            if (!sir_verify_ok || !sir_cap_ok || !sir_handle_verify_ok) return 1;
             return diag_rc;
         }
 
