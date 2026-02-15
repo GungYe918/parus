@@ -263,6 +263,160 @@ namespace {
         return true;
     }
 
+    /// @brief LLVM-IR 텍스트를 실제 오브젝트(.o)로 만들어 코드 생성 경로를 검증한다.
+    static bool emit_object_for_test_case_(const std::string& llvm_ir, const std::string& stem) {
+        const auto out_path = (std::filesystem::temp_directory_path() / ("parus_oir_llvm_" + stem + ".o")).string();
+        std::error_code ec;
+        std::filesystem::remove(out_path, ec);
+
+        const auto emitted = parus::backend::aot::emit_object_from_llvm_ir_text(
+            llvm_ir,
+            out_path,
+            parus::backend::aot::LLVMObjectEmissionOptions{
+                .llvm_lane_major = 20,
+                .target_triple = "",
+                .cpu = "",
+                .opt_level = 2
+            }
+        );
+
+        bool ok = true;
+        ok &= require_(emitted.ok, "LLVM object emission must succeed for test case");
+        if (!emitted.ok) {
+            for (const auto& m : emitted.messages) {
+                if (m.is_error) {
+                    std::cerr << "    object emission error: " << m.text << "\n";
+                }
+            }
+            return false;
+        }
+        ok &= require_(std::filesystem::exists(out_path), "object emission reported success but output file does not exist");
+        return ok;
+    }
+
+    /// @brief 함수 오버로딩 + 연산자 오버로딩(acts for) 경로가 올바른 LLVM 호출로 내려가는지 검사한다.
+    static bool test_overload_and_operator_lowering_patterns_() {
+        const std::string src = R"(
+            acts for i32 {
+                operator(+)(self a: i32, rhs: i32) -> i32 {
+                    return a;
+                }
+            };
+
+            fn add(a: i32, b: i32) -> i32 {
+                return a + b;
+            }
+
+            fn add(a: i64, b: i64) -> i64 {
+                return a + b;
+            }
+
+            fn main() -> i32 {
+                let x: i32 = add(a: 1i32, b: 2i32);
+                let y: i64 = add(a: 3i64, b: 4i64);
+                let z: i32 = 10i32 + 20i32;
+                return x + z;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "overload/operator case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "overload/operator LLVM text lowering must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("define i32 @add_fn_i32__i32_____i32") != std::string::npos,
+                       "i32 overload definition must exist in LLVM-IR");
+        ok &= require_(lowered.llvm_ir.find("define i64 @add_fn_i64__i64_____i64") != std::string::npos,
+                       "i64 overload definition must exist in LLVM-IR");
+        ok &= require_(lowered.llvm_ir.find("call i32 @add_fn_i32__i32_____i32") != std::string::npos,
+                       "i32 overload call must be direct in LLVM-IR");
+        ok &= require_(lowered.llvm_ir.find("call i64 @add_fn_i64__i64_____i64") != std::string::npos,
+                       "i64 overload call must be direct in LLVM-IR");
+        ok &= require_(lowered.llvm_ir.find("define i32 @__op___8_fn_i32__i32_____i32") != std::string::npos,
+                       "operator overload function must be present in LLVM-IR");
+        ok &= require_(lowered.llvm_ir.find("call i32 @__op___8_fn_i32__i32_____i32") != std::string::npos,
+                       "operator overload must lower to direct call");
+        ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
+                       "direct overload lowering should not require call stub");
+        ok &= require_(lowered.llvm_ir.find("add i64") != std::string::npos,
+                       "non-overloaded i64 arithmetic path should remain hot binop in LLVM-IR");
+        if (!ok) return false;
+
+        return emit_object_for_test_case_(lowered.llvm_ir, "overload_operator_patterns");
+    }
+
+    /// @brief 오버로딩/연산자 오버로딩 소스를 다수 순회하며 LLVM-IR + 오브젝트 생성을 함께 검증한다.
+    static bool test_overload_object_emission_matrix_() {
+        const std::vector<std::string> sources = {
+            R"(
+                fn sum(a: i32, b: i32) -> i32 { return a + b; }
+                fn sum(a: i64, b: i64) -> i64 { return a + b; }
+                fn main() -> i32 {
+                    let x: i32 = sum(a: 1i32, b: 2i32);
+                    let y: i64 = sum(a: 3i64, b: 4i64);
+                    return x;
+                }
+            )",
+            R"(
+                acts for i32 {
+                    operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
+                };
+                fn main() -> i32 {
+                    let a: i32 = 1i32;
+                    let b: i32 = 2i32;
+                    let c: i32 = a + b;
+                    return c;
+                }
+            )",
+            R"(
+                acts for i32 {
+                    operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
+                };
+                fn mix(a: i32, b: i32) -> i32 { return a + b; }
+                fn mix(a: i64, b: i64) -> i64 { return a + b; }
+                fn main() -> i32 {
+                    let p: i32 = mix(a: 7i32, b: 8i32);
+                    let q: i64 = mix(a: 9i64, b: 10i64);
+                    let r: i32 = p + 1i32;
+                    return r;
+                }
+            )"
+        };
+
+        bool ok = true;
+        for (size_t i = 0; i < sources.size(); ++i) {
+            auto built = build_oir_pipeline_(sources[i]);
+            ok &= require_(built.has_value(), "matrix source must pass frontend->OIR pipeline");
+            if (!built.has_value()) return false;
+
+            const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+                built->oir.mod,
+                built->prog.types,
+                parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+            );
+            ok &= require_(lowered.ok, "matrix source lowering must succeed");
+            if (!lowered.ok) return false;
+
+            ok &= require_(lowered.llvm_ir.find("define ") != std::string::npos,
+                           "matrix source LLVM-IR must contain define()");
+            if (!ok) return false;
+
+            const std::string stem = "matrix_" + std::to_string(i + 1);
+            ok &= emit_object_for_test_case_(lowered.llvm_ir, stem);
+            if (!ok) return false;
+        }
+        return ok;
+    }
+
     /// @brief `tests/oir_cases`의 케이스를 순회하며 OIR->LLVM lowering 경로를 일괄 검증한다.
     static bool test_oir_case_directory() {
 #ifndef PARUS_OIR_CASE_DIR
@@ -332,6 +486,8 @@ int main() {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
+        {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},
+        {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

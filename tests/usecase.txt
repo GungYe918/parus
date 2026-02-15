@@ -18,6 +18,9 @@ find out -maxdepth 1 -type f \( -name '*.o' -o -name '*.ll' \) -delete
 ../build/compiler/parusc/parusc oir_cases/case3_loop_index_mix.pr -Xparus -emit-object -o out/case3_loop_index_mix.o
 ../build/compiler/parusc/parusc oir_cases/case4_static_escape_mix.pr -Xparus -emit-object -o out/case4_static_escape_mix.o
 ../build/compiler/parusc/parusc oir_cases/case5_namedgroup_array.pr -Xparus -emit-object -o out/case5_namedgroup_array.o
+../build/compiler/parusc/parusc oir_cases/case6_function_overload_basic.pr -Xparus -emit-object -o out/case6_function_overload_basic.o
+../build/compiler/parusc/parusc oir_cases/case7_operator_overload_basic.pr -Xparus -emit-object -o out/case7_operator_overload_basic.o
+../build/compiler/parusc/parusc oir_cases/case8_overload_operator_mix.pr -Xparus -emit-object -o out/case8_overload_operator_mix.o
 
 # 5) check generated object files
 ls -lah out/*.o
@@ -33,6 +36,9 @@ ls -lah out/case1_index_read.bin
 ../build/compiler/parusc/parusc oir_cases/case3_loop_index_mix.pr -Xparus -emit-llvm-ir -o out/case3_loop_index_mix.ll
 ../build/compiler/parusc/parusc oir_cases/case4_static_escape_mix.pr -Xparus -emit-llvm-ir -o out/case4_static_escape_mix.ll
 ../build/compiler/parusc/parusc oir_cases/case5_namedgroup_array.pr -Xparus -emit-llvm-ir -o out/case5_namedgroup_array.ll
+../build/compiler/parusc/parusc oir_cases/case6_function_overload_basic.pr -Xparus -emit-llvm-ir -o out/case6_function_overload_basic.ll
+../build/compiler/parusc/parusc oir_cases/case7_operator_overload_basic.pr -Xparus -emit-llvm-ir -o out/case7_operator_overload_basic.ll
+../build/compiler/parusc/parusc oir_cases/case8_overload_operator_mix.pr -Xparus -emit-llvm-ir -o out/case8_overload_operator_mix.ll
 
 # 7) inspect LLVM-IR output
 ls -lah out/*.ll

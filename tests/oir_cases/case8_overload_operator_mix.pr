@@ -1,0 +1,21 @@
+// OIR->LLVM 케이스: 함수 오버로딩 + operator 오버로딩 혼합
+acts for i32 {
+    operator(+)(self a: i32, rhs: i32) -> i32 {
+        return a;
+    }
+};
+
+fn mix(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn mix(a: i64, b: i64) -> i64 {
+    return a + b;
+}
+
+fn main() -> i32 {
+    let p: i32 = mix(a: 7i32, b: 8i32);
+    let q: i64 = mix(a: 9i64, b: 10i64);
+    let r: i32 = p + 1i32;
+    return r;
+}
