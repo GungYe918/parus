@@ -19,6 +19,7 @@ namespace parus::oir {
         struct FuncBuild {
             Module* out = nullptr;
             const parus::sir::Module* sir = nullptr;
+            const parus::ty::TypePool* types = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
 
             Function* fn = nullptr;
@@ -403,6 +404,37 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kNullLit:
                 return emit_const_null(v.type);
+
+            case parus::sir::ValueKind::kArrayLit: {
+                // v0: 배열 리터럴은 함수 로컬 slot에 materialize한 뒤
+                // 해당 slot 포인터 값을 결과로 전달한다.
+                // (LLVM lowering 단계에서 index/store/load가 실제 주소 계산으로 변환됨)
+                ValueId arr_slot = emit_alloca(v.type);
+
+                TypeId elem_ty = v.type;
+                TypeId idx_ty = v.type;
+                if (types != nullptr && v.type != parus::ty::kInvalidType) {
+                    const auto& t = types->get(v.type);
+                    if (t.kind == parus::ty::Kind::kArray && t.elem != parus::ty::kInvalidType) {
+                        elem_ty = (TypeId)t.elem;
+                    }
+                    idx_ty = (TypeId)types->builtin(parus::ty::Builtin::kI64);
+                }
+
+                const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                if (arg_end <= (uint64_t)sir->args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto& a = sir->args[v.arg_begin + i];
+                        if (a.is_hole || a.value == parus::sir::k_invalid_value) continue;
+
+                        ValueId elem_val = lower_value(a.value);
+                        ValueId idx_val = emit_const_int(idx_ty, std::to_string(i));
+                        ValueId elem_place = emit_index(elem_ty, arr_slot, idx_val);
+                        emit_store(elem_place, elem_val);
+                    }
+                }
+                return arr_slot;
+            }
 
             case parus::sir::ValueKind::kLocal:
                 return read_local(v.sym, v.type);
@@ -839,6 +871,7 @@ namespace parus::oir {
             FuncBuild fb{};
             fb.out    = &out.mod;
             fb.sir    = &sir_;
+            fb.types  = &ty_;
             fb.escape_value_map = &escape_value_map;
             fb.fn     = &out.mod.funcs.back();
             fb.cur_bb = entry;

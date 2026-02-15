@@ -33,6 +33,7 @@ backend/
       AOTBackend.cpp
       AOTBackendLLVMDispatch.cpp
       LLVMIRLowering.cpp
+      LLVMObjectEmission.cpp
     jit/
       CMakeLists.txt
       JITBackend.cpp
@@ -91,7 +92,9 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 
 - `PARUS_AOT_ENABLE_LLVM` : AOT 내부 LLVM 엔진 활성화
 - `PARUS_LLVM_VERSION` : `20` 또는 `21`
+- `PARUS_LLVM_USE_TOOLCHAIN` : LLVM C++ API 링크 사용 여부(현재 실질적으로 `ON` 경로)
 - `PARUS_LLVM_REQUIRE_TOOLCHAIN` : 선택 lane의 LLVM toolchain 필수 여부
+- `PARUS_LLVM_CONFIG_EXECUTABLE` : lane에 맞는 `llvm-config` 실행 파일 경로(권장: 명시)
 
 권장 운영:
 
@@ -105,7 +108,10 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 3. `backend/src/aot`는 선택된 lane source를 링크
 4. AOT compile 경로에서 `PARUS_LLVM_SELECTED_MAJOR`에 따라 lane dispatch
 5. 선택 lane(v20/v21)에서 `LLVMIRLowering`을 통해 OIR을 LLVM-IR 텍스트로 lowering
-6. v0 현재 단계에서는 lane이 `.ll` 파일 emission까지 담당하고 object emission은 추후 구현
+6. `LLVMObjectEmission`이 `.o` 방출을 수행
+   - `llvm-config --link-static --libfiles all --system-libs`를 기반으로 정적 링크
+   - 외부 `clang -x ir -c` fallback은 사용하지 않음
+   - target triple/cpu/opt level 옵션을 그대로 반영
 
 ## 6) 향후 확장 계획
 

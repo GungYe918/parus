@@ -1004,7 +1004,7 @@ namespace parus::oir {
         }
 
         /// @brief dominance 기반 전역 mem2reg를 수행한다.
-        bool global_mem2reg_ssa_(Module& m) {
+        [[maybe_unused]] bool global_mem2reg_ssa_(Module& m) {
             bool changed = false;
 
             for (auto& f : m.funcs) {
@@ -1342,7 +1342,7 @@ namespace parus::oir {
         }
 
         /// @brief 모듈 전체에 GVN/CSE를 적용한다.
-        bool gvn_cse_(Module& m) {
+        [[maybe_unused]] bool gvn_cse_(Module& m) {
             bool changed = false;
             for (auto& f : m.funcs) {
                 changed |= gvn_cse_function_(m, f);
@@ -1519,7 +1519,7 @@ namespace parus::oir {
         }
 
         /// @brief 모듈 전체에 LICM을 적용한다.
-        bool licm_(Module& m) {
+        [[maybe_unused]] bool licm_(Module& m) {
             bool changed = false;
             for (auto& f : m.funcs) {
                 changed |= licm_function_(m, f);
@@ -1626,9 +1626,14 @@ namespace parus::oir {
             (void)canonicalize_loops_(m, f);
         }
         (void)const_fold_(m);
-        (void)global_mem2reg_ssa_(m);
-        (void)gvn_cse_(m);
-        (void)licm_(m);
+        // NOTE(parus/v0):
+        // 현재 mem2reg/GVN/LICM 조합에서 일부 loop 케이스의 SSA 지배 조건이 깨져
+        // invalid LLVM-IR(예: "Instruction does not dominate all uses")가 발생한다.
+        // OIR->LLVM lowering 정확성을 우선 보장하기 위해 해당 고급 패스는 일시 비활성화한다.
+        // 이후 dominance/loop-fixpoint 검증 보강 후 단계적으로 재활성화한다.
+        // (void)global_mem2reg_ssa_(m);
+        // (void)gvn_cse_(m);
+        // (void)licm_(m);
         (void)local_load_forward_(m);
         (void)optimize_escape_handles_(m);
         (void)dce_pure_insts_(m);

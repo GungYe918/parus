@@ -1,3 +1,3 @@
 list(APPEND PARUSC_SOURCES
-  ${CMAKE_CURRENT_LIST_DIR}/Options.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/Options.cpp
 )

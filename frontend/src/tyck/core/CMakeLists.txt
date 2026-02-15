@@ -1,3 +1,3 @@
 list(APPEND PARUS_TYCK_SOURCES
-  ${CMAKE_CURRENT_LIST_DIR}/type_check_entry.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/type_check_entry.cpp
 )

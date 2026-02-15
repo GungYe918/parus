@@ -13,15 +13,6 @@ namespace parus::backend::aot::detail {
         const CompileOptions& opt
     ) {
         CompileResult r{};
-        if (opt.emit_object) {
-            r.ok = false;
-            r.messages.push_back(CompileMessage{
-                true,
-                "Object emission is not implemented yet in LLVM lane v20. Use LLVM-IR emission."
-            });
-            return r;
-        }
-
         const auto lowered = lower_oir_to_llvm_ir_text(
             oir,
             types,
@@ -35,6 +26,23 @@ namespace parus::backend::aot::detail {
                 true,
                 "LLVM lane v20 lowering failed."
             });
+            return r;
+        }
+
+        if (opt.emit_object) {
+            const std::string out_path = opt.output_path.empty() ? "a.o" : opt.output_path;
+            const auto emitted = emit_object_from_llvm_ir_text(
+                lowered.llvm_ir,
+                out_path,
+                LLVMObjectEmissionOptions{
+                    .llvm_lane_major = 20,
+                    .target_triple = opt.target_triple,
+                    .cpu = opt.cpu,
+                    .opt_level = opt.opt_level
+                }
+            );
+            for (const auto& m : emitted.messages) r.messages.push_back(m);
+            r.ok = emitted.ok;
             return r;
         }
 

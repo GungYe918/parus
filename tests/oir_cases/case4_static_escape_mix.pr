@@ -1,0 +1,11 @@
+// OIR->LLVM 케이스: static + escape 혼합(게이트 통과 확인)
+static let G: i32 = 11i32;
+
+fn id(h: &&i32) -> i32 {
+    return 0i32;
+}
+
+fn main() -> i32 {
+    id(h: &&G);
+    return 0i32;
+}

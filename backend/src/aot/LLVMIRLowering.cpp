@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -17,6 +18,11 @@ namespace parus::backend::aot {
         struct IncomingEdge {
             parus::oir::BlockId pred = parus::oir::kInvalidId;
             std::vector<parus::oir::ValueId> args{};
+        };
+
+        struct ValueUseInfo {
+            bool as_value = false;
+            bool as_slot = false;
         };
 
         /// @brief 함수 이름을 LLVM 심볼 이름으로 정규화한다.
@@ -90,41 +96,216 @@ namespace parus::backend::aot {
             return "add i64 0, 0";
         }
 
-        /// @brief 타입 ID를 LLVM 타입 문자열로 변환한다.
-        std::string map_type_(const parus::ty::TypePool& types, parus::ty::TypeId tid) {
+        /// @brief LLVM 타입 문자열이 aggregate(구조체/배열)인지 검사한다.
+        bool is_aggregate_llvm_ty_(const std::string& ty) {
+            if (ty.empty()) return false;
+            return ty.front() == '[' || ty.front() == '{';
+        }
+
+        /// @brief 타입을 LLVM 타입 문자열로 재귀 변환한다.
+        std::string map_type_rec_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            uint32_t depth
+        ) {
             if (tid == parus::ty::kInvalidType) return "i64";
+            if (depth > 8) return "i64";
+
             const auto& t = types.get(tid);
             using K = parus::ty::Kind;
             using B = parus::ty::Builtin;
 
-            if (t.kind == K::kBuiltin) {
-                switch (t.builtin) {
-                    case B::kUnit:  return "void";
-                    case B::kNever: return "void";
-                    case B::kBool:  return "i1";
-                    case B::kChar:  return "i32";
-                    case B::kI8:    return "i8";
-                    case B::kI16:   return "i16";
-                    case B::kI32:   return "i32";
-                    case B::kI64:   return "i64";
-                    case B::kI128:  return "i128";
-                    case B::kU8:    return "i8";
-                    case B::kU16:   return "i16";
-                    case B::kU32:   return "i32";
-                    case B::kU64:   return "i64";
-                    case B::kU128:  return "i128";
-                    case B::kISize: return "i64";
-                    case B::kUSize: return "i64";
-                    case B::kF32:   return "float";
-                    case B::kF64:   return "double";
-                    case B::kF128:  return "fp128";
-                    case B::kNull:  return "ptr";
-                    case B::kInferInteger: return "i64";
+            switch (t.kind) {
+                case K::kError:
+                    return "i64";
+
+                case K::kBuiltin:
+                    switch (t.builtin) {
+                        case B::kUnit:  return "void";
+                        case B::kNever: return "void";
+                        case B::kBool:  return "i1";
+                        case B::kChar:  return "i32";
+                        case B::kI8:    return "i8";
+                        case B::kI16:   return "i16";
+                        case B::kI32:   return "i32";
+                        case B::kI64:   return "i64";
+                        case B::kI128:  return "i128";
+                        case B::kU8:    return "i8";
+                        case B::kU16:   return "i16";
+                        case B::kU32:   return "i32";
+                        case B::kU64:   return "i64";
+                        case B::kU128:  return "i128";
+                        case B::kISize: return "i64";
+                        case B::kUSize: return "i64";
+                        case B::kF32:   return "float";
+                        case B::kF64:   return "double";
+                        case B::kF128:  return "fp128";
+                        case B::kNull:  return "ptr";
+                        case B::kInferInteger: return "i64";
+                    }
+                    return "i64";
+
+                case K::kOptional: {
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1);
+                    if (elem == "void") elem = "i8";
+                    return "{ i1, " + elem + " }";
                 }
+
+                case K::kArray: {
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1);
+                    if (elem == "void") elem = "i8";
+                    if (t.array_has_size) {
+                        return "[" + std::to_string(t.array_size) + " x " + elem + "]";
+                    }
+                    // unsized array(T[])는 런타임 view로 취급한다.
+                    return "{ ptr, i64 }";
+                }
+
+                case K::kBorrow:
+                case K::kEscape:
+                case K::kFn:
+                    return "ptr";
+
+                case K::kNamedUser:
+                    // field/class/tablet 레이아웃 메타가 아직 OIR에 직접 연결되지 않으므로
+                    // v0에서는 고정 크기 바이트 버퍼로 모델링한다.
+                    return "[32 x i8]";
             }
 
-            // v0: 사용자/집합/핸들/배열은 우선 i64로 모델링한다.
             return "i64";
+        }
+
+        /// @brief 타입 ID를 LLVM 타입 문자열로 변환한다.
+        std::string map_type_(const parus::ty::TypePool& types, parus::ty::TypeId tid) {
+            return map_type_rec_(types, tid, 0);
+        }
+
+        /// @brief 타입의 대략적 바이트 크기를 계산한다.
+        uint64_t type_size_bytes_rec_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            uint32_t depth
+        ) {
+            if (tid == parus::ty::kInvalidType) return 8;
+            if (depth > 8) return 8;
+
+            const auto& t = types.get(tid);
+            using K = parus::ty::Kind;
+            using B = parus::ty::Builtin;
+
+            switch (t.kind) {
+                case K::kError:
+                    return 8;
+                case K::kBuiltin:
+                    switch (t.builtin) {
+                        case B::kBool: return 1;
+                        case B::kI8:
+                        case B::kU8: return 1;
+                        case B::kI16:
+                        case B::kU16: return 2;
+                        case B::kI32:
+                        case B::kU32:
+                        case B::kF32:
+                        case B::kChar: return 4;
+                        case B::kI64:
+                        case B::kU64:
+                        case B::kF64:
+                        case B::kISize:
+                        case B::kUSize:
+                        case B::kNull:
+                        case B::kInferInteger:
+                        case B::kUnit:
+                        case B::kNever:
+                            return 8;
+                        case B::kI128:
+                        case B::kU128:
+                        case B::kF128:
+                            return 16;
+                    }
+                    return 8;
+                case K::kOptional:
+                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1));
+                case K::kArray: {
+                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1));
+                    if (t.array_has_size) return elem * std::max<uint64_t>(1, t.array_size);
+                    return 16; // {ptr,len}
+                }
+                case K::kBorrow:
+                case K::kEscape:
+                case K::kFn:
+                    return 8;
+                case K::kNamedUser:
+                    return 32;
+            }
+            return 8;
+        }
+
+        /// @brief 타입의 대략적 바이트 크기를 계산한다.
+        uint64_t type_size_bytes_(const parus::ty::TypePool& types, parus::ty::TypeId tid) {
+            return type_size_bytes_rec_(types, tid, 0);
+        }
+
+        /// @brief OIR 모듈에서 value 사용 문맥(값/슬롯)을 수집한다.
+        std::vector<ValueUseInfo> build_value_use_table_(const parus::oir::Module& m) {
+            std::vector<ValueUseInfo> uses(m.values.size());
+            auto as_value = [&](parus::oir::ValueId v) {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= uses.size()) return;
+                uses[v].as_value = true;
+            };
+            auto as_slot = [&](parus::oir::ValueId v) {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= uses.size()) return;
+                uses[v].as_slot = true;
+            };
+
+            for (const auto& inst : m.insts) {
+                std::visit([&](auto&& x) {
+                    using T = std::decay_t<decltype(x)>;
+                    if constexpr (std::is_same_v<T, parus::oir::InstUnary>) {
+                        as_value(x.src);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstBinOp>) {
+                        as_value(x.lhs);
+                        as_value(x.rhs);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstCast>) {
+                        as_value(x.src);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstCall>) {
+                        as_value(x.callee);
+                        for (auto a : x.args) as_value(a);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstIndex>) {
+                        as_value(x.base);
+                        as_value(x.index);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstField>) {
+                        as_value(x.base);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstLoad>) {
+                        as_slot(x.slot);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstStore>) {
+                        as_slot(x.slot);
+                        as_value(x.value);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstConstInt> ||
+                                         std::is_same_v<T, parus::oir::InstConstBool> ||
+                                         std::is_same_v<T, parus::oir::InstConstNull> ||
+                                         std::is_same_v<T, parus::oir::InstAllocaLocal>) {
+                        // no operand
+                    }
+                }, inst.data);
+            }
+
+            for (const auto& b : m.blocks) {
+                if (!b.has_term) continue;
+                std::visit([&](auto&& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, parus::oir::TermRet>) {
+                        if (t.has_value) as_value(t.value);
+                    } else if constexpr (std::is_same_v<T, parus::oir::TermBr>) {
+                        for (auto a : t.args) as_value(a);
+                    } else if constexpr (std::is_same_v<T, parus::oir::TermCondBr>) {
+                        as_value(t.cond);
+                        for (auto a : t.then_args) as_value(a);
+                        for (auto a : t.else_args) as_value(a);
+                    }
+                }, b.term);
+            }
+
+            return uses;
         }
 
         /// @brief 정수 리터럴 텍스트에서 숫자 부분만 추출한다.
@@ -162,6 +343,10 @@ namespace parus::backend::aot {
             std::vector<std::string> out(m.values.size(), "i64");
             for (size_t i = 0; i < m.values.size(); ++i) {
                 out[i] = map_type_(types, m.values[i].ty);
+                if (is_aggregate_llvm_ty_(out[i])) {
+                    // SSA value 레벨에서는 aggregate 직접 연산을 피하고 주소/핸들(ptr)로 표현한다.
+                    out[i] = "ptr";
+                }
             }
 
             for (const auto& inst : m.insts) {
@@ -187,6 +372,7 @@ namespace parus::backend::aot {
                 if (std::holds_alternative<parus::oir::InstCast>(inst.data)) {
                     const auto& c = std::get<parus::oir::InstCast>(inst.data);
                     out[inst.result] = map_type_(types, c.to);
+                    if (is_aggregate_llvm_ty_(out[inst.result])) out[inst.result] = "ptr";
                 }
             }
             return out;
@@ -199,8 +385,9 @@ namespace parus::backend::aot {
                 const parus::oir::Module& m,
                 const parus::ty::TypePool& types,
                 const parus::oir::Function& fn,
-                const std::vector<std::string>& value_types
-            ) : m_(m), types_(types), fn_(fn), value_types_(value_types) {
+                const std::vector<std::string>& value_types,
+                const std::vector<ValueUseInfo>& value_uses
+            ) : m_(m), types_(types), fn_(fn), value_types_(value_types), value_uses_(value_uses) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -233,9 +420,13 @@ namespace parus::backend::aot {
             const parus::ty::TypePool& types_;
             const parus::oir::Function& fn_;
             const std::vector<std::string>& value_types_;
+            const std::vector<ValueUseInfo>& value_uses_;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
+            std::unordered_map<parus::oir::ValueId, std::string> address_ref_by_value_{};
+            std::unordered_map<uint64_t, uint64_t> field_offset_cache_{};
+            std::unordered_map<parus::ty::TypeId, uint64_t> next_field_offset_{};
             uint32_t temp_seq_ = 0;
             bool need_call_stub_ = false;
 
@@ -249,6 +440,48 @@ namespace parus::backend::aot {
                 if (v == parus::oir::kInvalidId) return "i64";
                 if (static_cast<size_t>(v) >= value_types_.size()) return "i64";
                 return value_types_[v];
+            }
+
+            /// @brief ValueId의 타입 ID를 반환한다.
+            parus::ty::TypeId value_type_id_(parus::oir::ValueId v) const {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= m_.values.size()) {
+                    return parus::ty::kInvalidType;
+                }
+                return m_.values[v].ty;
+            }
+
+            /// @brief 값이 일반 값 문맥에서 읽히는지 검사한다.
+            bool is_value_read_(parus::oir::ValueId v) const {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= value_uses_.size()) return false;
+                return value_uses_[v].as_value;
+            }
+
+            /// @brief 슬롯 주소 문맥에서 사용되는지 검사한다.
+            bool is_value_slot_(parus::oir::ValueId v) const {
+                if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= value_uses_.size()) return false;
+                return value_uses_[v].as_slot;
+            }
+
+            /// @brief slot operand를 ptr SSA ref로 정규화한다.
+            std::string slot_ptr_ref_(std::ostringstream& os, parus::oir::ValueId slot) {
+                auto it = address_ref_by_value_.find(slot);
+                if (it != address_ref_by_value_.end()) return it->second;
+                return coerce_value_(os, slot, "ptr");
+            }
+
+            /// @brief field 오프셋(바이트)을 type+field 조합 기준으로 결정한다.
+            uint64_t field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
+                const uint64_t h = std::hash<std::string_view>{}(field);
+                const uint64_t key = (uint64_t(base_ty) << 32u) ^ (h & 0xFFFF'FFFFu);
+
+                auto it = field_offset_cache_.find(key);
+                if (it != field_offset_cache_.end()) return it->second;
+
+                uint64_t& next = next_field_offset_[base_ty];
+                const uint64_t off = next;
+                next += 8; // v0: 필드 정렬을 8바이트 단위로 고정
+                field_offset_cache_[key] = off;
+                return off;
             }
 
             /// @brief src 값을 want 타입으로 강제 변환한 SSA ref를 반환한다.
@@ -374,6 +607,97 @@ namespace parus::backend::aot {
                 }
             }
 
+            /// @brief index 연산을 실제 주소 계산 + load/store 재사용 모델로 낮춘다.
+            void emit_index_(
+                std::ostringstream& os,
+                const parus::oir::Inst& inst,
+                const parus::oir::InstIndex& x
+            ) {
+                using namespace parus::oir;
+                if (inst.result == kInvalidId) return;
+
+                const auto base_ptr = slot_ptr_ref_(os, x.base);
+                const auto idx64 = coerce_value_(os, x.index, "i64");
+
+                const auto elem_ty_id = value_type_id_(inst.result);
+                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id));
+
+                std::string byte_off = idx64;
+                if (elem_size != 1) {
+                    const std::string mul_tmp = next_tmp_();
+                    os << "  " << mul_tmp << " = mul i64 " << idx64 << ", " << elem_size << "\n";
+                    byte_off = mul_tmp;
+                }
+
+                const std::string byte_ptr = next_tmp_();
+                os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << byte_off << "\n";
+
+                const std::string typed_ptr = next_tmp_();
+                os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
+                address_ref_by_value_[inst.result] = typed_ptr;
+
+                const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
+                    return;
+                }
+
+                if (is_value_read_(inst.result)) {
+                    os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
+                    return;
+                }
+
+                if (is_int_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = ptrtoint ptr " << typed_ptr << " to " << rty << "\n";
+                } else if (is_float_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                       << ", " << zero_literal_(rty) << "\n";
+                } else {
+                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                }
+            }
+
+            /// @brief field 연산을 실제 주소 계산 + load/store 재사용 모델로 낮춘다.
+            void emit_field_(
+                std::ostringstream& os,
+                const parus::oir::Inst& inst,
+                const parus::oir::InstField& x
+            ) {
+                using namespace parus::oir;
+                if (inst.result == kInvalidId) return;
+
+                const auto base_ptr = slot_ptr_ref_(os, x.base);
+                const auto base_ty_id = value_type_id_(x.base);
+                const uint64_t field_off = field_offset_bytes_(base_ty_id, x.field);
+
+                const std::string byte_ptr = next_tmp_();
+                os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << field_off << "\n";
+
+                const std::string typed_ptr = next_tmp_();
+                os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
+                address_ref_by_value_[inst.result] = typed_ptr;
+
+                const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
+                    return;
+                }
+
+                if (is_value_read_(inst.result)) {
+                    os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
+                    return;
+                }
+
+                if (is_int_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = ptrtoint ptr " << typed_ptr << " to " << rty << "\n";
+                } else if (is_float_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                       << ", " << zero_literal_(rty) << "\n";
+                } else {
+                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                }
+            }
+
             /// @brief 명령들을 LLVM-IR 문장으로 출력한다.
             void emit_insts_(std::ostringstream& os, const parus::oir::Block& block) {
                 using namespace parus::oir;
@@ -493,25 +817,23 @@ namespace parus::backend::aot {
                                 else if (rty == "ptr") os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
                                 else os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                             }
-                        } else if constexpr (std::is_same_v<T, InstIndex> || std::is_same_v<T, InstField>) {
-                            if (inst.result == kInvalidId) return;
-                            const auto rty = value_ty_(inst.result);
-                            if (is_int_ty_(rty)) os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
-                            else if (is_float_ty_(rty)) os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
-                            else if (rty == "ptr") os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
-                            else os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                        } else if constexpr (std::is_same_v<T, InstIndex>) {
+                            emit_index_(os, inst, x);
+                        } else if constexpr (std::is_same_v<T, InstField>) {
+                            emit_field_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
                             const auto slot_ty = map_type_(types_, x.slot_ty);
                             os << "  " << vref_(inst.result) << " = alloca " << slot_ty << "\n";
+                            address_ref_by_value_[inst.result] = vref_(inst.result);
                         } else if constexpr (std::is_same_v<T, InstLoad>) {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
-                            const auto ptr = coerce_value_(os, x.slot, "ptr");
+                            const auto ptr = slot_ptr_ref_(os, x.slot);
                             os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << ptr << "\n";
                         } else if constexpr (std::is_same_v<T, InstStore>) {
                             const auto vty = value_ty_(x.value);
-                            const auto ptr = coerce_value_(os, x.slot, "ptr");
+                            const auto ptr = slot_ptr_ref_(os, x.slot);
                             const auto val = coerce_value_(os, x.value, vty);
                             os << "  store " << vty << " " << val << ", ptr " << ptr << "\n";
                         }
@@ -594,14 +916,15 @@ namespace parus::backend::aot {
 
         std::ostringstream os;
         os << "; Generated by parusc AOT LLVM lane v" << opt.llvm_lane_major << "\n";
-        os << "; NOTE: this is v0 lowering bootstrap for OIR -> LLVM-IR.\n";
+        os << "; NOTE: OIR->LLVM lowering with index/field/aggregate memory model bootstrap.\n";
         os << "source_filename = \"parus.oir\"\n\n";
 
         const auto value_types = build_value_type_table_(oir, types);
+        const auto value_uses = build_value_use_table_(oir);
         bool need_call_stub = false;
 
         for (const auto& fn : oir.funcs) {
-            FunctionEmitter fe(oir, types, fn, value_types);
+            FunctionEmitter fe(oir, types, fn, value_types, value_uses);
             os << fe.emit(need_call_stub) << "\n";
         }
 

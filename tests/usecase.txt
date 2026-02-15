@@ -1,0 +1,34 @@
+# Manual use-case: OIR -> LLVM object emission check with parusc
+
+# 1) (repo root) build parusc first
+cd /Users/gungye/workspace/Lang/gaupel
+./run.sh
+
+# 2) move to tests directory
+cd tests
+
+# 3) prepare output directory
+mkdir -p out
+find out -maxdepth 1 -type f \( -name '*.o' -o -name '*.ll' \) -delete
+
+# 4) compile each OIR case to object file (.o)
+# (run from tests/, so input path is oir_cases/*.pr)
+../build/compiler/parusc/parusc oir_cases/case1_index_read.pr -Xparus -emit-object -o out/case1_index_read.o
+../build/compiler/parusc/parusc oir_cases/case2_index_write.pr -Xparus -emit-object -o out/case2_index_write.o
+../build/compiler/parusc/parusc oir_cases/case3_loop_index_mix.pr -Xparus -emit-object -o out/case3_loop_index_mix.o
+../build/compiler/parusc/parusc oir_cases/case4_static_escape_mix.pr -Xparus -emit-object -o out/case4_static_escape_mix.o
+../build/compiler/parusc/parusc oir_cases/case5_namedgroup_array.pr -Xparus -emit-object -o out/case5_namedgroup_array.o
+
+# 5) check generated object files
+ls -lah out/*.o
+
+# 6) if LLVM object emission is unavailable in this build,
+#    verify lowering itself via LLVM-IR text output (.ll)
+../build/compiler/parusc/parusc oir_cases/case1_index_read.pr -Xparus -emit-llvm-ir -o out/case1_index_read.ll
+../build/compiler/parusc/parusc oir_cases/case2_index_write.pr -Xparus -emit-llvm-ir -o out/case2_index_write.ll
+../build/compiler/parusc/parusc oir_cases/case3_loop_index_mix.pr -Xparus -emit-llvm-ir -o out/case3_loop_index_mix.ll
+../build/compiler/parusc/parusc oir_cases/case4_static_escape_mix.pr -Xparus -emit-llvm-ir -o out/case4_static_escape_mix.ll
+../build/compiler/parusc/parusc oir_cases/case5_namedgroup_array.pr -Xparus -emit-llvm-ir -o out/case5_namedgroup_array.ll
+
+# 7) inspect LLVM-IR output
+ls -lah out/*.ll
