@@ -413,6 +413,142 @@ namespace {
         return ok;
     }
 
+    /// @brief dominator 기반 GVN/CSE가 중복 순수 연산을 제거하는지 검사한다.
+    static bool test_oir_gvn_cse_ok() {
+        parus::oir::Module m;
+        const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
+
+        parus::oir::Function f{};
+        f.name = "gvn";
+        f.ret_ty = 1;
+        f.entry = entry;
+        f.blocks.push_back(entry);
+        (void)m.add_func(f);
+
+        parus::oir::Value pv{};
+        pv.ty = 1;
+        pv.eff = parus::oir::Effect::Pure;
+        pv.def_a = entry;
+        pv.def_b = 0;
+        const parus::oir::ValueId p0 = m.add_value(pv);
+        m.blocks[entry].params.push_back(p0);
+
+        auto add_result_inst = [&](parus::oir::TypeId ty, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Value v{};
+            v.ty = ty;
+            v.eff = eff;
+            const parus::oir::ValueId vid = m.add_value(v);
+
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = vid;
+            const parus::oir::InstId iid = m.add_inst(inst);
+
+            m.values[vid].def_a = iid;
+            m.blocks[entry].insts.push_back(iid);
+            return vid;
+        };
+
+        const parus::oir::ValueId c1 = add_result_inst(1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"1"});
+        (void)add_result_inst(1, parus::oir::Effect::Pure, parus::oir::InstBinOp{parus::oir::BinOp::Add, p0, c1});
+        const parus::oir::ValueId add2 = add_result_inst(1, parus::oir::Effect::Pure, parus::oir::InstBinOp{parus::oir::BinOp::Add, p0, c1});
+
+        parus::oir::TermRet rt{};
+        rt.has_value = true;
+        rt.value = add2;
+        m.blocks[entry].term = rt;
+        m.blocks[entry].has_term = true;
+
+        const size_t before = m.blocks[entry].insts.size();
+        parus::oir::run_passes(m);
+        const size_t after = m.blocks[entry].insts.size();
+
+        bool ok = true;
+        ok &= require_(after < before, "GVN/CSE must remove duplicated pure expression");
+        ok &= require_(m.opt_stats.gvn_cse_eliminated > 0, "gvn_cse stat must be increased");
+        ok &= require_(parus::oir::verify(m).empty(), "verify must pass after GVN/CSE");
+        return ok;
+    }
+
+    /// @brief loop canonical form + LICM이 preheader 생성/루프 불변식 hoist를 수행하는지 검사한다.
+    static bool test_oir_loop_canonical_and_licm_ok() {
+        parus::oir::Module m;
+        const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
+        const parus::oir::BlockId header = m.add_block(parus::oir::Block{});
+        const parus::oir::BlockId body = m.add_block(parus::oir::Block{});
+        const parus::oir::BlockId exit = m.add_block(parus::oir::Block{});
+
+        parus::oir::Function f{};
+        f.name = "loop";
+        f.ret_ty = 1;
+        f.entry = entry;
+        f.blocks = {entry, header, body, exit};
+        (void)m.add_func(f);
+
+        parus::oir::Value p{};
+        p.ty = 1;
+        p.eff = parus::oir::Effect::Pure;
+        p.def_a = entry;
+        p.def_b = 0;
+        const parus::oir::ValueId p0 = m.add_value(p);
+        m.blocks[entry].params.push_back(p0);
+
+        auto add_result_inst = [&](parus::oir::BlockId bb, parus::oir::TypeId ty, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Value v{};
+            v.ty = ty;
+            v.eff = eff;
+            const parus::oir::ValueId vid = m.add_value(v);
+
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = vid;
+            const parus::oir::InstId iid = m.add_inst(inst);
+
+            m.values[vid].def_a = iid;
+            m.blocks[bb].insts.push_back(iid);
+            return vid;
+        };
+
+        const parus::oir::ValueId cond0 = add_result_inst(entry, 1, parus::oir::Effect::Pure, parus::oir::InstConstBool{true});
+        const parus::oir::ValueId cond1 = add_result_inst(header, 1, parus::oir::Effect::Pure, parus::oir::InstConstBool{true});
+        const parus::oir::ValueId c2 = add_result_inst(body, 1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"2"});
+        (void)add_result_inst(body, 1, parus::oir::Effect::Pure, parus::oir::InstBinOp{parus::oir::BinOp::Add, p0, c2});
+
+        parus::oir::TermCondBr et{};
+        et.cond = cond0;
+        et.then_bb = header;
+        et.else_bb = exit;
+        m.blocks[entry].term = et;
+        m.blocks[entry].has_term = true;
+
+        parus::oir::TermCondBr ht{};
+        ht.cond = cond1;
+        ht.then_bb = body;
+        ht.else_bb = exit;
+        m.blocks[header].term = ht;
+        m.blocks[header].has_term = true;
+
+        parus::oir::TermBr bt{};
+        bt.target = header;
+        m.blocks[body].term = bt;
+        m.blocks[body].has_term = true;
+
+        parus::oir::TermRet rt{};
+        rt.has_value = true;
+        rt.value = p0;
+        m.blocks[exit].term = rt;
+        m.blocks[exit].has_term = true;
+
+        parus::oir::run_passes(m);
+        bool ok = true;
+        ok &= require_(m.opt_stats.loop_canonicalized > 0, "loop canonical form must create a preheader");
+        ok &= require_(m.opt_stats.licm_hoisted > 0, "LICM must hoist at least one loop-invariant inst");
+        ok &= require_(parus::oir::verify(m).empty(), "verify must pass after loop canonical + LICM");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -428,6 +564,8 @@ int main() {
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"oir_global_mem2reg_and_critical_edge", test_oir_global_mem2reg_and_critical_edge},
         {"oir_escape_handle_opt", test_oir_escape_handle_opt},
+        {"oir_gvn_cse_ok", test_oir_gvn_cse_ok},
+        {"oir_loop_canonical_and_licm_ok", test_oir_loop_canonical_and_licm_ok},
     };
 
     int failed = 0;

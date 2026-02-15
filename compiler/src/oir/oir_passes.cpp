@@ -4,6 +4,9 @@
 #include <algorithm>
 #include <charconv>
 #include <cstdint>
+#include <functional>
+#include <queue>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
@@ -14,9 +17,48 @@ namespace parus::oir {
 
     namespace {
 
-        struct FlowValue {
-            bool known = false;
-            ValueId value = kInvalidId;
+        struct DomInfo {
+            std::vector<BlockId> blocks;
+            std::unordered_map<BlockId, uint32_t> index_of;
+
+            std::vector<std::vector<BlockId>> preds_by_block;
+            std::vector<std::vector<BlockId>> succs_by_block;
+
+            // dom[b][d] == 1 이면 d가 b를 지배한다.
+            std::vector<std::vector<uint8_t>> dom;
+            std::vector<int32_t> idom;
+            std::vector<std::vector<uint32_t>> dom_tree;
+            std::vector<std::vector<uint32_t>> df;
+
+            uint32_t entry_index = UINT32_MAX;
+        };
+
+        struct LoopDesc {
+            BlockId header = kInvalidId;
+            std::unordered_set<BlockId> blocks;
+            std::vector<BlockId> latches;
+            BlockId preheader = kInvalidId;
+        };
+
+        /// @brief 메모리 접근이 어떤 별칭 범위를 건드리는지 요약한다.
+        enum class AliasFootprint : uint8_t {
+            None,
+            LocalSlot,
+            Unknown,
+        };
+
+        /// @brief OIR 명령의 effect/alias 요약 정보.
+        struct InstAccessModel {
+            bool reads = false;
+            bool writes = false;
+            bool may_call = false;
+            bool may_trap = false;
+
+            AliasFootprint read_fp = AliasFootprint::None;
+            AliasFootprint write_fp = AliasFootprint::None;
+
+            ValueId read_slot = kInvalidId;
+            ValueId write_slot = kInvalidId;
         };
 
         /// @brief ValueId 치환 테이블을 따라 최종 대표 값을 찾는다.
@@ -93,6 +135,60 @@ namespace parus::oir {
                     }
                 }, b.term);
             }
+        }
+
+        /// @brief 명령 단위로 메모리 영향/별칭 범위를 계산한다.
+        InstAccessModel build_inst_access_model_(const Inst& inst) {
+            InstAccessModel out{};
+
+            // 데이터 형태 기반의 정밀 분류를 우선 적용한다.
+            if (std::holds_alternative<InstLoad>(inst.data)) {
+                const auto& ld = std::get<InstLoad>(inst.data);
+                out.reads = true;
+                out.read_fp = AliasFootprint::LocalSlot;
+                out.read_slot = ld.slot;
+            } else if (std::holds_alternative<InstStore>(inst.data)) {
+                const auto& st = std::get<InstStore>(inst.data);
+                out.writes = true;
+                out.write_fp = AliasFootprint::LocalSlot;
+                out.write_slot = st.slot;
+            } else if (std::holds_alternative<InstCall>(inst.data)) {
+                out.reads = true;
+                out.writes = true;
+                out.may_call = true;
+                out.read_fp = AliasFootprint::Unknown;
+                out.write_fp = AliasFootprint::Unknown;
+            } else if (std::holds_alternative<InstIndex>(inst.data) ||
+                       std::holds_alternative<InstField>(inst.data)) {
+                // 인덱스/필드는 지역 slot 외의 메모리 뷰를 읽는 연산으로 취급한다.
+                out.reads = true;
+                out.read_fp = AliasFootprint::Unknown;
+            } else if (std::holds_alternative<InstAllocaLocal>(inst.data)) {
+                // alloca는 slot 생성 메타 동작으로 보고, 기존 메모리 가시 상태를 클로버하지 않는다.
+                out.reads = false;
+                out.writes = false;
+                out.read_fp = AliasFootprint::None;
+                out.write_fp = AliasFootprint::None;
+            }
+
+            // 기존 effect 플래그와 합성하여 보수성을 유지한다.
+            if (inst.eff == Effect::Call) {
+                out.may_call = true;
+                out.reads = true;
+                out.writes = true;
+                out.read_fp = AliasFootprint::Unknown;
+                out.write_fp = AliasFootprint::Unknown;
+            } else if (inst.eff == Effect::MayWriteMem && out.write_fp == AliasFootprint::None) {
+                out.writes = true;
+                out.write_fp = AliasFootprint::Unknown;
+            } else if (inst.eff == Effect::MayReadMem && out.read_fp == AliasFootprint::None) {
+                out.reads = true;
+                out.read_fp = AliasFootprint::Unknown;
+            } else if (inst.eff == Effect::MayTrap) {
+                out.may_trap = true;
+            }
+
+            return out;
         }
 
         /// @brief 모듈 전체 value use count를 계산한다.
@@ -193,6 +289,37 @@ namespace parus::oir {
             return preds;
         }
 
+        /// @brief 함수 CFG의 successor 리스트를 만든다.
+        std::vector<std::vector<BlockId>> build_succs_(const Module& m, const Function& f) {
+            std::vector<std::vector<BlockId>> succs(m.blocks.size());
+            const auto owned = build_owned_block_mask_(m, f);
+
+            auto add_succ = [&](BlockId from, BlockId to) {
+                if (from == kInvalidId || (size_t)from >= m.blocks.size()) return;
+                if (to == kInvalidId || (size_t)to >= m.blocks.size()) return;
+                if (!owned[from] || !owned[to]) return;
+                succs[from].push_back(to);
+            };
+
+            for (auto bb : f.blocks) {
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                const auto& b = m.blocks[bb];
+                if (!b.has_term) continue;
+                std::visit([&](auto&& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, TermBr>) {
+                        add_succ(bb, t.target);
+                    } else if constexpr (std::is_same_v<T, TermCondBr>) {
+                        add_succ(bb, t.then_bb);
+                        add_succ(bb, t.else_bb);
+                    } else if constexpr (std::is_same_v<T, TermRet>) {
+                        // no successor
+                    }
+                }, b.term);
+            }
+            return succs;
+        }
+
         /// @brief terminator의 successor 개수를 구한다(중복 타깃은 1로 취급).
         uint32_t succ_count_(const Terminator& term) {
             if (std::holds_alternative<TermBr>(term)) {
@@ -224,6 +351,36 @@ namespace parus::oir {
             }, b.term);
         }
 
+        /// @brief 간선의 target을 old -> neu로 치환한다(인자 벡터는 유지).
+        bool redirect_edge_target_(Module& m, BlockId pred, BlockId old_target, BlockId neu_target) {
+            if ((size_t)pred >= m.blocks.size()) return false;
+            auto& b = m.blocks[pred];
+            if (!b.has_term) return false;
+
+            bool changed = false;
+            std::visit([&](auto& t) {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, TermBr>) {
+                    if (t.target == old_target) {
+                        t.target = neu_target;
+                        changed = true;
+                    }
+                } else if constexpr (std::is_same_v<T, TermCondBr>) {
+                    if (t.then_bb == old_target) {
+                        t.then_bb = neu_target;
+                        changed = true;
+                    }
+                    if (t.else_bb == old_target) {
+                        t.else_bb = neu_target;
+                        changed = true;
+                    }
+                } else if constexpr (std::is_same_v<T, TermRet>) {
+                    // no edge
+                }
+            }, b.term);
+            return changed;
+        }
+
         /// @brief block parameter(SSA phi 유사값)를 추가한다.
         ValueId add_block_param_(Module& m, BlockId bb, TypeId ty) {
             auto& block = m.blocks[bb];
@@ -236,6 +393,16 @@ namespace parus::oir {
             const ValueId vid = m.add_value(v);
             block.params.push_back(vid);
             return vid;
+        }
+
+        /// @brief 규격 미정(undef) 값을 생성한다.
+        ValueId make_undef_value_(Module& m, TypeId ty) {
+            Value v{};
+            v.ty = ty;
+            v.eff = Effect::Pure;
+            v.def_a = kInvalidId;
+            v.def_b = kInvalidId;
+            return m.add_value(v);
         }
 
         /// @brief condbr의 두 타깃이 동일하면 br로 단순화한다.
@@ -305,6 +472,144 @@ namespace parus::oir {
             return changed;
         }
 
+        /// @brief CFG 관련 단순화 패스(분기 단순화 + unreachable 제거).
+        bool simplify_cfg_(Module& m) {
+            bool changed = false;
+            changed |= simplify_condbr_same_target_(m);
+            for (auto& f : m.funcs) {
+                changed |= remove_unreachable_blocks_(m, f);
+            }
+            return changed;
+        }
+
+        /// @brief Dominator/IDom/DF를 계산한다.
+        DomInfo build_dom_info_(const Module& m, const Function& f) {
+            DomInfo info{};
+            info.blocks = f.blocks;
+            info.preds_by_block = build_preds_(m, f);
+            info.succs_by_block = build_succs_(m, f);
+
+            for (uint32_t i = 0; i < (uint32_t)info.blocks.size(); ++i) {
+                info.index_of[info.blocks[i]] = i;
+            }
+            auto eit = info.index_of.find(f.entry);
+            if (eit == info.index_of.end()) return info;
+            info.entry_index = eit->second;
+
+            const uint32_t n = (uint32_t)info.blocks.size();
+            info.dom.assign(n, std::vector<uint8_t>(n, 1));
+            info.idom.assign(n, -1);
+            info.dom_tree.assign(n, {});
+            info.df.assign(n, {});
+
+            // 초기화: entry는 자기 자신만 지배.
+            for (uint32_t d = 0; d < n; ++d) info.dom[info.entry_index][d] = 0;
+            info.dom[info.entry_index][info.entry_index] = 1;
+
+            bool changed = false;
+            do {
+                changed = false;
+                for (uint32_t bi = 0; bi < n; ++bi) {
+                    if (bi == info.entry_index) continue;
+                    const BlockId bb = info.blocks[bi];
+                    const auto& preds = info.preds_by_block[bb];
+
+                    std::vector<uint8_t> ndom(n, 1);
+                    bool has_pred = false;
+                    for (auto pbb : preds) {
+                        auto pit = info.index_of.find(pbb);
+                        if (pit == info.index_of.end()) continue;
+                        const uint32_t pi = pit->second;
+                        if (!has_pred) {
+                            ndom = info.dom[pi];
+                            has_pred = true;
+                        } else {
+                            for (uint32_t d = 0; d < n; ++d) {
+                                ndom[d] = (uint8_t)(ndom[d] & info.dom[pi][d]);
+                            }
+                        }
+                    }
+                    if (!has_pred) {
+                        std::fill(ndom.begin(), ndom.end(), 0);
+                    }
+                    ndom[bi] = 1;
+
+                    if (ndom != info.dom[bi]) {
+                        info.dom[bi] = std::move(ndom);
+                        changed = true;
+                    }
+                }
+            } while (changed);
+
+            // idom 계산
+            for (uint32_t bi = 0; bi < n; ++bi) {
+                if (bi == info.entry_index) {
+                    info.idom[bi] = -1;
+                    continue;
+                }
+                int32_t idom = -1;
+                for (uint32_t d = 0; d < n; ++d) {
+                    if (d == bi || !info.dom[bi][d]) continue;
+                    bool dominated_by_other = false;
+                    for (uint32_t o = 0; o < n; ++o) {
+                        if (o == bi || o == d || !info.dom[bi][o]) continue;
+                        if (info.dom[d][o]) { // o dominates d
+                            dominated_by_other = true;
+                            break;
+                        }
+                    }
+                    if (!dominated_by_other) {
+                        idom = (int32_t)d;
+                        break;
+                    }
+                }
+                info.idom[bi] = idom;
+                if (idom >= 0) info.dom_tree[(uint32_t)idom].push_back(bi);
+            }
+
+            // DF 계산
+            for (uint32_t bi = 0; bi < n; ++bi) {
+                const BlockId bb = info.blocks[bi];
+                const auto& preds = info.preds_by_block[bb];
+                if (preds.size() < 2) continue;
+
+                for (auto pbb : preds) {
+                    auto pit = info.index_of.find(pbb);
+                    if (pit == info.index_of.end()) continue;
+                    int32_t runner = (int32_t)pit->second;
+                    while (runner >= 0 && runner != info.idom[bi]) {
+                        auto& dfr = info.df[(uint32_t)runner];
+                        if (std::find(dfr.begin(), dfr.end(), bi) == dfr.end()) {
+                            dfr.push_back(bi);
+                        }
+                        runner = info.idom[(uint32_t)runner];
+                    }
+                }
+            }
+
+            return info;
+        }
+
+        /// @brief a가 b를 지배하는지 검사한다.
+        bool dominates_(const DomInfo& dom, BlockId a, BlockId b) {
+            auto ia = dom.index_of.find(a);
+            auto ib = dom.index_of.find(b);
+            if (ia == dom.index_of.end() || ib == dom.index_of.end()) return false;
+            return dom.dom[ib->second][ia->second] != 0;
+        }
+
+        /// @brief inst -> 소속 block 매핑을 만든다.
+        std::unordered_map<InstId, BlockId> build_inst_block_map_(const Module& m, const Function& f) {
+            std::unordered_map<InstId, BlockId> out;
+            for (auto bb : f.blocks) {
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                for (auto iid : m.blocks[bb].insts) {
+                    out[iid] = bb;
+                }
+            }
+            return out;
+        }
+
         /// @brief critical-edge를 split해서 이후 SSA/mem2reg 패스의 단순성을 확보한다.
         bool split_critical_edges_(Module& m, Function& f) {
             bool changed = false;
@@ -320,8 +625,8 @@ namespace parus::oir {
                     auto& pb = m.blocks[pred];
                     if (!pb.has_term) continue;
 
-                    const uint32_t succ_count = succ_count_(pb.term);
-                    if (succ_count <= 1) continue;
+                    const uint32_t sc = succ_count_(pb.term);
+                    if (sc <= 1) continue;
                     if (!std::holds_alternative<TermCondBr>(pb.term)) continue;
 
                     auto t = std::get<TermCondBr>(pb.term);
@@ -333,8 +638,7 @@ namespace parus::oir {
                         if (!owned[succ]) return;
                         if (preds[succ].size() <= 1) return;
 
-                        std::vector<ValueId> edge_args =
-                            then_side ? t.then_args : t.else_args;
+                        std::vector<ValueId> edge_args = then_side ? t.then_args : t.else_args;
 
                         const BlockId mid = m.add_block(Block{});
                         f.blocks.push_back(mid);
@@ -361,25 +665,13 @@ namespace parus::oir {
                     split_side(true);
                     split_side(false);
 
-                    if (term_changed) {
-                        pb.term = std::move(t);
-                    }
+                    if (term_changed) pb.term = std::move(t);
                 }
 
                 if (!round_changed) break;
                 changed = true;
             }
 
-            return changed;
-        }
-
-        /// @brief CFG 관련 단순화 패스(분기 단순화 + unreachable 제거).
-        bool simplify_cfg_(Module& m) {
-            bool changed = false;
-            changed |= simplify_condbr_same_target_(m);
-            for (auto& f : m.funcs) {
-                changed |= remove_unreachable_blocks_(m, f);
-            }
             return changed;
         }
 
@@ -448,7 +740,6 @@ namespace parus::oir {
 
                 if (std::holds_alternative<InstUnary>(inst.data)) {
                     auto u = std::get<InstUnary>(inst.data);
-
                     int64_t iv = 0;
                     bool bv = false;
                     if ((u.op == UnOp::Neg || u.op == UnOp::Plus || u.op == UnOp::BitNot) &&
@@ -507,73 +798,6 @@ namespace parus::oir {
                 }
             }
             return changed;
-        }
-
-        /// @brief block-local store->load 전달(mem2reg-lite) 수행.
-        bool local_load_forward_(Module& m) {
-            bool changed = false;
-            std::unordered_map<ValueId, ValueId> repl;
-
-            for (auto& b : m.blocks) {
-                std::unordered_map<ValueId, ValueId> slot_value;
-
-                for (auto iid : b.insts) {
-                    if ((size_t)iid >= m.insts.size()) continue;
-                    const auto& inst = m.insts[iid];
-
-                    if (std::holds_alternative<InstStore>(inst.data)) {
-                        const auto& s = std::get<InstStore>(inst.data);
-                        slot_value[s.slot] = resolve_alias_(repl, s.value);
-                        continue;
-                    }
-                    if (std::holds_alternative<InstLoad>(inst.data)) {
-                        const auto& l = std::get<InstLoad>(inst.data);
-                        if (inst.result != kInvalidId) {
-                            auto it = slot_value.find(l.slot);
-                            if (it != slot_value.end()) {
-                                repl[inst.result] = resolve_alias_(repl, it->second);
-                                changed = true;
-                            }
-                        }
-                        continue;
-                    }
-
-                    if (inst.eff == Effect::Call || inst.eff == Effect::MayWriteMem || inst.eff == Effect::MayTrap) {
-                        slot_value.clear();
-                    }
-                }
-            }
-
-            if (changed) rewrite_operands_(m, repl);
-            return changed;
-        }
-
-        /// @brief FlowValue 비교.
-        bool flow_equal_(const FlowValue& a, const FlowValue& b) {
-            if (a.known != b.known) return false;
-            if (!a.known) return true;
-            return a.value == b.value;
-        }
-
-        /// @brief slot 데이터플로우의 meet 연산.
-        FlowValue meet_preds_(
-            BlockId bb,
-            const std::vector<std::vector<BlockId>>& preds,
-            const std::vector<FlowValue>& out_state
-        ) {
-            if ((size_t)bb >= preds.size()) return FlowValue{};
-            const auto& ps = preds[bb];
-            if (ps.empty()) return FlowValue{};
-
-            FlowValue cur = out_state[ps[0]];
-            if (!cur.known) return FlowValue{};
-            for (size_t i = 1; i < ps.size(); ++i) {
-                const auto& ov = out_state[ps[i]];
-                if (!ov.known || ov.value != cur.value) {
-                    return FlowValue{};
-                }
-            }
-            return cur;
         }
 
         /// @brief slot이 load/store slot 위치에서만 사용되는지 검사한다.
@@ -650,211 +874,140 @@ namespace parus::oir {
             return true;
         }
 
-        /// @brief slot 데이터플로우(in/out)를 고정점까지 계산한다.
-        void compute_slot_flow_(
-            const Module& m,
-            const Function& f,
-            ValueId slot,
-            const std::vector<std::vector<BlockId>>& preds,
-            const std::unordered_map<BlockId, ValueId>& phi_for_block,
-            std::vector<FlowValue>& in_state,
-            std::vector<FlowValue>& out_state
-        ) {
-            in_state.assign(m.blocks.size(), FlowValue{});
-            out_state.assign(m.blocks.size(), FlowValue{});
-
-            bool changed = false;
-            do {
-                changed = false;
-                for (auto bb : f.blocks) {
-                    if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
-                    const auto& block = m.blocks[bb];
-
-                    FlowValue in = FlowValue{};
-                    auto phi_it = phi_for_block.find(bb);
-                    if (phi_it != phi_for_block.end()) {
-                        in.known = true;
-                        in.value = phi_it->second;
-                    } else {
-                        in = meet_preds_(bb, preds, out_state);
-                    }
-
-                    FlowValue cur = in;
-                    for (auto iid : block.insts) {
-                        if ((size_t)iid >= m.insts.size()) continue;
-                        const auto& inst = m.insts[iid];
-                        if (!std::holds_alternative<InstStore>(inst.data)) continue;
-                        const auto& st = std::get<InstStore>(inst.data);
-                        if (st.slot != slot) continue;
-                        if (st.value == kInvalidId) {
-                            cur = FlowValue{};
-                        } else {
-                            cur.known = true;
-                            cur.value = st.value;
-                        }
-                    }
-
-                    if (!flow_equal_(in_state[bb], in)) {
-                        in_state[bb] = in;
-                        changed = true;
-                    }
-                    if (!flow_equal_(out_state[bb], cur)) {
-                        out_state[bb] = cur;
-                        changed = true;
-                    }
-                }
-            } while (changed);
-        }
-
-        /// @brief 서로 다른 predecessor 값이 합류하는 블록에 phi(block param)를 삽입한다.
-        bool insert_slot_phi_(
-            Module& m,
-            Function& f,
-            TypeId slot_ty,
-            const std::vector<std::vector<BlockId>>& preds,
-            const std::vector<FlowValue>& out_state,
-            std::unordered_map<BlockId, ValueId>& phi_for_block
-        ) {
-            bool inserted = false;
-            for (auto bb : f.blocks) {
-                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
-                if (phi_for_block.find(bb) != phi_for_block.end()) continue;
-                if ((size_t)bb >= preds.size()) continue;
-
-                const auto& ps = preds[bb];
-                if (ps.size() < 2) continue;
-
-                bool all_known = true;
-                std::unordered_set<ValueId> uniq;
-                for (auto p : ps) {
-                    if ((size_t)p >= out_state.size() || !out_state[p].known) {
-                        all_known = false;
-                        break;
-                    }
-                    uniq.insert(out_state[p].value);
-                }
-                if (!all_known) continue;
-                if (uniq.size() < 2) continue;
-
-                const ValueId phi = add_block_param_(m, bb, slot_ty);
-                phi_for_block[bb] = phi;
-                m.opt_stats.mem2reg_phi_params += 1;
-
-                for (auto p : ps) {
-                    append_edge_arg_(m, p, bb, out_state[p].value);
-                }
-                inserted = true;
-            }
-            return inserted;
-        }
-
-        /// @brief slot 하나를 전역 mem2reg + SSA(block param)로 승격한다.
-        bool promote_slot_global_(
+        /// @brief dominance frontier + rename로 slot 하나를 mem2reg 승격한다.
+        bool promote_slot_mem2reg_(
             Module& m,
             Function& f,
             ValueId slot,
             TypeId slot_ty
         ) {
-            const auto preds = build_preds_(m, f);
-            std::unordered_map<BlockId, ValueId> phi_for_block;
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
 
-            std::vector<FlowValue> in_state;
-            std::vector<FlowValue> out_state;
-
-            // phi 삽입이 멈출 때까지 반복
-            for (;;) {
-                compute_slot_flow_(m, f, slot, preds, phi_for_block, in_state, out_state);
-                if (!insert_slot_phi_(m, f, slot_ty, preds, out_state, phi_for_block)) break;
-            }
-            compute_slot_flow_(m, f, slot, preds, phi_for_block, in_state, out_state);
-
-            // 모든 load가 known 경로에서만 읽히는지 확인
-            bool promotable = true;
-            std::unordered_map<ValueId, ValueId> repl;
-
+            std::unordered_set<uint32_t> def_blocks;
             for (auto bb : f.blocks) {
                 if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
-                const auto& block = m.blocks[bb];
-                FlowValue cur = ((size_t)bb < in_state.size()) ? in_state[bb] : FlowValue{};
+                for (auto iid : m.blocks[bb].insts) {
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    const auto& inst = m.insts[iid];
+                    if (!std::holds_alternative<InstStore>(inst.data)) continue;
+                    const auto& st = std::get<InstStore>(inst.data);
+                    if (st.slot != slot) continue;
+                    auto it = dom.index_of.find(bb);
+                    if (it != dom.index_of.end()) def_blocks.insert(it->second);
+                }
+            }
+
+            std::unordered_map<BlockId, ValueId> phi_for_block;
+            {
+                std::queue<uint32_t> work;
+                for (auto di : def_blocks) work.push(di);
+                std::vector<uint8_t> has_phi(dom.blocks.size(), 0);
+
+                while (!work.empty()) {
+                    const uint32_t x = work.front();
+                    work.pop();
+                    for (auto y : dom.df[x]) {
+                        if (has_phi[y]) continue;
+                        has_phi[y] = 1;
+
+                        const BlockId ybb = dom.blocks[y];
+                        const ValueId phi = add_block_param_(m, ybb, slot_ty);
+                        phi_for_block[ybb] = phi;
+                        m.opt_stats.mem2reg_phi_params += 1;
+
+                        if (!def_blocks.count(y)) {
+                            work.push(y);
+                        }
+                    }
+                }
+            }
+
+            std::unordered_map<ValueId, ValueId> repl;
+            std::unordered_set<InstId> remove_set;
+            std::vector<ValueId> value_stack;
+            const ValueId undef = make_undef_value_(m, slot_ty);
+
+            std::function<void(uint32_t)> rename = [&](uint32_t bi) {
+                const BlockId bb = dom.blocks[bi];
+                auto& block = m.blocks[bb];
+                uint32_t pushed = 0;
+
+                auto pit = phi_for_block.find(bb);
+                if (pit != phi_for_block.end()) {
+                    value_stack.push_back(pit->second);
+                    pushed += 1;
+                }
 
                 for (auto iid : block.insts) {
                     if ((size_t)iid >= m.insts.size()) continue;
                     const auto& inst = m.insts[iid];
-                    if (std::holds_alternative<InstStore>(inst.data)) {
-                        const auto& st = std::get<InstStore>(inst.data);
-                        if (st.slot == slot) {
-                            if (st.value == kInvalidId) cur = FlowValue{};
-                            else {
-                                cur.known = true;
-                                cur.value = st.value;
-                            }
-                        }
+
+                    if (inst.result == slot && std::holds_alternative<InstAllocaLocal>(inst.data)) {
+                        remove_set.insert(iid);
                         continue;
                     }
+
+                    if (std::holds_alternative<InstStore>(inst.data)) {
+                        const auto& st = std::get<InstStore>(inst.data);
+                        if (st.slot != slot) continue;
+                        value_stack.push_back(resolve_alias_(repl, st.value));
+                        pushed += 1;
+                        remove_set.insert(iid);
+                        continue;
+                    }
+
                     if (std::holds_alternative<InstLoad>(inst.data)) {
                         const auto& ld = std::get<InstLoad>(inst.data);
-                        if (ld.slot != slot) continue;
-                        if (!cur.known || inst.result == kInvalidId) {
-                            promotable = false;
-                            break;
-                        }
-                        repl[inst.result] = cur.value;
+                        if (ld.slot != slot || inst.result == kInvalidId) continue;
+                        repl[inst.result] = value_stack.empty() ? undef : value_stack.back();
+                        remove_set.insert(iid);
+                        continue;
                     }
                 }
-                if (!promotable) break;
-            }
 
-            if (!promotable) return false;
+                const ValueId outv = value_stack.empty() ? undef : value_stack.back();
+                for (auto succ : dom.succs_by_block[bb]) {
+                    if (phi_for_block.find(succ) != phi_for_block.end()) {
+                        append_edge_arg_(m, bb, succ, outv);
+                    }
+                }
 
-            // operand 치환 후 slot 관련 inst 제거
+                for (auto child : dom.dom_tree[bi]) rename(child);
+
+                while (pushed > 0 && !value_stack.empty()) {
+                    value_stack.pop_back();
+                    pushed -= 1;
+                }
+            };
+
+            rename(dom.entry_index);
+
             if (!repl.empty()) rewrite_operands_(m, repl);
 
-            bool changed = false;
+            bool changed = !remove_set.empty() || !phi_for_block.empty();
+            if (!changed) return false;
+
             for (auto bb : f.blocks) {
                 if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
                 auto& block = m.blocks[bb];
                 std::vector<InstId> kept;
                 kept.reserve(block.insts.size());
-
                 for (auto iid : block.insts) {
-                    if ((size_t)iid >= m.insts.size()) continue;
-                    const auto& inst = m.insts[iid];
-                    bool remove = false;
-
-                    if (inst.result == slot && std::holds_alternative<InstAllocaLocal>(inst.data)) {
-                        remove = true;
-                    } else if (std::holds_alternative<InstLoad>(inst.data)) {
-                        const auto& ld = std::get<InstLoad>(inst.data);
-                        remove = (ld.slot == slot);
-                    } else if (std::holds_alternative<InstStore>(inst.data)) {
-                        const auto& st = std::get<InstStore>(inst.data);
-                        remove = (st.slot == slot);
-                    }
-
-                    if (remove) {
-                        changed = true;
-                        continue;
-                    }
-                    kept.push_back(iid);
+                    if (!remove_set.count(iid)) kept.push_back(iid);
                 }
-
-                if (kept.size() != block.insts.size()) {
-                    block.insts = std::move(kept);
-                }
+                if (kept.size() != block.insts.size()) block.insts = std::move(kept);
             }
 
-            if (changed) {
-                m.opt_stats.mem2reg_promoted_slots += 1;
-            }
-            return changed;
+            m.opt_stats.mem2reg_promoted_slots += 1;
+            return true;
         }
 
-        /// @brief 함수 전체에서 승격 가능한 alloca slot을 찾아 전역 mem2reg를 수행한다.
+        /// @brief dominance 기반 전역 mem2reg를 수행한다.
         bool global_mem2reg_ssa_(Module& m) {
             bool changed = false;
 
             for (auto& f : m.funcs) {
-                // 반복 승격: 한 슬롯 승격이 다른 슬롯 승격을 가능하게 만들 수 있다.
                 for (;;) {
                     bool round_changed = false;
                     std::vector<std::pair<ValueId, TypeId>> candidates;
@@ -873,7 +1026,7 @@ namespace parus::oir {
 
                     for (const auto& [slot, slot_ty] : candidates) {
                         if (!is_non_escaping_slot_(m, f, slot)) continue;
-                        round_changed |= promote_slot_global_(m, f, slot, slot_ty);
+                        round_changed |= promote_slot_mem2reg_(m, f, slot, slot_ty);
                     }
 
                     if (!round_changed) break;
@@ -881,6 +1034,496 @@ namespace parus::oir {
                 }
             }
 
+            return changed;
+        }
+
+        /// @brief block-local store->load 전달(mem2reg-lite) 보조 수행.
+        /// @details
+        /// unknown write/call이 나타나더라도 non-escaping slot은 별칭되지 않으므로
+        /// 해당 slot 캐시는 유지한다(정밀 alias/effect 기반 클로버).
+        bool local_load_forward_(Module& m) {
+            bool changed = false;
+            std::unordered_map<ValueId, ValueId> repl;
+
+            for (auto& f : m.funcs) {
+                std::unordered_map<ValueId, bool> nonescape_cache;
+                auto is_alloca_slot = [&](ValueId slot) -> bool {
+                    if (slot == kInvalidId || (size_t)slot >= m.values.size()) return false;
+                    const auto& v = m.values[slot];
+                    if (v.def_a == kInvalidId || v.def_b != kInvalidId) return false;
+                    const InstId iid = (InstId)v.def_a;
+                    if ((size_t)iid >= m.insts.size()) return false;
+                    return std::holds_alternative<InstAllocaLocal>(m.insts[iid].data);
+                };
+                auto is_nonescape = [&](ValueId slot) -> bool {
+                    auto it = nonescape_cache.find(slot);
+                    if (it != nonescape_cache.end()) return it->second;
+                    const bool v = is_alloca_slot(slot) && is_non_escaping_slot_(m, f, slot);
+                    nonescape_cache[slot] = v;
+                    return v;
+                };
+
+                for (auto bb : f.blocks) {
+                    if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                    auto& b = m.blocks[bb];
+                    std::unordered_map<ValueId, ValueId> slot_value;
+
+                    for (auto iid : b.insts) {
+                        if ((size_t)iid >= m.insts.size()) continue;
+                        const auto& inst = m.insts[iid];
+
+                        if (std::holds_alternative<InstStore>(inst.data)) {
+                            const auto& s = std::get<InstStore>(inst.data);
+                            slot_value[s.slot] = resolve_alias_(repl, s.value);
+                            continue;
+                        }
+                        if (std::holds_alternative<InstLoad>(inst.data)) {
+                            const auto& l = std::get<InstLoad>(inst.data);
+                            if (inst.result != kInvalidId) {
+                                auto it = slot_value.find(l.slot);
+                                if (it != slot_value.end()) {
+                                    repl[inst.result] = resolve_alias_(repl, it->second);
+                                    changed = true;
+                                }
+                            }
+                            continue;
+                        }
+
+                        const InstAccessModel fx = build_inst_access_model_(inst);
+
+                        if (fx.write_fp == AliasFootprint::LocalSlot && fx.write_slot != kInvalidId) {
+                            slot_value.erase(fx.write_slot);
+                        }
+
+                        if (fx.write_fp == AliasFootprint::Unknown || fx.may_call || fx.may_trap) {
+                            for (auto it = slot_value.begin(); it != slot_value.end();) {
+                                if (is_nonescape(it->first)) {
+                                    ++it;
+                                } else {
+                                    it = slot_value.erase(it);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (changed) rewrite_operands_(m, repl);
+            return changed;
+        }
+
+        /// @brief 루프 preheader 조건인지 검사한다.
+        bool is_preheader_block_(const Module& m, BlockId bb, BlockId header) {
+            if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) return false;
+            const auto& b = m.blocks[bb];
+            if (!b.has_term) return false;
+            if (!std::holds_alternative<TermBr>(b.term)) return false;
+            const auto& br = std::get<TermBr>(b.term);
+            if (br.target != header) return false;
+            return succ_count_(b.term) == 1;
+        }
+
+        /// @brief 현재 CFG에서 natural loop 집합을 수집한다.
+        std::vector<LoopDesc> collect_loops_(const Module& m, const Function& f, const DomInfo& dom) {
+            std::unordered_map<BlockId, size_t> by_header;
+            std::vector<LoopDesc> out;
+
+            for (auto pred : f.blocks) {
+                if (pred == kInvalidId || (size_t)pred >= m.blocks.size()) continue;
+                for (auto succ : dom.succs_by_block[pred]) {
+                    if (!dominates_(dom, succ, pred)) continue; // backedge
+
+                    size_t li = 0;
+                    auto it = by_header.find(succ);
+                    if (it == by_header.end()) {
+                        li = out.size();
+                        by_header[succ] = li;
+                        LoopDesc l{};
+                        l.header = succ;
+                        l.blocks.insert(succ);
+                        out.push_back(std::move(l));
+                    } else {
+                        li = it->second;
+                    }
+
+                    auto& loop = out[li];
+                    if (std::find(loop.latches.begin(), loop.latches.end(), pred) == loop.latches.end()) {
+                        loop.latches.push_back(pred);
+                    }
+
+                    // natural loop: pred에서 역방향으로 header까지 확장
+                    std::vector<BlockId> stack;
+                    if (loop.blocks.insert(pred).second) stack.push_back(pred);
+                    while (!stack.empty()) {
+                        const BlockId x = stack.back();
+                        stack.pop_back();
+                        for (auto p : dom.preds_by_block[x]) {
+                            if (loop.blocks.insert(p).second && p != succ) {
+                                stack.push_back(p);
+                            }
+                        }
+                    }
+                }
+            }
+
+            return out;
+        }
+
+        /// @brief loop canonical form(preheader)로 변환한다.
+        bool canonicalize_loops_(Module& m, Function& f) {
+            bool changed = false;
+
+            for (;;) {
+                bool round_changed = false;
+                const auto dom = build_dom_info_(m, f);
+                if (dom.entry_index == UINT32_MAX) break;
+                auto loops = collect_loops_(m, f, dom);
+                if (loops.empty()) break;
+
+                for (auto& loop : loops) {
+                    std::vector<BlockId> outside_preds;
+                    for (auto p : dom.preds_by_block[loop.header]) {
+                        if (!loop.blocks.count(p)) outside_preds.push_back(p);
+                    }
+                    if (outside_preds.empty()) continue;
+
+                    if (outside_preds.size() == 1 &&
+                        is_preheader_block_(m, outside_preds[0], loop.header)) {
+                        continue; // 이미 canonical
+                    }
+
+                    const BlockId pre = m.add_block(Block{});
+                    f.blocks.push_back(pre);
+
+                    // header param 타입을 preheader param으로 복제한 뒤 그대로 전달한다.
+                    std::vector<ValueId> pre_args;
+                    for (auto hparam : m.blocks[loop.header].params) {
+                        TypeId ty = kInvalidId;
+                        if (hparam != kInvalidId && (size_t)hparam < m.values.size()) {
+                            ty = m.values[hparam].ty;
+                        }
+                        pre_args.push_back(add_block_param_(m, pre, ty));
+                    }
+
+                    TermBr t{};
+                    t.target = loop.header;
+                    t.args = pre_args;
+                    m.blocks[pre].term = std::move(t);
+                    m.blocks[pre].has_term = true;
+
+                    for (auto p : outside_preds) {
+                        (void)redirect_edge_target_(m, p, loop.header, pre);
+                    }
+
+                    m.opt_stats.loop_canonicalized += 1;
+                    round_changed = true;
+                    changed = true;
+                }
+
+                if (!round_changed) break;
+            }
+
+            return changed;
+        }
+
+        /// @brief commutative binop인지 반환한다.
+        bool is_commutative_(BinOp op) {
+            switch (op) {
+                case BinOp::Add:
+                case BinOp::Mul:
+                case BinOp::Eq:
+                case BinOp::Ne:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// @brief pure inst를 위한 GVN 키를 생성한다.
+        std::string gvn_key_(
+            const Inst& inst,
+            const std::unordered_map<ValueId, ValueId>& repl
+        ) {
+            if (inst.result == kInvalidId) return {};
+            if (inst.eff != Effect::Pure) return {};
+
+            std::ostringstream oss;
+            auto rv = [&](ValueId v) { return resolve_alias_(repl, v); };
+
+            return std::visit([&](auto&& x) -> std::string {
+                using T = std::decay_t<decltype(x)>;
+                if constexpr (std::is_same_v<T, InstConstInt>) {
+                    return std::string("ci:") + x.text;
+                } else if constexpr (std::is_same_v<T, InstConstBool>) {
+                    return std::string("cb:") + (x.value ? "1" : "0");
+                } else if constexpr (std::is_same_v<T, InstConstNull>) {
+                    return "cn";
+                } else if constexpr (std::is_same_v<T, InstUnary>) {
+                    oss << "u:" << (uint32_t)x.op << ":" << rv(x.src);
+                    return oss.str();
+                } else if constexpr (std::is_same_v<T, InstBinOp>) {
+                    ValueId a = rv(x.lhs);
+                    ValueId b = rv(x.rhs);
+                    if (is_commutative_(x.op) && b < a) std::swap(a, b);
+                    oss << "b:" << (uint32_t)x.op << ":" << a << ":" << b;
+                    return oss.str();
+                } else if constexpr (std::is_same_v<T, InstCast>) {
+                    oss << "c:" << (uint32_t)x.kind << ":" << x.to << ":" << rv(x.src);
+                    return oss.str();
+                } else {
+                    return {};
+                }
+            }, inst.data);
+        }
+
+        /// @brief 함수 단위로 GVN/CSE를 수행한다.
+        bool gvn_cse_function_(Module& m, Function& f) {
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
+
+            std::unordered_map<std::string, std::vector<ValueId>> env;
+            std::unordered_map<ValueId, ValueId> repl;
+            std::unordered_set<InstId> remove_set;
+
+            std::function<void(uint32_t)> dfs = [&](uint32_t bi) {
+                const BlockId bb = dom.blocks[bi];
+                const auto& block = m.blocks[bb];
+
+                std::vector<std::pair<std::string, ValueId>> pushed;
+                pushed.reserve(block.insts.size());
+
+                for (auto iid : block.insts) {
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    const auto& inst = m.insts[iid];
+                    if (inst.result == kInvalidId) continue;
+
+                    const std::string key = gvn_key_(inst, repl);
+                    if (key.empty()) continue;
+
+                    auto it = env.find(key);
+                    if (it != env.end() && !it->second.empty()) {
+                        repl[inst.result] = it->second.back();
+                        remove_set.insert(iid);
+                        m.opt_stats.gvn_cse_eliminated += 1;
+                    } else {
+                        env[key].push_back(inst.result);
+                        pushed.push_back({key, inst.result});
+                    }
+                }
+
+                for (auto child : dom.dom_tree[bi]) dfs(child);
+
+                for (auto it = pushed.rbegin(); it != pushed.rend(); ++it) {
+                    auto env_it = env.find(it->first);
+                    if (env_it == env.end() || env_it->second.empty()) continue;
+                    if (env_it->second.back() == it->second) {
+                        env_it->second.pop_back();
+                        if (env_it->second.empty()) env.erase(env_it);
+                    }
+                }
+            };
+
+            dfs(dom.entry_index);
+
+            if (repl.empty() && remove_set.empty()) return false;
+            if (!repl.empty()) rewrite_operands_(m, repl);
+
+            for (auto bb : f.blocks) {
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                auto& block = m.blocks[bb];
+                std::vector<InstId> kept;
+                kept.reserve(block.insts.size());
+                for (auto iid : block.insts) {
+                    if (!remove_set.count(iid)) kept.push_back(iid);
+                }
+                if (kept.size() != block.insts.size()) block.insts = std::move(kept);
+            }
+            return true;
+        }
+
+        /// @brief 모듈 전체에 GVN/CSE를 적용한다.
+        bool gvn_cse_(Module& m) {
+            bool changed = false;
+            for (auto& f : m.funcs) {
+                changed |= gvn_cse_function_(m, f);
+            }
+            return changed;
+        }
+
+        /// @brief LICM 후보의 operand 목록을 수집한다.
+        std::vector<ValueId> inst_operands_(const Inst& inst) {
+            return std::visit([&](auto&& x) -> std::vector<ValueId> {
+                using T = std::decay_t<decltype(x)>;
+                if constexpr (std::is_same_v<T, InstUnary>) {
+                    return {x.src};
+                } else if constexpr (std::is_same_v<T, InstBinOp>) {
+                    return {x.lhs, x.rhs};
+                } else if constexpr (std::is_same_v<T, InstCast>) {
+                    return {x.src};
+                } else if constexpr (std::is_same_v<T, InstCall>) {
+                    std::vector<ValueId> out;
+                    out.reserve(x.args.size() + 1);
+                    out.push_back(x.callee);
+                    out.insert(out.end(), x.args.begin(), x.args.end());
+                    return out;
+                } else if constexpr (std::is_same_v<T, InstIndex>) {
+                    return {x.base, x.index};
+                } else if constexpr (std::is_same_v<T, InstField>) {
+                    return {x.base};
+                } else if constexpr (std::is_same_v<T, InstLoad>) {
+                    return {x.slot};
+                } else if constexpr (std::is_same_v<T, InstStore>) {
+                    return {x.slot, x.value};
+                } else {
+                    return {};
+                }
+            }, inst.data);
+        }
+
+        /// @brief value 정의가 loop 내부인지 판단한다.
+        bool value_defined_in_loop_(
+            const Module& m,
+            ValueId v,
+            const std::unordered_set<BlockId>& loop_blocks,
+            const std::unordered_map<InstId, BlockId>& inst_block
+        ) {
+            if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
+            const auto& val = m.values[v];
+            if (val.def_a == kInvalidId) return false;
+
+            // block param
+            if (val.def_b != kInvalidId) {
+                const BlockId b = (BlockId)val.def_a;
+                return loop_blocks.count(b) != 0;
+            }
+
+            // inst result
+            const InstId iid = (InstId)val.def_a;
+            auto it = inst_block.find(iid);
+            if (it == inst_block.end()) return false;
+            return loop_blocks.count(it->second) != 0;
+        }
+
+        /// @brief LICM에서 함수 단위 최적화를 수행한다.
+        bool licm_function_(Module& m, Function& f) {
+            bool changed = false;
+
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
+
+            auto loops = collect_loops_(m, f, dom);
+            if (loops.empty()) return false;
+
+            const auto inst_block = build_inst_block_map_(m, f);
+            std::unordered_map<ValueId, bool> noescape_slot_cache;
+
+            for (auto& loop : loops) {
+                std::vector<BlockId> outside_preds;
+                for (auto p : dom.preds_by_block[loop.header]) {
+                    if (!loop.blocks.count(p)) outside_preds.push_back(p);
+                }
+                if (outside_preds.size() != 1) continue;
+                const BlockId preheader = outside_preds[0];
+                if (!is_preheader_block_(m, preheader, loop.header)) continue;
+                loop.preheader = preheader;
+
+                std::unordered_set<ValueId> mutated_slots;
+                for (auto bb : loop.blocks) {
+                    if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                    for (auto iid : m.blocks[bb].insts) {
+                        if ((size_t)iid >= m.insts.size()) continue;
+                        const auto& inst = m.insts[iid];
+                        if (!std::holds_alternative<InstStore>(inst.data)) continue;
+                        const auto& st = std::get<InstStore>(inst.data);
+                        mutated_slots.insert(st.slot);
+                    }
+                }
+
+                std::unordered_set<ValueId> invariant_values;
+                for (uint32_t vid = 0; vid < (uint32_t)m.values.size(); ++vid) {
+                    if (!value_defined_in_loop_(m, vid, loop.blocks, inst_block)) {
+                        invariant_values.insert(vid);
+                    }
+                }
+
+                std::unordered_set<InstId> hoist_set;
+                std::vector<InstId> hoist_order;
+
+                bool round = false;
+                do {
+                    round = false;
+                    for (auto bb : f.blocks) {
+                        if (!loop.blocks.count(bb)) continue;
+                        for (auto iid : m.blocks[bb].insts) {
+                            if ((size_t)iid >= m.insts.size()) continue;
+                            if (hoist_set.count(iid)) continue;
+                            const auto& inst = m.insts[iid];
+                            if (inst.result == kInvalidId) continue;
+
+                            bool hoistable = false;
+                            if (std::holds_alternative<InstLoad>(inst.data)) {
+                                const auto& ld = std::get<InstLoad>(inst.data);
+                                bool noescape = false;
+                                auto it = noescape_slot_cache.find(ld.slot);
+                                if (it == noescape_slot_cache.end()) {
+                                    noescape = is_non_escaping_slot_(m, f, ld.slot);
+                                    noescape_slot_cache[ld.slot] = noescape;
+                                } else {
+                                    noescape = it->second;
+                                }
+                                hoistable = noescape && !mutated_slots.count(ld.slot);
+                            } else {
+                                hoistable = (inst.eff == Effect::Pure);
+                            }
+                            if (!hoistable) continue;
+
+                            auto ops = inst_operands_(inst);
+                            bool operands_invariant = true;
+                            for (auto v : ops) {
+                                if (!invariant_values.count(v)) {
+                                    operands_invariant = false;
+                                    break;
+                                }
+                            }
+                            if (!operands_invariant) continue;
+
+                            hoist_set.insert(iid);
+                            hoist_order.push_back(iid);
+                            invariant_values.insert(inst.result);
+                            round = true;
+                        }
+                    }
+                } while (round);
+
+                if (hoist_order.empty()) continue;
+
+                for (auto bb : loop.blocks) {
+                    if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                    auto& block = m.blocks[bb];
+                    std::vector<InstId> kept;
+                    kept.reserve(block.insts.size());
+                    for (auto iid : block.insts) {
+                        if (!hoist_set.count(iid)) kept.push_back(iid);
+                    }
+                    if (kept.size() != block.insts.size()) block.insts = std::move(kept);
+                }
+
+                auto& pre = m.blocks[preheader];
+                pre.insts.insert(pre.insts.end(), hoist_order.begin(), hoist_order.end());
+
+                changed = true;
+                m.opt_stats.licm_hoisted += (uint32_t)hoist_order.size();
+            }
+
+            return changed;
+        }
+
+        /// @brief 모듈 전체에 LICM을 적용한다.
+        bool licm_(Module& m) {
+            bool changed = false;
+            for (auto& f : m.funcs) {
+                changed |= licm_function_(m, f);
+            }
             return changed;
         }
 
@@ -905,7 +1548,6 @@ namespace parus::oir {
                 if (escape_values.find(c.src) == escape_values.end()) continue;
                 if ((size_t)c.src >= m.values.size()) continue;
 
-                // 동일 타입 강제 cast는 escape 비물질화 경로에서 제거한다.
                 if (m.values[c.src].ty != m.values[inst.result].ty) continue;
 
                 repl[inst.result] = c.src;
@@ -967,18 +1609,26 @@ namespace parus::oir {
         // OIR 강화 파이프라인(v0):
         // 1) CFG 단순화
         // 2) critical-edge split
-        // 3) 상수 폴딩
-        // 4) 전역 mem2reg + SSA(block param)
-        // 5) block-local forwarding 보조
-        // 6) escape-handle 특화 정리
-        // 7) pure DCE
-        // 8) CFG 재정리
+        // 3) loop canonical form(preheader)
+        // 4) 상수 폴딩
+        // 5) dominance 기반 mem2reg + SSA(block param)
+        // 6) GVN/CSE
+        // 7) LICM
+        // 8) local forwarding 보조
+        // 9) escape-handle 특화 정리
+        // 10) pure DCE
+        // 11) CFG 재정리
         (void)simplify_cfg_(m);
         for (auto& f : m.funcs) {
             (void)split_critical_edges_(m, f);
         }
+        for (auto& f : m.funcs) {
+            (void)canonicalize_loops_(m, f);
+        }
         (void)const_fold_(m);
         (void)global_mem2reg_ssa_(m);
+        (void)gvn_cse_(m);
+        (void)licm_(m);
         (void)local_load_forward_(m);
         (void)optimize_escape_handles_(m);
         (void)dce_pure_insts_(m);

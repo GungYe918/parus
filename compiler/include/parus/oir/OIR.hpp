@@ -206,8 +206,11 @@ namespace parus::oir {
     /// @brief OIR 패스가 누적하는 최적화 통계.
     struct OptStats {
         uint32_t critical_edges_split = 0;
+        uint32_t loop_canonicalized = 0;
         uint32_t mem2reg_promoted_slots = 0;
         uint32_t mem2reg_phi_params = 0;
+        uint32_t gvn_cse_eliminated = 0;
+        uint32_t licm_hoisted = 0;
         uint32_t escape_pack_elided = 0;
         uint32_t escape_boundary_rewrites = 0;
     };

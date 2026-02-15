@@ -670,8 +670,11 @@ namespace parusc::dump {
                 << "\n";
         std::cout << "  opt_stats:"
                 << " critical_edges_split=" << m.opt_stats.critical_edges_split
+                << " loop_canonicalized=" << m.opt_stats.loop_canonicalized
                 << " mem2reg_promoted_slots=" << m.opt_stats.mem2reg_promoted_slots
                 << " mem2reg_phi_params=" << m.opt_stats.mem2reg_phi_params
+                << " gvn_cse_eliminated=" << m.opt_stats.gvn_cse_eliminated
+                << " licm_hoisted=" << m.opt_stats.licm_hoisted
                 << " escape_pack_elided=" << m.opt_stats.escape_pack_elided
                 << " escape_boundary_rewrites=" << m.opt_stats.escape_boundary_rewrites
                 << "\n";
