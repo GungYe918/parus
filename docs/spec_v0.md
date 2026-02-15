@@ -683,6 +683,7 @@ fn bindings() -> void{
 ### 5.2 스코프와 섀도잉
 
 * 같은 스코프에서 동일 이름 재선언은 금지(권장). 구현이 쉬워진다.
+  단, 함수는 6.1.7의 오버로딩 규약을 만족하면 같은 이름 공존을 허용한다.
 * 다른 스코프에서는 허용 가능하다.
 
 예시
@@ -912,102 +913,123 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 
 ---
 
-### 6.1.7 시그니처 키(오버로딩 키)와 `{}`의 포함 방식
+### 6.1.7 함수 오버로딩 표준 규약 (정본, v0 고정)
 
-사용자가 발췌한 규약(“라벨이 시그니처에 포함”)을 기반으로, v0에서 **시그니처 유일성 키**는 아래처럼 확장해 고정한다.
+이 섹션은 Parus 함수 오버로딩의 **유일한 정본 규약**이다.
+문서의 다른 섹션(예: 13장)은 이 규약을 요약만 하며, 의미를 추가/변경하지 않는다.
 
-시그니처 유일성 키(v0):
- 
-* 함수의 전체 경로: `bundle::(nest...)::name`
-* `sub/pub` 모드(권장: 포함)
-* **위치 파라미터 목록**
+#### (A) 오버로드 집합과 선언 경계
 
-  * 개수(arity_pos)
-  * 각 파라미터의 타입
-  * (선언상의) 파라미터 이름(라벨) — *라벨 호출을 지원하므로 포함*
-* **named group 파라미터 목록**
+오버로드 집합(Overload Set)의 키:
 
-  * 개수(arity_named)
-  * 각 파라미터의 타입
-  * 각 파라미터의 라벨 이름
-* 리시버 종류(self / &self / &mut self 등, 있는 경우)
+* `bundle::(nest...)::name`
+* 리시버 종류(`self` / `&self` / `&mut self` / 없음)
+* 모드(`sub/pub/none`)
 
-추가 고정(중요):
+같은 오버로드 집합 안에서 여러 함수를 둘 수 있으나, 아래 규칙을 만족해야 한다.
 
-* **기본값 자체(표현식)는 시그니처 키에 포함하지 않는다.**
+#### (B) 시그니처 유일성 키(Declaration Key)
 
-  * 기본값은 “호출 해소 이후 채우기”가 아니라,
-  * 위 6.1.4의 우선순위 규칙에 따라 “필요할 때만 채우기”로 동작하므로,
-  * 기본값이 ABI/맹글링을 흔들지 않게 된다.
+선언 충돌을 판정하는 키:
 
----
+* 오버로드 집합 키
+* 위치 파라미터 목록(선언 순서 고정):
+  * 개수
+  * 각 항목의 `label + type`
+* named-group 파라미터 목록(선언 순서 고정):
+  * 개수
+  * 각 항목의 `label + type + required/optional(default 유무)`
 
-### 6.1.8 오버로딩 해소 알고리즘(요약, 구현 지침)
+제외 항목(키에 포함하지 않음):
 
-호출 `C`에 대해 후보 함수 집합을 모은 뒤:
+* 반환 타입
+* 기본값 표현식 본문
+* `export`, `pure`, `comptime`, `commit`, `recast`
 
-1. 경로/이름/모드(sub/pub)까지 일치하는 후보를 모은다.
-2. 호출 형태를 분류한다:
+#### (C) 선언 시점 충돌 금지(사전 모호성 차단)
 
-   * positional call
-   * labeled call
-   * positional + named-group call
-3. 각 후보에 대해 **(A) 기본값 없이 매칭 가능한지** 검사
-4. 가능한 후보가 정확히 1개면 선택
-5. 0개면 **(B) 기본값 채우기를 허용**하고 다시 검사
-6. 그래도 0개면 not found, 2개 이상이면 ambiguous
+아래는 **호출이 없어도** 선언 시점에서 컴파일 에러로 막는다.
 
-추가 고정(v0):
+1. Declaration Key가 동일한 함수 2개 이상
+2. 반환 타입만 다른 함수(인자 키 동일)
+3. 같은 오버로드 집합에서, 위치 호출 관점으로 구분 불가능한 쌍
+   (예: 위치 타입열이 동일하고 named-group이 없는 함수 2개)
+4. labeled 호출 관점으로 구분 불가능한 쌍
+   (라벨 집합+타입이 동일한 함수 2개)
+5. 함수 1개 내부에서 파라미터 라벨 중복(위치/named-group 전체 기준)
 
-* **반환 타입은 오버로딩 키에 포함하지 않는다.**
-* 같은 인자 시그니처에 반환 타입만 다른 선언은 금지한다.
+#### (D) 호출 형태별 후보 필터
 
-이 과정에서 라벨 관련은 다음처럼 처리한다.
+호출 `C`에 대해 후보를 모은 뒤, 먼저 호출 형태로 필터한다.
 
-* labeled call: **라벨 집합이 정확히 일치**해야 한다(순서는 무관)
-* named group call: `{}` 내부 라벨은 named group의 라벨과만 매칭한다(위치 파라미터 라벨과 섞지 않는다)
+1. positional call: `f(e1, e2, ...)`
+   * named-group 없는 후보만 대상
+2. labeled call: `f(a: e1, b: e2, ...)`
+   * named-group 없는 후보만 대상
+   * 라벨 집합이 후보의 위치 파라미터 라벨 집합과 일치해야 함
+3. positional + named-group call: `f(e1, {x: e2, ...})`
+   * named-group 있는 후보만 대상
+   * `{}` 그룹은 명시적으로 존재해야 함 (자동 `{}` 가정 금지)
 
----
+#### (E) 오버로딩 해소 순서(결정적)
 
-### 6.1.9 예시 모음 (충돌/비충돌이 한눈에 보이게)
+형태 필터 후, 다음 2단계로 해소한다.
 
-#### 1) 동일 이름 + 기본값이 있어도 “정확 매칭이 우선”
+1. 단계 A: 기본값 채우기 없이 exact match 시도
+2. 단계 B: 단계 A 후보가 0개일 때만 기본값 채우기 허용
 
-```parus
-fn g(a: int) -> int { return 1; }
-fn g(a: int, b: int = 0) -> int { return 2; }
+판정:
 
-set x = g(1);      // (기본값 채우기 없이) g(a:int) 가 정확매칭 -> 1
-set y = g(1, 2);   // g(a:int, b:int=0) -> 2
+* 후보 1개: 선택
+* 후보 0개: not found
+* 후보 2개 이상: ambiguous
+
+추가 고정:
+
+* 기본값은 해소 우선순위에만 영향, 오버로드 키에는 영향 없음
+* 기본값 채우기로 인해 2개 이상이 살아나면 반드시 ambiguous
+
+#### (F) 맹글링(ABI 심볼) 규약
+
+맹글링은 위 Declaration Key를 기반으로 생성한다.
+
+권장 포맷(v0):
+
+```
+p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 ```
 
-#### 2) named group은 완전히 별도 구역이라 충돌이 줄어듦(권장)
+구성:
+
+* `BundleId`: bundle 식별자
+* `Path`: `nest` 경로(`::` -> `__`)
+* `BaseName`: 함수 원이름
+* `Mode`: `none|sub|pub`
+* `Recv`: `none|self|ref_self|mut_self`
+* `ParamSig`: 위치/ named-group 파라미터를 canonical 문자열로 직렬화
+* `Hash`: canonical 문자열의 고정 해시(충돌 완화)
+
+요구사항:
+
+* canonical 문자열은 컴파일러 버전/플랫폼과 무관하게 안정적이어야 함
+* 디버깅을 위해 `BaseName`, `Path`는 사람이 읽을 수 있어야 함
+
+#### (G) no-mangle (`@cabi`) 제약
+
+* `@cabi`(no-mangle export)는 오버로드 집합에 함수가 1개일 때만 허용
+* 같은 이름으로 2개 이상 export가 가능해지는 조합은 금지
+* `@cabi`는 FFI 경계 함수에만 사용을 권장
+
+#### (H) 예시
 
 ```parus
-fn h(a: int) -> int { return 10; }
-fn h(a: int, {b: int = 0}) -> int { return 20; }
+fn add(a: i32, b: i32) -> i32 { return a + b; }
+fn add(a: i32, {b: i32 = 0}) -> i32 { return a + b; }
 
-set p = h(1);           // h(a:int) 정확매칭 -> 10
-set q = h(1, {b: 2});   // named-group 버전 -> 20
+set x = add(1, 2);         // positional -> 첫 번째
+set y = add(1, {b: 3});    // named-group -> 두 번째
+// set z = add(1);         // 두 번째는 '{}' 자동 가정 금지. 첫 번째도 인자 부족 -> not found
 ```
-
-#### 3) 모호해지는 경우는 “ambiguous”로 강제 차단
-
-```parus
-fn k(a: int, b: int = 0) -> int { return 1; }
-fn k(a: int, {b: int = 0}) -> int { return 2; }
-
-// k(1) 은?
-// - k(a:int, b:int=0) : 기본값 채우면 가능
-// - k(a:int, {b:int=0}) : named group 자체를 생략 가능한가? (v0 정책에 따라 다름)
-//
-// v0 권장: named group은 "비어있는 {}"를 자동으로 가정하지 않는다.
-// -> k(1)은 첫 번째만 후보가 되어 1로 결정.
-// 만약 named group 생략을 자동 허용하면, 여기서 ambiguous 위험이 커짐.
-```
-
-> **v0 권장 결론:** named group은 “그룹 자체는 명시적으로 쓰는 걸 기본”으로 두는 게 안전하다.
-> 즉, `{}` 그룹이 있는 함수는 호출에서도 `{}`가 등장할 때만 그 후보로 적극 고려되는 방향이 덜 사고 난다.
 
 ---
 
@@ -3778,22 +3800,14 @@ fn lambdas() -> void {
 
 ### 13.1 오버로딩 규약(라벨 포함)
 
-Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시그니처에 포함**된다.
+정본 규약은 **6.1.7 함수 오버로딩 표준 규약**을 따른다.
+즉, 이 섹션은 중복 정의를 하지 않으며 아래만 확인한다.
 
-시그니처 유일성 키(v0):
-
-* 함수의 전체 경로: `bundle::(nest...)::name`
-* 파라미터 개수(arity)
-* 각 파라미터의 **타입**
-* 각 파라미터의 **라벨 이름**
-* 리시버 종류(self / &self / &mut self)
-* (권장) `sub/pub` 모드도 시그니처에 포함 (상태 접근 의미가 달라 ABI/규칙이 달라질 수 있음)
-
-호출 해소 규칙:
-
-* 후보 집합을 모은 뒤,
-* “타입 + 라벨”이 정확히 1개에만 매칭되면 선택
-* 0개면 not found, 2개 이상이면 ambiguous 에러
+* 오버로드 집합 키: `bundle::(nest...)::name + receiver + mode`
+* 선언 충돌은 Declaration Key 기준으로 사전 차단
+* 호출 해소는 2단계(exact -> default-fill) 결정적 규칙 적용
+* 반환 타입만 다른 오버로드는 금지
+* ambiguous는 런타임이 아니라 컴파일 타임 에러
 
 ---
 
@@ -3804,33 +3818,29 @@ Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시
 * 디버거에서 원 이름이 읽히도록 유지
 * 링크 충돌 방지 + 오버로딩 지원
 
-권장 심볼 포맷(v0):
+권장 심볼 포맷(v0, 정본은 6.1.7(F)):
 
 ```
-p$<BundleId>$<Path>$<BaseName>$S<ParamSig>$H<Hash>
+p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 ```
 
 * `BundleId`: bundle 이름을 정규화한 ID(예: `engine_core`)
 * `Path`: `nest` 경로를 `__`로 연결 (예: `math__vec`)
-* `ParamSig`: 파라미터를 좌=>우 순서로 나열, 각 항목은 `label$type`
+* `Mode`: `none|sub|pub`
+* `Recv`: `none|self|ref_self|mut_self`
+* `ParamSig`: 파라미터 canonical 문자열(위치 + named-group + required/optional)
 
   * 예: `a$i32_b$i32`
 * `Hash`: 위 정보를 canonical 문자열로 만든 뒤 짧은 해시(충돌 방지)
 
 예시:
 
-* `p$engine_core$math$add$Sa$i32_b$i32$H9f2c1a`
-* 오버로딩(라벨이 다르면 다른 심볼):
+* `p$engine_core$math$add$Mnone$Rnone$Sa$i32_b$i32$H9f2c1a`
 
-  * `...__Pa$x_i32__...` vs `...__Pleft$i32_right$i32__...`
-
-추가 규칙(v0 권장):
+추가 규칙(v0 고정):
 
 * `export`된 심볼은 기본적으로 위 규칙으로 맹글링된다.
-* “정확히 이 이름으로 외부 ABI에 노출”이 필요하면(FFI 등),
-
-  * 별도 어트리뷰트(예: `@cabi`)로 “no-mangle export”를 제공하는 것을 권장한다.
-  * (이건 지금 문서에 “확장 포인트”로만 남겨도 됨)
+* `@cabi`(no-mangle)는 6.1.7(G) 제약을 그대로 따른다.
 
 ---
 
