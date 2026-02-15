@@ -1,14 +1,14 @@
 // compiler/src/parse/parse_decl_fn.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/ty/Type.hpp>
-#include <gaupel/ty/TypePool.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/ty/Type.hpp>
+#include <parus/ty/TypePool.hpp>
 
 #include <unordered_set>
 #include <vector>
 
 
-namespace gaupel {
+namespace parus {
     
     // '@attr' 리스트를 파싱하여 AST arena에 저장한다.
     // 정책(v0): '@' 뒤는 ident만 허용. 그 외는 진단 후 회복.
@@ -429,4 +429,4 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-} // namespace gaupel
+} // namespace parus

@@ -1,7 +1,7 @@
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
-namespace gaupel {
+namespace parus {
 
     /// @brief `do { ... }` / `do { ... } while (cond);` 구문을 파싱한다.
     ast::StmtId Parser::parse_stmt_do() {
@@ -89,5 +89,5 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-} // namespace gaupel
+} // namespace parus
 

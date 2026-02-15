@@ -1,4 +1,4 @@
-# Gaupel 코드 규약
+# Parus 코드 규약
 
 ## 1) struct / class 사용 기준
 

@@ -1,9 +1,9 @@
 // compiler/src/parse/parse_decl_entry.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 
-namespace gaupel {
+namespace parus {
 
     bool Parser::is_decl_start(syntax::TokenKind k) const {
         using K = syntax::TokenKind;
@@ -61,4 +61,4 @@ namespace gaupel {
         return parse_stmt_use();
     }
 
-} // namespace gaupel
+} // namespace parus

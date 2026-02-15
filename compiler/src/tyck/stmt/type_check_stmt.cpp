@@ -1,17 +1,17 @@
 // compiler/src/tyck/type_check_stmt.cpp
-#include <gaupel/tyck/TypeCheck.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/tyck/TypeCheck.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/diag/Diagnostic.hpp>
+#include <parus/diag/DiagCode.hpp>
 #include "../common/type_check_literals.hpp"
 
 #include <sstream>
 #include <unordered_map>
 
 
-namespace gaupel::tyck {
+namespace parus::tyck {
 
-    using K = gaupel::syntax::TokenKind;
+    using K = parus::syntax::TokenKind;
     using detail::ParsedFloatLiteral;
     using detail::ParsedIntLiteral;
     using detail::parse_float_literal_;
@@ -641,4 +641,4 @@ namespace gaupel::tyck {
     // expr: memoized dispatcher
     // --------------------
 
-} // namespace gaupel::tyck
+} // namespace parus::tyck

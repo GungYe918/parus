@@ -1,5 +1,5 @@
 // compiler/src/sir/verify/sir_escape_handle_verify.cpp
-#include <gaupel/sir/Verify.hpp>
+#include <parus/sir/Verify.hpp>
 
 #include <optional>
 #include <sstream>
@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     namespace {
 
@@ -212,4 +212,4 @@ namespace gaupel::sir {
         return errs;
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir

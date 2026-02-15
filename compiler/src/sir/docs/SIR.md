@@ -12,7 +12,7 @@ SIR(Structured Intermediate Representation)은 AST의 문법 정보를 최대한
 - OIR lowering 전에 SIR 자체 무결성 검증(verify)으로 변환 오류를 조기 차단한다.
 
 ## 2. 모듈 구조
-SIR 모듈(`gaupel::sir::Module`)은 다음 배열 기반 저장소를 가진다.
+SIR 모듈(`parus::sir::Module`)은 다음 배열 기반 저장소를 가진다.
 
 - `values`: 표현식 값 노드 (`Value`)
 - `stmts`: 문장 노드 (`Stmt`)

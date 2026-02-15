@@ -1,9 +1,9 @@
 // compiler/src/sir/mut_analysis.cpp
-#include <gaupel/sir/MutAnalysis.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/sir/MutAnalysis.hpp>
+#include <parus/diag/DiagCode.hpp>
 
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     namespace {
         /// @brief 타입이 `&mut T`인지 판정한다.
@@ -130,4 +130,4 @@ namespace gaupel::sir {
         return r;
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir

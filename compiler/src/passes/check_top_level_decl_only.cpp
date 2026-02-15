@@ -1,9 +1,9 @@
 // compiler/src/passes/check_top_level_decl_only.cpp
-#include <gaupel/passes/CheckTopLevelDeclOnly.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/passes/CheckTopLevelDeclOnly.hpp>
+#include <parus/diag/DiagCode.hpp>
 
 
-namespace gaupel::passes {
+namespace parus::passes {
 
     static void report(diag::Bag& bag, diag::Code code, Span span) {
         diag::Diagnostic d(diag::Severity::kError, code, span);

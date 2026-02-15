@@ -1,12 +1,12 @@
 // compiler/src/passes/check_place_expr.cpp
-#include <gaupel/passes/CheckPlaceExpr.hpp>
+#include <parus/passes/CheckPlaceExpr.hpp>
 
-#include <gaupel/ast/Nodes.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
-#include <gaupel/diag/DiagCode.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/ast/Nodes.hpp>
+#include <parus/diag/Diagnostic.hpp>
+#include <parus/diag/DiagCode.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
-namespace gaupel::passes {
+namespace parus::passes {
 
     static void report(diag::Bag& bag, diag::Code code, Span span) {
         diag::Diagnostic d(diag::Severity::kError, code, span);
@@ -146,4 +146,4 @@ namespace gaupel::passes {
         walk_expr(ast, root, bag);
     }
 
-} // namespace gaupel::passes
+} // namespace parus::passes

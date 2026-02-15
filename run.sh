@@ -13,11 +13,11 @@ fi
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
   -G "${GENERATOR}" \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-  -DGAUPEL_BUILD_TESTS=ON \
+  -DPARUS_BUILD_TESTS=ON \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 
 cmake --build "${BUILD_DIR}" -j16
 
 echo ""
 echo "Built successfully."
-echo "Run: ${BUILD_DIR}/tools/gaupelc/gaupelc"
+echo "Run: ${BUILD_DIR}/tools/parusc/parusc"

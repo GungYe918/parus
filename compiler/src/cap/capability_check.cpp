@@ -1,15 +1,15 @@
 // compiler/src/cap/capability_check.cpp
-#include <gaupel/cap/CapabilityCheck.hpp>
+#include <parus/cap/CapabilityCheck.hpp>
 
-#include <gaupel/diag/DiagCode.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/diag/DiagCode.hpp>
+#include <parus/diag/Diagnostic.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <optional>
 #include <unordered_map>
 #include <vector>
 
-namespace gaupel::cap {
+namespace parus::cap {
 
     namespace {
 
@@ -609,4 +609,4 @@ namespace gaupel::cap {
         return checker.run();
     }
 
-} // namespace gaupel::cap
+} // namespace parus::cap

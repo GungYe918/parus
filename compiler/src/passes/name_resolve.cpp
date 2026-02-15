@@ -1,7 +1,7 @@
 // compiler/src/passes/name_resolve.cpp
-#include <gaupel/passes/NameResolve.hpp>
-#include <gaupel/diag/DiagCode.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
+#include <parus/passes/NameResolve.hpp>
+#include <parus/diag/DiagCode.hpp>
+#include <parus/diag/Diagnostic.hpp>
 
 #include <cstdint>
 #include <string_view>
@@ -9,7 +9,7 @@
 #include <unordered_set>
 
 
-namespace gaupel::passes {
+namespace parus::passes {
 
     // -----------------------------------------------------------------------------
     // Diagnostics helpers
@@ -130,7 +130,7 @@ namespace gaupel::passes {
     static sema::SymbolTable::InsertResult declare_(
         sema::SymbolKind kind,
         std::string_view name,
-        gaupel::ty::TypeId ty,
+        parus::ty::TypeId ty,
         Span span,
         sema::SymbolTable& sym,
         diag::Bag& bag,
@@ -567,4 +567,4 @@ namespace gaupel::passes {
         walk_stmt(ast, r, root, sym, bag, opt, out_result, param_symbol_ids);
     }
 
-} // namespace gaupel::passes
+} // namespace parus::passes

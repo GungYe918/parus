@@ -1,10 +1,10 @@
 ---
 
-# Gaupel v0 Language Specification (Single Reference, Upgraded)
+# Parus v0 Language Specification (Single Reference, Upgraded)
 
-본 문서는 Gaupel v0를 구현하기 위한 단일 레퍼런스이다. 이 문서만으로 토크나이저, 프리패스, 파서, 타입체커 v0를 구현할 수 있도록 설계 철학, 정적 규칙, 문법, 예시 코드를 포함한다.
+본 문서는 Parus v0를 구현하기 위한 단일 레퍼런스이다. 이 문서만으로 토크나이저, 프리패스, 파서, 타입체커 v0를 구현할 수 있도록 설계 철학, 정적 규칙, 문법, 예시 코드를 포함한다.
 
-주의: 이 문서는 한국어로 작성되며, 한국어 외 문자는 ASCII 및 영문자만 사용한다. 단, Gaupel이 UTF-8 친화적이라는 점을 보여주는 예시에서는 임의의 이모지 등을 포함한다.
+주의: 이 문서는 한국어로 작성되며, 한국어 외 문자는 ASCII 및 영문자만 사용한다. 단, Parus이 UTF-8 친화적이라는 점을 보여주는 예시에서는 임의의 이모지 등을 포함한다.
 
 ---
 
@@ -20,7 +20,7 @@
 
 예시 (철학이 반영된 스타일, 작은 데이터는 값, 큰 상태는 class)
 
-```gaupel
+```parus
 @pure
 export fn demo_small_big() -> void {
   set x = 3;
@@ -40,7 +40,7 @@ export fn demo_small_big() -> void {
 
 예시
 
-```gaupel
+```parus
 class Counter {
   // draft.count 라는 큰 상태를 가진다고 가정
 
@@ -64,7 +64,7 @@ class Counter {
 
 예시 (개념 맛보기)
 
-```gaupel
+```parus
 export field Vec2 {
   float32 x;
   float32 y;
@@ -93,7 +93,7 @@ tablet Sprite : Drawable {
 
 예시
 
-```gaupel
+```parus
 export fn basic_blocks() -> void {
   set a = 1;
   if (a == 1) { set b = 2; }
@@ -107,7 +107,7 @@ export fn basic_blocks() -> void {
 
 예시
 
-```gaupel
+```parus
 fn comments() -> void {
   // line comment
   /* block comment */
@@ -117,7 +117,7 @@ fn comments() -> void {
 
 ### 1.3 식별자 (UTF-8 friendly)
 
-Gaupel은 UTF-8 친화적인 토크나이저/파서를 목표로 한다.
+Parus은 UTF-8 친화적인 토크나이저/파서를 목표로 한다.
 
 v0 권장 규칙:
 
@@ -128,7 +128,7 @@ v0 권장 규칙:
 
 예시 (UTF-8 식별자, 이모지 포함)
 
-```gaupel
+```parus
 fn utf8_identifiers() -> void {
   let 한글이름: int = 3;
   let `🍣`: int = 7;
@@ -156,7 +156,7 @@ fn utf8_identifiers() -> void {
 
 예시
 
-```gaupel
+```parus
 fn keywords_demo() -> void {
   set ok = true;
   if (ok and not false) { /* ... */ }
@@ -175,7 +175,7 @@ fn keywords_demo() -> void {
 
 예시
 
-```gaupel
+```parus
 fn int_literals() -> void {
   let a: u32 = 123u32;
   let b: u64 = 1_000_000u64;
@@ -191,7 +191,7 @@ fn int_literals() -> void {
 
 예시
 
-```gaupel
+```parus
 fn float_literals() -> void {
   let x: float32 = 3.14f;
   let y: float64 = 2.71828lf;
@@ -205,7 +205,7 @@ fn float_literals() -> void {
 
 예시
 
-```gaupel
+```parus
 fn bool_null() -> void {
   let t: bool = true;
   let f: bool = false;
@@ -220,7 +220,7 @@ fn bool_null() -> void {
 
 예시
 
-```gaupel
+```parus
 fn char_literals() -> void {
   let c1: char = 'a';
   let c2: char = '\n';
@@ -240,9 +240,9 @@ F-string 이스케이프:
 
 예시
 
-```gaupel
+```parus
 fn strings() -> void {
-  let name: string = "gaupel";
+  let name: string = "parus";
   let msg: string = F"""hello {name}""";
   let raw: string = R"""no {interpolation} here""";
 }
@@ -254,7 +254,7 @@ fn strings() -> void {
 
 ### 3.1 단위 용어: project / module / file
 
-Gaupel 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 소스 코드를 다음 3단위로 정의한다.
+Parus 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 소스 코드를 다음 3단위로 정의한다.
 
 * **file**: 하나의 소스 파일. 파싱 단위이다.
 * **module**: 하나의 폴더(또는 논리적 디렉터리) 안의 file 집합. **컴파일 단위**이다.
@@ -262,7 +262,7 @@ Gaupel 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 �
 
 핵심 규칙(전방선언 문제 제거):
 
-* Gaupel은 **module 단위로 “선언 수집 prepass”**를 수행한다.
+* Parus은 **module 단위로 “선언 수집 prepass”**를 수행한다.
 * 따라서 같은 module 내부에서는:
 
   * 함수/타입/acts 선언 순서가 의미를 갖지 않는다.
@@ -277,22 +277,22 @@ Gaupel 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 �
 
 1. **타입 별칭**
 
-```gaupel
+```parus
 use newT = u32;
 ```
 
 2. **함수/심볼 별칭(경로 별칭)**
 
-```gaupel
+```parus
 use Math::add = add_i32;
 use core::io::print = println;
 ```
 
 3. **파일 스코프 상수/치환(매크로 함수 금지)**
 
-```gaupel
+```parus
 use PI 3.14f;
-use GAME_NAME "Gaupel";
+use GAME_NAME "Parus";
 ```
 
 제약(v0 강제):
@@ -314,7 +314,7 @@ use GAME_NAME "Gaupel";
 
 문법:
 
-```gaupel
+```parus
 use module <engine/core> as core;
 use module <engine/math> as math;
 ```
@@ -333,7 +333,7 @@ use module <engine/math> as math;
 
 심볼 접근 예시:
 
-```gaupel
+```parus
 export fn sub init() -> void { ... }
 
 export fn pure add(a: int, b: int) -> int {
@@ -354,7 +354,7 @@ export fn sub demo() -> void {
 
 문법:
 
-```gaupel
+```parus
 export space engine {
   export space math {
     export fn pure add(a: int, b: int) -> int { return a + b; }
@@ -390,14 +390,14 @@ export space engine {
 
 추가 규칙 (컴파일 단위):
 
-* Gaupel에서 "모듈(module)"은 컴파일 단위이다.
-* Rust가 crate를 컴파일 단위로 보듯, Gaupel은 "하나의 모듈(그리고 그 모듈이 포함하는 소스 집합)"을 컴파일 단위로 취급한다.
+* Parus에서 "모듈(module)"은 컴파일 단위이다.
+* Rust가 crate를 컴파일 단위로 보듯, Parus은 "하나의 모듈(그리고 그 모듈이 포함하는 소스 집합)"을 컴파일 단위로 취급한다.
 * use module은 이 컴파일 단위를 불러오는 문법이며, 단순 include가 아니다.
 * 따라서 모듈 단위로 심볼 테이블, 의존성 그래프, 증분 빌드 캐시, ABI 경계 정책을 적용하기 쉽다.
 
 예시
 
-```gaupel
+```parus
 use module <engine/core> as core;
 use module "../engine/math" as math;
 
@@ -415,7 +415,7 @@ fn use_modules() -> void {
 
 예시
 
-```gaupel
+```parus
 use func::ffi<int (int, int)> c_add;
 use struct::ffi Vec2C { float32 x; float32 y; }
 
@@ -447,7 +447,7 @@ fn call_c(a: int, b: int) -> int {
 
 * “POD 데이터(field)” + “불투명 핸들(handle)”만 통과한다.
 
-### 3.3.2 Gaupel의 개념이 C에서 어떻게 대응되는가
+### 3.3.2 Parus의 개념이 C에서 어떻게 대응되는가
 
 * `field` -> `struct` (C 호환 레이아웃)
 * `handle<T>` -> `void*`(또는 `struct Handle_T*`) + 생성/해제 함수 세트
@@ -460,7 +460,7 @@ fn call_c(a: int, b: int) -> int {
 
 예:
 
-```gaupel
+```parus
 class Counter {
   fn inc() : pub { draft.count += 1u32; commit; }
 }
@@ -485,7 +485,7 @@ v0 권장 전략은 단순하다:
 * Swift: C 헤더 브리징 + `OpaquePointer`/`UnsafeMutableRawPointer`
 * Python: CPython extension 또는 ctypes/cffi로 C ABI 소비(핸들 기반)
 
-이렇게 하면 “Gaupel 의미론”을 타 언어로 억지로 이식하지 않고, ABI는 깔끔하게 유지된다.
+이렇게 하면 “Parus 의미론”을 타 언어로 억지로 이식하지 않고, ABI는 깔끔하게 유지된다.
 
 ## 3.4 `-ffreestanding` / `-fno-std` 경계 정의
 
@@ -534,7 +534,7 @@ v0 권장 전략은 단순하다:
 
 예시
 
-```gaupel
+```parus
 fn primitives() -> void{
   let a: int32 = 1i32;
   let b: uint64 = 2u64;
@@ -553,7 +553,7 @@ fn primitives() -> void{
 
 예시
 
-```gaupel
+```parus
 fn nullable_demo() -> void {
   let a: int? = null;
   let b: int? = 3i32;
@@ -571,7 +571,7 @@ fn nullable_demo() -> void {
 
 예시
 
-```gaupel
+```parus
 fn arrays_lists() -> void {
   let xs: int[3] = [1, 2, 3];
   // let ys: int[] = [1, 2, 3]; // 리스트 리터럴 문법은 v0에서 선택 구현
@@ -598,14 +598,14 @@ v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한�
 
 예시 (향후 제네릭의 목표 형태, v0에서는 파싱만 선행 가능)
 
-```gaupel
+```parus
 // v1+ 목표 예시
 // field Vec<T> { T x; T y; }
 ```
 
 ### 4.5 storage class 키워드: `static`
 
-Gaupel v0에서는 “값이 어디에 저장되고(저장소/수명), 소유권이 어떻게 제한되는지(유일성)”를 명시적으로 표현하기 위해 `static`을 제공한다.
+Parus v0에서는 “값이 어디에 저장되고(저장소/수명), 소유권이 어떻게 제한되는지(유일성)”를 명시적으로 표현하기 위해 `static`을 제공한다.
 
 * `static` : **정적 저장소(static storage)** 를 의미한다. 스코프를 벗어나도 저장이 유지되며(프로그램 수명), 해당 place의 주소/저장 위치는 컴파일 타임에 고정된다.
 
@@ -613,7 +613,7 @@ Gaupel v0에서는 “값이 어디에 저장되고(저장소/수명), 소유권
 
 `static`은 변수/전역/필드 선언에 붙는 **storage class**로 취급한다.
 
-```gaupel
+```parus
 static set G: i32 = 3i32;
 static mut set UART0: Uart? = null;
 ```
@@ -645,7 +645,7 @@ v0 권장(= freestanding 친화) 규칙:
 
 freestanding에서 “나중에 초기화”가 필요한 전역 자원은 다음 패턴을 권장한다.
 
-```gaupel
+```parus
 static mut set LOGGER: Logger? = null;
 
 fn init_logger() -> void {
@@ -682,7 +682,7 @@ fn init_logger() -> void {
 
 예시
 
-```gaupel
+```parus
 fn bindings() -> void{
   let a: int = 1i32;
   set b = a + 2;
@@ -698,7 +698,7 @@ fn bindings() -> void{
 
 예시
 
-```gaupel
+```parus
 fn shadowing() -> void {
   set x = 1;
   if (x == 1) {
@@ -713,8 +713,8 @@ fn shadowing() -> void {
 
 ## 6.1 함수 선언 기본형 (확장판, v0 기준)
 
-Gaupel의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해소가 100% 정적(컴파일 타임)**으로 끝나도록 설계한다.
-특히 Gaupel은 **“라벨 이름도 시그니처(오버로딩 키)에 포함”**되므로, named-parameter의 편의성을 넣어도 호출 해소를 흐리지 않도록 규칙을 강하게 고정한다.
+Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해소가 100% 정적(컴파일 타임)**으로 끝나도록 설계한다.
+특히 Parus은 **“라벨 이름도 시그니처(오버로딩 키)에 포함”**되므로, named-parameter의 편의성을 넣어도 호출 해소를 흐리지 않도록 규칙을 강하게 고정한다.
 
 ---
 
@@ -749,7 +749,7 @@ FuncParams := "(" PositionalParamsOpt NamedGroupOpt ")"
 
 ### 6.1.2 파라미터 모델: “위치 파라미터” + “named group 파라미터”
 
-Gaupel은 파라미터를 **두 구역**으로 나눈다.
+Parus은 파라미터를 **두 구역**으로 나눈다.
 
 1. **위치 파라미터(positional params)**
 2. **Dart식 named parameter group `{ ... }`**
@@ -789,7 +789,7 @@ NamedParam := Ident ":" Type DefaultOpt
 
 #### 1) 위치 파라미터만
 
-```gaupel
+```parus
 @pure
 export fn add(a: int, b: int) -> int {
   return a + b;
@@ -798,15 +798,15 @@ export fn add(a: int, b: int) -> int {
 
 #### 2) named group만 (전부 라벨 전달)
 
-```gaupel
-export fn make_window({w: int, h: int, title: string = "Gaupel"}) -> handle<Window> {
+```parus
+export fn make_window({w: int, h: int, title: string = "Parus"}) -> handle<Window> {
   // ...
 }
 ```
 
 #### 3) 위치 + named group (권장 “실전형”)
 
-```gaupel
+```parus
 export fn spawn_entity(
   world: handle<World>,
   kind: EntityKind,
@@ -858,7 +858,7 @@ v0 권장 정책(가장 단단함):
 
 ### 6.1.5 호출 문법과 라벨 규약 (positional / labeled / named-group)
 
-Gaupel 호출은 **세 가지 모드**만 허용한다.
+Parus 호출은 **세 가지 모드**만 허용한다.
 
 #### (A) 위치 호출 (positional call)
 
@@ -866,7 +866,7 @@ Gaupel 호출은 **세 가지 모드**만 허용한다.
 * 오직 위치 파라미터에만 매칭된다.
 * `{}` 그룹 파라미터는 이 방식으로 전달할 수 없다.
 
-```gaupel
+```parus
 set x = add(1, 2);
 ```
 
@@ -876,7 +876,7 @@ set x = add(1, 2);
 * **한 호출 안에서 전부 라벨이어야 한다** (기존 규칙 유지)
 * 라벨 이름이 시그니처에 포함되므로, **라벨 이름 불일치 = 매칭 실패**다.
 
-```gaupel
+```parus
 set y = add(a: 1, b: 2);
 ```
 
@@ -889,7 +889,7 @@ set y = add(a: 1, b: 2);
 * `{ ... }`는 선언에 named group이 있을 때만 사용 가능
 * `{ ... }`는 “명시적 구역”이므로, 이것은 *혼합 금지 규칙의 예외가 아니라*, **별도 모드**로 취급한다.
 
-```gaupel
+```parus
 set e = spawn_entity(
   world,
   EntityKind::Orc,
@@ -913,7 +913,7 @@ set e = spawn_entity(
 
 예:
 
-```gaupel
+```parus
 export fn f(a: int, {x: int = 0, y: int}) -> int { return a + x + y; }
 
 set ok  = f(1, {y: 2});        // ok: x는 default 0
@@ -979,7 +979,7 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 
 #### 1) 동일 이름 + 기본값이 있어도 “정확 매칭이 우선”
 
-```gaupel
+```parus
 fn g(a: int) -> int { return 1; }
 fn g(a: int, b: int = 0) -> int { return 2; }
 
@@ -989,7 +989,7 @@ set y = g(1, 2);   // g(a:int, b:int=0) -> 2
 
 #### 2) named group은 완전히 별도 구역이라 충돌이 줄어듦(권장)
 
-```gaupel
+```parus
 fn h(a: int) -> int { return 10; }
 fn h(a: int, {b: int = 0}) -> int { return 20; }
 
@@ -999,7 +999,7 @@ set q = h(1, {b: 2});   // named-group 버전 -> 20
 
 #### 3) 모호해지는 경우는 “ambiguous”로 강제 차단
 
-```gaupel
+```parus
 fn k(a: int, b: int = 0) -> int { return 1; }
 fn k(a: int, {b: int = 0}) -> int { return 2; }
 
@@ -1043,7 +1043,7 @@ v0 보수 규칙:
 
 예시
 
-```gaupel
+```parus
 @pure
 fn clamp(p: int, lo: int, hi: int) -> int {
   if (p < lo) { return lo; }
@@ -1086,7 +1086,7 @@ comptime 호출 위치 (v0 권장):
 
 예시
 
-```gaupel
+```parus
 @comptime
 fn pow2(n: int) -> int {
   // 단순 루프는 comptime 엔진이 지원한다고 가정
@@ -1116,7 +1116,7 @@ v0에서의 실용 규칙(권장):
 
 예시 (권장 형태, v0에 넣기 좋은 문법)
 
-```gaupel
+```parus
 // v0 권장 추가 문법(선택):
 // comptime set N = pow2(a: 5);
 ```
@@ -1128,7 +1128,7 @@ v0에서의 실용 규칙(권장):
 
 예시
 
-```gaupel
+```parus
 fn f(a: int, b: int) -> int { return a + b; }
 
 fn calls() -> void {
@@ -1142,7 +1142,7 @@ fn calls() -> void {
 
 ### 6.4.1 함수 “예외 허용” 표기: 이름 접미 `?`
 
-Gaupel은 함수 단위로 “예외(throw) 경로”를 **정적 분리**한다.
+Parus은 함수 단위로 “예외(throw) 경로”를 **정적 분리**한다.
 
 * **non-? 함수**: 함수 이름에 `?`가 없다.
 
@@ -1155,7 +1155,7 @@ Gaupel은 함수 단위로 “예외(throw) 경로”를 **정적 분리**한다
 
 문법 예시:
 
-```gaupel
+```parus
 fn parse_u32(text: string) -> Result<u32> { ... }     // non-?
 fn read_file?(path: string) -> bytes { ... }          // ?
 ```
@@ -1175,7 +1175,7 @@ non-? 함수 본문에서는 아래가 **컴파일 에러**다.
 
 예시:
 
-```gaupel
+```parus
 fn bad() -> void {
   throw Err("nope");          // error
 }
@@ -1191,7 +1191,7 @@ fn also_bad() -> void {
 
 ? 함수는 `throw`, `try...catch`를 사용할 수 있으며, **잡히지 않은 예외는 자동 전파**된다.
 
-```gaupel
+```parus
 fn open_config?(path: string) -> Config {
   set bytes = read_file?(path: path);   // 여기서 throw되면 자동 전파
   return parse_config?(bytes: bytes);   // 자동 전파
@@ -1210,13 +1210,13 @@ non-? 함수는 예외를 직접 다룰 수 없으므로, **예외를 값(`Resul
 
 형태:
 
-```gaupel
+```parus
 set r: Result<T> = attempt some_throwing_call?(...);
 ```
 
 예시:
 
-```gaupel
+```parus
 fn load_config(path: string) -> Result<Config> {
   set bytes_r = attempt read_file?(path: path);   // Result<bytes>
   switch (bytes_r) {
@@ -1257,7 +1257,7 @@ fn load_config(path: string) -> Result<Config> {
 
 ### 예시
 
-```gaupel
+```parus
 fn sign(x: int) -> int {
   if (x < 0) { return -1; }
   elif (x == 0) { return 0; }
@@ -1271,7 +1271,7 @@ fn sign(x: int) -> int {
 
 ### 문법
 
-```gaupel
+```parus
 switch (expr) {
   case LIT: { ... }
   case LIT: { ... }
@@ -1287,7 +1287,7 @@ switch (expr) {
 * `default`는 선택 사항이나 강력히 권장
 * 타입 패턴 매칭 허용
 
-  ```gaupel
+  ```parus
   case Err(name): { ... }
   ```
 
@@ -1295,7 +1295,7 @@ switch (expr) {
 
 ### 예시
 
-```gaupel
+```parus
 fn demo(r: Result<u32>) -> u32 {
   switch (r) {
     case Ok(v): { return v; }
@@ -1313,7 +1313,7 @@ fn demo(r: Result<u32>) -> u32 {
 
 ### 문법
 
-```gaupel
+```parus
 while (cond) { ... }
 ```
 
@@ -1333,7 +1333,7 @@ while (cond) { ... }
 
 ### 예시
 
-```gaupel
+```parus
 fn sum_to(n: int) -> int {
   mut set i = 0;
   mut set s = 0;
@@ -1352,11 +1352,11 @@ fn sum_to(n: int) -> int {
 #### 7.3.1.1 배경
 
 기존 `{ ... }` 단독 블록은 긴 함수에서 “단순 스코프 시작”과 “제어문 본문/표현식 블록”의 시각적 구분이 약하다.
-Gaupel은 이미 `loop { ... }`처럼 키워드 기반 블록 문법을 사용하므로, 일반 스코프도 같은 계열로 맞춘다.
+Parus은 이미 `loop { ... }`처럼 키워드 기반 블록 문법을 사용하므로, 일반 스코프도 같은 계열로 맞춘다.
 
 #### 7.3.1.2 문법
 
-```gaupel
+```parus
 do { ... }                      // 일반 스코프(명시적)
 do { ... } while (cond);        // do-while (최소 1회 실행)
 ```
@@ -1416,7 +1416,7 @@ v0에서 `loop(cond)` 문법은 삭제되며,
 * `loop { ... }` 및 `loop (x in xs) { ... }`는 **표현식**이다.
 * 따라서 변수 대입, 반환, 인자 위치에서 사용 가능하다.
 
-```gaupel
+```parus
 set x = loop {
   break 42;
 };
@@ -1461,14 +1461,14 @@ set x = loop {
 
 #### 예시 (정상)
 
-```gaupel
+```parus
 set found = loop (v in xs) {
   if (v == 42) { break v; }
 };
 // found : int?
 ```
 
-```gaupel
+```parus
 let found: int? = loop (v in xs) {
   if (v == 42) { break v; }
 };
@@ -1476,7 +1476,7 @@ let found: int? = loop (v in xs) {
 
 #### 예시 (에러)
 
-```gaupel
+```parus
 let found: int = loop (v in xs) {
   if (v == 42) { break v; }
 };
@@ -1488,7 +1488,7 @@ let found: int = loop (v in xs) {
 
 ### 7.6.3 타입 캐스팅 (as, as?, as!)
 
-Gaupel은 Rust와 유사하게 암시적 타입 변환을 허용하지 않으며, 타입이 다른 값들 사이의 연산(i32 + i64 등)은 컴파일 에러이다.
+Parus은 Rust와 유사하게 암시적 타입 변환을 허용하지 않으며, 타입이 다른 값들 사이의 연산(i32 + i64 등)은 컴파일 에러이다.
 명시적 변환이 필요한 경우 `as` 계열 캐스팅 연산자를 사용한다.
 
 `as` 계열 캐스팅은 다음 세 가지 의미를 가진다.
@@ -1510,7 +1510,7 @@ Gaupel은 Rust와 유사하게 암시적 타입 변환을 허용하지 않으며
 
 예:
 
-```gaupel
+```parus
 let a: i32 = 1;
 let b: i64 = a as i64;
 ```
@@ -1531,7 +1531,7 @@ let b: i64 = a as i64;
 
 예:
 
-```gaupel
+```parus
 let x: i32? = null;
 let y: i64? = x as? i64;   // null 유지
 
@@ -1548,7 +1548,7 @@ let b: i64? = a as? i64;   // 성공 -> i64?
 
 예:
 
-```gaupel
+```parus
 let x: i32? = null;
 let z: i64 = x as! i64;   // 런타임 trap
 ```
@@ -1570,7 +1570,7 @@ Optional 중첩은 허용되지 않으며, 항상 단일 optional로 정규화�
 
 `as`는 optional 값을 자동으로 해소하지 않는다.
 
-```gaupel
+```parus
 let x: i32? = null;
 
 let a: i32  = x as i32;   // 에러: optional 자동 해소 없음
@@ -1584,7 +1584,7 @@ Optional 값에 대해 변환을 수행할 때는 **optional chaining 기반 캐
 
 예:
 
-```gaupel
+```parus
 let x: i32? = 10;
 let y: i64? = x?.(as i64);
 ```
@@ -1618,7 +1618,7 @@ v0 단계에서는 `as` 계열 캐스팅을 기본 스칼라 타입 변환에 �
 
 #### 7.6.3.5 예시
 
-```gaupel
+```parus
 let a: i32 = 1;
 let b: i64 = a as i64;
 
@@ -1645,7 +1645,7 @@ let b: i32? = a as? i32;     // safe cast -> optional
 
 예시:
 
-```gaupel
+```parus
 fn retry() -> int? {
   set attempts = 0;
   loop {
@@ -1675,7 +1675,7 @@ fn retry() -> int? {
 
 예시:
 
-```gaupel
+```parus
 fn sum_arr(xs: int[4]) -> int {
   mut set s = 0;
   loop (v in xs) {
@@ -1685,7 +1685,7 @@ fn sum_arr(xs: int[4]) -> int {
 }
 ```
 
-```gaupel
+```parus
 fn find_positive(xs: int[]) -> int? {
   loop (v in xs) {
     if (v > 0) { break v; }
@@ -1700,7 +1700,7 @@ fn find_positive(xs: int[]) -> int? {
 * `a..b`  : `b` 미만
 * `a..:b` : `b` 이하
 
-```gaupel
+```parus
 fn sum_range(n: int) -> int {
   mut set s = 0;
   loop (i in 0..:n) {
@@ -1760,7 +1760,7 @@ fn sum_range(n: int) -> int {
 
 예시
 
-```gaupel
+```parus
 fn exprs() -> void {
   set a = 1 + 2 * 3;
   set ok = (a >= 7) and (a != 0);
@@ -1785,7 +1785,7 @@ fn exprs() -> void {
 
 예시
 
-```gaupel
+```parus
 fn add(a: int, b: int) -> int { return a + b; }
 
 fn mul(x: int, y: int) -> int { return x * y; }
@@ -1801,7 +1801,7 @@ fn pipe_demo() -> void {
 
 ### 8.3.1 목적: 작은 데이터는 값, 공유/탈출은 명시적으로
 
-Gaupel은 기본적으로 **값(move) 기반**이다. v0에서는 Rust급의 복잡한 수명 추론을 강제하지 않되, C/C++의 “참조/포인터가 슬쩍 탈출하여 수명 버그를 만드는 문제”를 구조적으로 차단한다.
+Parus은 기본적으로 **값(move) 기반**이다. v0에서는 Rust급의 복잡한 수명 추론을 강제하지 않되, C/C++의 “참조/포인터가 슬쩍 탈출하여 수명 버그를 만드는 문제”를 구조적으로 차단한다.
 
 이를 위해 두 연산자를 제공한다.
 
@@ -1810,7 +1810,7 @@ Gaupel은 기본적으로 **값(move) 기반**이다. v0에서는 Rust급의 복
 
 이 연산자들은 런타임 오버헤드를 만들기 위한 것이 아니라, **컴파일 타임 정적 규칙 + 표현(ABI) 고정**을 통해 안전성과 최적화를 동시에 얻기 위한 장치다.
 
-또한 Gaupel에서 `&&`는 논리 AND가 아니며, 논리 연산은 `and/or/not/xor` 키워드만 사용한다.
+또한 Parus에서 `&&`는 논리 AND가 아니며, 논리 연산은 `and/or/not/xor` 키워드만 사용한다.
 
 ---
 
@@ -1917,7 +1917,7 @@ borrow는 비탈출이므로, 아래는 금지된다.
 
 #### 예시 1: 읽기 전용 borrow
 
-```gaupel
+```parus
 fn sum2(a: &i32, b: &i32) -> i32 {
   return a + b;
 }
@@ -1931,7 +1931,7 @@ fn demo_read_borrow() -> void {
 
 #### 예시 2: `&mut`로 수정 권한 위임
 
-```gaupel
+```parus
 fn inc(x: &mut i32) -> void {
   x = x + 1;
 }
@@ -1944,7 +1944,7 @@ fn demo_write_borrow() -> void {
 
 #### 예시 3: borrow 비탈출 규칙(금지 사례)
 
-```gaupel
+```parus
 fn bad_return_ref() -> &i32 {
   set x: i32 = 3;
   return &x;   // error: borrow 값은 함수 밖으로 탈출할 수 없다
@@ -1957,7 +1957,7 @@ fn bad_store_global() -> void {
 
 #### 예시 4: `&&`로 소유권 탈출(escape)
 
-```gaupel
+```parus
 tablet File {
   public:
     fn close() -> void { /* ... */ }
@@ -1974,7 +1974,7 @@ fn open_file() -> Handle<File> {
 
 #### 예시 5: `&mut` 배타 규칙(충돌)
 
-```gaupel
+```parus
 fn demo_exclusive() -> void {
   mut set x: i32 = 1;
 
@@ -1988,7 +1988,7 @@ fn demo_exclusive() -> void {
 
 #### 예시 6: 논리 연산은 키워드만 사용
 
-```gaupel
+```parus
 fn demo_logic() -> void {
   set a = true;
   set b = false;
@@ -2152,7 +2152,7 @@ KIND 태그 정의(v0):
 
 패턴:
 
-```gaupel
+```parus
 fn make() -> Handle<T> {
   set x = T();
   return &&x;
@@ -2179,7 +2179,7 @@ lowering 핵심:
 
 패턴:
 
-```gaupel
+```parus
 fn g(h: Handle<T>) -> void { /* ... */ }
 
 fn f() -> void {
@@ -2206,7 +2206,7 @@ lowering:
 
 패턴:
 
-```gaupel
+```parus
 fn f() -> void {
   set x = T();
   set h = &&x;
@@ -2235,7 +2235,7 @@ ctrl 기반 증명:
 
 패턴:
 
-```gaupel
+```parus
 fn drop_it(h: Handle<T>) -> void {
   // 스코프 종료 시 드랍
 }
@@ -2264,7 +2264,7 @@ ctrl 연계:
 
 패턴:
 
-```gaupel
+```parus
 fn pass() -> Handle<T> {
   set x = T();
   set h = &&x;     // 여기서는 STACK_SLOT
@@ -2334,7 +2334,7 @@ v0에서 `&&x`의 대상 `x`는 place expression이어야 하며, 그 place는 �
 
 `static`으로 선언된 place는 프로그램 수명 동안 유효하므로, 다음 패턴은 v0에서 장수명 `&&`의 표준적인 형태다.
 
-```gaupel
+```parus
 static mut set G: i32 = 7i32;
 
 fn get_g() -> Handle<i32> {
@@ -2367,7 +2367,7 @@ fn get_g() -> Handle<i32> {
 
 예시(권장 A 형태):
 
-```gaupel
+```parus
 unique static mut set LOG: Logger? = null;
 
 fn take_log() -> Handle<Logger> {
@@ -2394,7 +2394,7 @@ borrow(`&T`, `&mut T`, slice borrow 등)는 8.3.2 규칙에 의해 저장/캡처
 
 금지 사례(의도 설명):
 
-```gaupel
+```parus
 fn bad_escape_store() -> void {
   set x = T();
 
@@ -2424,7 +2424,7 @@ v0(no-std)에서 “장수명”을 만드는 기본 패턴은 아래 둘로 정
 
 ### 8.4 slice borrow: `&[T]`, `&mut [T]` 와 슬라이싱 문법
 
-Gaupel은 Rust 스타일의 slice/view 표현력을 원하지만, 표준 라이브러리 특수 타입(view<T>)에 언어 규칙을 붙이면 “코어/표준 경계”가 흐려질 수 있다.
+Parus은 Rust 스타일의 slice/view 표현력을 원하지만, 표준 라이브러리 특수 타입(view<T>)에 언어 규칙을 붙이면 “코어/표준 경계”가 흐려질 수 있다.
 따라서 v0에서는 slice를 **언어 코어의 borrow 타입 확장**으로 직접 제공한다.
 
 #### (1) slice 타입 정의
@@ -2478,7 +2478,7 @@ slice borrow는 일반 borrow와 동일한 성질을 가진다.
 
 #### (5) 예시: 요청한 형태 그대로
 
-```gaupel
+```parus
 fn slice_demo() -> void {
   let x: int[8] = [0,1,2,3,4,5,6,7];
 
@@ -2497,7 +2497,7 @@ fn slice_demo() -> void {
 
 #### (6) 함수 파라미터에서의 사용 예시
 
-```gaupel
+```parus
 fn sum(xs: &[int]) -> int {
   mut set s = 0;
   // v0에서는 slice 반복을 단순화하기 위해 표준 라이브러리 helper가 필요할 수 있음
@@ -2522,7 +2522,7 @@ fn use_sum() -> void {
 
 ### 8.5 `copy` / `clone` 연산자(키워드) 정의
 
-Gaupel은 “암묵 복사 금지(또는 최소화)”를 목표로 하므로, 복사/복제는 **연산자(키워드)로 명시**한다.
+Parus은 “암묵 복사 금지(또는 최소화)”를 목표로 하므로, 복사/복제는 **연산자(키워드)로 명시**한다.
 `copy()` / `clone()` 같은 함수 형태는 제공하지 않는다(유저 라이브러리 함수처럼 보여 언어 철학과 충돌).
 
 #### (1) 문법(권장): prefix 연산자
@@ -2573,11 +2573,11 @@ v0에서는 단순화를 위해 아래 중 하나를 선택한다(둘 다 가능
 
   * `copy (a+b)` ok (임시값 복사)
 
-Gaupel의 “명시적 비용” 철학상 정책 A가 더 보수적이고 구현도 쉽다.
+Parus의 “명시적 비용” 철학상 정책 A가 더 보수적이고 구현도 쉽다.
 
 #### (5) 예시(반환/대입/초기화)
 
-```gaupel
+```parus
 fn demo_copy_return(a: int) -> int {
   // int는 내장 copy 가능
   return copy a;
@@ -2607,7 +2607,7 @@ fn demo_clone_assign() -> void {
 
 #### (7) acts 예시: 사용자 정의 타입의 copy/clone
 
-```gaupel
+```parus
 field Big {
   u32 a;
   u32 b;
@@ -2681,7 +2681,7 @@ v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 �
 
 #### (3) 예시: copy/clone/drop까지 포함한 acts
 
-```gaupel
+```parus
 acts string {
   fn do_clone(self: string) : op(clone) -> string { return __intrin_string_clone(s: self); }
 
@@ -2693,7 +2693,7 @@ acts string {
 
 ### 8.8.1 예외 값의 타입: 표준 `Error`만 허용(v0 고정)
 
-Gaupel의 `throw`는 “아무거나 던지기”를 금지한다. v0에서는 다음으로 고정한다.
+Parus의 `throw`는 “아무거나 던지기”를 금지한다. v0에서는 다음으로 고정한다.
 
 * `throw`에 실리는 값은 반드시 표준 라이브러리의 `Error` 타입이어야 한다.
 
@@ -2702,7 +2702,7 @@ Gaupel의 `throw`는 “아무거나 던지기”를 금지한다. v0에서는 �
 
 예시(표준 라이브러리 관례 예시):
 
-```gaupel
+```parus
 // std::error::Error 가 있다고 가정
 use std::error::Error;
 
@@ -2719,7 +2719,7 @@ fn fail?( ) -> void {
 * **? 함수 내부에서만 허용**된다.
 * Expr의 타입은 `Error`여야 한다(또는 `Error`로의 명시적 변환이 있어야 한다).
 
-```gaupel
+```parus
 fn read_file?(path: string) -> bytes {
   if (path == "") {
     throw Error::from_code(code: 12);   // ok
@@ -2734,7 +2734,7 @@ fn read_file?(path: string) -> bytes {
 
 문법(권장 최소형):
 
-```gaupel
+```parus
 try {
   // throwing code
 } catch (e: Error) {
@@ -2749,7 +2749,7 @@ try {
 
 예시:
 
-```gaupel
+```parus
 fn load_user?(id: u32) -> User {
   try {
     return fetch_user?(id: id);
@@ -2799,7 +2799,7 @@ class는 “큰 공유 상태”를 제공한다. v0의 핵심 구현 모델은 
 
 예시
 
-```gaupel
+```parus
 class Game {
   // draft.score 같은 상태가 존재한다고 가정
 
@@ -2830,7 +2830,7 @@ recast (추가 설명):
 
 예시:
 
-```gaupel
+```parus
 class Counter {
   fn sub get() -> u32 {
     // 오래된 스냅샷이면 갱신하고 싶을 때
@@ -2868,7 +2868,7 @@ v0 권장:
 
 예시
 
-```gaupel
+```parus
 class Counter {
   fn pub add(delta: int) -> void {
     if (delta < 0) {
@@ -2886,7 +2886,7 @@ pub의 핵심은 “draft 변경 + 최종 commit”이다. `&&`는 “소유권 
 
 예:
 
-```gaupel
+```parus
 fn add_sprite() : pub {
   set s = Sprite();
   draft.sprite = &&s;   // handle로 승격해 draft에 저장
@@ -2928,7 +2928,7 @@ commit 경계에서의 규칙(강제):
 
 예시(금지):
 
-```gaupel
+```parus
 class Bad {
   fn pub f() -> void {
     set r = &mut draft.count;
@@ -2955,7 +2955,7 @@ pub는 한 번의 호출 안에서 여러 번 commit할 수 있다. 의미는 �
   * 이후의 `draft.*` 접근/수정은 “방금 발행된 최신 스냅샷”을 베이스로 하는 새로운 draft로 간주한다.
 * 즉, pub 내부는 다음처럼 여러 “발행 단계”를 가질 수 있다:
 
-```gaupel
+```parus
 class Progress {
   fn pub run() -> void {
     draft.step = 1u32;
@@ -2991,7 +2991,7 @@ pub는 “상태 발행을 반드시 명시”해야 하므로, 반환 정책을
 
 예시:
 
-```gaupel
+```parus
 class Counter {
   fn pub add(delta: u32) -> u32 {
     draft.count += delta;
@@ -3002,7 +3002,7 @@ class Counter {
 
 #### (2) void pub는 `commit;`으로 종료
 
-```gaupel
+```parus
 class Counter {
   fn pub inc() -> void {
     draft.count += 1u32;
@@ -3026,7 +3026,7 @@ draft는 “데이터 레코드 + 핸들”로 유지한다(기존 철학 강화
 
 예시(권장 패턴):
 
-```gaupel
+```parus
 class Scene {
   // draft.sprites: handle<SpriteList> 라고 가정
 
@@ -3157,7 +3157,7 @@ tablet은 “일반 구현 타입”이므로 멤버 포함을 폭넓게 허용�
 
 예시
 
-```gaupel
+```parus
 field Vec2 {
   float32 x;
   float32 y;
@@ -3172,7 +3172,7 @@ field Particle {
 
 예시 (타입 제한 field, 추가)
 
-```gaupel
+```parus
 field<u32, i32> OnlyInts {
   u32 a;
   i32 b;
@@ -3199,7 +3199,7 @@ field<u32, i32> OnlyInts {
 
 예시
 
-```gaupel
+```parus
 proto Drawable {
   fn draw() -> void;
 }
@@ -3217,7 +3217,7 @@ proto Drawable {
 
 예시
 
-```gaupel
+```parus
 proto Drawable {
   fn draw() -> void;
 }
@@ -3250,7 +3250,7 @@ tablet Sprite : Drawable {
 
 예시
 
-```gaupel
+```parus
 tablet A {
   let x: int;        // private
 
@@ -3266,7 +3266,7 @@ tablet A {
 
 ### 10.3.2 메서드의 `self` 규칙 (v0 단순/강제)
 
-Gaupel은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 **명시적으로 단순화**한다.
+Parus은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 **명시적으로 단순화**한다.
 
 * `tablet` 내부의 `fn name(...) -> R { ... }` 는 **항상 인스턴스 메서드**다.
 * 메서드에는 암묵 수신자 `self`가 존재한다.
@@ -3280,7 +3280,7 @@ Gaupel은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를
 
 예시
 
-```gaupel
+```parus
 tablet Counter {
   public:
     mut let n: int;
@@ -3305,7 +3305,7 @@ tablet Counter {
 
 ### 10.3.3 생성자/소멸자: `construct`, `destruct` (오버로딩 금지 철학과 정합)
 
-Gaupel은 “이름 오버로딩 금지” 철학이 있으므로, 생성자도 **단 하나만** 허용하는 게 깔끔하다.
+Parus은 “이름 오버로딩 금지” 철학이 있으므로, 생성자도 **단 하나만** 허용하는 게 깔끔하다.
 
 * 생성자(선택):
 
@@ -3323,7 +3323,7 @@ Gaupel은 “이름 오버로딩 금지” 철학이 있으므로, 생성자도 
 
 예시
 
-```gaupel
+```parus
 tablet File {
   public:
     let fd: int;
@@ -3388,7 +3388,7 @@ v0에서 proto는 “값으로 들고 다니는 타입”이 아니라 **참조/
 
 예시
 
-```gaupel
+```parus
 proto Stream {
   fn read(buf: &mut [u8]) -> u32;
   fn mut seek(pos: u64) -> void;   // self: &mut Stream
@@ -3415,7 +3415,7 @@ proto Stream {
 
 ### 11.2 acts의 세 형태: `acts A {}` vs `acts for T {}` vs `acts Foo for T {}`
 
-Gaupel v0에는 acts 블록이 **세 가지 형태**로 존재한다.
+Parus v0에는 acts 블록이 **세 가지 형태**로 존재한다.
 
 #### (1) 일반 acts(네임스페이스): `acts A { ... }`
 
@@ -3424,7 +3424,7 @@ Gaupel v0에는 acts 블록이 **세 가지 형태**로 존재한다.
 
 호출 예시:
 
-```gaupel
+```parus
 acts Math {
   fn add(a: i32, b: i32) -> i32 { return a + b; }
 }
@@ -3462,7 +3462,7 @@ fn demo() -> void {
 
 호출(메서드/UFCS) 예시:
 
-```gaupel
+```parus
 acts for Packet {
   fn checksum(self p: &Packet, seed: u32) -> u32 { return p.crc + seed; }
 }
@@ -3481,7 +3481,7 @@ fn demo(p: Packet) -> void {
 * 이 acts는 **이름이 Foo인 “선택 가능한 acts 세트”** 이다.
 * 사용하려면 **반드시** 아래처럼 명시해야 한다:
 
-```gaupel
+```parus
 use acts Foo for T;
 ```
 
@@ -3504,7 +3504,7 @@ v0에서 export는 다음으로 고정한다.
 
 예시:
 
-```gaupel
+```parus
 export acts for Packet {
   fn checksum(self a: &Packet, foo: i32) -> u32 { ... }
   fn verify(self a: &Packet) -> bool { ... }
@@ -3513,7 +3513,7 @@ export acts for Packet {
 
 금지 예시(존재하지 않는 문법):
 
-```gaupel
+```parus
 acts for Packet {
   export fn checksum(...) -> u32 { ... } // 금지: acts 내부 개별 export 없음
 }
@@ -3525,7 +3525,7 @@ acts for Packet {
 
 #### (1) `self`는 “파라미터 이름”이 아니라 **리시버 마커(modifier)** 다
 
-```gaupel
+```parus
 fn checksum(self a: &T, seed: u32) -> u32 { ... }
 ```
 
@@ -3545,7 +3545,7 @@ fn checksum(self a: &T, seed: u32) -> u32 { ... }
 
 아래는 동일 의미:
 
-```gaupel
+```parus
 x.f(1, 2);
 T::f(x, 1, 2);
 ```
@@ -3554,7 +3554,7 @@ T::f(x, 1, 2);
 
 #### (3) “self가 없는 함수”는 메서드가 아니며, 호출은 자유(정적 dot sugar 허용)
 
-```gaupel
+```parus
 acts for T {
   fn make(a: i32, b: i32) -> T { ... } // self 없음
 }
@@ -3573,7 +3573,7 @@ set t2 = someT.make(1,2); // 허용: T::make(1,2)로 lowering (리시버 전달 
 
 예:
 
-```gaupel
+```parus
 acts for T {
   fn checksum(self x: &T, seed: u32) -> u32 { ... }
 }
@@ -3581,7 +3581,7 @@ acts for T {
 
 반대로, T를 받지 않으면 `self`를 쓰지 않는다:
 
-```gaupel
+```parus
 acts for T {
   fn make_seed(x: i32, y: i32) -> u64 { ... } // T 인자 없음
 }
@@ -3596,7 +3596,7 @@ v0에서 연산자 정의 방식은 **오직 하나**만 존재한다.
 * 기존의 `: op("TOKEN")` 매핑 방식은 **언어에서 삭제**된다.
 * 연산자는 항상 다음 형태로 선언한다:
 
-```gaupel
+```parus
 operator(+)(self a: T, rhs: T) -> T { ... }
 operator(==)(self a: &T, rhs: &T) -> bool { ... }
 operator(++pre)(self x: &mut T) -> T { ... }
@@ -3664,7 +3664,7 @@ operator(++post)(self x: &mut T) -> T { ... }
 
 #### (1) field + 기본 acts for(자동 부착/자동 활성)
 
-```gaupel
+```parus
 export field Foo {
   u32 v;
 }
@@ -3680,7 +3680,7 @@ export acts for Foo {
 
 사용:
 
-```gaupel
+```parus
 fn demo(mut a: Foo, b: Foo) -> Foo {
   a.inc();          // dot -> Foo::inc(a)
   set c = a + b;    // 자동: acts for Foo의 operator(+)
@@ -3692,7 +3692,7 @@ fn demo(mut a: Foo, b: Foo) -> Foo {
 
 #### (2) 선택 acts Foo for T + use로 세트 선택 + fallback
 
-```gaupel
+```parus
 export acts FooMath for Foo {
   // +만 “다른 의미”로 재정의
   operator(+)(self a: Foo, rhs: Foo) -> Foo {
@@ -3708,7 +3708,7 @@ export acts FooMath for Foo {
 
 사용(기본 세트 vs 선택 세트):
 
-```gaupel
+```parus
 fn demo2(a: Foo, b: Foo) -> void {
   // 기본 세트(acts for Foo)로 동작
   set x = a + b;
@@ -3726,7 +3726,7 @@ fn demo2(a: Foo, b: Foo) -> void {
 
 **주의(v0 규칙)**: 같은 스코프에 아래 둘을 동시에 두면 에러
 
-```gaupel
+```parus
 use acts FooMath for Foo;
 use acts GooMath for Foo; // 에러: acts 세트 혼합 금지
 ```
@@ -3735,7 +3735,7 @@ use acts GooMath for Foo; // 에러: acts 세트 혼합 금지
 
 #### (3) primitive 기본 연산은 코어 라이브러리의 `acts for u32`가 담당
 
-```gaupel
+```parus
 export acts for u32 {
   operator(+)(self a: u32, rhs: u32) -> u32 { return __intrin_u32_add(a, rhs); }
   operator(==)(self a: u32, rhs: u32) -> bool { return __intrin_u32_eq(a, rhs); }
@@ -3756,7 +3756,7 @@ export acts for u32 {
 
 예시
 
-```gaupel
+```parus
 fn lambdas() -> void {
   set f = [](x: int) { return x + 1; };
   set y = f(3);
@@ -3773,7 +3773,7 @@ fn lambdas() -> void {
 
 예시
 
-```gaupel
+```parus
 // v0: 전역에 closure 금지
 // set g = [](x: int) { return x; }; // error
 ```
@@ -3784,7 +3784,7 @@ fn lambdas() -> void {
 
 ### 13.1 오버로딩 규약(라벨 포함)
 
-Gaupel은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시그니처에 포함**된다.
+Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시그니처에 포함**된다.
 
 시그니처 유일성 키(v0):
 
@@ -3891,7 +3891,7 @@ Gaupel은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 �
 
 ## 15. 종합 예시 (여러 기능 한 번에)
 
-```gaupel
+```parus
 field Vec2 {
   float32 x;
   float32 y;

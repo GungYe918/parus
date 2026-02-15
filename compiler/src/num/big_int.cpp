@@ -1,8 +1,8 @@
 // compiler/src/num/big_int.cpp
-#include <gaupel/num/BigInt.hpp>
+#include <parus/num/BigInt.hpp>
 
 
-namespace gaupel::num {
+namespace parus::num {
 
     static constexpr uint32_t kBase = 1000000000u; // 1e9
 
@@ -174,4 +174,4 @@ namespace gaupel::num {
     bool BigInt::fits_u64() const  { return !is_neg() && compare_abs(const_u64_max_()) <= 0; }
     bool BigInt::fits_u128() const { return !is_neg() && compare_abs(const_u128_max_()) <= 0; }
 
-} // namespace gaupel::num
+} // namespace parus::num

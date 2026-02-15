@@ -1,9 +1,9 @@
 // compiler/src/sir/analysis/capability_analysis.cpp
-#include <gaupel/sir/CapabilityAnalysis.hpp>
+#include <parus/sir/CapabilityAnalysis.hpp>
 
-#include <gaupel/diag/DiagCode.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/diag/DiagCode.hpp>
+#include <parus/diag/Diagnostic.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <charconv>
 #include <optional>
@@ -14,11 +14,11 @@
 #include <utility>
 #include <vector>
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     namespace {
 
-        using SymbolId = gaupel::sir::SymbolId;
+        using SymbolId = parus::sir::SymbolId;
 
         enum class ValueUse : uint8_t {
             kValue,
@@ -1074,4 +1074,4 @@ namespace gaupel::sir {
         return a.run();
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir

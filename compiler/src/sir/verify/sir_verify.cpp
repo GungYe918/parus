@@ -1,5 +1,5 @@
 // compiler/src/sir/sir_verify.cpp
-#include <gaupel/sir/Verify.hpp>
+#include <parus/sir/Verify.hpp>
 
 #include <optional>
 #include <sstream>
@@ -7,7 +7,7 @@
 #include <vector>
 
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     static bool valid_value_id_(const Module& m, ValueId id) {
         return id != k_invalid_value && (size_t)id < m.values.size();
@@ -311,4 +311,4 @@ namespace gaupel::sir {
         return errs;
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir

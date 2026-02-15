@@ -1,12 +1,12 @@
 // compiler/src/diag/render.cpp
-#include <gaupel/diag/Render.hpp>
+#include <parus/diag/Render.hpp>
 
 #include <array>
 #include <algorithm>
 #include <sstream>
 
 
-namespace gaupel::diag {
+namespace parus::diag {
 
     static constexpr uint32_t digits10(uint32_t v) {
         uint32_t d = 1;
@@ -659,4 +659,4 @@ namespace gaupel::diag {
         return out.str();
     }
 
-} // namespace gaupel::diag
+} // namespace parus::diag

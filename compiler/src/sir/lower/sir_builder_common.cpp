@@ -1,12 +1,12 @@
 // compiler/src/sir/sir_builder_common.cpp
 #include "sir_builder_internal.hpp"
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 
-namespace gaupel::sir::detail {
+namespace parus::sir::detail {
 
-    TypeId type_of_ast_expr(const tyck::TyckResult& tyck, gaupel::ast::ExprId eid) {
-        if (eid == gaupel::ast::k_invalid_expr) return k_invalid_type;
+    TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid) {
+        if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
         if ((size_t)eid >= tyck.expr_types.size()) return k_invalid_type;
         return tyck.expr_types[eid];
     }
@@ -16,9 +16,9 @@ namespace gaupel::sir::detail {
     // -----------------------------
     SymbolId resolve_symbol_from_expr(
         const passes::NameResolveResult& nres,
-        gaupel::ast::ExprId eid
+        parus::ast::ExprId eid
     ) {
-        if (eid == gaupel::ast::k_invalid_expr) return k_invalid_symbol;
+        if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
         if ((size_t)eid >= nres.expr_to_resolved.size()) return k_invalid_symbol;
 
         const auto rid = nres.expr_to_resolved[(uint32_t)eid];
@@ -29,17 +29,17 @@ namespace gaupel::sir::detail {
     }
 
     SymbolId resolve_root_place_symbol_from_expr(
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
-        gaupel::ast::ExprId eid
+        parus::ast::ExprId eid
     ) {
-        if (eid == gaupel::ast::k_invalid_expr) return k_invalid_symbol;
+        if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
         const auto& e = ast.expr(eid);
 
-        if (e.kind == gaupel::ast::ExprKind::kIdent) {
+        if (e.kind == parus::ast::ExprKind::kIdent) {
             return resolve_symbol_from_expr(nres, eid);
         }
-        if (e.kind == gaupel::ast::ExprKind::kIndex) {
+        if (e.kind == parus::ast::ExprKind::kIndex) {
             return resolve_root_place_symbol_from_expr(ast, nres, e.a);
         }
         return k_invalid_symbol;
@@ -47,9 +47,9 @@ namespace gaupel::sir::detail {
 
     SymbolId resolve_symbol_from_stmt(
         const passes::NameResolveResult& nres,
-        gaupel::ast::StmtId sid
+        parus::ast::StmtId sid
     ) {
-        if (sid == gaupel::ast::k_invalid_stmt) return k_invalid_symbol;
+        if (sid == parus::ast::k_invalid_stmt) return k_invalid_symbol;
         if ((size_t)sid >= nres.stmt_to_resolved.size()) return k_invalid_symbol;
 
         const auto rid = nres.stmt_to_resolved[(uint32_t)sid];
@@ -89,7 +89,7 @@ namespace gaupel::sir::detail {
             if ((size_t)rid >= nres.resolved.size()) continue;
             if ((SymbolId)nres.resolved[rid].sym != sym_id) continue;
 
-            const TypeId t = type_of_ast_expr(tyck, (gaupel::ast::ExprId)eid);
+            const TypeId t = type_of_ast_expr(tyck, (parus::ast::ExprId)eid);
             if (t != k_invalid_type) return t;
         }
 
@@ -99,20 +99,20 @@ namespace gaupel::sir::detail {
     // -----------------------------
     // Place classification (v0 fixed)
     // -----------------------------
-    PlaceClass classify_place_from_ast(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId eid) {
-        if (eid == gaupel::ast::k_invalid_expr) return PlaceClass::kNotPlace;
+    PlaceClass classify_place_from_ast(const parus::ast::AstArena& ast, parus::ast::ExprId eid) {
+        if (eid == parus::ast::k_invalid_expr) return PlaceClass::kNotPlace;
         const auto& e = ast.expr(eid);
 
         switch (e.kind) {
-            case gaupel::ast::ExprKind::kIdent:
+            case parus::ast::ExprKind::kIdent:
                 return PlaceClass::kLocal;
-            case gaupel::ast::ExprKind::kIndex: {
+            case parus::ast::ExprKind::kIndex: {
                 // slice range index(a..b / a..:b)는 view 생성식으로 취급하여 place에서 제외한다.
-                if (e.b != gaupel::ast::k_invalid_expr) {
+                if (e.b != parus::ast::k_invalid_expr) {
                     const auto& ie = ast.expr(e.b);
-                    if (ie.kind == gaupel::ast::ExprKind::kBinary &&
-                        (ie.op == gaupel::syntax::TokenKind::kDotDot ||
-                         ie.op == gaupel::syntax::TokenKind::kDotDotColon)) {
+                    if (ie.kind == parus::ast::ExprKind::kBinary &&
+                        (ie.op == parus::syntax::TokenKind::kDotDot ||
+                         ie.op == parus::syntax::TokenKind::kDotDotColon)) {
                         return PlaceClass::kNotPlace;
                     }
                 }
@@ -120,7 +120,7 @@ namespace gaupel::sir::detail {
             }
 
             // future:
-            // case gaupel::ast::ExprKind::kField: return PlaceClass::kField;
+            // case parus::ast::ExprKind::kField: return PlaceClass::kField;
             default:
                 return PlaceClass::kNotPlace;
         }
@@ -223,34 +223,34 @@ namespace gaupel::sir::detail {
     ValueId lower_expr(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::ExprId eid
+        parus::ast::ExprId eid
     );
 
     Stmt lower_stmt_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId sid
+        parus::ast::StmtId sid
     );
 
     BlockId lower_block_stmt(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId block_sid
+        parus::ast::StmtId block_sid
     ) {
         const auto& bs = ast.stmt(block_sid);
-        if (bs.kind != gaupel::ast::StmtKind::kBlock) {
+        if (bs.kind != parus::ast::StmtKind::kBlock) {
             return k_invalid_block;
         }
 
@@ -277,24 +277,24 @@ namespace gaupel::sir::detail {
     // -----------------------------
     // helper: lower "maybe expr id" that might actually be a StmtId (legacy/quirk)
     // -----------------------------
-    bool is_valid_expr_id_(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id) {
-        return id != gaupel::ast::k_invalid_expr && (size_t)id < ast.exprs().size();
+    bool is_valid_expr_id_(const parus::ast::AstArena& ast, parus::ast::ExprId id) {
+        return id != parus::ast::k_invalid_expr && (size_t)id < ast.exprs().size();
     }
-    bool is_valid_stmt_id_(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id) {
-        return id != gaupel::ast::k_invalid_stmt && (size_t)id < ast.stmts().size();
+    bool is_valid_stmt_id_(const parus::ast::AstArena& ast, parus::ast::StmtId id) {
+        return id != parus::ast::k_invalid_stmt && (size_t)id < ast.stmts().size();
     }
 
     // Create a "block expression value" from a block stmt id (tail optional).
     ValueId lower_block_value_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId block_sid,
-        gaupel::ast::ExprId tail_eid,
-        gaupel::Span span,
+        parus::ast::StmtId block_sid,
+        parus::ast::ExprId tail_eid,
+        parus::Span span,
         TypeId forced_type // optional: if you want to override; otherwise k_invalid_type
     ) {
         Value bv{};
@@ -307,7 +307,7 @@ namespace gaupel::sir::detail {
         // - else unknown
         if (forced_type != k_invalid_type) {
             bv.type = forced_type;
-        } else if (tail_eid != gaupel::ast::k_invalid_expr) {
+        } else if (tail_eid != parus::ast::k_invalid_expr) {
             bv.type = type_of_ast_expr(tyck, tail_eid);
         } else {
             bv.type = k_invalid_type;
@@ -316,7 +316,7 @@ namespace gaupel::sir::detail {
         const BlockId bid = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, block_sid);
         bv.a = (ValueId)bid; // NOTE: BlockId stored in ValueId slot by convention.
 
-        if (tail_eid != gaupel::ast::k_invalid_expr) {
+        if (tail_eid != parus::ast::k_invalid_expr) {
             bv.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, tail_eid);
         }
 
@@ -334,12 +334,12 @@ namespace gaupel::sir::detail {
     ValueId lower_expr_or_stmt_as_value_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::ExprId maybe_expr,
-        gaupel::Span span,
+        parus::ast::ExprId maybe_expr,
+        parus::Span span,
         TypeId expected
     ) {
         // Normal path: ExprId.
@@ -348,15 +348,15 @@ namespace gaupel::sir::detail {
         }
 
         // Legacy/quirk path: treat it as StmtId.
-        const gaupel::ast::StmtId sid = (gaupel::ast::StmtId)maybe_expr;
+        const parus::ast::StmtId sid = (parus::ast::StmtId)maybe_expr;
         if (is_valid_stmt_id_(ast, sid)) {
             // wrap the statement-block as a block-expression value.
             return lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck, sid,
-                                      gaupel::ast::k_invalid_expr, span, expected);
+                                      parus::ast::k_invalid_expr, span, expected);
         }
 
         // fallback
         return k_invalid_value;
     }
 
-} // namespace gaupel::sir::detail
+} // namespace parus::sir::detail

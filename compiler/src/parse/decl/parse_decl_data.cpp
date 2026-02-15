@@ -1,13 +1,13 @@
 // compiler/src/parse/parse_decl_data.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/ty/Type.hpp>
-#include <gaupel/ty/TypePool.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/ty/Type.hpp>
+#include <parus/ty/TypePool.hpp>
 
 #include <vector>
 
 
-namespace gaupel {
+namespace parus {
 
     /// @brief `field Name { Type member; ... }` 선언을 파싱한다.
     ast::StmtId Parser::parse_decl_field() {
@@ -255,4 +255,4 @@ namespace gaupel {
         return ast_.add_stmt(s);
     }
 
-} // namespace gaupel
+} // namespace parus

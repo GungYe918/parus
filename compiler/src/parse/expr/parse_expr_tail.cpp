@@ -1,13 +1,13 @@
 // compiler/src/parse/parse_expr_tail.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/diag/DiagCode.hpp>
 
 #include <string_view>
 #include <unordered_set>
 
 
-namespace gaupel {
+namespace parus {
 
     static std::string_view token_display(const Token& t) {
         // lexeme이 비면(EOF 등) kind 이름으로 대체
@@ -649,4 +649,4 @@ namespace gaupel {
         return ast_.add_expr(e);
     }
 
-} // namespace gaupel
+} // namespace parus

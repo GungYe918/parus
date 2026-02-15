@@ -1,5 +1,5 @@
 // compiler/src/os/file.cpp
-#include <gaupel/os/File.hpp>
+#include <parus/os/File.hpp>
 
 #include <cstdio>
 #include <vector>
@@ -21,7 +21,7 @@
     #endif
 #endif
 
-namespace gaupel {
+namespace parus {
 
     static void normalize_newlines_inplace(std::string& s) {
         // CRLF -> LF, 단독 CR 제거
@@ -97,4 +97,4 @@ namespace gaupel {
     #endif
     }
 
-} // namespace gaupel
+} // namespace parus

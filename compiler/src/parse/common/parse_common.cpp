@@ -1,12 +1,12 @@
 // compiler/src/parse/parse_common.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/diag/DiagCode.hpp>
 
 
-namespace gaupel {
+namespace parus {
 
-    void gaupel::Parser::diag_report(diag::Code code, Span span, std::string_view a0) {
+    void parus::Parser::diag_report(diag::Code code, Span span, std::string_view a0) {
         if (!diags_ || aborted_) return;
 
         // 같은 위치/같은 코드 중복 스팸 방지
@@ -151,4 +151,4 @@ namespace gaupel {
         }
     }
 
-} // namespace gaupel
+} // namespace parus

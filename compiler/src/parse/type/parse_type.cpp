@@ -1,10 +1,10 @@
 // compiler/src/parse/parse_type.cpp
-#include <gaupel/parse/Parser.hpp>
+#include <parus/parse/Parser.hpp>
 
 #include <charconv>
 #include <string>
 
-namespace gaupel {
+namespace parus {
 
     namespace {
 
@@ -426,4 +426,4 @@ namespace gaupel {
         return out;
     }
 
-} // namespace gaupel
+} // namespace parus

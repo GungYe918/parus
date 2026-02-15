@@ -1,13 +1,13 @@
 // compiler/src/tyck/common/type_check_literals.hpp
 #pragma once
-#include <gaupel/ty/Type.hpp>
+#include <parus/ty/Type.hpp>
 
 #include <cctype>
 #include <string>
 #include <string_view>
 
 
-namespace gaupel::tyck::detail {
+namespace parus::tyck::detail {
 
     /// @brief 정수 리터럴의 본문/접미사 파싱 결과를 담는다.
     struct ParsedIntLiteral {
@@ -157,4 +157,4 @@ namespace gaupel::tyck::detail {
         return out;
     }
 
-} // namespace gaupel::tyck::detail
+} // namespace parus::tyck::detail

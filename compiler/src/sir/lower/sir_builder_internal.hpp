@@ -1,25 +1,25 @@
 // compiler/src/sir/lower/sir_builder_internal.hpp
 #pragma once
-#include <gaupel/sir/Builder.hpp>
+#include <parus/sir/Builder.hpp>
 
 
-namespace gaupel::sir::detail {
+namespace parus::sir::detail {
 
     /// @brief Tyck 결과에서 AST expression의 최종 타입을 조회한다.
-    TypeId type_of_ast_expr(const tyck::TyckResult& tyck, gaupel::ast::ExprId eid);
+    TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid);
 
     /// @brief AST expression 노드에서 name-resolve 심볼을 찾는다.
-    SymbolId resolve_symbol_from_expr(const passes::NameResolveResult& nres, gaupel::ast::ExprId eid);
+    SymbolId resolve_symbol_from_expr(const passes::NameResolveResult& nres, parus::ast::ExprId eid);
 
     /// @brief place expression의 root 심볼(ident/index.base)을 찾는다.
     SymbolId resolve_root_place_symbol_from_expr(
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
-        gaupel::ast::ExprId eid
+        parus::ast::ExprId eid
     );
 
     /// @brief AST statement 노드에서 name-resolve 심볼을 찾는다.
-    SymbolId resolve_symbol_from_stmt(const passes::NameResolveResult& nres, gaupel::ast::StmtId sid);
+    SymbolId resolve_symbol_from_stmt(const passes::NameResolveResult& nres, parus::ast::StmtId sid);
 
     /// @brief AST 파라미터 인덱스에서 name-resolve 심볼을 찾는다.
     SymbolId resolve_symbol_from_param_index(const passes::NameResolveResult& nres, uint32_t param_index);
@@ -32,7 +32,7 @@ namespace gaupel::sir::detail {
     );
 
     /// @brief AST expression이 place(local/index/...)인지 분류한다.
-    PlaceClass classify_place_from_ast(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId eid);
+    PlaceClass classify_place_from_ast(const parus::ast::AstArena& ast, parus::ast::ExprId eid);
 
     /// @brief ValueKind 기반의 효과 분류(Pure/MayWrite/Unknown)를 계산한다.
     EffectClass classify_effect(ValueKind k);
@@ -47,33 +47,33 @@ namespace gaupel::sir::detail {
     EffectClass effect_of_block_(const Module& m, BlockId bid);
 
     /// @brief ExprId 유효성 여부를 검사한다.
-    bool is_valid_expr_id_(const gaupel::ast::AstArena& ast, gaupel::ast::ExprId id);
+    bool is_valid_expr_id_(const parus::ast::AstArena& ast, parus::ast::ExprId id);
 
     /// @brief StmtId 유효성 여부를 검사한다.
-    bool is_valid_stmt_id_(const gaupel::ast::AstArena& ast, gaupel::ast::StmtId id);
+    bool is_valid_stmt_id_(const parus::ast::AstArena& ast, parus::ast::StmtId id);
 
     /// @brief AST block stmt를 SIR block으로 lower한다.
     BlockId lower_block_stmt(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId block_sid
+        parus::ast::StmtId block_sid
     );
 
     /// @brief AST block(+tail)을 SIR block-expression value로 lower한다.
     ValueId lower_block_value_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId block_sid,
-        gaupel::ast::ExprId tail_eid,
-        gaupel::Span span,
+        parus::ast::StmtId block_sid,
+        parus::ast::ExprId tail_eid,
+        parus::Span span,
         TypeId forced_type
     );
 
@@ -81,12 +81,12 @@ namespace gaupel::sir::detail {
     ValueId lower_expr_or_stmt_as_value_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::ExprId maybe_expr,
-        gaupel::Span span,
+        parus::ast::ExprId maybe_expr,
+        parus::Span span,
         TypeId expected
     );
 
@@ -94,35 +94,35 @@ namespace gaupel::sir::detail {
     ValueId lower_expr(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::ExprId eid
+        parus::ast::ExprId eid
     );
 
     /// @brief AST statement를 SIR statement로 lower한다.
     Stmt lower_stmt_(
         Module& m,
         bool& out_has_any_write,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId sid
+        parus::ast::StmtId sid
     );
 
     /// @brief AST 함수 모드를 SIR 함수 모드로 변환한다.
-    FnMode lower_fn_mode(gaupel::ast::FnMode m);
+    FnMode lower_fn_mode(parus::ast::FnMode m);
 
     /// @brief AST 함수 선언을 SIR 함수로 lower한다.
     FuncId lower_func_decl_(
         Module& m,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId sid,
+        parus::ast::StmtId sid,
         bool is_acts_member,
         ActsId owner_acts
     );
@@ -130,9 +130,9 @@ namespace gaupel::sir::detail {
     /// @brief AST field 선언을 SIR field 메타로 lower한다.
     FieldId lower_field_decl_(
         Module& m,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
-        gaupel::ast::StmtId sid
+        parus::ast::StmtId sid
     );
 
-} // namespace gaupel::sir::detail
+} // namespace parus::sir::detail

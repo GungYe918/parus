@@ -1,15 +1,15 @@
 // compiler/src/sir/sir_builder_decl.cpp
-#include <gaupel/sir/Builder.hpp>
+#include <parus/sir/Builder.hpp>
 #include "sir_builder_internal.hpp"
 
 
-namespace gaupel::sir::detail {
+namespace parus::sir::detail {
 
-    FnMode lower_fn_mode(gaupel::ast::FnMode m) {
+    FnMode lower_fn_mode(parus::ast::FnMode m) {
         switch (m) {
-            case gaupel::ast::FnMode::kPub: return FnMode::kPub;
-            case gaupel::ast::FnMode::kSub: return FnMode::kSub;
-            case gaupel::ast::FnMode::kNone:
+            case parus::ast::FnMode::kPub: return FnMode::kPub;
+            case parus::ast::FnMode::kSub: return FnMode::kSub;
+            case parus::ast::FnMode::kNone:
             default: return FnMode::kNone;
         }
     }
@@ -17,11 +17,11 @@ namespace gaupel::sir::detail {
     /// @brief AST 함수 선언 1개를 SIR Func로 lower하여 모듈에 추가한다.
     FuncId lower_func_decl_(
         Module& m,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
-        gaupel::ast::StmtId sid,
+        parus::ast::StmtId sid,
         bool is_acts_member,
         ActsId owner_acts
     ) {
@@ -108,9 +108,9 @@ namespace gaupel::sir::detail {
     /// @brief AST field 선언을 SIR field 메타로 lower한다.
     FieldId lower_field_decl_(
         Module& m,
-        const gaupel::ast::AstArena& ast,
+        const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
-        gaupel::ast::StmtId sid
+        parus::ast::StmtId sid
     ) {
         const auto& s = ast.stmt(sid);
         if (s.kind != ast::StmtKind::kFieldDecl) {
@@ -143,9 +143,9 @@ namespace gaupel::sir::detail {
         return m.add_field(f);
     }
 
-} // namespace gaupel::sir::detail
+} // namespace parus::sir::detail
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     using namespace detail;
 
@@ -247,4 +247,4 @@ namespace gaupel::sir {
         return m;
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir

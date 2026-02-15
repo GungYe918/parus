@@ -1,11 +1,11 @@
 // compiler/src/passes/passes.cpp
-#include <gaupel/passes/Passes.hpp>
+#include <parus/passes/Passes.hpp>
 
-#include <gaupel/passes/CheckPipeHole.hpp>
-#include <gaupel/passes/CheckTopLevelDeclOnly.hpp>
+#include <parus/passes/CheckPipeHole.hpp>
+#include <parus/passes/CheckTopLevelDeclOnly.hpp>
 
 
-namespace gaupel::passes {
+namespace parus::passes {
 
     void run_on_expr(const ast::AstArena& ast, ast::ExprId root, diag::Bag& bag) {
         if (root == ast::k_invalid_expr) return;
@@ -144,4 +144,4 @@ namespace gaupel::passes {
         return run_on_stmt_tree(ast, program_root, bag, opt);
     }
 
-} // namespace gaupel::passes
+} // namespace parus::passes

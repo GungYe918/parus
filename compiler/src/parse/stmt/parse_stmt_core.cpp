@@ -1,11 +1,11 @@
 // compiler/src/parse/parse_stmt_core.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <vector>
 
 
-namespace gaupel::detail {
+namespace parus::detail {
 
     static bool is_case_pattern_tok(syntax::TokenKind k) {
         using K = syntax::TokenKind;
@@ -29,9 +29,9 @@ namespace gaupel::detail {
             default:            return ast::CasePatKind::kError;
         }
     }
-} // namespace gaupel::detail
+} // namespace parus::detail
 
-namespace gaupel {
+namespace parus {
     
     ast::StmtId Parser::parse_stmt() {
         return parse_stmt_any();
@@ -718,4 +718,4 @@ namespace gaupel {
         return last;
     }
 
-} // namespace gaupel
+} // namespace parus

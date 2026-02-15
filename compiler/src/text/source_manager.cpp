@@ -1,10 +1,10 @@
 // compiler/src/text/source_manager.cpp
-#include <gaupel/text/SourceManager.hpp>
+#include <parus/text/SourceManager.hpp>
 
 #include <algorithm>
 
 
-namespace gaupel {
+namespace parus {
 
     bool SourceManager::utf8_decode_one(std::string_view s, uint32_t& i, uint32_t& cp) {
         if (i >= s.size()) return false;
@@ -260,4 +260,4 @@ namespace gaupel {
         return blk;
     }
 
-} // namespace gaupel
+} // namespace parus

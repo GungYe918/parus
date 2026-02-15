@@ -1,11 +1,11 @@
-#include <gaupel/sir/CapabilityAnalysis.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/sir/CapabilityAnalysis.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <algorithm>
 #include <cstdint>
 #include <vector>
 
-namespace gaupel::sir {
+namespace parus::sir {
 
     namespace {
 
@@ -298,5 +298,5 @@ namespace gaupel::sir {
         return out;
     }
 
-} // namespace gaupel::sir
+} // namespace parus::sir
 

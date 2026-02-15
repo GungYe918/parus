@@ -1,9 +1,9 @@
 // compiler/src/parse/parse_stmt_use.cpp
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 
-namespace gaupel::detail {
+namespace parus::detail {
 
     static bool is_lower_alpha_only(std::string_view s) {
         if (s.empty()) return false;
@@ -30,9 +30,9 @@ namespace gaupel::detail {
             || k == K::kKwFalse
             || k == K::kKwNull;
     }
-} // namespace gaupel::detail
+} // namespace parus::detail
 
-namespace gaupel {
+namespace parus {
     ast::ExprId Parser::parse_use_literal_expr_or_error() {
         using K = syntax::TokenKind;
 
@@ -331,4 +331,4 @@ namespace gaupel {
         }
     }
 
-} // namespace gaupel
+} // namespace parus

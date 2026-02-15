@@ -1,14 +1,14 @@
 // compiler/src/tyck/type_check_expr_core.cpp
-#include <gaupel/tyck/TypeCheck.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
-#include <gaupel/diag/Diagnostic.hpp>
-#include <gaupel/diag/DiagCode.hpp>
+#include <parus/tyck/TypeCheck.hpp>
+#include <parus/syntax/TokenKind.hpp>
+#include <parus/diag/Diagnostic.hpp>
+#include <parus/diag/DiagCode.hpp>
 #include "../common/type_check_literals.hpp"
 
 #include <sstream>
 #include <unordered_map>
 
-namespace gaupel::tyck {
+namespace parus::tyck {
 
     namespace {
         /// @brief 타입이 borrow(`&T`/`&mut T`)인지 판정하고, 내부 요소 타입/가변 여부를 반환한다.
@@ -38,7 +38,7 @@ namespace gaupel::tyck {
     } // namespace
 
     
-    using K = gaupel::syntax::TokenKind;
+    using K = parus::syntax::TokenKind;
     using detail::ParsedFloatLiteral;
     using detail::ParsedIntLiteral;
     using detail::parse_float_literal_;
@@ -1165,4 +1165,4 @@ namespace gaupel::tyck {
     // cast
     // --------------------
 
-} // namespace gaupel::tyck
+} // namespace parus::tyck

@@ -1,13 +1,13 @@
-#include <gaupel/lex/Lexer.hpp>
-#include <gaupel/parse/Parser.hpp>
-#include <gaupel/passes/Passes.hpp>
-#include <gaupel/cap/CapabilityCheck.hpp>
-#include <gaupel/tyck/TypeCheck.hpp>
-#include <gaupel/sir/Builder.hpp>
-#include <gaupel/sir/CapabilityAnalysis.hpp>
-#include <gaupel/sir/MutAnalysis.hpp>
-#include <gaupel/sir/Verify.hpp>
-#include <gaupel/oir/Builder.hpp>
+#include <parus/lex/Lexer.hpp>
+#include <parus/parse/Parser.hpp>
+#include <parus/passes/Passes.hpp>
+#include <parus/cap/CapabilityCheck.hpp>
+#include <parus/tyck/TypeCheck.hpp>
+#include <parus/sir/Builder.hpp>
+#include <parus/sir/CapabilityAnalysis.hpp>
+#include <parus/sir/MutAnalysis.hpp>
+#include <parus/sir/Verify.hpp>
+#include <parus/oir/Builder.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -19,63 +19,63 @@
 namespace {
 
     struct ParsedProgram {
-        gaupel::ast::AstArena ast;
-        gaupel::ty::TypePool types;
-        gaupel::diag::Bag bag;
-        gaupel::ast::StmtId root = gaupel::ast::k_invalid_stmt;
+        parus::ast::AstArena ast;
+        parus::ty::TypePool types;
+        parus::diag::Bag bag;
+        parus::ast::StmtId root = parus::ast::k_invalid_stmt;
     };
 
     static ParsedProgram parse_program(const std::string& src) {
         ParsedProgram p{};
-        gaupel::Lexer lx(src, /*file_id=*/1, &p.bag);
+        parus::Lexer lx(src, /*file_id=*/1, &p.bag);
         const auto tokens = lx.lex_all();
 
-        gaupel::Parser parser(tokens, p.ast, p.types, &p.bag);
+        parus::Parser parser(tokens, p.ast, p.types, &p.bag);
         p.root = parser.parse_program();
         return p;
     }
 
-    static gaupel::passes::PassResults run_passes(ParsedProgram& p) {
-        gaupel::passes::PassOptions opt{};
-        return gaupel::passes::run_on_program(p.ast, p.root, p.bag, opt);
+    static parus::passes::PassResults run_passes(ParsedProgram& p) {
+        parus::passes::PassOptions opt{};
+        return parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
     }
 
-    static gaupel::tyck::TyckResult run_tyck(ParsedProgram& p) {
-        gaupel::tyck::TypeChecker tc(p.ast, p.types, p.bag);
+    static parus::tyck::TyckResult run_tyck(ParsedProgram& p) {
+        parus::tyck::TypeChecker tc(p.ast, p.types, p.bag);
         return tc.check_program(p.root);
     }
 
-    static gaupel::cap::CapabilityResult run_cap(
+    static parus::cap::CapabilityResult run_cap(
         ParsedProgram& p,
-        const gaupel::passes::PassResults& pres,
-        const gaupel::tyck::TyckResult& ty
+        const parus::passes::PassResults& pres,
+        const parus::tyck::TyckResult& ty
     ) {
-        return gaupel::cap::run_capability_check(
+        return parus::cap::run_capability_check(
             p.ast, p.root, pres.name_resolve, ty, p.types, p.bag
         );
     }
 
     struct SirRun {
-        gaupel::sir::Module mod;
-        std::vector<gaupel::sir::VerifyError> verify_errors;
-        std::vector<gaupel::sir::VerifyError> handle_verify_errors;
-        gaupel::sir::CapabilityAnalysisResult cap;
+        parus::sir::Module mod;
+        std::vector<parus::sir::VerifyError> verify_errors;
+        std::vector<parus::sir::VerifyError> handle_verify_errors;
+        parus::sir::CapabilityAnalysisResult cap;
     };
 
     static SirRun run_sir(
         ParsedProgram& p,
-        const gaupel::passes::PassResults& pres,
-        const gaupel::tyck::TyckResult& ty
+        const parus::passes::PassResults& pres,
+        const parus::tyck::TyckResult& ty
     ) {
         SirRun out{};
-        gaupel::sir::BuildOptions bopt{};
-        out.mod = gaupel::sir::build_sir_module(
+        parus::sir::BuildOptions bopt{};
+        out.mod = parus::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
-        (void)gaupel::sir::canonicalize_for_capability(out.mod, p.types);
-        out.verify_errors = gaupel::sir::verify_module(out.mod);
-        out.cap = gaupel::sir::analyze_capabilities(out.mod, p.types, p.bag);
-        out.handle_verify_errors = gaupel::sir::verify_escape_handles(out.mod);
+        (void)parus::sir::canonicalize_for_capability(out.mod, p.types);
+        out.verify_errors = parus::sir::verify_module(out.mod);
+        out.cap = parus::sir::analyze_capabilities(out.mod, p.types, p.bag);
+        out.handle_verify_errors = parus::sir::verify_escape_handles(out.mod);
         return out;
     }
 
@@ -180,8 +180,8 @@ namespace {
 
         bool found_qq_assign = false;
         for (const auto& ex : p.ast.exprs()) {
-            if (ex.kind == gaupel::ast::ExprKind::kAssign &&
-                ex.op == gaupel::syntax::TokenKind::kQuestionQuestionAssign) {
+            if (ex.kind == parus::ast::ExprKind::kAssign &&
+                ex.op == parus::syntax::TokenKind::kQuestionQuestionAssign) {
                 found_qq_assign = true;
                 break;
             }
@@ -231,7 +231,7 @@ namespace {
         auto ty = run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kTypeBreakValueOnlyInLoopExpr),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kTypeBreakValueOnlyInLoopExpr),
             "while + break value must emit type error");
         ok &= require_(!ty.errors.empty(),
             "while + break value must produce tyck error entry");
@@ -254,7 +254,7 @@ namespace {
         (void)run_passes(p);
 
         bool ok = true;
-        ok &= require_(!p.bag.has_code(gaupel::diag::Code::kUndefinedName),
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kUndefinedName),
             "loop header variable must be visible in loop body");
         return ok;
     }
@@ -274,7 +274,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kAmbiguousAmpPrefixChain),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAmbiguousAmpPrefixChain),
             "&&& chain must emit AmbiguousAmpPrefixChain");
         return ok;
     }
@@ -295,7 +295,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kCallNoArgsAfterNamedGroup),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kCallNoArgsAfterNamedGroup),
             "args after named-group must emit CallNoArgsAfterNamedGroup");
         return ok;
     }
@@ -314,7 +314,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kVarDeclNameExpected),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kVarDeclNameExpected),
             "missing var name must emit VarDeclNameExpected");
         return ok;
     }
@@ -333,7 +333,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kSetInitializerRequired),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kSetInitializerRequired),
             "set without initializer must emit SetInitializerRequired");
         return ok;
     }
@@ -352,7 +352,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kVarDeclInitializerExpected),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kVarDeclInitializerExpected),
             "missing initializer expression must emit VarDeclInitializerExpected");
         return ok;
     }
@@ -371,7 +371,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kCastTargetTypeExpected),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kCastTargetTypeExpected),
             "missing cast target type must emit CastTargetTypeExpected");
         return ok;
     }
@@ -389,7 +389,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kFnNameExpected),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFnNameExpected),
             "missing function name must emit FnNameExpected");
         return ok;
     }
@@ -407,7 +407,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kFieldMemberNameExpected),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFieldMemberNameExpected),
             "missing field member name must emit FieldMemberNameExpected");
         return ok;
     }
@@ -425,7 +425,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kActsForNotSupported),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kActsForNotSupported),
             "acts for syntax must emit ActsForNotSupported");
         return ok;
     }
@@ -448,7 +448,7 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBlockTailExprRequired),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kBlockTailExprRequired),
             "missing tail expr in value-required block must emit BlockTailExprRequired");
         return ok;
     }
@@ -472,7 +472,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(!sir.cap.ok, "&& on slice borrow must fail SIR capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kEscapeOperandMustNotBeBorrow),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kEscapeOperandMustNotBeBorrow),
             "&& on slice borrow must emit EscapeOperandMustNotBeBorrow");
         ok &= require_(cap.ok, "AST capability pass should stay as lightweight filter for this case");
         return ok;
@@ -552,7 +552,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(!sir.cap.ok, "shared borrow under active &mut must fail SIR capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedConflictWithMut),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kBorrowSharedConflictWithMut),
             "shared borrow under active &mut must emit BorrowSharedConflictWithMut");
         return ok;
     }
@@ -575,7 +575,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(!sir.cap.ok, "&mut under active shared borrow must fail SIR capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowMutConflictWithShared),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kBorrowMutConflictWithShared),
             "&mut under active shared borrow must emit BorrowMutConflictWithShared");
         return ok;
     }
@@ -598,7 +598,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(!sir.cap.ok, "write under active shared borrow must fail SIR capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedWriteConflict),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kBorrowSharedWriteConflict),
             "write under active shared borrow must emit BorrowSharedWriteConflict");
         return ok;
     }
@@ -621,7 +621,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(!sir.cap.ok, "non-boundary && on non-static place must fail SIR capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kSirEscapeBoundaryViolation),
+        ok &= require_(p.bag.has_code(parus::diag::Code::kSirEscapeBoundaryViolation),
             "non-boundary && on non-static place must emit SirEscapeBoundaryViolation");
         ok &= require_(cap.ok, "AST capability pass should keep lightweight behavior for boundary checks");
         return ok;
@@ -677,7 +677,7 @@ namespace {
         if (!ok) return false;
 
         sir.mod.escape_handles[0].materialize_count = 1;
-        const auto verrs = gaupel::sir::verify_escape_handles(sir.mod);
+        const auto verrs = parus::sir::verify_escape_handles(sir.mod);
         ok &= require_(!verrs.empty(), "handle verify must fail when materialize_count is non-zero");
 
         bool has_materialize_msg = false;
@@ -717,7 +717,7 @@ namespace {
         if (!ok) return false;
 
         sir.mod.escape_handles[0].materialize_count = 1;
-        gaupel::oir::Builder ob(sir.mod, p.types);
+        parus::oir::Builder ob(sir.mod, p.types);
         auto oir = ob.build();
 
         ok &= require_(!oir.gate_passed, "OIR gate must fail when escape handle verify fails");
@@ -752,13 +752,13 @@ namespace {
         ok &= require_(sir_cap.cap.ok, "mut-analysis source must pass SIR capability check");
         if (!ok) return false;
 
-        gaupel::sir::BuildOptions bopt{};
-        const auto mod = gaupel::sir::build_sir_module(
+        parus::sir::BuildOptions bopt{};
+        const auto mod = parus::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
 
-        (void)gaupel::sir::analyze_mut(mod, p.types, p.bag);
-        ok &= require_(!p.bag.has_code(gaupel::diag::Code::kWriteToImmutable),
+        (void)parus::sir::analyze_mut(mod, p.types, p.bag);
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kWriteToImmutable),
             "SIR mut-analysis must not report WriteToImmutable for &mut write-through");
         return ok;
     }
@@ -782,27 +782,27 @@ namespace {
         ok &= require_(ty.errors.empty(), "SIR declared_type test must not emit tyck errors");
         if (!ok) return false;
 
-        gaupel::sir::BuildOptions bopt{};
-        const auto mod = gaupel::sir::build_sir_module(
+        parus::sir::BuildOptions bopt{};
+        const auto mod = parus::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
-        const auto verrs = gaupel::sir::verify_module(mod);
+        const auto verrs = parus::sir::verify_module(mod);
 
         ok &= require_(!mod.funcs.empty(), "SIR module must contain at least one function");
         ok &= require_(verrs.empty(), "SIR verifier must pass on declared_type test");
         if (!ok) return false;
 
         const auto& fn = mod.funcs.front();
-        ok &= require_(fn.entry != gaupel::sir::k_invalid_block, "function entry block must exist");
+        ok &= require_(fn.entry != parus::sir::k_invalid_block, "function entry block must exist");
         if (!ok) return false;
 
         const auto& entry = mod.blocks[fn.entry];
-        const auto i64_ty = p.types.builtin(gaupel::ty::Builtin::kI64);
+        const auto i64_ty = p.types.builtin(parus::ty::Builtin::kI64);
 
         bool found_x = false;
         for (uint32_t i = 0; i < entry.stmt_count; ++i) {
             const auto& st = mod.stmts[entry.stmt_begin + i];
-            if (st.kind == gaupel::sir::StmtKind::kVarDecl && st.name == "x") {
+            if (st.kind == parus::sir::StmtKind::kVarDecl && st.name == "x") {
                 found_x = true;
                 ok &= require_(st.declared_type == i64_ty, "SIR declared_type for 'set x = 1' must be i64");
                 break;
@@ -850,19 +850,19 @@ namespace {
         ok &= require_(ty.errors.empty(), "control-flow layout source must not emit tyck errors");
         if (!ok) return false;
 
-        gaupel::sir::BuildOptions bopt{};
-        const auto mod = gaupel::sir::build_sir_module(
+        parus::sir::BuildOptions bopt{};
+        const auto mod = parus::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
-        const auto verrs = gaupel::sir::verify_module(mod);
+        const auto verrs = parus::sir::verify_module(mod);
         ok &= require_(verrs.empty(), "SIR verifier must pass on control-flow layout test");
         ok &= require_(mod.funcs.size() >= 3, "expected at least 3 lowered functions");
         if (!ok) return false;
 
-        auto check_entry_stmt_kinds = [&](size_t fi, std::vector<gaupel::sir::StmtKind> expected) {
+        auto check_entry_stmt_kinds = [&](size_t fi, std::vector<parus::sir::StmtKind> expected) {
             if (fi >= mod.funcs.size()) return false;
             const auto& fn = mod.funcs[fi];
-            if (fn.entry == gaupel::sir::k_invalid_block || (size_t)fn.entry >= mod.blocks.size()) return false;
+            if (fn.entry == parus::sir::k_invalid_block || (size_t)fn.entry >= mod.blocks.size()) return false;
             const auto& b = mod.blocks[fn.entry];
             if (b.stmt_count != expected.size()) return false;
             for (uint32_t i = 0; i < b.stmt_count; ++i) {
@@ -874,26 +874,26 @@ namespace {
         };
 
         ok &= require_(
-            check_entry_stmt_kinds(0, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kWhileStmt, gaupel::sir::StmtKind::kReturn}),
+            check_entry_stmt_kinds(0, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kWhileStmt, parus::sir::StmtKind::kReturn}),
             "f1 entry block stmt order must be [VarDecl, WhileStmt, Return]"
         );
         ok &= require_(
-            check_entry_stmt_kinds(1, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kReturn}),
+            check_entry_stmt_kinds(1, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kReturn}),
             "f2 entry block stmt order must be [VarDecl, Return]"
         );
         ok &= require_(
-            check_entry_stmt_kinds(2, {gaupel::sir::StmtKind::kVarDecl, gaupel::sir::StmtKind::kIfStmt}),
+            check_entry_stmt_kinds(2, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kIfStmt}),
             "f3 entry block stmt order must be [VarDecl, IfStmt]"
         );
         return ok;
     }
 
     static bool test_file_cases_directory() {
-#ifndef GAUPEL_TEST_CASE_DIR
-        std::cerr << "  - GAUPEL_TEST_CASE_DIR is not defined\n";
+#ifndef PARUS_TEST_CASE_DIR
+        std::cerr << "  - PARUS_TEST_CASE_DIR is not defined\n";
         return false;
 #else
-        const std::filesystem::path case_dir{GAUPEL_TEST_CASE_DIR};
+        const std::filesystem::path case_dir{PARUS_TEST_CASE_DIR};
         bool ok = true;
 
         ok &= require_(std::filesystem::exists(case_dir), "case directory does not exist");
@@ -904,7 +904,7 @@ namespace {
         for (const auto& entry : std::filesystem::directory_iterator(case_dir)) {
             if (!entry.is_regular_file()) continue;
             const auto& p = entry.path();
-            if (p.extension() == ".gpel") files.push_back(p);
+            if (p.extension() == ".pr") files.push_back(p);
         }
 
         std::sort(files.begin(), files.end());

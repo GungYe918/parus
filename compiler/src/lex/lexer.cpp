@@ -1,14 +1,14 @@
 // compiler/src/lex/lexer.cpp
-#include <gaupel/lex/Lexer.hpp>
-#include <gaupel/syntax/Punct.hpp>
-#include <gaupel/syntax/TokenKind.hpp>
+#include <parus/lex/Lexer.hpp>
+#include <parus/syntax/Punct.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <cctype>
 #include <algorithm>
 #include <sstream> 
 
 
-namespace gaupel {
+namespace parus {
 
     static bool utf8_validate_strict(std::string_view s, uint32_t& bad_off) {
         auto is_cont = [&](unsigned char b) -> bool {
@@ -463,4 +463,4 @@ namespace gaupel {
         return out;
     }
 
-} // namespace gaupel
+} // namespace parus
