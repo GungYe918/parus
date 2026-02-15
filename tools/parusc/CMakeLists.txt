@@ -6,9 +6,11 @@ add_executable(parusc
   ${PARUSC_SOURCES}
 )
 
-target_link_libraries(parusc
-  PRIVATE parus_compiler
-)
+if(TARGET parus_backend)
+  target_link_libraries(parusc PRIVATE parus_backend)
+else()
+  target_link_libraries(parusc PRIVATE parus_frontend)
+endif()
 
 target_compile_features(parusc PRIVATE cxx_std_23)
 

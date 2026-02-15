@@ -1,4 +1,3 @@
-# parus/cmake
 cmake_minimum_required(VERSION 3.25)
 
 project(parus
@@ -16,13 +15,37 @@ if (NOT MSVC)
 endif()
 
 option(PARUS_BUILD_TESTS "Build Parus tests" ON)
+
+# Backend module switches
+option(PARUS_ENABLE_BACKEND "Build Parus backend modules" ON)
+option(PARUS_ENABLE_JIT_BACKEND "Build JIT backend module" ON)
+option(PARUS_ENABLE_WASM_BACKEND "Build WASM backend module" ON)
+option(PARUS_ENABLE_AOT_BACKEND "Build AOT backend module" ON)
+option(PARUS_AOT_ENABLE_LLVM "Enable LLVM engine inside AOT backend" ON)
+
+# LLVM lane fence: only 20 / 21 allowed
+set(PARUS_LLVM_VERSION "20" CACHE STRING "LLVM major version lane for AOT backend (20|21)")
+set_property(CACHE PARUS_LLVM_VERSION PROPERTY STRINGS 20 21)
+option(PARUS_LLVM_REQUIRE_TOOLCHAIN "Require a matching LLVM toolchain for the selected LLVM backend version" OFF)
+
+if(NOT PARUS_LLVM_VERSION STREQUAL "20" AND NOT PARUS_LLVM_VERSION STREQUAL "21")
+  message(FATAL_ERROR
+    "Unsupported PARUS_LLVM_VERSION='${PARUS_LLVM_VERSION}'. Supported values are: 20, 21.")
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 enable_testing()
 
-add_subdirectory(compiler)
-add_subdirectory(tools/parusc)
+# Frontend only: AST -> SIR -> OIR
+add_subdirectory(frontend)
 
+# Backend only: LLVM/JIT/WASM bridge layers
+if(PARUS_ENABLE_BACKEND)
+  add_subdirectory(backend)
+endif()
+
+add_subdirectory(tools/parusc)
 
 if(PARUS_BUILD_TESTS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")

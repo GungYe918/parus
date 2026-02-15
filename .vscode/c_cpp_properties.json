@@ -4,7 +4,8 @@
             "name": "Linux",
             "includePath": [
                 "${workspaceFolder}/**",
-                "${workspaceFolder}/compiler/include/**"
+                "${workspaceFolder}/frontend/include/**",
+                "${workspaceFolder}/backend/include/**"
             ],
             "defines": [],
             "cStandard": "c23",
