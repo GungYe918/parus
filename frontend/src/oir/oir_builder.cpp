@@ -93,6 +93,13 @@ namespace parus::oir {
 
             InstId emit_inst(const Inst& inst) {
                 InstId iid = out->add_inst(inst);
+                // OIR 값 정의 위치(def_a/def_b)를 즉시 동기화한다.
+                // - 일반 inst result: def_a = inst_id, def_b = kInvalidId
+                // - no-result inst(store 등): 값 메타 갱신 없음
+                if (inst.result != kInvalidId && (size_t)inst.result < out->values.size()) {
+                    out->values[inst.result].def_a = iid;
+                    out->values[inst.result].def_b = kInvalidId;
+                }
                 out->blocks[cur_bb].insts.push_back(iid);
                 return iid;
             }

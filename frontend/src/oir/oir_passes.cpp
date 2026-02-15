@@ -1,5 +1,6 @@
 // frontend/src/oir/oir_passes.cpp
 #include <parus/oir/Passes.hpp>
+#include <parus/oir/Verify.hpp>
 
 #include <algorithm>
 #include <charconv>
@@ -39,6 +40,11 @@ namespace parus::oir {
             std::vector<BlockId> latches;
             BlockId preheader = kInvalidId;
         };
+
+        DomInfo build_dom_info_(const Module& m, const Function& f);
+        bool dominates_(const DomInfo& dom, BlockId a, BlockId b);
+        std::vector<LoopDesc> collect_loops_(const Module& m, const Function& f, const DomInfo& dom);
+        bool is_preheader_block_(const Module& m, BlockId bb, BlockId header);
 
         /// @brief 메모리 접근이 어떤 별칭 범위를 건드리는지 요약한다.
         enum class AliasFootprint : uint8_t {
@@ -257,6 +263,254 @@ namespace parus::oir {
                 owned[bb] = 1;
             }
             return owned;
+        }
+
+        struct ValueDefLoc {
+            bool known = false;
+            bool is_block_param = false;
+            BlockId bb = kInvalidId;
+            uint32_t inst_ord = UINT32_MAX; // block 내 inst 순서(terminator 직전은 inst_count)
+        };
+
+        /// @brief inst operand을 순회한다.
+        template <typename Fn>
+        void for_each_inst_operand_(const Inst& inst, Fn&& fn) {
+            std::visit([&](auto&& x) {
+                using T = std::decay_t<decltype(x)>;
+                if constexpr (std::is_same_v<T, InstUnary>) {
+                    fn(x.src);
+                } else if constexpr (std::is_same_v<T, InstBinOp>) {
+                    fn(x.lhs);
+                    fn(x.rhs);
+                } else if constexpr (std::is_same_v<T, InstCast>) {
+                    fn(x.src);
+                } else if constexpr (std::is_same_v<T, InstCall>) {
+                    fn(x.callee);
+                    for (auto a : x.args) fn(a);
+                } else if constexpr (std::is_same_v<T, InstIndex>) {
+                    fn(x.base);
+                    fn(x.index);
+                } else if constexpr (std::is_same_v<T, InstField>) {
+                    fn(x.base);
+                } else if constexpr (std::is_same_v<T, InstLoad>) {
+                    fn(x.slot);
+                } else if constexpr (std::is_same_v<T, InstStore>) {
+                    fn(x.slot);
+                    fn(x.value);
+                } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                     std::is_same_v<T, InstConstBool> ||
+                                     std::is_same_v<T, InstConstNull> ||
+                                     std::is_same_v<T, InstAllocaLocal>) {
+                    // no operand
+                }
+            }, inst.data);
+        }
+
+        /// @brief terminator operand을 순회한다.
+        template <typename Fn>
+        void for_each_term_operand_(const Terminator& term, Fn&& fn) {
+            std::visit([&](auto&& t) {
+                using T = std::decay_t<decltype(t)>;
+                if constexpr (std::is_same_v<T, TermRet>) {
+                    if (t.has_value) fn(t.value);
+                } else if constexpr (std::is_same_v<T, TermBr>) {
+                    for (auto a : t.args) fn(a);
+                } else if constexpr (std::is_same_v<T, TermCondBr>) {
+                    fn(t.cond);
+                    for (auto a : t.then_args) fn(a);
+                    for (auto a : t.else_args) fn(a);
+                }
+            }, term);
+        }
+
+        /// @brief 값이 특정 블록 위치에서 사용 가능한지(지배 + 동일 블록 순서) 검사한다.
+        bool value_available_at_(
+            const Module& m,
+            const DomInfo& dom,
+            const std::vector<ValueDefLoc>& defs,
+            ValueId v,
+            BlockId use_bb,
+            uint32_t use_inst_ord
+        ) {
+            if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
+
+            const auto& vv = m.values[v];
+            if ((size_t)v >= defs.size()) return false;
+
+            const auto& d = defs[v];
+            if (!d.known) {
+                // mem2reg에서 만드는 pseudo-undef는 def 미지정 값을 허용한다.
+                return vv.def_a == kInvalidId;
+            }
+
+            if (d.bb == use_bb) {
+                if (d.is_block_param) return true;
+                return d.inst_ord < use_inst_ord;
+            }
+            return dominates_(dom, d.bb, use_bb);
+        }
+
+        /// @brief 함수 단위로 SSA 지배 조건(Instruction dominates all uses)을 검사한다.
+        bool verify_function_dominance_(const Module& m, const Function& f) {
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
+
+            std::vector<ValueDefLoc> defs(m.values.size());
+
+            for (auto bb : f.blocks) {
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                const auto& b = m.blocks[bb];
+                for (auto p : b.params) {
+                    if (p == kInvalidId || (size_t)p >= defs.size()) continue;
+                    defs[p] = ValueDefLoc{
+                        .known = true,
+                        .is_block_param = true,
+                        .bb = bb,
+                        .inst_ord = 0
+                    };
+                }
+                for (uint32_t i = 0; i < (uint32_t)b.insts.size(); ++i) {
+                    const InstId iid = b.insts[i];
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    const auto& inst = m.insts[iid];
+                    if (inst.result == kInvalidId || (size_t)inst.result >= defs.size()) continue;
+                    defs[inst.result] = ValueDefLoc{
+                        .known = true,
+                        .is_block_param = false,
+                        .bb = bb,
+                        .inst_ord = i + 1
+                    };
+                }
+            }
+
+            // 일반 inst/terminator use 검사
+            for (auto bb : f.blocks) {
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                const auto& b = m.blocks[bb];
+
+                for (uint32_t i = 0; i < (uint32_t)b.insts.size(); ++i) {
+                    const InstId iid = b.insts[i];
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    bool ok = true;
+                    for_each_inst_operand_(m.insts[iid], [&](ValueId v) {
+                        if (!value_available_at_(m, dom, defs, v, bb, i + 1)) ok = false;
+                    });
+                    if (!ok) return false;
+                }
+
+                if (!b.has_term) continue;
+                const uint32_t term_ord = (uint32_t)b.insts.size() + 1;
+                bool ok = true;
+                for_each_term_operand_(b.term, [&](ValueId v) {
+                    if (!value_available_at_(m, dom, defs, v, bb, term_ord)) ok = false;
+                });
+                if (!ok) return false;
+            }
+
+            // phi(block param) incoming edge use 검사
+            for (auto pred : f.blocks) {
+                if (pred == kInvalidId || (size_t)pred >= m.blocks.size()) continue;
+                const auto& pb = m.blocks[pred];
+                if (!pb.has_term) continue;
+
+                auto check_edge_args = [&](BlockId succ, const std::vector<ValueId>& args) -> bool {
+                    if (succ == kInvalidId || (size_t)succ >= m.blocks.size()) return true;
+                    if (dom.index_of.find(succ) == dom.index_of.end()) return true;
+                    const auto& target = m.blocks[succ];
+                    const uint32_t n = std::min<uint32_t>((uint32_t)args.size(), (uint32_t)target.params.size());
+                    const uint32_t edge_ord = (uint32_t)m.blocks[pred].insts.size() + 1;
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (!value_available_at_(m, dom, defs, args[i], pred, edge_ord)) return false;
+                    }
+                    return true;
+                };
+
+                bool ok = true;
+                std::visit([&](auto&& t) {
+                    using T = std::decay_t<decltype(t)>;
+                    if constexpr (std::is_same_v<T, TermBr>) {
+                        ok = check_edge_args(t.target, t.args);
+                    } else if constexpr (std::is_same_v<T, TermCondBr>) {
+                        ok = check_edge_args(t.then_bb, t.then_args) &&
+                             check_edge_args(t.else_bb, t.else_args);
+                    } else if constexpr (std::is_same_v<T, TermRet>) {
+                        ok = true;
+                    }
+                }, pb.term);
+                if (!ok) return false;
+            }
+
+            return true;
+        }
+
+        /// @brief 함수가 loop canonical form 고정점(preheader 유일성)을 만족하는지 검사한다.
+        bool verify_function_loop_fixpoint_(const Module& m, const Function& f) {
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
+
+            const auto loops = collect_loops_(m, f, dom);
+            for (const auto& loop : loops) {
+                std::vector<BlockId> outside_preds;
+                for (auto p : dom.preds_by_block[loop.header]) {
+                    if (!loop.blocks.count(p)) outside_preds.push_back(p);
+                }
+                if (outside_preds.empty()) return false;
+                if (outside_preds.size() != 1) return false;
+                if (!is_preheader_block_(m, outside_preds[0], loop.header)) return false;
+            }
+            return true;
+        }
+
+        /// @brief OIR 고급 최적화 단계 이후 필수 불변식을 검증한다.
+        bool verify_pipeline_invariants_(
+            const Module& m,
+            bool require_loop_fixpoint
+        ) {
+            if (!verify(m).empty()) return false;
+            for (const auto& f : m.funcs) {
+                if (!verify_function_dominance_(m, f)) return false;
+                if (require_loop_fixpoint && !verify_function_loop_fixpoint_(m, f)) return false;
+            }
+            return true;
+        }
+
+        /// @brief 패스를 1회 실행하고, 불변식 위반 시 즉시 롤백한다.
+        template <typename Fn>
+        bool run_guarded_pass_once_(
+            Module& m,
+            bool require_loop_fixpoint,
+            Fn&& fn
+        ) {
+            Module snapshot = m;
+            const bool changed = fn(m);
+            if (!changed) return false;
+            if (!verify_pipeline_invariants_(m, require_loop_fixpoint)) {
+                m = std::move(snapshot);
+                return false;
+            }
+            return true;
+        }
+
+        /// @brief 패스를 고정점까지 반복 실행하되, 실패 라운드는 롤백하고 중단한다.
+        template <typename Fn>
+        bool run_guarded_pass_fixpoint_(
+            Module& m,
+            bool require_loop_fixpoint,
+            uint32_t max_rounds,
+            Fn&& fn
+        ) {
+            bool any_changed = false;
+            for (uint32_t round = 0; round < max_rounds; ++round) {
+                Module snapshot = m;
+                const bool changed = fn(m);
+                if (!changed) break;
+                if (!verify_pipeline_invariants_(m, require_loop_fixpoint)) {
+                    m = std::move(snapshot);
+                    break;
+                }
+                any_changed = true;
+            }
+            return any_changed;
         }
 
         /// @brief 함수 CFG의 predecessor 리스트를 만든다.
@@ -1626,14 +1880,44 @@ namespace parus::oir {
             (void)canonicalize_loops_(m, f);
         }
         (void)const_fold_(m);
+        (void)local_load_forward_(m);
+
         // NOTE(parus/v0):
-        // 현재 mem2reg/GVN/LICM 조합에서 일부 loop 케이스의 SSA 지배 조건이 깨져
-        // invalid LLVM-IR(예: "Instruction does not dominate all uses")가 발생한다.
-        // OIR->LLVM lowering 정확성을 우선 보장하기 위해 해당 고급 패스는 일시 비활성화한다.
-        // 이후 dominance/loop-fixpoint 검증 보강 후 단계적으로 재활성화한다.
-        // (void)global_mem2reg_ssa_(m);
-        // (void)gvn_cse_(m);
-        // (void)licm_(m);
+        // 고급 패스(mem2reg/GVN/LICM)는 실행 후 즉시 지배/루프 고정점 검증을 수행한다.
+        // 검증 실패 라운드는 모듈 스냅샷으로 롤백하여 invalid LLVM-IR 유입을 차단한다.
+        const bool require_loop_fixpoint = true;
+        const uint32_t max_opt_rounds = 4;
+        (void)run_guarded_pass_fixpoint_(
+            m,
+            require_loop_fixpoint,
+            max_opt_rounds,
+            [&](Module& mm) { return global_mem2reg_ssa_(mm); }
+        );
+        (void)run_guarded_pass_fixpoint_(
+            m,
+            require_loop_fixpoint,
+            max_opt_rounds,
+            [&](Module& mm) { return gvn_cse_(mm); }
+        );
+        (void)run_guarded_pass_fixpoint_(
+            m,
+            require_loop_fixpoint,
+            max_opt_rounds,
+            [&](Module& mm) { return licm_(mm); }
+        );
+
+        // LICM 이후 preheader 형태가 흔들릴 수 있으므로 canonical form을 재검증한다.
+        (void)run_guarded_pass_fixpoint_(
+            m,
+            require_loop_fixpoint,
+            max_opt_rounds,
+            [&](Module& mm) {
+                bool changed = false;
+                for (auto& f : mm.funcs) changed |= canonicalize_loops_(mm, f);
+                return changed;
+            }
+        );
+
         (void)local_load_forward_(m);
         (void)optimize_escape_handles_(m);
         (void)dce_pure_insts_(m);

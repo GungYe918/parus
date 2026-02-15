@@ -25,6 +25,8 @@
 #include <parus/backend/aot/AOTBackend.hpp>
 #endif
 
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -70,6 +72,47 @@ namespace parusc::p0 {
                 }
             }
             return has_error;
+        }
+
+        /// @brief 쉘 인자를 단일 인용부호 형태로 이스케이프한다.
+        std::string shell_quote_(const std::string& s) {
+            std::string out;
+            out.reserve(s.size() + 8);
+            out.push_back('\'');
+            for (char c : s) {
+                if (c == '\'') out += "'\\''";
+                else out.push_back(c);
+            }
+            out.push_back('\'');
+            return out;
+        }
+
+        /// @brief 시스템 링커(clang++ driver)를 통해 단일 object를 실행 파일로 링크한다.
+        bool link_single_object_to_exe_(
+            const std::string& object_path,
+            const std::string& exe_path,
+            std::string& out_err
+        ) {
+            namespace fs = std::filesystem;
+            if (!fs::exists(object_path)) {
+                out_err = "object file not found for linking: " + object_path;
+                return false;
+            }
+
+            std::string linker = "/usr/bin/clang++";
+            if (!fs::exists(linker)) linker = "clang++";
+
+            const std::string cmd =
+                shell_quote_(linker) + " " +
+                shell_quote_(object_path) + " -o " +
+                shell_quote_(exe_path);
+
+            const int rc = std::system(cmd.c_str());
+            if (rc != 0) {
+                out_err = "linker invocation failed (exit=" + std::to_string(rc) + ")";
+                return false;
+            }
+            return true;
         }
 #endif
 
@@ -179,15 +222,26 @@ namespace parusc::p0 {
 #if PARUSC_HAS_AOT_BACKEND
         parus::backend::CompileOptions backend_opt{};
         backend_opt.opt_level = opt.opt_level;
-        backend_opt.output_path = opt.output_path;
         backend_opt.aot_engine = parus::backend::AOTEngine::kLlvm;
 
-        // v0 현재 구현은 LLVM-IR emission을 기본 경로로 삼는다.
-        backend_opt.emit_llvm_ir = true;
-        if (opt.has_xparus && opt.internal.emit_object) {
+        const bool emit_object = (opt.has_xparus && opt.internal.emit_object);
+        const bool emit_llvm_ir = (opt.has_xparus && opt.internal.emit_llvm_ir);
+        const bool emit_executable = (!emit_object && !emit_llvm_ir);
+
+        std::string object_for_link = opt.output_path;
+        std::string final_exe_output = opt.output_path;
+        if (emit_executable) {
+            object_for_link = opt.output_path + ".tmp.o";
+            backend_opt.output_path = object_for_link;
             backend_opt.emit_object = true;
-        }
-        if (opt.has_xparus && opt.internal.emit_llvm_ir) {
+            backend_opt.emit_llvm_ir = false;
+        } else if (emit_object) {
+            backend_opt.output_path = opt.output_path;
+            backend_opt.emit_object = true;
+            backend_opt.emit_llvm_ir = false;
+        } else {
+            backend_opt.output_path = opt.output_path;
+            backend_opt.emit_object = false;
             backend_opt.emit_llvm_ir = true;
         }
 
@@ -195,6 +249,17 @@ namespace parusc::p0 {
         auto cr = backend.compile(oir_res.mod, types, backend_opt);
         const bool has_backend_error = print_backend_messages_(cr);
         if (!cr.ok || has_backend_error) return 1;
+
+        if (emit_executable) {
+            std::string link_err;
+            if (!link_single_object_to_exe_(object_for_link, final_exe_output, link_err)) {
+                std::cerr << "error: " << link_err << "\n";
+                return 1;
+            }
+            std::error_code ec;
+            std::filesystem::remove(object_for_link, ec);
+            std::cout << "linked executable to " << final_exe_output << "\n";
+        }
         return 0;
 #else
         (void)oir_res;

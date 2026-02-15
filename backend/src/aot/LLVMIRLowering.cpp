@@ -343,6 +343,10 @@ namespace parus::backend::aot {
             std::vector<std::string> out(m.values.size(), "i64");
             for (size_t i = 0; i < m.values.size(); ++i) {
                 out[i] = map_type_(types, m.values[i].ty);
+                if (out[i] == "void") {
+                    // LLVM SSA value는 void 타입을 가질 수 없다.
+                    out[i] = "i8";
+                }
                 if (is_aggregate_llvm_ty_(out[i])) {
                     // SSA value 레벨에서는 aggregate 직접 연산을 피하고 주소/핸들(ptr)로 표현한다.
                     out[i] = "ptr";
@@ -586,7 +590,13 @@ namespace parus::backend::aot {
                         for (const auto& edge : it->second) {
                             if (i >= edge.args.size()) continue;
                             const auto arg = edge.args[i];
-                            const auto arg_ref = coerce_value_(os, arg, pty);
+                            // phi는 블록 맨 앞에 연속으로 위치해야 하므로,
+                            // 여기서는 추가 명령(coerce)을 생성하지 않는다.
+                            // 타입이 맞지 않는 incoming은 보수적으로 zero literal로 다운그레이드한다.
+                            std::string arg_ref = vref_(arg);
+                            if (value_ty_(arg) != pty) {
+                                arg_ref = zero_literal_(pty);
+                            }
                             incoming_texts.push_back("[ " + arg_ref + ", %" + bref_(edge.pred) + " ]");
                         }
                     }
@@ -823,7 +833,8 @@ namespace parus::backend::aot {
                             emit_field_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
-                            const auto slot_ty = map_type_(types_, x.slot_ty);
+                            auto slot_ty = map_type_(types_, x.slot_ty);
+                            if (slot_ty == "void") slot_ty = "i8";
                             os << "  " << vref_(inst.result) << " = alloca " << slot_ty << "\n";
                             address_ref_by_value_[inst.result] = vref_(inst.result);
                         } else if constexpr (std::is_same_v<T, InstLoad>) {
@@ -929,7 +940,11 @@ namespace parus::backend::aot {
         }
 
         if (need_call_stub) {
-            os << "declare void @parus_oir_call_stub()\n";
+            // 링크 단계에서 unresolved 심볼이 생기지 않도록 내부 no-op 스텁을 함께 생성한다.
+            os << "define internal void @parus_oir_call_stub() {\n";
+            os << "entry:\n";
+            os << "  ret void\n";
+            os << "}\n";
         }
 
         out.ok = true;

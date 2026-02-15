@@ -76,13 +76,13 @@ namespace parusc::cli {
     void print_usage(std::ostream& os) {
         os
             << "parusc [options] <input.pr>\n"
-            << "  parusc main.pr -o main.ll\n"
+            << "  parusc main.pr -o main\n"
             << "  parusc --version\n"
             << "\n"
             << "General options:\n"
             << "  -h, --help\n"
             << "  --version\n"
-            << "  -o <path>             Output path (default: a.ll)\n"
+            << "  -o <path>             Output path (default: a.out)\n"
             << "  -O0|-O1|-O2|-O3       Optimization level\n"
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
@@ -218,7 +218,8 @@ namespace parusc::cli {
 
         if (out.output_path.empty()) {
             if (out.internal.emit_object) out.output_path = "a.o";
-            else out.output_path = "a.ll";
+            else if (out.internal.emit_llvm_ir) out.output_path = "a.ll";
+            else out.output_path = "a.out";
         }
 
         return out;
