@@ -4,6 +4,7 @@
 #include <gaupel/cap/CapabilityCheck.hpp>
 #include <gaupel/tyck/TypeCheck.hpp>
 #include <gaupel/sir/Builder.hpp>
+#include <gaupel/sir/CapabilityAnalysis.hpp>
 #include <gaupel/sir/MutAnalysis.hpp>
 #include <gaupel/sir/Verify.hpp>
 
@@ -53,6 +54,27 @@ namespace {
         );
     }
 
+    struct SirRun {
+        gaupel::sir::Module mod;
+        std::vector<gaupel::sir::VerifyError> verify_errors;
+        gaupel::sir::CapabilityAnalysisResult cap;
+    };
+
+    static SirRun run_sir(
+        ParsedProgram& p,
+        const gaupel::passes::PassResults& pres,
+        const gaupel::tyck::TyckResult& ty
+    ) {
+        SirRun out{};
+        gaupel::sir::BuildOptions bopt{};
+        out.mod = gaupel::sir::build_sir_module(
+            p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
+        );
+        out.verify_errors = gaupel::sir::verify_module(out.mod);
+        out.cap = gaupel::sir::analyze_capabilities(out.mod, p.types, p.bag);
+        return out;
+    }
+
     static bool require_(bool cond, const char* msg) {
         if (cond) return true;
         std::cerr << "  - " << msg << "\n";
@@ -77,12 +99,18 @@ namespace {
         auto pres = run_passes(prog);
         auto ty = run_tyck(prog);
         auto cap = run_cap(prog, pres, ty);
+        auto sir = run_sir(prog, pres, ty);
 
         const std::string file_name = p.filename().string();
         const bool expect_error = (file_name.rfind("err_", 0) == 0);
 
         if (expect_error) {
-            const bool has_any_error = prog.bag.has_error() || !ty.errors.empty() || !cap.ok;
+            const bool has_any_error =
+                prog.bag.has_error() ||
+                !ty.errors.empty() ||
+                !cap.ok ||
+                !sir.verify_errors.empty() ||
+                !sir.cap.ok;
             bool ok = true;
             ok &= require_(has_any_error, "expected diagnostics for err_ case, but none were emitted");
             if (!ok) {
@@ -94,20 +122,15 @@ namespace {
         bool ok = true;
         ok &= require_(!prog.bag.has_error(), "file case emitted parser/sema diagnostics");
         ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
-        ok &= require_(cap.ok, "file case emitted capability errors");
+        ok &= require_(cap.ok, "file case emitted AST capability errors");
+        ok &= require_(sir.cap.ok, "file case emitted SIR capability errors");
         if (!ok) {
             std::cerr << "    file: " << p.filename().string() << "\n";
             return false;
         }
 
-        gaupel::sir::BuildOptions bopt{};
-        const auto mod = gaupel::sir::build_sir_module(
-            prog.ast, prog.root, pres.sym, pres.name_resolve, ty, prog.types, bopt
-        );
-
-        ok &= require_(!mod.funcs.empty(), "file case must lower at least one function to SIR");
-        const auto verrs = gaupel::sir::verify_module(mod);
-        ok &= require_(verrs.empty(), "SIR verifier failed for file case");
+        ok &= require_(!sir.mod.funcs.empty(), "file case must lower at least one function to SIR");
+        ok &= require_(sir.verify_errors.empty(), "SIR verifier failed for file case");
         if (!ok) {
             std::cerr << "    file: " << p.filename().string() << "\n";
         }
@@ -439,11 +462,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!cap.ok, "&& on slice borrow must fail capability check");
+        ok &= require_(!sir.cap.ok, "&& on slice borrow must fail SIR capability check");
         ok &= require_(p.bag.has_code(gaupel::diag::Code::kEscapeOperandMustNotBeBorrow),
             "&& on slice borrow must emit EscapeOperandMustNotBeBorrow");
+        ok &= require_(cap.ok, "AST capability pass should stay as lightweight filter for this case");
         return ok;
     }
 
@@ -465,11 +490,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
         ok &= require_(!p.bag.has_error(), "borrow arithmetic source must not emit diagnostics");
         ok &= require_(ty.errors.empty(), "borrow arithmetic source must not emit tyck errors");
         ok &= require_(cap.ok, "borrow arithmetic source must pass capability check");
+        ok &= require_(sir.cap.ok, "borrow arithmetic source must pass SIR capability check");
         return ok;
     }
 
@@ -491,11 +518,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
         ok &= require_(!p.bag.has_error(), "mut-borrow write-through source must not emit diagnostics");
         ok &= require_(ty.errors.empty(), "mut-borrow write-through source must not emit tyck errors");
         ok &= require_(cap.ok, "mut-borrow write-through source must pass capability check");
+        ok &= require_(sir.cap.ok, "mut-borrow write-through source must pass SIR capability check");
         return ok;
     }
 
@@ -513,10 +542,10 @@ namespace {
         auto p = parse_program(src);
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
-        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!cap.ok, "shared borrow under active &mut must fail capability check");
+        ok &= require_(!sir.cap.ok, "shared borrow under active &mut must fail SIR capability check");
         ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedConflictWithMut),
             "shared borrow under active &mut must emit BorrowSharedConflictWithMut");
         return ok;
@@ -536,10 +565,10 @@ namespace {
         auto p = parse_program(src);
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
-        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!cap.ok, "&mut under active shared borrow must fail capability check");
+        ok &= require_(!sir.cap.ok, "&mut under active shared borrow must fail SIR capability check");
         ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowMutConflictWithShared),
             "&mut under active shared borrow must emit BorrowMutConflictWithShared");
         return ok;
@@ -559,10 +588,10 @@ namespace {
         auto p = parse_program(src);
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
-        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!cap.ok, "write under active shared borrow must fail capability check");
+        ok &= require_(!sir.cap.ok, "write under active shared borrow must fail SIR capability check");
         ok &= require_(p.bag.has_code(gaupel::diag::Code::kBorrowSharedWriteConflict),
             "write under active shared borrow must emit BorrowSharedWriteConflict");
         return ok;
@@ -582,11 +611,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!cap.ok, "non-boundary && on non-static place must fail capability check");
-        ok &= require_(p.bag.has_code(gaupel::diag::Code::kEscapeRequiresStaticOrBoundary),
-            "non-boundary && on non-static place must emit EscapeRequiresStaticOrBoundary");
+        ok &= require_(!sir.cap.ok, "non-boundary && on non-static place must fail SIR capability check");
+        ok &= require_(p.bag.has_code(gaupel::diag::Code::kSirEscapeBoundaryViolation),
+            "non-boundary && on non-static place must emit SirEscapeBoundaryViolation");
+        ok &= require_(cap.ok, "AST capability pass should keep lightweight behavior for boundary checks");
         return ok;
     }
 
@@ -604,11 +635,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
         ok &= require_(!p.bag.has_error(), "static + && source must not emit diagnostics");
         ok &= require_(ty.errors.empty(), "static + && source must not emit tyck errors");
         ok &= require_(cap.ok, "static + && source must pass capability check");
+        ok &= require_(sir.cap.ok, "static + && source must pass SIR capability check");
         return ok;
     }
 
@@ -630,11 +663,13 @@ namespace {
         auto pres = run_passes(p);
         auto ty = run_tyck(p);
         auto cap = run_cap(p, pres, ty);
+        auto sir_cap = run_sir(p, pres, ty);
 
         bool ok = true;
         ok &= require_(!p.bag.has_error(), "mut-analysis source must not emit parser/tyck/cap diagnostics");
         ok &= require_(ty.errors.empty(), "mut-analysis source must not emit tyck errors");
         ok &= require_(cap.ok, "mut-analysis source must pass capability check");
+        ok &= require_(sir_cap.cap.ok, "mut-analysis source must pass SIR capability check");
         if (!ok) return false;
 
         gaupel::sir::BuildOptions bopt{};

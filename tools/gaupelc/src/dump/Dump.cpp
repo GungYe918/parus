@@ -376,6 +376,7 @@ namespace gaupelc::dump {
             std::cout << " name=" << s.name
                     << " sym=" << s.sym
                     << " mut=" << (s.is_mut ? "true" : "false")
+                    << " static=" << (s.is_static ? "true" : "false")
                     << " set=" << (s.is_set ? "true" : "false")
                     << " decl_ty=" << types.to_string(s.declared_type) << " <id " << (uint32_t)s.declared_type << ">"
                     << " init=" << s.init;

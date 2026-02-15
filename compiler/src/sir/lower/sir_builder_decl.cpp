@@ -216,6 +216,32 @@ namespace gaupel::sir {
                 }
                 continue;
             }
+
+            if (s.kind == ast::StmtKind::kVar) {
+                GlobalVarDecl g{};
+                g.span = s.span;
+                g.name = s.name;
+                g.sym = resolve_symbol_from_stmt(nres, sid);
+                g.is_set = s.is_set;
+                g.is_mut = s.is_mut;
+                g.is_static = s.is_static;
+
+                g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
+                if (g.declared_type == k_invalid_type) {
+                    g.declared_type = s.type;
+                }
+                if (g.declared_type == k_invalid_type && s.init != ast::k_invalid_expr) {
+                    g.declared_type = type_of_ast_expr(tyck, s.init);
+                }
+                if (g.declared_type == k_invalid_type &&
+                    g.sym != k_invalid_symbol &&
+                    (size_t)g.sym < sym.symbols().size()) {
+                    g.declared_type = sym.symbol(g.sym).declared_type;
+                }
+
+                (void)m.add_global(g);
+                continue;
+            }
         }
 
         return m;

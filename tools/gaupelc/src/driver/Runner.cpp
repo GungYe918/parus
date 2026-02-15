@@ -16,6 +16,7 @@
 #include <gaupel/parse/Parser.hpp>
 #include <gaupel/passes/Passes.hpp>
 #include <gaupel/sir/Builder.hpp>
+#include <gaupel/sir/CapabilityAnalysis.hpp>
 #include <gaupel/sir/MutAnalysis.hpp>
 #include <gaupel/sir/Verify.hpp>
 #include <gaupel/text/SourceManager.hpp>
@@ -162,6 +163,7 @@ namespace gaupelc::driver {
 
             gaupel::sir::Module sir_mod;
             bool sir_verify_ok = true;
+            bool sir_cap_ok = true;
             {
                 gaupel::sir::BuildOptions bopt{};
                 sir_mod = gaupel::sir::build_sir_module(
@@ -191,6 +193,15 @@ namespace gaupelc::driver {
                 auto mut = gaupel::sir::analyze_mut(sir_mod, types, bag);
                 std::cout << "\nMUT:\n";
                 std::cout << "tracked symbols: " << mut.by_symbol.size() << "\n";
+
+                const auto sir_cap = gaupel::sir::analyze_capabilities(sir_mod, types, bag);
+                std::cout << "\nSIR CAP:\n";
+                if (sir_cap.ok) {
+                    std::cout << "capability ok.\n";
+                } else {
+                    sir_cap_ok = false;
+                    std::cout << "capability errors: " << sir_cap.error_count << "\n";
+                }
             }
 
             if (opt.dump_oir) {
@@ -210,7 +221,7 @@ namespace gaupelc::driver {
             }
 
             int diag_rc = flush_diags(bag, opt.lang, sm, opt.context_lines);
-            if (!sir_verify_ok) return 1;
+            if (!sir_verify_ok || !sir_cap_ok) return 1;
             return diag_rc;
         }
 

@@ -312,11 +312,6 @@ namespace gaupel::cap {
                     case ast::StmtKind::kVar: {
                         if (s.init != ast::k_invalid_expr) {
                             walk_expr_(s.init, ExprUse::kValue);
-
-                            const ty::TypeId init_t = expr_type_(s.init);
-                            if (is_borrow_type_(init_t) && (fn_depth_ == 0 || s.is_static)) {
-                                report_(diag::Code::kBorrowEscapeToStorage, s.span);
-                            }
                         }
                         return;
                     }
@@ -335,10 +330,6 @@ namespace gaupel::cap {
                     case ast::StmtKind::kReturn: {
                         if (s.expr != ast::k_invalid_expr) {
                             walk_expr_(s.expr, ExprUse::kReturnValue);
-                            const ty::TypeId rt = expr_type_(s.expr);
-                            if (is_borrow_type_(rt)) {
-                                report_(diag::Code::kBorrowEscapeFromReturn, s.span);
-                            }
                         }
                         return;
                     }
@@ -432,21 +423,7 @@ namespace gaupel::cap {
 
                 switch (e.kind) {
                     case ast::ExprKind::kIdent: {
-                        auto sid = symbol_from_ident_expr_(eid);
-                        if (!sid) return;
-
-                        if (use != ExprUse::kAssignLhs && is_symbol_moved_(*sid)) {
-                            report_(diag::Code::kUseAfterEscapeMove, e.span);
-                        }
-
-                        if ((use == ExprUse::kValue || use == ExprUse::kAssignLhs ||
-                             use == ExprUse::kCallArg || use == ExprUse::kReturnValue) &&
-                            has_active_mut_borrow_(*sid)) {
-                            report_(diag::Code::kBorrowMutDirectAccessConflict, e.span);
-                        }
-                        if (use == ExprUse::kAssignLhs && has_active_shared_borrow_(*sid)) {
-                            report_(diag::Code::kBorrowSharedWriteConflict, e.span);
-                        }
+                        (void)use; // AST pass는 식별자 충돌/UAF 정밀 검증을 SIR 단계로 위임한다.
                         return;
                     }
 
@@ -464,26 +441,6 @@ namespace gaupel::cap {
                                 if (e.unary_is_mut && !is_symbol_mutable_(*sid)) {
                                     report_(diag::Code::kBorrowMutRequiresMutablePlace, e.span);
                                 }
-                                const bool has_mut_conflict = has_active_mut_borrow_(*sid);
-                                const bool has_shared_conflict = has_active_shared_borrow_(*sid);
-
-                                if (e.unary_is_mut) {
-                                    if (has_mut_conflict) {
-                                        report_(diag::Code::kBorrowMutConflict, e.span);
-                                    }
-                                    if (has_shared_conflict) {
-                                        report_(diag::Code::kBorrowMutConflictWithShared, e.span);
-                                    }
-                                    if (!has_mut_conflict && !has_shared_conflict && is_symbol_mutable_(*sid)) {
-                                        activate_mut_borrow_(*sid);
-                                    }
-                                } else {
-                                    if (has_mut_conflict) {
-                                        report_(diag::Code::kBorrowSharedConflictWithMut, e.span);
-                                    } else {
-                                        activate_shared_borrow_(*sid);
-                                    }
-                                }
                             }
                             return;
                         }
@@ -499,29 +456,7 @@ namespace gaupel::cap {
                                 report_(diag::Code::kTypeEscapeNotAllowedInPureComptime, e.span);
                             }
 
-                            const ty::TypeId at = expr_type_(e.a);
-                            if (is_borrow_type_(at)) {
-                                report_(diag::Code::kEscapeOperandMustNotBeBorrow, e.span);
-                            }
-
-                            auto sid = root_place_symbol_(e.a);
-                            if (sid) {
-                                if (has_active_mut_borrow_(*sid)) {
-                                    report_(diag::Code::kEscapeWhileMutBorrowActive, e.span);
-                                }
-                                if (has_active_shared_borrow_(*sid)) {
-                                    report_(diag::Code::kEscapeWhileBorrowActive, e.span);
-                                }
-                                if (!is_escape_boundary_use_(use) && !is_symbol_static_(*sid)) {
-                                    report_(diag::Code::kEscapeRequiresStaticOrBoundary, e.span);
-                                }
-                                if (is_symbol_moved_(*sid)) {
-                                    report_(diag::Code::kUseAfterEscapeMove, e.span);
-                                }
-                                mark_symbol_moved_(*sid);
-                            } else if (!is_escape_boundary_use_(use)) {
-                                report_(diag::Code::kEscapeRequiresStaticOrBoundary, e.span);
-                            }
+                            (void)use; // escape 경계/충돌/UAF 정밀 검증은 SIR capability 분석에서 수행한다.
                             return;
                         }
 
@@ -541,27 +476,6 @@ namespace gaupel::cap {
                     case ast::ExprKind::kAssign: {
                         walk_expr_(e.a, ExprUse::kAssignLhs);
                         walk_expr_(e.b, ExprUse::kValue);
-
-                        const ty::TypeId rhs_t = expr_type_(e.b);
-                        if (is_borrow_type_(rhs_t)) {
-                            bool lhs_is_plain_local = false;
-                            if (e.a != ast::k_invalid_expr && ast_.expr(e.a).kind == ast::ExprKind::kIdent) {
-                                if (auto lhs_sid = root_place_symbol_(e.a)) {
-                                    lhs_is_plain_local = (fn_depth_ > 0) && !is_symbol_static_(*lhs_sid);
-                                }
-                            }
-                            if (!lhs_is_plain_local || fn_depth_ == 0) {
-                                report_(diag::Code::kBorrowEscapeToStorage, e.span);
-                            }
-                        }
-
-                        if (auto sid = root_place_symbol_(e.a)) {
-                            if (ast_.expr(e.a).kind != ast::ExprKind::kIdent &&
-                                has_active_shared_borrow_(*sid)) {
-                                report_(diag::Code::kBorrowSharedWriteConflict, e.span);
-                            }
-                            clear_symbol_moved_(*sid);
-                        }
                         return;
                     }
 

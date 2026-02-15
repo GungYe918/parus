@@ -409,6 +409,7 @@ namespace gaupel::sir::detail {
                 out.kind = StmtKind::kVarDecl;
                 out.is_set = s.is_set;
                 out.is_mut = s.is_mut;
+                out.is_static = s.is_static;
                 out.name = s.name;
                 out.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
 

@@ -124,6 +124,8 @@ namespace gaupel::diag {
             case Code::kEscapeWhileMutBorrowActive: return "EscapeWhileMutBorrowActive";
             case Code::kEscapeWhileBorrowActive: return "EscapeWhileBorrowActive";
             case Code::kEscapeRequiresStaticOrBoundary: return "EscapeRequiresStaticOrBoundary";
+            case Code::kSirUseAfterEscapeMove: return "SirUseAfterEscapeMove";
+            case Code::kSirEscapeBoundaryViolation: return "SirEscapeBoundaryViolation";
 
             case Code::kTopLevelMustBeBlock: return "TopLevelMustBeBlock";
             case Code::kTopLevelDeclOnly: return "TopLevelDeclOnly";
@@ -295,6 +297,8 @@ namespace gaupel::diag {
             case Code::kEscapeWhileMutBorrowActive: return "cannot apply '&&' while an active '&mut' borrow exists for this place";
             case Code::kEscapeWhileBorrowActive: return "cannot apply '&&' while an active borrow exists for this place";
             case Code::kEscapeRequiresStaticOrBoundary: return "escaping '&&' requires static storage or direct return/call-argument boundary";
+            case Code::kSirUseAfterEscapeMove: return "use-after-move detected in SIR capability analysis ('&&' moved value)";
+            case Code::kSirEscapeBoundaryViolation: return "SIR capability analysis: escape value must be consumed at return/call boundary or originate from static storage";
 
             case Code::kTopLevelMustBeBlock: return "internal: program root must be a block";
             case Code::kTopLevelDeclOnly: return "top-level allows declarations only";
@@ -473,6 +477,8 @@ namespace gaupel::diag {
             case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
             case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
             case Code::kEscapeRequiresStaticOrBoundary: return "'&&' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";
+            case Code::kSirUseAfterEscapeMove: return "SIR capability 분석에서 use-after-move가 감지되었습니다('&&'로 move된 값 사용)";
+            case Code::kSirEscapeBoundaryViolation: return "SIR capability 분석: escape 값은 return/호출 인자 경계에서 소비되거나 static 저장소 기원이어야 합니다";
 
             case Code::kTopLevelMustBeBlock: return "내부 오류: 프로그램 루트는 블록이어야 합니다";
             case Code::kTopLevelDeclOnly: return "최상위에서는 decl만 허용됩니다";
@@ -508,7 +514,7 @@ namespace gaupel::diag {
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
             
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "set에서 null로는 타입을 추론할 수 없습니다. (예: let {0}: T? = null; 처럼 옵셔널 타입을 명시하세요)";
-            case Code::kMissingReturn: return "missing return";
+            case Code::kMissingReturn: return "반환문이 누락되었습니다";
             
             case Code::kIntLiteralInvalid: return "정수 리터럴이 올바르지 않습니다: '{0}'";
             case Code::kIntLiteralOverflow: /* args[0]=text, args[1]=target */ return "정수 리터럴 '{0}'이(가) 대상 타입 {1}에서 오버플로우됩니다";
@@ -533,10 +539,10 @@ namespace gaupel::diag {
             case Code::kTypeTernaryCondMustBeBool: return "삼항 조건식은 bool이어야 합니다(현재 {0})";
             case Code::kTypeUnresolvedHole: return "식에서 '_'(hole)이 해소되지 않았습니다";
 
-            case Code::kTyckCastMissingOperand: return "cast expression is missing its operand";
-            case Code::kTyckCastMissingTargetType: return "cast expression is missing its target type";
-            case Code::kTyckCastNullToNonOptional: return "cannot cast 'null' to non-optional type '{0}'";
-            case Code::kTyckCastNotAllowed: return "cast not allowed: '{0}' -> '{1}'";
+            case Code::kTyckCastMissingOperand: return "cast 식에 피연산자가 없습니다";
+            case Code::kTyckCastMissingTargetType: return "cast 식에 대상 타입이 없습니다";
+            case Code::kTyckCastNullToNonOptional: return "'null'을 non-optional 타입 '{0}'로 cast할 수 없습니다";
+            case Code::kTyckCastNotAllowed: return "허용되지 않는 cast입니다: '{0}' -> '{1}'";
 
             // args: {0}=lhs_type
             case Code::kTypeNullCoalesceLhsMustBeOptional: return "'?" "?' 연산자의 왼쪽은 옵셔널(T?)이어야 합니다(현재 {0})";

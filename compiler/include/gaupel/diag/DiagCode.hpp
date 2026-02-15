@@ -140,6 +140,8 @@ namespace gaupel::diag {
         kEscapeWhileMutBorrowActive,
         kEscapeWhileBorrowActive,
         kEscapeRequiresStaticOrBoundary,
+        kSirUseAfterEscapeMove,          // SIR pass: use-after-move via escape
+        kSirEscapeBoundaryViolation,     // SIR pass: escape handle must be boundary-consumed or static-origin
 
         // =========================
         // passes / sema

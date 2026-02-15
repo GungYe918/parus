@@ -228,6 +228,7 @@ namespace gaupel::sir {
         // var decl
         bool is_set = false;   // let=false, set=true
         bool is_mut = false;
+        bool is_static = false;
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
         TypeId declared_type = k_invalid_type;
@@ -322,6 +323,18 @@ namespace gaupel::sir {
         uint32_t func_count = 0;
     };
 
+    struct GlobalVarDecl {
+        gaupel::Span span{};
+        std::string_view name{};
+        SymbolId sym = k_invalid_symbol;
+
+        bool is_set = false;
+        bool is_mut = false;
+        bool is_static = false;
+
+        TypeId declared_type = k_invalid_type;
+    };
+
     class Module {
     public:
         std::vector<Value> values;
@@ -336,6 +349,7 @@ namespace gaupel::sir {
         std::vector<FieldMember> field_members;
         std::vector<FieldDecl> fields;
         std::vector<ActsDecl> acts;
+        std::vector<GlobalVarDecl> globals;
 
         // helpers
         ValueId add_value(const Value& v)   {  values.push_back(v); return (ValueId)values.size() - 1;  }
@@ -350,6 +364,7 @@ namespace gaupel::sir {
         uint32_t add_field_member(const FieldMember& f) { field_members.push_back(f); return (uint32_t)field_members.size() - 1; }
         FieldId add_field(const FieldDecl& f)           { fields.push_back(f); return (FieldId)fields.size() - 1; }
         ActsId add_acts(const ActsDecl& a)              { acts.push_back(a); return (ActsId)acts.size() - 1; }
+        uint32_t add_global(const GlobalVarDecl& g)     { globals.push_back(g); return (uint32_t)globals.size() - 1; }
     };
 
 } // namespace gaupel::sir
