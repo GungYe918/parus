@@ -4,6 +4,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 
 namespace {
 
@@ -44,7 +47,15 @@ namespace {
             cmd += shell_quote_(argv[i]);
         }
 
-        return std::system(cmd.c_str());
+        const int raw = std::system(cmd.c_str());
+        if (raw == -1) return 1;
+#if defined(_WIN32)
+        return raw;
+#else
+        if (WIFEXITED(raw)) return WEXITSTATUS(raw);
+        if (WIFSIGNALED(raw)) return 128 + WTERMSIG(raw);
+        return 1;
+#endif
     }
 
 } // namespace

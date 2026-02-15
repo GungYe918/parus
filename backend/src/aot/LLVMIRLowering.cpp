@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -268,7 +269,8 @@ namespace parus::backend::aot {
                     } else if constexpr (std::is_same_v<T, parus::oir::InstCast>) {
                         as_value(x.src);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstCall>) {
-                        as_value(x.callee);
+                        // callee는 direct-call로 소거될 수 있으므로
+                        // 일반 값 사용(as_value)으로 강제하지 않는다.
                         for (auto a : x.args) as_value(a);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstIndex>) {
                         as_value(x.base);
@@ -473,7 +475,16 @@ namespace parus::backend::aot {
                 std::ostringstream os;
                 const std::string ret_ty = map_type_(types_, fn_.ret_ty);
                 const std::string sym = sanitize_symbol_(fn_.name);
-                os << "define " << ret_ty << " @" << sym << "() {\n";
+                os << "define " << ret_ty << " @" << sym << "(";
+                if (fn_.entry != parus::oir::kInvalidId &&
+                    static_cast<size_t>(fn_.entry) < m_.blocks.size()) {
+                    const auto& entry = m_.blocks[fn_.entry];
+                    for (size_t i = 0; i < entry.params.size(); ++i) {
+                        if (i) os << ", ";
+                        os << value_ty_(entry.params[i]) << " %arg" << i;
+                    }
+                }
+                os << ") {\n";
 
                 for (auto bb : fn_.blocks) {
                     if (bb == parus::oir::kInvalidId || static_cast<size_t>(bb) >= m_.blocks.size()) continue;
@@ -506,6 +517,12 @@ namespace parus::backend::aot {
             uint32_t temp_seq_ = 0;
             bool need_call_stub_ = false;
 
+            struct DirectCalleeInfo {
+                std::string symbol{};
+                std::string ret_ty{};
+                std::vector<std::string> param_tys{};
+            };
+
             /// @brief 새 임시 SSA 이름을 생성한다.
             std::string next_tmp_() {
                 return "%tmp" + std::to_string(temp_seq_++);
@@ -536,6 +553,42 @@ namespace parus::backend::aot {
             bool is_value_slot_(parus::oir::ValueId v) const {
                 if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= value_uses_.size()) return false;
                 return value_uses_[v].as_slot;
+            }
+
+            /// @brief callee 값이 InstFuncRef를 가리키면 direct-call 메타를 추출한다.
+            std::optional<DirectCalleeInfo> resolve_direct_callee_(parus::oir::ValueId callee) const {
+                using namespace parus::oir;
+                if (callee == kInvalidId || static_cast<size_t>(callee) >= m_.values.size()) {
+                    return std::nullopt;
+                }
+                const auto& cv = m_.values[callee];
+                if (cv.def_a == kInvalidId || static_cast<size_t>(cv.def_a) >= m_.insts.size()) {
+                    return std::nullopt;
+                }
+
+                const auto& def_inst = m_.insts[cv.def_a];
+                const auto* fr = std::get_if<InstFuncRef>(&def_inst.data);
+                if (fr == nullptr) {
+                    return std::nullopt;
+                }
+                if (fr->func == kInvalidId || static_cast<size_t>(fr->func) >= m_.funcs.size()) {
+                    return std::nullopt;
+                }
+
+                const auto& target = m_.funcs[fr->func];
+                DirectCalleeInfo info{};
+                info.symbol = sanitize_symbol_(fr->name.empty() ? target.name : fr->name);
+                info.ret_ty = map_type_(types_, target.ret_ty);
+
+                if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
+                    const auto& entry = m_.blocks[target.entry];
+                    info.param_tys.reserve(entry.params.size());
+                    for (auto p : entry.params) {
+                        info.param_tys.push_back(value_ty_(p));
+                    }
+                }
+
+                return info;
             }
 
             /// @brief slot operand를 ptr SSA ref로 정규화한다.
@@ -652,6 +705,17 @@ namespace parus::backend::aot {
                 parus::oir::BlockId bb,
                 const parus::oir::Block& block
             ) {
+                // 함수 entry 블록 파라미터는 LLVM 함수 인자로 직접 seed한다.
+                if (bb == fn_.entry) {
+                    for (size_t i = 0; i < block.params.size(); ++i) {
+                        const auto p = block.params[i];
+                        const std::string pty = value_ty_(p);
+                        const std::string arg = "%arg" + std::to_string(i);
+                        os << "  " << vref_(p) << " = " << copy_expr_(pty, arg) << "\n";
+                    }
+                    return;
+                }
+
                 auto it = incomings_.find(bb);
                 for (size_t i = 0; i < block.params.size(); ++i) {
                     const auto p = block.params[i];
@@ -885,15 +949,89 @@ namespace parus::backend::aot {
                             const auto rty = value_ty_(inst.result);
                             const auto src = coerce_value_(os, x.src, rty);
                             os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, src) << "\n";
+                        } else if constexpr (std::is_same_v<T, InstFuncRef>) {
+                            // InstFuncRef는 런타임 값으로 물질화하지 않고, call 시점에만 사용한다.
+                            // 단, result가 값 문맥에서 읽히는 경우를 대비해 ptr 표현을 남겨둔다.
+                            if (inst.result == kInvalidId) return;
+                            if (!is_value_read_(inst.result)) return;
+                            const std::string sym = sanitize_symbol_(x.name);
+                            const auto rty = value_ty_(inst.result);
+                            if (rty == "ptr") {
+                                os << "  " << vref_(inst.result) << " = bitcast ptr @" << sym << " to ptr\n";
+                            } else if (is_int_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = ptrtoint ptr @" << sym << " to " << rty << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                            }
                         } else if constexpr (std::is_same_v<T, InstCall>) {
-                            need_call_stub_ = true;
-                            os << "  call void @parus_oir_call_stub()\n";
-                            if (inst.result != kInvalidId) {
+                            std::vector<std::string> arg_tys{};
+                            std::vector<std::string> arg_vals{};
+                            arg_tys.reserve(x.args.size());
+                            arg_vals.reserve(x.args.size());
+
+                            const auto direct = resolve_direct_callee_(x.callee);
+                            for (size_t ai = 0; ai < x.args.size(); ++ai) {
+                                std::string want = value_ty_(x.args[ai]);
+                                if (direct.has_value() && ai < direct->param_tys.size()) {
+                                    want = direct->param_tys[ai];
+                                }
+                                arg_tys.push_back(want);
+                                arg_vals.push_back(coerce_value_(os, x.args[ai], want));
+                            }
+
+                            const auto emit_default_result = [&]() {
+                                if (inst.result == kInvalidId) return;
                                 const auto rty = value_ty_(inst.result);
                                 if (is_int_ty_(rty)) os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
                                 else if (is_float_ty_(rty)) os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
                                 else if (rty == "ptr") os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
                                 else os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                            };
+
+                            auto emit_arg_list = [&](std::ostringstream& out) {
+                                for (size_t i = 0; i < arg_vals.size(); ++i) {
+                                    if (i) out << ", ";
+                                    out << arg_tys[i] << " " << arg_vals[i];
+                                }
+                            };
+
+                            if (direct.has_value() && direct->param_tys.size() == arg_vals.size()) {
+                                if (direct->ret_ty == "void") {
+                                    os << "  call void @" << direct->symbol << "(";
+                                    emit_arg_list(os);
+                                    os << ")\n";
+                                    emit_default_result();
+                                } else if (inst.result != kInvalidId) {
+                                    os << "  " << vref_(inst.result) << " = call " << direct->ret_ty
+                                       << " @" << direct->symbol << "(";
+                                    emit_arg_list(os);
+                                    os << ")\n";
+                                } else {
+                                    os << "  call " << direct->ret_ty << " @" << direct->symbol << "(";
+                                    emit_arg_list(os);
+                                    os << ")\n";
+                                }
+                                return;
+                            }
+
+                            std::string callee_ptr;
+                            if (direct.has_value()) {
+                                // direct 메타를 얻었지만 시그니처가 맞지 않아 indirect 경로로 내려가는 경우,
+                                // InstFuncRef 값이 소거되어도 동작하도록 심볼에서 즉시 ptr을 만든다.
+                                callee_ptr = next_tmp_();
+                                os << "  " << callee_ptr << " = bitcast ptr @" << direct->symbol << " to ptr\n";
+                            } else {
+                                callee_ptr = coerce_value_(os, x.callee, "ptr");
+                            }
+                            const std::string rty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
+                            if (rty == "void") {
+                                os << "  call void " << callee_ptr << "(";
+                                emit_arg_list(os);
+                                os << ")\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = call " << rty << " " << callee_ptr << "(";
+                                emit_arg_list(os);
+                                os << ")\n";
                             }
                         } else if constexpr (std::is_same_v<T, InstIndex>) {
                             emit_index_(os, inst, x);
@@ -1013,10 +1151,66 @@ namespace parus::backend::aot {
             return out;
         }
         bool need_call_stub = false;
+        bool has_raw_main_symbol = false;
+        bool has_ambiguous_main_entry = false;
+        struct MainEntryCandidate {
+            std::string symbol{};
+            std::string ret_ty{};
+        };
+        std::optional<MainEntryCandidate> main_entry_candidate{};
+
+        /// @brief 함수가 사용자 엔트리(main) 후보인지 판정한다.
+        auto is_main_entry_candidate_name = [](const parus::oir::Function& fn) -> bool {
+            // 신규 경로: OIR Function이 맹글링 전 이름을 함께 보존한 경우.
+            if (!fn.source_name.empty()) {
+                return fn.source_name == "main";
+            }
+            // 구버전 OIR과의 호환: 맹글링된 main 패턴을 허용한다.
+            return fn.name == "main" || fn.name.rfind("main_fn", 0) == 0;
+        };
 
         for (const auto& fn : oir.funcs) {
+            const std::string fn_sym = sanitize_symbol_(fn.name);
+            if (fn_sym == "main") {
+                has_raw_main_symbol = true;
+            }
+
+            if (is_main_entry_candidate_name(fn)) {
+                bool is_zero_arity = false;
+                if (fn.entry != parus::oir::kInvalidId &&
+                    static_cast<size_t>(fn.entry) < oir.blocks.size()) {
+                    is_zero_arity = oir.blocks[fn.entry].params.empty();
+                }
+                const std::string ret_ty = map_type_(types, fn.ret_ty);
+                if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
+                    if (!main_entry_candidate.has_value()) {
+                        main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
+                    } else if (main_entry_candidate->symbol != fn_sym) {
+                        has_ambiguous_main_entry = true;
+                    }
+                }
+            }
+
             FunctionEmitter fe(oir, types, fn, value_types, value_uses);
             os << fe.emit(need_call_stub) << "\n";
+        }
+
+        if (!has_raw_main_symbol && main_entry_candidate.has_value() && !has_ambiguous_main_entry) {
+            // 실행 파일 링크를 위해 C 엔트리 심볼(main)을 자동 브릿지한다.
+            os << "define i32 @main() {\n";
+            os << "entry:\n";
+            if (main_entry_candidate->ret_ty == "i32") {
+                os << "  %main_ret = call i32 @" << main_entry_candidate->symbol << "()\n";
+                os << "  ret i32 %main_ret\n";
+            } else {
+                os << "  call void @" << main_entry_candidate->symbol << "()\n";
+                os << "  ret i32 0\n";
+            }
+            os << "}\n\n";
+            out.messages.push_back(CompileMessage{
+                false,
+                "emitted main entry wrapper for executable link."
+            });
         }
 
         if (need_call_stub) {

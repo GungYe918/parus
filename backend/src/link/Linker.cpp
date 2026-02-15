@@ -6,6 +6,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 
 namespace parus::backend::link {
 
@@ -42,8 +45,20 @@ namespace parus::backend::link {
         }
 
         /// @brief 명령을 실행하고 종료 코드를 반환한다.
+        int decode_wait_status_(int raw_status) {
+            if (raw_status == -1) return -1;
+#if defined(_WIN32)
+            return raw_status;
+#else
+            if (WIFEXITED(raw_status)) return WEXITSTATUS(raw_status);
+            if (WIFSIGNALED(raw_status)) return 128 + WTERMSIG(raw_status);
+            return raw_status;
+#endif
+        }
+
+        /// @brief 명령을 실행하고 표준화된 종료 코드를 반환한다.
         int run_command_(const std::string& cmd) {
-            return std::system(cmd.c_str());
+            return decode_wait_status_(std::system(cmd.c_str()));
         }
 
         /// @brief object -> executable 링크 명령을 조립한다.

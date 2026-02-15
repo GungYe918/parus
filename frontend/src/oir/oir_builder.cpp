@@ -23,6 +23,8 @@ namespace parus::oir {
             const parus::ty::TypePool* types = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
             const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
+            const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
+            const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
 
             Function* fn = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -528,17 +530,6 @@ namespace parus::oir {
             }
 
             case parus::sir::ValueKind::kCall: {
-                ValueId callee = kInvalidId;
-                if (v.callee_sym != parus::sir::k_invalid_symbol && fn_symbol_to_func != nullptr) {
-                    auto fit = fn_symbol_to_func->find(v.callee_sym);
-                    if (fit != fn_symbol_to_func->end() &&
-                        (size_t)fit->second < out->funcs.size()) {
-                        callee = emit_func_ref(fit->second, out->funcs[fit->second].name);
-                    }
-                }
-                if (callee == kInvalidId) {
-                    callee = lower_value(v.a);
-                }
                 std::vector<ValueId> args;
                 args.reserve(v.arg_count);
 
@@ -564,6 +555,69 @@ namespace parus::oir {
                         args.push_back(lower_value(a.value));
                     }
                     ++i;
+                }
+
+                ValueId callee = kInvalidId;
+                if (v.callee_decl_stmt != 0xFFFF'FFFFu && fn_decl_to_func != nullptr) {
+                    auto dit = fn_decl_to_func->find(v.callee_decl_stmt);
+                    if (dit != fn_decl_to_func->end() &&
+                        (size_t)dit->second < out->funcs.size()) {
+                        callee = emit_func_ref(dit->second, out->funcs[dit->second].name);
+                    }
+                }
+
+                // 오버로드 정보가 빠진 경우(예: 일반 call 경로)에도
+                // 심볼+인자 타입으로 가장 정확한 함수 대상을 재선택한다.
+                if (callee == kInvalidId &&
+                    v.callee_sym != parus::sir::k_invalid_symbol &&
+                    fn_symbol_to_funcs != nullptr) {
+                    auto fit = fn_symbol_to_funcs->find(v.callee_sym);
+                    if (fit != fn_symbol_to_funcs->end()) {
+                        FuncId best = kInvalidId;
+                        uint32_t best_exact = 0;
+                        for (const FuncId fid : fit->second) {
+                            if ((size_t)fid >= out->funcs.size()) continue;
+                            const auto& f = out->funcs[fid];
+                            if (f.entry == kInvalidId || (size_t)f.entry >= out->blocks.size()) continue;
+                            const auto& entry = out->blocks[f.entry];
+                            if (entry.params.size() != args.size()) continue;
+
+                            uint32_t exact = 0;
+                            bool ok = true;
+                            for (size_t ai = 0; ai < args.size(); ++ai) {
+                                const auto p = entry.params[ai];
+                                if ((size_t)p >= out->values.size() || (size_t)args[ai] >= out->values.size()) {
+                                    ok = false;
+                                    break;
+                                }
+                                if (out->values[p].ty == out->values[args[ai]].ty) {
+                                    exact++;
+                                }
+                            }
+                            if (!ok) continue;
+                            if (best == kInvalidId || exact > best_exact) {
+                                best = fid;
+                                best_exact = exact;
+                            }
+                        }
+                        if (best != kInvalidId) {
+                            callee = emit_func_ref(best, out->funcs[best].name);
+                        }
+                    }
+                }
+
+                if (callee == kInvalidId &&
+                    v.callee_sym != parus::sir::k_invalid_symbol &&
+                    fn_symbol_to_func != nullptr) {
+                    auto fit = fn_symbol_to_func->find(v.callee_sym);
+                    if (fit != fn_symbol_to_func->end() &&
+                        (size_t)fit->second < out->funcs.size()) {
+                        callee = emit_func_ref(fit->second, out->funcs[fit->second].name);
+                    }
+                }
+
+                if (callee == kInvalidId) {
+                    callee = lower_value(v.a);
                 }
 
                 return emit_call(v.type, callee, std::move(args));
@@ -902,12 +956,15 @@ namespace parus::oir {
         std::vector<FuncId> sir_to_oir_func(sir_.funcs.size(), kInvalidId);
         std::vector<BlockId> sir_to_entry(sir_.funcs.size(), kInvalidId);
         std::unordered_map<parus::sir::SymbolId, FuncId> fn_symbol_to_func;
+        std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>> fn_symbol_to_funcs;
+        std::unordered_map<uint32_t, FuncId> fn_decl_to_func;
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
 
             Function f{};
             f.name = mangle_func_name_(sf, ty_);
+            f.source_name = sf.name;
             f.ret_ty = (TypeId)sf.ret;
 
             const BlockId entry = out.mod.add_block(Block{});
@@ -920,6 +977,10 @@ namespace parus::oir {
 
             if (sf.sym != parus::sir::k_invalid_symbol) {
                 fn_symbol_to_func[sf.sym] = fid;
+                fn_symbol_to_funcs[sf.sym].push_back(fid);
+            }
+            if (sf.origin_stmt != 0xFFFF'FFFFu) {
+                fn_decl_to_func[sf.origin_stmt] = fid;
             }
         }
 
@@ -937,6 +998,8 @@ namespace parus::oir {
             fb.types = &ty_;
             fb.escape_value_map = &escape_value_map;
             fb.fn_symbol_to_func = &fn_symbol_to_func;
+            fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
+            fb.fn_decl_to_func = &fn_decl_to_func;
             fb.fn = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
