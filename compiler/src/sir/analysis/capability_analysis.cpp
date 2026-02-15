@@ -63,6 +63,11 @@ namespace gaupel::sir {
             bool is_static = false;
         };
 
+        struct FlowState {
+            std::unordered_map<SymbolId, bool> moved_true;
+            std::vector<ActiveBorrow> active_borrows;
+        };
+
         /// @brief SIR 값/문장을 순회하며 capability 충돌, UAF, escape 경계를 정밀 검증한다.
         class CapabilityAnalyzer final {
         public:
@@ -286,6 +291,76 @@ namespace gaupel::sir {
                 return true;
             }
 
+            /// @brief projection이 완전히 동일한지 비교한다.
+            static bool place_projection_equal_(const PlaceProjection& a, const PlaceProjection& b) {
+                if (a.kind != b.kind) return false;
+                if (a.kind == PlaceProjectionKind::kIndex) {
+                    return a.has_const_index == b.has_const_index &&
+                           a.const_index == b.const_index;
+                }
+                return a.field_name == b.field_name;
+            }
+
+            /// @brief place 경로(root + projection)가 완전히 같은지 비교한다.
+            static bool place_ref_equal_(const PlaceRef& a, const PlaceRef& b) {
+                if (a.root != b.root) return false;
+                if (a.proj.size() != b.proj.size()) return false;
+                for (size_t i = 0; i < a.proj.size(); ++i) {
+                    if (!place_projection_equal_(a.proj[i], b.proj[i])) return false;
+                }
+                return true;
+            }
+
+            /// @brief 활성 borrow 항목이 완전히 같은지 비교한다.
+            static bool active_borrow_equal_(const ActiveBorrow& a, const ActiveBorrow& b) {
+                return a.is_mut == b.is_mut && place_ref_equal_(a.place, b.place);
+            }
+
+            /// @brief borrow 집합에 중복 없이 추가한다. (동일 place의 shared/mut 충돌은 mut로 승격)
+            static void append_unique_borrow_(std::vector<ActiveBorrow>& dst, const ActiveBorrow& item) {
+                for (auto& cur : dst) {
+                    if (active_borrow_equal_(cur, item)) return;
+                    if (place_ref_equal_(cur.place, item.place) && cur.is_mut != item.is_mut) {
+                        // 보수 규칙: 합류 후에는 stronger capability(&mut)를 유지해
+                        // false-negative(충돌 누락)를 막는다.
+                        cur.is_mut = true;
+                        return;
+                    }
+                }
+                dst.push_back(item);
+            }
+
+            /// @brief 두 borrow 집합을 CFG 합류점에서 보수적으로 합친다.
+            static std::vector<ActiveBorrow> merge_borrow_set_(
+                const std::vector<ActiveBorrow>& a,
+                const std::vector<ActiveBorrow>& b
+            ) {
+                std::vector<ActiveBorrow> out;
+                out.reserve(a.size() + b.size());
+                for (const auto& x : a) append_unique_borrow_(out, x);
+                for (const auto& x : b) append_unique_borrow_(out, x);
+                return out;
+            }
+
+            /// @brief borrow 집합이 같은지 순서 무관(set)으로 비교한다.
+            static bool borrow_set_equal_(
+                const std::vector<ActiveBorrow>& a,
+                const std::vector<ActiveBorrow>& b
+            ) {
+                if (a.size() != b.size()) return false;
+                for (const auto& x : a) {
+                    bool found = false;
+                    for (const auto& y : b) {
+                        if (active_borrow_equal_(x, y)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) return false;
+                }
+                return true;
+            }
+
             /// @brief 스코프를 시작한다.
             void enter_scope_() {
                 scopes_.push_back(ScopeState{active_borrows_.size()});
@@ -353,6 +428,84 @@ namespace gaupel::sir {
             /// @brief 심볼 move-out 상태를 해제한다(재초기화/재대입).
             void clear_moved_(SymbolId sym) {
                 moved_by_escape_[sym] = false;
+            }
+
+            /// @brief 현재 CFG 지점의 흐름 상태(moved + active borrow)를 캡처한다.
+            FlowState capture_flow_state_() const {
+                FlowState st{};
+                for (const auto& [sym, moved] : moved_by_escape_) {
+                    if (moved) st.moved_true[sym] = true;
+                }
+                for (const auto& b : active_borrows_) {
+                    append_unique_borrow_(st.active_borrows, b);
+                }
+                return st;
+            }
+
+            /// @brief 캡처된 흐름 상태로 moved/borrow 집합을 복원한다.
+            void restore_flow_state_(const FlowState& st) {
+                moved_by_escape_.clear();
+                for (const auto& [sym, moved] : st.moved_true) {
+                    if (moved) moved_by_escape_[sym] = true;
+                }
+                active_borrows_ = st.active_borrows;
+            }
+
+            /// @brief CFG 합류점에서 두 경로의 moved/borrow 상태를 보수적으로 OR-merge 한다.
+            static FlowState merge_flow_state_(const FlowState& a, const FlowState& b) {
+                FlowState out = a;
+                for (const auto& [sym, moved] : b.moved_true) {
+                    if (moved) out.moved_true[sym] = true;
+                }
+                out.active_borrows = merge_borrow_set_(a.active_borrows, b.active_borrows);
+                return out;
+            }
+
+            /// @brief 두 흐름 상태가 같은지(논리적으로) 비교한다.
+            static bool flow_state_equal_(const FlowState& a, const FlowState& b) {
+                if (a.moved_true.size() != b.moved_true.size()) return false;
+                for (const auto& [sym, moved] : a.moved_true) {
+                    auto it = b.moved_true.find(sym);
+                    if (it == b.moved_true.end()) return false;
+                    if (moved != it->second) return false;
+                }
+                return borrow_set_equal_(a.active_borrows, b.active_borrows);
+            }
+
+            /// @brief 주어진 입력 흐름 상태로 블록을 분석하고, 블록 종료 상태를 반환한다.
+            FlowState analyze_block_with_flow_(BlockId bid, const FlowState& in) {
+                const auto saved_borrows = active_borrows_;
+                const auto saved_scopes = scopes_;
+                const auto saved_moved = moved_by_escape_;
+                const auto saved_visiting = visiting_blocks_;
+
+                restore_flow_state_(in);
+                analyze_block_(bid);
+                const FlowState out = capture_flow_state_();
+
+                active_borrows_ = saved_borrows;
+                scopes_ = saved_scopes;
+                moved_by_escape_ = saved_moved;
+                visiting_blocks_ = saved_visiting;
+                return out;
+            }
+
+            /// @brief 주어진 입력 흐름 상태로 조건식을 분석하고, 종료 상태를 반환한다.
+            FlowState analyze_value_with_flow_(ValueId vid, ValueUse use, const FlowState& in) {
+                const auto saved_borrows = active_borrows_;
+                const auto saved_scopes = scopes_;
+                const auto saved_moved = moved_by_escape_;
+                const auto saved_visiting = visiting_blocks_;
+
+                restore_flow_state_(in);
+                analyze_value_(vid, use);
+                const FlowState out = capture_flow_state_();
+
+                active_borrows_ = saved_borrows;
+                scopes_ = saved_scopes;
+                moved_by_escape_ = saved_moved;
+                visiting_blocks_ = saved_visiting;
+                return out;
             }
 
             /// @brief place 기반 use-after-move를 검사한다.
@@ -535,13 +688,58 @@ namespace gaupel::sir {
 
                     case StmtKind::kIfStmt:
                         analyze_value_(s.expr, ValueUse::kValue);
-                        analyze_block_(s.a);
-                        if (s.b != k_invalid_block) analyze_block_(s.b);
+                        {
+                            // CFG join(then/else)에서 moved 상태를 경로별로 합친다.
+                            const FlowState in = capture_flow_state_();
+                            const FlowState then_out = analyze_block_with_flow_(s.a, in);
+                            const FlowState else_out =
+                                (s.b != k_invalid_block) ? analyze_block_with_flow_(s.b, in) : in;
+                            restore_flow_state_(merge_flow_state_(then_out, else_out));
+                        }
                         return;
 
                     case StmtKind::kWhileStmt:
-                        analyze_value_(s.expr, ValueUse::kValue);
-                        analyze_block_(s.a);
+                        {
+                            // while은 0회 실행 경로가 있으므로 pre와 body 경로를 합류한다.
+                            const FlowState pre = capture_flow_state_();
+                            FlowState fp = pre;
+
+                            for (uint32_t iter = 0; iter < 8; ++iter) {
+                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, fp);
+                                const FlowState body_out = analyze_block_with_flow_(s.a, cond_out);
+                                const FlowState merged = merge_flow_state_(pre, body_out);
+                                if (flow_state_equal_(merged, fp)) break;
+                                fp = merged;
+                            }
+
+                            restore_flow_state_(fp);
+                        }
+                        return;
+
+                    case StmtKind::kDoScopeStmt:
+                        {
+                            const FlowState in = capture_flow_state_();
+                            const FlowState out = analyze_block_with_flow_(s.a, in);
+                            restore_flow_state_(out);
+                        }
+                        return;
+
+                    case StmtKind::kDoWhileStmt:
+                        {
+                            // do-while은 body를 최소 1회 실행한다.
+                            const FlowState pre = capture_flow_state_();
+                            FlowState fp = analyze_block_with_flow_(s.a, pre);
+
+                            for (uint32_t iter = 0; iter < 8; ++iter) {
+                                const FlowState cond_out = analyze_value_with_flow_(s.expr, ValueUse::kValue, fp);
+                                const FlowState body_out = analyze_block_with_flow_(s.a, cond_out);
+                                const FlowState merged = merge_flow_state_(fp, body_out);
+                                if (flow_state_equal_(merged, fp)) break;
+                                fp = merged;
+                            }
+
+                            restore_flow_state_(fp);
+                        }
                         return;
 
                     case StmtKind::kReturn:
@@ -809,6 +1007,9 @@ namespace gaupel::sir {
         const ty::TypePool& types,
         diag::Bag& bag
     ) {
+        // Cap 분석은 canonical SIR을 전제로 한다.
+        // (호출 순서에 의존하지 않도록 분석 진입점에서 한 번 더 정규화한다.)
+        (void)canonicalize_for_capability(m, types);
         CapabilityAnalyzer a(m, types, bag);
         return a.run();
     }

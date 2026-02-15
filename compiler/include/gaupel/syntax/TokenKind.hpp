@@ -40,6 +40,7 @@ namespace gaupel::syntax {
         kKwElif,
         kKwElse,
         kKwWhile,
+        kKwDo,
         kKwReturn,
         kKwBreak,
         kKwContinue,
@@ -161,6 +162,7 @@ namespace gaupel::syntax {
             case TokenKind::kKwElif: return "elif";
             case TokenKind::kKwElse: return "else";
             case TokenKind::kKwWhile: return "while";
+            case TokenKind::kKwDo: return "do";
             case TokenKind::kKwLoop: return "loop";
             case TokenKind::kKwIn: return "in";
             case TokenKind::kKwReturn: return "return";

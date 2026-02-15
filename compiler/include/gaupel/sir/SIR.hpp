@@ -225,6 +225,8 @@ namespace gaupel::sir {
         kVarDecl,   // let/set
         kIfStmt,
         kWhileStmt,
+        kDoScopeStmt,
+        kDoWhileStmt,
         kReturn,
         kBreak,
         kContinue,

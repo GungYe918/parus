@@ -42,6 +42,19 @@ namespace gaupel {
         }
     }
 
+    void Parser::diag_report_warn(diag::Code code, Span span, std::string_view a0) {
+        if (!diags_ || aborted_) return;
+
+        // 경고도 같은 위치/코드 중복 출력은 억제한다.
+        if (span.lo == last_diag_lo_ && code == last_diag_code_) return;
+        last_diag_lo_ = span.lo;
+        last_diag_code_ = code;
+
+        diag::Diagnostic d(diag::Severity::kWarning, code, span);
+        if (!a0.empty()) d.add_arg(a0);
+        diags_->add(std::move(d));
+    }
+
 
     void Parser::diag_report_int(diag::Code code, Span span, int v0) {
         std::string tmp = std::to_string(v0);
@@ -120,7 +133,7 @@ namespace gaupel {
             if (k1 == K::kKwLet || k1 == K::kKwSet || k1 == K::kKwStatic) return true;
         }
         if (k == K::kKwReturn || k == K::kKwBreak || k == K::kKwContinue)   return true;
-        if (k == K::kKwWhile || k == K::kKwSwitch)                          return true;
+        if (k == K::kKwWhile || k == K::kKwDo || k == K::kKwSwitch)         return true;
         if (k == K::kKwUse)                                                 return true;
 
         // if/loop/{...} 는 expr도 될 수 있으므로 여기 넣지 않음

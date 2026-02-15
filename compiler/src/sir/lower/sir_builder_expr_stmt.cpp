@@ -449,6 +449,15 @@ namespace gaupel::sir::detail {
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
                 break;
+            case gaupel::ast::StmtKind::kDoScope:
+                out.kind = StmtKind::kDoScopeStmt;
+                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                break;
+            case gaupel::ast::StmtKind::kDoWhile:
+                out.kind = StmtKind::kDoWhileStmt;
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                if (s.a != gaupel::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                break;
 
             case gaupel::ast::StmtKind::kReturn:
                 out.kind = StmtKind::kReturn;

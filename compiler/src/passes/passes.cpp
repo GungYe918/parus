@@ -42,6 +42,13 @@ namespace gaupel::passes {
                     on_expr(st.expr);
                     on_stmt(st.a);
                     break;
+                case ast::StmtKind::kDoScope:
+                    on_stmt(st.a);
+                    break;
+                case ast::StmtKind::kDoWhile:
+                    on_stmt(st.a);
+                    on_expr(st.expr);
+                    break;
 
                 case ast::StmtKind::kReturn:
                     on_expr(st.expr);

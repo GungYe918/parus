@@ -92,6 +92,11 @@ namespace gaupel::diag {
         kWhileHeaderExpectedLParen,   // while ( ... ) 에서 '(' 없음
         kWhileHeaderExpectedRParen,   // while ( ... ) 에서 ')' 없음
         kWhileBodyExpectedBlock,      // while (...) { ... } 에서 block 없음
+        kDoBodyExpectedBlock,         // do { ... } 에서 block 없음
+        kDoWhileExpectedLParen,       // do { ... } while (...) 에서 '(' 없음
+        kDoWhileExpectedRParen,       // do { ... } while (...) 에서 ')' 없음
+        kDoWhileExpectedSemicolon,    // do { ... } while (...); 에서 ';' 없음
+        kBareBlockScopePreferDo,      // 단독 '{...}' 블록은 do { ... } 사용 권장 (warning)
 
         // ---- loop parsing ----
         kLoopHeaderExpectedLParen,  // loop ( ... ) 형태인데 '(' 없음

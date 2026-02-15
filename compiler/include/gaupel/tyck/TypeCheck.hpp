@@ -79,6 +79,8 @@ namespace gaupel::tyck {
         void check_stmt_var_(ast::StmtId sid);
         void check_stmt_if_(const ast::Stmt& s);
         void check_stmt_while_(const ast::Stmt& s);
+        void check_stmt_do_scope_(const ast::Stmt& s);
+        void check_stmt_do_while_(const ast::Stmt& s);
         void check_stmt_return_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
         void check_stmt_fn_decl_(const ast::Stmt& s);

@@ -88,6 +88,11 @@ namespace gaupel::diag {
             case Code::kWhileHeaderExpectedLParen: return "WhileHeaderExpectedLParen";
             case Code::kWhileHeaderExpectedRParen: return "WhileHeaderExpectedRParen";
             case Code::kWhileBodyExpectedBlock:    return "WhileBodyExpectedBlock";
+            case Code::kDoBodyExpectedBlock:       return "DoBodyExpectedBlock";
+            case Code::kDoWhileExpectedLParen:     return "DoWhileExpectedLParen";
+            case Code::kDoWhileExpectedRParen:     return "DoWhileExpectedRParen";
+            case Code::kDoWhileExpectedSemicolon:  return "DoWhileExpectedSemicolon";
+            case Code::kBareBlockScopePreferDo:    return "BareBlockScopePreferDo";
             case Code::kLoopHeaderExpectedLParen:    return "LoopHeaderExpectedLParen";
             case Code::kLoopHeaderVarExpectedIdent:  return "LoopHeaderVarExpectedIdent";
             case Code::kLoopHeaderExpectedIn:        return "LoopHeaderExpectedIn";
@@ -261,6 +266,11 @@ namespace gaupel::diag {
             case Code::kWhileHeaderExpectedLParen: return "expected '(' after 'while'";
             case Code::kWhileHeaderExpectedRParen: return "expected ')' to close while header";
             case Code::kWhileBodyExpectedBlock:    return "expected while body block '{ ... }'";
+            case Code::kDoBodyExpectedBlock:       return "expected do body block '{ ... }'";
+            case Code::kDoWhileExpectedLParen:     return "expected '(' after 'while' in do-while";
+            case Code::kDoWhileExpectedRParen:     return "expected ')' to close do-while condition";
+            case Code::kDoWhileExpectedSemicolon:  return "expected ';' after do-while condition";
+            case Code::kBareBlockScopePreferDo:    return "bare block scope is allowed but 'do { ... }' is preferred";
             case Code::kLoopHeaderExpectedLParen:   return "expected '(' after 'loop' header";
             case Code::kLoopHeaderVarExpectedIdent: return "loop header variable must be an identifier";
             case Code::kLoopHeaderExpectedIn:       return "expected 'in' in loop header (e.g., loop (v in xs))";
@@ -440,6 +450,11 @@ namespace gaupel::diag {
             case Code::kWhileHeaderExpectedLParen: return "'while' 뒤에는 '('이(가) 필요합니다";
             case Code::kWhileHeaderExpectedRParen: return "while 헤더를 닫는 ')'이(가) 필요합니다";
             case Code::kWhileBodyExpectedBlock:    return "while 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kDoBodyExpectedBlock:       return "do 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kDoWhileExpectedLParen:     return "do-while의 'while' 뒤에는 '('이(가) 필요합니다";
+            case Code::kDoWhileExpectedRParen:     return "do-while 조건을 닫는 ')'이(가) 필요합니다";
+            case Code::kDoWhileExpectedSemicolon:  return "do-while 조건 뒤에는 ';'이(가) 필요합니다";
+            case Code::kBareBlockScopePreferDo:    return "단독 블록 스코프도 허용되지만 'do { ... }' 사용을 권장합니다";
 
             case Code::kLoopHeaderExpectedLParen:   return "'loop' 헤더 뒤에는 '('이(가) 필요합니다";
             case Code::kLoopHeaderVarExpectedIdent: return "loop 헤더의 변수는 식별자(ident)여야 합니다";

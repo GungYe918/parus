@@ -49,6 +49,8 @@ namespace gaupel {
 
         //  진단을 기록 (중복 스팸 방지, max-errors 처리 포함)
         void diag_report(diag::Code code, Span span, std::string_view a0 = {});
+        /// @brief 경고 진단을 기록한다(파싱 오류 카운트에는 반영하지 않음).
+        void diag_report_warn(diag::Code code, Span span, std::string_view a0 = {});
 
         //  정수 인자를 포함하는 진단을 기록
         void diag_report_int(diag::Code code, Span span, int v0);
@@ -139,6 +141,8 @@ namespace gaupel {
 
         //  while 파싱
         ast::StmtId parse_stmt_while();
+        //  do / do-while 파싱
+        ast::StmtId parse_stmt_do();
 
         //  return 파싱
         ast::StmtId parse_stmt_return();

@@ -436,6 +436,13 @@ namespace gaupel::passes {
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
                 walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
                 return;
+            case ast::StmtKind::kDoScope:
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
+                return;
+            case ast::StmtKind::kDoWhile:
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
+                return;
 
             case ast::StmtKind::kReturn:
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);

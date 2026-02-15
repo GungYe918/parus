@@ -43,6 +43,12 @@ namespace gaupel::tyck {
             case ast::StmtKind::kWhile:
                 check_stmt_while_(s);
                 return;
+            case ast::StmtKind::kDoScope:
+                check_stmt_do_scope_(s);
+                return;
+            case ast::StmtKind::kDoWhile:
+                check_stmt_do_while_(s);
+                return;
 
             case ast::StmtKind::kReturn:
                 check_stmt_return_(s);
@@ -315,6 +321,31 @@ namespace gaupel::tyck {
         }
     }
 
+    /// @brief `do { ... }` 문장을 타입체크한다.
+    void TypeChecker::check_stmt_do_scope_(const ast::Stmt& s) {
+        if (s.a != ast::k_invalid_stmt) {
+            check_stmt_(s.a);
+        }
+    }
+
+    /// @brief `do { ... } while (cond);` 문장을 타입체크한다.
+    void TypeChecker::check_stmt_do_while_(const ast::Stmt& s) {
+        // do-while도 반복문이므로 body 내부의 break/continue 문맥을 허용한다.
+        if (s.a != ast::k_invalid_stmt) {
+            ++stmt_loop_depth_;
+            check_stmt_(s.a);
+            if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+        }
+
+        if (s.expr != ast::k_invalid_expr) {
+            ty::TypeId ct = check_expr_(s.expr);
+            if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+                diag_(diag::Code::kTypeCondMustBeBool, ast_.expr(s.expr).span, types_.to_string(ct));
+                err_(s.span, "do-while condition must be bool");
+            }
+        }
+    }
+
     void TypeChecker::check_stmt_return_(const ast::Stmt& s) {
         if (!fn_ctx_.in_fn) {
             diag_(diag::Code::kTypeReturnOutsideFn, s.span);
@@ -514,8 +545,12 @@ namespace gaupel::tyck {
                         return self(self, st.a) && self(self, st.b);
                     }
 
+                    case ast::StmtKind::kDoScope:
+                        return (st.a != ast::k_invalid_stmt) ? self(self, st.a) : false;
+
                     // while/loop/switch 등은 v0에서 보수적으로 false
                     case ast::StmtKind::kWhile:
+                    case ast::StmtKind::kDoWhile:
                     case ast::StmtKind::kSwitch:
                         return false;
 

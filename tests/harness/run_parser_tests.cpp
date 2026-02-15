@@ -71,6 +71,7 @@ namespace {
         out.mod = gaupel::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt
         );
+        (void)gaupel::sir::canonicalize_for_capability(out.mod, p.types);
         out.verify_errors = gaupel::sir::verify_module(out.mod);
         out.cap = gaupel::sir::analyze_capabilities(out.mod, p.types, p.bag);
         out.handle_verify_errors = gaupel::sir::verify_escape_handles(out.mod);

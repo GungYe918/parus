@@ -63,6 +63,8 @@ namespace gaupelc::dump {
             case K::kVarDecl: return "VarDecl";
             case K::kIfStmt: return "IfStmt";
             case K::kWhileStmt: return "WhileStmt";
+            case K::kDoScopeStmt: return "DoScopeStmt";
+            case K::kDoWhileStmt: return "DoWhileStmt";
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
@@ -165,6 +167,8 @@ namespace gaupelc::dump {
             case K::kVar: return "Var";
             case K::kIf: return "If";
             case K::kWhile: return "While";
+            case K::kDoScope: return "DoScope";
+            case K::kDoWhile: return "DoWhile";
             case K::kUse:  return "Use";
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
@@ -341,6 +345,13 @@ namespace gaupelc::dump {
             case StmtKind::kWhileStmt:
                 collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
                 push_block(s.a);
+                break;
+            case StmtKind::kDoScopeStmt:
+                push_block(s.a);
+                break;
+            case StmtKind::kDoWhileStmt:
+                push_block(s.a);
+                collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
                 break;
 
             case StmtKind::kReturn:
@@ -960,6 +971,21 @@ namespace gaupelc::dump {
                 for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
                 std::cout << "Body:\n";
                 dump_stmt(ast, types, s.a, indent + 2);
+                break;
+
+            case gaupel::ast::StmtKind::kDoScope:
+                for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+                std::cout << "DoBody:\n";
+                dump_stmt(ast, types, s.a, indent + 2);
+                break;
+
+            case gaupel::ast::StmtKind::kDoWhile:
+                for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+                std::cout << "DoBody:\n";
+                dump_stmt(ast, types, s.a, indent + 2);
+                for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+                std::cout << "Cond:\n";
+                dump_expr(ast, s.expr, indent + 2);
                 break;
 
             case gaupel::ast::StmtKind::kReturn:

@@ -191,6 +191,13 @@ namespace gaupel::sir::detail {
                 join_value(s.expr);
                 if (s.a != k_invalid_block) join_block(s.a);
                 break;
+            case StmtKind::kDoScopeStmt:
+                if (s.a != k_invalid_block) join_block(s.a);
+                break;
+            case StmtKind::kDoWhileStmt:
+                if (s.a != k_invalid_block) join_block(s.a);
+                join_value(s.expr);
+                break;
 
             default:
                 break;

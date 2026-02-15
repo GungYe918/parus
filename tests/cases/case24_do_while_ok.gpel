@@ -1,0 +1,8 @@
+// 허용 케이스: do-while 반복문
+fn main() -> i32 {
+  set mut i = 0i32;
+  do {
+    i = i + 1i32;
+  } while (i < 3i32);
+  return i;
+}

@@ -118,12 +118,17 @@ namespace gaupel {
 
         // block
         if (tok.kind == syntax::TokenKind::kLBrace) {
+            // NOTE:
+            // - 하위 호환을 위해 단독 '{ ... }' 블록 문장은 유지한다.
+            // - 다만 가독성을 위해 일반 스코프는 'do { ... }'를 권장한다.
+            diag_report_warn(diag::Code::kBareBlockScopePreferDo, tok.span);
             return parse_stmt_block();
         }
 
         // keyword stmts
         if (tok.kind == K::kKwIf)       return parse_stmt_if();
         if (tok.kind == K::kKwWhile)    return parse_stmt_while();
+        if (tok.kind == K::kKwDo)       return parse_stmt_do();
         if (tok.kind == K::kKwReturn)   return parse_stmt_return();
         if (tok.kind == K::kKwBreak)    return parse_stmt_break();
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();

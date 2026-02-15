@@ -78,6 +78,8 @@ namespace gaupel::ast {
         kVar,         // let/set
         kIf,
         kWhile,
+        kDoScope,     // do { ... }
+        kDoWhile,     // do { ... } while (cond);
         kReturn,
         kBreak,
         kContinue,

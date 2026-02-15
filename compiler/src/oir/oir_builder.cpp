@@ -466,6 +466,42 @@ namespace gaupel::oir {
                 return;
             }
 
+            case gaupel::sir::StmtKind::kDoScopeStmt: {
+                // do { ... } : body를 1회 실행하는 명시 스코프
+                push_scope();
+                lower_block(s.a);
+                pop_scope();
+                return;
+            }
+
+            case gaupel::sir::StmtKind::kDoWhileStmt: {
+                // do-while: body를 먼저 실행하고 조건을 검사한다.
+                BlockId body_bb = new_block();
+                BlockId cond_bb = new_block();
+                BlockId exit_bb = new_block();
+
+                if (!has_term()) br(body_bb, {});
+
+                // body
+                fn->blocks.push_back(body_bb);
+                cur_bb = body_bb;
+                push_scope();
+                lower_block(s.a);
+                pop_scope();
+                if (!has_term()) br(cond_bb, {});
+
+                // cond
+                fn->blocks.push_back(cond_bb);
+                cur_bb = cond_bb;
+                ValueId cond = lower_value(s.expr);
+                condbr(cond, body_bb, {}, exit_bb, {});
+
+                // exit
+                fn->blocks.push_back(exit_bb);
+                cur_bb = exit_bb;
+                return;
+            }
+
             case gaupel::sir::StmtKind::kIfStmt: {
                 // v0: stmt-level if (not expression). SIR: s.expr=cond, s.a=then block, s.b=else block
                 BlockId then_bb = new_block();

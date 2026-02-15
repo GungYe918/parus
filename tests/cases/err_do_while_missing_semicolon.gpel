@@ -1,0 +1,8 @@
+// 비허용 케이스: do-while은 조건 뒤 ';'이 필요함
+fn main() -> i32 {
+  set mut i = 0i32;
+  do {
+    i = i + 1i32;
+  } while (i < 3i32)
+  return i;
+}

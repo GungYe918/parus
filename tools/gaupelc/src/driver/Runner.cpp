@@ -177,6 +177,11 @@ namespace gaupelc::driver {
                     bopt
                 );
 
+                const auto canon = gaupel::sir::canonicalize_for_capability(sir_mod, types);
+                std::cout << "\nSIR CANON:\n";
+                std::cout << "rewritten values: " << canon.rewritten_values
+                          << ", rewritten calls: " << canon.rewritten_calls << "\n";
+
                 const auto sir_verrs = gaupel::sir::verify_module(sir_mod);
                 std::cout << "\nSIR VERIFY:\n";
                 if (sir_verrs.empty()) {
