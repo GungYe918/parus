@@ -382,6 +382,78 @@ namespace parus::backend::aot {
             return out;
         }
 
+        /// @brief lowering 전제: edge incoming 타입/개수가 block param과 일치하는지 검사한다.
+        std::vector<std::string> verify_phi_incoming_contract_(
+            const parus::oir::Module& m,
+            const std::vector<std::string>& value_types
+        ) {
+            using namespace parus::oir;
+            std::vector<std::string> errs;
+
+            for (const auto& fn : m.funcs) {
+                std::unordered_set<BlockId> owned;
+                for (auto bb : fn.blocks) owned.insert(bb);
+
+                auto check_edge = [&](BlockId pred, BlockId target, const std::vector<ValueId>& args) {
+                    if (target == kInvalidId || static_cast<size_t>(target) >= m.blocks.size()) return;
+                    if (!owned.contains(target)) return;
+                    const auto& tb = m.blocks[target];
+
+                    if (args.size() != tb.params.size()) {
+                        errs.push_back(
+                            "phi incoming arity mismatch in function '" + fn.name +
+                            "': pred bb" + std::to_string(pred) +
+                            " -> bb" + std::to_string(target) +
+                            " has " + std::to_string(args.size()) +
+                            " args, but target expects " + std::to_string(tb.params.size())
+                        );
+                    }
+
+                    const uint32_t n = std::min<uint32_t>(
+                        static_cast<uint32_t>(args.size()),
+                        static_cast<uint32_t>(tb.params.size())
+                    );
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const auto arg = args[i];
+                        const auto param = tb.params[i];
+                        if (arg == kInvalidId || param == kInvalidId) continue;
+                        if (static_cast<size_t>(arg) >= value_types.size()) continue;
+                        if (static_cast<size_t>(param) >= value_types.size()) continue;
+                        if (value_types[arg] == value_types[param]) continue;
+
+                        errs.push_back(
+                            "phi incoming type mismatch in function '" + fn.name +
+                            "': pred bb" + std::to_string(pred) +
+                            " -> bb" + std::to_string(target) +
+                            ", idx " + std::to_string(i) +
+                            ", arg type '" + value_types[arg] +
+                            "' != param type '" + value_types[param] + "'"
+                        );
+                    }
+                };
+
+                for (auto bb : fn.blocks) {
+                    if (bb == kInvalidId || static_cast<size_t>(bb) >= m.blocks.size()) continue;
+                    const auto& b = m.blocks[bb];
+                    if (!b.has_term) continue;
+
+                    std::visit([&](auto&& t) {
+                        using T = std::decay_t<decltype(t)>;
+                        if constexpr (std::is_same_v<T, TermBr>) {
+                            check_edge(bb, t.target, t.args);
+                        } else if constexpr (std::is_same_v<T, TermCondBr>) {
+                            check_edge(bb, t.then_bb, t.then_args);
+                            check_edge(bb, t.else_bb, t.else_args);
+                        } else if constexpr (std::is_same_v<T, TermRet>) {
+                            // no edge
+                        }
+                    }, b.term);
+                }
+            }
+
+            return errs;
+        }
+
         /// @brief OIR 함수 하나를 LLVM-IR 함수 텍스트로 변환한다.
         class FunctionEmitter {
         public:
@@ -590,13 +662,9 @@ namespace parus::backend::aot {
                         for (const auto& edge : it->second) {
                             if (i >= edge.args.size()) continue;
                             const auto arg = edge.args[i];
-                            // phi는 블록 맨 앞에 연속으로 위치해야 하므로,
-                            // 여기서는 추가 명령(coerce)을 생성하지 않는다.
-                            // 타입이 맞지 않는 incoming은 보수적으로 zero literal로 다운그레이드한다.
+                            // phi는 블록 맨 앞에 연속으로 위치해야 하므로
+                            // edge-cast 정규화된 입력만 사용한다.
                             std::string arg_ref = vref_(arg);
-                            if (value_ty_(arg) != pty) {
-                                arg_ref = zero_literal_(pty);
-                            }
                             incoming_texts.push_back("[ " + arg_ref + ", %" + bref_(edge.pred) + " ]");
                         }
                     }
@@ -932,6 +1000,18 @@ namespace parus::backend::aot {
 
         const auto value_types = build_value_type_table_(oir, types);
         const auto value_uses = build_value_use_table_(oir);
+        const auto phi_contract_errors = verify_phi_incoming_contract_(oir, value_types);
+        if (!phi_contract_errors.empty()) {
+            out.ok = false;
+            for (const auto& e : phi_contract_errors) {
+                out.messages.push_back(CompileMessage{true, e});
+            }
+            out.messages.push_back(CompileMessage{
+                true,
+                "OIR->LLVM lowering aborted: phi incoming contract violation. Run OIR edge-cast normalization first."
+            });
+            return out;
+        }
         bool need_call_stub = false;
 
         for (const auto& fn : oir.funcs) {

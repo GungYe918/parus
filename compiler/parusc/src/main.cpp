@@ -31,5 +31,5 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    return parusc::driver::run(opt);
+    return parusc::driver::run(opt, argv[0]);
 }

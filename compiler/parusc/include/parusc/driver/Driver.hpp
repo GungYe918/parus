@@ -6,6 +6,6 @@
 namespace parusc::driver {
 
     /// @brief 단일 입력 파일에 대해 프론트엔드+백엔드를 실행한다.
-    int run(const cli::Options& opt);
+    int run(const cli::Options& opt, const char* argv0);
 
 } // namespace parusc::driver

@@ -23,10 +23,11 @@
 
 #if PARUSC_HAS_AOT_BACKEND
 #include <parus/backend/aot/AOTBackend.hpp>
+#include <parus/backend/link/Linker.hpp>
 #endif
 
-#include <cstdlib>
 #include <filesystem>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -60,6 +61,30 @@ namespace parusc::p0 {
         }
 
 #if PARUSC_HAS_AOT_BACKEND
+        /// @brief 드라이버 실행 경로를 기준으로 PARUS_LLD 환경 변수를 자동 설정한다.
+        void seed_parus_lld_env_from_driver_(const Invocation& inv) {
+            if (std::getenv("PARUS_LLD") != nullptr) {
+                return;
+            }
+            if (inv.driver_executable_path.empty()) {
+                return;
+            }
+
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            const fs::path driver_path(inv.driver_executable_path);
+            const fs::path candidate = driver_path.parent_path() / "parus-lld";
+            if (!fs::exists(candidate, ec) || ec) {
+                return;
+            }
+
+#if defined(_WIN32)
+            _putenv_s("PARUS_LLD", candidate.string().c_str());
+#else
+            setenv("PARUS_LLD", candidate.string().c_str(), 0);
+#endif
+        }
+
         /// @brief 백엔드 메시지를 표준 에러로 출력하고 실패 여부를 반환한다.
         bool print_backend_messages_(const parus::backend::CompileResult& r) {
             bool has_error = false;
@@ -74,45 +99,36 @@ namespace parusc::p0 {
             return has_error;
         }
 
-        /// @brief 쉘 인자를 단일 인용부호 형태로 이스케이프한다.
-        std::string shell_quote_(const std::string& s) {
-            std::string out;
-            out.reserve(s.size() + 8);
-            out.push_back('\'');
-            for (char c : s) {
-                if (c == '\'') out += "'\\''";
-                else out.push_back(c);
+        /// @brief CLI 링커 모드를 backend 링크 API 모드로 매핑한다.
+        parus::backend::link::LinkerMode to_backend_linker_mode_(cli::LinkerMode mode) {
+            using In = cli::LinkerMode;
+            using Out = parus::backend::link::LinkerMode;
+            switch (mode) {
+                case In::kParusLld: return Out::kParusLld;
+                case In::kSystemLld: return Out::kSystemLld;
+                case In::kSystemClang: return Out::kSystemClang;
+                case In::kAuto:
+                default:
+                    return Out::kAuto;
             }
-            out.push_back('\'');
-            return out;
         }
 
-        /// @brief 시스템 링커(clang++ driver)를 통해 단일 object를 실행 파일로 링크한다.
-        bool link_single_object_to_exe_(
-            const std::string& object_path,
-            const std::string& exe_path,
-            std::string& out_err
-        ) {
-            namespace fs = std::filesystem;
-            if (!fs::exists(object_path)) {
-                out_err = "object file not found for linking: " + object_path;
-                return false;
+        /// @brief backend 링크 메시지를 표준 입출력으로 출력하고 오류 여부를 반환한다.
+        bool print_link_messages_(const parus::backend::link::LinkResult& r) {
+            bool has_error = false;
+            for (const auto& m : r.messages) {
+                if (m.is_error) {
+                    if (r.ok) {
+                        std::cerr << "note: " << m.text << "\n";
+                    } else {
+                        has_error = true;
+                        std::cerr << "error: " << m.text << "\n";
+                    }
+                } else {
+                    std::cout << m.text << "\n";
+                }
             }
-
-            std::string linker = "/usr/bin/clang++";
-            if (!fs::exists(linker)) linker = "clang++";
-
-            const std::string cmd =
-                shell_quote_(linker) + " " +
-                shell_quote_(object_path) + " -o " +
-                shell_quote_(exe_path);
-
-            const int rc = std::system(cmd.c_str());
-            if (rc != 0) {
-                out_err = "linker invocation failed (exit=" + std::to_string(rc) + ")";
-                return false;
-            }
-            return true;
+            return has_error;
         }
 #endif
 
@@ -220,6 +236,8 @@ namespace parusc::p0 {
         }
 
 #if PARUSC_HAS_AOT_BACKEND
+        seed_parus_lld_env_from_driver_(inv);
+
         parus::backend::CompileOptions backend_opt{};
         backend_opt.opt_level = opt.opt_level;
         backend_opt.aot_engine = parus::backend::AOTEngine::kLlvm;
@@ -251,14 +269,24 @@ namespace parusc::p0 {
         if (!cr.ok || has_backend_error) return 1;
 
         if (emit_executable) {
-            std::string link_err;
-            if (!link_single_object_to_exe_(object_for_link, final_exe_output, link_err)) {
-                std::cerr << "error: " << link_err << "\n";
+            parus::backend::link::LinkOptions link_opt{};
+            link_opt.object_paths = {object_for_link};
+            link_opt.output_path = final_exe_output;
+            link_opt.mode = to_backend_linker_mode_(opt.linker_mode);
+            link_opt.allow_fallback = opt.allow_link_fallback;
+
+            const auto link_res = parus::backend::link::link_executable(link_opt);
+            const bool has_link_error = print_link_messages_(link_res);
+            if (!link_res.ok || has_link_error) {
                 return 1;
             }
             std::error_code ec;
             std::filesystem::remove(object_for_link, ec);
-            std::cout << "linked executable to " << final_exe_output << "\n";
+            std::cout << "linked executable to " << final_exe_output;
+            if (!link_res.linker_used.empty()) {
+                std::cout << " (via " << link_res.linker_used << ")";
+            }
+            std::cout << "\n";
         }
         return 0;
 #else

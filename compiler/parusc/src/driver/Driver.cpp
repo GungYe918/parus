@@ -15,6 +15,7 @@ namespace parusc::driver {
         /// @brief 입력 파일을 읽고 내부 컴파일러 호출 정보를 구성한다.
         bool prepare_invocation_(
             const cli::Options& opt,
+            const char* argv0,
             p0::Invocation& out_inv,
             std::string& out_err
         ) {
@@ -34,18 +35,21 @@ namespace parusc::driver {
             out_inv.input_path = input;
             out_inv.normalized_input_path = parus::normalize_path(input);
             out_inv.source_text = std::move(src);
+            if (argv0 != nullptr) {
+                out_inv.driver_executable_path = parus::normalize_path(argv0);
+            }
             out_inv.options = &opt;
             return true;
         }
 
     } // namespace
 
-    int run(const cli::Options& opt) {
+    int run(const cli::Options& opt, const char* argv0) {
         switch (opt.mode) {
             case cli::Mode::kCompile: {
                 p0::Invocation inv{};
                 std::string err;
-                if (!prepare_invocation_(opt, inv, err)) {
+                if (!prepare_invocation_(opt, argv0, inv, err)) {
                     std::cerr << "error: " << err << "\n";
                     return 1;
                 }

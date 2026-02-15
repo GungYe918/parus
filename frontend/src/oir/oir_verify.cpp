@@ -1,6 +1,7 @@
 // frontend/src/oir/oir_verify.cpp
 #include <parus/oir/Verify.hpp>
 
+#include <algorithm>
 #include <sstream>
 #include <string>
 #include <type_traits>
@@ -83,6 +84,22 @@ namespace parus::oir {
                                 << ", target bb#" << t.target << " expects " << target.params.size();
                             push_error_(errs, oss.str());
                         }
+                        const uint32_t n = static_cast<uint32_t>(
+                            std::min<size_t>(t.args.size(), target.params.size())
+                        );
+                        for (uint32_t i = 0; i < n; ++i) {
+                            const ValueId arg = t.args[i];
+                            const ValueId param = target.params[i];
+                            if (arg == kInvalidId || param == kInvalidId) continue;
+                            if ((size_t)arg >= m.values.size() || (size_t)param >= m.values.size()) continue;
+                            if (m.values[arg].ty != m.values[param].ty) {
+                                std::ostringstream oss;
+                                oss << "block #" << bbid << " br arg type mismatch at index " << i
+                                    << ": arg v" << arg << "(ty=" << m.values[arg].ty << ") != "
+                                    << "target param v" << param << "(ty=" << m.values[param].ty << ")";
+                                push_error_(errs, oss.str());
+                            }
+                        }
                     }
                 } else if constexpr (std::is_same_v<T, TermCondBr>) {
                     (void)check_value_id_(m, errs, bbid, "block(term cond)", t.cond);
@@ -112,6 +129,23 @@ namespace parus::oir {
                                 << " arg count mismatch: got " << args.size()
                                 << ", target bb#" << target << " expects " << target_block.params.size();
                             push_error_(errs, oss.str());
+                        }
+                        const uint32_t n = static_cast<uint32_t>(
+                            std::min<size_t>(args.size(), target_block.params.size())
+                        );
+                        for (uint32_t i = 0; i < n; ++i) {
+                            const ValueId arg = args[i];
+                            const ValueId param = target_block.params[i];
+                            if (arg == kInvalidId || param == kInvalidId) continue;
+                            if ((size_t)arg >= m.values.size() || (size_t)param >= m.values.size()) continue;
+                            if (m.values[arg].ty != m.values[param].ty) {
+                                std::ostringstream oss;
+                                oss << "block #" << bbid << " condbr " << tag
+                                    << " arg type mismatch at index " << i
+                                    << ": arg v" << arg << "(ty=" << m.values[arg].ty << ") != "
+                                    << "target param v" << param << "(ty=" << m.values[param].ty << ")";
+                                push_error_(errs, oss.str());
+                            }
                         }
                     };
 

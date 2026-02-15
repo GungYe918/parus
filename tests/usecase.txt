@@ -22,6 +22,10 @@ find out -maxdepth 1 -type f \( -name '*.o' -o -name '*.ll' \) -delete
 # 5) check generated object files
 ls -lah out/*.o
 
+# 5-1) default compile path (no -Xparus) -> object emission + backend link API -> executable
+../build/compiler/parusc/parusc oir_cases/case1_index_read.pr -o out/case1_index_read.bin
+ls -lah out/case1_index_read.bin
+
 # 6) if LLVM object emission is unavailable in this build,
 #    verify lowering itself via LLVM-IR text output (.ll)
 ../build/compiler/parusc/parusc oir_cases/case1_index_read.pr -Xparus -emit-llvm-ir -o out/case1_index_read.ll

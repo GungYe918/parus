@@ -19,6 +19,10 @@ backend/
   CMakeLists.txt
   include/parus/backend/
     Backend.hpp
+    link/
+      Linker.hpp
+    parlib/
+      Parlib.hpp
     aot/
       AOTBackend.hpp
       AOTLLVMDispatcher.hpp
@@ -34,12 +38,22 @@ backend/
       AOTBackendLLVMDispatch.cpp
       LLVMIRLowering.cpp
       LLVMObjectEmission.cpp
+    link/
+      CMakeLists.txt
+      Linker.cpp
+    parlib/
+      CMakeLists.txt
+      Parlib.cpp
     jit/
       CMakeLists.txt
       JITBackend.cpp
     wasm/
       CMakeLists.txt
       WasmBackend.cpp
+  tools/
+    parus-lld/
+      CMakeLists.txt
+      main.cpp
   llvmconfig/
     CMakeLists.txt
     lanes/
@@ -112,6 +126,11 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
    - `llvm-config --link-static --libfiles all --system-libs`를 기반으로 정적 링크
    - 외부 `clang -x ir -c` fallback은 사용하지 않음
    - target triple/cpu/opt level 옵션을 그대로 반영
+7. 실행 파일 링크는 `backend/link` API를 통해 수행
+   - 기본: `parus-lld`
+   - 실패 시 정책에 따라 `clang++ -fuse-ld=lld`, `clang++` 순으로 fallback
+   - `parusc`는 직접 링커 명령을 조립하지 않고 backend API만 호출
+   - `parus-lld` 바이너리는 빌드 시 `build/compiler/parusc/`로 배치되어 드라이버가 자동 발견
 
 ## 6) 향후 확장 계획
 
@@ -132,6 +151,23 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 
 - OIR -> WASM IR 또는 중간 추상 계층 설계
 - ABI/메모리 모델 정책 정의
+
+### 6.4 PARLIB
+
+- `*.parlib` v1 구현(`backend/src/parlib`) 완료
+- 파일 레이아웃:
+  - Header(`PRLB`, format version, target triple, feature bits)
+  - TOC(고정 길이 entry: kind/lane/offset/size/alignment/compression/checksum/hash)
+  - Chunk data 영역
+- 기본 lane `pcore/prt/pstd` 고정, lane별 `SymbolIndex` 분리
+- 필수 chunk:
+  - `Manifest`, `StringTable`
+  - lane별 `SymbolIndex`, `TypeMeta`, `OIRArchive`, `ObjectArchive`
+  - `Debug`(옵션)
+- API:
+  - `build_parlib(...)`
+  - `inspect_parlib(...)`
+  - 호환 API `build_parlib_skeleton(...)`는 내부적으로 `build_parlib(...)` 호출
 
 ## 7) 유지보수 체크리스트
 

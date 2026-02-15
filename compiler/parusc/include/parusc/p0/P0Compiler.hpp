@@ -12,6 +12,7 @@ namespace parusc::p0 {
         std::string input_path{};
         std::string normalized_input_path{};
         std::string source_text{};
+        std::string driver_executable_path{};
         const cli::Options* options = nullptr;
     };
 

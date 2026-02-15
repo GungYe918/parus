@@ -12,6 +12,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace parus::oir {
@@ -49,8 +50,22 @@ namespace parus::oir {
         /// @brief 메모리 접근이 어떤 별칭 범위를 건드리는지 요약한다.
         enum class AliasFootprint : uint8_t {
             None,
-            LocalSlot,
+            LocalMemory,
             Unknown,
+        };
+
+        /// @brief 메모리 위치 추적 정밀도.
+        enum class MemoryLocPrecision : uint8_t {
+            Unknown,
+            BaseOnly,
+            Exact,
+        };
+
+        /// @brief OIR value가 가리키는 메모리 위치(기저 slot + 경로)를 요약한다.
+        struct MemoryLocDesc {
+            ValueId base_slot = kInvalidId;
+            std::string path{};
+            MemoryLocPrecision precision = MemoryLocPrecision::Unknown;
         };
 
         /// @brief OIR 명령의 effect/alias 요약 정보.
@@ -65,6 +80,8 @@ namespace parus::oir {
 
             ValueId read_slot = kInvalidId;
             ValueId write_slot = kInvalidId;
+            MemoryLocDesc read_loc{};
+            MemoryLocDesc write_loc{};
         };
 
         /// @brief ValueId 치환 테이블을 따라 최종 대표 값을 찾는다.
@@ -77,6 +94,82 @@ namespace parus::oir {
                 cur = it->second;
             }
             return cur;
+        }
+
+        /// @brief 메모리 위치가 유효한 base slot을 갖는지 검사한다.
+        bool has_memory_base_(const MemoryLocDesc& loc) {
+            return loc.base_slot != kInvalidId;
+        }
+
+        /// @brief ValueId에서 기저 slot + projection 경로를 추출한다.
+        MemoryLocDesc resolve_memory_loc_from_value_(
+            const Module& m,
+            ValueId v,
+            uint32_t depth = 0
+        ) {
+            if (v == kInvalidId || (size_t)v >= m.values.size()) return {};
+            if (depth > 32) return {};
+
+            const auto& val = m.values[v];
+            if (val.def_b != kInvalidId) {
+                // block-param은 별도 메모리 위치 보증이 없다.
+                return {};
+            }
+            if (val.def_a == kInvalidId || (size_t)val.def_a >= m.insts.size()) return {};
+
+            const auto& inst = m.insts[val.def_a];
+            if (std::holds_alternative<InstAllocaLocal>(inst.data)) {
+                MemoryLocDesc out{};
+                out.base_slot = v;
+                out.path.clear();
+                out.precision = MemoryLocPrecision::Exact;
+                return out;
+            }
+
+            if (std::holds_alternative<InstField>(inst.data)) {
+                const auto& fld = std::get<InstField>(inst.data);
+                auto base = resolve_memory_loc_from_value_(m, fld.base, depth + 1);
+                if (!has_memory_base_(base)) return {};
+                base.path += ".";
+                base.path += fld.field;
+                return base;
+            }
+
+            if (std::holds_alternative<InstIndex>(inst.data)) {
+                const auto& idx = std::get<InstIndex>(inst.data);
+                auto base = resolve_memory_loc_from_value_(m, idx.base, depth + 1);
+                if (!has_memory_base_(base)) return {};
+                base.path += "[*]";
+                if (base.precision == MemoryLocPrecision::Exact) {
+                    base.precision = MemoryLocPrecision::BaseOnly;
+                }
+                return base;
+            }
+
+            if (std::holds_alternative<InstCast>(inst.data)) {
+                const auto& c = std::get<InstCast>(inst.data);
+                return resolve_memory_loc_from_value_(m, c.src, depth + 1);
+            }
+
+            return {};
+        }
+
+        /// @brief 두 메모리 위치가 반드시 같은 위치인지 판단한다.
+        bool must_alias_memory_loc_(const MemoryLocDesc& a, const MemoryLocDesc& b) {
+            if (!has_memory_base_(a) || !has_memory_base_(b)) return false;
+            if (a.base_slot != b.base_slot) return false;
+            if (a.precision != MemoryLocPrecision::Exact || b.precision != MemoryLocPrecision::Exact) return false;
+            return a.path == b.path;
+        }
+
+        /// @brief 두 메모리 위치가 충돌할 가능성이 있는지 판단한다.
+        bool may_alias_memory_loc_(const MemoryLocDesc& a, const MemoryLocDesc& b) {
+            if (!has_memory_base_(a) || !has_memory_base_(b)) return true;
+            if (a.base_slot != b.base_slot) return false;
+            if (a.path == b.path) return true;
+            if (a.precision == MemoryLocPrecision::Unknown || b.precision == MemoryLocPrecision::Unknown) return true;
+            if (a.precision == MemoryLocPrecision::BaseOnly || b.precision == MemoryLocPrecision::BaseOnly) return true;
+            return false;
         }
 
         /// @brief inst/terminator의 operand를 순회하며 값 치환을 적용한다.
@@ -144,31 +237,57 @@ namespace parus::oir {
         }
 
         /// @brief 명령 단위로 메모리 영향/별칭 범위를 계산한다.
-        InstAccessModel build_inst_access_model_(const Inst& inst) {
+        InstAccessModel build_inst_access_model_(const Module& m, const Inst& inst) {
             InstAccessModel out{};
 
             // 데이터 형태 기반의 정밀 분류를 우선 적용한다.
             if (std::holds_alternative<InstLoad>(inst.data)) {
                 const auto& ld = std::get<InstLoad>(inst.data);
                 out.reads = true;
-                out.read_fp = AliasFootprint::LocalSlot;
-                out.read_slot = ld.slot;
+                out.read_loc = resolve_memory_loc_from_value_(m, ld.slot);
+                if (has_memory_base_(out.read_loc)) {
+                    out.read_fp = AliasFootprint::LocalMemory;
+                    out.read_slot = out.read_loc.base_slot;
+                } else {
+                    out.read_fp = AliasFootprint::Unknown;
+                }
             } else if (std::holds_alternative<InstStore>(inst.data)) {
                 const auto& st = std::get<InstStore>(inst.data);
                 out.writes = true;
-                out.write_fp = AliasFootprint::LocalSlot;
-                out.write_slot = st.slot;
+                out.write_loc = resolve_memory_loc_from_value_(m, st.slot);
+                if (has_memory_base_(out.write_loc)) {
+                    out.write_fp = AliasFootprint::LocalMemory;
+                    out.write_slot = out.write_loc.base_slot;
+                } else {
+                    out.write_fp = AliasFootprint::Unknown;
+                }
             } else if (std::holds_alternative<InstCall>(inst.data)) {
                 out.reads = true;
                 out.writes = true;
                 out.may_call = true;
                 out.read_fp = AliasFootprint::Unknown;
                 out.write_fp = AliasFootprint::Unknown;
-            } else if (std::holds_alternative<InstIndex>(inst.data) ||
-                       std::holds_alternative<InstField>(inst.data)) {
+            } else if (std::holds_alternative<InstIndex>(inst.data)) {
                 // 인덱스/필드는 지역 slot 외의 메모리 뷰를 읽는 연산으로 취급한다.
+                const auto& ix = std::get<InstIndex>(inst.data);
+                out.read_loc = resolve_memory_loc_from_value_(m, ix.base);
                 out.reads = true;
-                out.read_fp = AliasFootprint::Unknown;
+                if (has_memory_base_(out.read_loc)) {
+                    out.read_fp = AliasFootprint::LocalMemory;
+                    out.read_slot = out.read_loc.base_slot;
+                } else {
+                    out.read_fp = AliasFootprint::Unknown;
+                }
+            } else if (std::holds_alternative<InstField>(inst.data)) {
+                const auto& fld = std::get<InstField>(inst.data);
+                out.read_loc = resolve_memory_loc_from_value_(m, fld.base);
+                out.reads = true;
+                if (has_memory_base_(out.read_loc)) {
+                    out.read_fp = AliasFootprint::LocalMemory;
+                    out.read_slot = out.read_loc.base_slot;
+                } else {
+                    out.read_fp = AliasFootprint::Unknown;
+                }
             } else if (std::holds_alternative<InstAllocaLocal>(inst.data)) {
                 // alloca는 slot 생성 메타 동작으로 보고, 기존 메모리 가시 상태를 클로버하지 않는다.
                 out.reads = false;
@@ -657,6 +776,160 @@ namespace parus::oir {
             v.def_a = kInvalidId;
             v.def_b = kInvalidId;
             return m.add_value(v);
+        }
+
+        /// @brief 엣지 전용 블록에 타입 보정 cast 결과 값을 생성한다.
+        ValueId make_edge_cast_value_(
+            Module& m,
+            BlockId edge_block,
+            ValueId src,
+            TypeId to_ty
+        ) {
+            Value out_val{};
+            out_val.ty = to_ty;
+            out_val.eff = Effect::Pure;
+            const ValueId out_vid = m.add_value(out_val);
+
+            Inst cast_inst{};
+            cast_inst.data = InstCast{
+                .kind = CastKind::As,
+                .to = to_ty,
+                .src = src
+            };
+            cast_inst.eff = Effect::Pure;
+            cast_inst.result = out_vid;
+            const InstId cast_iid = m.add_inst(cast_inst);
+
+            m.values[out_vid].def_a = cast_iid;
+            m.values[out_vid].def_b = kInvalidId;
+            if ((size_t)edge_block < m.blocks.size()) {
+                m.blocks[edge_block].insts.push_back(cast_iid);
+            }
+            return out_vid;
+        }
+
+        /// @brief 특정 edge arg 벡터를 target block param 타입으로 맞춘다.
+        bool normalize_edge_args_to_target_types_(
+            Module& m,
+            BlockId edge_block,
+            std::vector<ValueId>& edge_args,
+            const Block& target_block
+        ) {
+            bool changed = false;
+            const uint32_t n = std::min<uint32_t>(
+                static_cast<uint32_t>(edge_args.size()),
+                static_cast<uint32_t>(target_block.params.size())
+            );
+
+            for (uint32_t i = 0; i < n; ++i) {
+                const ValueId arg = edge_args[i];
+                const ValueId param = target_block.params[i];
+                if (arg == kInvalidId || param == kInvalidId) continue;
+                if ((size_t)arg >= m.values.size() || (size_t)param >= m.values.size()) continue;
+
+                const TypeId arg_ty = m.values[arg].ty;
+                const TypeId param_ty = m.values[param].ty;
+                if (arg_ty == param_ty) continue;
+
+                edge_args[i] = make_edge_cast_value_(m, edge_block, arg, param_ty);
+                changed = true;
+            }
+            return changed;
+        }
+
+        /// @brief block-arg(phi 유사) incoming 타입 불일치를 edge-cast로 정규화한다.
+        bool normalize_phi_edge_casts_(Module& m, Function& f) {
+            bool changed = false;
+            const auto owned = build_owned_block_mask_(m, f);
+
+            for (size_t fi = 0; fi < f.blocks.size(); ++fi) {
+                const BlockId pred = f.blocks[fi];
+                if (pred == kInvalidId || (size_t)pred >= m.blocks.size()) continue;
+
+                auto& pb = m.blocks[pred];
+                if (!pb.has_term) continue;
+
+                if (std::holds_alternative<TermBr>(pb.term)) {
+                    auto& br = std::get<TermBr>(pb.term);
+                    if (br.target == kInvalidId || (size_t)br.target >= m.blocks.size()) continue;
+                    if (!owned[br.target]) continue;
+                    changed |= normalize_edge_args_to_target_types_(
+                        m,
+                        pred,
+                        br.args,
+                        m.blocks[br.target]
+                    );
+                    continue;
+                }
+
+                if (!std::holds_alternative<TermCondBr>(pb.term)) continue;
+                auto& cbr = std::get<TermCondBr>(pb.term);
+
+                auto normalize_side = [&](bool then_side) {
+                    BlockId& target = then_side ? cbr.then_bb : cbr.else_bb;
+                    std::vector<ValueId>& side_args = then_side ? cbr.then_args : cbr.else_args;
+                    if (target == kInvalidId || (size_t)target >= m.blocks.size()) return false;
+                    if (!owned[target]) return false;
+
+                    const auto& target_block = m.blocks[target];
+                    const uint32_t n = std::min<uint32_t>(
+                        static_cast<uint32_t>(side_args.size()),
+                        static_cast<uint32_t>(target_block.params.size())
+                    );
+
+                    bool has_mismatch = false;
+                    for (uint32_t i = 0; i < n; ++i) {
+                        const ValueId arg = side_args[i];
+                        const ValueId param = target_block.params[i];
+                        if (arg == kInvalidId || param == kInvalidId) continue;
+                        if ((size_t)arg >= m.values.size() || (size_t)param >= m.values.size()) continue;
+                        if (m.values[arg].ty != m.values[param].ty) {
+                            has_mismatch = true;
+                            break;
+                        }
+                    }
+                    if (!has_mismatch) return false;
+
+                    // condbr의 한 분기에만 cast를 넣어야 의미 보존된다.
+                    // 다중 successor에서는 edge split으로 전용 블록을 만든다.
+                    if (succ_count_(pb.term) > 1) {
+                        const BlockId orig_target = target;
+                        const BlockId mid = m.add_block(Block{});
+                        f.blocks.push_back(mid);
+
+                        TermBr mid_term{};
+                        mid_term.target = orig_target;
+                        mid_term.args = std::move(side_args);
+                        m.blocks[mid].term = std::move(mid_term);
+                        m.blocks[mid].has_term = true;
+
+                        target = mid;
+                        side_args.clear();
+                        m.opt_stats.critical_edges_split += 1;
+                        changed = true;
+
+                        auto& edge_term = std::get<TermBr>(m.blocks[mid].term);
+                        return normalize_edge_args_to_target_types_(
+                            m,
+                            mid,
+                            edge_term.args,
+                            m.blocks[orig_target]
+                        );
+                    }
+
+                    return normalize_edge_args_to_target_types_(
+                        m,
+                        pred,
+                        side_args,
+                        target_block
+                    );
+                };
+
+                changed |= normalize_side(true);
+                changed |= normalize_side(false);
+            }
+
+            return changed;
         }
 
         /// @brief condbr의 두 타깃이 동일하면 br로 단순화한다.
@@ -1317,10 +1590,33 @@ namespace parus::oir {
                     return v;
                 };
 
+                struct MemoryCacheEntry {
+                    MemoryLocDesc loc{};
+                    ValueId value = kInvalidId;
+                };
+                auto invalidate_aliases = [&](std::vector<MemoryCacheEntry>& cache, const MemoryLocDesc& written) {
+                    for (auto it = cache.begin(); it != cache.end();) {
+                        if (may_alias_memory_loc_(it->loc, written)) {
+                            it = cache.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                };
+                auto invalidate_base = [&](std::vector<MemoryCacheEntry>& cache, ValueId base_slot) {
+                    for (auto it = cache.begin(); it != cache.end();) {
+                        if (it->loc.base_slot == base_slot) {
+                            it = cache.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                };
+
                 for (auto bb : f.blocks) {
                     if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
                     auto& b = m.blocks[bb];
-                    std::unordered_map<ValueId, ValueId> slot_value;
+                    std::vector<MemoryCacheEntry> mem_value_cache;
 
                     for (auto iid : b.insts) {
                         if ((size_t)iid >= m.insts.size()) continue;
@@ -1328,33 +1624,62 @@ namespace parus::oir {
 
                         if (std::holds_alternative<InstStore>(inst.data)) {
                             const auto& s = std::get<InstStore>(inst.data);
-                            slot_value[s.slot] = resolve_alias_(repl, s.value);
+                            const MemoryLocDesc loc = resolve_memory_loc_from_value_(m, s.slot);
+                            if (!has_memory_base_(loc)) {
+                                // 미해결 slot store는 메모리 전반을 보수적으로 클로버한다.
+                                for (auto it = mem_value_cache.begin(); it != mem_value_cache.end();) {
+                                    if (is_nonescape(it->loc.base_slot)) {
+                                        ++it;
+                                    } else {
+                                        it = mem_value_cache.erase(it);
+                                    }
+                                }
+                                continue;
+                            }
+
+                            if (loc.precision == MemoryLocPrecision::Exact) {
+                                invalidate_aliases(mem_value_cache, loc);
+                                mem_value_cache.push_back(MemoryCacheEntry{
+                                    .loc = loc,
+                                    .value = resolve_alias_(repl, s.value)
+                                });
+                            } else {
+                                invalidate_base(mem_value_cache, loc.base_slot);
+                            }
                             continue;
                         }
                         if (std::holds_alternative<InstLoad>(inst.data)) {
                             const auto& l = std::get<InstLoad>(inst.data);
                             if (inst.result != kInvalidId) {
-                                auto it = slot_value.find(l.slot);
-                                if (it != slot_value.end()) {
-                                    repl[inst.result] = resolve_alias_(repl, it->second);
-                                    changed = true;
+                                const MemoryLocDesc loc = resolve_memory_loc_from_value_(m, l.slot);
+                                if (has_memory_base_(loc) && loc.precision == MemoryLocPrecision::Exact) {
+                                    for (auto it = mem_value_cache.rbegin(); it != mem_value_cache.rend(); ++it) {
+                                        if (!must_alias_memory_loc_(it->loc, loc)) continue;
+                                        repl[inst.result] = resolve_alias_(repl, it->value);
+                                        changed = true;
+                                        break;
+                                    }
                                 }
                             }
                             continue;
                         }
 
-                        const InstAccessModel fx = build_inst_access_model_(inst);
+                        const InstAccessModel fx = build_inst_access_model_(m, inst);
 
-                        if (fx.write_fp == AliasFootprint::LocalSlot && fx.write_slot != kInvalidId) {
-                            slot_value.erase(fx.write_slot);
+                        if (fx.write_fp == AliasFootprint::LocalMemory && has_memory_base_(fx.write_loc)) {
+                            if (fx.write_loc.precision == MemoryLocPrecision::Exact) {
+                                invalidate_aliases(mem_value_cache, fx.write_loc);
+                            } else {
+                                invalidate_base(mem_value_cache, fx.write_loc.base_slot);
+                            }
                         }
 
                         if (fx.write_fp == AliasFootprint::Unknown || fx.may_call || fx.may_trap) {
-                            for (auto it = slot_value.begin(); it != slot_value.end();) {
-                                if (is_nonescape(it->first)) {
+                            for (auto it = mem_value_cache.begin(); it != mem_value_cache.end();) {
+                                if (is_nonescape(it->loc.base_slot)) {
                                     ++it;
                                 } else {
-                                    it = slot_value.erase(it);
+                                    it = mem_value_cache.erase(it);
                                 }
                             }
                         }
@@ -1864,20 +2189,22 @@ namespace parus::oir {
         // 1) CFG 단순화
         // 2) critical-edge split
         // 3) loop canonical form(preheader)
-        // 4) 상수 폴딩
-        // 5) dominance 기반 mem2reg + SSA(block param)
-        // 6) GVN/CSE
-        // 7) LICM
-        // 8) local forwarding 보조
-        // 9) escape-handle 특화 정리
-        // 10) pure DCE
-        // 11) CFG 재정리
+        // 4) block-arg edge-cast 정규화(의미 보존)
+        // 5) 상수 폴딩
+        // 6) dominance 기반 mem2reg + SSA(block param)
+        // 7) GVN/CSE
+        // 8) LICM
+        // 9) local forwarding 보조
+        // 10) escape-handle 특화 정리
+        // 11) pure DCE
+        // 12) CFG 재정리
         (void)simplify_cfg_(m);
         for (auto& f : m.funcs) {
             (void)split_critical_edges_(m, f);
         }
         for (auto& f : m.funcs) {
             (void)canonicalize_loops_(m, f);
+            (void)normalize_phi_edge_casts_(m, f);
         }
         (void)const_fold_(m);
         (void)local_load_forward_(m);
@@ -1919,6 +2246,9 @@ namespace parus::oir {
         );
 
         (void)local_load_forward_(m);
+        for (auto& f : m.funcs) {
+            (void)normalize_phi_edge_casts_(m, f);
+        }
         (void)optimize_escape_handles_(m);
         (void)dce_pure_insts_(m);
         (void)simplify_cfg_(m);

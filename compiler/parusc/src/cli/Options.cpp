@@ -61,6 +61,32 @@ namespace parusc::cli {
             return true;
         }
 
+        /// @brief `-fuse-linker=<mode>` 값을 파싱한다.
+        bool parse_linker_mode_(Options& out, std::string_view arg) {
+            constexpr std::string_view kPrefix = "-fuse-linker=";
+            if (!arg.starts_with(kPrefix)) return false;
+
+            const std::string_view mode = arg.substr(kPrefix.size());
+            if (mode == "auto" || mode == "parus-lld") {
+                out.linker_mode = (mode == "auto")
+                    ? LinkerMode::kAuto
+                    : LinkerMode::kParusLld;
+                return true;
+            }
+            if (mode == "lld" || mode == "system-lld") {
+                out.linker_mode = LinkerMode::kSystemLld;
+                return true;
+            }
+            if (mode == "clang" || mode == "system-clang") {
+                out.linker_mode = LinkerMode::kSystemClang;
+                return true;
+            }
+
+            out.ok = false;
+            out.error = "unsupported linker mode: " + std::string(mode);
+            return true;
+        }
+
         /// @brief 옵션 다음의 필수 값을 읽는다.
         std::optional<std::string_view> read_next_(
             const std::vector<std::string_view>& args,
@@ -87,6 +113,8 @@ namespace parusc::cli {
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
             << "  -fmax-errors=<N>\n"
+            << "  -fuse-linker=auto|parus-lld|lld|clang\n"
+            << "  --no-link-fallback   Disable linker fallback chain\n"
             << "  -Wshadow | -Werror=shadow\n"
             << "\n"
             << "Developer-only options (must be passed through -Xparus):\n"
@@ -188,6 +216,16 @@ namespace parusc::cli {
                     out.error = "unknown -Xparus argument: " + std::string(*v);
                     return out;
                 }
+                continue;
+            }
+
+            if (a == "--no-link-fallback") {
+                out.allow_link_fallback = false;
+                continue;
+            }
+
+            if (parse_linker_mode_(out, a)) {
+                if (!out.ok) return out;
                 continue;
             }
 

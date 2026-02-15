@@ -18,6 +18,14 @@ namespace parusc::cli {
         kCompile,
     };
 
+    /// @brief 드라이버가 선택할 링커 모드.
+    enum class LinkerMode : uint8_t {
+        kAuto,
+        kParusLld,
+        kSystemLld,
+        kSystemClang,
+    };
+
     /// @brief `-Xparus`로만 접근 가능한 내부 개발 옵션.
     struct InternalOptions {
         bool token_dump = false;
@@ -36,6 +44,8 @@ namespace parusc::cli {
         std::vector<std::string> inputs{};
         std::string output_path{};
         uint8_t opt_level = 0;
+        LinkerMode linker_mode = LinkerMode::kAuto;
+        bool allow_link_fallback = true;
 
         bool has_xparus = false;
         InternalOptions internal{};

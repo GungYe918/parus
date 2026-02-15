@@ -19,6 +19,10 @@ else()
     target_compile_definitions(parusc PRIVATE PARUSC_HAS_AOT_BACKEND=0)
 endif()
 
+if(TARGET parus_backend_link)
+    target_link_libraries(parusc PRIVATE parus_backend_link)
+endif()
+
 target_include_directories(parusc
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
