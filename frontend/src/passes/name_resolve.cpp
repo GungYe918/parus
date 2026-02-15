@@ -138,6 +138,19 @@ namespace parus::passes {
     ) {
         auto ins = sym.insert(kind, name, ty, span);
 
+        // 함수는 오버로딩을 허용한다.
+        // SymbolTable은 이름당 1개 엔트리만 보관하므로,
+        // 같은 스코프에 같은 이름의 함수가 이미 있으면 기존 심볼을 재사용한다.
+        if (ins.is_duplicate && kind == sema::SymbolKind::kFn) {
+            const auto& dup = sym.symbol(ins.symbol_id);
+            if (dup.kind == sema::SymbolKind::kFn) {
+                sema::SymbolTable::InsertResult ok{};
+                ok.ok = true;
+                ok.symbol_id = ins.symbol_id;
+                return ok;
+            }
+        }
+
         if (ins.is_duplicate) {
             report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, span, name);
             return ins;

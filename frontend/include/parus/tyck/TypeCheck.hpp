@@ -201,11 +201,11 @@ namespace parus::tyck {
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
 
-        // name -> fn decl stmt id (top-level only)
+        // name -> overloaded fn decl stmt ids (top-level only)
         // NOTE: std::string을 key로 쓰는 이유:
         // - string_view는 AST storage lifetime에 의존하는데,
         //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.
-        std::unordered_map<std::string, ast::StmtId> fn_decl_by_name_;
+        std::unordered_map<std::string, std::vector<ast::StmtId>> fn_decl_by_name_;
 
     };
 

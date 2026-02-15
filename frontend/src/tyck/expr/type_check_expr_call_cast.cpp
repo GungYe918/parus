@@ -7,6 +7,8 @@
 
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
+#include <algorithm>
 
 
 namespace parus::tyck {
@@ -105,28 +107,73 @@ namespace parus::tyck {
         // ------------------------------------------------------------
         // 1) find callee fn decl meta if possible (Ident-only in v0)
         // ------------------------------------------------------------
-        const ast::Stmt* fn_decl = nullptr;
-        ast::StmtId fn_decl_id = ast::k_invalid_stmt;
+        std::string callee_name;
+        bool callee_is_fn_symbol = false;
+        std::vector<ast::StmtId> overload_decl_ids;
 
         {
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kIdent) {
-                auto it = fn_decl_by_name_.find(std::string(callee_expr.text));
-                if (it != fn_decl_by_name_.end()) {
-                    fn_decl_id = it->second;
-                    fn_decl = &ast_.stmt(fn_decl_id);
-                    if (fn_decl->kind != ast::StmtKind::kFnDecl) {
-                        fn_decl = nullptr;
-                        fn_decl_id = ast::k_invalid_stmt;
+                callee_name = std::string(callee_expr.text);
+                if (auto sid = sym_.lookup(callee_expr.text)) {
+                    const auto& sym = sym_.symbol(*sid);
+                    callee_is_fn_symbol = (sym.kind == sema::SymbolKind::kFn);
+                }
+
+                if (callee_is_fn_symbol) {
+                    auto it = fn_decl_by_name_.find(callee_name);
+                    if (it != fn_decl_by_name_.end()) {
+                        overload_decl_ids = it->second;
                     }
                 }
             }
         }
 
+        // 라벨 중복은 오버로드 해소 이전에 무조건 진단한다.
+        auto has_duplicate_labels = [&](const std::vector<const ast::Arg*>& args, Span& out_span, std::string& out_label) -> bool {
+            std::unordered_set<std::string> seen;
+            seen.reserve(args.size());
+            for (const auto* a : args) {
+                const std::string label(a->label);
+                if (!seen.insert(label).second) {
+                    out_span = a->span;
+                    out_label = label;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        std::vector<const ast::Arg*> group_entries;
+        if (group_arg != nullptr) {
+            group_entries.reserve(group_arg->child_count);
+            for (uint32_t k = 0; k < group_arg->child_count; ++k) {
+                const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
+                group_entries.push_back(&ca);
+            }
+        }
+
+        {
+            Span dup_sp{};
+            std::string dup_label;
+            if (has_duplicate_labels(outside_labeled, dup_sp, dup_label)) {
+                diag_(diag::Code::kDuplicateDecl, dup_sp, dup_label);
+                err_(dup_sp, "duplicate argument label '" + dup_label + "'");
+                check_all_arg_exprs_only();
+                return ct.ret;
+            }
+            if (has_duplicate_labels(group_entries, dup_sp, dup_label)) {
+                diag_(diag::Code::kDuplicateDecl, dup_sp, dup_label);
+                err_(dup_sp, "duplicate named argument label '" + dup_label + "'");
+                check_all_arg_exprs_only();
+                return ct.ret;
+            }
+        }
+
         // ------------------------------------------------------------
-        // 2) fallback: decl meta가 없으면 기존 signature 기반으로만 검사
+        // 2) fallback: overload 집합을 못 찾으면 기존 signature 기반으로만 검사
         // ------------------------------------------------------------
-        if (!fn_decl) {
+        if (!callee_is_fn_symbol || overload_decl_ids.empty()) {
             const uint32_t provided_non_group =
                 static_cast<uint32_t>(outside_positional.size() + outside_labeled.size());
 
@@ -181,77 +228,224 @@ namespace parus::tyck {
         }
 
         // ------------------------------------------------------------
-        // 3) build param metadata from declaration
+        // 3) overload 후보 구성
         // ------------------------------------------------------------
         struct ParamInfo {
             uint32_t decl_index = 0;
-            std::string_view name{};
+            std::string name{};
             ty::TypeId type = ty::kInvalidType;
             bool has_default = false;
-            bool is_named = false;
             Span span{};
         };
+        struct Candidate {
+            ast::StmtId decl_id = ast::k_invalid_stmt;
+            ty::TypeId ret = ty::kInvalidType;
+            std::vector<ParamInfo> positional;
+            std::vector<ParamInfo> named;
+            std::unordered_map<std::string, size_t> positional_by_label;
+            std::unordered_map<std::string, size_t> named_by_label;
+        };
 
-        std::vector<ParamInfo> positional_params;
-        std::vector<ParamInfo> named_params;
+        std::vector<Candidate> candidates;
+        candidates.reserve(overload_decl_ids.size());
 
-        std::unordered_map<std::string, ParamInfo> all_params_by_name;
-        std::unordered_map<std::string, ParamInfo> named_params_by_name;
+        for (const ast::StmtId sid : overload_decl_ids) {
+            const ast::Stmt& fn = ast_.stmt(sid);
+            if (fn.kind != ast::StmtKind::kFnDecl) continue;
 
-        const uint32_t decl_total = fn_decl->param_count;
-        uint32_t decl_positional = fn_decl->positional_param_count;
-        if (decl_positional > decl_total) decl_positional = decl_total;
+            Candidate c{};
+            c.decl_id = sid;
+            c.ret = (fn.fn_ret != ty::kInvalidType)
+                ? fn.fn_ret
+                : ((fn.type != ty::kInvalidType && types_.get(fn.type).kind == ty::Kind::kFn)
+                    ? types_.get(fn.type).ret
+                    : ct.ret);
 
-        positional_params.reserve(decl_positional);
-        named_params.reserve(decl_total - decl_positional);
-        all_params_by_name.reserve(decl_total);
-        named_params_by_name.reserve(decl_total - decl_positional);
+            uint32_t pos_cnt = fn.positional_param_count;
+            if (pos_cnt > fn.param_count) pos_cnt = fn.param_count;
 
-        for (uint32_t idx = 0; idx < decl_total; ++idx) {
-            const auto& p = ast_.params()[fn_decl->param_begin + idx];
+            c.positional.reserve(pos_cnt);
+            c.named.reserve(fn.param_count - pos_cnt);
 
-            const bool is_named = p.is_named_group || (idx >= decl_positional);
+            for (uint32_t i = 0; i < fn.param_count; ++i) {
+                const auto& p = ast_.params()[fn.param_begin + i];
+                ParamInfo info{};
+                info.decl_index = i;
+                info.name = std::string(p.name);
+                info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
+                info.has_default = p.has_default;
+                info.span = p.span;
 
-            ParamInfo info{};
-            info.decl_index = idx;
-            info.name = p.name;
-            info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
-            info.has_default = is_named ? p.has_default : false; // positional default 정책 차단
-            info.is_named = is_named;
-            info.span = p.span;
-
-            if (is_named) {
-                named_params.push_back(info);
-                named_params_by_name.emplace(std::string(info.name), info);
-            } else {
-                positional_params.push_back(info);
+                const bool is_named = (i >= pos_cnt) || p.is_named_group;
+                if (is_named) {
+                    c.named_by_label.emplace(info.name, c.named.size());
+                    c.named.push_back(std::move(info));
+                } else {
+                    c.positional_by_label.emplace(info.name, c.positional.size());
+                    c.positional.push_back(std::move(info));
+                }
             }
 
-            auto ins = all_params_by_name.emplace(std::string(info.name), info);
-            if (!ins.second) {
-                diag_(diag::Code::kDuplicateDecl, p.span, p.name);
-                err_(p.span, "duplicate parameter label in function declaration: " + std::string(p.name));
+            candidates.push_back(std::move(c));
+        }
+
+        if (candidates.empty()) {
+            std::string msg = "no callable declaration candidate for '" + callee_name + "'";
+            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            err_(e.span, msg);
+            check_all_arg_exprs_only();
+            return ct.ret;
+        }
+
+        std::unordered_map<std::string, const ast::Arg*> labeled_by_label;
+        labeled_by_label.reserve(outside_labeled.size());
+        for (const auto* a : outside_labeled) {
+            labeled_by_label.emplace(std::string(a->label), a);
+        }
+
+        std::unordered_map<std::string, const ast::Arg*> group_by_label;
+        group_by_label.reserve(group_entries.size());
+        for (const auto* a : group_entries) {
+            group_by_label.emplace(std::string(a->label), a);
+        }
+
+        const auto arg_type_now = [&](const ast::Arg* a) -> ty::TypeId {
+            if (a == nullptr || a->expr == ast::k_invalid_expr) return types_.error();
+            return check_expr_(a->expr);
+        };
+
+        const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
+            const ty::TypeId at = arg_type_now(a);
+            return can_assign_(expected, at);
+        };
+
+        std::vector<size_t> filtered;
+        filtered.reserve(candidates.size());
+
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            const auto& c = candidates[i];
+
+            if (form == CallForm::kPositional) {
+                if (!c.named.empty()) continue; // spec 6.1.7(D)-1
+                filtered.push_back(i);
+                continue;
+            }
+
+            if (form == CallForm::kLabeled) {
+                if (!c.named.empty()) continue; // spec 6.1.7(D)-2
+                if (outside_labeled.size() != c.positional.size()) continue;
+
+                bool label_set_ok = true;
+                for (const auto& pp : c.positional) {
+                    if (labeled_by_label.find(pp.name) == labeled_by_label.end()) {
+                        label_set_ok = false;
+                        break;
+                    }
+                }
+                if (!label_set_ok) continue;
+                filtered.push_back(i);
+                continue;
+            }
+
+            if (form == CallForm::kPositionalPlusNamedGroup) {
+                if (c.named.empty()) continue; // spec 6.1.7(D)-3
+                filtered.push_back(i);
+                continue;
             }
         }
 
-        const bool decl_has_named_group = !named_params.empty();
+        if (filtered.empty()) {
+            std::string msg = "no overload candidate matches call form for '" + callee_name + "'";
+            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            err_(e.span, msg);
+            check_all_arg_exprs_only();
+            return ct.ret;
+        }
 
-        auto emit_count_too_many = [&](uint32_t expected_max, uint32_t got, Span sp, std::string_view ctx) {
-            if (got <= expected_max) return;
-            diag_(diag::Code::kTypeArgCountMismatch, sp,
-                std::to_string(expected_max), std::to_string(got));
-            err_(sp, std::string(ctx) + " argument count mismatch");
+        /// @brief spec 6.1.7(E)의 단계 A/B를 구현하는 후보 매칭 함수.
+        const auto match_candidate = [&](const Candidate& c, bool allow_defaults) -> bool {
+            if (form == CallForm::kPositional) {
+                if (outside_positional.size() != c.positional.size()) return false;
+                for (size_t i = 0; i < outside_positional.size(); ++i) {
+                    if (!arg_assignable_now(outside_positional[i], c.positional[i].type)) return false;
+                }
+                return true;
+            }
+
+            if (form == CallForm::kLabeled) {
+                for (const auto& p : c.positional) {
+                    auto it = labeled_by_label.find(p.name);
+                    if (it == labeled_by_label.end()) {
+                        if (!allow_defaults || !p.has_default) return false;
+                        continue;
+                    }
+                    if (!arg_assignable_now(it->second, p.type)) return false;
+                }
+                return true;
+            }
+
+            if (form == CallForm::kPositionalPlusNamedGroup) {
+                if (outside_positional.size() != c.positional.size()) return false;
+                for (size_t i = 0; i < outside_positional.size(); ++i) {
+                    if (!arg_assignable_now(outside_positional[i], c.positional[i].type)) return false;
+                }
+
+                for (const auto& pair : group_by_label) {
+                    if (c.named_by_label.find(pair.first) == c.named_by_label.end()) return false;
+                }
+
+                for (const auto& p : c.named) {
+                    auto it = group_by_label.find(p.name);
+                    if (it == group_by_label.end()) {
+                        if (!allow_defaults || !p.has_default) return false;
+                        continue;
+                    }
+                    if (!arg_assignable_now(it->second, p.type)) return false;
+                }
+                return true;
+            }
+
+            return false;
         };
 
-        auto emit_missing_required = [&](const ParamInfo& p, bool named, Span report_span) {
-            std::string msg = named
-                ? ("missing required named argument '" + std::string(p.name) + "'")
-                : ("missing required argument '" + std::string(p.name) + "'");
-            diag_(diag::Code::kTypeErrorGeneric, report_span, msg);
-            err_(report_span, msg);
-        };
+        std::vector<size_t> stage_a_matches;
+        for (size_t idx : filtered) {
+            if (match_candidate(candidates[idx], /*allow_defaults=*/false)) {
+                stage_a_matches.push_back(idx);
+            }
+        }
 
-        auto check_arg_against_param = [&](const ast::Arg& a, const ParamInfo& p) {
+        std::vector<size_t> final_matches;
+        if (!stage_a_matches.empty()) {
+            final_matches = std::move(stage_a_matches);
+        } else {
+            for (size_t idx : filtered) {
+                if (match_candidate(candidates[idx], /*allow_defaults=*/true)) {
+                    final_matches.push_back(idx);
+                }
+            }
+        }
+
+        if (final_matches.empty()) {
+            std::string msg = "no matching overload found for call '" + callee_name + "'";
+            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            err_(e.span, msg);
+            check_all_arg_exprs_only();
+            return ct.ret;
+        }
+
+        if (final_matches.size() > 1) {
+            std::string msg = "ambiguous overloaded call '" + callee_name + "'";
+            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            err_(e.span, msg);
+            check_all_arg_exprs_only();
+            return ct.ret;
+        }
+
+        const Candidate& selected = candidates[final_matches.front()];
+
+        /// @brief 선택된 후보에 대해 infer-int 해소를 포함한 최종 타입 검증을 수행한다.
+        const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {
             ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
 
             const auto& st = types_.get(at);
@@ -265,213 +459,34 @@ namespace parus::tyck {
             if (!can_assign_(p.type, at)) {
                 diag_(diag::Code::kTypeArgTypeMismatch, a.span,
                     std::to_string(p.decl_index), types_.to_string(p.type), types_.to_string(at));
-                err_(a.span, "argument type mismatch for parameter '" + std::string(p.name) + "'");
+                err_(a.span, "argument type mismatch for parameter '" + p.name + "'");
             }
         };
 
-        auto emit_named_group_requires_brace_diag = [&](Span sp, uint32_t pos_expected, uint32_t got_total) {
-            uint32_t extras = (got_total > pos_expected) ? (got_total - pos_expected) : 0;
-            std::string msg = "callee has named-group params; extra positional arguments (" +
-                            std::to_string(extras) +
-                            ") are not allowed. Pass them with '{ ... }' labels.";
-            diag_(diag::Code::kTypeErrorGeneric, sp, msg);
-            err_(sp, msg);
-        };
-
-        // ------------------------------------------------------------
-        // 4) call-form specific matching
-        // ------------------------------------------------------------
-        switch (form) {
-            case CallForm::kPositional: {
-                // A) positional call: f(v1, v2, ...)
-                // + compat: named-only 함수(fn({a,b}))에 대해 f(v1,v2) 허용
-                if (!outside_labeled.empty()) {
-                    diag_(diag::Code::kCallArgMixNotAllowed, e.span);
-                    err_(e.span, "mixing labeled and positional arguments is not allowed");
-                    check_all_arg_exprs_only();
-                    return ct.ret;
-                }
-
-                const uint32_t got = static_cast<uint32_t>(outside_positional.size());
-
-                if (!positional_params.empty()) {
-                    const uint32_t pos_expected = static_cast<uint32_t>(positional_params.size());
-                    const uint32_t bound = (got < pos_expected) ? got : pos_expected;
-
-                    for (uint32_t i = 0; i < bound; ++i) {
-                        check_arg_against_param(*outside_positional[i], positional_params[i]);
-                    }
-
-                    // 핵심 UX 수정:
-                    // named-group이 있는 함수에서 positional이 초과되면
-                    // 단순 "expected N, got M" 대신 정책 메시지를 낸다.
-                    if (decl_has_named_group && got > pos_expected) {
-                        for (uint32_t i = pos_expected; i < got; ++i) {
-                            if (outside_positional[i]->expr != ast::k_invalid_expr) {
-                                (void)check_expr_(outside_positional[i]->expr);
-                            }
-                        }
-                        emit_named_group_requires_brace_diag(e.span, pos_expected, got);
-                        return ct.ret;
-                    }
-
-                    // named-group 없는 일반 함수면 기존 count mismatch 유지
-                    if (!decl_has_named_group) {
-                        emit_count_too_many(pos_expected, got, e.span, "positional");
-                    }
-
-                    for (uint32_t i = bound; i < pos_expected; ++i) {
-                        emit_missing_required(positional_params[i], /*named=*/false, e.span);
-                    }
-
-                    for (const auto& np : named_params) {
-                        if (!np.has_default) emit_missing_required(np, /*named=*/true, e.span);
-                    }
-                } else if (!named_params.empty()) {
-                    // named-only compat: declaration order로 positional 바인딩
-                    emit_count_too_many(static_cast<uint32_t>(named_params.size()), got, e.span,
-                                        "positional(named-only compat)");
-
-                    const uint32_t bound =
-                        (got < named_params.size()) ? got : static_cast<uint32_t>(named_params.size());
-
-                    for (uint32_t i = 0; i < bound; ++i) {
-                        check_arg_against_param(*outside_positional[i], named_params[i]);
-                    }
-
-                    for (uint32_t i = bound; i < named_params.size(); ++i) {
-                        if (!named_params[i].has_default) emit_missing_required(named_params[i], /*named=*/true, e.span);
-                    }
-                } else {
-                    emit_count_too_many(0, got, e.span, "positional");
-                    for (const auto* pa : outside_positional) {
-                        if (pa->expr != ast::k_invalid_expr) (void)check_expr_(pa->expr);
-                    }
-                }
-
-                break;
+        if (form == CallForm::kPositional) {
+            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
+                check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
             }
-
-            case CallForm::kLabeled: {
-                // B) labeled call: f(a:v1, b:v2, ...)
-                std::unordered_map<std::string, const ast::Arg*> provided;
-                provided.reserve(outside_labeled.size());
-
-                for (const auto* la : outside_labeled) {
-                    const std::string label(la->label);
-
-                    auto ins = provided.emplace(label, la);
-                    if (!ins.second) {
-                        diag_(diag::Code::kDuplicateDecl, la->span, la->label);
-                        err_(la->span, "duplicate argument label '" + label + "'");
-                        if (la->expr != ast::k_invalid_expr) (void)check_expr_(la->expr);
-                        continue;
-                    }
-
-                    auto it = all_params_by_name.find(label);
-                    if (it == all_params_by_name.end()) {
-                        std::string msg = "unknown argument label '" + label + "'";
-                        diag_(diag::Code::kTypeErrorGeneric, la->span, msg);
-                        err_(la->span, msg);
-                        if (la->expr != ast::k_invalid_expr) (void)check_expr_(la->expr);
-                        continue;
-                    }
-
-                    check_arg_against_param(*la, it->second);
+        } else if (form == CallForm::kLabeled) {
+            for (const auto& p : selected.positional) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
+                    check_arg_against_param_final(*it->second, p);
                 }
-
-                for (const auto& pp : positional_params) {
-                    if (provided.find(std::string(pp.name)) == provided.end()) {
-                        emit_missing_required(pp, /*named=*/false, e.span);
-                    }
-                }
-
-                for (const auto& np : named_params) {
-                    if (!np.has_default && provided.find(std::string(np.name)) == provided.end()) {
-                        emit_missing_required(np, /*named=*/true, e.span);
-                    }
-                }
-
-                break;
             }
-
-            case CallForm::kPositionalPlusNamedGroup: {
-                // C) positional + named-group: f(pos..., {x:v, y:v})
-                const uint32_t got_pos = static_cast<uint32_t>(outside_positional.size());
-                emit_count_too_many(static_cast<uint32_t>(positional_params.size()), got_pos, e.span, "positional");
-
-                const uint32_t bound =
-                    (got_pos < positional_params.size()) ? got_pos : static_cast<uint32_t>(positional_params.size());
-
-                for (uint32_t i = 0; i < bound; ++i) {
-                    check_arg_against_param(*outside_positional[i], positional_params[i]);
-                }
-
-                for (uint32_t i = bound; i < positional_params.size(); ++i) {
-                    emit_missing_required(positional_params[i], /*named=*/false, e.span);
-                }
-
-                if (!group_arg) break;
-
-                const Span named_report_span = group_arg->span.hi ? group_arg->span : e.span;
-
-                if (!decl_has_named_group) {
-                    std::string msg = "callee does not declare a named-group parameter section";
-                    diag_(diag::Code::kTypeErrorGeneric, named_report_span, msg);
-                    err_(named_report_span, msg);
-
-                    for (uint32_t k = 0; k < group_arg->child_count; ++k) {
-                        const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
-                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
-                    }
-                    break;
-                }
-
-                std::unordered_map<std::string, const ast::Arg*> provided_named;
-                provided_named.reserve(group_arg->child_count);
-
-                for (uint32_t k = 0; k < group_arg->child_count; ++k) {
-                    const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
-                    const std::string label(ca.label);
-
-                    auto ins = provided_named.emplace(label, &ca);
-                    if (!ins.second) {
-                        diag_(diag::Code::kDuplicateDecl, ca.span, ca.label);
-                        err_(ca.span, "duplicate named argument label '" + label + "'");
-                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
-                        continue;
-                    }
-
-                    auto it = named_params_by_name.find(label);
-                    if (it == named_params_by_name.end()) {
-                        std::string msg = "unknown named argument label '" + label + "'";
-                        diag_(diag::Code::kTypeErrorGeneric, ca.span, msg);
-                        err_(ca.span, msg);
-                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
-                        continue;
-                    }
-
-                    check_arg_against_param(ca, it->second);
-                }
-
-                for (const auto& np : named_params) {
-                    if (!np.has_default &&
-                        provided_named.find(std::string(np.name)) == provided_named.end()) {
-                        emit_missing_required(np, /*named=*/true, named_report_span);
-                    }
-                }
-
-                break;
+        } else if (form == CallForm::kPositionalPlusNamedGroup) {
+            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
+                check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
             }
-
-            case CallForm::kMixedInvalid: {
-                // 위에서 이미 return 처리됨. 방어용.
-                check_all_arg_exprs_only();
-                break;
+            for (const auto& p : selected.named) {
+                auto it = group_by_label.find(p.name);
+                if (it != group_by_label.end()) {
+                    check_arg_against_param_final(*it->second, p);
+                }
             }
         }
 
-        return ct.ret;
+        return selected.ret;
     }
 
     ty::TypeId TypeChecker::check_expr_cast_(const ast::Expr& e) {

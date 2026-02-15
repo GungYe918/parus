@@ -6,7 +6,9 @@
 #include "../common/type_check_literals.hpp"
 
 #include <sstream>
+#include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 
 namespace parus::tyck {
@@ -196,9 +198,9 @@ namespace parus::tyck {
             // top-level fn decl
             // ----------------------------
             if (s.kind == ast::StmtKind::kFnDecl) {
-                // record decl id for named-group validation at call-site
+                // overload 집합 구성: 동일 이름 함수는 모두 수집한다.
                 if (!s.name.empty()) {
-                    fn_decl_by_name_[std::string(s.name)] = cid;
+                    fn_decl_by_name_[std::string(s.name)].push_back(cid);
                 }
 
                 // 1) 우선 Stmt.type이 fn 시그니처로 이미 채워져 있으면 그대로 사용
@@ -243,10 +245,21 @@ namespace parus::tyck {
                     sig = types_.make_fn(ret, params.empty() ? nullptr : params.data(), (uint32_t)params.size());
                 }
 
-                auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
-                if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (function): " + std::string(s.name));
-                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                // 함수 오버로딩 허용:
+                // - 같은 이름의 기존 심볼이 함수면 "오버로드 집합 대표 심볼"을 재사용한다.
+                // - 같은 이름의 기존 심볼이 함수가 아니면 중복 선언 에러다.
+                if (auto existing = sym_.lookup_in_current(s.name)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kFn) {
+                        err_(s.span, "duplicate symbol (function): " + std::string(s.name));
+                        diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (function): " + std::string(s.name));
+                        diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    }
                 }
                 continue;
             }
@@ -285,6 +298,173 @@ namespace parus::tyck {
             }
 
             // use / unknown / other: pass1에서는 스킵
+        }
+
+        struct ParamShape {
+            std::string label;
+            ty::TypeId type = ty::kInvalidType;
+            bool has_default = false;
+            Span span{};
+        };
+        struct DeclShape {
+            ast::StmtId sid = ast::k_invalid_stmt;
+            std::string_view name{};
+            Span span{};
+            ty::TypeId ret = ty::kInvalidType;
+            std::vector<ParamShape> positional;
+            std::vector<ParamShape> named;
+        };
+
+        /// @brief 선언 키(Declaration Key)를 canonical 문자열로 만든다.
+        const auto make_decl_key = [](const DeclShape& d) -> std::string {
+            std::ostringstream oss;
+            oss << "P" << d.positional.size();
+            for (const auto& p : d.positional) {
+                oss << "|" << p.label << ":" << p.type;
+            }
+            oss << "|N" << d.named.size();
+            for (const auto& p : d.named) {
+                oss << "|" << p.label << ":" << p.type << ":" << (p.has_default ? "opt" : "req");
+            }
+            return oss.str();
+        };
+
+        /// @brief 위치 호출 관점(타입열만) 비교 키를 만든다.
+        const auto make_positional_type_key = [](const DeclShape& d) -> std::string {
+            std::ostringstream oss;
+            oss << "P" << d.positional.size();
+            for (const auto& p : d.positional) {
+                oss << "|" << p.type;
+            }
+            return oss.str();
+        };
+
+        /// @brief labeled 호출 관점(라벨+타입 집합) 비교 키를 만든다.
+        const auto make_labeled_set_key = [](const DeclShape& d) -> std::string {
+            std::vector<std::pair<std::string, ty::TypeId>> elems;
+            elems.reserve(d.positional.size());
+            for (const auto& p : d.positional) {
+                elems.emplace_back(p.label, p.type);
+            }
+            std::sort(elems.begin(), elems.end(), [](const auto& a, const auto& b) {
+                if (a.first != b.first) return a.first < b.first;
+                return a.second < b.second;
+            });
+
+            std::ostringstream oss;
+            oss << "L" << elems.size();
+            for (const auto& e : elems) {
+                oss << "|" << e.first << ":" << e.second;
+            }
+            return oss.str();
+        };
+
+        // 오버로드 집합 단위 검증
+        for (const auto& it : fn_decl_by_name_) {
+            const std::string& fn_name = it.first;
+            const std::vector<ast::StmtId>& decl_ids = it.second;
+            if (decl_ids.empty()) continue;
+
+            std::vector<DeclShape> decls;
+            decls.reserve(decl_ids.size());
+
+            for (const ast::StmtId sid : decl_ids) {
+                const ast::Stmt& s = ast_.stmt(sid);
+                if (s.kind != ast::StmtKind::kFnDecl) continue;
+
+                DeclShape d{};
+                d.sid = sid;
+                d.name = s.name;
+                d.span = s.span;
+                d.ret = (s.fn_ret != ty::kInvalidType)
+                    ? s.fn_ret
+                    : ((s.type != ty::kInvalidType && types_.get(s.type).kind == ty::Kind::kFn)
+                        ? types_.get(s.type).ret
+                        : types_.error());
+
+                const uint32_t total = s.param_count;
+                uint32_t pos_cnt = s.positional_param_count;
+                if (pos_cnt > total) pos_cnt = total;
+
+                std::unordered_set<std::string> seen_labels;
+                seen_labels.reserve(total);
+
+                for (uint32_t i = 0; i < total; ++i) {
+                    const auto& p = ast_.params()[s.param_begin + i];
+                    ParamShape ps{};
+                    ps.label = std::string(p.name);
+                    ps.type = p.type;
+                    ps.has_default = p.has_default;
+                    ps.span = p.span;
+
+                    // 스펙 6.1.7(C)-5: 함수 내부 파라미터 라벨 중복 금지
+                    if (!seen_labels.insert(ps.label).second) {
+                        std::string msg = "duplicate parameter label '" + ps.label +
+                                        "' in overload declaration of '" + fn_name + "'";
+                        diag_(diag::Code::kTypeErrorGeneric, ps.span, msg);
+                        err_(ps.span, msg);
+                    }
+
+                    const bool is_named = (i >= pos_cnt) || p.is_named_group;
+                    if (is_named) d.named.push_back(std::move(ps));
+                    else d.positional.push_back(std::move(ps));
+                }
+
+                decls.push_back(std::move(d));
+            }
+
+            if (decls.size() <= 1) continue;
+
+            // 스펙 6.1.7(C)-1/2: Declaration Key 충돌 금지 (반환 타입만 차이도 포함)
+            std::unordered_map<std::string, size_t> decl_key_owner;
+            decl_key_owner.reserve(decls.size());
+            for (size_t i = 0; i < decls.size(); ++i) {
+                const std::string key = make_decl_key(decls[i]);
+                auto ins = decl_key_owner.emplace(key, i);
+                if (!ins.second) {
+                    const auto& prev = decls[ins.first->second];
+                    std::string msg;
+                    if (prev.ret != decls[i].ret) {
+                        msg = "overload conflict in '" + fn_name +
+                            "': return-type-only overloading is not allowed";
+                    } else {
+                        msg = "overload conflict in '" + fn_name +
+                            "': declaration key collision";
+                    }
+                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    err_(decls[i].span, msg);
+                }
+            }
+
+            // 스펙 6.1.7(C)-3: positional 호출 관점 충돌 금지 (named-group 없는 함수끼리)
+            std::unordered_map<std::string, size_t> pos_view_owner;
+            pos_view_owner.reserve(decls.size());
+            for (size_t i = 0; i < decls.size(); ++i) {
+                if (!decls[i].named.empty()) continue;
+                const std::string key = make_positional_type_key(decls[i]);
+                auto ins = pos_view_owner.emplace(key, i);
+                if (!ins.second) {
+                    std::string msg = "overload conflict in '" + fn_name +
+                        "': positional-call view is indistinguishable";
+                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    err_(decls[i].span, msg);
+                }
+            }
+
+            // 스펙 6.1.7(C)-4: labeled 호출 관점 충돌 금지 (named-group 없는 함수끼리)
+            std::unordered_map<std::string, size_t> labeled_view_owner;
+            labeled_view_owner.reserve(decls.size());
+            for (size_t i = 0; i < decls.size(); ++i) {
+                if (!decls[i].named.empty()) continue;
+                const std::string key = make_labeled_set_key(decls[i]);
+                auto ins = labeled_view_owner.emplace(key, i);
+                if (!ins.second) {
+                    std::string msg = "overload conflict in '" + fn_name +
+                        "': labeled-call view is indistinguishable";
+                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    err_(decls[i].span, msg);
+                }
+            }
         }
     }
 
