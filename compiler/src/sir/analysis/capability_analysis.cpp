@@ -4,7 +4,10 @@
 #include <gaupel/diag/Diagnostic.hpp>
 #include <gaupel/syntax/TokenKind.hpp>
 
+#include <charconv>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -25,13 +28,34 @@ namespace gaupel::sir {
             kReturnValue,
         };
 
-        struct ScopeState {
-            std::vector<std::pair<SymbolId, bool>> activated_borrows; // (sym, is_mut)
+        enum class PlaceProjectionKind : uint8_t {
+            kIndex,
+            kField,
         };
 
-        struct BorrowState {
-            uint32_t shared_count = 0;
-            uint32_t mut_count = 0;
+        struct PlaceProjection {
+            PlaceProjectionKind kind = PlaceProjectionKind::kIndex;
+
+            // kIndex
+            bool has_const_index = false;
+            uint64_t const_index = 0;
+
+            // kField
+            std::string_view field_name{};
+        };
+
+        struct PlaceRef {
+            SymbolId root = k_invalid_symbol;
+            std::vector<PlaceProjection> proj;
+        };
+
+        struct ActiveBorrow {
+            PlaceRef place{};
+            bool is_mut = false;
+        };
+
+        struct ScopeState {
+            size_t borrow_size_at_entry = 0;
         };
 
         struct SymbolTraits {
@@ -67,10 +91,11 @@ namespace gaupel::sir {
                     auto& st = out.state_by_symbol[sym];
                     st.moved_by_escape = moved;
                 }
-                for (const auto& [sym, bs] : active_borrows_) {
-                    auto& st = out.state_by_symbol[sym];
-                    st.active_shared_borrows = bs.shared_count;
-                    st.active_mut_borrow = (bs.mut_count > 0);
+                for (const auto& b : active_borrows_) {
+                    if (b.place.root == k_invalid_symbol) continue;
+                    auto& st = out.state_by_symbol[b.place.root];
+                    if (b.is_mut) st.active_mut_borrow = true;
+                    else st.active_shared_borrows += 1;
                 }
                 out.escape_handle_count = (uint32_t)m_.escape_handles.size();
                 for (const auto& h : m_.escape_handles) {
@@ -91,6 +116,12 @@ namespace gaupel::sir {
             bool is_borrow_type_(TypeId t) const {
                 if (t == k_invalid_type || t >= types_.count()) return false;
                 return types_.get(t).kind == ty::Kind::kBorrow;
+            }
+
+            /// @brief `T`가 escape(`&&T`)인지 확인한다.
+            bool is_escape_type_(TypeId t) const {
+                if (t == k_invalid_type || t >= types_.count()) return false;
+                return types_.get(t).kind == ty::Kind::kEscape;
             }
 
             /// @brief 타입이 drop을 요구할 수 있는지 보수적으로 판정한다.
@@ -124,6 +155,8 @@ namespace gaupel::sir {
                 const auto& v = m_.values[vid];
                 return v.place == PlaceClass::kLocal ||
                        v.place == PlaceClass::kIndex ||
+                       v.place == PlaceClass::kField ||
+                       v.kind == ValueKind::kField ||
                        v.kind == ValueKind::kGlobal;
             }
 
@@ -142,52 +175,135 @@ namespace gaupel::sir {
                        op == (uint32_t)syntax::TokenKind::kDotDotColon;
             }
 
-            /// @brief 값에서 root 심볼을 추적한다(local/index/borrow/escape).
+            /// @brief 정수 리터럴에서 상수 인덱스를 추출한다(추출 실패 시 nullopt).
+            std::optional<uint64_t> parse_const_index_(ValueId vid) const {
+                if (vid == k_invalid_value || (size_t)vid >= m_.values.size()) return std::nullopt;
+                const auto& v = m_.values[vid];
+                if (v.kind != ValueKind::kIntLit) return std::nullopt;
+
+                std::string_view text = v.text;
+                std::string digits;
+                digits.reserve(text.size());
+                for (char ch : text) {
+                    if (ch >= '0' && ch <= '9') {
+                        digits.push_back(ch);
+                        continue;
+                    }
+                    if (ch == '_') continue;
+                    break; // 접미사(i32/u64 등) 시작
+                }
+                if (digits.empty()) return std::nullopt;
+
+                uint64_t out = 0;
+                const char* begin = digits.data();
+                const char* end = begin + digits.size();
+                auto [ptr, ec] = std::from_chars(begin, end, out, 10);
+                if (ec != std::errc{} || ptr != end) return std::nullopt;
+                return out;
+            }
+
+            /// @brief 값에서 place 경로(root + projection)를 구성한다.
+            bool try_make_place_ref_(ValueId vid, PlaceRef& out) const {
+                if (vid == k_invalid_value || (size_t)vid >= m_.values.size()) return false;
+                const auto& v = m_.values[vid];
+
+                switch (v.kind) {
+                    case ValueKind::kLocal:
+                        if (v.sym == k_invalid_symbol) return false;
+                        out.root = v.sym;
+                        return true;
+
+                    case ValueKind::kGlobal:
+                        if (v.sym == k_invalid_symbol) return false;
+                        out.root = v.sym;
+                        return true;
+
+                    case ValueKind::kIndex: {
+                        if (!try_make_place_ref_(v.a, out)) return false;
+                        PlaceProjection p{};
+                        p.kind = PlaceProjectionKind::kIndex;
+                        if (const auto ci = parse_const_index_(v.b)) {
+                            p.has_const_index = true;
+                            p.const_index = *ci;
+                        }
+                        out.proj.push_back(p);
+                        return true;
+                    }
+
+                    case ValueKind::kField: {
+                        if (!try_make_place_ref_(v.a, out)) return false;
+                        PlaceProjection p{};
+                        p.kind = PlaceProjectionKind::kField;
+                        p.field_name = v.text;
+                        out.proj.push_back(p);
+                        return true;
+                    }
+
+                    default:
+                        return false;
+                }
+            }
+
+            /// @brief 값에서 place 경로를 추출한다.
+            std::optional<PlaceRef> place_ref_(ValueId vid) const {
+                PlaceRef p{};
+                if (!try_make_place_ref_(vid, p)) return std::nullopt;
+                if (p.root == k_invalid_symbol) return std::nullopt;
+                return p;
+            }
+
+            /// @brief 값에서 root 심볼을 추적한다(local/index/field/global).
             std::optional<SymbolId> root_symbol_(ValueId vid) const {
                 if (vid == k_invalid_value || (size_t)vid >= m_.values.size()) return std::nullopt;
                 const auto& v = m_.values[vid];
-
                 if (v.origin_sym != k_invalid_symbol) return v.origin_sym;
-                if (v.kind == ValueKind::kLocal && v.sym != k_invalid_symbol) return v.sym;
-                if (v.kind == ValueKind::kIndex) return root_symbol_(v.a);
+                if (const auto p = place_ref_(vid)) return p->root;
                 return std::nullopt;
+            }
+
+            /// @brief 두 place projection이 disjoint인지 판정한다.
+            static bool projection_disjoint_(const PlaceProjection& a, const PlaceProjection& b) {
+                if (a.kind != b.kind) return false;
+                if (a.kind == PlaceProjectionKind::kField) {
+                    return !a.field_name.empty() && !b.field_name.empty() && a.field_name != b.field_name;
+                }
+                if (a.kind == PlaceProjectionKind::kIndex) {
+                    return a.has_const_index && b.has_const_index && a.const_index != b.const_index;
+                }
+                return false;
+            }
+
+            /// @brief 두 place가 alias/충돌 가능한지(overlap) 판정한다.
+            static bool place_overlap_(const PlaceRef& a, const PlaceRef& b) {
+                if (a.root == k_invalid_symbol || b.root == k_invalid_symbol) return false;
+                if (a.root != b.root) return false;
+
+                const size_t n = (a.proj.size() < b.proj.size()) ? a.proj.size() : b.proj.size();
+                for (size_t i = 0; i < n; ++i) {
+                    if (projection_disjoint_(a.proj[i], b.proj[i])) return false;
+                }
+                // prefix 관계이거나(ancestor), projection이 같거나, 동적 index가 섞인 경우는 overlap으로 본다.
+                return true;
             }
 
             /// @brief 스코프를 시작한다.
             void enter_scope_() {
-                scopes_.push_back(ScopeState{});
+                scopes_.push_back(ScopeState{active_borrows_.size()});
             }
 
-            /// @brief 스코프를 끝내고 스코프 내 활성 borrow를 해제한다.
+            /// @brief 스코프를 끝내고 스코프에서 생성한 borrow를 해제한다.
             void leave_scope_() {
                 if (scopes_.empty()) return;
-                const auto& scope = scopes_.back();
-                for (const auto& [sym, is_mut] : scope.activated_borrows) {
-                    auto it = active_borrows_.find(sym);
-                    if (it == active_borrows_.end()) continue;
-                    if (is_mut) {
-                        if (it->second.mut_count > 0) --it->second.mut_count;
-                    } else {
-                        if (it->second.shared_count > 0) --it->second.shared_count;
-                    }
-                    if (it->second.mut_count == 0 && it->second.shared_count == 0) {
-                        active_borrows_.erase(it);
-                    }
+                const size_t keep = scopes_.back().borrow_size_at_entry;
+                if (keep < active_borrows_.size()) {
+                    active_borrows_.resize(keep);
                 }
                 scopes_.pop_back();
             }
 
             /// @brief 현재 스코프에 borrow 활성화를 등록한다.
-            void activate_borrow_(SymbolId sym, bool is_mut) {
-                auto& st = active_borrows_[sym];
-                if (is_mut) {
-                    st.mut_count += 1;
-                } else {
-                    st.shared_count += 1;
-                }
-                if (!scopes_.empty()) {
-                    scopes_.back().activated_borrows.push_back({sym, is_mut});
-                }
+            void activate_borrow_(const PlaceRef& place, bool is_mut) {
+                active_borrows_.push_back(ActiveBorrow{place, is_mut});
             }
 
             /// @brief 심볼이 mutable 선언인지 확인한다.
@@ -204,18 +320,22 @@ namespace gaupel::sir {
                 return it->second.is_static;
             }
 
-            /// @brief 활성 `&mut` borrow 존재 여부를 반환한다.
-            bool has_active_mut_(SymbolId sym) const {
-                auto it = active_borrows_.find(sym);
-                if (it == active_borrows_.end()) return false;
-                return it->second.mut_count > 0;
+            /// @brief 주어진 place와 겹치는 활성 '&mut' borrow 존재 여부를 반환한다.
+            bool has_active_mut_(const PlaceRef& place) const {
+                for (const auto& b : active_borrows_) {
+                    if (!b.is_mut) continue;
+                    if (place_overlap_(place, b.place)) return true;
+                }
+                return false;
             }
 
-            /// @brief 활성 shared borrow 존재 여부를 반환한다.
-            bool has_active_shared_(SymbolId sym) const {
-                auto it = active_borrows_.find(sym);
-                if (it == active_borrows_.end()) return false;
-                return it->second.shared_count > 0;
+            /// @brief 주어진 place와 겹치는 활성 shared borrow 존재 여부를 반환한다.
+            bool has_active_shared_(const PlaceRef& place) const {
+                for (const auto& b : active_borrows_) {
+                    if (b.is_mut) continue;
+                    if (place_overlap_(place, b.place)) return true;
+                }
+                return false;
             }
 
             /// @brief `&&` move-out된 심볼인지 확인한다.
@@ -233,6 +353,42 @@ namespace gaupel::sir {
             /// @brief 심볼 move-out 상태를 해제한다(재초기화/재대입).
             void clear_moved_(SymbolId sym) {
                 moved_by_escape_[sym] = false;
+            }
+
+            /// @brief place 기반 use-after-move를 검사한다.
+            void check_use_after_move_(ValueId place_vid, ValueUse use, Span sp) {
+                if (use == ValueUse::kAssignLhs) return;
+                const auto root = root_symbol_(place_vid);
+                if (!root) return;
+                if (is_moved_(*root)) {
+                    report_(diag::Code::kSirUseAfterEscapeMove, sp);
+                }
+            }
+
+            /// @brief place 직접 접근/쓰기 시 borrow 충돌을 검사한다.
+            void check_place_access_conflicts_(ValueId place_vid, ValueUse use, Span sp) {
+                const auto p = place_ref_(place_vid);
+                if (!p) return;
+
+                const bool direct_access =
+                    use == ValueUse::kValue ||
+                    use == ValueUse::kCallArg ||
+                    use == ValueUse::kReturnValue ||
+                    use == ValueUse::kAssignLhs;
+
+                if (direct_access && has_active_mut_(*p)) {
+                    report_(diag::Code::kBorrowMutDirectAccessConflict, sp);
+                }
+                if (use == ValueUse::kAssignLhs && has_active_shared_(*p)) {
+                    report_(diag::Code::kBorrowSharedWriteConflict, sp);
+                }
+            }
+
+            /// @brief 대입 lhs가 static place인지 판정한다.
+            bool is_static_place_(ValueId lhs_vid) const {
+                const auto root = root_symbol_(lhs_vid);
+                if (!root) return false;
+                return is_symbol_static_(*root);
             }
 
             /// @brief escape 값이 허용된 경계 문맥인지 반환한다.
@@ -368,6 +524,9 @@ namespace gaupel::sir {
                         if (is_borrow_type_(value_type_(s.init)) && s.is_static) {
                             report_(diag::Code::kBorrowEscapeToStorage, s.span);
                         }
+                        if (is_escape_type_(value_type_(s.init)) && !s.is_static) {
+                            report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
+                        }
                         if (s.sym != k_invalid_symbol) {
                             clear_moved_(s.sym);
                         }
@@ -417,23 +576,8 @@ namespace gaupel::sir {
                 switch (v.kind) {
                     case ValueKind::kLocal: {
                         if (v.sym == k_invalid_symbol) return;
-
-                        if (use != ValueUse::kAssignLhs && is_moved_(v.sym)) {
-                            report_(diag::Code::kSirUseAfterEscapeMove, v.span);
-                        }
-
-                        const bool direct_access =
-                            use == ValueUse::kValue ||
-                            use == ValueUse::kCallArg ||
-                            use == ValueUse::kReturnValue ||
-                            use == ValueUse::kAssignLhs;
-
-                        if (direct_access && has_active_mut_(v.sym)) {
-                            report_(diag::Code::kBorrowMutDirectAccessConflict, v.span);
-                        }
-                        if (use == ValueUse::kAssignLhs && has_active_shared_(v.sym)) {
-                            report_(diag::Code::kBorrowSharedWriteConflict, v.span);
-                        }
+                        check_use_after_move_(vid, use, v.span);
+                        check_place_access_conflicts_(vid, use, v.span);
                         return;
                     }
 
@@ -446,17 +590,19 @@ namespace gaupel::sir {
                             return;
                         }
 
+                        auto place = place_ref_(v.a);
+                        if (!place) return;
                         const auto root = (v.origin_sym != k_invalid_symbol)
                             ? std::optional<SymbolId>{v.origin_sym}
-                            : root_symbol_(v.a);
-                        if (!root) return;
+                            : std::optional<SymbolId>{place->root};
+                        if (!root || *root == k_invalid_symbol) return;
 
                         if (v.borrow_is_mut && !is_symbol_mutable_(*root)) {
                             report_(diag::Code::kBorrowMutRequiresMutablePlace, v.span);
                         }
 
-                        const bool has_mut_conflict = has_active_mut_(*root);
-                        const bool has_shared_conflict = has_active_shared_(*root);
+                        const bool has_mut_conflict = has_active_mut_(*place);
+                        const bool has_shared_conflict = has_active_shared_(*place);
 
                         if (v.borrow_is_mut) {
                             if (has_mut_conflict) {
@@ -466,13 +612,13 @@ namespace gaupel::sir {
                                 report_(diag::Code::kBorrowMutConflictWithShared, v.span);
                             }
                             if (!has_mut_conflict && !has_shared_conflict && is_symbol_mutable_(*root)) {
-                                activate_borrow_(*root, /*is_mut=*/true);
+                                activate_borrow_(*place, /*is_mut=*/true);
                             }
                         } else {
                             if (has_mut_conflict) {
                                 report_(diag::Code::kBorrowSharedConflictWithMut, v.span);
                             } else {
-                                activate_borrow_(*root, /*is_mut=*/false);
+                                activate_borrow_(*place, /*is_mut=*/false);
                             }
                         }
                         return;
@@ -491,16 +637,17 @@ namespace gaupel::sir {
                             report_(diag::Code::kEscapeOperandMustNotBeBorrow, v.span);
                         }
 
+                        auto place = place_ref_(v.a);
                         const auto root = (v.origin_sym != k_invalid_symbol)
                             ? std::optional<SymbolId>{v.origin_sym}
-                            : root_symbol_(v.a);
+                            : (place ? std::optional<SymbolId>{place->root} : root_symbol_(v.a));
                         register_escape_handle_(vid, v, use, root);
 
-                        if (root) {
-                            if (has_active_mut_(*root)) {
+                        if (root && *root != k_invalid_symbol) {
+                            if (place && has_active_mut_(*place)) {
                                 report_(diag::Code::kEscapeWhileMutBorrowActive, v.span);
                             }
-                            if (has_active_shared_(*root)) {
+                            if (place && has_active_shared_(*place)) {
                                 report_(diag::Code::kEscapeWhileBorrowActive, v.span);
                             }
 
@@ -530,6 +677,9 @@ namespace gaupel::sir {
                             if (!lhs_plain_local) {
                                 report_(diag::Code::kBorrowEscapeToStorage, v.span);
                             }
+                        }
+                        if (is_escape_type_(value_type_(v.b)) && !is_static_place_(v.a)) {
+                            report_(diag::Code::kSirEscapeMustNotMaterialize, v.span);
                         }
 
                         if (auto root = root_symbol_(v.a)) {
@@ -568,8 +718,16 @@ namespace gaupel::sir {
                     }
 
                     case ValueKind::kIndex:
-                        analyze_value_(v.a, use == ValueUse::kAssignLhs ? ValueUse::kAssignLhs : ValueUse::kValue);
+                        analyze_value_(v.a, ValueUse::kValue);
                         analyze_value_(v.b, ValueUse::kValue);
+                        check_use_after_move_(vid, use, v.span);
+                        check_place_access_conflicts_(vid, use, v.span);
+                        return;
+
+                    case ValueKind::kField:
+                        analyze_value_(v.a, ValueUse::kValue);
+                        check_use_after_move_(vid, use, v.span);
+                        check_place_access_conflicts_(vid, use, v.span);
                         return;
 
                     case ValueKind::kIfExpr:
@@ -624,7 +782,6 @@ namespace gaupel::sir {
                     case ValueKind::kGlobal:
                     case ValueKind::kParam:
                     case ValueKind::kFieldInit:
-                    case ValueKind::kField:
                         return;
                 }
             }
@@ -638,7 +795,7 @@ namespace gaupel::sir {
             bool current_fn_is_comptime_ = false;
 
             std::unordered_map<SymbolId, SymbolTraits> symbol_traits_;
-            std::unordered_map<SymbolId, BorrowState> active_borrows_;
+            std::vector<ActiveBorrow> active_borrows_;
             std::unordered_map<SymbolId, bool> moved_by_escape_;
             std::unordered_map<ValueId, uint32_t> escape_meta_by_value_;
             std::vector<ScopeState> scopes_;

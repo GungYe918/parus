@@ -165,7 +165,7 @@ namespace {
     static bool test_null_coalesce_assign_parsed_as_assign() {
         // '??='가 이항식이 아니라 대입식(Assign)으로 파싱되어야 한다.
         const std::string src = R"(
-            fn main() -> unit {
+            fn main() -> void {
                 let mut o: i32? = null;
                 o ??= 1;
                 return;
@@ -414,7 +414,7 @@ namespace {
         // acts for 구문은 현재 미지원 진단이 나와야 한다.
         const std::string src = R"(
             acts for Logger {
-                fn write(msg: i32) -> unit { return; }
+                fn write(msg: i32) -> void { return; }
             }
         )";
 
@@ -507,7 +507,7 @@ namespace {
     static bool test_mut_borrow_write_through_assignment_ok() {
         // &mut T 바인딩은 대입을 통해 pointee 쓰기가 가능해야 한다.
         const std::string src = R"(
-            fn inc(x: &mut i32) -> unit {
+            fn inc(x: &mut i32) -> void {
                 x = x + 1;
                 return;
             }
@@ -629,8 +629,8 @@ namespace {
         // static place는 non-boundary 문맥에서도 &&를 허용해야 한다.
         const std::string src = R"(
             static let G: i32 = 7i32;
+            static mut set HG = &&G;
             fn main() -> i32 {
-                set h = &&G;
                 return 0i32;
             }
         )";
@@ -653,9 +653,11 @@ namespace {
         // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
         const std::string src = R"(
             static let G: i32 = 7i32;
-            fn main() -> i32 {
-                set h = &&G;
+            fn sink(h: &&i32) -> i32 {
                 return 0i32;
+            }
+            fn main() -> i32 {
+                return sink(h: &&G);
             }
         )";
 
@@ -690,7 +692,7 @@ namespace {
     static bool test_sir_mut_analysis_allows_mut_borrow_write_through() {
         // SIR mut-analysis는 &mut write-through를 불법 쓰기로 오검출하면 안 된다.
         const std::string src = R"(
-            fn inc(x: &mut i32) -> unit {
+            fn inc(x: &mut i32) -> void {
                 x = x + 1;
                 return;
             }

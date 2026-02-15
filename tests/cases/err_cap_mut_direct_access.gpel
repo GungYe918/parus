@@ -1,5 +1,5 @@
 // 비허용 케이스: 활성 &mut borrow 동안 원본 place 직접 접근은 금지된다.
-fn main() -> unit {
+fn main() -> void {
   let mut x: i32 = 1i32;
   set r = &mut x;
   set v = x;

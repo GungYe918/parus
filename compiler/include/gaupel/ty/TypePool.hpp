@@ -199,7 +199,7 @@ namespace gaupel::ty {
             // exact
             if (name == "null")   { out = Builtin::kNull; return true; }
 
-            if (name == "unit")  { out = Builtin::kUnit; return true; }
+            if (name == "void")  { out = Builtin::kUnit; return true; }
             if (name == "never") { out = Builtin::kNever; return true; }
 
             if (name == "bool")   { out = Builtin::kBool; return true; }
@@ -226,6 +226,7 @@ namespace gaupel::ty {
 
             // NOTE:
             // - Builtin::kInferInteger is INTERNAL ONLY.
+            // - Builtin::kUnit is represented as "void" in source; users must not spell "unit".
             // - Users must not be able to spell it in source.
             return false;
         }
@@ -238,7 +239,7 @@ namespace gaupel::ty {
             switch (b) {
                 case Builtin::kNull:   return "null";
 
-                case Builtin::kUnit:  return "unit";
+                case Builtin::kUnit:  return "void";
                 case Builtin::kNever: return "never";
 
                 case Builtin::kBool:   return "bool";

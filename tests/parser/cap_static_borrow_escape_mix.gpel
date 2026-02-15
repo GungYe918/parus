@@ -10,7 +10,7 @@ fn read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return (a + b) * scale + bias;
 }
 
-fn bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> unit {
+fn bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> void {
   x = x + delta;
   return;
 }
@@ -32,10 +32,8 @@ fn main() -> i32 {
   bump_one(&mut arr[2], { delta: 5i32 });
   bump_one(&mut arr[3], { delta: 7i32 });
 
-  set h0 = &&G0;
-  set h1 = &&G1;
-  set c0 = consume(h0);
-  set c1 = consume(h1);
+  set c0 = consume(&&G0);
+  set c1 = consume(&&G1);
 
   return out + arr[2] + arr[3] + c0 + c1;
 }

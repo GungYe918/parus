@@ -1,5 +1,5 @@
 // 비허용 케이스: &의 피연산자는 place여야 한다.
-fn main() -> unit {
+fn main() -> void {
   set r = &(1i32 + 2i32);
   return;
 }

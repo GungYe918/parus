@@ -231,6 +231,14 @@ namespace gaupel {
                     last_span = seg.span;
                 }
 
+                if (segs.size() == 1 && segs[0] == "unit") {
+                    diag_report(diag::Code::kTypeInternalNameReserved, first.span, "unit");
+                    ParsedType out{};
+                    out.id = types_.error();
+                    out.span = span_join(first.span, last_span);
+                    return out;
+                }
+
                 ParsedType out{};
                 out.id = types_.intern_path(segs.data(), (uint32_t)segs.size());
                 out.span = span_join(first.span, last_span);

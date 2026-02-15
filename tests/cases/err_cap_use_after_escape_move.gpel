@@ -1,5 +1,5 @@
 // 비허용 케이스: &&로 소유권 이동한 값은 이후 직접 사용할 수 없다.
-fn main() -> unit {
+fn main() -> void {
   let mut x: i32 = 1i32;
   set h = &&x;
   set y = x;

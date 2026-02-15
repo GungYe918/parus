@@ -86,6 +86,7 @@ namespace gaupel::diag {
         kTypeOptionalDuplicate,     // T?? 같은 중복
         kTypeRecovery,              // 타입 파싱 실패 후 동기화
         kCastTargetTypeExpected,    // "as/as?/as!" 뒤에 타입 필요
+        kTypeInternalNameReserved,  // internal-only type name used in source
 
         // ---- while parsing ----
         kWhileHeaderExpectedLParen,   // while ( ... ) 에서 '(' 없음
@@ -142,6 +143,7 @@ namespace gaupel::diag {
         kEscapeRequiresStaticOrBoundary,
         kSirUseAfterEscapeMove,          // SIR pass: use-after-move via escape
         kSirEscapeBoundaryViolation,     // SIR pass: escape handle must be boundary-consumed or static-origin
+        kSirEscapeMustNotMaterialize,    // SIR pass: escape handle must not be materialized into non-static locals
 
         // =========================
         // passes / sema

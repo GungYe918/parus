@@ -1,5 +1,5 @@
 // 비허용 케이스: 슬라이스 경계는 정수 타입이어야 함
-fn main() -> unit {
+fn main() -> void {
   let arr: i32[4] = [1, 2, 3, 4];
   set s = &arr[true..2];
   return;

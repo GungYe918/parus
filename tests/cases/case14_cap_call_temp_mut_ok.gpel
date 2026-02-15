@@ -1,9 +1,9 @@
 // 허용 케이스: call 인자의 임시 &mut borrow는 호출식 이후 해제되어야 한다.
-fn touch(v: &mut i32) -> unit {
+fn touch(v: &mut i32) -> void {
   return;
 }
 
-fn main() -> unit {
+fn main() -> void {
   let mut x: i32 = 0i32;
   touch(v: &mut x);
   set y = x;

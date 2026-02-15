@@ -327,15 +327,14 @@ namespace gaupel::tyck {
         if (rt == ty::kInvalidType) rt = types_.error();
 
         if (s.expr == ast::k_invalid_expr) {
-            // 이제 unit 타입이 있으므로:
-            // - fn ret == unit 이면 return; 허용
+            // 내부 표현상 Unit(=source "void") 타입이면 return; 허용
             // - 아니면 에러
             if (rt == types_.builtin(ty::Builtin::kUnit)) {
                 return;
             }
 
             diag_(diag::Code::kTypeReturnExprRequired, s.span);
-            err_(s.span, "return expression is required (function does not return unit)");
+            err_(s.span, "return expression is required (function does not return void)");
             return;
         }
 
@@ -487,7 +486,7 @@ namespace gaupel::tyck {
             return t == types_.builtin(ty::Builtin::kNever);
         };
 
-        // 반환 타입이 unit/never면 "끝까지 도달" 허용
+        // 반환 타입이 void(Unit)/never면 "끝까지 도달" 허용
         const ty::TypeId fn_ret = fn_ctx_.ret;
 
         if (!is_unit(fn_ret) && !is_never(fn_ret)) {

@@ -14,7 +14,7 @@ fn sum_slice(xs: &[i32], { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return acc;
 }
 
-fn bump(x: &mut i32, { delta: i32 = 1i32 }) -> unit {
+fn bump(x: &mut i32, { delta: i32 = 1i32 }) -> void {
   x = x + delta;
   return;
 }
