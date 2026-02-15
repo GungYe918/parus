@@ -23,6 +23,10 @@ namespace parus::sir::detail {
         Value v{};
         v.span = e.span;
         v.type = type_of_ast_expr(tyck, eid);
+        const ast::StmtId overload_sid =
+            ((size_t)eid < tyck.expr_overload_target.size())
+                ? tyck.expr_overload_target[eid]
+                : ast::k_invalid_stmt;
 
         switch (e.kind) {
             case parus::ast::ExprKind::kIntLit:
@@ -81,17 +85,57 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kPostfixUnary: {
                 // v0: postfix++ only
-                v.kind = ValueKind::kPostfixInc;
-                v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                if (overload_sid != ast::k_invalid_stmt) {
+                    v.kind = ValueKind::kCall;
+                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_decl_stmt = overload_sid;
+                    v.a = k_invalid_value;
+
+                    v.arg_begin = (uint32_t)m.args.size();
+                    v.arg_count = 0;
+
+                    Arg a0{};
+                    a0.kind = ArgKind::kPositional;
+                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.span = e.span;
+                    m.add_arg(a0);
+                    v.arg_count = 1;
+                } else {
+                    v.kind = ValueKind::kPostfixInc;
+                    v.op = (uint32_t)e.op;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                }
                 break;
             }
 
             case parus::ast::ExprKind::kBinary: {
-                v.kind = ValueKind::kBinary;
-                v.op = (uint32_t)e.op;
-                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
-                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                if (overload_sid != ast::k_invalid_stmt) {
+                    v.kind = ValueKind::kCall;
+                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_decl_stmt = overload_sid;
+                    v.a = k_invalid_value;
+                    v.arg_begin = (uint32_t)m.args.size();
+                    v.arg_count = 0;
+
+                    Arg a0{};
+                    a0.kind = ArgKind::kPositional;
+                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.span = ast.expr(e.a).span;
+                    m.add_arg(a0);
+                    v.arg_count++;
+
+                    Arg a1{};
+                    a1.kind = ArgKind::kPositional;
+                    a1.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                    a1.span = ast.expr(e.b).span;
+                    m.add_arg(a1);
+                    v.arg_count++;
+                } else {
+                    v.kind = ValueKind::kBinary;
+                    v.op = (uint32_t)e.op;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                }
                 break;
             }
 
@@ -168,6 +212,10 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
+                if (overload_sid != ast::k_invalid_stmt) {
+                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_decl_stmt = overload_sid;
+                }
 
                 // callee
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);

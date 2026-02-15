@@ -72,6 +72,10 @@ namespace parus::diag {
         kFnOnlyOneNamedGroupAllowed,
         kActsForNotSupported,             // acts for T is not supported yet in parser
         kActsMemberExportNotAllowed,      // member-level export inside acts is not allowed
+        kActsForTypeExpected,             // `acts for` requires a target type
+        kOperatorDeclOnlyInActsFor,       // operator(...) is only allowed in acts-for forms
+        kOperatorKeyExpected,             // operator(<key>) key is missing/invalid
+        kOperatorSelfFirstParamRequired,  // operator(...) first parameter must be `self`
         
         // fn body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration

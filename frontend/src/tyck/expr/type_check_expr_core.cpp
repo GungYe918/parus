@@ -49,6 +49,8 @@ namespace parus::tyck {
         if (eid >= expr_type_cache_.size()) return types_.error();
 
         const ast::Expr& e = ast_.expr(eid);
+        const ast::ExprId saved_expr_id = current_expr_id_;
+        current_expr_id_ = eid;
 
         // NOTE(slot-sensitive caching)
         // - 일부 expr는 "Value vs Discard" 컨텍스트에 따라 진단/타입 규칙이 달라질 수 있다.
@@ -66,6 +68,7 @@ namespace parus::tyck {
         // - slot-sensitive expr는 Value에서만 캐시를 신뢰한다.
         if (!slot_sensitive || slot == Slot::kValue) {
             if (expr_type_cache_[eid] != ty::kInvalidType) {
+                current_expr_id_ = saved_expr_id;
                 return expr_type_cache_[eid];
             }
         }
@@ -225,6 +228,7 @@ namespace parus::tyck {
             expr_type_cache_[eid] = t;
         }
 
+        current_expr_id_ = saved_expr_id;
         return t;
     }
 
@@ -492,6 +496,11 @@ namespace parus::tyck {
     }
 
     ty::TypeId TypeChecker::check_expr_postfix_unary_(const ast::Expr& e) {
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_overload_target_cache_.size()) {
+            expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
         if (!is_place_expr_(e.a)) {
             diag_(diag::Code::kPostfixOperandMustBePlace, e.span);
             err_(e.span, "postfix operator requires a place expression");
@@ -513,13 +522,29 @@ namespace parus::tyck {
                 }
             }
         }
-        return write_through_borrow ? elem : at;
+
+        const ty::TypeId receiver_ty = write_through_borrow ? elem : at;
+        const ast::StmtId op_sid = resolve_postfix_operator_overload_(e.op, receiver_ty);
+        if (op_sid != ast::k_invalid_stmt) {
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                current_expr_id_ < expr_overload_target_cache_.size()) {
+                expr_overload_target_cache_[current_expr_id_] = op_sid;
+            }
+            return ast_.stmt(op_sid).fn_ret;
+        }
+
+        return receiver_ty;
     }
 
     // --------------------
     // binary / assign / ternary
     // --------------------
     ty::TypeId TypeChecker::check_expr_binary_(const ast::Expr& e) {
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_overload_target_cache_.size()) {
+            expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
         // NOTE:
         // - v0 정책: binary는 기본적으로 "builtin fast-path"만 처리한다.
         // - 추후 operator overloading을 넣을 때도,
@@ -621,6 +646,25 @@ namespace parus::tyck {
         // Equality: == / !=
         // ------------------------------------------------------------
         if (e.op == K::kEqEq || e.op == K::kBangEq) {
+            // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
+            if (!acts_default_operator_map_.empty()) {
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                if (op_sid != ast::k_invalid_stmt) {
+                    if (current_expr_id_ != ast::k_invalid_expr &&
+                        current_expr_id_ < expr_overload_target_cache_.size()) {
+                        expr_overload_target_cache_[current_expr_id_] = op_sid;
+                    }
+                    return ast_.stmt(op_sid).fn_ret;
+                }
+            }
+
+            const bool both_builtin = is_builtin(lt) && is_builtin(rt);
+            if (!both_builtin && !is_null_(lt) && !is_null_(rt)) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "no matching operator overload for equality");
+                err_(e.span, "no matching operator overload for equality");
+                return types_.error();
+            }
+
             // null == null : ok
             if (is_null_(lt) && is_null_(rt)) {
                 return types_.builtin(ty::Builtin::kBool);
@@ -648,6 +692,25 @@ namespace parus::tyck {
         // Arithmetic: + - * / %
         // ------------------------------------------------------------
         if (e.op == K::kPlus || e.op == K::kMinus || e.op == K::kStar || e.op == K::kSlash || e.op == K::kPercent) {
+            // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
+            if (!acts_default_operator_map_.empty()) {
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                if (op_sid != ast::k_invalid_stmt) {
+                    if (current_expr_id_ != ast::k_invalid_expr &&
+                        current_expr_id_ < expr_overload_target_cache_.size()) {
+                        expr_overload_target_cache_[current_expr_id_] = op_sid;
+                    }
+                    return ast_.stmt(op_sid).fn_ret;
+                }
+            }
+
+            const bool both_builtin = is_builtin(lt) && is_builtin(rt);
+            if (!both_builtin) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "no matching operator overload for arithmetic");
+                err_(e.span, "no matching operator overload for arithmetic");
+                return types_.error();
+            }
+
             // float + {integer} is forbidden (no implicit int->float)
             if ((is_float(lt) && is_infer_int(rt)) || (is_float(rt) && is_infer_int(lt))) {
                 diag_(diag::Code::kIntToFloatNotAllowed, e.span, "float-arithmetic");
@@ -687,6 +750,25 @@ namespace parus::tyck {
         // Comparison: < <= > >=
         // ------------------------------------------------------------
         if (e.op == K::kLt || e.op == K::kLtEq || e.op == K::kGt || e.op == K::kGtEq) {
+            // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
+            if (!acts_default_operator_map_.empty()) {
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                if (op_sid != ast::k_invalid_stmt) {
+                    if (current_expr_id_ != ast::k_invalid_expr &&
+                        current_expr_id_ < expr_overload_target_cache_.size()) {
+                        expr_overload_target_cache_[current_expr_id_] = op_sid;
+                    }
+                    return ast_.stmt(op_sid).fn_ret;
+                }
+            }
+
+            const bool both_builtin = is_builtin(lt) && is_builtin(rt);
+            if (!both_builtin) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "no matching operator overload for comparison");
+                err_(e.span, "no matching operator overload for comparison");
+                return types_.error();
+            }
+
             // If one side is concrete int and the other is {integer}, resolve it like arithmetic.
             if (is_infer_int(lt) && is_int(rt)) {
                 if (!resolve_infer_int_in_context_(e.a, rt)) {
@@ -723,6 +805,16 @@ namespace parus::tyck {
         // ------------------------------------------------------------
         // TODO: logical ops, bitwise ops, pipe, etc.
         // ------------------------------------------------------------
+        {
+            const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+            if (op_sid != ast::k_invalid_stmt) {
+                if (current_expr_id_ != ast::k_invalid_expr &&
+                    current_expr_id_ < expr_overload_target_cache_.size()) {
+                    expr_overload_target_cache_[current_expr_id_] = op_sid;
+                }
+                return ast_.stmt(op_sid).fn_ret;
+            }
+        }
         return types_.error();
     }
 

@@ -2,6 +2,7 @@
 #pragma once
 #include <parus/text/Span.hpp>
 #include <parus/ty/Type.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <cstdint>
 #include <string_view>
@@ -133,6 +134,10 @@ namespace parus::sir {
 
         // resolved symbol (for kLocal)
         SymbolId sym = k_invalid_symbol;
+
+        // direct callee symbol (for kCall)
+        SymbolId callee_sym = k_invalid_symbol;
+        uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
 
         // root symbol for capability expressions (kBorrow/kEscape)
         SymbolId origin_sym = k_invalid_symbol;
@@ -307,6 +312,7 @@ namespace parus::sir {
 
         // body
         BlockId entry = k_invalid_block;
+        uint32_t origin_stmt = 0xFFFF'FFFFu; // AST StmtId of source fn decl
 
         // hint: whether any stmt/value in this func may write
         bool has_any_write = false;
@@ -337,6 +343,9 @@ namespace parus::sir {
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
         bool is_export = false;
+        bool is_for = false;
+        bool has_set_name = false;
+        TypeId target_type = k_invalid_type;
 
         uint32_t func_begin = 0;
         uint32_t func_count = 0;

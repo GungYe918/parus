@@ -100,6 +100,7 @@ namespace parus::sir::detail {
         if (s.a != ast::k_invalid_stmt) {
             f.entry = lower_block_stmt(m, has_any_write, ast, sym, nres, tyck, s.a);
         }
+        f.origin_stmt = sid;
 
         f.has_any_write = has_any_write;
         return m.add_func(f);
@@ -193,6 +194,9 @@ namespace parus::sir {
                 a.name = s.name;
                 a.sym = resolve_symbol_from_stmt(nres, sid);
                 a.is_export = s.is_export;
+                a.is_for = s.acts_is_for;
+                a.has_set_name = s.acts_has_set_name;
+                a.target_type = s.acts_target_type;
                 a.func_begin = (uint32_t)m.funcs.size();
                 a.func_count = 0;
 

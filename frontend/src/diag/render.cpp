@@ -77,6 +77,10 @@ namespace parus::diag {
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
             case Code::kActsForNotSupported: return "ActsForNotSupported";
             case Code::kActsMemberExportNotAllowed: return "ActsMemberExportNotAllowed";
+            case Code::kActsForTypeExpected: return "ActsForTypeExpected";
+            case Code::kOperatorDeclOnlyInActsFor: return "OperatorDeclOnlyInActsFor";
+            case Code::kOperatorKeyExpected: return "OperatorKeyExpected";
+            case Code::kOperatorSelfFirstParamRequired: return "OperatorSelfFirstParamRequired";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
             case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
             case Code::kTypeNameExpected: return "TypeNameExpected";
@@ -255,6 +259,10 @@ namespace parus::diag {
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
             case Code::kActsForNotSupported: return "'acts for T' is not supported yet; use 'acts A { ... }'";
             case Code::kActsMemberExportNotAllowed: return "member-level 'export' is not allowed inside acts";
+            case Code::kActsForTypeExpected: return "'acts for' requires a target type";
+            case Code::kOperatorDeclOnlyInActsFor: return "operator(...) declarations are only allowed in 'acts for T' or 'acts Name for T'";
+            case Code::kOperatorKeyExpected: return "operator key is missing or invalid (e.g., +, ==, ++pre)";
+            case Code::kOperatorSelfFirstParamRequired: return "operator(...) first parameter must be a receiver marked with 'self'";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
             case Code::kTypeFnSignatureExpected: return "type-context 'fn' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
@@ -439,6 +447,10 @@ namespace parus::diag {
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
             case Code::kActsForNotSupported: return "'acts for T'는 아직 지원되지 않습니다. 'acts A { ... }' 형태를 사용하세요";
             case Code::kActsMemberExportNotAllowed: return "acts 내부 멤버 함수에는 'export'를 붙일 수 없습니다";
+            case Code::kActsForTypeExpected: return "'acts for' 뒤에는 대상 타입이 필요합니다";
+            case Code::kOperatorDeclOnlyInActsFor: return "operator(...) 선언은 'acts for T' 또는 'acts Name for T' 내부에서만 허용됩니다";
+            case Code::kOperatorKeyExpected: return "operator 키가 없거나 올바르지 않습니다 (예: +, ==, ++pre)";
+            case Code::kOperatorSelfFirstParamRequired: return "operator(...)의 첫 번째 파라미터는 'self' 리시버여야 합니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'fn' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";

@@ -30,6 +30,7 @@ namespace parus::tyck {
         pending_int_sym_.clear();
         pending_int_expr_.clear();
         sym_is_mut_.clear();
+        acts_default_operator_map_.clear();
 
         // sym_ “완전 초기화”
         // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
@@ -37,7 +38,9 @@ namespace parus::tyck {
 
         // expr type cache: AST exprs 크기에 맞춰 리셋
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_overload_target_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
+        result_.expr_overload_target = expr_overload_target_cache_;
 
         // string literal 타입(필요 시)
         if (string_type_ == ty::kInvalidType) {
@@ -122,6 +125,7 @@ namespace parus::tyck {
 
         // 결과 반영
         result_.expr_types = expr_type_cache_;
+        result_.expr_overload_target = expr_overload_target_cache_;
         return result_;
     }
 
@@ -294,6 +298,7 @@ namespace parus::tyck {
                     err_(s.span, "duplicate symbol (acts): " + std::string(s.name));
                     diag_(diag::Code::kDuplicateDecl, s.span, s.name);
                 }
+                collect_acts_operator_decl_(s);
                 continue;
             }
 
@@ -466,6 +471,124 @@ namespace parus::tyck {
                 }
             }
         }
+    }
+
+    /// @brief acts operator 조회용 키를 생성한다.
+    uint64_t TypeChecker::acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix) {
+        const uint64_t owner = static_cast<uint64_t>(owner_type);
+        const uint64_t op = static_cast<uint64_t>(op_token);
+        const uint64_t pf = is_postfix ? 1ull : 0ull;
+        return (owner << 32) | (op << 1) | pf;
+    }
+
+    /// @brief 실제 파라미터 타입이 acts owner 타입과 호환되는지 판정한다.
+    bool TypeChecker::type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual) {
+        if (owner == ty::kInvalidType || actual == ty::kInvalidType) return false;
+        if (owner == actual) return true;
+        const auto& at = types.get(actual);
+        if (at.kind == ty::Kind::kBorrow) {
+            return at.elem == owner;
+        }
+        return false;
+    }
+
+    /// @brief acts decl 하나에서 기본 acts(`acts for T`) operator 멤버를 인덱싱한다.
+    void TypeChecker::collect_acts_operator_decl_(const ast::Stmt& acts_decl) {
+        if (!acts_decl.acts_is_for) return;
+        if (acts_decl.acts_has_set_name) return; // v0: named-set operator는 추후 활성화 규칙과 함께 처리
+        if (acts_decl.acts_target_type == ty::kInvalidType) return;
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = acts_decl.stmt_begin;
+        const uint32_t end = acts_decl.stmt_begin + acts_decl.stmt_count;
+        if (begin >= kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = begin; i < end; ++i) {
+            const ast::StmtId sid = kids[i];
+            if (sid == ast::k_invalid_stmt) continue;
+            const auto& member = ast_.stmt(sid);
+            if (member.kind != ast::StmtKind::kFnDecl || !member.fn_is_operator) continue;
+
+            // 규칙 검증: operator의 첫 파라미터는 self 리시버여야 한다.
+            if (member.param_count == 0) {
+                diag_(diag::Code::kOperatorSelfFirstParamRequired, member.span);
+                err_(member.span, "operator declaration requires a self receiver parameter");
+                continue;
+            }
+            const auto& first = ast_.params()[member.param_begin];
+            if (!first.is_self) {
+                diag_(diag::Code::kOperatorSelfFirstParamRequired, first.span);
+                err_(first.span, "operator declaration requires 'self' on first parameter");
+                continue;
+            }
+            if (!type_matches_acts_owner_(types_, acts_decl.acts_target_type, first.type)) {
+                std::string msg = "operator self type must match acts target type";
+                diag_(diag::Code::kTypeErrorGeneric, first.span, msg);
+                err_(first.span, msg);
+                continue;
+            }
+
+            const uint64_t key = acts_operator_key_(
+                acts_decl.acts_target_type,
+                member.fn_operator_token,
+                member.fn_operator_is_postfix
+            );
+            acts_default_operator_map_[key].push_back(ActsOperatorDecl{
+                .fn_sid = sid,
+                .owner_type = acts_decl.acts_target_type,
+                .op_token = member.fn_operator_token,
+                .is_postfix = member.fn_operator_is_postfix,
+            });
+        }
+    }
+
+    /// @brief binary operator에 대응되는 기본 acts overload를 찾는다.
+    ast::StmtId TypeChecker::resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs) const {
+        const uint64_t key = acts_operator_key_(lhs, op, /*is_postfix=*/false);
+        auto it = acts_default_operator_map_.find(key);
+        if (it == acts_default_operator_map_.end()) return ast::k_invalid_stmt;
+
+        ast::StmtId selected = ast::k_invalid_stmt;
+        for (const auto& decl : it->second) {
+            const auto& fn = ast_.stmt(decl.fn_sid);
+            if (fn.kind != ast::StmtKind::kFnDecl) continue;
+            if (fn.param_count < 2) continue;
+
+            const auto& p0 = ast_.params()[fn.param_begin + 0];
+            const auto& p1 = ast_.params()[fn.param_begin + 1];
+            if (!can_assign_(p0.type, lhs)) continue;
+            if (!can_assign_(p1.type, rhs)) continue;
+
+            if (selected != ast::k_invalid_stmt) {
+                // 중복 후보는 모호성으로 보고 해소 실패 처리
+                return ast::k_invalid_stmt;
+            }
+            selected = decl.fn_sid;
+        }
+        return selected;
+    }
+
+    /// @brief postfix operator(++ 등)에 대응되는 기본 acts overload를 찾는다.
+    ast::StmtId TypeChecker::resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const {
+        const uint64_t key = acts_operator_key_(lhs, op, /*is_postfix=*/true);
+        auto it = acts_default_operator_map_.find(key);
+        if (it == acts_default_operator_map_.end()) return ast::k_invalid_stmt;
+
+        ast::StmtId selected = ast::k_invalid_stmt;
+        for (const auto& decl : it->second) {
+            const auto& fn = ast_.stmt(decl.fn_sid);
+            if (fn.kind != ast::StmtKind::kFnDecl) continue;
+            if (fn.param_count < 1) continue;
+
+            const auto& p0 = ast_.params()[fn.param_begin + 0];
+            if (!can_assign_(p0.type, lhs)) continue;
+
+            if (selected != ast::k_invalid_stmt) {
+                return ast::k_invalid_stmt;
+            }
+            selected = decl.fn_sid;
+        }
+        return selected;
     }
 
     bool TypeChecker::fits_builtin_int_big_(const parus::num::BigInt& v, parus::ty::Builtin dst) {

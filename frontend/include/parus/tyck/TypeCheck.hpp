@@ -6,6 +6,7 @@
 #include <parus/text/Span.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/num/BigInt.hpp>
+#include <parus/syntax/TokenKind.hpp>
 
 #include <cstdint>
 #include <string>
@@ -27,6 +28,7 @@ namespace parus::tyck {
     struct TyckResult {
         bool ok = true;
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
+        std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
         std::vector<TyError> errors;
     };
 
@@ -165,6 +167,8 @@ namespace parus::tyck {
 
         // expr_types 캐시
         std::vector<ty::TypeId> expr_type_cache_;
+        std::vector<ast::StmtId> expr_overload_target_cache_;
+        ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
         // for "string literal" placeholder type
         ty::TypeId string_type_ = ty::kInvalidType;
@@ -206,6 +210,20 @@ namespace parus::tyck {
         // - string_view는 AST storage lifetime에 의존하는데,
         //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.
         std::unordered_map<std::string, std::vector<ast::StmtId>> fn_decl_by_name_;
+
+        struct ActsOperatorDecl {
+            ast::StmtId fn_sid = ast::k_invalid_stmt;
+            ty::TypeId owner_type = ty::kInvalidType;
+            syntax::TokenKind op_token = syntax::TokenKind::kError;
+            bool is_postfix = false;
+        };
+        std::unordered_map<uint64_t, std::vector<ActsOperatorDecl>> acts_default_operator_map_;
+
+        static uint64_t acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix);
+        void collect_acts_operator_decl_(const ast::Stmt& acts_decl);
+        ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs) const;
+        ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const;
+        static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
 
     };
 

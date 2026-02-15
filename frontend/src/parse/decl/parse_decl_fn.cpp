@@ -43,7 +43,7 @@ namespace parus {
     }
 
     // 파라미터 1개(Ident ':' Type ['=' Expr])를 파싱한다.
-    bool Parser::parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name) {
+    bool Parser::parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self) {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
@@ -56,7 +56,16 @@ namespace parus {
             start_span = cursor_.bump().span; // start span becomes 'mut'
         }
 
-        const Token name_tok = cursor_.peek();
+        bool is_self = false;
+        Token name_tok = cursor_.peek();
+
+        // self receiver marker: `self x: T`
+        if (name_tok.kind == K::kIdent && name_tok.lexeme == "self") {
+            is_self = true;
+            start_span = is_mut ? start_span : name_tok.span;
+            cursor_.bump(); // self
+            name_tok = cursor_.peek();
+        }
 
         std::string_view name{};
         if (name_tok.kind == K::kIdent) {
@@ -69,6 +78,7 @@ namespace parus {
         }
 
         if (out_name) *out_name = name;
+        if (out_is_self) *out_is_self = is_self;
 
         // ':'
         if (!cursor_.eat(K::kColon)) {
@@ -128,6 +138,7 @@ namespace parus {
         p.name = name;
         p.type = ty.id;
         p.is_mut = is_mut;
+        p.is_self = is_self;
         p.is_named_group = is_named_group;
         p.has_default = has_default;
         p.default_expr = def;

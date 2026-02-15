@@ -756,6 +756,11 @@ namespace parusc::dump {
                             std::cout << "Cast " << oir_cast_kind_name(x.kind)
                                     << " to=" << types.to_string((ty::TypeId)x.to) << " <id " << x.to << ">"
                                     << " v" << x.src;
+                        } else if constexpr (std::is_same_v<T, oir::InstFuncRef>) {
+                            std::cout << "FuncRef f#" << x.func;
+                            if (!x.name.empty()) {
+                                std::cout << " name=" << x.name;
+                            }
                         } else if constexpr (std::is_same_v<T, oir::InstCall>) {
                             std::cout << "Call callee=v" << x.callee << " args=[";
                             for (size_t ai = 0; ai < x.args.size(); ++ai) {

@@ -102,6 +102,7 @@ namespace parus::oir {
     struct InstUnary      { UnOp op; ValueId src; };
     struct InstBinOp      { BinOp op; ValueId lhs; ValueId rhs; };
     struct InstCast       { CastKind kind; TypeId to; ValueId src; };
+    struct InstFuncRef    { FuncId func = kInvalidId; std::string name; };
     struct InstCall       { ValueId callee; std::vector<ValueId> args; };
     struct InstIndex      { ValueId base; ValueId index; };
     struct InstField      { ValueId base; std::string field; };
@@ -117,6 +118,7 @@ namespace parus::oir {
         InstUnary,
         InstBinOp,
         InstCast,
+        InstFuncRef,
         InstCall,
         InstIndex,
         InstField,

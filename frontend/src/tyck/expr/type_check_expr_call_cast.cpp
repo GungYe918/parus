@@ -21,6 +21,11 @@ namespace parus::tyck {
 
     ty::TypeId TypeChecker::check_expr_call_(const ast::Expr& e) {
         // e.a = callee, args slice in e.arg_begin/e.arg_count
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_overload_target_cache_.size()) {
+            expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
         ty::TypeId callee_t = check_expr_(e.a);
         const auto& ct = types_.get(callee_t);
 
@@ -443,6 +448,10 @@ namespace parus::tyck {
         }
 
         const Candidate& selected = candidates[final_matches.front()];
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_overload_target_cache_.size()) {
+            expr_overload_target_cache_[current_expr_id_] = selected.decl_id;
+        }
 
         /// @brief 선택된 후보에 대해 infer-int 해소를 포함한 최종 타입 검증을 수행한다.
         const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {

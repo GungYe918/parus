@@ -177,6 +177,12 @@ namespace parus::oir {
                     (void)check_value_id_(m, errs, iid, "inst(bin rhs)", x.rhs);
                 } else if constexpr (std::is_same_v<T, InstCast>) {
                     (void)check_value_id_(m, errs, iid, "inst(cast src)", x.src);
+                } else if constexpr (std::is_same_v<T, InstFuncRef>) {
+                    if (x.func == kInvalidId || (size_t)x.func >= m.funcs.size()) {
+                        std::ostringstream oss;
+                        oss << "inst #" << iid << " has invalid function ref id f" << x.func;
+                        push_error_(errs, oss.str());
+                    }
                 } else if constexpr (std::is_same_v<T, InstCall>) {
                     (void)check_value_id_(m, errs, iid, "inst(call callee)", x.callee);
                     for (auto av : x.args) {

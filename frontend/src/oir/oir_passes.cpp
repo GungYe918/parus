@@ -1350,6 +1350,8 @@ namespace parus::oir {
                         return x.base == slot || x.index == slot;
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         return x.base == slot;
+                    } else if constexpr (std::is_same_v<T, InstFuncRef>) {
+                        return false;
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                          std::is_same_v<T, InstConstBool> ||
                                          std::is_same_v<T, InstConstNull> ||

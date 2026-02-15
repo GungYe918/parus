@@ -624,6 +624,28 @@ namespace parus::tyck {
                 const auto& member = ast_.stmt(sid);
                 if (member.kind != ast::StmtKind::kFnDecl) continue;
 
+                if (member.fn_is_operator) {
+                    if (!s.acts_is_for) {
+                        diag_(diag::Code::kOperatorDeclOnlyInActsFor, member.span);
+                        err_(member.span, "operator declarations are only allowed in acts-for declarations");
+                    }
+                    if (member.param_count == 0) {
+                        diag_(diag::Code::kOperatorSelfFirstParamRequired, member.span);
+                        err_(member.span, "operator declaration requires a self receiver");
+                    } else {
+                        const auto& p0 = ast_.params()[member.param_begin];
+                        if (!p0.is_self) {
+                            diag_(diag::Code::kOperatorSelfFirstParamRequired, p0.span);
+                            err_(p0.span, "operator first parameter must be marked with self");
+                        } else if (s.acts_is_for && s.acts_target_type != ty::kInvalidType &&
+                                   !type_matches_acts_owner_(types_, s.acts_target_type, p0.type)) {
+                            std::string msg = "operator self type must match acts target type";
+                            diag_(diag::Code::kTypeErrorGeneric, p0.span, msg);
+                            err_(p0.span, msg);
+                        }
+                    }
+                }
+
                 auto ins = sym_.insert(sema::SymbolKind::kFn, member.name, member.type, member.span);
                 if (!ins.ok && ins.is_duplicate) {
                     diag_(diag::Code::kDuplicateDecl, member.span, member.name);

@@ -137,6 +137,7 @@ namespace parus::ast {
         TypeId type = k_invalid_type;
 
         bool is_mut = false;
+        bool is_self = false; // acts-for receiver marker: `self name: T`
 
         // default 값: "= Expr"
         bool has_default = false;
@@ -301,6 +302,11 @@ namespace parus::ast {
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
 
+        // fn/operator
+        bool fn_is_operator = false; // true when declared as `operator(...)`
+        syntax::TokenKind fn_operator_token = syntax::TokenKind::kError;
+        bool fn_operator_is_postfix = false; // used for ++pre/++post disambiguation
+
         // ---- switch ----
         uint32_t case_begin = 0;
         uint32_t case_count = 0;
@@ -309,6 +315,11 @@ namespace parus::ast {
         // ---- field decl ----
         uint32_t field_member_begin = 0;
         uint32_t field_member_count = 0;
+
+        // ---- acts decl ----
+        bool acts_is_for = false;          // true: `acts for T` or `acts Name for T`
+        bool acts_has_set_name = false;    // true: `acts Name for T`
+        TypeId acts_target_type = k_invalid_type;
 
         // ---- use ----
         UseKind use_kind = UseKind::kError;

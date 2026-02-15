@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 #include <string>
+#include <cctype>
 
 
 namespace parus::oir {
@@ -21,6 +22,7 @@ namespace parus::oir {
             const parus::sir::Module* sir = nullptr;
             const parus::ty::TypePool* types = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
+            const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
 
             Function* fn = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -159,6 +161,20 @@ namespace parus::oir {
                 Inst inst{};
                 inst.data = InstCast{kind, to, src};
                 inst.eff = eff;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
+            ValueId emit_func_ref(FuncId fid, const std::string& name) {
+                const TypeId ptr_ty =
+                    (types != nullptr)
+                        ? (TypeId)types->builtin(parus::ty::Builtin::kNull)
+                        : kInvalidId;
+                ValueId r = make_value(ptr_ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstFuncRef{fid, name};
+                inst.eff = Effect::Pure;
                 inst.result = r;
                 emit_inst(inst);
                 return r;
@@ -336,6 +352,20 @@ namespace parus::oir {
             }
         }
 
+        /// @brief 함수 이름 + 시그니처를 기반으로 OIR 내부 함수명을 생성한다.
+        std::string mangle_func_name_(const parus::sir::Func& sf, const parus::ty::TypePool& types) {
+            std::string sig = (sf.sig != parus::ty::kInvalidType)
+                ? types.to_string(sf.sig)
+                : std::string("fn(?)");
+            std::string out = std::string(sf.name) + "$" + sig;
+            for (char& ch : out) {
+                if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+                    ch = '_';
+                }
+            }
+            return out;
+        }
+
         // -----------------------
         // Lower expressions
         // -----------------------
@@ -498,7 +528,17 @@ namespace parus::oir {
             }
 
             case parus::sir::ValueKind::kCall: {
-                ValueId callee = lower_value(v.a);
+                ValueId callee = kInvalidId;
+                if (v.callee_sym != parus::sir::k_invalid_symbol && fn_symbol_to_func != nullptr) {
+                    auto fit = fn_symbol_to_func->find(v.callee_sym);
+                    if (fit != fn_symbol_to_func->end() &&
+                        (size_t)fit->second < out->funcs.size()) {
+                        callee = emit_func_ref(fit->second, out->funcs[fit->second].name);
+                    }
+                }
+                if (callee == kInvalidId) {
+                    callee = lower_value(v.a);
+                }
                 std::vector<ValueId> args;
                 args.reserve(v.arg_count);
 
@@ -855,39 +895,56 @@ namespace parus::oir {
 
         // Build all functions in SIR module.
         // Strategy:
-        // - One OIR function per SIR func
-        // - Entry OIR block created, then lower SIR entry block into it
+        // 1) 함수 쉘/엔트리 블록을 먼저 전부 생성해 심볼->FuncId를 고정한다.
+        // 2) 두 번째 패스에서 바디를 lowering한다.
+        // 이렇게 해야 전방 함수 호출/오버로드 호출에서도 direct callee를 안정적으로 참조할 수 있다.
         std::unordered_map<parus::sir::ValueId, ValueId> escape_value_map;
+        std::vector<FuncId> sir_to_oir_func(sir_.funcs.size(), kInvalidId);
+        std::vector<BlockId> sir_to_entry(sir_.funcs.size(), kInvalidId);
+        std::unordered_map<parus::sir::SymbolId, FuncId> fn_symbol_to_func;
 
-        for (const auto& sf : sir_.funcs) {
+        for (size_t i = 0; i < sir_.funcs.size(); ++i) {
+            const auto& sf = sir_.funcs[i];
 
-            // --- create OIR function shell ---
             Function f{};
-            f.name   = std::string(sf.name);
+            f.name = mangle_func_name_(sf, ty_);
             f.ret_ty = (TypeId)sf.ret;
 
-            // --- create entry block ---
-            BlockId entry = out.mod.add_block(Block{});
+            const BlockId entry = out.mod.add_block(Block{});
             f.entry = entry;
             f.blocks.push_back(entry);
 
-            // Register function into module (so fb.fn can point to stable storage)
-            FuncId fid = out.mod.add_func(f);
-            (void)fid;
+            const FuncId fid = out.mod.add_func(f);
+            sir_to_oir_func[i] = fid;
+            sir_to_entry[i] = entry;
+
+            if (sf.sym != parus::sir::k_invalid_symbol) {
+                fn_symbol_to_func[sf.sym] = fid;
+            }
+        }
+
+        for (size_t i = 0; i < sir_.funcs.size(); ++i) {
+            const auto& sf = sir_.funcs[i];
+            const FuncId fid = sir_to_oir_func[i];
+            const BlockId entry = sir_to_entry[i];
+            if (fid == kInvalidId || entry == kInvalidId || (size_t)fid >= out.mod.funcs.size()) {
+                continue;
+            }
 
             FuncBuild fb{};
-            fb.out    = &out.mod;
-            fb.sir    = &sir_;
-            fb.types  = &ty_;
+            fb.out = &out.mod;
+            fb.sir = &sir_;
+            fb.types = &ty_;
             fb.escape_value_map = &escape_value_map;
-            fb.fn     = &out.mod.funcs.back();
+            fb.fn_symbol_to_func = &fn_symbol_to_func;
+            fb.fn = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
             // 함수 파라미터를 entry block parameter로 시드하고 심볼 바인딩을 연결한다.
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
             if (pend <= (uint64_t)sir_.params.size()) {
-                for (uint32_t i = 0; i < sf.param_count; ++i) {
-                    const auto& sp = sir_.params[sf.param_begin + i];
+                for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
+                    const auto& sp = sir_.params[sf.param_begin + pidx];
                     ValueId pv = fb.add_block_param(entry, (TypeId)sp.type);
                     if (sp.sym == parus::sir::k_invalid_symbol) continue;
 
@@ -901,13 +958,10 @@ namespace parus::oir {
                 }
             }
 
-            // lower entry block
             fb.push_scope();
             fb.lower_block(sf.entry);
             fb.pop_scope();
 
-            // if no terminator, add default return:
-            // - return null for non-void (v0)
             if (!out.mod.blocks[fb.cur_bb].has_term) {
                 ValueId rv = fb.emit_const_null((TypeId)sf.ret);
                 fb.ret(rv);

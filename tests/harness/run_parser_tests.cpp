@@ -412,21 +412,24 @@ namespace {
         return ok;
     }
 
-    static bool test_diag_acts_for_not_supported() {
-        // acts for 구문은 현재 미지원 진단이 나와야 한다.
+    static bool test_acts_for_parse_and_tyck_ok() {
+        // acts for / operator(...) 기본 파싱과 tyck 경로가 동작해야 한다.
         const std::string src = R"(
-            acts for Logger {
-                fn write(msg: i32) -> void { return; }
+            acts for i32 {
+                fn keep(self x: i32) -> i32 { return x; }
+                operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
             }
         )";
 
         auto p = parse_program(src);
         (void)run_passes(p);
-        (void)run_tyck(p);
+        auto ty = run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(parus::diag::Code::kActsForNotSupported),
-            "acts for syntax must emit ActsForNotSupported");
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kActsForNotSupported),
+            "acts for syntax must not emit legacy ActsForNotSupported");
+        ok &= require_(ty.errors.empty(),
+            "acts for / operator basic source should not produce tyck errors");
         return ok;
     }
 
@@ -941,7 +944,7 @@ int main() {
         {"diag_cast_target_type_expected", test_diag_cast_target_type_expected},
         {"diag_fn_name_expected", test_diag_fn_name_expected},
         {"diag_field_member_name_expected", test_diag_field_member_name_expected},
-        {"diag_acts_for_not_supported", test_diag_acts_for_not_supported},
+        {"acts_for_parse_and_tyck_ok", test_acts_for_parse_and_tyck_ok},
         {"diag_block_tail_expr_required", test_diag_block_tail_expr_required},
         {"cap_escape_on_slice_borrow_rejected", test_cap_escape_on_slice_borrow_rejected},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},

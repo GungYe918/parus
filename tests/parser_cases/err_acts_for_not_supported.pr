@@ -1,6 +1,6 @@
-// 비허용 케이스: 아직 acts for T 형태는 지원하지 않는다.
-acts for Foo {
-    fn f(self a: Foo) -> Foo {
+// 비허용 케이스: acts for 뒤에 대상 타입이 빠지면 에러여야 한다.
+acts for {
+    fn f(self a: i32) -> i32 {
         return a;
     }
 }

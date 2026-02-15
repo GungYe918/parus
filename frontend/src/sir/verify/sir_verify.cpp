@@ -254,7 +254,19 @@ namespace parus::sir {
                 }
 
                 case ValueKind::kCall: {
-                    need_child(v.a, "callee");
+                    const bool has_direct_callee_meta =
+                        (v.callee_sym != k_invalid_symbol) ||
+                        (v.callee_decl_stmt != 0xFFFF'FFFFu);
+
+                    if (v.a != k_invalid_value) {
+                        need_child(v.a, "callee");
+                    } else if (!has_direct_callee_meta) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid
+                            << " call requires callee value or direct callee metadata";
+                        push_error_(errs, oss.str());
+                    }
+
                     const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
                     if (arg_end > (uint64_t)m.args.size()) {
                         std::ostringstream oss;

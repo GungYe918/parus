@@ -176,6 +176,7 @@ namespace parus {
 
         //  acts 선언 파싱 (v0: 일반 acts A { ... }만 지원)
         ast::StmtId parse_decl_acts();
+        ast::StmtId parse_decl_acts_operator(ast::TypeId owner_type, bool allow_operator);
 
         // use구문 파싱
         ast::StmtId parse_decl_use();
@@ -193,7 +194,7 @@ namespace parus {
 
         //  파라미터 1개(Ident ':' Type ['=' Expr])를 파싱
         //  반환값: 성공 여부(이름/타입까지 정상 파싱되었는지)
-        bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name);
+        bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self = nullptr);
 
         // --------------------
         // call args
