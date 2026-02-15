@@ -94,6 +94,7 @@ namespace parus::ast {
 
         // use
         kUse,
+        kNestDecl,   // nest foo; / nest foo { ... }
     };
 
     // --------------------
@@ -242,10 +243,10 @@ namespace parus::ast {
     // use stmt
     enum class UseKind : uint8_t {
         kError,
+        kImport,       // import foo [as alias];
         kTypeAlias,    // use NewT = u32;
         kPathAlias,    // use A::B = name;
         kTextSubst,    // use PI 3.14f;
-        kModuleImport, // use module <x/y> as alias;
         kFFIFunc,      // use func::ffi<sig> name;
         kFFIStruct,    // use struct::ffi Name { ... }
     };
@@ -324,10 +325,10 @@ namespace parus::ast {
         uint32_t use_path_count = 0;
         std::string_view use_rhs_ident{}; // "= Ident" 의 Ident
 
-        // ModuleImport: module_path + alias
-        std::string_view use_module_path{};
-        bool use_module_is_angle = false; // <...> 인지 "..." 인지
-        std::string_view use_module_alias{}; // as Ident
+        // ---- nest decl ----
+        uint32_t nest_path_begin = 0;
+        uint32_t nest_path_count = 0;
+        bool nest_is_file_directive = false; // nest foo;
 
         // FFIStruct: struct name(use_name) + fields slice
         uint32_t use_field_begin = 0;

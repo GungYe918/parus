@@ -12,7 +12,9 @@ namespace parus {
             || k == K::kKwFn
             || k == K::kKwField
             || k == K::kKwActs
-            || k == K::kKwUse;
+            || k == K::kKwUse
+            || k == K::kKwImport
+            || k == K::kKwNest;
     }
 
     // decl 엔트리.
@@ -24,6 +26,12 @@ namespace parus {
         // ---- use is treated as a top-level decl (policy) ----
         if (t.kind == K::kKwUse) {
             return parse_decl_use();
+        }
+        if (t.kind == K::kKwImport) {
+            return parse_decl_import();
+        }
+        if (t.kind == K::kKwNest) {
+            return parse_decl_nest();
         }
 
         // direct decl keywords
@@ -39,6 +47,7 @@ namespace parus {
             const auto k1 = cursor_.peek(1).kind;
             if (k1 == K::kKwField) return parse_decl_field();
             if (k1 == K::kKwActs)  return parse_decl_acts();
+            if (k1 == K::kKwNest)  return parse_decl_nest();
             return parse_decl_fn();
         }
 
@@ -59,6 +68,10 @@ namespace parus {
     // decl-level use: just forward to stmt use parser (AST node is still StmtKind::kUse)
     ast::StmtId Parser::parse_decl_use() {
         return parse_stmt_use();
+    }
+
+    ast::StmtId Parser::parse_decl_import() {
+        return parse_stmt_import();
     }
 
 } // namespace parus

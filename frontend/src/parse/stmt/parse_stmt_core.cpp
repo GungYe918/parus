@@ -134,6 +134,7 @@ namespace parus {
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();
         if (tok.kind == K::kKwSwitch)   return parse_stmt_switch();
         if (tok.kind == K::kKwUse)      return parse_stmt_use();
+        if (tok.kind == K::kKwImport)   return parse_stmt_import();
 
         if (tok.kind == K::kKwStatic) return parse_stmt_var();
         if (tok.kind == K::kKwLet || tok.kind == K::kKwSet) return parse_stmt_var();

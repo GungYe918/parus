@@ -216,6 +216,7 @@ namespace parusc::dump {
             case K::kDoScope: return "DoScope";
             case K::kDoWhile: return "DoWhile";
             case K::kUse:  return "Use";
+            case K::kNestDecl: return "NestDecl";
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
@@ -1111,6 +1112,18 @@ namespace parusc::dump {
                 }
                 break;
             }
+
+            case parus::ast::StmtKind::kUse:
+                if (s.expr != parus::ast::k_invalid_expr) {
+                    dump_expr(ast, s.expr, indent + 1);
+                }
+                break;
+
+            case parus::ast::StmtKind::kNestDecl:
+                if (!s.nest_is_file_directive && s.a != parus::ast::k_invalid_stmt) {
+                    dump_stmt(ast, types, s.a, indent + 1);
+                }
+                break;
 
             default:
                 break;

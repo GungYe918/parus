@@ -371,6 +371,7 @@ namespace parus::cap {
 
                     case ast::StmtKind::kFieldDecl:
                     case ast::StmtKind::kUse:
+                    case ast::StmtKind::kNestDecl:
                     case ast::StmtKind::kError:
                         return;
                 }

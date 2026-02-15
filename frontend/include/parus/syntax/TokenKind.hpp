@@ -64,8 +64,10 @@ namespace parus::syntax {
         kKwComptime,
 
         kKwUse,
+        kKwImport,
         kKwModule,
         kKwAs,
+        kKwNest,
 
         // punct / delimiters
         kAt,       // @
@@ -83,6 +85,7 @@ namespace parus::syntax {
         kQuestion,  // ?
         kQuestionQuestion,        // ??     (null-coalescing)
         kQuestionQuestionAssign,  // ??=    (null-coalescing assign)
+        kDot,       // .
 
         // operators
         kAssign,      // =
@@ -177,8 +180,10 @@ namespace parus::syntax {
             case TokenKind::kKwComptime: return "comptime";
 
             case TokenKind::kKwUse: return "use";
+            case TokenKind::kKwImport: return "import";
             case TokenKind::kKwModule: return "module";
             case TokenKind::kKwAs: return "as";
+            case TokenKind::kKwNest: return "nest";
 
             case TokenKind::kKwPub: return "pub";
             case TokenKind::kKwSub: return "sub";
@@ -201,6 +206,7 @@ namespace parus::syntax {
             case TokenKind::kQuestion: return "?";
             case TokenKind::kQuestionQuestion: return "??";
             case TokenKind::kQuestionQuestionAssign: return "?" "?="; // "??=" but avoids trigraph
+            case TokenKind::kDot: return ".";
 
             case TokenKind::kAssign: return "=";
             case TokenKind::kPlusAssign: return "+=";

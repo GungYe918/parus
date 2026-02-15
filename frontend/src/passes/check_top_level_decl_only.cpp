@@ -34,6 +34,7 @@ namespace parus::passes {
                 (s.kind == ast::StmtKind::kFnDecl) ||
                 (s.kind == ast::StmtKind::kFieldDecl) ||
                 (s.kind == ast::StmtKind::kActsDecl) ||
+                (s.kind == ast::StmtKind::kNestDecl) ||
                 (s.kind == ast::StmtKind::kUse);
 
             if (!ok) {

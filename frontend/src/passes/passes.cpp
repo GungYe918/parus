@@ -98,6 +98,10 @@ namespace parus::passes {
                     on_expr(st.expr);
                     break;
 
+                case ast::StmtKind::kNestDecl:
+                    if (!st.nest_is_file_directive) on_stmt(st.a);
+                    break;
+
                 default:
                     break;
             }

@@ -117,45 +117,51 @@ namespace parus {
         return { begin, count };
     }
 
-    std::string_view Parser::parse_module_path_to_string(bool& out_is_angle) {
+    /// @brief import 선언을 파싱한다.
+    ///
+    /// 문법(v0):
+    ///   import foo;
+    ///   import foo::bar as fb;
+    ///
+    /// 규칙:
+    /// - import는 외부 의존성 alias를 현재 스코프에 1개만 도입한다.
+    /// - alias 미지정 시 마지막 path segment를 alias로 사용한다.
+    ast::StmtId Parser::parse_stmt_import() {
         using K = syntax::TokenKind;
-        out_is_angle = false;
 
-        // ModulePath := "<...>" | StringLit
-        if (cursor_.at(K::kStringLit)) {
-            const Token s = cursor_.bump();
-            return s.lexeme; // lexer가 따옴표 포함/미포함 어느쪽이든 그대로 보관
+        const Token import_kw = cursor_.bump(); // 'import'
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kUse;
+        s.use_kind = ast::UseKind::kImport;
+        s.span = import_kw.span;
+
+        auto [pb, pc] = parse_path_segments();
+        s.use_path_begin = pb;
+        s.use_path_count = pc;
+
+        if (pc == 0) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "module path");
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(import_kw.span, end);
+            return ast_.add_stmt(s);
         }
 
-        // '<' 는 TokenKind::kLt 로 들어옴
-        if (!cursor_.at(K::kLt)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "< or string literal");
-            return {};
-        }
-
-        out_is_angle = true;
-        cursor_.bump(); // '<'
-
-        std::string acc;
-
-        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
-            const Token t = cursor_.bump();
-
-            // lexeme이 있으면 그대로, 없으면 kind name 사용(예: eof 같은)
-            if (!t.lexeme.empty()) acc.append(t.lexeme.data(), t.lexeme.size());
-            else {
-                auto nm = syntax::token_kind_name(t.kind);
-                acc.append(nm.data(), nm.size());
+        std::string_view alias = ast_.path_segs()[pb + pc - 1];
+        if (cursor_.eat(K::kKwAs)) {
+            const Token al = cursor_.peek();
+            if (al.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, al.span, "identifier (import alias)");
+            } else {
+                cursor_.bump();
+                alias = al.lexeme;
             }
         }
 
-        if (!cursor_.eat(K::kGt)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-            recover_to_delim(K::kGt, K::kSemicolon);
-            cursor_.eat(K::kGt);
-        }
-
-        return ast_.add_owned_string(std::move(acc));
+        s.use_rhs_ident = alias;
+        Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        s.span = span_join(import_kw.span, end);
+        return ast_.add_stmt(s);
     }
 
     // stmt 경계까지 스킵
@@ -177,34 +183,11 @@ namespace parus {
         s.span = use_kw.span;
         s.use_kind = ast::UseKind::kError;
 
-        // ------------------------------------------------------------
-        // 1) module import
-        //    use module <x/y> as alias;
-        // ------------------------------------------------------------
+        // use module ... 는 즉시 폐기(deprecated -> removed)
         if (cursor_.at(K::kKwModule)) {
-            cursor_.bump(); // 'module'
-
-            bool is_angle = false;
-            std::string_view mpath = parse_module_path_to_string(is_angle);
-
-            if (!cursor_.eat(K::kKwAs)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "as");
-                recover_to_delim(K::kKwAs, K::kSemicolon, K::kEof);
-                cursor_.eat(K::kKwAs);
-            }
-
-            const Token al = cursor_.peek();
-            if (al.kind != K::kIdent) {
-                diag_report(diag::Code::kUnexpectedToken, al.span, "identifier (module alias)");
-            } else {
-                cursor_.bump();
-
-                s.use_kind = ast::UseKind::kModuleImport;
-                s.use_module_path = mpath;
-                s.use_module_is_angle = is_angle;
-                s.use_module_alias = al.lexeme;
-            }
-
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "use module is removed; use 'import foo [as alias];'");
+            stmt_sync_to_boundary();
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);

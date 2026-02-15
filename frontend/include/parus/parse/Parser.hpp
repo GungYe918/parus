@@ -70,8 +70,6 @@ namespace parus {
 
         std::pair<uint32_t, uint32_t> parse_path_segments(); // returns (begin,count) in arena.path_segs
         
-        std::string_view parse_module_path_to_string(bool& out_is_angle);
-        
         // --------------------
         // expr
         // --------------------
@@ -158,6 +156,7 @@ namespace parus {
 
         // use stmt 파싱
         ast::StmtId parse_stmt_use();
+        ast::StmtId parse_stmt_import();
 
         //  if/while/fn에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
@@ -180,6 +179,8 @@ namespace parus {
 
         // use구문 파싱
         ast::StmtId parse_decl_use();
+        ast::StmtId parse_decl_import();
+        ast::StmtId parse_decl_nest();
 
         //  '@attr' 리스트를 파싱하여 arena에 저장
         std::pair<uint32_t, uint32_t> parse_decl_fn_attr_list();
@@ -237,6 +238,7 @@ namespace parus {
         bool lexer_fatal_ = false;
         bool aborted_ = false;
         bool too_many_errors_emitted_ = false;
+        bool seen_file_nest_directive_ = false;
     };
 
 } // namespace parus

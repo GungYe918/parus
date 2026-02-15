@@ -111,6 +111,12 @@ namespace parus::tyck {
             case ast::StmtKind::kUse:
                 return;
 
+            case ast::StmtKind::kNestDecl:
+                if (!s.nest_is_file_directive && s.a != ast::k_invalid_stmt) {
+                    check_stmt_(s.a);
+                }
+                return;
+
             case ast::StmtKind::kError:
                 return;
         }

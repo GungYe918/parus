@@ -351,11 +351,42 @@ namespace parus {
         }
 
         if (t.kind == syntax::TokenKind::kIdent) {
+            // Path primary:
+            //   Ident ('::' Ident)*
+            // 를 하나의 식별 경로 토큰으로 파싱한다.
             cursor_.bump();
+
+            std::string joined(t.lexeme);
+            Span sp = t.span;
+            bool has_path_tail = false;
+
+            auto eat_coloncolon = [&]() -> bool {
+                if (cursor_.eat(syntax::TokenKind::kColonColon)) return true;
+                if (cursor_.at(syntax::TokenKind::kColon) && cursor_.peek(1).kind == syntax::TokenKind::kColon) {
+                    cursor_.bump();
+                    cursor_.bump();
+                    return true;
+                }
+                return false;
+            };
+
+            while (eat_coloncolon()) {
+                const Token seg = cursor_.peek();
+                if (seg.kind != syntax::TokenKind::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
+                    break;
+                }
+                cursor_.bump();
+                joined += "::";
+                joined.append(seg.lexeme.data(), seg.lexeme.size());
+                sp = span_join(sp, seg.span);
+                has_path_tail = true;
+            }
+
             ast::Expr e{};
             e.kind = ast::ExprKind::kIdent;
-            e.span = t.span;
-            e.text = t.lexeme;
+            e.span = sp;
+            e.text = has_path_tail ? ast_.add_owned_string(std::move(joined)) : t.lexeme;
             return ast_.add_expr(e);
         }
 
@@ -472,6 +503,37 @@ namespace parus {
 
         while (1) {
             const Token t = cursor_.peek();
+
+            // field/method access chain:
+            //   base.ident
+            //
+            // 현재 AST에서는 전용 노드 대신 Binary(op='.')로 표현한다.
+            if (t.kind == K::kDot) {
+                const Token dot = cursor_.bump();
+                const Token seg = cursor_.peek();
+                if (seg.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier after '.'");
+                    recover_to_delim(K::kComma, K::kSemicolon, K::kRParen);
+                    continue;
+                }
+                cursor_.bump();
+
+                ast::Expr rhs{};
+                rhs.kind = ast::ExprKind::kIdent;
+                rhs.span = seg.span;
+                rhs.text = seg.lexeme;
+                const ast::ExprId rhs_id = ast_.add_expr(rhs);
+
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kBinary;
+                e.op = K::kDot;
+                e.a = base;
+                e.b = rhs_id;
+                e.span = span_join(ast_.expr(base).span, seg.span);
+                (void)dot;
+                base = ast_.add_expr(e);
+                continue;
+            }
 
             // call
             if (t.kind == K::kLParen) {

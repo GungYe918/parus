@@ -1,5 +1,5 @@
 // test.pr
-use module "std/io" as io;
+import std as io;
 use newT = MyType;
 use PI 3.14159;
 use Math::add = add_i32;

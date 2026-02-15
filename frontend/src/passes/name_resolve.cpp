@@ -541,6 +541,13 @@ namespace parus::passes {
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids);
                 return;
 
+            case ast::StmtKind::kNestDecl:
+                if (!s.nest_is_file_directive) {
+                    ScopeGuard g(sym);
+                    walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids);
+                }
+                return;
+
             default:
                 return;
         }

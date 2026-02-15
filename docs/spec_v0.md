@@ -142,7 +142,7 @@ fn utf8_identifiers() -> void {
 * 제어: if, elif, else, switch, case, default, while, loop, break, continue, return
 * 상탯값: true, false, null
 * 논리: and, or, not, xor
-* 시스템: use, module, func::ffi, struct::ffi, commit, recast
+* 시스템: import, use, nest, func::ffi, struct::ffi, commit, recast
 * 접근 제한: public, private
 * 메모리/수명/복사: **copy, clone, delete**
 * slice 관련 타입 표기(토큰이 아니라 타입 표기): **[T]**, **&[T]**, **&mut [T]**
@@ -250,45 +250,93 @@ fn strings() -> void {
 
 ---
 
-## 3. 프리패스와 project/module/file, `use`, FFI
+## 3. 프리패스와 단위 계층, `import`/`use`, FFI
 
-### 3.1 단위 용어: project / module / file
+### 3.1 단위 용어: file / module / bundle / project
 
-Parus 빌드는 컴파일러가 빌드 시스템을 겸한다. 이를 위해 소스 코드를 다음 3단위로 정의한다.
+Parus 빌드는 다음 4단위를 가진다.
 
-* **file**: 하나의 소스 파일. 파싱 단위이다.
-* **module**: 하나의 폴더(또는 논리적 디렉터리) 안의 file 집합. **컴파일 단위**이다.
-* **project**: 여러 module의 집합. 최상위 출력(실행파일/라이브러리)과 빌드 설정을 가진다.
+* **file**: 하나의 소스 파일(`*.pr`). 파싱 단위이다.
+* **module**: bundle 내부의 논리 코드 그룹(심볼 경로/가시성 단위).
+* **bundle**: Rust crate 대응 컴파일/배포 단위. `parus.toml`을 가진다.
+* **project**: 여러 bundle을 묶는 최상위 단위(workspace).
+
+권장 계층:
+
+```text
+file -> module -> bundle -> project
+```
 
 핵심 규칙(전방선언 문제 제거):
 
-* Parus은 **module 단위로 “선언 수집 prepass”**를 수행한다.
-* 따라서 같은 module 내부에서는:
+* Parus은 **bundle 단위 선언 수집 prepass**를 수행한다.
+* 따라서 같은 bundle 내부에서는 함수/타입/acts 선언 순서가 의미를 갖지 않는다.
+* 같은 bundle 안에서는 파일 A가 파일 B의 뒤 선언 심볼을 전방선언 없이 참조할 수 있다.
+* bundle 외부로 노출되는 심볼은 `export`로만 결정된다.
 
-  * 함수/타입/acts 선언 순서가 의미를 갖지 않는다.
-  * 파일 A가 파일 B의 “뒤에 선언된” 함수를 전방선언 없이 호출할 수 있다.
-* module 외부로 노출되는 심볼은 `export`로만 결정된다.
+### 3.1.1 의존성 선언: manifest 우선
 
----
+의존성은 소스 코드가 아니라 bundle manifest(`parus.toml`)에 선언한다.
 
-### 3.1.1 `use` 문 (통합: 별칭/상수/타입/함수 경로)
+```toml
+[package]
+name = "app"
 
-`use`는 다음 기능을 하나의 키워드로 통합한다.
-
-1. **타입 별칭**
-
-```parus
-use newT = u32;
+[dependencies]
+foo = { path = "../foo" }
+goo = { path = "../goo" }
 ```
 
-2. **함수/심볼 별칭(경로 별칭)**
+소스 코드의 `import`는 manifest에 선언된 의존성 키를 활성화하는 용도다.
+
+### 3.1.2 `import` 문 (의존성/경로 alias 도입)
+
+문법:
 
 ```parus
-use Math::add = add_i32;
-use core::io::print = println;
+import foo;
+import goo as g;
+import foo::net as fnet;
 ```
 
-3. **파일 스코프 상수/치환(매크로 함수 금지)**
+규칙(v0 고정):
+
+* `import`는 **include가 아니다**. 현재 스코프에 alias 심볼 1개를 도입한다.
+* alias 생략 시 마지막 경로 세그먼트를 alias로 사용한다.
+* 외부 심볼은 자동 평탄화되지 않는다. 항상 `alias::...`로 접근한다.
+* `import`는 파일 스코프에서만 허용한다.
+* `use module ...` 문법은 즉시 폐기한다.
+
+심볼 접근 예시:
+
+```parus
+import foo;
+import goo as g;
+
+fn demo() -> void {
+  foo::math::add(a: 1, b: 2);
+  g::io::print(msg: "ok");
+}
+```
+
+### 3.1.3 `use` 문 (로컬 alias/치환 전용)
+
+`use`는 로컬 축약과 치환에만 사용한다.
+
+1. 타입 별칭
+
+```parus
+use NewT = u32;
+```
+
+2. 경로 축약(alias)
+
+```parus
+use foo::math::add as add_i32;
+use foo::io::print = println;
+```
+
+3. 파일 스코프 상수/치환
 
 ```parus
 use PI 3.14f;
@@ -297,115 +345,56 @@ use GAME_NAME "Parus";
 
 제약(v0 강제):
 
-* `use`는 **예약어/토큰을 바꾸지 않는다.**
-* `use` 치환 대상은 **식별자(IDENT)** 만 가능하다.
-* `use NAME expr;` 형태는 “소스 코드 레벨 치환”이며,
+* `use`는 예약어/토큰을 바꾸지 않는다.
+* `use NAME expr;` 치환 대상은 식별자(IDENT)만 가능하다.
+* 함수형 매크로(인자), 토큰 결합/분해는 금지한다.
 
-  * 함수형 매크로(인자) 금지
-  * 토큰 결합/분해 금지
-* 구현 권장:
+### 3.1.4 `nest` 네임스페이스
 
-  * (안전) 토큰화 이후 AST 레벨에서 치환
-  * (단순) 토큰화 직후 IDENT 토큰만 치환
-
----
-
-### 3.1.2 `use module <path> as alias;` (모듈 임포트)
+`space` 키워드는 폐기하고 `nest`로 대체한다.
 
 문법:
 
 ```parus
-use module <engine/core> as core;
-use module <engine/math> as math;
-```
+// 파일 기본 네임스페이스 지시어
+nest engine::math;
 
-규칙:
-
-* `<...>`는 **모듈 경로**이며, project의 모듈 검색 규칙으로 해석한다.
-* `alias`는 필수(권장: v0에서는 강제). 모듈 외부 심볼은 `alias::...`로 접근한다.
-* `use module`은 include가 아니라 **의존성 선언**이다.
-
-  * 컴파일러는 이를 기반으로 module dependency graph(빌드 그래프)를 구성한다.
-* **순환 의존성 금지(v0 권장)**:
-
-  * module A가 B를 `use module`로 의존하면, B가 다시 A에 의존하는 것은 에러.
-  * (향후 확장) “인터페이스 전용 모듈” 분리로 완화 가능.
-
-심볼 접근 예시:
-
-```parus
-export fn sub init() -> void { ... }
-
-export fn pure add(a: int, b: int) -> int {
-  return a + b;
-}
-
-export fn sub demo() -> void {
-  core::init();
-  set x = math::add(a: 1, b: 2);
-}
-```
-
----
-
-### 3.1.3 `space {}` 네임스페이스
-
-`space`는 “이름 충돌 방지 및 계층화”를 위한 선언 스코프이다.
-
-문법:
-
-```parus
-export space engine {
-  export space math {
-    export fn pure add(a: int, b: int) -> int { return a + b; }
+// 블록형 선언
+nest engine {
+  nest math {
+    export fn add(a: i32, b: i32) -> i32 { return a + b; }
   }
 }
 ```
 
-규칙:
+규칙(v0):
 
-* `space` 내부 선언은 경로로 식별된다: `engine::math::add`
-* 같은 module 내부에서 `space`는 파일을 넘어 공유된다(모듈 스코프).
-* `export space X { ... }`는 “X 아래의 공개 심볼 트리”를 만든다.
-* `space`는 타입/함수/상수/acts/tablet/proto/field/class를 포함할 수 있다.
+* `nest` 내부 선언은 `a::b::c` 경로로 식별된다.
+* `nest foo;` 파일 지시어는 파일당 1회만 허용한다.
+* `nest` 내부에 `use`를 둘 수 있다(lexical alias).
+* `import`는 파일 스코프에서만 허용한다.
 
----
+### 3.2 `.` / `::` 접근 규칙
 
-### 3.2 모듈 임포트
+Parus v0는 경로 접근과 값 접근을 분리한다.
 
-문법:
+* `::`는 **경로(path) 접근 전용**이다.
+  * `foo::math::add`
+  * `Type::factory`
+* `.`는 **값(value) 접근 전용**이다.
+  * `obj.field`
+  * `obj.method(...)`
 
-* use module <abs/path> as alias;
-* use module "../rel/path" as alias;
+금지 규칙:
 
-규칙:
+* `obj::field` 금지
+* `alias.obj` 금지
+* 경로 접근에 `.` 사용 금지, 값 접근에 `::` 사용 금지
 
-* <...> 는 절대 모듈명이다. 빌드 시스템이 제공하는 모듈 검색 경로에서 해석한다.
-* "..." 는 파일 시스템 기반 상대 경로다.
-* alias는 v0에서 필수로 권장하며, 구현 단순화를 위해 v0에서는 alias 생략을 금지로 둘 수 있다.
+호출 lowering 규칙(v0):
 
-심볼 접근:
-
-* alias::Name 형태
-
-추가 규칙 (컴파일 단위):
-
-* Parus에서 "모듈(module)"은 컴파일 단위이다.
-* Rust가 crate를 컴파일 단위로 보듯, Parus은 "하나의 모듈(그리고 그 모듈이 포함하는 소스 집합)"을 컴파일 단위로 취급한다.
-* use module은 이 컴파일 단위를 불러오는 문법이며, 단순 include가 아니다.
-* 따라서 모듈 단위로 심볼 테이블, 의존성 그래프, 증분 빌드 캐시, ABI 경계 정책을 적용하기 쉽다.
-
-예시
-
-```parus
-use module <engine/core> as core;
-use module "../engine/math" as math;
-
-fn use_modules() -> void {
-  core::init();
-  set v = math::add(a: 1, b: 2);
-}
-```
+* `obj.method(x)`는 메서드 해소 후 UFCS 형태로 lowering 가능하다.
+* `Type::method(obj, x)`와 의미가 같더라도 표면 문법 규칙(`.` vs `::`)은 유지한다.
 
 ### 3.3 FFI 임포트
 
@@ -929,7 +918,7 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 
 시그니처 유일성 키(v0):
  
-* 함수의 전체 경로: `module::(space...)::name`
+* 함수의 전체 경로: `bundle::(nest...)::name`
 * `sub/pub` 모드(권장: 포함)
 * **위치 파라미터 목록**
 
@@ -941,7 +930,7 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
   * 개수(arity_named)
   * 각 파라미터의 타입
   * 각 파라미터의 라벨 이름
-* 반환 타입
+* 리시버 종류(self / &self / &mut self 등, 있는 경우)
 
 추가 고정(중요):
 
@@ -957,7 +946,7 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 
 호출 `C`에 대해 후보 함수 집합을 모은 뒤:
 
-1. 경로/이름/모드(sub/pub)/반환 타입까지 포함한 후보를 모은다(정책에 따라 반환 타입은 마지막 필터로 둘 수 있음).
+1. 경로/이름/모드(sub/pub)까지 일치하는 후보를 모은다.
 2. 호출 형태를 분류한다:
 
    * positional call
@@ -967,6 +956,11 @@ set bad2 = f(1, {z: 9});       // error: z는 선언되지 않음
 4. 가능한 후보가 정확히 1개면 선택
 5. 0개면 **(B) 기본값 채우기를 허용**하고 다시 검사
 6. 그래도 0개면 not found, 2개 이상이면 ambiguous
+
+추가 고정(v0):
+
+* **반환 타입은 오버로딩 키에 포함하지 않는다.**
+* 같은 인자 시그니처에 반환 타입만 다른 선언은 금지한다.
 
 이 과정에서 라벨 관련은 다음처럼 처리한다.
 
@@ -3303,9 +3297,9 @@ tablet Counter {
 
 ---
 
-### 10.3.3 생성자/소멸자: `construct`, `destruct` (오버로딩 금지 철학과 정합)
+### 10.3.3 생성자/소멸자: `construct`, `destruct` (v0 단일 정의 규칙)
 
-Parus은 “이름 오버로딩 금지” 철학이 있으므로, 생성자도 **단 하나만** 허용하는 게 깔끔하다.
+일반 함수 오버로딩은 허용한다. 다만 v0 단순화를 위해 생성자/소멸자는 타입당 단일 정의만 허용한다.
 
 * 생성자(선택):
 
@@ -3788,11 +3782,11 @@ Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시
 
 시그니처 유일성 키(v0):
 
-* 함수의 전체 경로: `module::(space...)::name`
+* 함수의 전체 경로: `bundle::(nest...)::name`
 * 파라미터 개수(arity)
 * 각 파라미터의 **타입**
 * 각 파라미터의 **라벨 이름**
-* 반환 타입
+* 리시버 종류(self / &self / &mut self)
 * (권장) `sub/pub` 모드도 시그니처에 포함 (상태 접근 의미가 달라 ABI/규칙이 달라질 수 있음)
 
 호출 해소 규칙:
@@ -3813,20 +3807,19 @@ Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시
 권장 심볼 포맷(v0):
 
 ```
-<ModuleId>__<Path>__<BaseName>__P<ParamSig>__R<RetSig>__H<Hash>
+p$<BundleId>$<Path>$<BaseName>$S<ParamSig>$H<Hash>
 ```
 
-* `ModuleId`: 모듈 경로를 정규화한 짧은 ID(예: `engine_core`)
-* `Path`: `space` 경로를 `__`로 연결 (예: `math__vec`)
+* `BundleId`: bundle 이름을 정규화한 ID(예: `engine_core`)
+* `Path`: `nest` 경로를 `__`로 연결 (예: `math__vec`)
 * `ParamSig`: 파라미터를 좌=>우 순서로 나열, 각 항목은 `label$type`
 
   * 예: `a$i32_b$i32`
-* `RetSig`: 반환 타입 (예: `i32`, `u32`, `void`)
 * `Hash`: 위 정보를 canonical 문자열로 만든 뒤 짧은 해시(충돌 방지)
 
 예시:
 
-* `engine_core__math__add__Pa$i32_b$i32__Ri32__H9f2c1a`
+* `p$engine_core$math$add$Sa$i32_b$i32$H9f2c1a`
 * 오버로딩(라벨이 다르면 다른 심볼):
 
   * `...__Pa$x_i32__...` vs `...__Pleft$i32_right$i32__...`
@@ -3846,8 +3839,8 @@ Parus은 함수 오버로딩을 허용한다. 단, **라벨 인자 이름도 시
 ### 14.1 프리패스
 
 * #define 텍스트 치환
-* use module 해석, alias 심볼 테이블 구성
-* 모듈을 컴파일 단위로 취급하는 의존성 그래프 구성 (추가)
+* import 해석, alias 심볼 테이블 구성
+* bundle 단위로 선언/의존성 그래프 구성 (추가)
 * use ...::ffi 수집
 * F-string 분절 (문자열 내부 expr 파싱 준비)
 
@@ -4019,12 +4012,13 @@ WS            := /* spaces/tabs/newlines */ ;
 
 ---
 
-### 16.2 프로그램 구조: project/module/file 단위의 파싱 단위
+### 16.2 프로그램 구조: project/bundle/module/file 단위
 
 ```ebnf
 File          := FileItem* EOF ;
 
-FileItem      := UseStmt
+FileItem      := ImportStmt
+               | UseStmt
                | NamespaceDecl
                | Decl
                | ";"              /* 허용: 빈 문장(파일 스코프) */
@@ -4033,12 +4027,12 @@ FileItem      := UseStmt
 
 ---
 
-### 16.3 경로 / 네임스페이스(space)
+### 16.3 경로 / 네임스페이스(nest)
 
 ```ebnf
 Path          := Ident ("::" Ident)* ;
 
-NamespaceDecl := ExportOpt "space" Ident BlockNamespace ;
+NamespaceDecl := ExportOpt "nest" Path ( ";" | BlockNamespace ) ;
 BlockNamespace:= "{" NamespaceItem* "}" ;
 
 NamespaceItem := UseStmt
@@ -4047,17 +4041,16 @@ NamespaceItem := UseStmt
                | ";" ;
 ```
 
----
-
-### 16.4 `use` 문 (별칭/치환/모듈/FFI)
+### 16.4 `import`/`use` 문
 
 ```ebnf
+ImportStmt    := "import" Path ("as" Ident)? ";" ;
+
 UseStmt       := "use" UseBody ";" ;
 
 UseBody       := UseTypeAlias
                | UsePathAlias
                | UseTextSubst
-               | UseModuleImport
                | UseFFIFunc
                | UseFFIStruct
                ;
@@ -4065,10 +4058,6 @@ UseBody       := UseTypeAlias
 UseTypeAlias  := Ident "=" Type ;
 UsePathAlias  := Path "=" Ident ;              /* 경로 별칭 */
 UseTextSubst  := Ident Expr ;                  /* IDENT 단위 치환(매크로 함수 금지) */
-
-UseModuleImport := "module" ModulePath "as" Ident ;
-ModulePath    := "<" ModulePathBody ">" | StringLit ;
-ModulePathBody:= /* '/'로 구분된 모듈 경로 토큰열 (구현 정의) */ ;
 
 UseFFIFunc    := "func::ffi" "<" FFISignature ">" Ident ;
 UseFFIStruct  := "struct::ffi" Ident FFIStructBody ;
