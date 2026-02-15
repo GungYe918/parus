@@ -237,6 +237,26 @@ namespace parus::oir {
             }
         }
 
+        // escape-handle 힌트 무결성 검사
+        for (uint32_t i = 0; i < (uint32_t)m.escape_hints.size(); ++i) {
+            const auto& h = m.escape_hints[i];
+            if (h.value == kInvalidId || (size_t)h.value >= m.values.size()) {
+                std::ostringstream oss;
+                oss << "escape_hint #" << i << " references invalid value id v" << h.value;
+                push_error_(errs, oss.str());
+            }
+            if (h.kind == EscapeHandleKind::HeapBox) {
+                std::ostringstream oss;
+                oss << "escape_hint #" << i << " uses heap_box kind, forbidden in v0";
+                push_error_(errs, oss.str());
+            }
+            if (h.abi_pack_required && h.ffi_pack_required) {
+                std::ostringstream oss;
+                oss << "escape_hint #" << i << " has both abi_pack_required and ffi_pack_required";
+                push_error_(errs, oss.str());
+            }
+        }
+
         return errs;
     }
 

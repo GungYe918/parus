@@ -75,6 +75,23 @@ namespace parus::oir {
         AsB,   // as! T
     };
 
+    /// @brief escape-handle storage kind(내부 비물질화 토큰의 의미 힌트).
+    enum class EscapeHandleKind : uint8_t {
+        Trivial = 0,
+        StackSlot,
+        CallerSlot,
+        HeapBox,
+    };
+
+    /// @brief escape-handle이 경계에서 소비되는 형태.
+    enum class EscapeBoundaryKind : uint8_t {
+        None = 0,
+        Return,
+        CallArg,
+        Abi,
+        Ffi,
+    };
+
     // ----------------------
     // Inst payloads (v0)
     // ----------------------
@@ -172,6 +189,29 @@ namespace parus::oir {
         BlockId entry = kInvalidId;
     };
 
+    /// @brief OIR에서 추적하는 escape-handle 힌트(런타임 객체가 아닌 최적화 메타).
+    struct EscapeHandleHint {
+        ValueId value = kInvalidId;
+        TypeId pointee_type = kInvalidId;
+
+        EscapeHandleKind kind = EscapeHandleKind::Trivial;
+        EscapeBoundaryKind boundary = EscapeBoundaryKind::None;
+
+        bool from_static = false;
+        bool has_drop = false;
+        bool abi_pack_required = false;
+        bool ffi_pack_required = false;
+    };
+
+    /// @brief OIR 패스가 누적하는 최적화 통계.
+    struct OptStats {
+        uint32_t critical_edges_split = 0;
+        uint32_t mem2reg_promoted_slots = 0;
+        uint32_t mem2reg_phi_params = 0;
+        uint32_t escape_pack_elided = 0;
+        uint32_t escape_boundary_rewrites = 0;
+    };
+
     // ----------------------
     // Module container
     // ----------------------
@@ -180,6 +220,8 @@ namespace parus::oir {
         std::vector<Block>    blocks;
         std::vector<Inst>     insts;
         std::vector<Value>    values;
+        std::vector<EscapeHandleHint> escape_hints;
+        OptStats opt_stats{};
 
         // ---- add_* helpers (complete types required) ----
         ValueId add_value(const Value& v) {
@@ -200,6 +242,11 @@ namespace parus::oir {
         FuncId add_func(const Function& f) {
             funcs.push_back(f);
             return static_cast<FuncId>(funcs.size() - 1);
+        }
+
+        uint32_t add_escape_hint(const EscapeHandleHint& h) {
+            escape_hints.push_back(h);
+            return static_cast<uint32_t>(escape_hints.size() - 1);
         }
     };
 

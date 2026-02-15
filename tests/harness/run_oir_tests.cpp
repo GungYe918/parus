@@ -246,6 +246,173 @@ namespace {
         return ok;
     }
 
+    /// @brief critical-edge split + 전역 mem2reg(SSA block param) 경로를 검증한다.
+    static bool test_oir_global_mem2reg_and_critical_edge() {
+        parus::oir::Module m;
+
+        const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
+        const parus::oir::BlockId then_bb = m.add_block(parus::oir::Block{});
+        const parus::oir::BlockId join_bb = m.add_block(parus::oir::Block{});
+
+        parus::oir::Function f{};
+        f.name = "mem2reg_cfg";
+        f.ret_ty = 1;
+        f.entry = entry;
+        f.blocks = {entry, then_bb, join_bb};
+        (void)m.add_func(f);
+
+        auto add_result_inst = [&](parus::oir::BlockId bb, parus::oir::TypeId ty, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Value v{};
+            v.ty = ty;
+            v.eff = eff;
+            const parus::oir::ValueId vid = m.add_value(v);
+
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = vid;
+            const parus::oir::InstId iid = m.add_inst(inst);
+
+            m.values[vid].def_a = iid;
+            m.blocks[bb].insts.push_back(iid);
+            return vid;
+        };
+
+        auto add_void_inst = [&](parus::oir::BlockId bb, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = parus::oir::kInvalidId;
+            const parus::oir::InstId iid = m.add_inst(inst);
+            m.blocks[bb].insts.push_back(iid);
+        };
+
+        const parus::oir::ValueId cond = add_result_inst(entry, 1, parus::oir::Effect::Pure, parus::oir::InstConstBool{true});
+        const parus::oir::ValueId slot = add_result_inst(entry, 1, parus::oir::Effect::MayWriteMem, parus::oir::InstAllocaLocal{1});
+        const parus::oir::ValueId c0 = add_result_inst(entry, 1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"0"});
+        add_void_inst(entry, parus::oir::Effect::MayWriteMem, parus::oir::InstStore{slot, c0});
+
+        parus::oir::TermCondBr ebr{};
+        ebr.cond = cond;
+        ebr.then_bb = then_bb;
+        ebr.else_bb = join_bb;
+        m.blocks[entry].term = ebr;
+        m.blocks[entry].has_term = true;
+
+        const parus::oir::ValueId c1 = add_result_inst(then_bb, 1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"1"});
+        add_void_inst(then_bb, parus::oir::Effect::MayWriteMem, parus::oir::InstStore{slot, c1});
+
+        parus::oir::TermBr tbr{};
+        tbr.target = join_bb;
+        m.blocks[then_bb].term = tbr;
+        m.blocks[then_bb].has_term = true;
+
+        const parus::oir::ValueId lv = add_result_inst(join_bb, 1, parus::oir::Effect::MayReadMem, parus::oir::InstLoad{slot});
+        parus::oir::TermRet jret{};
+        jret.has_value = true;
+        jret.value = lv;
+        m.blocks[join_bb].term = jret;
+        m.blocks[join_bb].has_term = true;
+
+        parus::oir::run_passes(m);
+        const auto verrs = parus::oir::verify(m);
+
+        bool ok = true;
+        ok &= require_(verrs.empty(), "verify must pass after global mem2reg + critical-edge split");
+        ok &= require_(m.opt_stats.critical_edges_split > 0, "critical-edge split stat must be increased");
+        ok &= require_(m.opt_stats.mem2reg_promoted_slots > 0, "global mem2reg must promote at least one slot");
+        ok &= require_(m.opt_stats.mem2reg_phi_params > 0, "global mem2reg must insert phi(block param)");
+        ok &= require_(!m.blocks[join_bb].params.empty(), "join block must get at least one block param");
+
+        bool has_mem_inst = false;
+        for (const auto& fn : m.funcs) {
+            for (auto bb : fn.blocks) {
+                if (bb == parus::oir::kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+                for (auto iid : m.blocks[bb].insts) {
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    const auto& inst = m.insts[iid];
+                    if (std::holds_alternative<parus::oir::InstAllocaLocal>(inst.data) ||
+                        std::holds_alternative<parus::oir::InstLoad>(inst.data) ||
+                        std::holds_alternative<parus::oir::InstStore>(inst.data)) {
+                        has_mem_inst = true;
+                        break;
+                    }
+                }
+                if (has_mem_inst) break;
+            }
+            if (has_mem_inst) break;
+        }
+        ok &= require_(!has_mem_inst, "promoted slot must remove alloca/load/store from function");
+        return ok;
+    }
+
+    /// @brief escape-handle 힌트 기반으로 불필요한 cast/경계 전달을 정리하는지 검사한다.
+    static bool test_oir_escape_handle_opt() {
+        parus::oir::Module m;
+
+        const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
+        parus::oir::Function f{};
+        f.name = "escape_opt";
+        f.ret_ty = 1;
+        f.entry = entry;
+        f.blocks.push_back(entry);
+        (void)m.add_func(f);
+
+        auto add_result_inst = [&](parus::oir::TypeId ty, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Value v{};
+            v.ty = ty;
+            v.eff = eff;
+            const parus::oir::ValueId vid = m.add_value(v);
+
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = vid;
+            const parus::oir::InstId iid = m.add_inst(inst);
+
+            m.values[vid].def_a = iid;
+            m.blocks[entry].insts.push_back(iid);
+            return vid;
+        };
+
+        const parus::oir::ValueId base = add_result_inst(1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"42"});
+        const parus::oir::ValueId casted = add_result_inst(
+            1,
+            parus::oir::Effect::Pure,
+            parus::oir::InstCast{parus::oir::CastKind::As, 1, base}
+        );
+
+        parus::oir::EscapeHandleHint hint{};
+        hint.value = base;
+        hint.pointee_type = 1;
+        hint.kind = parus::oir::EscapeHandleKind::CallerSlot;
+        hint.boundary = parus::oir::EscapeBoundaryKind::Return;
+        hint.abi_pack_required = false;
+        hint.ffi_pack_required = false;
+        m.add_escape_hint(hint);
+
+        parus::oir::TermRet rt{};
+        rt.has_value = true;
+        rt.value = casted;
+        m.blocks[entry].term = rt;
+        m.blocks[entry].has_term = true;
+
+        parus::oir::run_passes(m);
+        const auto verrs = parus::oir::verify(m);
+
+        bool ok = true;
+        ok &= require_(verrs.empty(), "verify must pass after escape-handle optimization");
+        ok &= require_(m.opt_stats.escape_pack_elided > 0, "escape-handle pass must elide at least one pack/cast");
+        ok &= require_(m.opt_stats.escape_boundary_rewrites > 0, "escape-handle pass must rewrite boundary operand");
+
+        ok &= require_(std::holds_alternative<parus::oir::TermRet>(m.blocks[entry].term), "entry terminator must remain ret");
+        if (std::holds_alternative<parus::oir::TermRet>(m.blocks[entry].term)) {
+            const auto& ret = std::get<parus::oir::TermRet>(m.blocks[entry].term);
+            ok &= require_(ret.has_value && ret.value == base, "ret must point to canonical escape source value");
+        }
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -259,6 +426,8 @@ int main() {
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
+        {"oir_global_mem2reg_and_critical_edge", test_oir_global_mem2reg_and_critical_edge},
+        {"oir_escape_handle_opt", test_oir_escape_handle_opt},
     };
 
     int failed = 0;

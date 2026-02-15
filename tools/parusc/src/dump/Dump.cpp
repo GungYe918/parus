@@ -178,6 +178,31 @@ namespace parusc::dump {
         return "cast(?)";
     }
 
+    /// @brief OIR escape-handle kind를 문자열로 변환한다.
+    static const char* oir_escape_kind_name(parus::oir::EscapeHandleKind k) {
+        using K = parus::oir::EscapeHandleKind;
+        switch (k) {
+            case K::Trivial:    return "trivial";
+            case K::StackSlot:  return "stack_slot";
+            case K::CallerSlot: return "caller_slot";
+            case K::HeapBox:    return "heap_box";
+        }
+        return "escape_kind(?)";
+    }
+
+    /// @brief OIR escape boundary kind를 문자열로 변환한다.
+    static const char* oir_escape_boundary_name(parus::oir::EscapeBoundaryKind k) {
+        using K = parus::oir::EscapeBoundaryKind;
+        switch (k) {
+            case K::None:    return "none";
+            case K::Return:  return "return";
+            case K::CallArg: return "call_arg";
+            case K::Abi:     return "abi";
+            case K::Ffi:     return "ffi";
+        }
+        return "escape_boundary(?)";
+    }
+
     /// @brief AST stmt kind를 문자열로 변환한다.
     static const char* stmt_kind_name(parus::ast::StmtKind k) {
         using K = parus::ast::StmtKind;
@@ -643,6 +668,27 @@ namespace parusc::dump {
                 << " insts=" << m.insts.size()
                 << " values=" << m.values.size()
                 << "\n";
+        std::cout << "  opt_stats:"
+                << " critical_edges_split=" << m.opt_stats.critical_edges_split
+                << " mem2reg_promoted_slots=" << m.opt_stats.mem2reg_promoted_slots
+                << " mem2reg_phi_params=" << m.opt_stats.mem2reg_phi_params
+                << " escape_pack_elided=" << m.opt_stats.escape_pack_elided
+                << " escape_boundary_rewrites=" << m.opt_stats.escape_boundary_rewrites
+                << "\n";
+        std::cout << "  escape_hints=" << m.escape_hints.size() << "\n";
+        for (size_t hi = 0; hi < m.escape_hints.size(); ++hi) {
+            const auto& h = m.escape_hints[hi];
+            std::cout << "    eh#" << hi
+                    << " value=v" << h.value
+                    << " pointee_ty=" << types.to_string((ty::TypeId)h.pointee_type) << " <id " << h.pointee_type << ">"
+                    << " kind=" << oir_escape_kind_name(h.kind)
+                    << " boundary=" << oir_escape_boundary_name(h.boundary)
+                    << " from_static=" << (h.from_static ? "true" : "false")
+                    << " has_drop=" << (h.has_drop ? "true" : "false")
+                    << " abi_pack=" << (h.abi_pack_required ? "true" : "false")
+                    << " ffi_pack=" << (h.ffi_pack_required ? "true" : "false")
+                    << "\n";
+        }
 
         for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
             const auto& f = m.funcs[fi];

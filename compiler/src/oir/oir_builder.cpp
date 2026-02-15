@@ -19,6 +19,7 @@ namespace parus::oir {
         struct FuncBuild {
             Module* out = nullptr;
             const parus::sir::Module* sir = nullptr;
+            std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
 
             Function* fn = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -410,7 +411,13 @@ namespace parus::oir {
             case parus::sir::ValueKind::kEscape:
                 // v0: borrow/escape는 컴파일타임 capability 토큰이다.
                 // OIR에서는 비물질화 원칙을 유지하고 원본 값으로 전달한다.
-                return lower_value(v.a);
+                {
+                    const ValueId lowered = lower_value(v.a);
+                    if (v.kind == parus::sir::ValueKind::kEscape && escape_value_map != nullptr) {
+                        (*escape_value_map)[vid] = lowered;
+                    }
+                    return lowered;
+                }
 
             case parus::sir::ValueKind::kUnary: {
                 ValueId src = lower_value(v.a);
@@ -763,6 +770,31 @@ namespace parus::oir {
             }
         }
 
+        /// @brief SIR escape kind를 OIR 힌트 kind로 변환한다.
+        EscapeHandleKind map_escape_kind_(parus::sir::EscapeHandleKind k) {
+            using SK = parus::sir::EscapeHandleKind;
+            switch (k) {
+                case SK::kTrivial:    return EscapeHandleKind::Trivial;
+                case SK::kStackSlot:  return EscapeHandleKind::StackSlot;
+                case SK::kCallerSlot: return EscapeHandleKind::CallerSlot;
+                case SK::kHeapBox:    return EscapeHandleKind::HeapBox;
+            }
+            return EscapeHandleKind::Trivial;
+        }
+
+        /// @brief SIR escape boundary를 OIR 힌트 boundary로 변환한다.
+        EscapeBoundaryKind map_escape_boundary_(parus::sir::EscapeBoundaryKind k) {
+            using SB = parus::sir::EscapeBoundaryKind;
+            switch (k) {
+                case SB::kNone:   return EscapeBoundaryKind::None;
+                case SB::kReturn: return EscapeBoundaryKind::Return;
+                case SB::kCallArg:return EscapeBoundaryKind::CallArg;
+                case SB::kAbi:    return EscapeBoundaryKind::Abi;
+                case SB::kFfi:    return EscapeBoundaryKind::Ffi;
+            }
+            return EscapeBoundaryKind::None;
+        }
+
     } // namespace
 
     // ------------------------------------------------------------
@@ -786,6 +818,8 @@ namespace parus::oir {
         // Strategy:
         // - One OIR function per SIR func
         // - Entry OIR block created, then lower SIR entry block into it
+        std::unordered_map<parus::sir::ValueId, ValueId> escape_value_map;
+
         for (const auto& sf : sir_.funcs) {
 
             // --- create OIR function shell ---
@@ -805,6 +839,7 @@ namespace parus::oir {
             FuncBuild fb{};
             fb.out    = &out.mod;
             fb.sir    = &sir_;
+            fb.escape_value_map = &escape_value_map;
             fb.fn     = &out.mod.funcs.back();
             fb.cur_bb = entry;
 
@@ -837,6 +872,23 @@ namespace parus::oir {
                 ValueId rv = fb.emit_const_null((TypeId)sf.ret);
                 fb.ret(rv);
             }
+        }
+
+        // SIR escape-handle 메타를 OIR 힌트로 연결한다.
+        for (const auto& h : sir_.escape_handles) {
+            auto it = escape_value_map.find(h.escape_value);
+            if (it == escape_value_map.end()) continue;
+
+            EscapeHandleHint hint{};
+            hint.value = it->second;
+            hint.pointee_type = (TypeId)h.pointee_type;
+            hint.kind = map_escape_kind_(h.kind);
+            hint.boundary = map_escape_boundary_(h.boundary);
+            hint.from_static = h.from_static;
+            hint.has_drop = h.has_drop;
+            hint.abi_pack_required = h.abi_pack_required;
+            hint.ffi_pack_required = h.ffi_pack_required;
+            out.mod.add_escape_hint(hint);
         }
 
         return out;
