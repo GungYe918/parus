@@ -109,6 +109,9 @@ namespace parusc::cli {
             << "  -h, --help\n"
             << "  --version\n"
             << "  -o <path>             Output path (default: a.out)\n"
+            << "  --target <triple>     Override backend target triple\n"
+            << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
+            << "  --apple-sdk-root <path>  Explicit Apple SDK root for Darwin linking\n"
             << "  -O0|-O1|-O2|-O3       Optimization level\n"
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
@@ -190,6 +193,39 @@ namespace parusc::cli {
                     out.error = "--context requires a valid number";
                     return out;
                 }
+                continue;
+            }
+
+            if (a == "--target") {
+                const auto v = read_next_(args, i);
+                if (!v) {
+                    out.ok = false;
+                    out.error = "--target requires a triple";
+                    return out;
+                }
+                out.target_triple = std::string(*v);
+                continue;
+            }
+
+            if (a == "--sysroot") {
+                const auto v = read_next_(args, i);
+                if (!v) {
+                    out.ok = false;
+                    out.error = "--sysroot requires a path";
+                    return out;
+                }
+                out.sysroot_path = std::string(*v);
+                continue;
+            }
+
+            if (a == "--apple-sdk-root") {
+                const auto v = read_next_(args, i);
+                if (!v) {
+                    out.ok = false;
+                    out.error = "--apple-sdk-root requires a path";
+                    return out;
+                }
+                out.apple_sdk_root = std::string(*v);
                 continue;
             }
 

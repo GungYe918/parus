@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -62,27 +63,90 @@ namespace parusc::p0 {
 
 #if PARUSC_HAS_AOT_BACKEND
         /// @brief 드라이버 실행 경로를 기준으로 PARUS_LLD 환경 변수를 자동 설정한다.
-        void seed_parus_lld_env_from_driver_(const Invocation& inv) {
-            if (std::getenv("PARUS_LLD") != nullptr) {
-                return;
+        std::string getenv_string_(const char* key) {
+            if (key == nullptr) return {};
+            const char* p = std::getenv(key);
+            if (p == nullptr) return {};
+            return std::string(p);
+        }
+
+        std::optional<uint64_t> parse_u64_(const std::string& s) {
+            if (s.empty()) return std::nullopt;
+            try {
+                size_t idx = 0;
+                const uint64_t v = std::stoull(s, &idx, 0);
+                if (idx != s.size()) return std::nullopt;
+                return v;
+            } catch (...) {
+                return std::nullopt;
             }
+        }
+
+        void seed_parus_toolchain_env_from_driver_(const Invocation& inv) {
+            namespace fs = std::filesystem;
             if (inv.driver_executable_path.empty()) {
                 return;
             }
+            std::error_code ec{};
 
-            namespace fs = std::filesystem;
-            std::error_code ec;
-            const fs::path driver_path(inv.driver_executable_path);
-            const fs::path candidate = driver_path.parent_path() / "parus-lld";
-            if (!fs::exists(candidate, ec) || ec) {
-                return;
+            fs::path driver_path(inv.driver_executable_path);
+            fs::path resolved_driver = fs::weakly_canonical(driver_path, ec);
+            if (ec || resolved_driver.empty()) {
+                ec.clear();
+                resolved_driver = driver_path;
+            }
+            if (resolved_driver.empty()) return;
+
+            const fs::path driver_bin_dir = resolved_driver.parent_path();
+            fs::path toolchain_root = driver_bin_dir;
+            if (driver_bin_dir.filename() == "bin") {
+                toolchain_root = driver_bin_dir.parent_path();
             }
 
+            if (std::getenv("PARUS_TOOLCHAIN_ROOT") == nullptr) {
 #if defined(_WIN32)
-            _putenv_s("PARUS_LLD", candidate.string().c_str());
+                _putenv_s("PARUS_TOOLCHAIN_ROOT", toolchain_root.string().c_str());
 #else
-            setenv("PARUS_LLD", candidate.string().c_str(), 0);
+                setenv("PARUS_TOOLCHAIN_ROOT", toolchain_root.string().c_str(), 0);
 #endif
+            }
+
+            if (std::getenv("PARUS_LLD") == nullptr) {
+                const fs::path candidate_lld = toolchain_root / "bin" / "parus-lld";
+                if (fs::exists(candidate_lld, ec) && !ec) {
+#if defined(_WIN32)
+                    _putenv_s("PARUS_LLD", candidate_lld.string().c_str());
+#else
+                    setenv("PARUS_LLD", candidate_lld.string().c_str(), 0);
+#endif
+                }
+            }
+
+            if (std::getenv("PARUS_SYSROOT") == nullptr) {
+                const fs::path candidate_sysroot = toolchain_root / "sysroot";
+                if (fs::exists(candidate_sysroot, ec) && !ec) {
+#if defined(_WIN32)
+                    _putenv_s("PARUS_SYSROOT", candidate_sysroot.string().c_str());
+#else
+                    setenv("PARUS_SYSROOT", candidate_sysroot.string().c_str(), 0);
+#endif
+                }
+            }
+        }
+
+        std::optional<uint64_t> expected_hash_from_env_(const char* key) {
+            const auto s = getenv_string_(key);
+            return parse_u64_(s);
+        }
+
+        std::string select_sysroot_(const cli::Options& opt) {
+            if (!opt.sysroot_path.empty()) return opt.sysroot_path;
+            return getenv_string_("PARUS_SYSROOT");
+        }
+
+        std::string select_apple_sdk_root_(const cli::Options& opt) {
+            if (!opt.apple_sdk_root.empty()) return opt.apple_sdk_root;
+            return getenv_string_("PARUS_APPLE_SDK_ROOT");
         }
 
         /// @brief 백엔드 메시지를 표준 에러로 출력하고 실패 여부를 반환한다.
@@ -236,11 +300,12 @@ namespace parusc::p0 {
         }
 
 #if PARUSC_HAS_AOT_BACKEND
-        seed_parus_lld_env_from_driver_(inv);
+        seed_parus_toolchain_env_from_driver_(inv);
 
         parus::backend::CompileOptions backend_opt{};
         backend_opt.opt_level = opt.opt_level;
         backend_opt.aot_engine = parus::backend::AOTEngine::kLlvm;
+        backend_opt.target_triple = opt.target_triple;
 
         const bool emit_object = (opt.has_xparus && opt.internal.emit_object);
         const bool emit_llvm_ir = (opt.has_xparus && opt.internal.emit_llvm_ir);
@@ -272,6 +337,15 @@ namespace parusc::p0 {
             parus::backend::link::LinkOptions link_opt{};
             link_opt.object_paths = {object_for_link};
             link_opt.output_path = final_exe_output;
+            link_opt.target_triple = opt.target_triple;
+            link_opt.sysroot_path = select_sysroot_(opt);
+            link_opt.apple_sdk_root = select_apple_sdk_root_(opt);
+            if (const auto h = expected_hash_from_env_("PARUS_EXPECTED_TOOLCHAIN_HASH"); h.has_value()) {
+                link_opt.expected_toolchain_hash = *h;
+            }
+            if (const auto h = expected_hash_from_env_("PARUS_EXPECTED_TARGET_HASH"); h.has_value()) {
+                link_opt.expected_target_hash = *h;
+            }
             link_opt.mode = to_backend_linker_mode_(opt.linker_mode);
             link_opt.allow_fallback = opt.allow_link_fallback;
 

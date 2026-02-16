@@ -43,6 +43,9 @@ namespace parusc::cli {
 
         std::vector<std::string> inputs{};
         std::string output_path{};
+        std::string target_triple{};
+        std::string sysroot_path{};
+        std::string apple_sdk_root{};
         uint8_t opt_level = 0;
         LinkerMode linker_mode = LinkerMode::kAuto;
         bool allow_link_fallback = true;

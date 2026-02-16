@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,6 +45,34 @@ namespace parus::backend::link {
             return "clang++";
         }
 
+        /// @brief 환경 변수 문자열을 읽는다.
+        std::string getenv_string_(const char* key) {
+            if (key == nullptr) return {};
+            const char* p = std::getenv(key);
+            if (p == nullptr) return {};
+            return std::string(p);
+        }
+
+        /// @brief 문자열을 정수 hash(u64)로 해석한다.
+        std::optional<uint64_t> parse_u64_(const std::string& s) {
+            if (s.empty()) return std::nullopt;
+            try {
+                size_t idx = 0;
+                const uint64_t v = std::stoull(s, &idx, 0);
+                if (idx != s.size()) return std::nullopt;
+                return v;
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
+        /// @brief 경로에서 마지막 파일명을 얻는다.
+        std::string basename_(const std::string& path) {
+            if (path.empty()) return {};
+            namespace fs = std::filesystem;
+            return fs::path(path).filename().string();
+        }
+
         /// @brief 명령을 실행하고 종료 코드를 반환한다.
         int decode_wait_status_(int raw_status) {
             if (raw_status == -1) return -1;
@@ -66,14 +95,57 @@ namespace parus::backend::link {
             const std::string& linker,
             const std::vector<std::string>& objects,
             const std::string& output,
-            bool use_lld_via_clang
+            bool use_lld_via_clang,
+            const LinkOptions& opt,
+            bool is_parus_lld_mode
         ) {
             std::string cmd;
-            cmd.reserve(256);
+            cmd.reserve(512);
 
             cmd += shell_quote_(linker);
             if (use_lld_via_clang) {
                 cmd += " -fuse-ld=lld";
+            }
+
+            if (is_parus_lld_mode) {
+                const std::string sysroot = !opt.sysroot_path.empty()
+                    ? opt.sysroot_path
+                    : getenv_string_("PARUS_SYSROOT");
+                const std::string sdk_root = !opt.apple_sdk_root.empty()
+                    ? opt.apple_sdk_root
+                    : getenv_string_("PARUS_APPLE_SDK_ROOT");
+                uint64_t toolchain_hash = opt.expected_toolchain_hash;
+                uint64_t target_hash = opt.expected_target_hash;
+
+                if (toolchain_hash == 0) {
+                    const auto parsed = parse_u64_(getenv_string_("PARUS_EXPECTED_TOOLCHAIN_HASH"));
+                    if (parsed.has_value()) toolchain_hash = *parsed;
+                }
+                if (target_hash == 0) {
+                    const auto parsed = parse_u64_(getenv_string_("PARUS_EXPECTED_TARGET_HASH"));
+                    if (parsed.has_value()) target_hash = *parsed;
+                }
+
+                if (!opt.target_triple.empty()) {
+                    cmd += " --target ";
+                    cmd += shell_quote_(opt.target_triple);
+                }
+                if (!sysroot.empty()) {
+                    cmd += " --sysroot ";
+                    cmd += shell_quote_(sysroot);
+                }
+                if (!sdk_root.empty()) {
+                    cmd += " --apple-sdk-root ";
+                    cmd += shell_quote_(sdk_root);
+                }
+                if (toolchain_hash != 0) {
+                    cmd += " --toolchain-hash ";
+                    cmd += shell_quote_(std::to_string(toolchain_hash));
+                }
+                if (target_hash != 0) {
+                    cmd += " --target-hash ";
+                    cmd += shell_quote_(std::to_string(target_hash));
+                }
             }
 
             for (const auto& obj : objects) {
@@ -91,7 +163,8 @@ namespace parus::backend::link {
             const std::string& linker,
             const std::vector<std::string>& objects,
             const std::string& output,
-            bool use_lld_via_clang
+            bool use_lld_via_clang,
+            const LinkOptions& opt
         ) {
             if (linker.empty()) {
                 return {
@@ -103,7 +176,17 @@ namespace parus::backend::link {
                 };
             }
 
-            const std::string cmd = build_link_command_(linker, objects, output, use_lld_via_clang);
+            const bool is_parus_lld_mode =
+                !use_lld_via_clang &&
+                basename_(linker).find("parus-lld") != std::string::npos;
+            const std::string cmd = build_link_command_(
+                linker,
+                objects,
+                output,
+                use_lld_via_clang,
+                opt,
+                is_parus_lld_mode
+            );
             const int rc = run_command_(cmd);
             if (rc == 0) {
                 return {
@@ -146,11 +229,7 @@ namespace parus::backend::link {
             return out;
         }
 
-        const std::string env_parus_lld = []() -> std::string {
-            const char* p = std::getenv("PARUS_LLD");
-            if (p == nullptr) return {};
-            return std::string(p);
-        }();
+        const std::string env_parus_lld = getenv_string_("PARUS_LLD");
 
         const std::string parus_lld = resolve_tool_candidate_(
             env_parus_lld.empty() ? std::string("parus-lld") : env_parus_lld
@@ -198,7 +277,8 @@ namespace parus::backend::link {
                 cand.tool,
                 opt.object_paths,
                 opt.output_path,
-                cand.use_lld_via_clang
+                cand.use_lld_via_clang,
+                opt
             );
             out.messages.push_back(std::move(msg));
             if (!ok) continue;

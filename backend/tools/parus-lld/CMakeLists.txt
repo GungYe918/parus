@@ -4,6 +4,12 @@ add_executable(parus-lld
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp
 )
 
+target_link_libraries(parus-lld
+    PRIVATE
+    parus_backend
+    parus_backend_parlib
+)
+
 target_compile_features(parus-lld PRIVATE cxx_std_23)
 
 if(MSVC)

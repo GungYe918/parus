@@ -22,6 +22,10 @@ namespace parus::backend::link {
         std::vector<std::string> object_paths{};
         std::string output_path{};
         std::string target_triple{};
+        std::string sysroot_path{};
+        std::string apple_sdk_root{};
+        uint64_t expected_toolchain_hash = 0;
+        uint64_t expected_target_hash = 0;
 
         LinkerMode mode = LinkerMode::kAuto;
         bool allow_fallback = true;
