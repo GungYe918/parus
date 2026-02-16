@@ -239,7 +239,25 @@ namespace parus::sir {
         kReturn,
         kBreak,
         kContinue,
-        kSwitch,    // reserved (future)
+        kSwitch,
+    };
+
+    enum class SwitchCasePatKind : uint8_t {
+        kError = 0,
+        kInt,
+        kChar,
+        kString,
+        kBool,
+        kNull,
+        kIdent,
+    };
+
+    struct SwitchCase {
+        bool is_default = false;
+        SwitchCasePatKind pat_kind = SwitchCasePatKind::kError;
+        std::string_view pat_text{};
+        BlockId body = k_invalid_block;
+        parus::Span span{};
     };
 
     struct Stmt {
@@ -267,6 +285,11 @@ namespace parus::sir {
         // block children slice (optional; if you ever inline blocks as stmts)
         uint32_t stmt_begin = 0;
         uint32_t stmt_count = 0;
+
+        // switch
+        uint32_t case_begin = 0;
+        uint32_t case_count = 0;
+        bool has_default = false;
     };
 
     struct Block {
@@ -422,6 +445,7 @@ namespace parus::sir {
         std::vector<FieldDecl> fields;
         std::vector<ActsDecl> acts;
         std::vector<GlobalVarDecl> globals;
+        std::vector<SwitchCase> switch_cases;
         std::vector<EscapeHandleMeta> escape_handles;
 
         // helpers
@@ -438,6 +462,7 @@ namespace parus::sir {
         FieldId add_field(const FieldDecl& f)           { fields.push_back(f); return (FieldId)fields.size() - 1; }
         ActsId add_acts(const ActsDecl& a)              { acts.push_back(a); return (ActsId)acts.size() - 1; }
         uint32_t add_global(const GlobalVarDecl& g)     { globals.push_back(g); return (uint32_t)globals.size() - 1; }
+        uint32_t add_switch_case(const SwitchCase& c)   { switch_cases.push_back(c); return (uint32_t)switch_cases.size() - 1; }
         uint32_t add_escape_handle(const EscapeHandleMeta& h) {
             escape_handles.push_back(h);
             return (uint32_t)escape_handles.size() - 1;

@@ -112,11 +112,35 @@ namespace parus::tyck {
                 return;
 
             case ast::StmtKind::kUse:
+                if (s.use_kind == ast::UseKind::kImport && block_depth_ != 0) {
+                    const std::string msg = "import is only allowed at file scope";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                }
                 return;
 
             case ast::StmtKind::kNestDecl:
-                if (!s.nest_is_file_directive && s.a != ast::k_invalid_stmt) {
+                if (s.nest_is_file_directive) {
+                    return;
+                }
+                if (s.a != ast::k_invalid_stmt) {
+                    uint32_t pushed = 0;
+                    const auto& segs = ast_.path_segs();
+                    const uint64_t begin = s.nest_path_begin;
+                    const uint64_t end = begin + s.nest_path_count;
+                    if (begin <= segs.size() && end <= segs.size()) {
+                        for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                            namespace_stack_.push_back(std::string(segs[s.nest_path_begin + i]));
+                            ++pushed;
+                        }
+                    }
+
                     check_stmt_(s.a);
+
+                    while (pushed > 0) {
+                        namespace_stack_.pop_back();
+                        --pushed;
+                    }
                 }
                 return;
 
@@ -131,6 +155,7 @@ namespace parus::tyck {
         // 블록 진입 시 새 스코프 생성
         const uint32_t scope_id = sym_.push_scope();
         (void)scope_id; // 디버그용이면 남겨두기
+        ++block_depth_;
 
         // s.stmt_begin/count 는 ast_.stmt_children()의 slice
         const auto& children = ast_.stmt_children();
@@ -141,6 +166,7 @@ namespace parus::tyck {
             // 에러가 나도 계속 진행할지 정책(여기선 계속)
         }
 
+        if (block_depth_ > 0) --block_depth_;
         sym_.pop_scope();
     }
 

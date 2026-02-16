@@ -183,6 +183,26 @@ namespace parus::sir {
                         push_error_(errs, oss.str());
                     }
                     break;
+                case StmtKind::kSwitch: {
+                    need_value(s.expr, "switch scrutinee");
+                    const uint64_t cend = (uint64_t)s.case_begin + (uint64_t)s.case_count;
+                    if (cend > (uint64_t)m.switch_cases.size()) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " has out-of-range switch case slice";
+                        push_error_(errs, oss.str());
+                        break;
+                    }
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        const auto& c = m.switch_cases[s.case_begin + i];
+                        if (!valid_block_id_(m, c.body)) {
+                            std::ostringstream oss;
+                            oss << "stmt #" << sid << " switch case #" << i
+                                << " has invalid body block id " << c.body;
+                            push_error_(errs, oss.str());
+                        }
+                    }
+                    break;
+                }
                 case StmtKind::kReturn:
                 case StmtKind::kBreak:
                     if (s.expr != k_invalid_value && !valid_value_id_(m, s.expr)) {
@@ -222,6 +242,9 @@ namespace parus::sir {
                 case ValueKind::kIndex:
                     need_child(v.a, "a");
                     need_child(v.b, "b");
+                    break;
+                case ValueKind::kField:
+                    need_child(v.a, "base");
                     break;
 
                 case ValueKind::kIfExpr:

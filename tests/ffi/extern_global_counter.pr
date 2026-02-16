@@ -1,0 +1,7 @@
+extern "C" static mut g_counter: i32;
+extern "C" fn c_expect_counter(v: i32) -> i32;
+
+fn main() -> i32 {
+    g_counter = 41i32;
+    return c_expect_counter(v: 41i32);
+}

@@ -311,6 +311,9 @@ namespace parusc::dump {
                 push_value(v.a);
                 push_value(v.b);
                 break;
+            case ValueKind::kField:
+                push_value(v.a);
+                break;
 
             case ValueKind::kIfExpr:
                 push_value(v.a);
@@ -407,6 +410,14 @@ namespace parusc::dump {
             case StmtKind::kReturn:
             case StmtKind::kBreak:
                 collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+                break;
+            case StmtKind::kSwitch:
+                collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
+                if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)m.switch_cases.size()) {
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        push_block(m.switch_cases[s.case_begin + i].body);
+                    }
+                }
                 break;
 
             default:

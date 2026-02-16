@@ -530,7 +530,7 @@ namespace parus::backend::aot {
                         const auto& entry = m_.blocks[fn_.entry];
                         for (size_t i = 0; i < entry.params.size(); ++i) {
                             if (i) os << ", ";
-                            os << value_ty_(entry.params[i]);
+                            os << abi_value_ty_(entry.params[i], fn_.abi);
                         }
                     }
                     os << ")\n";
@@ -544,7 +544,7 @@ namespace parus::backend::aot {
                     const auto& entry = m_.blocks[fn_.entry];
                     for (size_t i = 0; i < entry.params.size(); ++i) {
                         if (i) os << ", ";
-                        os << value_ty_(entry.params[i]) << " %arg" << i;
+                        os << abi_value_ty_(entry.params[i], fn_.abi) << " %arg" << i;
                     }
                 }
                 os << ")";
@@ -608,12 +608,58 @@ namespace parus::backend::aot {
                 return value_types_[v];
             }
 
+            /// @brief 값의 함수 ABI 관점 LLVM 타입을 계산한다.
+            std::string abi_value_ty_(parus::oir::ValueId v, parus::oir::FunctionAbi abi) const {
+                if (abi != parus::oir::FunctionAbi::C) {
+                    return value_ty_(v);
+                }
+
+                const auto tid = value_type_id_(v);
+                std::string ty = map_type_(types_, tid, &named_layouts_);
+                if (ty == "void") ty = "i8";
+                return ty;
+            }
+
             /// @brief ValueId의 타입 ID를 반환한다.
             parus::ty::TypeId value_type_id_(parus::oir::ValueId v) const {
                 if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= m_.values.size()) {
                     return parus::ty::kInvalidType;
                 }
                 return m_.values[v].ty;
+            }
+
+            /// @brief field base 값의 타입 ID를 보수적으로 추론한다.
+            parus::ty::TypeId field_base_type_id_(parus::oir::ValueId base) const {
+                using namespace parus::oir;
+
+                const auto tid = value_type_id_(base);
+                if (tid != parus::ty::kInvalidType) {
+                    const auto& t = types_.get(tid);
+                    if (!(t.kind == parus::ty::Kind::kBuiltin &&
+                          t.builtin == parus::ty::Builtin::kNull)) {
+                        return tid;
+                    }
+                }
+
+                if (base == kInvalidId || static_cast<size_t>(base) >= m_.values.size()) {
+                    return tid;
+                }
+                const auto& bv = m_.values[base];
+                if (bv.def_b != kInvalidId) {
+                    return tid;
+                }
+                if (bv.def_a == kInvalidId || static_cast<size_t>(bv.def_a) >= m_.insts.size()) {
+                    return tid;
+                }
+                const auto& def_inst = m_.insts[bv.def_a];
+                const auto* gr = std::get_if<InstGlobalRef>(&def_inst.data);
+                if (gr == nullptr) {
+                    return tid;
+                }
+                if (static_cast<size_t>(gr->global) >= m_.globals.size()) {
+                    return tid;
+                }
+                return m_.globals[gr->global].type;
             }
 
             /// @brief 값이 일반 값 문맥에서 읽히는지 검사한다.
@@ -667,7 +713,7 @@ namespace parus::backend::aot {
                     const auto& entry = m_.blocks[target.entry];
                     info.param_tys.reserve(entry.params.size());
                     for (auto p : entry.params) {
-                        info.param_tys.push_back(value_ty_(p));
+                        info.param_tys.push_back(abi_value_ty_(p, target.abi));
                     }
                 }
 
@@ -683,7 +729,18 @@ namespace parus::backend::aot {
 
             /// @brief field 오프셋(바이트)을 type+field 조합 기준으로 결정한다.
             uint64_t field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
-                auto fit = field_offsets_.find(base_ty);
+                parus::ty::TypeId lookup_ty = base_ty;
+                if (lookup_ty != parus::ty::kInvalidType) {
+                    const auto& t = types_.get(lookup_ty);
+                    if ((t.kind == parus::ty::Kind::kPtr ||
+                         t.kind == parus::ty::Kind::kBorrow ||
+                         t.kind == parus::ty::Kind::kEscape) &&
+                        t.elem != parus::ty::kInvalidType) {
+                        lookup_ty = t.elem;
+                    }
+                }
+
+                auto fit = field_offsets_.find(lookup_ty);
                 if (fit != field_offsets_.end()) {
                     auto oit = fit->second.find(std::string(field));
                     if (oit != fit->second.end()) {
@@ -692,12 +749,12 @@ namespace parus::backend::aot {
                 }
 
                 const uint64_t h = std::hash<std::string_view>{}(field);
-                const uint64_t key = (uint64_t(base_ty) << 32u) ^ (h & 0xFFFF'FFFFu);
+                const uint64_t key = (uint64_t(lookup_ty) << 32u) ^ (h & 0xFFFF'FFFFu);
 
                 auto it = field_offset_cache_.find(key);
                 if (it != field_offset_cache_.end()) return it->second;
 
-                uint64_t& next = next_field_offset_[base_ty];
+                uint64_t& next = next_field_offset_[lookup_ty];
                 const uint64_t off = next;
                 next += 8; // v0: 필드 정렬을 8바이트 단위로 고정
                 field_offset_cache_[key] = off;
@@ -714,6 +771,30 @@ namespace parus::backend::aot {
                 if (cur == want) return ref;
 
                 const std::string tmp = next_tmp_();
+                const bool cur_is_agg = is_aggregate_llvm_ty_(cur);
+                const bool want_is_agg = is_aggregate_llvm_ty_(want);
+
+                // ABI bridge:
+                // - aggregate value <-> ptr 변환은 alloca/store/load로 물질화한다.
+                if (cur_is_agg && want == "ptr") {
+                    const std::string agg_slot = next_tmp_();
+                    os << "  " << agg_slot << " = alloca " << cur << "\n";
+                    os << "  store " << cur << " " << ref << ", ptr " << agg_slot << "\n";
+                    os << "  " << tmp << " = bitcast ptr " << agg_slot << " to ptr\n";
+                    return tmp;
+                }
+                if (want_is_agg && cur == "ptr") {
+                    os << "  " << tmp << " = load " << want << ", ptr " << ref << "\n";
+                    return tmp;
+                }
+                if (want_is_agg) {
+                    // 보수적 fallback: 원하는 aggregate zero-init value를 생성한다.
+                    const std::string agg_slot = next_tmp_();
+                    os << "  " << agg_slot << " = alloca " << want << "\n";
+                    os << "  store " << want << " zeroinitializer, ptr " << agg_slot << "\n";
+                    os << "  " << tmp << " = load " << want << ", ptr " << agg_slot << "\n";
+                    return tmp;
+                }
 
                 if (want == "i1") {
                     if (cur == "ptr") {
@@ -811,8 +892,17 @@ namespace parus::backend::aot {
                     for (size_t i = 0; i < block.params.size(); ++i) {
                         const auto p = block.params[i];
                         const std::string pty = value_ty_(p);
+                        const std::string aty = abi_value_ty_(p, fn_.abi);
                         const std::string arg = "%arg" + std::to_string(i);
-                        os << "  " << vref_(p) << " = " << copy_expr_(pty, arg) << "\n";
+
+                        if (pty == aty) {
+                            os << "  " << vref_(p) << " = " << copy_expr_(pty, arg) << "\n";
+                            continue;
+                        }
+
+                        const std::string seeded = coerce_ref_(os, arg, aty, pty);
+                        if (seeded == vref_(p)) continue;
+                        os << "  " << vref_(p) << " = " << copy_expr_(pty, seeded) << "\n";
                     }
                     return;
                 }
@@ -924,7 +1014,7 @@ namespace parus::backend::aot {
                 if (inst.result == kInvalidId) return;
 
                 const auto base_ptr = slot_ptr_ref_(os, x.base);
-                const auto base_ty_id = value_type_id_(x.base);
+                const auto base_ty_id = field_base_type_id_(x.base);
                 const uint64_t field_off = field_offset_bytes_(base_ty_id, x.field);
 
                 const std::string byte_ptr = next_tmp_();

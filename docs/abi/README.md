@@ -4,6 +4,8 @@
 
 - 현재 고정 버전: `v0.0.1`
 - 단일 신뢰 문서: `docs/abi/v0.0.1/ABI.md`
+- 문자열 모델 상세: `docs/abi/v0.0.1/STRING_MODEL.md`
+- 저장소 정책 상세: `docs/abi/v0.0.1/STORAGE_POLICY.md`
 
 ## 버전 정책 (`MAJOR.MINOR.PATCH`)
 
@@ -22,4 +24,3 @@ Parus ABI 문서 버전은 `X.Y.Z` 3자리로 관리한다.
 
 - C ABI 라인: `c-v0` (불변 목표)
 - Parus ABI 문서 버전: `v0.0.1`
-

@@ -10,6 +10,8 @@
 #include <vector>
 #include <string>
 #include <cctype>
+#include <optional>
+#include <sstream>
 
 
 namespace parus::oir {
@@ -381,18 +383,112 @@ namespace parus::oir {
             }
         }
 
+        std::string parse_int_literal_text_(std::string_view text) {
+            std::string out;
+            out.reserve(text.size());
+
+            size_t i = 0;
+            if (!text.empty() && (text[0] == '+' || text[0] == '-')) {
+                out.push_back(text[0]);
+                i = 1;
+            }
+
+            bool saw_digit = false;
+            for (; i < text.size(); ++i) {
+                const char c = text[i];
+                if (c >= '0' && c <= '9') {
+                    out.push_back(c);
+                    saw_digit = true;
+                    continue;
+                }
+                if (c == '_') continue;
+                break;
+            }
+            if (!saw_digit) return "0";
+            return out;
+        }
+
+        std::optional<uint32_t> parse_char_literal_code_(std::string_view text) {
+            if (text.size() < 3 || text.front() != '\'' || text.back() != '\'') return std::nullopt;
+            std::string_view body = text.substr(1, text.size() - 2);
+            if (body.empty()) return std::nullopt;
+            if (body.size() == 1) return static_cast<uint32_t>(static_cast<unsigned char>(body[0]));
+            if (body[0] != '\\') return std::nullopt;
+
+            if (body.size() == 2) {
+                switch (body[1]) {
+                    case 'n': return static_cast<uint32_t>('\n');
+                    case 'r': return static_cast<uint32_t>('\r');
+                    case 't': return static_cast<uint32_t>('\t');
+                    case '\\': return static_cast<uint32_t>('\\');
+                    case '\'': return static_cast<uint32_t>('\'');
+                    case '0': return static_cast<uint32_t>('\0');
+                    default: return std::nullopt;
+                }
+            }
+            return std::nullopt;
+        }
+
+        std::string normalize_symbol_fragment_(std::string_view in) {
+            std::string out;
+            out.reserve(in.size());
+            for (char c : in) {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (std::isalnum(u) || c == '_') out.push_back(c);
+                else out.push_back('_');
+            }
+            if (out.empty()) out = "_";
+            return out;
+        }
+
+        uint64_t fnv1a64_(std::string_view s) {
+            uint64_t h = 1469598103934665603ull;
+            for (char c : s) {
+                h ^= static_cast<unsigned char>(c);
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
         /// @brief 함수 이름 + 시그니처를 기반으로 OIR 내부 함수명을 생성한다.
         std::string mangle_func_name_(const parus::sir::Func& sf, const parus::ty::TypePool& types) {
             std::string sig = (sf.sig != parus::ty::kInvalidType)
                 ? types.to_string(sf.sig)
                 : std::string("fn(?)");
-            std::string out = std::string(sf.name) + "$" + sig;
-            for (char& ch : out) {
-                if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
-                    ch = '_';
+
+            const std::string qname(sf.name);
+            std::string path = "_";
+            std::string base = qname;
+            if (const size_t pos = qname.rfind("::"); pos != std::string::npos) {
+                path = qname.substr(0, pos);
+                base = qname.substr(pos + 2);
+                size_t p = 0;
+                while ((p = path.find("::", p)) != std::string::npos) {
+                    path.replace(p, 2, "__");
+                    p += 2;
                 }
             }
-            return out;
+
+            std::string mode = "none";
+            switch (sf.fn_mode) {
+                case parus::sir::FnMode::kPub: mode = "pub"; break;
+                case parus::sir::FnMode::kSub: mode = "sub"; break;
+                case parus::sir::FnMode::kNone: default: mode = "none"; break;
+            }
+
+            const std::string canonical =
+                "bundle=main|path=" + path +
+                "|name=" + base +
+                "|mode=" + mode +
+                "|recv=none|sig=" + sig;
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(canonical);
+
+            return "p$main$" +
+                normalize_symbol_fragment_(path) + "$" +
+                normalize_symbol_fragment_(base) + "$M" +
+                normalize_symbol_fragment_(mode) + "$Rnone$S" +
+                normalize_symbol_fragment_(sig) + "$H" + hs.str();
         }
 
         /// @brief SIR 함수 ABI를 OIR 함수 ABI로 변환한다.
@@ -925,6 +1021,96 @@ namespace parus::oir {
                 // join
                 fn->blocks.push_back(join_bb);
                 cur_bb = join_bb;
+                return;
+            }
+
+            case parus::sir::StmtKind::kSwitch: {
+                const ValueId scrut = lower_value(s.expr);
+                const TypeId scrut_ty =
+                    (scrut != kInvalidId && (size_t)scrut < out->values.size())
+                        ? out->values[scrut].ty
+                        : kInvalidId;
+                const TypeId bool_ty =
+                    (types != nullptr)
+                        ? (TypeId)types->builtin(parus::ty::Builtin::kBool)
+                        : kInvalidId;
+
+                const auto emit_case_match_cond = [&](const parus::sir::SwitchCase& c) -> ValueId {
+                    switch (c.pat_kind) {
+                        case parus::sir::SwitchCasePatKind::kInt: {
+                            const ValueId pat = emit_const_int(scrut_ty, parse_int_literal_text_(c.pat_text));
+                            return emit_binop(bool_ty, Effect::Pure, BinOp::Eq, scrut, pat);
+                        }
+                        case parus::sir::SwitchCasePatKind::kBool: {
+                            const bool bv = (c.pat_text == "true");
+                            const ValueId pat = emit_const_bool(scrut_ty, bv);
+                            return emit_binop(bool_ty, Effect::Pure, BinOp::Eq, scrut, pat);
+                        }
+                        case parus::sir::SwitchCasePatKind::kNull: {
+                            const ValueId pat = emit_const_null(scrut_ty);
+                            return emit_binop(bool_ty, Effect::Pure, BinOp::Eq, scrut, pat);
+                        }
+                        case parus::sir::SwitchCasePatKind::kChar: {
+                            const auto code = parse_char_literal_code_(c.pat_text);
+                            const ValueId pat = emit_const_int(
+                                scrut_ty,
+                                code.has_value() ? std::to_string(*code) : std::string("0")
+                            );
+                            return emit_binop(bool_ty, Effect::Pure, BinOp::Eq, scrut, pat);
+                        }
+                        case parus::sir::SwitchCasePatKind::kString:
+                        case parus::sir::SwitchCasePatKind::kIdent:
+                        case parus::sir::SwitchCasePatKind::kError:
+                        default:
+                            return emit_const_bool(bool_ty, false);
+                    }
+                };
+
+                const BlockId exit_bb = new_block();
+                std::optional<parus::sir::SwitchCase> default_case;
+
+                if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)sir->switch_cases.size()) {
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        const auto& c = sir->switch_cases[s.case_begin + i];
+                        if (c.is_default) {
+                            default_case = c;
+                            continue;
+                        }
+
+                        const BlockId match_bb = new_block();
+                        const BlockId next_bb = new_block();
+
+                        const ValueId cond = emit_case_match_cond(c);
+                        condbr(cond, match_bb, {}, next_bb, {});
+
+                        fn->blocks.push_back(match_bb);
+                        cur_bb = match_bb;
+                        push_scope();
+                        lower_block(c.body);
+                        pop_scope();
+                        if (!has_term()) br(exit_bb, {});
+
+                        fn->blocks.push_back(next_bb);
+                        cur_bb = next_bb;
+                    }
+                }
+
+                if (default_case.has_value()) {
+                    const BlockId def_bb = new_block();
+                    if (!has_term()) br(def_bb, {});
+
+                    fn->blocks.push_back(def_bb);
+                    cur_bb = def_bb;
+                    push_scope();
+                    lower_block(default_case->body);
+                    pop_scope();
+                    if (!has_term()) br(exit_bb, {});
+                } else {
+                    if (!has_term()) br(exit_bb, {});
+                }
+
+                fn->blocks.push_back(exit_bb);
+                cur_bb = exit_bb;
                 return;
             }
 

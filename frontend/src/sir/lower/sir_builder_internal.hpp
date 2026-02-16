@@ -131,6 +131,7 @@ namespace parus::sir::detail {
     FieldId lower_field_decl_(
         Module& m,
         const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         parus::ast::StmtId sid
     );

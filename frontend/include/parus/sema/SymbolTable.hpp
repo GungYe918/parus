@@ -4,6 +4,7 @@
 #include <parus/ty/Type.hpp>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 #include <unordered_map>
@@ -25,7 +26,7 @@ namespace parus::sema {
     struct Symbol {
         SymbolKind kind = SymbolKind::kVar;
 
-        std::string_view name{};
+        std::string name{};
         ty::TypeId declared_type = ty::kInvalidType; // 선언 타입(없으면 invalid)
 
         Span decl_span{}; // 선언 지점
@@ -39,25 +40,9 @@ namespace parus::sema {
         Span span{}; // 새 선언 span
     };
 
-    // unordered_map for string_view
-    struct SvHash {
-        size_t operator()(std::string_view s) const noexcept {
-            // FNV-1a (간단)
-            size_t h = 1469598103934665603ull;
-            for (unsigned char c : s) {
-                h ^= (size_t)c;
-                h *= 1099511628211ull;
-            }
-            return h;
-        }
-    };
-    struct SvEq {
-        bool operator()(std::string_view a, std::string_view b) const noexcept { return a == b; }
-    };
-
     struct Scope {
         uint32_t parent = 0xFFFF'FFFFu;
-        std::unordered_map<std::string_view, uint32_t, SvHash, SvEq> table;
+        std::unordered_map<std::string, uint32_t> table;
     };
 
     // 심볼 테이블: 스코프 스택 + 심볼 저장소
@@ -102,7 +87,7 @@ namespace parus::sema {
             uint32_t s = current_scope();
             while (s != kNoScope) {
                 const auto& m = scopes_[s].table;
-                auto it = m.find(name);
+                auto it = m.find(std::string(name));
                 if (it != m.end()) return it->second;
                 s = scopes_[s].parent;
             }
@@ -112,7 +97,7 @@ namespace parus::sema {
         // 같은 스코프 내 중복 여부(duplicate 체크용)
         std::optional<uint32_t> lookup_in_current(std::string_view name) const {
             const auto& m = scopes_[current_scope()].table;
-            auto it = m.find(name);
+            auto it = m.find(std::string(name));
             if (it == m.end()) return std::nullopt;
             return it->second;
         }
@@ -147,14 +132,14 @@ namespace parus::sema {
 
             Symbol sym{};
             sym.kind = kind;
-            sym.name = name;
+            sym.name = std::string(name);
             sym.declared_type = declared_type;
             sym.decl_span = decl_span;
             sym.owner_scope = current_scope();
 
             symbols_.push_back(sym);
             uint32_t sid = (uint32_t)symbols_.size() - 1;
-            scopes_[current_scope()].table.emplace(name, sid);
+            scopes_[current_scope()].table.emplace(symbols_[sid].name, sid);
 
             r.ok = true;
             r.symbol_id = sid;

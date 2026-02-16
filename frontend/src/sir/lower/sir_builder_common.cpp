@@ -42,6 +42,10 @@ namespace parus::sir::detail {
         if (e.kind == parus::ast::ExprKind::kIndex) {
             return resolve_root_place_symbol_from_expr(ast, nres, e.a);
         }
+        if (e.kind == parus::ast::ExprKind::kBinary &&
+            e.op == parus::syntax::TokenKind::kDot) {
+            return resolve_root_place_symbol_from_expr(ast, nres, e.a);
+        }
         return k_invalid_symbol;
     }
 
@@ -118,9 +122,12 @@ namespace parus::sir::detail {
                 }
                 return PlaceClass::kIndex;
             }
+            case parus::ast::ExprKind::kBinary:
+                if (e.op == parus::syntax::TokenKind::kDot) {
+                    return PlaceClass::kField;
+                }
+                return PlaceClass::kNotPlace;
 
-            // future:
-            // case parus::ast::ExprKind::kField: return PlaceClass::kField;
             default:
                 return PlaceClass::kNotPlace;
         }
@@ -200,6 +207,17 @@ namespace parus::sir::detail {
                 break;
             case StmtKind::kManualStmt:
                 if (s.a != k_invalid_block) join_block(s.a);
+                break;
+            case StmtKind::kSwitch:
+                join_value(s.expr);
+                if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)m.switch_cases.size()) {
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        const auto& c = m.switch_cases[s.case_begin + i];
+                        if (c.body != k_invalid_block) {
+                            join_block(c.body);
+                        }
+                    }
+                }
                 break;
 
             default:

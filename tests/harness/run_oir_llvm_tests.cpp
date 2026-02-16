@@ -156,6 +156,42 @@ namespace {
         return ok;
     }
 
+    /// @brief C ABI layout(c) field by-value 파라미터가 LLVM 시그니처에서 ptr이 아닌 aggregate로 내려가는지 검사한다.
+    static bool test_c_abi_field_by_value_param_signature() {
+        const std::string src = R"(
+            field layout(c) Vec2 {
+                x: i32;
+                y: i32;
+            }
+
+            extern "C" fn takes(v: Vec2) -> i32;
+
+            export "C" fn pass(v: Vec2) -> i32 {
+                return takes(v: v);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "C ABI by-value field source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for C ABI by-value field case must succeed");
+        ok &= require_(lowered.llvm_ir.find("declare i32 @takes([8 x i8])") != std::string::npos,
+                       "extern \"C\" field by-value parameter must be emitted as aggregate signature");
+        ok &= require_(lowered.llvm_ir.find("define i32 @pass([8 x i8] %arg0)") != std::string::npos,
+                       "export \"C\" field by-value parameter must be emitted as aggregate signature");
+        ok &= require_(lowered.llvm_ir.find("call i32 @takes([8 x i8]") != std::string::npos,
+                       "C ABI by-value call must pass aggregate argument, not ptr");
+        return ok;
+    }
+
     /// @brief 수동 OIR field 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
     static bool test_manual_field_lowering_memory_model() {
         parus::ty::TypePool types;
@@ -309,6 +345,19 @@ namespace {
         return true;
     }
 
+    static size_t count_substr_(std::string_view haystack, std::string_view needle) {
+        if (needle.empty()) return 0;
+        size_t n = 0;
+        size_t pos = 0;
+        while (true) {
+            const size_t found = haystack.find(needle, pos);
+            if (found == std::string_view::npos) break;
+            ++n;
+            pos = found + needle.size();
+        }
+        return n;
+    }
+
     /// @brief LLVM-IR 텍스트를 실제 오브젝트(.o)로 만들어 코드 생성 경로를 검증한다.
     static bool emit_object_for_test_case_(const std::string& llvm_ir, const std::string& stem) {
         const auto out_path = (std::filesystem::temp_directory_path() / ("parus_oir_llvm_" + stem + ".o")).string();
@@ -379,17 +428,17 @@ namespace {
         ok &= require_(lowered.ok, "overload/operator LLVM text lowering must succeed");
         if (!ok) return false;
 
-        ok &= require_(lowered.llvm_ir.find("define i32 @add_fn_i32__i32_____i32") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("define i32 @p$main$_$add$Mnone$Rnone$S") != std::string::npos,
                        "i32 overload definition must exist in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("define i64 @add_fn_i64__i64_____i64") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("define i64 @p$main$_$add$Mnone$Rnone$S") != std::string::npos,
                        "i64 overload definition must exist in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("call i32 @add_fn_i32__i32_____i32") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("call i32 @p$main$_$add$Mnone$Rnone$S") != std::string::npos,
                        "i32 overload call must be direct in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("call i64 @add_fn_i64__i64_____i64") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("call i64 @p$main$_$add$Mnone$Rnone$S") != std::string::npos,
                        "i64 overload call must be direct in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("define i32 @__op___8_fn_i32__i32_____i32") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("define i32 @p$main$_$__op_") != std::string::npos,
                        "operator overload function must be present in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("call i32 @__op___8_fn_i32__i32_____i32") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("call i32 @p$main$_$__op_") != std::string::npos,
                        "operator overload must lower to direct call");
         ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
                        "direct overload lowering should not require call stub");
@@ -398,6 +447,153 @@ namespace {
         if (!ok) return false;
 
         return emit_object_for_test_case_(lowered.llvm_ir, "overload_operator_patterns");
+    }
+
+    /// @brief nest 경로 함수가 namespace 포함 맹글 심볼로 내려가고 direct call되는지 검사한다.
+    static bool test_nest_path_mangling_and_direct_call_() {
+        const std::string src = R"(
+            nest engine {
+                nest math {
+                    fn add(a: i32, b: i32) -> i32 {
+                        return a + b;
+                    }
+                }
+            }
+
+            fn main() -> i32 {
+                return engine::math::add(a: 1i32, b: 2i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "nest path source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "nest path LLVM text lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("define i32 @p$main$engine__math$add$Mnone$Rnone$S") != std::string::npos,
+                       "nested function must include namespace path in mangled symbol");
+        ok &= require_(lowered.llvm_ir.find("call i32 @p$main$engine__math$add$Mnone$Rnone$S") != std::string::npos,
+                       "nested function call must be direct to namespace mangled symbol");
+        return ok;
+    }
+
+    /// @brief import alias가 nest 경로 호출로 정상 해소되는지 검사한다.
+    static bool test_import_alias_path_resolution_to_llvm_() {
+        const std::string src = R"(
+            import engine::math as m;
+
+            nest engine {
+                nest math {
+                    fn add(a: i32, b: i32) -> i32 {
+                        return a + b;
+                    }
+                }
+            }
+
+            fn main() -> i32 {
+                return m::add(a: 3i32, b: 4i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "import alias source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "import alias LLVM text lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("call i32 @p$main$engine__math$add$Mnone$Rnone$S") != std::string::npos,
+                       "import alias call must resolve to namespace-qualified target");
+        return ok;
+    }
+
+    /// @brief switch 문이 LLVM condbr 체인으로 lowering되는지 검사한다.
+    static bool test_switch_stmt_lowering_cfg_() {
+        const std::string src = R"(
+            fn pick(x: i32) -> i32 {
+                switch (x) {
+                    case 1: { return 11i32; }
+                    case 2: { return 22i32; }
+                    default: { return 33i32; }
+                }
+                return 0i32;
+            }
+
+            fn main() -> i32 {
+                return pick(x: 2i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "switch source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "switch LLVM text lowering must succeed");
+        ok &= require_(count_substr_(lowered.llvm_ir, "br i1 ") >= 2,
+                       "switch lowering must emit multiple conditional branches");
+        ok &= require_(lowered.llvm_ir.find("add i32 0, 11") != std::string::npos,
+                       "switch case(1) constant path must be present");
+        ok &= require_(lowered.llvm_ir.find("add i32 0, 22") != std::string::npos,
+                       "switch case(2) constant path must be present");
+        ok &= require_(lowered.llvm_ir.find("add i32 0, 33") != std::string::npos,
+                       "switch default constant path must be present");
+        return ok;
+    }
+
+    /// @brief g_vec.x 체인이 field lowering 경로(GEP+store/load)로 내려가는지 검사한다.
+    static bool test_global_field_member_chain_lowering_() {
+        const std::string src = R"(
+            field layout(c) Vec2 {
+                x: i32;
+                y: i32;
+            }
+
+            extern "C" static mut g_vec: Vec2;
+
+            fn main() -> i32 {
+                g_vec.x = 7i32;
+                return g_vec.x;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "global field member chain source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "global field member chain lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("@g_vec = external global [8 x i8]") != std::string::npos,
+                       "extern global Vec2 symbol must be emitted");
+        ok &= require_(count_substr_(lowered.llvm_ir, "getelementptr i8, ptr @g_vec, i64 0") >= 2,
+                       "g_vec.x read/write must both compute field address");
+        ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
+                       "g_vec.x assignment must emit typed store");
+        ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
+                       "g_vec.x read must emit typed load");
+        return ok;
     }
 
     /// @brief 오버로딩/연산자 오버로딩 소스를 다수 순회하며 LLVM-IR + 오브젝트 생성을 함께 검증한다.
@@ -531,9 +727,14 @@ int main() {
     const Case cases[] = {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
+        {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},
+        {"nest_path_mangling_and_direct_call", test_nest_path_mangling_and_direct_call_},
+        {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
+        {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
+        {"global_field_member_chain_lowering", test_global_field_member_chain_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"oir_case_directory", test_oir_case_directory},
     };

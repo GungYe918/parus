@@ -119,10 +119,18 @@ namespace parus::tyck {
         {
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kIdent) {
-                callee_name = std::string(callee_expr.text);
-                if (auto sid = sym_.lookup(callee_expr.text)) {
+                std::string lookup_name = std::string(callee_expr.text);
+                if (auto rewritten = rewrite_imported_path_(lookup_name)) {
+                    lookup_name = *rewritten;
+                }
+
+                callee_name = lookup_name;
+                if (auto sid = lookup_symbol_(lookup_name)) {
                     const auto& sym = sym_.symbol(*sid);
                     callee_is_fn_symbol = (sym.kind == sema::SymbolKind::kFn);
+                    if (callee_is_fn_symbol) {
+                        callee_name = sym.name;
+                    }
                 }
 
                 if (callee_is_fn_symbol) {

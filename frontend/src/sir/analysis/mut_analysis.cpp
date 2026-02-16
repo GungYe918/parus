@@ -32,6 +32,11 @@ namespace parus::sir {
                 const Value& base = m.values[v.a];
                 return is_mut_borrow_type_(types, base.type);
             }
+            if (v.kind == ValueKind::kField) {
+                if (v.a == k_invalid_value || v.a >= m.values.size()) return false;
+                const Value& base = m.values[v.a];
+                return is_mut_borrow_type_(types, base.type);
+            }
 
             return false;
         }
@@ -50,15 +55,14 @@ namespace parus::sir {
 
         // index write: a[i] = ...
         if (v.kind == ValueKind::kIndex) {
-            // v.a = base, v.b = index
-            if (v.a == k_invalid_value) return std::nullopt;
-            const Value& base = m.values[v.a];
-            if (base.kind == ValueKind::kLocal && base.sym != k_invalid_symbol) {
-                return base.sym;
-            }
+            return root_written_symbol(m, v.a);
         }
 
-        // future: field/deref/etc.
+        // field write: a.b = ...
+        if (v.kind == ValueKind::kField) {
+            return root_written_symbol(m, v.a);
+        }
+
         return std::nullopt;
     }
 

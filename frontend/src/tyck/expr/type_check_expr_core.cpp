@@ -146,7 +146,7 @@ namespace parus::tyck {
                 break;
 
             case ast::ExprKind::kIdent: {
-                auto id = sym_.lookup(e.text);
+                auto id = lookup_symbol_(e.text);
                 if (!id) {
                     diag_(diag::Code::kUndefinedName, e.span, e.text);
                     err_(e.span, "unknown identifier");
@@ -370,19 +370,17 @@ namespace parus::tyck {
         const ast::Expr& e = ast_.expr(place);
 
         if (e.kind == ast::ExprKind::kIdent) {
-            auto sid = sym_.lookup(e.text);
+            auto sid = lookup_symbol_(e.text);
             if (!sid) return std::nullopt;
             return *sid;
         }
 
         if (e.kind == ast::ExprKind::kIndex) {
-            // 가정: e.a = base, e.b = index
-            const ast::Expr& base = ast_.expr(e.a);
-            if (base.kind == ast::ExprKind::kIdent) {
-                auto sid = sym_.lookup(base.text);
-                if (!sid) return std::nullopt;
-                return *sid;
-            }
+            return root_place_symbol_(e.a);
+        }
+
+        if (e.kind == ast::ExprKind::kBinary && e.op == K::kDot) {
+            return root_place_symbol_(e.a);
         }
 
         return std::nullopt;
@@ -427,7 +425,7 @@ namespace parus::tyck {
         }
     }
 
-    // place expr (v0: Ident, Index만 place로 인정)
+    // place expr (v0: Ident, Index, Field(dot)만 place로 인정)
     bool TypeChecker::is_place_expr_(ast::ExprId eid) const {
         if (eid == ast::k_invalid_expr) return false;
         const auto& e = ast_.expr(eid);
@@ -435,6 +433,12 @@ namespace parus::tyck {
         if (e.kind == ast::ExprKind::kIndex) {
             // range index는 slice 생성용 view이므로 v0에서 write/place로 취급하지 않는다.
             if (is_range_expr_(e.b)) return false;
+            return is_place_expr_(e.a);
+        }
+        if (e.kind == ast::ExprKind::kBinary && e.op == K::kDot) {
+            if (e.b == ast::k_invalid_expr) return false;
+            const auto& rhs = ast_.expr(e.b);
+            if (rhs.kind != ast::ExprKind::kIdent) return false;
             return is_place_expr_(e.a);
         }
         return false;
@@ -543,6 +547,73 @@ namespace parus::tyck {
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
+        // value member access (v0): obj.field
+        if (e.op == K::kDot) {
+            ty::TypeId base_t = check_expr_(e.a);
+            base_t = read_decay_borrow_(types_, base_t);
+
+            if (e.b == ast::k_invalid_expr) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member on '.' access");
+                err_(e.span, "missing member on '.' access");
+                return types_.error();
+            }
+
+            const ast::Expr& rhs = ast_.expr(e.b);
+            if (rhs.kind != ast::ExprKind::kIdent) {
+                diag_(diag::Code::kTypeErrorGeneric, rhs.span, "member access requires identifier rhs");
+                err_(rhs.span, "member access requires identifier rhs");
+                return types_.error();
+            }
+
+            auto meta_it = field_abi_meta_by_type_.find(base_t);
+            if (meta_it == field_abi_meta_by_type_.end()) {
+                const auto& bt = types_.get(base_t);
+                if (bt.kind == ty::Kind::kNamedUser) {
+                    if (auto sid = lookup_symbol_(types_.to_string(base_t))) {
+                        const auto& ss = sym_.symbol(*sid);
+                        if (ss.kind == sema::SymbolKind::kField) {
+                            meta_it = field_abi_meta_by_type_.find(ss.declared_type);
+                        }
+                    }
+                }
+            }
+
+            if (meta_it == field_abi_meta_by_type_.end()) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                    std::string("member access is only available on field values in v0, got ") + types_.to_string(base_t));
+                err_(e.span, "member access on non-field value");
+                return types_.error();
+            }
+
+            const ast::StmtId fsid = meta_it->second.sid;
+            if (fsid == ast::k_invalid_stmt || (size_t)fsid >= ast_.stmts().size()) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid field metadata while resolving member");
+                err_(e.span, "invalid field metadata");
+                return types_.error();
+            }
+
+            const auto& fs = ast_.stmt(fsid);
+            const uint64_t begin = fs.field_member_begin;
+            const uint64_t end = begin + fs.field_member_count;
+            if (begin > ast_.field_members().size() || end > ast_.field_members().size()) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid field member range");
+                err_(e.span, "invalid field member range");
+                return types_.error();
+            }
+
+            for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+                const auto& m = ast_.field_members()[i];
+                if (m.name == rhs.text) {
+                    return m.type;
+                }
+            }
+
+            diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                std::string("unknown field member '") + std::string(rhs.text) + "'");
+            err_(rhs.span, "unknown field member");
+            return types_.error();
         }
 
         // NOTE:

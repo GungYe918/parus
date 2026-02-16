@@ -5,6 +5,21 @@
 
 namespace parus::sir::detail {
 
+    static SwitchCasePatKind lower_switch_pat_kind_(parus::ast::CasePatKind k) {
+        using A = parus::ast::CasePatKind;
+        switch (k) {
+            case A::kInt:    return SwitchCasePatKind::kInt;
+            case A::kChar:   return SwitchCasePatKind::kChar;
+            case A::kString: return SwitchCasePatKind::kString;
+            case A::kBool:   return SwitchCasePatKind::kBool;
+            case A::kNull:   return SwitchCasePatKind::kNull;
+            case A::kIdent:  return SwitchCasePatKind::kIdent;
+            case A::kError:
+            default:
+                return SwitchCasePatKind::kError;
+        }
+    }
+
     ValueId lower_expr(
         Module& m,
         bool& out_has_any_write,
@@ -109,6 +124,16 @@ namespace parus::sir::detail {
             }
 
             case parus::ast::ExprKind::kBinary: {
+                if (e.op == parus::syntax::TokenKind::kDot) {
+                    v.kind = ValueKind::kField;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    if (e.b != parus::ast::k_invalid_expr) {
+                        const auto& rhs = ast.expr(e.b);
+                        v.text = rhs.text;
+                    }
+                    break;
+                }
+
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
@@ -396,6 +421,9 @@ namespace parus::sir::detail {
                 join_child(v.a);
                 join_child(v.b);
                 break;
+            case ValueKind::kField:
+                join_child(v.a);
+                break;
 
             case ValueKind::kIfExpr:
                 join_child(v.a);
@@ -531,6 +559,33 @@ namespace parus::sir::detail {
                 out.expr = lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck, sid,
                                             parus::ast::k_invalid_expr, s.span, k_invalid_type);
                 break;
+
+            case parus::ast::StmtKind::kSwitch: {
+                out.kind = StmtKind::kSwitch;
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                out.case_begin = (uint32_t)m.switch_cases.size();
+                out.case_count = 0;
+                out.has_default = s.has_default;
+
+                const uint64_t cb = s.case_begin;
+                const uint64_t ce = cb + s.case_count;
+                if (cb <= ast.switch_cases().size() && ce <= ast.switch_cases().size()) {
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        const auto& ac = ast.switch_cases()[s.case_begin + i];
+                        SwitchCase sc{};
+                        sc.is_default = ac.is_default;
+                        sc.pat_kind = lower_switch_pat_kind_(ac.pat_kind);
+                        sc.pat_text = ac.pat_text;
+                        sc.span = ac.span;
+                        if (ac.body != parus::ast::k_invalid_stmt) {
+                            sc.body = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, ac.body);
+                        }
+                        (void)m.add_switch_case(sc);
+                        out.case_count++;
+                    }
+                }
+                break;
+            }
 
             default:
                 out.kind = StmtKind::kError;

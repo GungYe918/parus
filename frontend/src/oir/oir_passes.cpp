@@ -1233,6 +1233,11 @@ namespace parus::oir {
         bool as_const_int_(const Module& m, ValueId v, int64_t& out) {
             if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
             const auto& vv = m.values[v];
+            // def_a/def_b 계약:
+            // - inst result: def_a = inst_id, def_b = kInvalidId
+            // - block param: def_a = block_id, def_b = param_index
+            // block param을 inst로 오해하면 잘못된 상수 폴딩이 발생한다.
+            if (vv.def_b != kInvalidId) return false;
             const uint32_t iid = vv.def_a;
             if (iid == kInvalidId || (size_t)iid >= m.insts.size()) return false;
             if (!std::holds_alternative<InstConstInt>(m.insts[iid].data)) return false;
@@ -1243,6 +1248,7 @@ namespace parus::oir {
         bool as_const_bool_(const Module& m, ValueId v, bool& out) {
             if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
             const auto& vv = m.values[v];
+            if (vv.def_b != kInvalidId) return false;
             const uint32_t iid = vv.def_a;
             if (iid == kInvalidId || (size_t)iid >= m.insts.size()) return false;
             if (!std::holds_alternative<InstConstBool>(m.insts[iid].data)) return false;
@@ -1254,6 +1260,7 @@ namespace parus::oir {
         bool is_const_null_(const Module& m, ValueId v) {
             if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
             const auto& vv = m.values[v];
+            if (vv.def_b != kInvalidId) return false;
             const uint32_t iid = vv.def_a;
             if (iid == kInvalidId || (size_t)iid >= m.insts.size()) return false;
             return std::holds_alternative<InstConstNull>(m.insts[iid].data);

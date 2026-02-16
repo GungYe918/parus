@@ -135,7 +135,7 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
 
 cmake --build "${BUILD_DIR}" --target parus_stage1 -j16
 cmake --build "${BUILD_DIR}" --target parus_stage2 -j16
-cmake --build "${BUILD_DIR}" --target parus_parser_tests parus_oir_tests parus_oir_llvm_tests parus_parlib_tests -j16
+cmake --build "${BUILD_DIR}" --target parus_parser_tests parus_oir_tests parus_oir_llvm_tests parus_ffi_tests parus_parlib_tests -j16
 
 echo ""
 echo "Built successfully (stage1 + stage2 + tests)."

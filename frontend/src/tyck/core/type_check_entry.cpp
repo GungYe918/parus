@@ -33,6 +33,10 @@ namespace parus::tyck {
         sym_is_mut_.clear();
         acts_default_operator_map_.clear();
         field_abi_meta_by_type_.clear();
+        fn_qualified_name_by_stmt_.clear();
+        namespace_stack_.clear();
+        import_alias_to_path_.clear();
+        block_depth_ = 0;
 
         // sym_ “완전 초기화”
         // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
@@ -64,6 +68,9 @@ namespace parus::tyck {
             result_.ok = false;
             return result_;
         }
+
+        // 파일 기본 nest 지시어를 먼저 반영한다.
+        init_file_namespace_(program_stmt);
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
@@ -128,6 +135,7 @@ namespace parus::tyck {
         // 결과 반영
         result_.expr_types = expr_type_cache_;
         result_.expr_overload_target = expr_overload_target_cache_;
+        result_.fn_qualified_names = fn_qualified_name_by_stmt_;
         return result_;
     }
 
@@ -282,6 +290,119 @@ namespace parus::tyck {
         }
     }
 
+    std::string TypeChecker::path_join_(uint32_t begin, uint32_t count) const {
+        if (count == 0) return {};
+        const auto& segs = ast_.path_segs();
+        if (begin >= segs.size() || begin + count > segs.size()) return {};
+
+        std::string out;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (i) out += "::";
+            out += std::string(segs[begin + i]);
+        }
+        return out;
+    }
+
+    std::string TypeChecker::current_namespace_prefix_() const {
+        if (namespace_stack_.empty()) return {};
+        std::string out;
+        for (size_t i = 0; i < namespace_stack_.size(); ++i) {
+            if (i) out += "::";
+            out += namespace_stack_[i];
+        }
+        return out;
+    }
+
+    std::string TypeChecker::qualify_decl_name_(std::string_view base_name) const {
+        const std::string ns = current_namespace_prefix_();
+        if (ns.empty()) return std::string(base_name);
+        if (base_name.empty()) return ns;
+        return ns + "::" + std::string(base_name);
+    }
+
+    void TypeChecker::init_file_namespace_(ast::StmtId program_stmt) {
+        namespace_stack_.clear();
+        if (program_stmt == ast::k_invalid_stmt) return;
+        const auto& prog = ast_.stmt(program_stmt);
+        if (prog.kind != ast::StmtKind::kBlock) return;
+
+        for (uint32_t i = 0; i < prog.stmt_count; ++i) {
+            const ast::StmtId cid = ast_.stmt_children()[prog.stmt_begin + i];
+            if (cid == ast::k_invalid_stmt || (size_t)cid >= ast_.stmts().size()) continue;
+            const auto& s = ast_.stmt(cid);
+            if (s.kind != ast::StmtKind::kNestDecl || !s.nest_is_file_directive) continue;
+
+            const std::string file_ns = path_join_(s.nest_path_begin, s.nest_path_count);
+            if (file_ns.empty()) return;
+
+            size_t pos = 0;
+            while (pos < file_ns.size()) {
+                size_t next = file_ns.find("::", pos);
+                if (next == std::string::npos) {
+                    namespace_stack_.push_back(file_ns.substr(pos));
+                    break;
+                }
+                namespace_stack_.push_back(file_ns.substr(pos, next - pos));
+                pos = next + 2;
+            }
+            return;
+        }
+    }
+
+    std::optional<std::string> TypeChecker::rewrite_imported_path_(std::string_view path) const {
+        if (path.empty()) return std::nullopt;
+
+        const size_t pos = path.find("::");
+        if (pos == std::string_view::npos) {
+            auto it = import_alias_to_path_.find(std::string(path));
+            if (it == import_alias_to_path_.end()) return std::nullopt;
+            return it->second;
+        }
+
+        const std::string first(path.substr(0, pos));
+        auto it = import_alias_to_path_.find(first);
+        if (it == import_alias_to_path_.end()) return std::nullopt;
+
+        std::string out = it->second;
+        out += path.substr(pos);
+        return out;
+    }
+
+    std::optional<uint32_t> TypeChecker::lookup_symbol_(std::string_view name) const {
+        if (name.empty()) return std::nullopt;
+
+        std::string key(name);
+        if (auto rewritten = rewrite_imported_path_(key)) {
+            key = *rewritten;
+        }
+
+        if (auto sid = sym_.lookup(key)) {
+            return sid;
+        }
+
+        // 이미 절대 경로(또는 import 확장 경로)이면 상대 namespace fallback을 하지 않는다.
+        if (key.find("::") != std::string::npos) {
+            return std::nullopt;
+        }
+
+        // nest 경로 상대 해소:
+        // - 현재 namespace 경로를 바깥으로 줄여가며 `ns::name`을 시도한다.
+        for (size_t depth = namespace_stack_.size(); depth > 0; --depth) {
+            std::string qname;
+            for (size_t i = 0; i < depth; ++i) {
+                if (i) qname += "::";
+                qname += namespace_stack_[i];
+            }
+            qname += "::";
+            qname += key;
+            if (auto sid = sym_.lookup(qname)) {
+                return sid;
+            }
+        }
+
+        return std::nullopt;
+    }
+
     // --------------------
     // pass 1: collect top-level decls
     // --------------------
@@ -293,103 +414,141 @@ namespace parus::tyck {
             return;
         }
 
-        // ensure map is reset for each check_program call
         fn_decl_by_name_.clear();
+        fn_qualified_name_by_stmt_.clear();
+        import_alias_to_path_.clear();
 
-        // C ABI safe 판정을 위해 field layout 메타를 먼저 수집한다.
-        for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-            const ast::StmtId cid = ast_.stmt_children()[prog.stmt_begin + i];
-            if (cid == ast::k_invalid_stmt || (size_t)cid >= ast_.stmts().size()) continue;
-            const ast::Stmt& s = ast_.stmt(cid);
-            if (s.kind != ast::StmtKind::kFieldDecl) continue;
-
-            ty::TypeId field_ty = s.type;
-            if (field_ty == ty::kInvalidType && !s.name.empty()) {
-                field_ty = types_.intern_ident(s.name);
+        auto build_fn_sig = [&](const ast::Stmt& s) -> ty::TypeId {
+            ty::TypeId sig = s.type;
+            if (sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn) {
+                return sig;
             }
-            if (field_ty == ty::kInvalidType) continue;
 
-            FieldAbiMeta meta{};
-            meta.sid = cid;
-            meta.layout = s.field_layout;
-            meta.align = s.field_align;
-            field_abi_meta_by_type_[field_ty] = meta;
-        }
+            ty::TypeId ret = ty::kInvalidType;
+            if (sig != ty::kInvalidType && types_.get(sig).kind != ty::Kind::kFn) {
+                ret = sig;
+            }
+            if (ret == ty::kInvalidType) ret = types_.error();
 
-        // global scope는 SymbolTable이 이미 push되어 있음.
-        for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-            const ast::StmtId cid = ast_.stmt_children()[prog.stmt_begin + i];
-            const ast::Stmt& s = ast_.stmt(cid);
+            uint32_t pos_cnt = 0;
+            if (s.positional_param_count != 0 || s.param_count == 0) {
+                pos_cnt = s.positional_param_count;
+            } else {
+                pos_cnt = s.param_count;
+            }
 
-            // ----------------------------
-            // top-level fn decl
-            // ----------------------------
-            if (s.kind == ast::StmtKind::kFnDecl) {
-                // overload 집합 구성: 동일 이름 함수는 모두 수집한다.
-                if (!s.name.empty()) {
-                    fn_decl_by_name_[std::string(s.name)].push_back(cid);
+            std::vector<ty::TypeId> params;
+            params.reserve(pos_cnt);
+            for (uint32_t pi = 0; pi < pos_cnt; ++pi) {
+                const auto& p = ast_.params()[s.param_begin + pi];
+                ty::TypeId pt = p.type;
+                if (pt == ty::kInvalidType) {
+                    err_(p.span, "parameter requires an explicit type");
+                    diag_(diag::Code::kTypeParamTypeRequired, p.span, p.name);
+                    pt = types_.error();
+                }
+                params.push_back(pt);
+            }
+
+            return types_.make_fn(ret, params.empty() ? nullptr : params.data(), (uint32_t)params.size());
+        };
+
+        std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;
+
+        auto collect_stmt = [&](auto&& self, ast::StmtId sid, bool file_scope) -> void {
+            if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
+            const ast::Stmt& s = ast_.stmt(sid);
+
+            if (s.kind == ast::StmtKind::kNestDecl) {
+                if (s.nest_is_file_directive) return;
+
+                uint32_t pushed = 0;
+                const auto& segs = ast_.path_segs();
+                const uint64_t begin = s.nest_path_begin;
+                const uint64_t end = begin + s.nest_path_count;
+                if (begin <= segs.size() && end <= segs.size()) {
+                    for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                        namespace_stack_.push_back(std::string(segs[s.nest_path_begin + i]));
+                        ++pushed;
+                    }
                 }
 
-                // 1) 우선 Stmt.type이 fn 시그니처로 이미 채워져 있으면 그대로 사용
-                ty::TypeId sig = s.type;
-
-                if (!(sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn)) {
-                    // 2) 아니면 tyck에서 직접 구성
-                    ty::TypeId ret = ty::kInvalidType;
-
-                    // (A) s.type가 "반환 타입"으로 들어온 케이스 fallback
-                    if (sig != ty::kInvalidType && types_.get(sig).kind != ty::Kind::kFn) {
-                        ret = sig;
-                    }
-                    if (ret == ty::kInvalidType) ret = types_.error();
-
-                    // IMPORTANT:
-                    // signature params should be positional-only.
-                    // If parser already filled s.positional_param_count, use it.
-                    uint32_t pos_cnt = 0;
-                    if (s.positional_param_count != 0 || s.param_count == 0) {
-                        pos_cnt = s.positional_param_count;
-                    } else {
-                        // fallback for older AST: assume all are positional
-                        pos_cnt = s.param_count;
-                    }
-
-                    std::vector<ty::TypeId> params;
-                    params.reserve(pos_cnt);
-
-                    for (uint32_t pi = 0; pi < pos_cnt; ++pi) {
-                        const auto& p = ast_.params()[s.param_begin + pi];
-                        ty::TypeId pt = p.type;
-
-                        if (pt == ty::kInvalidType) {
-                            err_(p.span, "parameter requires an explicit type");
-                            diag_(diag::Code::kTypeParamTypeRequired, p.span, p.name);
-                            pt = types_.error();
+                if (s.a != ast::k_invalid_stmt && (size_t)s.a < ast_.stmts().size()) {
+                    const auto& body = ast_.stmt(s.a);
+                    if (body.kind == ast::StmtKind::kBlock) {
+                        const auto& kids = ast_.stmt_children();
+                        const uint64_t bb = body.stmt_begin;
+                        const uint64_t be = bb + body.stmt_count;
+                        if (bb <= kids.size() && be <= kids.size()) {
+                            for (uint32_t i = 0; i < body.stmt_count; ++i) {
+                                self(self, kids[body.stmt_begin + i], /*file_scope=*/false);
+                            }
                         }
-                        params.push_back(pt);
                     }
-
-                    sig = types_.make_fn(ret, params.empty() ? nullptr : params.data(), (uint32_t)params.size());
                 }
 
-                // 함수 오버로딩 허용:
-                // - 같은 이름의 기존 심볼이 함수면 "오버로드 집합 대표 심볼"을 재사용한다.
-                // - 같은 이름의 기존 심볼이 함수가 아니면 중복 선언 에러다.
-                if (auto existing = sym_.lookup_in_current(s.name)) {
+                while (pushed > 0) {
+                    namespace_stack_.pop_back();
+                    --pushed;
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kUse && s.use_kind == ast::UseKind::kImport) {
+                if (!file_scope) return;
+                if (s.use_path_count == 0) return;
+
+                const std::string path = path_join_(s.use_path_begin, s.use_path_count);
+                if (path.empty()) return;
+
+                std::string alias = std::string(s.use_rhs_ident);
+                if (alias.empty()) {
+                    const auto& segs = ast_.path_segs();
+                    if (s.use_path_begin + s.use_path_count <= segs.size()) {
+                        alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
+                    }
+                }
+                if (alias.empty()) return;
+
+                auto it = import_alias_to_path_.find(alias);
+                if (it != import_alias_to_path_.end() && it->second != path) {
+                    diag_(diag::Code::kDuplicateDecl, s.span, alias);
+                    err_(s.span, "duplicate import alias: " + alias);
+                    return;
+                }
+                import_alias_to_path_[alias] = path;
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kFnDecl) {
+                const std::string qname = qualify_decl_name_(s.name);
+                fn_qualified_name_by_stmt_[sid] = qname;
+                fn_decl_by_name_[qname].push_back(sid);
+
+                const ty::TypeId sig = build_fn_sig(s);
+
+                if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
                     if (existing_sym.kind != sema::SymbolKind::kFn) {
-                        err_(s.span, "duplicate symbol (function): " + std::string(s.name));
-                        diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                        err_(s.span, "duplicate symbol (function): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     }
                 } else {
-                    auto ins = sym_.insert(sema::SymbolKind::kFn, s.name, sig, s.span);
+                    auto ins = sym_.insert(sema::SymbolKind::kFn, qname, sig, s.span);
                     if (!ins.ok && ins.is_duplicate) {
-                        err_(s.span, "duplicate symbol (function): " + std::string(s.name));
-                        diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                        err_(s.span, "duplicate symbol (function): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     }
                 }
 
                 if (s.link_abi == ast::LinkAbi::kC) {
+                    const std::string c_sym = std::string(s.name);
+                    auto cins = c_abi_symbol_owner.emplace(c_sym, sid);
+                    if (!cins.second && cins.first->second != sid) {
+                        diag_(diag::Code::kDuplicateDecl, s.span, c_sym);
+                        err_(s.span, "duplicate C ABI symbol: " + c_sym);
+                    }
+
                     if (s.has_named_group || s.positional_param_count != s.param_count) {
                         diag_(diag::Code::kAbiCNamedGroupNotAllowed, s.span, s.name);
                         err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
@@ -412,53 +571,60 @@ namespace parus::tyck {
                         }
                     }
                 }
-                continue;
+                return;
             }
 
-            // ----------------------------
-            // top-level var decl
-            // ----------------------------
             if (s.kind == ast::StmtKind::kVar) {
                 if (s.link_abi == ast::LinkAbi::kC && !s.is_static) {
                     diag_(diag::Code::kAbiCGlobalMustBeStatic, s.span, s.name);
                     err_(s.span, "C ABI global must be static: " + std::string(s.name));
                 }
-                // top-level var는 precollect 대상이 아니다.
-                // 실제 선언/타입 확정은 PASS2(check_stmt_var_)에서 한 번만 처리한다.
-                continue;
+                return;
             }
 
-            // ----------------------------
-            // top-level field decl
-            // ----------------------------
             if (s.kind == ast::StmtKind::kFieldDecl) {
+                const std::string qname = qualify_decl_name_(s.name);
                 ty::TypeId field_ty = s.type;
-                if (field_ty == ty::kInvalidType && !s.name.empty()) {
-                    field_ty = types_.intern_ident(s.name);
+                if (field_ty == ty::kInvalidType && !qname.empty()) {
+                    field_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = field_ty;
                 }
 
-                auto ins = sym_.insert(sema::SymbolKind::kField, s.name, field_ty, s.span);
+                auto ins = sym_.insert(sema::SymbolKind::kField, qname, field_ty, s.span);
                 if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (field): " + std::string(s.name));
-                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    err_(s.span, "duplicate symbol (field): " + qname);
+                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
-                continue;
+
+                if (field_ty != ty::kInvalidType) {
+                    FieldAbiMeta meta{};
+                    meta.sid = sid;
+                    meta.layout = s.field_layout;
+                    meta.align = s.field_align;
+                    field_abi_meta_by_type_[field_ty] = meta;
+                }
+                return;
             }
 
-            // ----------------------------
-            // top-level acts decl
-            // ----------------------------
             if (s.kind == ast::StmtKind::kActsDecl) {
-                auto ins = sym_.insert(sema::SymbolKind::kAct, s.name, ty::kInvalidType, s.span);
+                const std::string qname = qualify_decl_name_(s.name);
+                auto ins = sym_.insert(sema::SymbolKind::kAct, qname, ty::kInvalidType, s.span);
                 if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (acts): " + std::string(s.name));
-                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    err_(s.span, "duplicate symbol (acts): " + qname);
+                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
                 collect_acts_operator_decl_(s);
-                continue;
+                return;
             }
+        };
 
-            // use / unknown / other: pass1에서는 스킵
+        const auto& kids = ast_.stmt_children();
+        const uint64_t begin = prog.stmt_begin;
+        const uint64_t end = begin + prog.stmt_count;
+        if (begin <= kids.size() && end <= kids.size()) {
+            for (uint32_t i = 0; i < prog.stmt_count; ++i) {
+                collect_stmt(collect_stmt, kids[prog.stmt_begin + i], /*file_scope=*/true);
+            }
         }
 
         struct ParamShape {
@@ -469,7 +635,7 @@ namespace parus::tyck {
         };
         struct DeclShape {
             ast::StmtId sid = ast::k_invalid_stmt;
-            std::string_view name{};
+            std::string name{};
             Span span{};
             ty::TypeId ret = ty::kInvalidType;
             bool is_c_abi = false;
@@ -477,7 +643,6 @@ namespace parus::tyck {
             std::vector<ParamShape> named;
         };
 
-        /// @brief 선언 키(Declaration Key)를 canonical 문자열로 만든다.
         const auto make_decl_key = [](const DeclShape& d) -> std::string {
             std::ostringstream oss;
             oss << "P" << d.positional.size();
@@ -491,7 +656,6 @@ namespace parus::tyck {
             return oss.str();
         };
 
-        /// @brief 위치 호출 관점(타입열만) 비교 키를 만든다.
         const auto make_positional_type_key = [](const DeclShape& d) -> std::string {
             std::ostringstream oss;
             oss << "P" << d.positional.size();
@@ -501,7 +665,6 @@ namespace parus::tyck {
             return oss.str();
         };
 
-        /// @brief labeled 호출 관점(라벨+타입 집합) 비교 키를 만든다.
         const auto make_labeled_set_key = [](const DeclShape& d) -> std::string {
             std::vector<std::pair<std::string, ty::TypeId>> elems;
             elems.reserve(d.positional.size());
@@ -521,7 +684,6 @@ namespace parus::tyck {
             return oss.str();
         };
 
-        /// @brief 오버로드 시그니처를 사용자 친화 문자열로 만든다.
         const auto make_human_sig = [&](const DeclShape& d) -> std::string {
             std::ostringstream oss;
             oss << d.name << "(";
@@ -545,7 +707,6 @@ namespace parus::tyck {
             return oss.str();
         };
 
-        /// @brief OIR 함수명과 동일 규칙으로 맹글링 후보를 만든다.
         const auto project_mangled_name = [&](const DeclShape& d) -> std::string {
             std::ostringstream sig;
             sig << "fn(";
@@ -567,14 +728,13 @@ namespace parus::tyck {
             }
             sig << ") -> " << types_.to_string(d.ret);
 
-            std::string out = std::string(d.name) + "$" + sig.str();
+            std::string out = d.name + "$" + sig.str();
             for (char& ch : out) {
                 if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') ch = '_';
             }
             return out;
         };
 
-        // 오버로드 집합 단위 검증
         for (const auto& it : fn_decl_by_name_) {
             const std::string& fn_name = it.first;
             const std::vector<ast::StmtId>& decl_ids = it.second;
@@ -589,7 +749,8 @@ namespace parus::tyck {
 
                 DeclShape d{};
                 d.sid = sid;
-                d.name = s.name;
+                auto qit = fn_qualified_name_by_stmt_.find(sid);
+                d.name = (qit != fn_qualified_name_by_stmt_.end()) ? qit->second : std::string(s.name);
                 d.span = s.span;
                 d.is_c_abi = (s.link_abi == ast::LinkAbi::kC);
                 d.ret = (s.fn_ret != ty::kInvalidType)
@@ -613,7 +774,6 @@ namespace parus::tyck {
                     ps.has_default = p.has_default;
                     ps.span = p.span;
 
-                    // 스펙 6.1.7(C)-5: 함수 내부 파라미터 라벨 중복 금지
                     if (!seen_labels.insert(ps.label).second) {
                         std::string msg = "duplicate parameter label '" + ps.label +
                                         "' in overload declaration of '" + fn_name + "'";
@@ -631,8 +791,6 @@ namespace parus::tyck {
 
             if (decls.size() <= 1) continue;
 
-            // ABI 문서(v0.0.1) 규칙:
-            // C ABI 경계 함수는 오버로딩 금지.
             bool has_c_abi = false;
             for (const auto& d : decls) {
                 if (d.is_c_abi) {
@@ -648,7 +806,6 @@ namespace parus::tyck {
                 }
             }
 
-            // 스펙 6.1.7(C)-1/2: Declaration Key 충돌 금지 (반환 타입만 차이도 포함)
             std::unordered_map<std::string, size_t> decl_key_owner;
             decl_key_owner.reserve(decls.size());
             for (size_t i = 0; i < decls.size(); ++i) {
@@ -669,7 +826,6 @@ namespace parus::tyck {
                 }
             }
 
-            // 스펙 6.1.7(C)-3: positional 호출 관점 충돌 금지 (named-group 없는 함수끼리)
             std::unordered_map<std::string, size_t> pos_view_owner;
             pos_view_owner.reserve(decls.size());
             for (size_t i = 0; i < decls.size(); ++i) {
@@ -684,7 +840,6 @@ namespace parus::tyck {
                 }
             }
 
-            // 스펙 6.1.7(C)-4: labeled 호출 관점 충돌 금지 (named-group 없는 함수끼리)
             std::unordered_map<std::string, size_t> labeled_view_owner;
             labeled_view_owner.reserve(decls.size());
             for (size_t i = 0; i < decls.size(); ++i) {
@@ -699,8 +854,6 @@ namespace parus::tyck {
                 }
             }
 
-            // 맹글링 충돌 검증:
-            // 시그니처가 달라도 sanitize 이후 심볼이 같아질 수 있으므로 미리 진단한다.
             std::unordered_map<std::string, std::pair<ast::StmtId, std::string>> mangled_owner;
             mangled_owner.reserve(decls.size());
             for (const auto& d : decls) {
@@ -911,7 +1064,7 @@ namespace parus::tyck {
 
         // ident의 경우: sym pending에서 찾아온다
         if (e.kind == ast::ExprKind::kIdent) {
-            auto sid = sym_.lookup(e.text);
+            auto sid = lookup_symbol_(e.text);
             if (!sid) return false;
             auto it2 = pending_int_sym_.find(*sid);
             if (it2 != pending_int_sym_.end() && it2->second.has_value) {
@@ -1088,7 +1241,7 @@ namespace parus::tyck {
 
         // ident라면 심볼 타입 확정 반영
         if (e.kind == ast::ExprKind::kIdent) {
-            auto sid = sym_.lookup(e.text);
+            auto sid = lookup_symbol_(e.text);
             if (sid) {
                 const auto& st = types_.get(sym_.symbol(*sid).declared_type);
                 if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {

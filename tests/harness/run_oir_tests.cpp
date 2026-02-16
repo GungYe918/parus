@@ -176,6 +176,75 @@ namespace {
         return ok;
     }
 
+    /// @brief const-fold가 block param을 상수로 오인하지 않는지 검사한다.
+    static bool test_oir_const_fold_respects_block_params() {
+        parus::oir::Module m;
+
+        const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
+
+        parus::oir::Function f{};
+        f.name = "sum_param";
+        f.ret_ty = 1;
+        f.entry = entry;
+        f.blocks.push_back(entry);
+        (void)m.add_func(f);
+
+        parus::oir::Value p0{};
+        p0.ty = 1;
+        p0.eff = parus::oir::Effect::Pure;
+        p0.def_a = entry;
+        p0.def_b = 0;
+        const parus::oir::ValueId v_param = m.add_value(p0);
+        m.blocks[entry].params.push_back(v_param);
+
+        auto add_result_inst = [&](parus::oir::TypeId ty, parus::oir::Effect eff, parus::oir::InstData data) {
+            parus::oir::Value v{};
+            v.ty = ty;
+            v.eff = eff;
+            const parus::oir::ValueId vid = m.add_value(v);
+
+            parus::oir::Inst inst{};
+            inst.data = std::move(data);
+            inst.eff = eff;
+            inst.result = vid;
+            const parus::oir::InstId iid = m.add_inst(inst);
+
+            m.values[vid].def_a = iid;
+            m.values[vid].def_b = parus::oir::kInvalidId;
+            m.blocks[entry].insts.push_back(iid);
+            return vid;
+        };
+
+        const parus::oir::ValueId c2 = add_result_inst(1, parus::oir::Effect::Pure, parus::oir::InstConstInt{"2"});
+        const parus::oir::ValueId sum = add_result_inst(
+            1,
+            parus::oir::Effect::Pure,
+            parus::oir::InstBinOp{parus::oir::BinOp::Add, v_param, c2}
+        );
+
+        parus::oir::TermRet rt{};
+        rt.has_value = true;
+        rt.value = sum;
+        m.blocks[entry].term = rt;
+        m.blocks[entry].has_term = true;
+
+        parus::oir::run_passes(m);
+
+        bool ok = true;
+        const auto sum_iid = m.values[sum].def_a;
+        ok &= require_(sum_iid != parus::oir::kInvalidId, "sum value must keep valid def inst");
+        if (ok) {
+            ok &= require_(
+                std::holds_alternative<parus::oir::InstBinOp>(m.insts[sum_iid].data),
+                "const fold must not fold expression that depends on block parameter"
+            );
+        }
+
+        const auto verrs = parus::oir::verify(m);
+        ok &= require_(verrs.empty(), "OIR verify must pass after block-param const-fold guard");
+        return ok;
+    }
+
     /// @brief OIR verify가 branch 인자/블록 파라미터 개수 불일치를 잡는지 검사한다.
     static bool test_oir_verify_branch_param_mismatch() {
         parus::oir::Module m;
@@ -536,6 +605,7 @@ int main() {
     const Case cases[] = {
         {"oir_call_lowering_ok", test_oir_call_lowering_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
+        {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"oir_global_mem2reg_and_critical_edge", test_oir_global_mem2reg_and_critical_edge},

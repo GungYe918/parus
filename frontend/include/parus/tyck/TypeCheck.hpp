@@ -30,6 +30,7 @@ namespace parus::tyck {
         bool ok = true;
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
         std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
+        std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // fn decl stmt -> qualified path name
         std::vector<TyError> errors;
     };
 
@@ -202,16 +203,30 @@ namespace parus::tyck {
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
         static bool is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id);
 
+        // --------------------
+        // namespace / path helpers (nest/import v0)
+        // --------------------
+        void init_file_namespace_(ast::StmtId program_stmt);
+        std::string qualify_decl_name_(std::string_view base_name) const;
+        std::optional<uint32_t> lookup_symbol_(std::string_view name) const;
+        std::optional<std::string> rewrite_imported_path_(std::string_view path) const;
+        std::string current_namespace_prefix_() const;
+        std::string path_join_(uint32_t begin, uint32_t count) const;
+
         // ----------------------------------------
         // Mut tracking (tyck-level)
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
 
-        // name -> overloaded fn decl stmt ids (top-level only)
+        // qualified-name -> overloaded fn decl stmt ids
         // NOTE: std::string을 key로 쓰는 이유:
         // - string_view는 AST storage lifetime에 의존하는데,
         //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.
         std::unordered_map<std::string, std::vector<ast::StmtId>> fn_decl_by_name_;
+        std::unordered_map<ast::StmtId, std::string> fn_qualified_name_by_stmt_;
+        std::vector<std::string> namespace_stack_;
+        std::unordered_map<std::string, std::string> import_alias_to_path_;
+        uint32_t block_depth_ = 0;
 
         struct ActsOperatorDecl {
             ast::StmtId fn_sid = ast::k_invalid_stmt;

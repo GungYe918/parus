@@ -123,12 +123,15 @@ extern "C" fn write(buf: ptr mut u8, len: usize) -> isize;
 2. 부동소수: `f32/f64`
 3. 포인터: `ptr T`, `ptr mut T` (T가 FFI-safe일 때)
 4. `layout(c)`를 만족하는 `field`
+5. 문자열 뷰 경계 타입: `layout(c) field Utf8Span { data: ptr u8; len: usize; }`
+6. 문자열 버퍼 경계 타입: `layout(c) field Utf8Buf { data: ptr mut u8; len: usize; cap: usize; }`
 
 ### 7.2 금지 타입
 
 1. borrow/escape 관련 타입 (`&`, `&mut`, `&&`)
 2. optional, class, tablet 직접 값 전달
 3. 구현 의존 내부 타입
+4. 표준 라이브러리 `String` 직접 값 전달 (`Utf8Span`/`Utf8Buf`로 변환해야 함)
 
 ### 7.3 오버로딩/심볼 규칙
 
@@ -166,10 +169,31 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 3. `field layout(c)`와 `align(n)` 규칙을 검증한다
 4. C ABI 심볼 중복/충돌을 진단한다
 5. 백엔드가 C ABI 심볼을 비맹글로 출력한다
+6. 문자열 C 경계 타입(`Utf8Span`, `Utf8Buf`) 레이아웃이 문서와 일치한다
 
 ---
 
-## 11. 변경 이력
+## 11. 문자열/저장소 정책 연결
+
+본 문서는 문자열 및 저장소 정책을 "요약만" 포함한다.
+상세 규칙은 아래 보조 명세를 따른다.
+
+1. 문자열 모델/변환/표준 라이브러리 구현 지침:
+   - `docs/abi/v0.0.1/STRING_MODEL.md`
+2. 스택/힙/정적 저장소 정책 및 `&&` 비힙 규칙:
+   - `docs/abi/v0.0.1/STORAGE_POLICY.md`
+
+요약 고정 규칙:
+
+1. 빌트인 문자열 슬라이스 타입 이름은 `text`다.
+2. `""`의 기본 타입은 표준 라이브러리 링크 여부와 무관하게 항상 `text`다.
+3. `text -> String` 암시 변환은 허용하지 않는다.
+4. `&&`는 힙에 materialize할 수 없다.
+5. C ABI 문자열 경계는 `Utf8Span`/`Utf8Buf`를 사용한다.
+
+---
+
+## 12. 변경 이력
 
 ### v0.0.1
 
@@ -177,3 +201,11 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 2. FFI 선언을 `extern "C"` / `export "C"`로 통일
 3. `field` 레이아웃 표기를 `layout(c)`/`align(n)`로 고정
 4. 포인터 표기를 `ptr` / `ptr mut`로 고정
+
+### v0.0.1 addendum (string/storage)
+
+1. C 경계 문자열 표준 타입 `Utf8Span`/`Utf8Buf`를 명시
+2. `String` 직접 C ABI 전달 금지 규칙을 명시
+3. `text` 기본 리터럴 타입, `text -> String` 비암시 변환 규칙 요약 추가
+4. `&&` 비힙 materialization 규칙 요약 추가
+5. 상세 명세를 `STRING_MODEL.md`, `STORAGE_POLICY.md`로 분리

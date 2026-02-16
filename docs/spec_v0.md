@@ -6,6 +6,14 @@
 
 주의: 이 문서는 한국어로 작성되며, 한국어 외 문자는 ASCII 및 영문자만 사용한다. 단, Parus이 UTF-8 친화적이라는 점을 보여주는 예시에서는 임의의 이모지 등을 포함한다.
 
+ABI/FFI 정본 우선순위:
+
+* ABI/FFI 관련 규칙의 단일 정본은 `docs/abi/v0.0.1/ABI.md`다.
+* 본 문서의 ABI/FFI 항목은 요약/연결 목적이며, 충돌 시 `ABI.md`를 우선 적용한다.
+* 문자열 타입/변환/C 경계 타입 정본은 `docs/abi/v0.0.1/STRING_MODEL.md`다.
+* 스택/힙/정적 저장소 및 `&&` 비힙 규칙 정본은 `docs/abi/v0.0.1/STORAGE_POLICY.md`다.
+* 본 문서의 과거 `string` 표기는 구버전 예시일 수 있으며, 우선 규칙은 `text`(빌트인) + 표준 라이브러리 `String`을 따른다.
+
 ---
 
 ## 0. 설계 목표와 철학
@@ -230,21 +238,19 @@ fn char_literals() -> void {
 
 ### 2.5 문자열 리터럴
 
-* 기본 문자열: "..."
-* F-string: F"""...{expr}...""" (보간)
-* Raw string: R"""...""" (보간 없음)
-
-F-string 이스케이프:
-
-* { 와 } 로 중괄호를 이스케이프한다.
+* 기본 문자열: `"..."` (v0 활성)
+* 기본 문자열 리터럴의 타입은 항상 `text`다.
+* Raw/F-string 문법은 v0에서 예약 상태다.
+  * `R"""..."""`, `F"""...{expr}..."""`는 추후 활성화한다.
+* 표준 라이브러리 `String`이 링크되어도 `""` 기본 타입은 바뀌지 않는다.
+* `text -> String` 암시 변환은 금지한다(명시 API 변환만 허용).
 
 예시
 
 ```parus
 fn strings() -> void {
-  let name: string = "parus";
-  let msg: string = F"""hello {name}""";
-  let raw: string = R"""no {interpolation} here""";
+  let raw_name: text = "parus";
+  // let owned: String = String::from_text(src: raw_name); // std 링크 후 명시 변환
 }
 ```
 
@@ -399,6 +405,7 @@ Parus v0는 경로 접근과 값 접근을 분리한다.
 ### 3.3 FFI 선언
 
 * ABI/FFI 관련 정본은 `docs/abi/v0.0.1/ABI.md`를 따른다.
+* 본 절은 `ABI.md`의 요약이며, 충돌 시 본 절 해석을 중단하고 `ABI.md`를 적용한다.
 * `use func::ffi`, `use struct::ffi` 문법은 폐기한다.
 * FFI 경계 함수/전역은 `extern "C"` / `export "C"`로 선언한다.
 * FFI는 ABI 경계이므로 pure/comptime에서 기본 금지다. (타입체커 규칙)
@@ -511,7 +518,7 @@ v0 권장 전략은 단순하다:
 
 * 정수: int8 int16 int32 int64, uint8 uint16 uint32 uint64
 * 부동: float32 float64
-* bool, char, string
+* bool, char, text
 * 별칭(구현 선택): int = int32, float = float32
 
 예시
@@ -522,7 +529,7 @@ fn primitives() -> void{
   let b: uint64 = 2u64;
   let c: bool = true;
   let d: char = 'Z';
-  let s: string = "hi";
+  let s: text = "hi";
 }
 ```
 
@@ -2314,7 +2321,8 @@ v0 기본 lowering:
 
   * 정수는 `i32`, `i64` 등
   * 부동소수는 `f32`, `f64` 등
-* 표준 라이브러리 없이는 `string` 타입 표기 금지
+* `text`는 빌트인 문자열 슬라이스 타입으로 항상 사용 가능
+* `String`은 표준 라이브러리 타입이며, std 링크가 없으면 사용할 수 없다
 * null 가능 타입 표기는 `T?`로 하며, `&i32?`는 허용한다.
 
   * 우선 파싱 규칙은 “타입 접미 `?`가 `&`보다 우선 결합”으로 둔다: `&i32?`는 `&(i32?)`로 해석

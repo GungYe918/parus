@@ -42,7 +42,6 @@ namespace parus::sir::detail {
 
         Func f{};
         f.span = s.span;
-        f.name = s.name;
 
         // signature & ret
         f.sig = s.type;
@@ -50,6 +49,19 @@ namespace parus::sir::detail {
 
         // decl symbol (fn name)
         f.sym = resolve_symbol_from_stmt(nres, sid);
+
+        // nested namespace를 통과한 내부 함수는 qualified symbol name을 사용한다.
+        // C ABI 함수는 선언 원문 이름을 그대로 유지한다(no-mangle).
+        if (s.link_abi == parus::ast::LinkAbi::kC) {
+            f.name = s.name;
+        } else if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+            f.name = sym.symbol(f.sym).name;
+        } else {
+            auto qit = tyck.fn_qualified_names.find(sid);
+            f.name = (qit != tyck.fn_qualified_names.end())
+                ? std::string_view(qit->second)
+                : s.name;
+        }
 
         // qualifiers / mode
         f.is_export = s.is_export;
@@ -122,6 +134,7 @@ namespace parus::sir::detail {
     FieldId lower_field_decl_(
         Module& m,
         const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         parus::ast::StmtId sid
     ) {
@@ -132,9 +145,13 @@ namespace parus::sir::detail {
 
         FieldDecl f{};
         f.span = s.span;
-        f.name = s.name;
         f.is_export = s.is_export;
         f.sym = resolve_symbol_from_stmt(nres, sid);
+        if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+            f.name = sym.symbol(f.sym).name;
+        } else {
+            f.name = s.name;
+        }
         f.layout = lower_field_layout(s.field_layout);
         f.align = s.field_align;
         f.self_type = s.type;
@@ -189,25 +206,29 @@ namespace parus::sir {
             return m;
         }
 
-        for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-            const auto sid = ast.stmt_children()[prog.stmt_begin + i];
+        const auto lower_stmt_recursive = [&](auto&& self, parus::ast::StmtId sid) -> void {
+            if (sid == ast::k_invalid_stmt || (size_t)sid >= ast.stmts().size()) return;
             const auto& s = ast.stmt(sid);
 
             if (s.kind == ast::StmtKind::kFnDecl) {
                 (void)lower_func_decl_(m, ast, sym, nres, tyck, sid, /*is_acts_member=*/false, k_invalid_acts);
-                continue;
+                return;
             }
 
             if (s.kind == ast::StmtKind::kFieldDecl) {
-                (void)lower_field_decl_(m, ast, nres, sid);
-                continue;
+                (void)lower_field_decl_(m, ast, sym, nres, sid);
+                return;
             }
 
             if (s.kind == ast::StmtKind::kActsDecl) {
                 ActsDecl a{};
                 a.span = s.span;
-                a.name = s.name;
                 a.sym = resolve_symbol_from_stmt(nres, sid);
+                if (a.sym != k_invalid_symbol && (size_t)a.sym < sym.symbols().size()) {
+                    a.name = sym.symbol(a.sym).name;
+                } else {
+                    a.name = s.name;
+                }
                 a.is_export = s.is_export;
                 a.is_for = s.acts_is_for;
                 a.has_set_name = s.acts_has_set_name;
@@ -226,20 +247,21 @@ namespace parus::sir {
                         if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
                         if (ast.stmt(member_sid).kind != ast::StmtKind::kFnDecl) continue;
 
-                        const FuncId fid = lower_func_decl_(m, ast, sym, nres, tyck, member_sid,
-                                                            /*is_acts_member=*/true, aid);
+                        const FuncId fid = lower_func_decl_(
+                            m, ast, sym, nres, tyck, member_sid,
+                            /*is_acts_member=*/true, aid
+                        );
                         if (fid != k_invalid_func) {
                             m.acts[aid].func_count++;
                         }
                     }
                 }
-                continue;
+                return;
             }
 
             if (s.kind == ast::StmtKind::kVar) {
                 GlobalVarDecl g{};
                 g.span = s.span;
-                g.name = s.name;
                 g.sym = resolve_symbol_from_stmt(nres, sid);
                 g.is_set = s.is_set;
                 g.is_mut = s.is_mut;
@@ -247,6 +269,14 @@ namespace parus::sir {
                 g.is_export = s.is_export;
                 g.is_extern = s.is_extern;
                 g.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
+
+                if (g.abi == FuncAbi::kC) {
+                    g.name = s.name;
+                } else if (g.sym != k_invalid_symbol && (size_t)g.sym < sym.symbols().size()) {
+                    g.name = sym.symbol(g.sym).name;
+                } else {
+                    g.name = s.name;
+                }
 
                 g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
                 if (g.declared_type == k_invalid_type) {
@@ -262,9 +292,30 @@ namespace parus::sir {
                 }
 
                 (void)m.add_global(g);
-                continue;
+                return;
             }
-        }
+
+            if (s.kind == ast::StmtKind::kNestDecl) {
+                if (!s.nest_is_file_directive) {
+                    self(self, s.a);
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kBlock) {
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                const auto& kids = ast.stmt_children();
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        self(self, kids[s.stmt_begin + i]);
+                    }
+                }
+                return;
+            }
+        };
+
+        lower_stmt_recursive(lower_stmt_recursive, program_root);
 
         return m;
     }

@@ -36,6 +36,23 @@ if (TARGET parus_backend_aot)
     else()
     target_compile_options(parus_oir_llvm_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     endif()
+
+    if (TARGET parus_backend_link)
+    add_executable(parus_ffi_tests
+    harness/run_ffi_tests.cpp
+    )
+    target_link_libraries(parus_ffi_tests PRIVATE parus_compiler parus_backend_aot parus_backend_link)
+    target_compile_features(parus_ffi_tests PRIVATE cxx_std_23)
+    target_compile_definitions(parus_ffi_tests PRIVATE
+    PARUS_FFI_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/ffi"
+    PARUS_TEST_LLVM_LANE=${PARUS_LLVM_VERSION}
+    )
+    if (MSVC)
+    target_compile_options(parus_ffi_tests PRIVATE /W4 /permissive-)
+    else()
+    target_compile_options(parus_ffi_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    endif()
+    endif()
 endif()
 
 if (TARGET parus_backend_parlib)
@@ -56,6 +73,9 @@ add_test(NAME parus_parser_tests COMMAND parus_parser_tests)
 add_test(NAME parus_oir_tests COMMAND parus_oir_tests)
 if (TARGET parus_oir_llvm_tests)
     add_test(NAME parus_oir_llvm_tests COMMAND parus_oir_llvm_tests)
+endif()
+if (TARGET parus_ffi_tests)
+    add_test(NAME parus_ffi_tests COMMAND parus_ffi_tests)
 endif()
 if (TARGET parus_parlib_tests)
     add_test(NAME parus_parlib_tests COMMAND parus_parlib_tests)

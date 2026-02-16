@@ -806,7 +806,33 @@ namespace parus::sir {
                         return;
 
                     case StmtKind::kContinue:
-                    case StmtKind::kSwitch:
+                        return;
+
+                    case StmtKind::kSwitch: {
+                        const FlowState in = capture_flow_state_();
+                        analyze_value_(s.expr, ValueUse::kValue);
+                        const FlowState after_scrut = capture_flow_state_();
+
+                        bool has_case = false;
+                        FlowState merged{};
+                        if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)m_.switch_cases.size()) {
+                            for (uint32_t i = 0; i < s.case_count; ++i) {
+                                const auto& c = m_.switch_cases[s.case_begin + i];
+                                const FlowState arm_out = analyze_block_with_flow_(c.body, after_scrut);
+                                if (!has_case) {
+                                    merged = arm_out;
+                                    has_case = true;
+                                } else {
+                                    merged = merge_flow_state_(merged, arm_out);
+                                }
+                            }
+                        }
+
+                        if (has_case) restore_flow_state_(merged);
+                        else restore_flow_state_(merge_flow_state_(in, after_scrut));
+                        return;
+                    }
+
                     case StmtKind::kError:
                         return;
                 }
