@@ -28,8 +28,10 @@
 
 #include <filesystem>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -42,12 +44,95 @@ namespace parusc::p0 {
             const parus::diag::Bag& bag,
             parus::diag::Language lang,
             const parus::SourceManager& sm,
-            uint32_t context_lines
+            uint32_t context_lines,
+            cli::DiagFormat format
         ) {
             if (bag.diags().empty()) return 0;
-            for (const auto& d : bag.diags()) {
-                std::cerr << parus::diag::render_one_context(d, lang, sm, context_lines) << "\n";
+
+            if (format == cli::DiagFormat::kText) {
+                for (const auto& d : bag.diags()) {
+                    std::cerr << parus::diag::render_one_context(d, lang, sm, context_lines) << "\n";
+                }
+                return bag.has_error() ? 1 : 0;
             }
+
+            auto json_escape_ = [](std::string_view s) -> std::string {
+                std::string out;
+                out.reserve(s.size() + 8);
+                for (const char ch : s) {
+                    switch (ch) {
+                        case '\"': out += "\\\""; break;
+                        case '\\': out += "\\\\"; break;
+                        case '\b': out += "\\b"; break;
+                        case '\f': out += "\\f"; break;
+                        case '\n': out += "\\n"; break;
+                        case '\r': out += "\\r"; break;
+                        case '\t': out += "\\t"; break;
+                        default:
+                            if (static_cast<unsigned char>(ch) < 0x20) {
+                                std::ostringstream oss;
+                                oss << "\\u" << std::hex << std::uppercase
+                                    << std::setw(4) << std::setfill('0')
+                                    << static_cast<int>(static_cast<unsigned char>(ch));
+                                out += oss.str();
+                            } else {
+                                out.push_back(ch);
+                            }
+                            break;
+                    }
+                }
+                return out;
+            };
+
+            auto severity_name_ = [](parus::diag::Severity sev) -> const char* {
+                switch (sev) {
+                    case parus::diag::Severity::kWarning: return "warning";
+                    case parus::diag::Severity::kFatal: return "fatal";
+                    case parus::diag::Severity::kError:
+                    default:
+                        return "error";
+                }
+            };
+
+            std::cerr << "[\n";
+            bool first = true;
+            for (const auto& d : bag.diags()) {
+                const auto sp = d.span();
+                const uint32_t end_off = (sp.hi >= sp.lo) ? sp.hi : sp.lo;
+                const auto begin_lc = sm.line_col(sp.file_id, sp.lo);
+                const auto end_lc = sm.line_col(sp.file_id, end_off);
+
+                if (!first) std::cerr << ",\n";
+                first = false;
+
+                std::cerr << "  {";
+                std::cerr << "\"severity\":\"" << severity_name_(d.severity()) << "\",";
+                std::cerr << "\"code\":\"" << json_escape_(parus::diag::code_name(d.code())) << "\",";
+                std::cerr << "\"message\":\"" << json_escape_(parus::diag::render_message(d, lang)) << "\",";
+                std::cerr << "\"file\":\"" << json_escape_(sm.name(sp.file_id)) << "\",";
+                std::cerr << "\"line\":" << begin_lc.line << ",";
+                std::cerr << "\"col\":" << begin_lc.col << ",";
+                std::cerr << "\"end_line\":" << end_lc.line << ",";
+                std::cerr << "\"end_col\":" << end_lc.col << ",";
+                std::cerr << "\"args\":[";
+                for (size_t i = 0; i < d.args().size(); ++i) {
+                    if (i != 0) std::cerr << ",";
+                    std::cerr << "\"" << json_escape_(d.args()[i]) << "\"";
+                }
+                std::cerr << "],";
+
+                const uint32_t start_line0 = (begin_lc.line > 0) ? (begin_lc.line - 1) : 0;
+                const uint32_t start_col0 = (begin_lc.col > 0) ? (begin_lc.col - 1) : 0;
+                const uint32_t end_line0 = (end_lc.line > 0) ? (end_lc.line - 1) : 0;
+                const uint32_t end_col0 = (end_lc.col > 0) ? (end_lc.col - 1) : 0;
+                std::cerr << "\"range\":{"
+                             "\"start\":{\"line\":" << start_line0 << ",\"character\":" << start_col0 << "},"
+                             "\"end\":{\"line\":" << end_line0 << ",\"character\":" << end_col0 << "}"
+                          << "}";
+
+                std::cerr << "}";
+            }
+            std::cerr << "\n]\n";
             return bag.has_error() ? 1 : 0;
         }
 
@@ -220,27 +305,49 @@ namespace parusc::p0 {
         parus::Parser parser(tokens, ast, types, &bag, opt.max_errors);
         auto root = parser.parse_program();
 
-        auto pres = parus::passes::run_on_program(ast, root, bag, opt.pass_opt);
-
-        parus::tyck::TyckResult tyck_res;
-        {
-            parus::tyck::TypeChecker tc(ast, types, bag);
-            tyck_res = tc.check_program(root);
-        }
-
-        const auto ast_cap_res = parus::cap::run_capability_check(
-            ast, root, pres.name_resolve, tyck_res, types, bag
-        );
-
         if (opt.has_xparus && opt.internal.ast_dump) {
             parusc::dump::dump_stmt(ast, types, root, 0);
             std::cout << "\nTYPES:\n";
             types.dump(std::cout);
         }
 
-        // 프론트엔드 진단이 있으면 백엔드로 내려가지 않는다.
-        int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines);
-        if (diag_rc != 0 || !tyck_res.errors.empty() || !ast_cap_res.ok) return 1;
+        // 파싱/렉싱 단계에서 오류가 있으면 이후 단계 진단 폭주를 막기 위해
+        // name-resolve/tyck/cap으로 진행하지 않는다.
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        auto pres = parus::passes::run_on_program(ast, root, bag, opt.pass_opt);
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        parus::tyck::TyckResult tyck_res;
+        {
+            parus::tyck::TypeChecker tc(ast, types, bag);
+            tyck_res = tc.check_program(root);
+        }
+        if (bag.has_error() || !tyck_res.errors.empty()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0 || !tyck_res.errors.empty()) ? 1 : 0;
+        }
+
+        const auto ast_cap_res = parus::cap::run_capability_check(
+            ast, root, pres.name_resolve, tyck_res, types, bag
+        );
+        if (bag.has_error() || !ast_cap_res.ok) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0 || !ast_cap_res.ok) ? 1 : 0;
+        }
+
+        if (opt.syntax_only) {
+            if (!bag.diags().empty()) {
+                (void)flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            }
+            return bag.has_error() ? 1 : 0;
+        }
 
         parus::sir::BuildOptions bopt{};
         auto sir_mod = parus::sir::build_sir_module(

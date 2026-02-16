@@ -60,6 +60,7 @@ echo "[install] build + test via ./run.sh ${BUILD_TYPE}"
 BUILD_DIR="${ROOT_DIR}/build"
 PARUSC_BIN="${BUILD_DIR}/compiler/parusc/parusc"
 PARUS_LLD_BIN="${BUILD_DIR}/compiler/parusc/parus-lld"
+PARUSD_BIN="${BUILD_DIR}/compiler/parusc/parusd"
 
 if [ ! -x "${PARUSC_BIN}" ]; then
   echo "install.sh: missing built parusc binary: ${PARUSC_BIN}" >&2
@@ -67,6 +68,10 @@ if [ ! -x "${PARUSC_BIN}" ]; then
 fi
 if [ ! -x "${PARUS_LLD_BIN}" ]; then
   echo "install.sh: missing built parus-lld binary: ${PARUS_LLD_BIN}" >&2
+  exit 1
+fi
+if [ ! -x "${PARUSD_BIN}" ]; then
+  echo "install.sh: missing built parusd binary: ${PARUSD_BIN}" >&2
   exit 1
 fi
 
@@ -154,7 +159,8 @@ mkdir -p "${BIN_DIR}" "${TOOLCHAINS_DIR}"
 
 cp -f "${PARUSC_BIN}" "${TOOLCHAIN_ROOT}/bin/parusc"
 cp -f "${PARUS_LLD_BIN}" "${TOOLCHAIN_ROOT}/bin/parus-lld"
-chmod +x "${TOOLCHAIN_ROOT}/bin/parusc" "${TOOLCHAIN_ROOT}/bin/parus-lld"
+cp -f "${PARUSD_BIN}" "${TOOLCHAIN_ROOT}/bin/parusd"
+chmod +x "${TOOLCHAIN_ROOT}/bin/parusc" "${TOOLCHAIN_ROOT}/bin/parus-lld" "${TOOLCHAIN_ROOT}/bin/parusd"
 
 if [ -n "${LLVM_CONFIG_BIN}" ]; then
   LLVM_PREFIX="$("${LLVM_CONFIG_BIN}" --prefix)"
@@ -264,6 +270,7 @@ TOOLCHAIN_ROOT="\$(cd "\${ACTIVE}" && pwd -P)"
 export PARUS_TOOLCHAIN_ROOT="\${PARUS_TOOLCHAIN_ROOT:-\${TOOLCHAIN_ROOT}}"
 export PARUS_SYSROOT="\${PARUS_SYSROOT:-\${TOOLCHAIN_ROOT}/sysroot}"
 export PARUS_LLD="\${PARUS_LLD:-\${TOOLCHAIN_ROOT}/bin/parus-lld}"
+export PARUSD="\${PARUSD:-\${TOOLCHAIN_ROOT}/bin/parusd}"
 exec "\${TOOLCHAIN_ROOT}/bin/parusc" "\$@"
 EOF
 
@@ -283,7 +290,23 @@ export PARUS_SYSROOT="\${PARUS_SYSROOT:-\${TOOLCHAIN_ROOT}/sysroot}"
 exec "\${TOOLCHAIN_ROOT}/bin/parus-lld" "\$@"
 EOF
 
-chmod +x "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld"
+cat > "${BIN_DIR}/parusd" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+PARUS_PREFIX="${PREFIX}"
+PARUS_HOME="\${PARUS_HOME:-\${PARUS_PREFIX}/share/parus}"
+ACTIVE="\${PARUS_HOME}/active-toolchain"
+if [ ! -e "\${ACTIVE}" ]; then
+  echo "parusd launcher: active-toolchain not found: \${ACTIVE}" >&2
+  exit 1
+fi
+TOOLCHAIN_ROOT="\$(cd "\${ACTIVE}" && pwd -P)"
+export PARUS_TOOLCHAIN_ROOT="\${PARUS_TOOLCHAIN_ROOT:-\${TOOLCHAIN_ROOT}}"
+export PARUS_SYSROOT="\${PARUS_SYSROOT:-\${TOOLCHAIN_ROOT}/sysroot}"
+exec "\${TOOLCHAIN_ROOT}/bin/parusd" "\$@"
+EOF
+
+chmod +x "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd"
 
 ZSHRC="${HOME}/.zshrc"
 mkdir -p "$(dirname "${ZSHRC}")"
@@ -306,6 +329,7 @@ fi
 echo "[install] done"
 echo "  parusc launcher : ${BIN_DIR}/parusc"
 echo "  parus-lld       : ${BIN_DIR}/parus-lld"
+echo "  parusd          : ${BIN_DIR}/parusd"
 echo "  sysroot         : ${SYSROOT_DIR}"
 echo "  toolchain hash  : ${TOOLCHAIN_HASH}"
 echo "  target hash     : ${TARGET_HASH}"

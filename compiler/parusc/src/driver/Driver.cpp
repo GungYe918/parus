@@ -5,8 +5,19 @@
 
 #include <parus/os/File.hpp>
 
+#include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <string>
+#include <vector>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+extern char** environ;
+#endif
 
 namespace parusc::driver {
 
@@ -42,6 +53,79 @@ namespace parusc::driver {
             return true;
         }
 
+        std::string getenv_string_(const char* key) {
+            if (key == nullptr) return {};
+            const char* p = std::getenv(key);
+            if (p == nullptr) return {};
+            return std::string(p);
+        }
+
+        int run_argv_(const std::vector<std::string>& argv) {
+            if (argv.empty()) return 1;
+#if defined(_WIN32)
+            std::vector<const char*> cargs;
+            cargs.reserve(argv.size() + 1);
+            for (const auto& a : argv) cargs.push_back(a.c_str());
+            cargs.push_back(nullptr);
+            const int rc = _spawnvp(_P_WAIT, argv[0].c_str(), cargs.data());
+            return (rc < 0) ? 1 : rc;
+#else
+            std::vector<char*> cargs;
+            cargs.reserve(argv.size() + 1);
+            for (const auto& a : argv) cargs.push_back(const_cast<char*>(a.c_str()));
+            cargs.push_back(nullptr);
+
+            pid_t pid = -1;
+            const int sp = posix_spawnp(&pid, argv[0].c_str(), nullptr, nullptr, cargs.data(), environ);
+            if (sp != 0) return 1;
+
+            int status = 0;
+            if (waitpid(pid, &status, 0) < 0) return 1;
+            if (WIFEXITED(status)) return WEXITSTATUS(status);
+            if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+            return 1;
+#endif
+        }
+
+        std::string resolve_parusd_path_(const char* argv0) {
+            namespace fs = std::filesystem;
+            const auto from_env = getenv_string_("PARUSD");
+            if (!from_env.empty()) return from_env;
+
+            const auto toolchain_root = getenv_string_("PARUS_TOOLCHAIN_ROOT");
+            if (!toolchain_root.empty()) {
+                const fs::path candidate = fs::path(toolchain_root) / "bin" / "parusd";
+                if (fs::exists(candidate)) return candidate.string();
+            }
+
+            if (argv0 != nullptr) {
+                std::error_code ec{};
+                fs::path driver_path(parus::normalize_path(argv0));
+                fs::path resolved = fs::weakly_canonical(driver_path, ec);
+                if (ec || resolved.empty()) {
+                    ec.clear();
+                    resolved = driver_path;
+                }
+                if (!resolved.empty()) {
+                    const fs::path sibling = resolved.parent_path() / "parusd";
+                    if (fs::exists(sibling)) return sibling.string();
+                }
+            }
+
+            return "parusd";
+        }
+
+        int run_lsp_(const cli::Options& opt, const char* argv0) {
+            if (!opt.lsp_stdio) {
+                std::cerr << "error: lsp mode requires --stdio\n";
+                return 1;
+            }
+
+            const std::string parusd = resolve_parusd_path_(argv0);
+            const std::vector<std::string> child_argv{parusd, "--stdio"};
+            return run_argv_(child_argv);
+        }
+
     } // namespace
 
     int run(const cli::Options& opt, const char* argv0) {
@@ -55,6 +139,8 @@ namespace parusc::driver {
                 }
                 return p0::run(inv);
             }
+            case cli::Mode::kLsp:
+                return run_lsp_(opt, argv0);
             case cli::Mode::kUsage:
             case cli::Mode::kVersion:
             default:

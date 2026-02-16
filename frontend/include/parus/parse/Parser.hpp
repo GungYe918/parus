@@ -7,6 +7,7 @@
 
 #include <vector>
 #include <utility>
+#include <unordered_set>
 
 
 namespace parus {
@@ -237,6 +238,7 @@ namespace parus {
 
         uint32_t last_diag_lo_ = 0xFFFFFFFFu;
         diag::Code last_diag_code_ = diag::Code::kUnexpectedToken;
+        std::unordered_set<uint64_t> seen_diag_keys_{};
         uint32_t parse_error_count_ = 0;
         static constexpr uint32_t kMaxParseErrors = 1024;
 

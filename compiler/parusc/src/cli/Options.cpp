@@ -66,6 +66,8 @@ namespace parusc::cli {
             constexpr std::string_view kPrefix = "-fuse-linker=";
             if (!arg.starts_with(kPrefix)) return false;
 
+            out.linker_mode_explicit = true;
+
             const std::string_view mode = arg.substr(kPrefix.size());
             if (mode == "auto" || mode == "parus-lld") {
                 out.linker_mode = (mode == "auto")
@@ -97,17 +99,81 @@ namespace parusc::cli {
             return args[i];
         }
 
+        /// @brief `--diag-format[=]text|json` 값을 파싱한다.
+        bool parse_diag_format_(
+            Options& out,
+            const std::vector<std::string_view>& args,
+            size_t& i
+        ) {
+            std::string_view value{};
+            const auto a = args[i];
+
+            constexpr std::string_view kOpt = "--diag-format";
+            constexpr std::string_view kOptEq = "--diag-format=";
+            if (a == kOpt) {
+                const auto v = read_next_(args, i);
+                if (!v) {
+                    out.ok = false;
+                    out.error = "--diag-format requires text or json";
+                    return true;
+                }
+                value = *v;
+            } else if (a.starts_with(kOptEq)) {
+                value = a.substr(kOptEq.size());
+            } else {
+                return false;
+            }
+
+            if (value == "text") {
+                out.diag_format = DiagFormat::kText;
+                return true;
+            }
+            if (value == "json") {
+                out.diag_format = DiagFormat::kJson;
+                return true;
+            }
+
+            out.ok = false;
+            out.error = "unsupported --diag-format value: " + std::string(value);
+            return true;
+        }
+
+        bool validate_syntax_only_conflicts_(Options& out) {
+            if (!out.syntax_only) return true;
+
+            if (out.output_path_explicit) {
+                out.ok = false;
+                out.error = "-fsyntax-only cannot be combined with -o";
+                return false;
+            }
+            if (out.internal.emit_object || out.internal.emit_llvm_ir) {
+                out.ok = false;
+                out.error = "-fsyntax-only cannot be combined with -Xparus emit options";
+                return false;
+            }
+            if (out.target_triple_explicit || out.sysroot_path_explicit || out.apple_sdk_root_explicit
+                || out.linker_mode_explicit || out.link_fallback_explicit) {
+                out.ok = false;
+                out.error = "-fsyntax-only cannot be combined with backend/linker options";
+                return false;
+            }
+            return true;
+        }
+
     } // namespace
 
     void print_usage(std::ostream& os) {
         os
             << "parusc [options] <input.pr>\n"
+            << "parusc lsp --stdio\n"
             << "  parusc main.pr -o main\n"
             << "  parusc --version\n"
             << "\n"
             << "General options:\n"
             << "  -h, --help\n"
             << "  --version\n"
+            << "  -fsyntax-only        Run frontend checks only (no SIR/OIR/backend/link)\n"
+            << "  --diag-format text|json\n"
             << "  -o <path>             Output path (default: a.out)\n"
             << "  --target <triple>     Override backend target triple\n"
             << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
@@ -126,7 +192,10 @@ namespace parusc::cli {
             << "  -Xparus -sir-dump\n"
             << "  -Xparus -oir-dump\n"
             << "  -Xparus -emit-llvm-ir\n"
-            << "  -Xparus -emit-object\n";
+            << "  -Xparus -emit-object\n"
+            << "\n"
+            << "LSP mode:\n"
+            << "  parusc lsp --stdio\n";
     }
 
     Options parse_options(int argc, char** argv) {
@@ -139,6 +208,36 @@ namespace parusc::cli {
         std::vector<std::string_view> args;
         args.reserve(static_cast<size_t>(argc - 1));
         for (int i = 1; i < argc; ++i) args.emplace_back(argv[i]);
+
+        if (!args.empty() && args.front() == "lsp") {
+            out.mode = Mode::kLsp;
+            for (size_t i = 1; i < args.size(); ++i) {
+                const auto a = args[i];
+
+                if (a == "-h" || a == "--help") {
+                    out.mode = Mode::kUsage;
+                    return out;
+                }
+                if (a == "--version") {
+                    out.mode = Mode::kVersion;
+                    return out;
+                }
+                if (a == "--stdio") {
+                    out.lsp_stdio = true;
+                    continue;
+                }
+
+                out.ok = false;
+                out.error = "unknown lsp option: " + std::string(a);
+                return out;
+            }
+
+            if (!out.lsp_stdio) {
+                out.ok = false;
+                out.error = "lsp mode requires --stdio";
+            }
+            return out;
+        }
 
         out.mode = Mode::kCompile;
 
@@ -163,6 +262,7 @@ namespace parusc::cli {
                     return out;
                 }
                 out.output_path = std::string(*v);
+                out.output_path_explicit = true;
                 continue;
             }
 
@@ -204,6 +304,7 @@ namespace parusc::cli {
                     return out;
                 }
                 out.target_triple = std::string(*v);
+                out.target_triple_explicit = true;
                 continue;
             }
 
@@ -215,6 +316,7 @@ namespace parusc::cli {
                     return out;
                 }
                 out.sysroot_path = std::string(*v);
+                out.sysroot_path_explicit = true;
                 continue;
             }
 
@@ -226,6 +328,17 @@ namespace parusc::cli {
                     return out;
                 }
                 out.apple_sdk_root = std::string(*v);
+                out.apple_sdk_root_explicit = true;
+                continue;
+            }
+
+            if (a == "-fsyntax-only") {
+                out.syntax_only = true;
+                continue;
+            }
+
+            if (parse_diag_format_(out, args, i)) {
+                if (!out.ok) return out;
                 continue;
             }
 
@@ -257,6 +370,7 @@ namespace parusc::cli {
 
             if (a == "--no-link-fallback") {
                 out.allow_link_fallback = false;
+                out.link_fallback_explicit = true;
                 continue;
             }
 
@@ -290,7 +404,11 @@ namespace parusc::cli {
             return out;
         }
 
-        if (out.output_path.empty()) {
+        if (!validate_syntax_only_conflicts_(out)) {
+            return out;
+        }
+
+        if (out.output_path.empty() && !out.syntax_only) {
             if (out.internal.emit_object) out.output_path = "a.o";
             else if (out.internal.emit_llvm_ir) out.output_path = "a.ll";
             else out.output_path = "a.out";

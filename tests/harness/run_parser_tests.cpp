@@ -164,6 +164,35 @@ namespace {
         return ok;
     }
 
+    static bool test_parser_aborted_guard_no_infinite_loop() {
+        // lexer fatal(InvalidUtf8)로 parser가 aborted 상태여도 parse_program은 즉시 종료되어야 한다.
+        parus::ast::AstArena ast;
+        parus::ty::TypePool types;
+        parus::diag::Bag bag;
+
+        constexpr parus::Span bad_span{1, 0, 1};
+        bag.add(parus::diag::Diagnostic(
+            parus::diag::Severity::kError,
+            parus::diag::Code::kInvalidUtf8,
+            bad_span
+        ));
+
+        std::vector<parus::Token> toks{
+            parus::Token{parus::syntax::TokenKind::kIdent, bad_span, "x"},
+            parus::Token{parus::syntax::TokenKind::kEof, parus::Span{1, 1, 1}, ""}
+        };
+
+        parus::Parser parser(toks, ast, types, &bag);
+        const auto root = parser.parse_program();
+
+        bool ok = true;
+        ok &= require_(root != parus::ast::k_invalid_stmt, "aborted parser must still return a program root");
+        ok &= require_(ast.stmt(root).kind == parus::ast::StmtKind::kBlock, "program root must remain block stmt");
+        ok &= require_(ast.stmt(root).stmt_count == 0, "aborted parser should not keep parsing non-EOF tokens");
+        ok &= require_(bag.has_code(parus::diag::Code::kInvalidUtf8), "invalid utf8 diagnostic must be preserved");
+        return ok;
+    }
+
     static bool test_text_string_literal_typecheck_ok() {
         const std::string src = R"(
             fn main() -> i32 {
@@ -1213,6 +1242,7 @@ int main() {
 
     const Case cases[] = {
         {"suffix_literals_work", test_suffix_literals_work},
+        {"parser_aborted_guard_no_infinite_loop", test_parser_aborted_guard_no_infinite_loop},
         {"text_string_literal_typecheck_ok", test_text_string_literal_typecheck_ok},
         {"raw_and_format_triple_string_lex_parse_ok", test_raw_and_format_triple_string_lex_parse_ok},
         {"fstring_parts_and_escape_split_ok", test_fstring_parts_and_escape_split_ok},

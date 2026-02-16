@@ -47,9 +47,19 @@ namespace parus {
         Span last  = first;
 
         while (!cursor_.at(syntax::TokenKind::kEof)) {
+            if (aborted_) break;
+
+            const size_t before = cursor_.pos();
             ast::StmtId s = parse_stmt_any();
             top.push_back(s);
             last = ast_.stmt(s).span;
+
+            if (aborted_) break;
+            if (cursor_.pos() == before && !cursor_.at(syntax::TokenKind::kEof)) {
+                const auto stuck = cursor_.peek();
+                diag_report(diag::Code::kUnexpectedToken, stuck.span, syntax::token_kind_name(stuck.kind));
+                cursor_.bump();
+            }
         }
 
         if (top.empty()) {
@@ -157,8 +167,20 @@ namespace parus {
         local.reserve(16);
 
         while (!cursor_.at(syntax::TokenKind::kRBrace) && !cursor_.at(syntax::TokenKind::kEof)) {
+            if (aborted_) break;
+
+            const size_t before = cursor_.pos();
             ast::StmtId child = parse_stmt_any();
             local.push_back(child);
+
+            if (aborted_) break;
+            if (cursor_.pos() == before
+                && !cursor_.at(syntax::TokenKind::kRBrace)
+                && !cursor_.at(syntax::TokenKind::kEof)) {
+                const auto stuck = cursor_.peek();
+                diag_report(diag::Code::kUnexpectedToken, stuck.span, syntax::token_kind_name(stuck.kind));
+                cursor_.bump();
+            }
         }
 
         const Token rb = cursor_.peek();
@@ -701,9 +723,25 @@ namespace parus {
             return cursor_.bump().span;
         }
 
+        using K = syntax::TokenKind;
         const Token t = cursor_.peek();
         diag_report(diag::Code::kExpectedToken, t.span,
                     syntax::token_kind_name(syntax::TokenKind::kSemicolon));
+
+        // 다음 토큰이 "새 문장/decl 시작으로 강하게 해석 가능한 경계"면
+        // 과도하게 토큰을 먹지 않고 즉시 반환하여 연쇄 파손을 줄인다.
+        const K k = t.kind;
+        if (is_decl_start(k)
+            || is_unambiguous_stmt_start(k)
+            || k == K::kKwIf
+            || k == K::kKwLoop
+            || k == K::kLBrace
+            || k == K::kKwElse
+            || k == K::kKwElif
+            || k == K::kKwCase
+            || k == K::kKwDefault) {
+            return fallback_end;
+        }
 
         Span last = fallback_end;
         while (!cursor_.at(syntax::TokenKind::kSemicolon) &&

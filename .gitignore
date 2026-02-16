@@ -3,3 +3,4 @@ build_dbg/
 docs/memo/*
 .ccache/
 tests/out/*
+tmp.txt

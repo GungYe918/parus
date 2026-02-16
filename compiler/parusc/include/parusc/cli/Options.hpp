@@ -16,6 +16,7 @@ namespace parusc::cli {
         kUsage,
         kVersion,
         kCompile,
+        kLsp,
     };
 
     /// @brief 드라이버가 선택할 링커 모드.
@@ -24,6 +25,12 @@ namespace parusc::cli {
         kParusLld,
         kSystemLld,
         kSystemClang,
+    };
+
+    /// @brief CLI 진단 출력 포맷.
+    enum class DiagFormat : uint8_t {
+        kText,
+        kJson,
     };
 
     /// @brief `-Xparus`로만 접근 가능한 내부 개발 옵션.
@@ -49,6 +56,8 @@ namespace parusc::cli {
         uint8_t opt_level = 0;
         LinkerMode linker_mode = LinkerMode::kAuto;
         bool allow_link_fallback = true;
+        bool syntax_only = false;
+        DiagFormat diag_format = DiagFormat::kText;
 
         bool has_xparus = false;
         InternalOptions internal{};
@@ -57,6 +66,15 @@ namespace parusc::cli {
         uint32_t context_lines = 2;
         uint32_t max_errors = 64;
         parus::passes::PassOptions pass_opt{};
+
+        // parse-time explicit flags for conflict validation
+        bool output_path_explicit = false;
+        bool target_triple_explicit = false;
+        bool sysroot_path_explicit = false;
+        bool apple_sdk_root_explicit = false;
+        bool linker_mode_explicit = false;
+        bool link_fallback_explicit = false;
+        bool lsp_stdio = false;
 
         bool ok = true;
         std::string error{};

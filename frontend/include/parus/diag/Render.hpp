@@ -8,6 +8,9 @@
 
 namespace parus::diag {
 
+    std::string code_name(Code c);
+    std::string render_message(const Diagnostic& d, Language lang);
+
     std::string render_one(const Diagnostic& d, Language lang, const SourceManager& sm);
 
     /// @brief 진단을 렌더링하되, 에러 라인 주변 컨텍스트를 함께 출력

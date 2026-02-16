@@ -6,8 +6,27 @@
 
 namespace parus {
 
+    namespace {
+        uint64_t make_diag_key_(diag::Severity sev, diag::Code code, Span span) {
+            uint64_t h = 1469598103934665603ull;
+            const auto mix = [&](uint64_t v) {
+                h ^= (v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2));
+            };
+            mix(static_cast<uint64_t>(sev));
+            mix(static_cast<uint64_t>(code));
+            mix(static_cast<uint64_t>(span.file_id));
+            mix(static_cast<uint64_t>(span.lo));
+            mix(static_cast<uint64_t>(span.hi));
+            return h;
+        }
+    } // namespace
+
     void parus::Parser::diag_report(diag::Code code, Span span, std::string_view a0) {
         if (!diags_ || aborted_) return;
+
+        // 동일 severity/code/span 진단은 전역적으로 한 번만 보고한다.
+        const uint64_t key = make_diag_key_(diag::Severity::kError, code, span);
+        if (!seen_diag_keys_.insert(key).second) return;
 
         // 같은 위치/같은 코드 중복 스팸 방지
         if (span.lo == last_diag_lo_ && code == last_diag_code_) return;
@@ -44,6 +63,10 @@ namespace parus {
 
     void Parser::diag_report_warn(diag::Code code, Span span, std::string_view a0) {
         if (!diags_ || aborted_) return;
+
+        // warning도 동일 severity/code/span은 1회만 보고한다.
+        const uint64_t key = make_diag_key_(diag::Severity::kWarning, code, span);
+        if (!seen_diag_keys_.insert(key).second) return;
 
         // 경고도 같은 위치/코드 중복 출력은 억제한다.
         if (span.lo == last_diag_lo_ && code == last_diag_code_) return;

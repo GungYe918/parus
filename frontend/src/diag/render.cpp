@@ -32,7 +32,7 @@ namespace parus::diag {
         return templ;
     }
 
-    static std::string_view code_name(Code c) {
+    static std::string_view code_name_sv_(Code c) {
         switch (c) {
             case Code::kInvalidUtf8: return "InvalidUtf8";
             case Code::kExpectedToken: return "ExpectedToken";
@@ -619,9 +619,17 @@ namespace parus::diag {
         return "알 수 없는 진단";
     }
 
-    std::string render_one(const Diagnostic& d, Language lang, const SourceManager& sm) {
+    std::string code_name(Code c) {
+        return std::string(code_name_sv_(c));
+    }
+
+    std::string render_message(const Diagnostic& d, Language lang) {
         std::string msg = (lang == Language::kKo) ? template_ko(d.code()) : template_en(d.code());
-        msg = format_template(std::move(msg), d.args());
+        return format_template(std::move(msg), d.args());
+    }
+
+    std::string render_one(const Diagnostic& d, Language lang, const SourceManager& sm) {
+        std::string msg = render_message(d, lang);
 
         const auto sp = d.span();
         auto lc = sm.line_col(sp.file_id, sp.lo);
@@ -633,7 +641,7 @@ namespace parus::diag {
             (sev == Severity::kWarning) ? "warning" :
             (sev == Severity::kFatal)   ? "fatal"   : "error";
 
-        oss << sev_name << "[" << code_name(d.code()) << "]: " << msg << "\n";
+        oss << sev_name << "[" << code_name_sv_(d.code()) << "]: " << msg << "\n";
         oss << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
         oss << "  |\n";
         oss << sn.line_no << " | " << sn.line_text << "\n";
@@ -669,7 +677,7 @@ namespace parus::diag {
             (sev == Severity::kWarning) ? "warning" :
             (sev == Severity::kFatal)   ? "fatal"   : "error";
 
-        out << sev_name << "[" << code_name(d.code()) << "]: " << msg << "\n";
+        out << sev_name << "[" << code_name_sv_(d.code()) << "]: " << msg << "\n";
         out << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
         out << "  |\n";
 

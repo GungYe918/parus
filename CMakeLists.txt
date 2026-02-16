@@ -15,6 +15,7 @@ if (NOT MSVC)
 endif()
 
 option(PARUS_BUILD_TESTS "Build Parus tests" ON)
+option(PARUS_BUILD_PARUSD "Build Parus standalone LSP server (parusd)" ON)
 
 # Backend module switches
 option(PARUS_ENABLE_BACKEND "Build Parus backend modules" ON)
@@ -48,6 +49,7 @@ if(PARUS_ENABLE_BACKEND)
 endif()
 
 add_subdirectory(compiler/parusc)
+add_subdirectory(tools)
 
 # ---------------------------
 # Two-stage build chain
@@ -72,6 +74,9 @@ if(TARGET parusc)
 endif()
 if(TARGET parus-lld)
     add_dependencies(parus_stage2 parus-lld)
+endif()
+if(TARGET parusd)
+    add_dependencies(parus_stage2 parusd)
 endif()
 
 if(PARUS_BUILD_TESTS)
