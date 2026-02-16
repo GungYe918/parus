@@ -157,6 +157,10 @@ namespace parus::diag {
             case Code::kTypeSetAssignMismatch:return "TypeSetAssignMismatch";
             case Code::kTypeArgCountMismatch: return "TypeArgCountMismatch";
             case Code::kTypeArgTypeMismatch:  return "TypeArgTypeMismatch";
+            case Code::kOverloadDeclConflict:return "OverloadDeclConflict";
+            case Code::kOverloadNoMatchingCall:return "OverloadNoMatchingCall";
+            case Code::kOverloadAmbiguousCall:return "OverloadAmbiguousCall";
+            case Code::kMangleSymbolCollision:return "MangleSymbolCollision";
             case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
             case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
             case Code::kTypeBreakValueOnlyInLoopExpr:return "TypeBreakValueOnlyInLoopExpr";
@@ -341,6 +345,10 @@ namespace parus::diag {
             case Code::kTypeSetAssignMismatch:return "cannot assign to '{0}': expected {1}, got {2}";
             case Code::kTypeArgCountMismatch: return "argument count mismatch: expected {0}, got {1}";
             case Code::kTypeArgTypeMismatch:  return "argument type mismatch at #{0}: expected {1}, got {2}";
+            case Code::kOverloadDeclConflict: return "overload declaration conflict in '{0}': {1}";
+            case Code::kOverloadNoMatchingCall: return "no matching overload for '{0}' with call form/types: {1}";
+            case Code::kOverloadAmbiguousCall: return "ambiguous overloaded call '{0}'; candidates: {1}";
+            case Code::kMangleSymbolCollision: return "mangle collision on symbol '{0}': {1} vs {2}";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
             case Code::kTypeReturnExprRequired: return "return expression is required (function does not return void)";
             case Code::kTypeBreakValueOnlyInLoopExpr: return "break with value is only allowed inside loop expressions";
@@ -532,6 +540,10 @@ namespace parus::diag {
             case Code::kTypeSetAssignMismatch:return "'{0}'에 대입할 수 없습니다: 기대 {1}, 실제 {2}";
             case Code::kTypeArgCountMismatch: return "인자 개수가 맞지 않습니다: 기대 {0}개, 실제 {1}개";
             case Code::kTypeArgTypeMismatch:  return "{0}번째 인자 타입이 맞지 않습니다: 기대 {1}, 실제 {2}";
+            case Code::kOverloadDeclConflict: return "'{0}' 오버로드 선언이 충돌합니다: {1}";
+            case Code::kOverloadNoMatchingCall: return "'{0}' 호출과 일치하는 오버로드를 찾지 못했습니다: {1}";
+            case Code::kOverloadAmbiguousCall: return "'{0}' 호출이 모호합니다. 후보: {1}";
+            case Code::kMangleSymbolCollision: return "맹글링 심볼 '{0}'이 충돌합니다: {1} vs {2}";
             case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
             case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 반환 타입이 void가 아닙니다)";
             case Code::kTypeBreakValueOnlyInLoopExpr: return "값을 가진 break는 loop 표현식 안에서만 허용됩니다";

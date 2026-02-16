@@ -269,8 +269,11 @@ namespace parus::backend::aot {
                     } else if constexpr (std::is_same_v<T, parus::oir::InstCast>) {
                         as_value(x.src);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstCall>) {
-                        // callee는 direct-call로 소거될 수 있으므로
-                        // 일반 값 사용(as_value)으로 강제하지 않는다.
+                        // callee는 direct-call(direct_callee)로 소거될 수 있으므로
+                        // 간접 경로일 때만 일반 값 사용(as_value)으로 표시한다.
+                        if (x.direct_callee == parus::oir::kInvalidId) {
+                            as_value(x.callee);
+                        }
                         for (auto a : x.args) as_value(a);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstIndex>) {
                         as_value(x.base);
@@ -555,29 +558,38 @@ namespace parus::backend::aot {
                 return value_uses_[v].as_slot;
             }
 
-            /// @brief callee 값이 InstFuncRef를 가리키면 direct-call 메타를 추출한다.
-            std::optional<DirectCalleeInfo> resolve_direct_callee_(parus::oir::ValueId callee) const {
+            /// @brief InstCall이 direct callee를 가지면 함수 ID를 우선으로 direct-call 메타를 추출한다.
+            std::optional<DirectCalleeInfo> resolve_direct_callee_(const parus::oir::InstCall& call) const {
                 using namespace parus::oir;
-                if (callee == kInvalidId || static_cast<size_t>(callee) >= m_.values.size()) {
-                    return std::nullopt;
+                FuncId target_fid = call.direct_callee;
+                std::string forced_symbol{};
+
+                if (target_fid == kInvalidId) {
+                    const auto callee = call.callee;
+                    if (callee == kInvalidId || static_cast<size_t>(callee) >= m_.values.size()) {
+                        return std::nullopt;
+                    }
+                    const auto& cv = m_.values[callee];
+                    if (cv.def_a == kInvalidId || static_cast<size_t>(cv.def_a) >= m_.insts.size()) {
+                        return std::nullopt;
+                    }
+
+                    const auto& def_inst = m_.insts[cv.def_a];
+                    const auto* fr = std::get_if<InstFuncRef>(&def_inst.data);
+                    if (fr == nullptr) {
+                        return std::nullopt;
+                    }
+                    target_fid = fr->func;
+                    forced_symbol = fr->name;
                 }
-                const auto& cv = m_.values[callee];
-                if (cv.def_a == kInvalidId || static_cast<size_t>(cv.def_a) >= m_.insts.size()) {
+
+                if (target_fid == kInvalidId || static_cast<size_t>(target_fid) >= m_.funcs.size()) {
                     return std::nullopt;
                 }
 
-                const auto& def_inst = m_.insts[cv.def_a];
-                const auto* fr = std::get_if<InstFuncRef>(&def_inst.data);
-                if (fr == nullptr) {
-                    return std::nullopt;
-                }
-                if (fr->func == kInvalidId || static_cast<size_t>(fr->func) >= m_.funcs.size()) {
-                    return std::nullopt;
-                }
-
-                const auto& target = m_.funcs[fr->func];
+                const auto& target = m_.funcs[target_fid];
                 DirectCalleeInfo info{};
-                info.symbol = sanitize_symbol_(fr->name.empty() ? target.name : fr->name);
+                info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
                 info.ret_ty = map_type_(types_, target.ret_ty);
 
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
@@ -789,6 +801,20 @@ namespace parus::backend::aot {
                     return;
                 }
 
+                if (is_value_slot_(inst.result)) {
+                    // 슬롯 문맥 전용 결과는 주소 맵(address_ref_by_value_)만 있으면 충분하다.
+                    // 불필요한 ptrtoint 물질화를 피해서 hot-path IR 노이즈를 줄인다.
+                    if (is_int_ty_(rty)) {
+                        os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                    } else if (is_float_ty_(rty)) {
+                        os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                           << ", " << zero_literal_(rty) << "\n";
+                    } else {
+                        os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                    }
+                    return;
+                }
+
                 if (is_int_ty_(rty)) {
                     os << "  " << vref_(inst.result) << " = ptrtoint ptr " << typed_ptr << " to " << rty << "\n";
                 } else if (is_float_ty_(rty)) {
@@ -827,6 +853,19 @@ namespace parus::backend::aot {
 
                 if (is_value_read_(inst.result)) {
                     os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
+                    return;
+                }
+
+                if (is_value_slot_(inst.result)) {
+                    // 슬롯 문맥 전용 결과는 주소 맵(address_ref_by_value_)만 있으면 충분하다.
+                    if (is_int_ty_(rty)) {
+                        os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                    } else if (is_float_ty_(rty)) {
+                        os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                           << ", " << zero_literal_(rty) << "\n";
+                    } else {
+                        os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                    }
                     return;
                 }
 
@@ -969,7 +1008,7 @@ namespace parus::backend::aot {
                             arg_tys.reserve(x.args.size());
                             arg_vals.reserve(x.args.size());
 
-                            const auto direct = resolve_direct_callee_(x.callee);
+                            const auto direct = resolve_direct_callee_(x);
                             for (size_t ai = 0; ai < x.args.size(); ++ai) {
                                 std::string want = value_ty_(x.args[ai]);
                                 if (direct.has_value() && ai < direct->param_tys.size()) {

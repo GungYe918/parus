@@ -296,7 +296,7 @@ namespace parus::tyck {
 
         if (candidates.empty()) {
             std::string msg = "no callable declaration candidate for '" + callee_name + "'";
-            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, "no declaration candidates");
             err_(e.span, msg);
             check_all_arg_exprs_only();
             return ct.ret;
@@ -322,6 +322,58 @@ namespace parus::tyck {
         const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
             const ty::TypeId at = arg_type_now(a);
             return can_assign_(expected, at);
+        };
+
+        /// @brief 호출 지점의 형태/타입 요약 문자열을 생성한다.
+        const auto make_callsite_summary = [&]() -> std::string {
+            std::ostringstream oss;
+            if (form == CallForm::kPositional) oss << "positional(";
+            else if (form == CallForm::kLabeled) oss << "labeled(";
+            else if (form == CallForm::kPositionalPlusNamedGroup) oss << "positional+named-group(";
+            else oss << "mixed-invalid(";
+
+            bool first = true;
+            for (const auto* a : outside_positional) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << types_.to_string(arg_type_now(a));
+            }
+            for (const auto* a : outside_labeled) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << std::string(a->label) << ":" << types_.to_string(arg_type_now(a));
+            }
+            for (const auto* a : group_entries) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << "{" << std::string(a->label) << ":" << types_.to_string(arg_type_now(a)) << "}";
+            }
+            oss << ")";
+            return oss.str();
+        };
+
+        /// @brief 후보 시그니처를 사람이 읽기 좋은 문자열로 만든다.
+        const auto format_candidate = [&](const Candidate& c) -> std::string {
+            std::ostringstream oss;
+            oss << callee_name << "(";
+            bool first = true;
+            for (const auto& p : c.positional) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << p.name << ":" << types_.to_string(p.type);
+            }
+            if (!c.named.empty()) {
+                if (!first) oss << ", ";
+                oss << "{";
+                for (size_t i = 0; i < c.named.size(); ++i) {
+                    if (i) oss << ", ";
+                    oss << c.named[i].name << ":" << types_.to_string(c.named[i].type);
+                    if (c.named[i].has_default) oss << "=?";
+                }
+                oss << "}";
+            }
+            oss << ") -> " << types_.to_string(c.ret);
+            return oss.str();
         };
 
         std::vector<size_t> filtered;
@@ -361,7 +413,7 @@ namespace parus::tyck {
 
         if (filtered.empty()) {
             std::string msg = "no overload candidate matches call form for '" + callee_name + "'";
-            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
             check_all_arg_exprs_only();
             return ct.ret;
@@ -433,7 +485,7 @@ namespace parus::tyck {
 
         if (final_matches.empty()) {
             std::string msg = "no matching overload found for call '" + callee_name + "'";
-            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
             check_all_arg_exprs_only();
             return ct.ret;
@@ -441,7 +493,12 @@ namespace parus::tyck {
 
         if (final_matches.size() > 1) {
             std::string msg = "ambiguous overloaded call '" + callee_name + "'";
-            diag_(diag::Code::kTypeErrorGeneric, e.span, msg);
+            std::string candidate_list;
+            for (size_t i = 0; i < final_matches.size(); ++i) {
+                if (i) candidate_list += ", ";
+                candidate_list += format_candidate(candidates[final_matches[i]]);
+            }
+            diag_(diag::Code::kOverloadAmbiguousCall, e.span, callee_name, candidate_list);
             err_(e.span, msg);
             check_all_arg_exprs_only();
             return ct.ret;

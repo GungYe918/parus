@@ -1822,11 +1822,14 @@ namespace parus::oir {
 
         /// @brief pure inst를 위한 GVN 키를 생성한다.
         std::string gvn_key_(
+            const Module& m,
             const Inst& inst,
             const std::unordered_map<ValueId, ValueId>& repl
         ) {
             if (inst.result == kInvalidId) return {};
             if (inst.eff != Effect::Pure) return {};
+            const TypeId result_ty =
+                (static_cast<size_t>(inst.result) < m.values.size()) ? m.values[inst.result].ty : kInvalidId;
 
             std::ostringstream oss;
             auto rv = [&](ValueId v) { return resolve_alias_(repl, v); };
@@ -1834,11 +1837,15 @@ namespace parus::oir {
             return std::visit([&](auto&& x) -> std::string {
                 using T = std::decay_t<decltype(x)>;
                 if constexpr (std::is_same_v<T, InstConstInt>) {
-                    return std::string("ci:") + x.text;
+                    // 타입 정보를 키에 포함해 i32 1 과 i64 1 같은 값이 섞여 CSE 되지 않게 한다.
+                    oss << "ci:" << result_ty << ":" << x.text;
+                    return oss.str();
                 } else if constexpr (std::is_same_v<T, InstConstBool>) {
-                    return std::string("cb:") + (x.value ? "1" : "0");
+                    oss << "cb:" << result_ty << ":" << (x.value ? "1" : "0");
+                    return oss.str();
                 } else if constexpr (std::is_same_v<T, InstConstNull>) {
-                    return "cn";
+                    oss << "cn:" << result_ty;
+                    return oss.str();
                 } else if constexpr (std::is_same_v<T, InstUnary>) {
                     oss << "u:" << (uint32_t)x.op << ":" << rv(x.src);
                     return oss.str();
@@ -1878,7 +1885,7 @@ namespace parus::oir {
                     const auto& inst = m.insts[iid];
                     if (inst.result == kInvalidId) continue;
 
-                    const std::string key = gvn_key_(inst, repl);
+                    const std::string key = gvn_key_(m, inst, repl);
                     if (key.empty()) continue;
 
                     auto it = env.find(key);

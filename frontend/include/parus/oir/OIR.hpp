@@ -103,7 +103,13 @@ namespace parus::oir {
     struct InstBinOp      { BinOp op; ValueId lhs; ValueId rhs; };
     struct InstCast       { CastKind kind; TypeId to; ValueId src; };
     struct InstFuncRef    { FuncId func = kInvalidId; std::string name; };
-    struct InstCall       { ValueId callee; std::vector<ValueId> args; };
+    struct InstCall       {
+        ValueId callee;
+        std::vector<ValueId> args;
+        // 오버로드/정적 해소된 direct callee를 ID로 고정한다.
+        // kInvalidId면 기존 callee 값 기반(함수 값/간접 호출) 경로를 사용한다.
+        FuncId direct_callee = kInvalidId;
+    };
     struct InstIndex      { ValueId base; ValueId index; };
     struct InstField      { ValueId base; std::string field; };
 

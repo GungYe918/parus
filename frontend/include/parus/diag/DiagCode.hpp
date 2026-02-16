@@ -180,6 +180,10 @@ namespace parus::diag {
         kTypeSetAssignMismatch, // args[0]=var, args[1]=expected, args[2]=got
         kTypeArgCountMismatch,  // args[0]=expected, args[1]=got
         kTypeArgTypeMismatch,   // args[0]=index, args[1]=expected, args[2]=got
+        kOverloadDeclConflict,  // args[0]=fn, args[1]=reason
+        kOverloadNoMatchingCall,// args[0]=fn, args[1]=call_signature
+        kOverloadAmbiguousCall, // args[0]=fn, args[1]=candidate_list
+        kMangleSymbolCollision, // args[0]=mangled_symbol, args[1]=lhs, args[2]=rhs
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)
         kTypeBreakValueOnlyInLoopExpr, // break value is only allowed in loop expression

@@ -6,6 +6,7 @@
 #include "../common/type_check_literals.hpp"
 
 #include <sstream>
+#include <cctype>
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
@@ -364,6 +365,59 @@ namespace parus::tyck {
             return oss.str();
         };
 
+        /// @brief 오버로드 시그니처를 사용자 친화 문자열로 만든다.
+        const auto make_human_sig = [&](const DeclShape& d) -> std::string {
+            std::ostringstream oss;
+            oss << d.name << "(";
+            bool first = true;
+            for (const auto& p : d.positional) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << p.label << ": " << types_.to_string(p.type);
+            }
+            if (!d.named.empty()) {
+                if (!first) oss << ", ";
+                oss << "{";
+                for (size_t i = 0; i < d.named.size(); ++i) {
+                    if (i) oss << ", ";
+                    oss << d.named[i].label << ": " << types_.to_string(d.named[i].type);
+                    if (d.named[i].has_default) oss << "=?";
+                }
+                oss << "}";
+            }
+            oss << ") -> " << types_.to_string(d.ret);
+            return oss.str();
+        };
+
+        /// @brief OIR 함수명과 동일 규칙으로 맹글링 후보를 만든다.
+        const auto project_mangled_name = [&](const DeclShape& d) -> std::string {
+            std::ostringstream sig;
+            sig << "fn(";
+            bool first = true;
+            for (const auto& p : d.positional) {
+                if (!first) sig << ", ";
+                first = false;
+                sig << types_.to_string(p.type);
+            }
+            if (!d.named.empty()) {
+                if (!first) sig << ", ";
+                sig << "{";
+                for (size_t i = 0; i < d.named.size(); ++i) {
+                    if (i) sig << ", ";
+                    sig << d.named[i].label << ":" << types_.to_string(d.named[i].type);
+                    if (d.named[i].has_default) sig << "=?";
+                }
+                sig << "}";
+            }
+            sig << ") -> " << types_.to_string(d.ret);
+
+            std::string out = std::string(d.name) + "$" + sig.str();
+            for (char& ch : out) {
+                if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') ch = '_';
+            }
+            return out;
+        };
+
         // 오버로드 집합 단위 검증
         for (const auto& it : fn_decl_by_name_) {
             const std::string& fn_name = it.first;
@@ -436,7 +490,7 @@ namespace parus::tyck {
                         msg = "overload conflict in '" + fn_name +
                             "': declaration key collision";
                     }
-                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    diag_(diag::Code::kOverloadDeclConflict, decls[i].span, fn_name, msg);
                     err_(decls[i].span, msg);
                 }
             }
@@ -451,7 +505,7 @@ namespace parus::tyck {
                 if (!ins.second) {
                     std::string msg = "overload conflict in '" + fn_name +
                         "': positional-call view is indistinguishable";
-                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    diag_(diag::Code::kOverloadDeclConflict, decls[i].span, fn_name, msg);
                     err_(decls[i].span, msg);
                 }
             }
@@ -466,8 +520,22 @@ namespace parus::tyck {
                 if (!ins.second) {
                     std::string msg = "overload conflict in '" + fn_name +
                         "': labeled-call view is indistinguishable";
-                    diag_(diag::Code::kTypeErrorGeneric, decls[i].span, msg);
+                    diag_(diag::Code::kOverloadDeclConflict, decls[i].span, fn_name, msg);
                     err_(decls[i].span, msg);
+                }
+            }
+
+            // 맹글링 충돌 검증:
+            // 시그니처가 달라도 sanitize 이후 심볼이 같아질 수 있으므로 미리 진단한다.
+            std::unordered_map<std::string, std::pair<ast::StmtId, std::string>> mangled_owner;
+            mangled_owner.reserve(decls.size());
+            for (const auto& d : decls) {
+                const std::string mangled = project_mangled_name(d);
+                const std::string human = make_human_sig(d);
+                auto ins = mangled_owner.emplace(mangled, std::make_pair(d.sid, human));
+                if (!ins.second && ins.first->second.first != d.sid) {
+                    diag_(diag::Code::kMangleSymbolCollision, d.span, mangled, ins.first->second.second, human);
+                    err_(d.span, "mangle symbol collision: " + mangled);
                 }
             }
         }

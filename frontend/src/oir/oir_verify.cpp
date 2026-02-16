@@ -184,7 +184,13 @@ namespace parus::oir {
                         push_error_(errs, oss.str());
                     }
                 } else if constexpr (std::is_same_v<T, InstCall>) {
-                    (void)check_value_id_(m, errs, iid, "inst(call callee)", x.callee);
+                    if (x.direct_callee == kInvalidId) {
+                        (void)check_value_id_(m, errs, iid, "inst(call callee)", x.callee);
+                    } else if ((size_t)x.direct_callee >= m.funcs.size()) {
+                        std::ostringstream oss;
+                        oss << "inst #" << iid << " has invalid direct callee id f" << x.direct_callee;
+                        push_error_(errs, oss.str());
+                    }
                     for (auto av : x.args) {
                         (void)check_value_id_(m, errs, iid, "inst(call arg)", av);
                     }

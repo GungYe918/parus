@@ -762,7 +762,14 @@ namespace parusc::dump {
                                 std::cout << " name=" << x.name;
                             }
                         } else if constexpr (std::is_same_v<T, oir::InstCall>) {
-                            std::cout << "Call callee=v" << x.callee << " args=[";
+                            std::cout << "Call ";
+                            if (x.direct_callee != oir::kInvalidId) {
+                                std::cout << "direct=f#" << x.direct_callee << " ";
+                            }
+                            if (x.callee != oir::kInvalidId) {
+                                std::cout << "callee=v" << x.callee << " ";
+                            }
+                            std::cout << "args=[";
                             for (size_t ai = 0; ai < x.args.size(); ++ai) {
                                 if (ai) std::cout << ", ";
                                 std::cout << "v" << x.args[ai];

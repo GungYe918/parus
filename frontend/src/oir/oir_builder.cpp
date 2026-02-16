@@ -182,10 +182,10 @@ namespace parus::oir {
                 return r;
             }
 
-            ValueId emit_call(TypeId ty, ValueId callee, std::vector<ValueId> args) {
+            ValueId emit_call(TypeId ty, ValueId callee, std::vector<ValueId> args, FuncId direct_callee = kInvalidId) {
                 ValueId r = make_value(ty, Effect::Call);
                 Inst inst{};
-                inst.data = InstCall{callee, std::move(args)};
+                inst.data = InstCall{callee, std::move(args), direct_callee};
                 inst.eff = Effect::Call;
                 inst.result = r;
                 emit_inst(inst);
@@ -558,11 +558,12 @@ namespace parus::oir {
                 }
 
                 ValueId callee = kInvalidId;
+                FuncId direct_callee = kInvalidId;
                 if (v.callee_decl_stmt != 0xFFFF'FFFFu && fn_decl_to_func != nullptr) {
                     auto dit = fn_decl_to_func->find(v.callee_decl_stmt);
                     if (dit != fn_decl_to_func->end() &&
                         (size_t)dit->second < out->funcs.size()) {
-                        callee = emit_func_ref(dit->second, out->funcs[dit->second].name);
+                        direct_callee = dit->second;
                     }
                 }
 
@@ -601,7 +602,7 @@ namespace parus::oir {
                             }
                         }
                         if (best != kInvalidId) {
-                            callee = emit_func_ref(best, out->funcs[best].name);
+                            direct_callee = best;
                         }
                     }
                 }
@@ -612,15 +613,15 @@ namespace parus::oir {
                     auto fit = fn_symbol_to_func->find(v.callee_sym);
                     if (fit != fn_symbol_to_func->end() &&
                         (size_t)fit->second < out->funcs.size()) {
-                        callee = emit_func_ref(fit->second, out->funcs[fit->second].name);
+                        direct_callee = fit->second;
                     }
                 }
 
-                if (callee == kInvalidId) {
+                if (callee == kInvalidId && direct_callee == kInvalidId) {
                     callee = lower_value(v.a);
                 }
 
-                return emit_call(v.type, callee, std::move(args));
+                return emit_call(v.type, callee, std::move(args), direct_callee);
             }
 
             case parus::sir::ValueKind::kIndex: {
