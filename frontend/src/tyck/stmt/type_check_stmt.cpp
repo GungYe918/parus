@@ -49,6 +49,9 @@ namespace parus::tyck {
             case ast::StmtKind::kDoWhile:
                 check_stmt_do_while_(s);
                 return;
+            case ast::StmtKind::kManual:
+                check_stmt_manual_(s);
+                return;
 
             case ast::StmtKind::kReturn:
                 check_stmt_return_(s);
@@ -352,6 +355,13 @@ namespace parus::tyck {
         }
     }
 
+    /// @brief manual 블록은 타입 규칙 완화 없이 블록 본문만 검사한다.
+    void TypeChecker::check_stmt_manual_(const ast::Stmt& s) {
+        if (s.a != ast::k_invalid_stmt) {
+            check_stmt_(s.a);
+        }
+    }
+
     void TypeChecker::check_stmt_return_(const ast::Stmt& s) {
         if (!fn_ctx_.in_fn) {
             diag_(diag::Code::kTypeReturnOutsideFn, s.span);
@@ -552,6 +562,7 @@ namespace parus::tyck {
                     }
 
                     case ast::StmtKind::kDoScope:
+                    case ast::StmtKind::kManual:
                         return (st.a != ast::k_invalid_stmt) ? self(self, st.a) : false;
 
                     // while/loop/switch 등은 v0에서 보수적으로 false

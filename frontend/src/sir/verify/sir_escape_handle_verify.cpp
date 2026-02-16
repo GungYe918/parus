@@ -23,7 +23,6 @@ namespace parus::sir {
                 case EscapeBoundaryKind::kReturn: return "return";
                 case EscapeBoundaryKind::kCallArg: return "call_arg";
                 case EscapeBoundaryKind::kAbi: return "abi";
-                case EscapeBoundaryKind::kFfi: return "ffi";
             }
             return "unknown";
         }
@@ -143,17 +142,10 @@ namespace parus::sir {
             }
 
             if (h.abi_pack_required &&
-                !(h.boundary == EscapeBoundaryKind::kAbi || h.boundary == EscapeBoundaryKind::kFfi)) {
+                h.boundary != EscapeBoundaryKind::kAbi) {
                 std::ostringstream oss;
                 oss << "escape-handle #" << i
                     << " abi_pack_required=true but boundary is " << boundary_name_(h.boundary);
-                push_error_(errs, oss.str());
-            }
-
-            if (h.ffi_pack_required && h.boundary != EscapeBoundaryKind::kFfi) {
-                std::ostringstream oss;
-                oss << "escape-handle #" << i
-                    << " ffi_pack_required=true but boundary is " << boundary_name_(h.boundary);
                 push_error_(errs, oss.str());
             }
 
@@ -165,10 +157,10 @@ namespace parus::sir {
                         << kind_name_(h.kind) << ")";
                     push_error_(errs, oss.str());
                 }
-                if (h.abi_pack_required || h.ffi_pack_required) {
+                if (h.abi_pack_required) {
                     std::ostringstream oss;
                     oss << "escape-handle #" << i
-                        << " boundary=none cannot request ABI/FFI packing";
+                        << " boundary=none cannot request ABI packing";
                     push_error_(errs, oss.str());
                 }
             }

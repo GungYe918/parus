@@ -44,6 +44,7 @@ namespace parus::syntax {
         kKwReturn,
         kKwBreak,
         kKwContinue,
+        kKwManual,
 
         // ---- keywords (decl / control) ----
         kKwExport,
@@ -171,6 +172,7 @@ namespace parus::syntax {
             case TokenKind::kKwReturn: return "return";
             case TokenKind::kKwBreak: return "break";
             case TokenKind::kKwContinue: return "continue";
+            case TokenKind::kKwManual: return "manual";
 
             case TokenKind::kKwSwitch: return "switch";
             case TokenKind::kKwCase: return "case";

@@ -176,6 +176,13 @@ namespace parus::sir {
                         push_error_(errs, oss.str());
                     }
                     break;
+                case StmtKind::kManualStmt:
+                    if (!valid_block_id_(m, s.a)) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " manual body has invalid block id " << s.a;
+                        push_error_(errs, oss.str());
+                    }
+                    break;
                 case StmtKind::kReturn:
                 case StmtKind::kBreak:
                     if (s.expr != k_invalid_value && !valid_value_id_(m, s.expr)) {

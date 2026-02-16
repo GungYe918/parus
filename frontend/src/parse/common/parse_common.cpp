@@ -134,6 +134,7 @@ namespace parus {
         }
         if (k == K::kKwReturn || k == K::kKwBreak || k == K::kKwContinue)   return true;
         if (k == K::kKwWhile || k == K::kKwDo || k == K::kKwSwitch)         return true;
+        if (k == K::kKwManual)                                               return true;
         if (k == K::kKwUse)                                                 return true;
 
         // if/loop/{...} 는 expr도 될 수 있으므로 여기 넣지 않음

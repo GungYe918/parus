@@ -49,6 +49,9 @@ namespace parus::passes {
                     on_stmt(st.a);
                     on_expr(st.expr);
                     break;
+                case ast::StmtKind::kManual:
+                    on_stmt(st.a);
+                    break;
 
                 case ast::StmtKind::kReturn:
                     on_expr(st.expr);

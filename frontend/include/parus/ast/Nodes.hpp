@@ -80,6 +80,7 @@ namespace parus::ast {
         kWhile,
         kDoScope,     // do { ... }
         kDoWhile,     // do { ... } while (cond);
+        kManual,      // manual[perm,...] { ... }
         kReturn,
         kBreak,
         kContinue,
@@ -96,6 +97,10 @@ namespace parus::ast {
         kUse,
         kNestDecl,   // nest foo; / nest foo { ... }
     };
+
+    inline constexpr uint8_t kManualPermGet = 1u << 0;
+    inline constexpr uint8_t kManualPermSet = 1u << 1;
+    inline constexpr uint8_t kManualPermAbi = 1u << 2;
 
     // --------------------
     // Call Args
@@ -166,12 +171,6 @@ namespace parus::ast {
         std::string_view pat_text{}; // literal/ident 원문 저장
 
         StmtId body = k_invalid_stmt; // 항상 block
-        Span span{};
-    };
-
-    struct FfiField {
-        TypeId type = k_invalid_type;
-        std::string_view name{};
         Span span{};
     };
 
@@ -248,8 +247,6 @@ namespace parus::ast {
         kTypeAlias,    // use NewT = u32;
         kPathAlias,    // use A::B = name;
         kTextSubst,    // use PI 3.14f;
-        kFFIFunc,      // use func::ffi<sig> name;
-        kFFIStruct,    // use struct::ffi Name { ... }
     };
 
     struct Stmt {
@@ -324,12 +321,11 @@ namespace parus::ast {
         // ---- use ----
         UseKind use_kind = UseKind::kError;
 
-        // 공통: "use" 뒤 첫 ident (alias name / subst name / type alias name / ffi symbol name 등)
+        // 공통: "use" 뒤 첫 ident (alias name / subst name / type alias name 등)
         std::string_view use_name{};
 
         // --- TypeAlias: name = TypeId (Stmt.type 사용) ---
         // --- TextSubst: name + expr (Stmt.expr 사용) ---
-        // --- FFIFunc:  use_name + type(fn signature TypeId in Stmt.type) ---
 
         // PathAlias: path segments slice + rhs ident
         uint32_t use_path_begin = 0;
@@ -341,9 +337,9 @@ namespace parus::ast {
         uint32_t nest_path_count = 0;
         bool nest_is_file_directive = false; // nest foo;
 
-        // FFIStruct: struct name(use_name) + fields slice
-        uint32_t use_field_begin = 0;
-        uint32_t use_field_count = 0;
+        // ---- manual stmt ----
+        // bit0: get, bit1: set, bit2: abi
+        uint8_t manual_perm_mask = 0;
     };
 
     // --------------------
@@ -361,11 +357,6 @@ namespace parus::ast {
         uint32_t add_param(const Param& p) {  params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1);  }
 
         uint32_t add_switch_case(const SwitchCase& c) {  switch_cases_.push_back(c); return (uint32_t)switch_cases_.size() - 1;  }
-
-        uint32_t add_ffi_field(const FfiField& f) {
-            ffi_fields_.push_back(f);
-            return (uint32_t)ffi_fields_.size() - 1;
-        }
 
         uint32_t add_field_member(const FieldMember& f) {
             field_members_.push_back(f);
@@ -408,9 +399,6 @@ namespace parus::ast {
         const std::vector<SwitchCase>& switch_cases() const {  return switch_cases_;  }
         std::vector<SwitchCase>& switch_cases_mut() {  return switch_cases_;  }  
 
-        const std::vector<FfiField>& ffi_fields() const { return ffi_fields_; }
-        std::vector<FfiField>& ffi_fields_mut() { return ffi_fields_; }
-
         const std::vector<FieldMember>& field_members() const { return field_members_; }
         std::vector<FieldMember>& field_members_mut() { return field_members_; }
 
@@ -430,7 +418,6 @@ namespace parus::ast {
         std::vector<Param> params_;
 
         std::vector<SwitchCase> switch_cases_;
-        std::vector<FfiField> ffi_fields_;
         std::vector<FieldMember> field_members_;
         std::vector<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;

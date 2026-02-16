@@ -112,8 +112,11 @@ namespace parus::sir {
         kReturn,
         kCallArg,
         kAbi,
-        kFfi,
     };
+
+    inline constexpr uint8_t kManualPermGet = 1u << 0;
+    inline constexpr uint8_t kManualPermSet = 1u << 1;
+    inline constexpr uint8_t kManualPermAbi = 1u << 2;
 
     // ---------------------------------------------
     // Value node
@@ -232,6 +235,7 @@ namespace parus::sir {
         kWhileStmt,
         kDoScopeStmt,
         kDoWhileStmt,
+        kManualStmt,
         kReturn,
         kBreak,
         kContinue,
@@ -253,6 +257,8 @@ namespace parus::sir {
         bool is_set = false;   // let=false, set=true
         bool is_mut = false;
         bool is_static = false;
+        // manual stmt permission bitset (get/set/abi)
+        uint8_t manual_perm_mask = 0;
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
         TypeId declared_type = k_invalid_type;
@@ -377,7 +383,6 @@ namespace parus::sir {
         bool from_static = false;
         bool has_drop = false;
         bool abi_pack_required = false;
-        bool ffi_pack_required = false;
 
         // v0 규칙: OIR 진입 전 반드시 0이어야 한다.
         uint32_t materialize_count = 0;

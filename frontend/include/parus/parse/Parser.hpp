@@ -141,6 +141,8 @@ namespace parus {
         ast::StmtId parse_stmt_while();
         //  do / do-while 파싱
         ast::StmtId parse_stmt_do();
+        // manual[perm,...] { ... } 파싱
+        ast::StmtId parse_stmt_manual();
 
         //  return 파싱
         ast::StmtId parse_stmt_return();

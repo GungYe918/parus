@@ -333,6 +333,9 @@ namespace parus::cap {
                         walk_stmt_(s.a);
                         walk_expr_(s.expr, ExprUse::kValue);
                         return;
+                    case ast::StmtKind::kManual:
+                        walk_stmt_(s.a);
+                        return;
 
                     case ast::StmtKind::kReturn: {
                         if (s.expr != ast::k_invalid_expr) {

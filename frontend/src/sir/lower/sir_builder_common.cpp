@@ -198,6 +198,9 @@ namespace parus::sir::detail {
                 if (s.a != k_invalid_block) join_block(s.a);
                 join_value(s.expr);
                 break;
+            case StmtKind::kManualStmt:
+                if (s.a != k_invalid_block) join_block(s.a);
+                break;
 
             default:
                 break;

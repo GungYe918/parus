@@ -296,11 +296,6 @@ namespace parus::oir {
                 oss << "escape_hint #" << i << " uses heap_box kind, forbidden in v0";
                 push_error_(errs, oss.str());
             }
-            if (h.abi_pack_required && h.ffi_pack_required) {
-                std::ostringstream oss;
-                oss << "escape_hint #" << i << " has both abi_pack_required and ffi_pack_required";
-                push_error_(errs, oss.str());
-            }
         }
 
         return errs;

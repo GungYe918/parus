@@ -65,6 +65,7 @@ namespace parusc::dump {
             case K::kWhileStmt: return "WhileStmt";
             case K::kDoScopeStmt: return "DoScopeStmt";
             case K::kDoWhileStmt: return "DoWhileStmt";
+            case K::kManualStmt: return "ManualStmt";
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
@@ -117,7 +118,6 @@ namespace parusc::dump {
             case K::kReturn: return "Return";
             case K::kCallArg: return "CallArg";
             case K::kAbi: return "Abi";
-            case K::kFfi: return "Ffi";
         }
         return "Unknown";
     }
@@ -198,7 +198,6 @@ namespace parusc::dump {
             case K::Return:  return "return";
             case K::CallArg: return "call_arg";
             case K::Abi:     return "abi";
-            case K::Ffi:     return "ffi";
         }
         return "escape_boundary(?)";
     }
@@ -215,6 +214,7 @@ namespace parusc::dump {
             case K::kWhile: return "While";
             case K::kDoScope: return "DoScope";
             case K::kDoWhile: return "DoWhile";
+            case K::kManual: return "Manual";
             case K::kUse:  return "Use";
             case K::kNestDecl: return "NestDecl";
             case K::kReturn: return "Return";
@@ -400,6 +400,9 @@ namespace parusc::dump {
                 push_block(s.a);
                 collect_sir_blocks_from_value_(m, s.expr, seen_values, queued_blocks, q);
                 break;
+            case StmtKind::kManualStmt:
+                push_block(s.a);
+                break;
 
             case StmtKind::kReturn:
             case StmtKind::kBreak:
@@ -463,6 +466,9 @@ namespace parusc::dump {
                     << " set=" << (s.is_set ? "true" : "false")
                     << " decl_ty=" << types.to_string(s.declared_type) << " <id " << (uint32_t)s.declared_type << ">"
                     << " init=" << s.init;
+        } else if (s.kind == StmtKind::kManualStmt) {
+            std::cout << " perms=" << (uint32_t)s.manual_perm_mask;
+            if (s.a != k_invalid_block) std::cout << " body=" << s.a;
         } else {
             if (s.expr != k_invalid_value) std::cout << " expr=" << s.expr;
             if (s.a != k_invalid_block) std::cout << " a=" << s.a;
@@ -652,7 +658,6 @@ namespace parusc::dump {
                         << " from_static=" << (h.from_static ? "true" : "false")
                         << " has_drop=" << (h.has_drop ? "true" : "false")
                         << " abi_pack=" << (h.abi_pack_required ? "true" : "false")
-                        << " ffi_pack=" << (h.ffi_pack_required ? "true" : "false")
                         << " materialize_count=" << h.materialize_count
                         << " span=[" << h.span.lo << "," << h.span.hi << ")"
                         << "\n";
@@ -690,7 +695,6 @@ namespace parusc::dump {
                     << " from_static=" << (h.from_static ? "true" : "false")
                     << " has_drop=" << (h.has_drop ? "true" : "false")
                     << " abi_pack=" << (h.abi_pack_required ? "true" : "false")
-                    << " ffi_pack=" << (h.ffi_pack_required ? "true" : "false")
                     << "\n";
         }
 
@@ -1082,6 +1086,14 @@ namespace parusc::dump {
                 for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
                 std::cout << "Cond:\n";
                 dump_expr(ast, s.expr, indent + 2);
+                break;
+
+            case parus::ast::StmtKind::kManual:
+                for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+                std::cout << "PermMask: " << (uint32_t)s.manual_perm_mask << "\n";
+                for (int i = 0; i < indent + 1; ++i) std::cout << "  ";
+                std::cout << "Body:\n";
+                dump_stmt(ast, types, s.a, indent + 2);
                 break;
 
             case parus::ast::StmtKind::kReturn:

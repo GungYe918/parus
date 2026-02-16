@@ -89,7 +89,6 @@ namespace parus::oir {
         Return,
         CallArg,
         Abi,
-        Ffi,
     };
 
     // ----------------------
@@ -210,7 +209,6 @@ namespace parus::oir {
         bool from_static = false;
         bool has_drop = false;
         bool abi_pack_required = false;
-        bool ffi_pack_required = false;
     };
 
     /// @brief OIR 패스가 누적하는 최적화 통계.

@@ -506,6 +506,11 @@ namespace parus::sir::detail {
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 if (s.a != parus::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
                 break;
+            case parus::ast::StmtKind::kManual:
+                out.kind = StmtKind::kManualStmt;
+                out.manual_perm_mask = s.manual_perm_mask;
+                if (s.a != parus::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                break;
 
             case parus::ast::StmtKind::kReturn:
                 out.kind = StmtKind::kReturn;

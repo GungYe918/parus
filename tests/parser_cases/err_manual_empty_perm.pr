@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    let mut x: i32 = 1;
+    manual[] {
+        x = x + 1;
+    }
+    return x;
+}

@@ -836,6 +836,14 @@ namespace parus::oir {
                 return;
             }
 
+            case parus::sir::StmtKind::kManualStmt: {
+                // manual 블록은 현재 단계에서 별도 runtime 동작 없이 body만 순차 lowering한다.
+                push_scope();
+                lower_block(s.a);
+                pop_scope();
+                return;
+            }
+
             case parus::sir::StmtKind::kIfStmt: {
                 // v0: stmt-level if (not expression). SIR: s.expr=cond, s.a=then block, s.b=else block
                 BlockId then_bb = new_block();
@@ -924,7 +932,6 @@ namespace parus::oir {
                 case SB::kReturn: return EscapeBoundaryKind::Return;
                 case SB::kCallArg:return EscapeBoundaryKind::CallArg;
                 case SB::kAbi:    return EscapeBoundaryKind::Abi;
-                case SB::kFfi:    return EscapeBoundaryKind::Ffi;
             }
             return EscapeBoundaryKind::None;
         }
@@ -1045,7 +1052,6 @@ namespace parus::oir {
             hint.from_static = h.from_static;
             hint.has_drop = h.has_drop;
             hint.abi_pack_required = h.abi_pack_required;
-            hint.ffi_pack_required = h.ffi_pack_required;
             out.mod.add_escape_hint(hint);
         }
 

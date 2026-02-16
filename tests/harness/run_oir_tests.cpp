@@ -367,7 +367,6 @@ namespace {
         hint.kind = parus::oir::EscapeHandleKind::CallerSlot;
         hint.boundary = parus::oir::EscapeBoundaryKind::Return;
         hint.abi_pack_required = false;
-        hint.ffi_pack_required = false;
         m.add_escape_hint(hint);
 
         parus::oir::TermRet rt{};

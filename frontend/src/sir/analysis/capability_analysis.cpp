@@ -613,9 +613,8 @@ namespace parus::sir {
                     meta.kind = EscapeHandleKind::kStackSlot;
                 }
 
-                // v0: 내부는 비물질화 토큰으로 유지하고 ABI/FFI 경계에서만 패킹.
+                // v0: 내부는 비물질화 토큰으로 유지하고 ABI 경계에서만 패킹.
                 meta.abi_pack_required = (boundary == EscapeBoundaryKind::kAbi);
-                meta.ffi_pack_required = (boundary == EscapeBoundaryKind::kFfi);
                 meta.materialize_count = 0;
 
                 auto it = escape_meta_by_value_.find(escape_vid);
@@ -755,6 +754,15 @@ namespace parus::sir {
 
                     case StmtKind::kDoScopeStmt:
                         {
+                            const FlowState in = capture_flow_state_();
+                            const FlowState out = analyze_block_with_flow_(s.a, in);
+                            restore_flow_state_(out);
+                        }
+                        return;
+
+                    case StmtKind::kManualStmt:
+                        {
+                            // manual은 권한 컨텍스트를 부여하지만 수명/escape 규칙은 그대로 적용한다.
                             const FlowState in = capture_flow_state_();
                             const FlowState out = analyze_block_with_flow_(s.a, in);
                             restore_flow_state_(out);
