@@ -1,5 +1,6 @@
 #include <parus/backend/aot/LLVMIRLowering.hpp>
 #include <parus/backend/link/Linker.hpp>
+#include <parus/backend/parlib/Parlib.hpp>
 #include <parus/lex/Lexer.hpp>
 #include <parus/oir/Builder.hpp>
 #include <parus/oir/Passes.hpp>
@@ -17,6 +18,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #if !defined(_WIN32)
@@ -51,6 +53,8 @@ namespace {
         return false;
     }
 
+    static std::string join_compile_messages_(const std::vector<parus::backend::CompileMessage>& messages);
+
     static std::filesystem::path case_path_(std::string_view name) {
 #ifndef PARUS_FFI_CASE_DIR
         return std::filesystem::path(name);
@@ -63,6 +67,156 @@ namespace {
         std::ifstream ifs(p, std::ios::in | std::ios::binary);
         if (!ifs) return false;
         out.assign(std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>());
+        return true;
+    }
+
+    static bool read_binary_file_(const std::filesystem::path& p, std::vector<uint8_t>& out) {
+        std::ifstream ifs(p, std::ios::in | std::ios::binary);
+        if (!ifs) return false;
+        ifs.seekg(0, std::ios::end);
+        const std::streampos end = ifs.tellg();
+        if (end < 0) return false;
+        ifs.seekg(0, std::ios::beg);
+        out.resize(static_cast<size_t>(end));
+        if (!out.empty()) {
+            ifs.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(out.size()));
+        }
+        return ifs.good() || ifs.eof();
+    }
+
+    static bool write_binary_file_(const std::filesystem::path& p, const std::vector<uint8_t>& bytes) {
+        std::ofstream ofs(p, std::ios::out | std::ios::binary | std::ios::trunc);
+        if (!ofs) return false;
+        if (!bytes.empty()) {
+            ofs.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+        return ofs.good();
+    }
+
+    static std::vector<parus::backend::parlib::ParlibExportCEntry> collect_export_c_symbols_(std::string_view src) {
+        using namespace parus::backend::parlib;
+        std::vector<ParlibExportCEntry> out;
+        const std::string_view needle = "export \"C\" fn ";
+        size_t pos = 0;
+        while (true) {
+            const size_t hit = src.find(needle, pos);
+            if (hit == std::string_view::npos) break;
+
+            size_t i = hit + needle.size();
+            while (i < src.size() && (src[i] == ' ' || src[i] == '\t' || src[i] == '\n' || src[i] == '\r')) ++i;
+            size_t j = i;
+            while (j < src.size()) {
+                const char c = src[j];
+                const bool ok = (c == '_') ||
+                                (c >= 'a' && c <= 'z') ||
+                                (c >= 'A' && c <= 'Z') ||
+                                (j > i && c >= '0' && c <= '9');
+                if (!ok) break;
+                ++j;
+            }
+            if (j > i) {
+                ParlibExportCEntry e{};
+                e.symbol = std::string(src.substr(i, j - i));
+                e.signature = "c_export";
+                e.lane = ParlibLane::kPcore;
+                e.chunk_kind = ParlibChunkKind::kObjectArchive;
+                e.target_id = 0;
+                e.visible = true;
+                out.push_back(std::move(e));
+            }
+            pos = (j > i) ? j : (hit + needle.size());
+        }
+        return out;
+    }
+
+    static bool package_object_into_parlib_and_extract_(
+        const std::filesystem::path& src_path,
+        const std::string& src_text,
+        const std::filesystem::path& raw_obj_path,
+        const std::filesystem::path& extracted_obj_path,
+        std::string& err
+    ) {
+        using namespace parus::backend::parlib;
+
+        std::vector<uint8_t> raw_obj;
+        if (!read_binary_file_(raw_obj_path, raw_obj)) {
+            err = "failed to read raw object for parlib packaging: " + raw_obj_path.string();
+            return false;
+        }
+
+        const std::filesystem::path parlib_path = raw_obj_path.parent_path() /
+            (raw_obj_path.filename().string() + ".parlib");
+
+        ParlibBuildOptions opt{};
+        opt.output_path = parlib_path.string();
+        opt.bundle_id = src_path.stem().string();
+        opt.target_triple = "aarch64-apple-darwin";
+        opt.target_summary = "darwin-arm64";
+        opt.feature_bits = 0;
+        opt.flags = 0;
+        opt.compiler_hash = 0x100ull;
+        opt.include_pcore = true;
+        opt.include_prt = true;
+        opt.include_pstd = true;
+        opt.include_debug = false;
+        opt.export_c_symbols = collect_export_c_symbols_(src_text);
+
+        ParlibNativeDepEntry dep{};
+        dep.name = "c";
+        dep.kind = ParlibNativeDepKind::kSystem;
+        dep.mode = ParlibNativeDepMode::kReference;
+        dep.target_filter = "*";
+        dep.link_order = 0;
+        dep.required = true;
+        dep.hash = 0;
+        dep.reference = "-lc";
+        opt.native_deps.push_back(dep);
+
+        ParlibChunkPayload obj_chunk{};
+        obj_chunk.kind = ParlibChunkKind::kObjectArchive;
+        obj_chunk.lane = ParlibLane::kPcore;
+        obj_chunk.target_id = 0;
+        obj_chunk.alignment = 8;
+        obj_chunk.compression = ParlibCompression::kNone;
+        obj_chunk.bytes = raw_obj;
+        opt.extra_chunks.push_back(std::move(obj_chunk));
+
+        const auto built = build_parlib(opt);
+        if (!built.ok) {
+            err = "parlib build failed: " + join_compile_messages_(built.messages);
+            return false;
+        }
+
+        auto reader_opt = ParlibReader::open(parlib_path.string());
+        if (!reader_opt.has_value()) {
+            err = "parlib reader open failed: " + parlib_path.string();
+            return false;
+        }
+        const auto& reader = *reader_opt;
+        const auto rec = reader.find_chunk(ParlibChunkKind::kObjectArchive, ParlibLane::kPcore, 0);
+        if (!rec.has_value()) {
+            err = "parlib object chunk not found for lane pcore";
+            return false;
+        }
+
+        const auto payload = reader.read_chunk_slice(*rec, 0, rec->size);
+        if (payload.size() != rec->size) {
+            err = "failed to extract full object bytes from parlib";
+            return false;
+        }
+        if (!write_binary_file_(extracted_obj_path, payload)) {
+            err = "failed to write extracted object file: " + extracted_obj_path.string();
+            return false;
+        }
+
+        for (const auto& e : opt.export_c_symbols) {
+            const auto hit = reader.lookup_export_c(e.symbol);
+            if (!hit.has_value()) {
+                err = "parlib ExportCIndex lookup failed for symbol: " + e.symbol;
+                return false;
+            }
+        }
+
         return true;
     }
 
@@ -134,6 +288,9 @@ namespace {
             return false;
         }
 
+        const std::filesystem::path raw_obj_path =
+            obj_path.parent_path() / (obj_path.filename().string() + ".raw.o");
+
         auto p = build_oir_pipeline_(src);
         if (!p.has_value()) {
             err = "frontend->OIR pipeline failed for: " + src_path.string();
@@ -152,7 +309,7 @@ namespace {
 
         const auto emitted = parus::backend::aot::emit_object_from_llvm_ir_text(
             lowered.llvm_ir,
-            obj_path.string(),
+            raw_obj_path.string(),
             parus::backend::aot::LLVMObjectEmissionOptions{
                 .llvm_lane_major = PARUS_TEST_LLVM_LANE,
                 .target_triple = "",
@@ -165,10 +322,20 @@ namespace {
             return false;
         }
 
-        if (!std::filesystem::exists(obj_path)) {
-            err = "object file does not exist after emission: " + obj_path.string();
+        if (!std::filesystem::exists(raw_obj_path)) {
+            err = "raw object file does not exist after emission: " + raw_obj_path.string();
             return false;
         }
+
+        if (!package_object_into_parlib_and_extract_(src_path, src, raw_obj_path, obj_path, err)) {
+            return false;
+        }
+
+        if (!std::filesystem::exists(obj_path)) {
+            err = "extracted object file does not exist after parlib path: " + obj_path.string();
+            return false;
+        }
+
         return true;
     }
 

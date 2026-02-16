@@ -41,7 +41,7 @@ if (TARGET parus_backend_aot)
     add_executable(parus_ffi_tests
     harness/run_ffi_tests.cpp
     )
-    target_link_libraries(parus_ffi_tests PRIVATE parus_compiler parus_backend_aot parus_backend_link)
+    target_link_libraries(parus_ffi_tests PRIVATE parus_compiler parus_backend_aot parus_backend_link parus_backend_parlib)
     target_compile_features(parus_ffi_tests PRIVATE cxx_std_23)
     target_compile_definitions(parus_ffi_tests PRIVATE
     PARUS_FFI_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/ffi"
