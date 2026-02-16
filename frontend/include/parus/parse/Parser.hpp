@@ -29,6 +29,8 @@ namespace parus {
 
         // 최상위 표현식 1개를 파싱
         ast::ExprId parse_expr();
+        // 표현식 1개를 파싱하고 입력의 끝까지 소비되지 않으면 error expr를 반환
+        ast::ExprId parse_expr_full();
 
         // stmt/decl 혼용 문장 1개를 파싱
         ast::StmtId parse_stmt();

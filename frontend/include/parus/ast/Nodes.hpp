@@ -5,6 +5,7 @@
 #include <parus/ty/Type.hpp>
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -180,6 +181,13 @@ namespace parus::ast {
         Span span{};
     };
 
+    struct FStringPart {
+        bool is_expr = false;
+        std::string_view text{};
+        ExprId expr = k_invalid_expr;
+        Span span{};
+    };
+
     enum class CastKind : uint8_t {
         kAs,        // expr as T
         kAsOptional,// expr as? T
@@ -205,6 +213,14 @@ namespace parus::ast {
 
         // literals / identifiers
         std::string_view text{};
+
+        // string literal metadata
+        bool string_is_raw = false;     // R"""..."""
+        bool string_is_format = false;  // F"""..."""
+        uint32_t string_part_begin = 0; // slice into AstArena::fstring_parts_
+        uint32_t string_part_count = 0;
+        // optional folded/normalized literal text for lowering (quoted literal form)
+        std::string_view string_folded_text{};
 
         // call args storage (Arg 배열 slice)
         uint32_t arg_begin = 0;
@@ -379,6 +395,11 @@ namespace parus::ast {
             return (uint32_t)field_members_.size() - 1;
         }
 
+        uint32_t add_fstring_part(const FStringPart& p) {
+            fstring_parts_.push_back(p);
+            return (uint32_t)fstring_parts_.size() - 1;
+        }
+
         std::string_view add_owned_string(std::string s) {
             owned_strings_.push_back(std::move(s));
             return owned_strings_.back();
@@ -418,6 +439,9 @@ namespace parus::ast {
         const std::vector<FieldMember>& field_members() const { return field_members_; }
         std::vector<FieldMember>& field_members_mut() { return field_members_; }
 
+        const std::vector<FStringPart>& fstring_parts() const { return fstring_parts_; }
+        std::vector<FStringPart>& fstring_parts_mut() { return fstring_parts_; }
+
         const std::vector<std::string_view>& path_segs() const { return path_segs_; }
         std::vector<std::string_view>& path_segs_mut() { return path_segs_; }
 
@@ -435,7 +459,8 @@ namespace parus::ast {
 
         std::vector<SwitchCase> switch_cases_;
         std::vector<FieldMember> field_members_;
-        std::vector<std::string> owned_strings_;
+        std::vector<FStringPart> fstring_parts_;
+        std::deque<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;
 
         std::vector<StmtId> stmt_children_;

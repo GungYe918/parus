@@ -154,20 +154,11 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
 
 ### 6.4 PARLIB
 
-- `*.parlib` v1 구현(`backend/src/parlib`) 완료
-- 파일 레이아웃:
-  - Header(`PRLB`, format version, target triple, feature bits)
-  - TOC(고정 길이 entry: kind/lane/offset/size/alignment/compression/checksum/hash)
-  - Chunk data 영역
-- 기본 lane `pcore/prt/pstd` 고정, lane별 `SymbolIndex` 분리
-- 필수 chunk:
-  - `Manifest`, `StringTable`
-  - lane별 `SymbolIndex`, `TypeMeta`, `OIRArchive`, `ObjectArchive`
-  - `Debug`(옵션)
-- API:
-  - `build_parlib(...)`
-  - `inspect_parlib(...)`
-  - 호환 API `build_parlib_skeleton(...)`는 내부적으로 `build_parlib(...)` 호출
+PARLIB 정본 문서는 아래 경로를 우선한다.
+
+- `backend/include/parus/backend/parlib/docs/PARLIB.md`
+
+이 섹션의 PARLIB 설명은 개요용이며, 구현/검증 기준은 위 문서를 따른다.
 
 ## 7) 유지보수 체크리스트
 

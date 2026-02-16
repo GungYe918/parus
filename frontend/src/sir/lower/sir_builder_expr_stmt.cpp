@@ -54,7 +54,7 @@ namespace parus::sir::detail {
                 break;
             case parus::ast::ExprKind::kStringLit:
                 v.kind = ValueKind::kStringLit;
-                v.text = e.text;
+                v.text = e.string_folded_text.empty() ? e.text : e.string_folded_text;
                 break;
             case parus::ast::ExprKind::kCharLit:
                 v.kind = ValueKind::kCharLit;

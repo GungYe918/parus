@@ -48,6 +48,23 @@ namespace parus::tyck {
         TyckResult check_program(ast::StmtId program_stmt);
 
     private:
+        struct FStringConstValue {
+            enum class Kind : uint8_t {
+                kInvalid = 0,
+                kInt,
+                kFloat,
+                kBool,
+                kChar,
+                kText,
+            };
+
+            Kind kind = Kind::kInvalid;
+            int64_t i64 = 0;
+            double f64 = 0.0;
+            bool b = false;
+            char ch = '\0';
+            std::string text{};
+        };
 
         // --------------------
         // Slot (value/discard)
@@ -152,6 +169,9 @@ namespace parus::tyck {
         // - null + T? => T?
         // - null + T  => T? (여기서는 “유틸”로만 제공. 정책은 쉽게 바꿀 수 있음)
         ty::TypeId unify_(ty::TypeId a, ty::TypeId b);
+        bool fold_fstring_expr_(ast::ExprId string_eid, std::string& out_bytes);
+        bool eval_fstring_const_expr_(ast::ExprId expr_eid, FStringConstValue& out);
+        bool fstring_const_to_text_(const FStringConstValue& v, std::string& out) const;
 
         // 함수 컨텍스트
         struct FnCtx {

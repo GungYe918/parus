@@ -1,9 +1,11 @@
 // frontend/src/parse/parse_expr_core.cpp
 #include <parus/parse/Parser.hpp>
+#include <parus/lex/Lexer.hpp>
 #include <parus/syntax/Precedence.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/DiagCode.hpp>
 
+#include <cctype>
 #include <string_view>
 #include <vector>
 
@@ -14,6 +16,22 @@ namespace parus {
         // lexeme이 비면(EOF 등) kind 이름으로 대체
         if (!t.lexeme.empty()) return t.lexeme;
         return syntax::token_kind_name(t.kind);
+    }
+
+    static bool starts_with_(std::string_view s, std::string_view pfx) {
+        return s.size() >= pfx.size() && s.substr(0, pfx.size()) == pfx;
+    }
+
+    static bool ends_with_(std::string_view s, std::string_view sfx) {
+        return s.size() >= sfx.size() && s.substr(s.size() - sfx.size()) == sfx;
+    }
+
+    static std::string_view trim_ascii_ws_(std::string_view s) {
+        size_t lo = 0;
+        while (lo < s.size() && std::isspace(static_cast<unsigned char>(s[lo]))) lo++;
+        size_t hi = s.size();
+        while (hi > lo && std::isspace(static_cast<unsigned char>(s[hi - 1]))) hi--;
+        return s.substr(lo, hi - lo);
     }
     static constexpr bool is_assign_op(parus::syntax::TokenKind k) {
         using K = parus::syntax::TokenKind;
@@ -32,6 +50,17 @@ namespace parus {
     }
     ast::ExprId Parser::parse_expr() {
         return parse_expr_pratt(/*min_prec=*/0, /*ternary_depth=*/0);
+    }
+
+    ast::ExprId Parser::parse_expr_full() {
+        ast::ExprId e = parse_expr_pratt(/*min_prec=*/0, /*ternary_depth=*/0);
+        if (cursor_.peek().kind == syntax::TokenKind::kEof) return e;
+
+        ast::Expr err{};
+        err.kind = ast::ExprKind::kError;
+        err.span = cursor_.peek().span;
+        err.text = "expr_trailing_tokens";
+        return ast_.add_expr(err);
     }
 
     ast::ExprId Parser::parse_expr_pratt(int min_prec, int ternary_depth) {
@@ -316,6 +345,173 @@ namespace parus {
             e.kind = ast::ExprKind::kStringLit;
             e.span = t.span;
             e.text = t.lexeme;
+            e.string_is_raw = starts_with_(t.lexeme, "R\"\"\"");
+            e.string_is_format = starts_with_(t.lexeme, "F\"\"\"");
+
+            // F"""...{expr}...""" parsing:
+            // - literal braces: '{{' / '}}'
+            // - interpolation: '{ expr }'
+            // - parts are stored in ast.fstring_parts()
+            if (e.string_is_format && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
+                const std::string_view body = t.lexeme.substr(4, t.lexeme.size() - 7);
+                const uint32_t base_lo = t.span.lo + 4;
+
+                e.string_part_begin = static_cast<uint32_t>(ast_.fstring_parts().size());
+                e.string_part_count = 0;
+
+                std::string literal_buf;
+                size_t literal_start = 0;
+                bool has_literal_start = false;
+
+                auto flush_literal = [&](size_t end_pos) {
+                    if (literal_buf.empty()) return;
+                    ast::FStringPart p{};
+                    p.is_expr = false;
+                    p.text = ast_.add_owned_string(std::move(literal_buf));
+                    p.span = Span{
+                        t.span.file_id,
+                        static_cast<uint32_t>(base_lo + static_cast<uint32_t>(literal_start)),
+                        static_cast<uint32_t>(base_lo + static_cast<uint32_t>(end_pos))
+                    };
+                    ast_.add_fstring_part(p);
+                    e.string_part_count += 1;
+                    literal_buf.clear();
+                    has_literal_start = false;
+                };
+
+                auto parse_embedded_expr = [&](std::string_view expr_src, uint32_t abs_lo, uint32_t abs_hi) -> ast::ExprId {
+                    const size_t expr_before = ast_.exprs().size();
+
+                    Lexer nested_lexer(expr_src, t.span.file_id, nullptr);
+                    const auto nested_tokens = nested_lexer.lex_all();
+
+                    Parser nested_parser(nested_tokens, ast_, types_, nullptr);
+                    const ast::ExprId inner = nested_parser.parse_expr_full();
+
+                    const size_t expr_after = ast_.exprs().size();
+                    for (size_t i = expr_before; i < expr_after; ++i) {
+                        auto& ne = ast_.expr_mut(static_cast<ast::ExprId>(i));
+                        ne.span.file_id = t.span.file_id;
+                        ne.span.lo = abs_lo + ne.span.lo;
+                        ne.span.hi = abs_lo + ne.span.hi;
+                    }
+
+                    const bool ok =
+                        inner != ast::k_invalid_expr &&
+                        static_cast<size_t>(inner) < ast_.exprs().size() &&
+                        ast_.expr(inner).kind != ast::ExprKind::kError;
+                    if (!ok) {
+                        diag_report(diag::Code::kUnexpectedToken, Span{t.span.file_id, abs_lo, abs_hi}, "fstring interpolation expression");
+                    }
+                    return inner;
+                };
+
+                size_t i = 0;
+                while (i < body.size()) {
+                    const char c = body[i];
+
+                    if (c == '{') {
+                        if (i + 1 < body.size() && body[i + 1] == '{') {
+                            if (!has_literal_start) {
+                                literal_start = i;
+                                has_literal_start = true;
+                            }
+                            literal_buf.push_back('{');
+                            i += 2;
+                            continue;
+                        }
+
+                        flush_literal(i);
+                        const size_t open_pos = i;
+                        i += 1; // after '{'
+                        const size_t expr_begin = i;
+
+                        const std::string_view remain = body.substr(expr_begin);
+                        Lexer scan_lexer(remain, t.span.file_id, nullptr);
+                        const auto scan_tokens = scan_lexer.lex_all();
+
+                        bool found_close = false;
+                        size_t close_rel_lo = 0; // relative to `remain`
+                        size_t close_rel_hi = 0; // relative to `remain`
+                        int depth = 1;
+
+                        for (const auto& st : scan_tokens) {
+                            if (st.kind == syntax::TokenKind::kEof) break;
+                            if (st.kind == syntax::TokenKind::kLBrace) {
+                                depth += 1;
+                                continue;
+                            }
+                            if (st.kind == syntax::TokenKind::kRBrace) {
+                                depth -= 1;
+                                if (depth == 0) {
+                                    found_close = true;
+                                    close_rel_lo = static_cast<size_t>(st.span.lo);
+                                    close_rel_hi = static_cast<size_t>(st.span.hi);
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!found_close) {
+                            const uint32_t lo = static_cast<uint32_t>(base_lo + static_cast<uint32_t>(open_pos));
+                            const uint32_t hi = static_cast<uint32_t>(lo + 1);
+                            diag_report(diag::Code::kExpectedToken, Span{t.span.file_id, lo, hi}, "}");
+                            break;
+                        }
+
+                        const size_t expr_end = expr_begin + close_rel_lo; // before closing '}'
+                        std::string_view expr_text = body.substr(expr_begin, expr_end - expr_begin);
+                        const std::string_view trimmed = trim_ascii_ws_(expr_text);
+
+                        if (trimmed.empty()) {
+                            const uint32_t lo = static_cast<uint32_t>(base_lo + static_cast<uint32_t>(expr_begin));
+                            const uint32_t hi = static_cast<uint32_t>(base_lo + static_cast<uint32_t>(expr_end));
+                            diag_report(diag::Code::kUnexpectedToken, Span{t.span.file_id, lo, hi}, "fstring interpolation expression");
+                        } else {
+                            const size_t trim_off = static_cast<size_t>(trimmed.data() - body.data());
+                            const uint32_t abs_lo = static_cast<uint32_t>(base_lo + static_cast<uint32_t>(trim_off));
+                            const uint32_t abs_hi = static_cast<uint32_t>(abs_lo + static_cast<uint32_t>(trimmed.size()));
+
+                            ast::FStringPart p{};
+                            p.is_expr = true;
+                            p.expr = parse_embedded_expr(trimmed, abs_lo, abs_hi);
+                            p.span = Span{t.span.file_id, abs_lo, abs_hi};
+                            ast_.add_fstring_part(p);
+                            e.string_part_count += 1;
+                        }
+
+                        i = expr_begin + close_rel_hi; // consume closing '}'
+                        literal_start = i;
+                        has_literal_start = false;
+                        continue;
+                    }
+
+                    if (c == '}') {
+                        if (i + 1 < body.size() && body[i + 1] == '}') {
+                            if (!has_literal_start) {
+                                literal_start = i;
+                                has_literal_start = true;
+                            }
+                            literal_buf.push_back('}');
+                            i += 2;
+                            continue;
+                        }
+                        const uint32_t lo = static_cast<uint32_t>(base_lo + static_cast<uint32_t>(i));
+                        diag_report(diag::Code::kUnexpectedToken, Span{t.span.file_id, lo, lo + 1}, "}");
+                        i += 1;
+                        continue;
+                    }
+
+                    if (!has_literal_start) {
+                        literal_start = i;
+                        has_literal_start = true;
+                    }
+                    literal_buf.push_back(c);
+                    i += 1;
+                }
+
+                flush_literal(body.size());
+            }
             return ast_.add_expr(e);
         }
 

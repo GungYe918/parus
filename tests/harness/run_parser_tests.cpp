@@ -211,6 +211,72 @@ namespace {
         return ok;
     }
 
+    static bool test_fstring_parts_and_escape_split_ok() {
+        const std::string src = R"(
+            fn main() -> i32 {
+                let s: text = F"""A{{B}}C{1 + 2}D{3 * 4}E""";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+
+        const parus::ast::Expr* fmt = nullptr;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind == parus::ast::ExprKind::kStringLit && e.string_is_format) {
+                fmt = &e;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(fmt != nullptr, "format triple string literal must exist");
+        if (!ok) return false;
+
+        ok &= require_(fmt->string_part_count == 5, "F-string must be split to literal/expr/literal/expr/literal");
+        if (!ok) return false;
+
+        const auto begin = fmt->string_part_begin;
+        const auto& parts = p.ast.fstring_parts();
+        ok &= require_(begin + fmt->string_part_count <= parts.size(), "F-string part slice must be in-range");
+        if (!ok) return false;
+
+        const auto& p0 = parts[begin + 0];
+        const auto& p1 = parts[begin + 1];
+        const auto& p2 = parts[begin + 2];
+        const auto& p3 = parts[begin + 3];
+        const auto& p4 = parts[begin + 4];
+
+        ok &= require_(!p0.is_expr && p0.text == "A{B}C", "part[0] must be escaped literal text");
+        ok &= require_(p1.is_expr && p1.expr != parus::ast::k_invalid_expr, "part[1] must be interpolation expr");
+        ok &= require_(!p2.is_expr && p2.text == "D", "part[2] must be literal text");
+        ok &= require_(p3.is_expr && p3.expr != parus::ast::k_invalid_expr, "part[3] must be interpolation expr");
+        ok &= require_(!p4.is_expr && p4.text == "E", "part[4] must be literal text");
+
+        ok &= require_(!p.bag.has_error(), "well-formed F-string source must not emit diagnostics");
+        return ok;
+    }
+
+    static bool test_fstring_brace_error_diagnostics() {
+        const std::string src = R"(
+            fn main() -> i32 {
+                let a: text = F"""x}y""";
+                let b: text = F"""x{}y""";
+                let c: text = F"""x{1 + 2""";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kUnexpectedToken),
+            "invalid F-string braces must emit UnexpectedToken");
+        ok &= require_(p.bag.has_code(parus::diag::Code::kExpectedToken),
+            "unterminated F-string interpolation must emit ExpectedToken('}')");
+        return ok;
+    }
+
     static bool test_null_coalesce_assign_parsed_as_assign() {
         // '??='가 이항식이 아니라 대입식(Assign)으로 파싱되어야 한다.
         const std::string src = R"(
@@ -1149,6 +1215,8 @@ int main() {
         {"suffix_literals_work", test_suffix_literals_work},
         {"text_string_literal_typecheck_ok", test_text_string_literal_typecheck_ok},
         {"raw_and_format_triple_string_lex_parse_ok", test_raw_and_format_triple_string_lex_parse_ok},
+        {"fstring_parts_and_escape_split_ok", test_fstring_parts_and_escape_split_ok},
+        {"fstring_brace_error_diagnostics", test_fstring_brace_error_diagnostics},
         {"null_coalesce_assign_parsed_as_assign", test_null_coalesce_assign_parsed_as_assign},
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
         {"while_break_value_rejected", test_while_break_value_rejected},

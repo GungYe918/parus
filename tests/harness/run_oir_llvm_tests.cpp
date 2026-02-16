@@ -238,8 +238,8 @@ namespace {
                        "escaped normal string must contain decoded newline byte (0x0A)");
         ok &= require_(lowered.llvm_ir.find("A\\5CnB\\00") != std::string::npos,
                        "raw string must preserve backslash+n byte sequence");
-        ok &= require_(lowered.llvm_ir.find("A{1}B\\00") != std::string::npos,
-                       "format triple string must currently preserve body text");
+        ok &= require_(lowered.llvm_ir.find("A1B\\00") != std::string::npos,
+                       "format triple string must be folded at compile time");
         ok &= require_(lowered.llvm_ir.find("malloc") == std::string::npos,
                        "text literal lowering must not introduce heap allocation calls");
         return ok;
