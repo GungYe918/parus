@@ -603,14 +603,14 @@ Parus v0에서는 “값이 어디에 저장되고(저장소/수명), 소유권�
 `static`은 변수/전역/필드 선언에 붙는 **storage class**로 취급한다.
 
 ```parus
-static set G: i32 = 3i32;
-static mut set UART0: Uart? = null;
+static G: i32 = 3i32;
+static mut UART0: Uart? = null;
 ```
 
 권장 순서(가독성 규칙):
 
 ```
-static mut set Name: T = Init;
+static mut Name: T = Init;
 ```
 
 *의미론상 순서는 중요하지 않으나, v0 문서/스타일은 위 순서를 권장한다.*
@@ -635,7 +635,7 @@ v0 권장(= freestanding 친화) 규칙:
 freestanding에서 “나중에 초기화”가 필요한 전역 자원은 다음 패턴을 권장한다.
 
 ```parus
-static mut set LOGGER: Logger? = null;
+static mut LOGGER: Logger? = null;
 
 fn init_logger() -> void {
   LOGGER = Logger::init(); // 런타임 초기화(명시적)
@@ -1014,11 +1014,11 @@ p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 * canonical 문자열은 컴파일러 버전/플랫폼과 무관하게 안정적이어야 함
 * 디버깅을 위해 `BaseName`, `Path`는 사람이 읽을 수 있어야 함
 
-#### (G) no-mangle (`@cabi`) 제약
+#### (G) no-mangle (`export "C"`) 제약
 
-* `@cabi`(no-mangle export)는 오버로드 집합에 함수가 1개일 때만 허용
-* 같은 이름으로 2개 이상 export가 가능해지는 조합은 금지
-* `@cabi`는 FFI 경계 함수에만 사용을 권장
+* `export "C"`(no-mangle export)는 오버로드 집합에 함수가 1개일 때만 허용
+* 같은 C 심볼 이름으로 2개 이상 export가 가능해지는 조합은 금지
+* `export "C"`는 FFI 경계 함수에만 사용한다
 
 #### (H) 예시
 
@@ -1048,7 +1048,7 @@ v0 보수 규칙:
 
   * commit, recast 사용
   * pub 호출 (큰 상태 수정 경로)
-  * FFI 호출 (use ...::ffi)
+  * FFI 호출 (`extern "C"` 선언 함수 호출)
   * I/O 성격 표준 라이브러리 호출
   * && 사용
 
@@ -1106,8 +1106,8 @@ comptime 호출 위치 (v0 권장):
 @comptime
 fn pow2(n: int) -> int {
   // 단순 루프는 comptime 엔진이 지원한다고 가정
-  mut set r = 1;
-  mut set i = 0;
+  set mut r = 1;
+  set mut i = 0;
   while (i < n) {
     r = r * 2;
     i = i + 1;
@@ -1227,7 +1227,7 @@ non-? 함수는 예외를 직접 다룰 수 없으므로, **예외를 값(`Resul
 형태:
 
 ```parus
-set r: Result<T> = attempt some_throwing_call?(...);
+let r: Result<T> = attempt some_throwing_call?(...);
 ```
 
 예시:
@@ -1351,8 +1351,8 @@ while (cond) { ... }
 
 ```parus
 fn sum_to(n: int) -> int {
-  mut set i = 0;
-  mut set s = 0;
+  set mut i = 0;
+  set mut s = 0;
   while (i <= n) {
     s = s + i;
     i = i + 1;
@@ -1464,7 +1464,7 @@ set x = loop {
 
 * 타입 추론 선언: `set x = expr;`
 * 타입 명시 선언: `let x: T = expr;`
-* 가변 선언: `mut set`, `mut let`
+* 가변 선언: `set mut`, `let mut`
 
 ---
 
@@ -1693,7 +1693,7 @@ fn retry() -> int? {
 
 ```parus
 fn sum_arr(xs: int[4]) -> int {
-  mut set s = 0;
+  set mut s = 0;
   loop (v in xs) {
     s = s + v;
   }
@@ -1718,7 +1718,7 @@ fn find_positive(xs: int[]) -> int? {
 
 ```parus
 fn sum_range(n: int) -> int {
-  mut set s = 0;
+  set mut s = 0;
   loop (i in 0..:n) {
     s = s + i;
   }
@@ -1782,7 +1782,7 @@ fn exprs() -> void {
   set ok = (a >= 7) and (a != 0);
   set r = ok ? 10 : 20; // 중첩은 금지
 
-  mut set x = 10;
+  set mut x = 10;
   set y = x++;  // y=10, x=11
   set z = ++x;  // x=12, z=12
 }
@@ -1939,9 +1939,9 @@ fn sum2(a: &i32, b: &i32) -> i32 {
 }
 
 fn demo_read_borrow() -> void {
-  set x: i32 = 10;
-  set y: i32 = 20;
-  set s: i32 = sum2(a: &x, b: &y);
+  let x: i32 = 10;
+  let y: i32 = 20;
+  let s: i32 = sum2(a: &x, b: &y);
 }
 ```
 
@@ -1953,7 +1953,7 @@ fn inc(x: &mut i32) -> void {
 }
 
 fn demo_write_borrow() -> void {
-  mut set a: i32 = 0;
+  let mut a: i32 = 0;
   inc(x: &mut a);
 }
 ```
@@ -1962,7 +1962,7 @@ fn demo_write_borrow() -> void {
 
 ```parus
 fn bad_return_ref() -> &i32 {
-  set x: i32 = 3;
+  let x: i32 = 3;
   return &x;   // error: borrow 값은 함수 밖으로 탈출할 수 없다
 }
 
@@ -1992,7 +1992,7 @@ fn open_file() -> Handle<File> {
 
 ```parus
 fn demo_exclusive() -> void {
-  mut set x: i32 = 1;
+  let mut x: i32 = 1;
 
   set r = &mut x;
   // set s = &x;     // error: &mut x 살아있는 동안 다른 borrow 불가
@@ -2351,7 +2351,7 @@ v0에서 `&&x`의 대상 `x`는 place expression이어야 하며, 그 place는 �
 `static`으로 선언된 place는 프로그램 수명 동안 유효하므로, 다음 패턴은 v0에서 장수명 `&&`의 표준적인 형태다.
 
 ```parus
-static mut set G: i32 = 7i32;
+static mut G: i32 = 7i32;
 
 fn get_g() -> Handle<i32> {
   // G는 static place이므로 &&로 탈출 가능
@@ -2384,7 +2384,7 @@ fn get_g() -> Handle<i32> {
 예시(권장 A 형태):
 
 ```parus
-unique static mut set LOG: Logger? = null;
+unique static mut LOG: Logger? = null;
 
 fn take_log() -> Handle<Logger> {
   if (LOG == null) { throw Error::from_code(code: 2); }
@@ -2502,7 +2502,7 @@ fn slice_demo() -> void {
   set arr = &x[1..:5];     // 타입: &[int]  (요소: 1,2,3,4,5)
 
   // 슬라이스 생성(쓰기 가능)
-  mut set y: int[8] = [0,0,0,0,0,0,0,0];
+  let mut y: int[8] = [0,0,0,0,0,0,0,0];
   set win = &mut y[2..:4]; // 타입: &mut [int] (요소 슬롯: y[2],y[3],y[4])
 
   // 금지: slice 탈출
@@ -2515,10 +2515,10 @@ fn slice_demo() -> void {
 
 ```parus
 fn sum(xs: &[int]) -> int {
-  mut set s = 0;
+  set mut s = 0;
   // v0에서는 slice 반복을 단순화하기 위해 표준 라이브러리 helper가 필요할 수 있음
   // 최소 구현: xs[i] 인덱싱을 허용(범위 내라고 가정하거나 디버그 검사)
-  mut set i = 0;
+  set mut i = 0;
   while (i < xs.len) {     // len 접근 문법은 v0에서 선택: 내장 또는 표준 규약
     s = s + xs[i];
     i = i + 1;
@@ -3255,7 +3255,7 @@ tablet Sprite : Drawable {
 * `tablet` 본문은 “멤버 목록”이다.
 * 멤버 종류(v0):
 
-  * 데이터 멤버: `let name: Type;` 또는 `mut let name: Type;`(선택)
+  * 데이터 멤버: `let name: Type;` 또는 `let mut name: Type;`(선택)
   * 메서드: `fn ... { ... }`
   * 생성자/소멸자: `construct`, `destruct` (아래 10.3.3)
 * 접근 제한자:
@@ -3299,7 +3299,7 @@ Parus은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 
 ```parus
 tablet Counter {
   public:
-    mut let n: int;
+    let mut n: int;
 
     fn get() -> int {            // self: &Counter
       return self.n;
@@ -3840,7 +3840,7 @@ p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 추가 규칙(v0 고정):
 
 * `export`된 심볼은 기본적으로 위 규칙으로 맹글링된다.
-* `@cabi`(no-mangle)는 6.1.7(G) 제약을 그대로 따른다.
+* `export "C"`(no-mangle)는 6.1.7(G) 제약을 그대로 따른다.
 
 ---
 
@@ -3851,7 +3851,7 @@ p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 * #define 텍스트 치환
 * import 해석, alias 심볼 테이블 구성
 * bundle 단위로 선언/의존성 그래프 구성 (추가)
-* use ...::ffi 수집
+* `extern "C"` / `export "C"` 선언 수집
 * F-string 분절 (문자열 내부 expr 파싱 준비)
 
 ### 14.2 파서
@@ -3951,18 +3951,18 @@ fn f(a: int, b: int) -> int { return a + b; }
 fn main() -> void {
   let xs: u32[3] = [1u32, 2u32, 3u32];
 
-  mut set s = 0u32;
+  set mut s = 0u32;
   loop(iter: v in xs) {
     s = s + v;
   }
 
   // loop(for: ...) 예시 (명시 이름 버전)
-  mut set t = 0;
+  set mut t = 0;
   loop(for: i in 1..:5) {
     t = t + i;
   }
 
-  mut set x = 10;
+  set mut x = 10;
   set y = x++;
   set z = ++x;
 

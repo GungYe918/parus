@@ -219,7 +219,7 @@ namespace {
     /// @brief OIR 진입 게이트가 invalid escape handle을 차단하는지 검사한다.
     static bool test_oir_gate_rejects_invalid_escape_handle() {
         const std::string src = R"(
-            static let G: i32 = 7i32;
+            static G: i32 = 7i32;
             fn sink(h: &&i32) -> i32 {
                 return 0i32;
             }

@@ -164,6 +164,7 @@ namespace parus::backend::aot {
 
                 case K::kBorrow:
                 case K::kEscape:
+                case K::kPtr:
                 case K::kFn:
                     return "ptr";
 
@@ -233,6 +234,7 @@ namespace parus::backend::aot {
                 }
                 case K::kBorrow:
                 case K::kEscape:
+                case K::kPtr:
                 case K::kFn:
                     return 8;
                 case K::kNamedUser:
@@ -478,6 +480,23 @@ namespace parus::backend::aot {
                 std::ostringstream os;
                 const std::string ret_ty = map_type_(types_, fn_.ret_ty);
                 const std::string sym = sanitize_symbol_(fn_.name);
+
+                // extern 함수는 본문 없이 선언으로만 내린다.
+                if (fn_.is_extern) {
+                    os << "declare " << ret_ty << " @" << sym << "(";
+                    if (fn_.entry != parus::oir::kInvalidId &&
+                        static_cast<size_t>(fn_.entry) < m_.blocks.size()) {
+                        const auto& entry = m_.blocks[fn_.entry];
+                        for (size_t i = 0; i < entry.params.size(); ++i) {
+                            if (i) os << ", ";
+                            os << value_ty_(entry.params[i]);
+                        }
+                    }
+                    os << ")\n";
+                    need_call_stub = need_call_stub || need_call_stub_;
+                    return os.str();
+                }
+
                 os << "define " << ret_ty << " @" << sym << "(";
                 if (fn_.entry != parus::oir::kInvalidId &&
                     static_cast<size_t>(fn_.entry) < m_.blocks.size()) {
@@ -487,7 +506,14 @@ namespace parus::backend::aot {
                         os << value_ty_(entry.params[i]) << " %arg" << i;
                     }
                 }
-                os << ") {\n";
+                os << ")";
+                if (fn_.is_pure || fn_.is_comptime) {
+                    os << " nounwind";
+                }
+                if (fn_.is_pure) {
+                    os << " willreturn";
+                }
+                os << " {\n";
 
                 for (auto bb : fn_.blocks) {
                     if (bb == parus::oir::kInvalidId || static_cast<size_t>(bb) >= m_.blocks.size()) continue;
@@ -524,6 +550,7 @@ namespace parus::backend::aot {
                 std::string symbol{};
                 std::string ret_ty{};
                 std::vector<std::string> param_tys{};
+                parus::oir::FunctionAbi abi = parus::oir::FunctionAbi::Parus;
             };
 
             /// @brief 새 임시 SSA 이름을 생성한다.
@@ -591,6 +618,7 @@ namespace parus::backend::aot {
                 DirectCalleeInfo info{};
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
                 info.ret_ty = map_type_(types_, target.ret_ty);
+                info.abi = target.abi;
 
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
                     const auto& entry = m_.blocks[target.entry];
@@ -625,14 +653,13 @@ namespace parus::backend::aot {
                 return off;
             }
 
-            /// @brief src 값을 want 타입으로 강제 변환한 SSA ref를 반환한다.
-            std::string coerce_value_(
+            /// @brief SSA 참조(ref, cur_ty)를 want 타입으로 강제 변환한다.
+            std::string coerce_ref_(
                 std::ostringstream& os,
-                parus::oir::ValueId src,
+                const std::string& ref,
+                const std::string& cur,
                 const std::string& want
             ) {
-                const std::string cur = value_ty_(src);
-                const std::string ref = vref_(src);
                 if (cur == want) return ref;
 
                 const std::string tmp = next_tmp_();
@@ -709,6 +736,17 @@ namespace parus::backend::aot {
 
                 os << "  " << tmp << " = add i64 0, 0\n";
                 return tmp;
+            }
+
+            /// @brief src 값을 want 타입으로 강제 변환한 SSA ref를 반환한다.
+            std::string coerce_value_(
+                std::ostringstream& os,
+                parus::oir::ValueId src,
+                const std::string& want
+            ) {
+                const std::string cur = value_ty_(src);
+                const std::string ref = vref_(src);
+                return coerce_ref_(os, ref, cur, want);
             }
 
             /// @brief 블록 인자(phi)를 출력한다.
@@ -1041,10 +1079,29 @@ namespace parus::backend::aot {
                                     os << ")\n";
                                     emit_default_result();
                                 } else if (inst.result != kInvalidId) {
-                                    os << "  " << vref_(inst.result) << " = call " << direct->ret_ty
-                                       << " @" << direct->symbol << "(";
-                                    emit_arg_list(os);
-                                    os << ")\n";
+                                    const std::string want_ty = value_ty_(inst.result);
+                                    if (want_ty == direct->ret_ty) {
+                                        os << "  " << vref_(inst.result) << " = call " << direct->ret_ty
+                                           << " @" << direct->symbol << "(";
+                                        emit_arg_list(os);
+                                        os << ")\n";
+                                    } else {
+                                        // 오버로드/직접 호출 해소가 기대 타입과 어긋나더라도
+                                        // SSA 타입 일관성을 보존하도록 결과를 강제 변환한다.
+                                        const std::string call_tmp = next_tmp_();
+                                        os << "  " << call_tmp << " = call " << direct->ret_ty
+                                           << " @" << direct->symbol << "(";
+                                        emit_arg_list(os);
+                                        os << ")\n";
+                                        const std::string coerced = coerce_ref_(os, call_tmp, direct->ret_ty, want_ty);
+                                        if (coerced == vref_(inst.result)) {
+                                            // no-op
+                                        } else if (coerced.size() > 0 && coerced[0] == '%') {
+                                            os << "  " << vref_(inst.result) << " = " << copy_expr_(want_ty, coerced) << "\n";
+                                        } else {
+                                            os << "  " << vref_(inst.result) << " = " << copy_expr_(want_ty, coerced) << "\n";
+                                        }
+                                    }
                                 } else {
                                     os << "  call " << direct->ret_ty << " @" << direct->symbol << "(";
                                     emit_arg_list(os);
@@ -1214,7 +1271,7 @@ namespace parus::backend::aot {
                 has_raw_main_symbol = true;
             }
 
-            if (is_main_entry_candidate_name(fn)) {
+            if (!fn.is_extern && is_main_entry_candidate_name(fn)) {
                 bool is_zero_arity = false;
                 if (fn.entry != parus::oir::kInvalidId &&
                     static_cast<size_t>(fn.entry) < oir.blocks.size()) {

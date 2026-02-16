@@ -82,29 +82,15 @@ namespace parus {
             return parse_decl_any();
         }
 
-        /// @brief `static/mut/let/set` 조합이 변수 선언 시작인지 lookahead로 판정한다.
+        /// @brief `static/let/set` 또는 잘못된 `mut <...>` 패턴이 변수 선언 시작인지 lookahead로 판정한다.
         const auto is_var_stmt_start_lookahead = [&](uint32_t off) -> bool {
-            K k = cursor_.peek(off).kind;
-
-            bool seen_static = false;
-            bool seen_mut = false;
-
-            // prefix qualifier(static/mut)는 순서 무관으로 최대 1회씩 허용
-            for (;;) {
-                if (k == K::kKwStatic && !seen_static) {
-                    seen_static = true;
-                    k = cursor_.peek(++off).kind;
-                    continue;
-                }
-                if (k == K::kKwMut && !seen_mut) {
-                    seen_mut = true;
-                    k = cursor_.peek(++off).kind;
-                    continue;
-                }
-                break;
+            const K k = cursor_.peek(off).kind;
+            if (k == K::kKwStatic || k == K::kKwLet || k == K::kKwSet) return true;
+            if (k == K::kKwMut) {
+                const K k1 = cursor_.peek(off + 1).kind;
+                return (k1 == K::kKwStatic || k1 == K::kKwLet || k1 == K::kKwSet);
             }
-
-            return k == K::kKwLet || k == K::kKwSet;
+            return false;
         };
 
         // empty stmt: ';'
@@ -266,35 +252,55 @@ namespace parus {
 
         const Token start_tok = cursor_.peek();
 
-        bool is_static = false;
-        bool is_mut = false;
-        bool seen_static = false;
-        bool seen_mut = false;
-
-        // prefix qualifier는 순서 무관 허용: static mut set, mut static set, ...
-        for (;;) {
-            if (cursor_.at(K::kKwStatic) && !seen_static) {
-                seen_static = true;
-                is_static = true;
-                cursor_.bump();
-                continue;
-            }
-            if (cursor_.at(K::kKwMut) && !seen_mut) {
-                seen_mut = true;
-                is_mut = true;
-                cursor_.bump();
-                continue;
-            }
-            break;
+        bool mut_prefix_invalid = false;
+        if (cursor_.at(K::kKwMut)) {
+            // v0 규칙:
+            // - 가변성 표기는 선언 키워드 뒤에만 허용한다.
+            //   * let mut x: T = ...
+            //   * set mut x = ...
+            //   * static mut x: T = ...
+            diag_report(diag::Code::kVarMutMustFollowKw, cursor_.peek().span);
+            cursor_.bump();
+            mut_prefix_invalid = true;
         }
 
-        if (!cursor_.at(K::kKwLet) && !cursor_.at(K::kKwSet)) {
-            if (is_static) {
-                diag_report(diag::Code::kStaticVarExpectedLetOrSet, cursor_.peek().span);
-            } else {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'let' or 'set'");
+        bool is_static = false;
+        bool is_mut = false;
+        bool is_set = false;
+
+        // -------- declaration keyword --------
+        if (cursor_.at(K::kKwStatic)) {
+            is_static = true;
+            cursor_.bump(); // static
+
+            if (cursor_.at(K::kKwMut)) {
+                is_mut = true;
+                cursor_.bump(); // static mut
             }
 
+            // 구문 정리: static은 let/set을 수반하지 않는다.
+            if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet)) {
+                diag_report(
+                    diag::Code::kUnexpectedToken,
+                    cursor_.peek().span,
+                    "remove 'let/set' after 'static' (use: static [mut] name: T = expr;)"
+                );
+                cursor_.bump();
+                if (cursor_.at(K::kKwMut)) {
+                    diag_report(diag::Code::kVarMutMustFollowKw, cursor_.peek().span);
+                    cursor_.bump();
+                }
+            }
+        } else if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet)) {
+            const Token kw = cursor_.bump();
+            is_set = (kw.kind == K::kKwSet);
+
+            if (cursor_.at(K::kKwMut)) {
+                is_mut = true;
+                cursor_.bump();
+            }
+        } else {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'static', 'let' or 'set'");
             stmt_sync_to_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
 
@@ -304,15 +310,8 @@ namespace parus {
             return ast_.add_stmt(s);
         }
 
-        const Token kw = cursor_.bump(); // consume 'let' or 'set'
-        const bool is_set = (kw.kind == K::kKwSet);
-
-        // 기존 문법 호환: let/set 뒤의 mut도 허용한다.
-        if (cursor_.at(K::kKwMut) && !seen_mut) {
-            is_mut = true;
-            seen_mut = true;
-            cursor_.bump();
-        }
+        // prefix 'mut'가 있었더라도 선언 자체는 계속 파싱하여 연쇄 오류를 줄인다.
+        (void)mut_prefix_invalid;
 
         // ---- name ----
         std::string_view name{};
@@ -330,14 +329,14 @@ namespace parus {
 
             ast::Stmt s{};
             s.kind = ast::StmtKind::kError;
-            s.span = span_join(kw.span, cursor_.prev().span);
+            s.span = span_join(start_tok.span, cursor_.prev().span);
             return ast_.add_stmt(s);
         }
 
         // ---- type annotation ----
         ast::TypeId type_id = ast::k_invalid_type;
 
-        if (!is_set) {
+        if (is_static || !is_set) {
             // let: ':' required
             if (!cursor_.eat(K::kColon)) {
                 diag_report(diag::Code::kVarDeclTypeAnnotationRequired, cursor_.peek().span);

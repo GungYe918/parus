@@ -371,6 +371,7 @@ namespace parus {
         if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
+        if (t.lexeme == "extern")   { t.kind = syntax::TokenKind::kKwExtern;   return t; }
         // - 설계 변경: pure/comptime 등 @ + attr에서 attr은 이제 kIdent로 취급
         // if (t.lexeme == "pure")     { t.kind = syntax::TokenKind::kKwPure;     return t; }
         // if (t.lexeme == "comptime") { t.kind = syntax::TokenKind::kKwComptime; return t; }

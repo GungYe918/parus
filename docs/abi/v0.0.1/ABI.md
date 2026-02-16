@@ -60,7 +60,7 @@ FFI 경계는 선언 키워드로 고정한다.
 
 ```parus
 extern "C" fn puts(s: ptr u8) -> i32;
-extern "C" static mut set errno: i32;
+extern "C" static mut errno: i32;
 ```
 
 ### 4.2 심볼 내보내기
@@ -177,4 +177,3 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 2. FFI 선언을 `extern "C"` / `export "C"`로 통일
 3. `field` 레이아웃 표기를 `layout(c)`/`align(n)`로 고정
 4. 포인터 표기를 `ptr` / `ptr mut`로 고정
-

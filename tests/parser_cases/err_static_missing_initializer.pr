@@ -1,5 +1,5 @@
 // 비허용 케이스: static 변수는 반드시 초기화 필요
-static let G: i32;
+static G: i32;
 
 fn main() -> i32 {
   return 0i32;

@@ -9,6 +9,16 @@
 
 
 namespace parus {
+
+    namespace {
+
+        /// @brief 링크 ABI 문자열 토큰이 C ABI(`"C"`)인지 검사한다.
+        bool is_c_abi_lit_(const Token& t) {
+            if (t.kind != syntax::TokenKind::kStringLit) return false;
+            return t.lexeme == "\"C\"";
+        }
+
+    } // namespace
     
     // '@attr' 리스트를 파싱하여 AST arena에 저장한다.
     // 정책(v0): '@' 뒤는 ident만 허용. 그 외는 진단 후 회복.
@@ -295,11 +305,29 @@ namespace parus {
         // 1) @attribute*
         auto [attr_begin, attr_count] = parse_decl_fn_attr_list();
 
-        // 2) export?
+        // 2) linkage prefix (export / extern)
         bool is_export = false;
-        if (cursor_.at(K::kKwExport)) {
-            is_export = true;
-            cursor_.bump();
+        bool is_extern = false;
+        ast::LinkAbi link_abi = ast::LinkAbi::kNone;
+        if (cursor_.at(K::kKwExport) || cursor_.at(K::kKwExtern)) {
+            const Token lk = cursor_.bump();
+            is_export = (lk.kind == K::kKwExport);
+            is_extern = (lk.kind == K::kKwExtern);
+
+            // ABI spec v0.0.1:
+            // - extern "C" / export "C"를 C ABI 경계로 취급한다.
+            // - export 단독은 기존 내부 export 의미를 유지한다.
+            if (cursor_.at(K::kStringLit)) {
+                const Token abi_tok = cursor_.peek();
+                if (is_c_abi_lit_(abi_tok)) {
+                    link_abi = ast::LinkAbi::kC;
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, abi_tok.span, "only \"C\" ABI is supported");
+                }
+                cursor_.bump();
+            } else if (is_extern) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "\"C\"");
+            }
         }
 
         // 3) fn
@@ -401,12 +429,27 @@ namespace parus {
             );
         }
 
-        // 9) Block
-        ast::StmtId body = parse_stmt_required_block("fn");
-
-        Span end_sp = ast_.stmt(body).span;
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
+        // 9) body/prototype
+        ast::StmtId body = ast::k_invalid_stmt;
+        Span end_sp = ret_ty.span.hi ? ret_ty.span : cursor_.prev().span;
+        if (is_extern) {
+            // extern 선언은 body 없이 ';'로 끝난다.
+            if (cursor_.at(K::kLBrace)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "extern function declaration must not have a body");
+                (void)parse_stmt_required_block("extern fn");
+            }
+            if (cursor_.at(K::kSemicolon)) {
+                end_sp = cursor_.bump().span;
+            } else {
+                end_sp = stmt_consume_semicolon_or_recover(end_sp);
+            }
+        } else {
+            body = parse_stmt_required_block("fn");
+            end_sp = ast_.stmt(body).span;
+            if (cursor_.at(K::kSemicolon)) {
+                end_sp = cursor_.bump().span;
+            }
         }
 
         ast::Stmt s{};
@@ -421,6 +464,8 @@ namespace parus {
         s.a = body;
 
         s.is_export = is_export;
+        s.is_extern = is_extern;
+        s.link_abi = link_abi;
         s.fn_mode = ast::FnMode::kNone;
 
         s.is_throwing = is_throwing;

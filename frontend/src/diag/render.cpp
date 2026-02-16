@@ -161,6 +161,10 @@ namespace parus::diag {
             case Code::kOverloadNoMatchingCall:return "OverloadNoMatchingCall";
             case Code::kOverloadAmbiguousCall:return "OverloadAmbiguousCall";
             case Code::kMangleSymbolCollision:return "MangleSymbolCollision";
+            case Code::kAbiCOverloadNotAllowed:return "AbiCOverloadNotAllowed";
+            case Code::kAbiCNamedGroupNotAllowed:return "AbiCNamedGroupNotAllowed";
+            case Code::kAbiCTypeNotFfiSafe:return "AbiCTypeNotFfiSafe";
+            case Code::kAbiCGlobalMustBeStatic:return "AbiCGlobalMustBeStatic";
             case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
             case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
             case Code::kTypeBreakValueOnlyInLoopExpr:return "TypeBreakValueOnlyInLoopExpr";
@@ -306,7 +310,7 @@ namespace parus::diag {
             case Code::kSwitchDefaultDuplicate:     return "duplicate 'default' clause in switch";
             case Code::kSwitchNeedsAtLeastOneCase:  return "switch must contain at least one 'case' clause";
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "only 'case'/'default' clauses are allowed inside switch body";
-            case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after 'let'/'set' (e.g., 'set mut x = ...')";
+            case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after declaration keyword (e.g., 'let mut x: T', 'set mut x = ...', 'static mut x: T = ...')";
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
             case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
             case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
@@ -349,6 +353,10 @@ namespace parus::diag {
             case Code::kOverloadNoMatchingCall: return "no matching overload for '{0}' with call form/types: {1}";
             case Code::kOverloadAmbiguousCall: return "ambiguous overloaded call '{0}'; candidates: {1}";
             case Code::kMangleSymbolCollision: return "mangle collision on symbol '{0}': {1} vs {2}";
+            case Code::kAbiCOverloadNotAllowed: return "C ABI function '{0}' must not be overloaded";
+            case Code::kAbiCNamedGroupNotAllowed: return "C ABI function '{0}' must not use named-group parameters";
+            case Code::kAbiCTypeNotFfiSafe: return "C ABI requires FFI-safe type for {0}; got '{1}'";
+            case Code::kAbiCGlobalMustBeStatic: return "C ABI global '{0}' must be declared with 'static'";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
             case Code::kTypeReturnExprRequired: return "return expression is required (function does not return void)";
             case Code::kTypeBreakValueOnlyInLoopExpr: return "break with value is only allowed inside loop expressions";
@@ -500,7 +508,7 @@ namespace parus::diag {
             case Code::kSwitchNeedsAtLeastOneCase:  return "switch에는 최소 1개의 case 절이 필요합니다";
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "switch 본문에는 case/default 절만 올 수 있습니다";
 
-            case Code::kVarMutMustFollowKw: return "'mut'는 'let/set' 바로 뒤에만 올 수 있습니다 (예: set mut x = ...)";
+            case Code::kVarMutMustFollowKw: return "'mut'는 선언 키워드 바로 뒤에만 올 수 있습니다 (예: let mut x: T, set mut x = ..., static mut x: T = ...)";
 
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
             case Code::kEscapeOperandMustBePlace: return "'&&'의 피연산자는 place expression이어야 합니다";
@@ -544,6 +552,10 @@ namespace parus::diag {
             case Code::kOverloadNoMatchingCall: return "'{0}' 호출과 일치하는 오버로드를 찾지 못했습니다: {1}";
             case Code::kOverloadAmbiguousCall: return "'{0}' 호출이 모호합니다. 후보: {1}";
             case Code::kMangleSymbolCollision: return "맹글링 심볼 '{0}'이 충돌합니다: {1} vs {2}";
+            case Code::kAbiCOverloadNotAllowed: return "C ABI 함수 '{0}'는 오버로딩할 수 없습니다";
+            case Code::kAbiCNamedGroupNotAllowed: return "C ABI 함수 '{0}'는 named-group 파라미터를 사용할 수 없습니다";
+            case Code::kAbiCTypeNotFfiSafe: return "C ABI의 {0}에는 FFI-safe 타입만 허용됩니다. 현재 타입: '{1}'";
+            case Code::kAbiCGlobalMustBeStatic: return "C ABI 전역 '{0}'는 반드시 'static'으로 선언해야 합니다";
             case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
             case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 반환 타입이 void가 아닙니다)";
             case Code::kTypeBreakValueOnlyInLoopExpr: return "값을 가진 break는 loop 표현식 안에서만 허용됩니다";

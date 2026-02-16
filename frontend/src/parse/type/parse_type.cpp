@@ -203,6 +203,23 @@ namespace parus {
                 return out;
             }
 
+            // ---- ptr T / ptr mut T ----
+            if (cursor_.at(K::kIdent) && cursor_.peek().lexeme == "ptr") {
+                const Token ptr_tok = cursor_.bump(); // 'ptr'
+                bool is_mut = false;
+                if (cursor_.at(K::kKwMut)) {
+                    is_mut = true;
+                    cursor_.bump();
+                }
+                auto elem = parse_type();
+                if (elem.id == ty::kInvalidType) elem.id = types_.error();
+
+                ParsedType out{};
+                out.id = types_.make_ptr(elem.id, is_mut);
+                out.span = span_join(ptr_tok.span, elem.span.hi ? elem.span : ptr_tok.span);
+                return out;
+            }
+
             // ---- Ident / Path type ----
             //   Ident ('::' Ident)*
             if (cursor_.at(K::kIdent)) {

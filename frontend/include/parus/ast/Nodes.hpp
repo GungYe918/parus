@@ -240,6 +240,12 @@ namespace parus::ast {
         kSub,
     };
 
+    /// @brief 선언의 외부 링크 ABI 종류(v0: 미지정/ C ABI)
+    enum class LinkAbi : uint8_t {
+        kNone = 0,
+        kC,
+    };
+
     // use stmt
     enum class UseKind : uint8_t {
         kError,
@@ -268,6 +274,8 @@ namespace parus::ast {
         bool is_set = false;          // false=let, true=set
         bool is_mut = false;
         bool is_static = false;
+        bool is_extern = false;
+        LinkAbi link_abi = LinkAbi::kNone;
         std::string_view name{};
         TypeId type = k_invalid_type;
         ExprId init = k_invalid_expr;

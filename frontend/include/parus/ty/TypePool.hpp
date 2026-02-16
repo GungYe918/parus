@@ -149,6 +149,19 @@ namespace parus::ty {
             return push_(t);
         }
 
+        TypeId make_ptr(TypeId elem, bool is_mut) {
+            for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
+                const auto& t = types_[i];
+                if (t.kind == Kind::kPtr && t.elem == elem && t.ptr_is_mut == is_mut) return i;
+            }
+
+            Type t{};
+            t.kind = Kind::kPtr;
+            t.elem = elem;
+            t.ptr_is_mut = is_mut;
+            return push_(t);
+        }
+
         // ---- function signature type interning ----
         TypeId make_fn(TypeId ret, const TypeId* params, uint32_t param_count) {
             // linear search v0 (ok)
@@ -317,6 +330,9 @@ namespace parus::ty {
                     case Kind::kEscape:
                         os << "(Escape elem=" << t.elem << ")";
                         break;
+                    case Kind::kPtr:
+                        os << "(Ptr mut=" << (t.ptr_is_mut ? 1 : 0) << " elem=" << t.elem << ")";
+                        break;
                     case Kind::kFn:
                         os << "(Fn ret=" << t.ret
                            << " params=[" << t.param_begin
@@ -440,6 +456,17 @@ namespace parus::ty {
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
 
                     out += "&&";
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_(out, t.elem, RenderCtx::kTop);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
+                    return;
+                }
+
+                case Kind::kPtr: {
+                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "ptr mut <invalid>" : "ptr <invalid>"); return; }
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    out += "ptr ";
+                    if (t.ptr_is_mut) out += "mut ";
                     if (needs_parens_for_prefix_(ek)) out += "(";
                     render_into_(out, t.elem, RenderCtx::kTop);
                     if (needs_parens_for_prefix_(ek)) out += ")";

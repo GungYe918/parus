@@ -144,6 +144,8 @@ namespace parus::sir {
                         return false;
                     case ty::Kind::kEscape:
                         return false;
+                    case ty::Kind::kPtr:
+                        return false;
                     case ty::Kind::kFn:
                         return false;
                     case ty::Kind::kOptional:

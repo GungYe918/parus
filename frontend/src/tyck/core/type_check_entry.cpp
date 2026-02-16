@@ -180,6 +180,70 @@ namespace parus::tyck {
         // - 사용자 출력은 항상 diag_(Code, args...)만 사용
     }
 
+    bool TypeChecker::is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const {
+        if (t == ty::kInvalidType) return false;
+        const auto& tt = types_.get(t);
+
+        switch (tt.kind) {
+            case ty::Kind::kError:
+                return false;
+
+            case ty::Kind::kBuiltin: {
+                using B = ty::Builtin;
+                switch (tt.builtin) {
+                    case B::kI8:
+                    case B::kI16:
+                    case B::kI32:
+                    case B::kI64:
+                    case B::kU8:
+                    case B::kU16:
+                    case B::kU32:
+                    case B::kU64:
+                    case B::kISize:
+                    case B::kUSize:
+                    case B::kF32:
+                    case B::kF64:
+                        return true;
+                    case B::kUnit:
+                        return allow_void;
+                    default:
+                        return false;
+                }
+            }
+
+            case ty::Kind::kPtr:
+                // ptr T / ptr mut T: pointee도 FFI-safe여야 한다.
+                return is_c_abi_safe_type_(tt.elem, /*allow_void=*/false);
+
+            case ty::Kind::kBorrow:
+            case ty::Kind::kEscape:
+            case ty::Kind::kOptional:
+            case ty::Kind::kArray:
+            case ty::Kind::kFn:
+            case ty::Kind::kNamedUser:
+                // v0.0.1 규칙:
+                // - borrow/escape/optional/direct function type 금지
+                // - layout(c) field는 추후 별도 메타 검증 추가 전까지 보수적으로 금지
+                return false;
+        }
+
+        return false;
+    }
+
+    void TypeChecker::check_c_abi_global_decl_(const ast::Stmt& s) {
+        if (s.link_abi != ast::LinkAbi::kC) return;
+
+        if (!s.is_static) {
+            diag_(diag::Code::kAbiCGlobalMustBeStatic, s.span, s.name);
+            err_(s.span, "C ABI global must be static: " + std::string(s.name));
+        }
+
+        if (!is_c_abi_safe_type_(s.type, /*allow_void=*/false)) {
+            diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("global '") + std::string(s.name) + "'", types_.to_string(s.type));
+            err_(s.span, "C ABI global type is not FFI-safe: " + types_.to_string(s.type));
+        }
+    }
+
     // --------------------
     // pass 1: collect top-level decls
     // --------------------
@@ -266,6 +330,30 @@ namespace parus::tyck {
                         diag_(diag::Code::kDuplicateDecl, s.span, s.name);
                     }
                 }
+
+                if (s.link_abi == ast::LinkAbi::kC) {
+                    if (s.has_named_group || s.positional_param_count != s.param_count) {
+                        diag_(diag::Code::kAbiCNamedGroupNotAllowed, s.span, s.name);
+                        err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
+                    }
+
+                    ty::TypeId ret_ty = s.fn_ret;
+                    if (ret_ty == ty::kInvalidType && sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn) {
+                        ret_ty = types_.get(sig).ret;
+                    }
+                    if (!is_c_abi_safe_type_(ret_ty, /*allow_void=*/true)) {
+                        diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("return type of '") + std::string(s.name) + "'", types_.to_string(ret_ty));
+                        err_(s.span, "C ABI return type is not FFI-safe: " + types_.to_string(ret_ty));
+                    }
+
+                    for (uint32_t pi = 0; pi < s.param_count; ++pi) {
+                        const auto& p = ast_.params()[s.param_begin + pi];
+                        if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
+                            diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span, std::string("parameter '") + std::string(p.name) + "'", types_.to_string(p.type));
+                            err_(p.span, "C ABI parameter type is not FFI-safe: " + std::string(p.name));
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -273,6 +361,10 @@ namespace parus::tyck {
             // top-level var decl
             // ----------------------------
             if (s.kind == ast::StmtKind::kVar) {
+                if (s.link_abi == ast::LinkAbi::kC && !s.is_static) {
+                    diag_(diag::Code::kAbiCGlobalMustBeStatic, s.span, s.name);
+                    err_(s.span, "C ABI global must be static: " + std::string(s.name));
+                }
                 // top-level var는 precollect 대상이 아니다.
                 // 실제 선언/타입 확정은 PASS2(check_stmt_var_)에서 한 번만 처리한다.
                 continue;
@@ -317,6 +409,7 @@ namespace parus::tyck {
             std::string_view name{};
             Span span{};
             ty::TypeId ret = ty::kInvalidType;
+            bool is_c_abi = false;
             std::vector<ParamShape> positional;
             std::vector<ParamShape> named;
         };
@@ -435,6 +528,7 @@ namespace parus::tyck {
                 d.sid = sid;
                 d.name = s.name;
                 d.span = s.span;
+                d.is_c_abi = (s.link_abi == ast::LinkAbi::kC);
                 d.ret = (s.fn_ret != ty::kInvalidType)
                     ? s.fn_ret
                     : ((s.type != ty::kInvalidType && types_.get(s.type).kind == ty::Kind::kFn)
@@ -473,6 +567,23 @@ namespace parus::tyck {
             }
 
             if (decls.size() <= 1) continue;
+
+            // ABI 문서(v0.0.1) 규칙:
+            // C ABI 경계 함수는 오버로딩 금지.
+            bool has_c_abi = false;
+            for (const auto& d : decls) {
+                if (d.is_c_abi) {
+                    has_c_abi = true;
+                    break;
+                }
+            }
+            if (has_c_abi) {
+                for (const auto& d : decls) {
+                    if (!d.is_c_abi) continue;
+                    diag_(diag::Code::kAbiCOverloadNotAllowed, d.span, fn_name);
+                    err_(d.span, "C ABI function must not be overloaded: " + fn_name);
+                }
+            }
 
             // 스펙 6.1.7(C)-1/2: Declaration Key 충돌 금지 (반환 타입만 차이도 포함)
             std::unordered_map<std::string, size_t> decl_key_owner;

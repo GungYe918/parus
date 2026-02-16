@@ -368,6 +368,15 @@ namespace parus::oir {
             return out;
         }
 
+        /// @brief SIR 함수 ABI를 OIR 함수 ABI로 변환한다.
+        FunctionAbi map_func_abi_(parus::sir::FuncAbi abi) {
+            switch (abi) {
+                case parus::sir::FuncAbi::kC: return FunctionAbi::C;
+                case parus::sir::FuncAbi::kParus:
+                default: return FunctionAbi::Parus;
+            }
+        }
+
         // -----------------------
         // Lower expressions
         // -----------------------
@@ -608,6 +617,7 @@ namespace parus::oir {
                 }
 
                 if (callee == kInvalidId &&
+                    direct_callee == kInvalidId &&
                     v.callee_sym != parus::sir::k_invalid_symbol &&
                     fn_symbol_to_func != nullptr) {
                     auto fit = fn_symbol_to_func->find(v.callee_sym);
@@ -971,8 +981,15 @@ namespace parus::oir {
             const auto& sf = sir_.funcs[i];
 
             Function f{};
-            f.name = mangle_func_name_(sf, ty_);
+            // C ABI 함수는 심볼을 비맹글 기반으로 유지한다.
+            f.name = (sf.abi == parus::sir::FuncAbi::kC)
+                ? std::string(sf.name)
+                : mangle_func_name_(sf, ty_);
             f.source_name = sf.name;
+            f.abi = map_func_abi_(sf.abi);
+            f.is_extern = sf.is_extern;
+            f.is_pure = sf.is_pure;
+            f.is_comptime = sf.is_comptime;
             f.ret_ty = (TypeId)sf.ret;
 
             const BlockId entry = out.mod.add_block(Block{});

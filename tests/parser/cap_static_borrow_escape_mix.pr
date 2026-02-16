@@ -2,9 +2,9 @@
 // - static 저장소에 && 초기값 저장
 // - 함수 내부에서 &, &mut, &&, named-group, 배열 인덱스/슬라이스 조합 사용
 
-static let G0: i32 = 11i32;
-static let G1: i32 = 22i32;
-static mut set SLOT = &&G0;
+static G0: i32 = 11i32;
+static G1: i32 = 22i32;
+static mut SLOT: &&i32 = &&G0;
 
 fn read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return (a + b) * scale + bias;

@@ -633,8 +633,8 @@ namespace {
     static bool test_static_allows_escape_storage() {
         // static place는 non-boundary 문맥에서도 &&를 허용해야 한다.
         const std::string src = R"(
-            static let G: i32 = 7i32;
-            static mut set HG = &&G;
+            static G: i32 = 7i32;
+            static mut HG: &&i32 = &&G;
             fn main() -> i32 {
                 return 0i32;
             }
@@ -657,7 +657,7 @@ namespace {
     static bool test_sir_handle_verify_rejects_materialized_handle() {
         // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
         const std::string src = R"(
-            static let G: i32 = 7i32;
+            static G: i32 = 7i32;
             fn sink(h: &&i32) -> i32 {
                 return 0i32;
             }
@@ -697,7 +697,7 @@ namespace {
     static bool test_oir_gate_rejects_invalid_escape_handle() {
         // OIR lowering 진입 전 게이트는 escape-handle verify 실패 시 lowering을 중단해야 한다.
         const std::string src = R"(
-            static let G: i32 = 7i32;
+            static G: i32 = 7i32;
             fn sink(h: &&i32) -> i32 {
                 return 0i32;
             }
@@ -891,6 +891,112 @@ namespace {
         return ok;
     }
 
+    static bool test_c_abi_extern_export_ok() {
+        const std::string src = R"(
+            extern "C" fn c_add(a: i32, b: i32) -> i32;
+            extern "C" static mut errno: i32;
+
+            export "C" fn p_add(a: i32, b: i32) -> i32 {
+                return a + b;
+            }
+
+            fn main() -> i32 {
+                return p_add(1i32, 2i32);
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "valid C ABI declaration/source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "valid C ABI declaration/source must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_c_abi_reject_non_ffi_safe_type() {
+        const std::string src = R"(
+            extern "C" fn bad_ref(x: &i32) -> i32;
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCTypeNotFfiSafe),
+            "C ABI function with borrow type must emit AbiCTypeNotFfiSafe");
+        return ok;
+    }
+
+    static bool test_c_abi_reject_named_group() {
+        const std::string src = R"(
+            extern "C" fn bad_ng(a: i32, { b: i32 }) -> i32;
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCNamedGroupNotAllowed),
+            "C ABI function with named-group must emit AbiCNamedGroupNotAllowed");
+        return ok;
+    }
+
+    static bool test_c_abi_global_requires_static() {
+        const std::string src = R"(
+            extern "C" mut errno: i32;
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCGlobalMustBeStatic),
+            "C ABI global without static must emit AbiCGlobalMustBeStatic");
+        return ok;
+    }
+
+    static bool test_var_mut_prefix_forbidden_on_set() {
+        const std::string src = R"(
+            fn main() -> i32 {
+                mut set a = 6i32;
+                return a;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kVarMutMustFollowKw),
+            "prefix 'mut set' must emit VarMutMustFollowKw");
+        return ok;
+    }
+
+    static bool test_var_mut_prefix_forbidden_on_static() {
+        const std::string src = R"(
+            mut static G: i32 = 1i32;
+            fn main() -> i32 { return G; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kVarMutMustFollowKw),
+            "prefix 'mut static' must emit VarMutMustFollowKw");
+        return ok;
+    }
+
     static bool test_file_cases_directory() {
 #ifndef PARUS_TEST_CASE_DIR
         std::cerr << "  - PARUS_TEST_CASE_DIR is not defined\n";
@@ -959,6 +1065,12 @@ int main() {
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},
         {"sir_control_flow_block_layout", test_sir_control_flow_block_layout},
+        {"c_abi_extern_export_ok", test_c_abi_extern_export_ok},
+        {"c_abi_reject_non_ffi_safe_type", test_c_abi_reject_non_ffi_safe_type},
+        {"c_abi_reject_named_group", test_c_abi_reject_named_group},
+        {"c_abi_global_requires_static", test_c_abi_global_requires_static},
+        {"var_mut_prefix_forbidden_on_set", test_var_mut_prefix_forbidden_on_set},
+        {"var_mut_prefix_forbidden_on_static", test_var_mut_prefix_forbidden_on_static},
         {"file_cases_directory", test_file_cases_directory},
     };
 

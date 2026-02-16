@@ -226,6 +226,9 @@ namespace parus::tyck {
         ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
 
+        bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
+        void check_c_abi_global_decl_(const ast::Stmt& s);
+
     };
 
 } // namespace parus::tyck

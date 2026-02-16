@@ -1,4 +1,4 @@
-// 비허용 케이스: static 뒤에는 [mut] let/set 필요
+// 비허용 케이스: static 변수 선언은 `static [mut] name: T = expr;` 형태여야 함
 static fn bad() -> i32 {
   return 0i32;
 }

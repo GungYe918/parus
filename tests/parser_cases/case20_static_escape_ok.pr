@@ -1,6 +1,6 @@
 // 허용 케이스: static place는 경계 외 문맥에서도 && 가능
-static let G: i32 = 7i32;
-static mut set HG = &&G;
+static G: i32 = 7i32;
+static mut HG: &&i32 = &&G;
 
 fn main() -> i32 {
   return 0i32;

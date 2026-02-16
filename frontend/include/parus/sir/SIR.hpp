@@ -284,6 +284,12 @@ namespace parus::sir {
         kSub,
     };
 
+    /// @brief 함수 ABI 분류 (v0: 내부 ABI와 C ABI 기반 라인 분리)
+    enum class FuncAbi : uint8_t {
+        kParus = 0,
+        kC,
+    };
+
     struct Func {
         parus::Span span{};
         std::string_view name{};
@@ -295,7 +301,9 @@ namespace parus::sir {
 
         // decl qualifiers
         bool is_export = false;
+        bool is_extern = false;
         FnMode fn_mode = FnMode::kNone;
+        FuncAbi abi = FuncAbi::kParus;
 
         bool is_pure = false;
         bool is_comptime = false;
@@ -365,6 +373,9 @@ namespace parus::sir {
         bool is_set = false;
         bool is_mut = false;
         bool is_static = false;
+        bool is_export = false;
+        bool is_extern = false;
+        FuncAbi abi = FuncAbi::kParus;
 
         TypeId declared_type = k_invalid_type;
     };

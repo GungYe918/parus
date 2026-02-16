@@ -44,6 +44,7 @@ namespace parus::ty {
 
         kBorrow,    // &T / &mut T
         kEscape,    // &&T
+        kPtr,       // ptr T / ptr mut T
 
         kFn,        // fn(T1, T2, ...) -> R
     };
@@ -69,6 +70,8 @@ namespace parus::ty {
 
         // kBorrow
         bool borrow_is_mut = false;
+        // kPtr
+        bool ptr_is_mut = false;
 
         // kFn
         TypeId ret = kInvalidType;

@@ -148,6 +148,43 @@ namespace parus::tyck {
         ast::Stmt& s = ast_.stmt_mut(sid); // mutable access (AST에 타입 기록 위해)
 
         // ----------------------------------------
+        // extern variable declaration:
+        // - declaration only (no initializer)
+        // - explicit type required
+        // - set/let 표기 차이는 의미론에 영향 없음
+        // ----------------------------------------
+        if (s.is_extern) {
+            if (s.type == ty::kInvalidType) {
+                diag_(diag::Code::kVarDeclTypeAnnotationRequired, s.span);
+                err_(s.span, "extern variable requires an explicit declared type");
+            }
+            if (s.init != ast::k_invalid_expr) {
+                diag_(diag::Code::kTypeErrorGeneric, s.span,
+                    "extern variable declaration must not have an initializer");
+                err_(s.span, "extern variable declaration must not have an initializer");
+            }
+
+            ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
+            auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, vt, s.span);
+            if (!ins.ok) {
+                if (ins.is_duplicate) {
+                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
+                    err_(s.span, "duplicate symbol (extern var): " + std::string(s.name));
+                } else if (ins.is_shadowing) {
+                    diag_(diag::Code::kShadowing, s.span, s.name);
+                }
+            }
+
+            if (ins.ok) {
+                sym_is_mut_[ins.symbol_id] = s.is_mut;
+            }
+
+            s.type = vt;
+            check_c_abi_global_decl_(s);
+            return;
+        }
+
+        // ----------------------------------------
         // let: explicit type required (기존 로직 유지 + diag 강화)
         // ----------------------------------------
         if (!s.is_set) {
@@ -213,6 +250,7 @@ namespace parus::tyck {
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
             s.type = vt;
+            check_c_abi_global_decl_(s);
             return;
         }
 
@@ -300,6 +338,7 @@ namespace parus::tyck {
 
         // (F) AST에 “추론된 타입” 기록
         s.type = inferred;
+        check_c_abi_global_decl_(s);
     }
 
     void TypeChecker::check_stmt_if_(const ast::Stmt& s) {
@@ -452,6 +491,30 @@ namespace parus::tyck {
             sig = types_.make_fn(ret, params.data(), (uint32_t)params.size());
         }
 
+        if (s.link_abi == ast::LinkAbi::kC) {
+            if (s.has_named_group || s.positional_param_count != s.param_count) {
+                diag_(diag::Code::kAbiCNamedGroupNotAllowed, s.span, s.name);
+                err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
+            }
+
+            if (!is_c_abi_safe_type_(ret, /*allow_void=*/true)) {
+                diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span,
+                    std::string("return type of '") + std::string(s.name) + "'",
+                    types_.to_string(ret));
+                err_(s.span, "C ABI return type is not FFI-safe");
+            }
+
+            for (uint32_t i = 0; i < s.param_count; ++i) {
+                const auto& p = ast_.params()[s.param_begin + i];
+                if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
+                    diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span,
+                        std::string("parameter '") + std::string(p.name) + "'",
+                        types_.to_string(p.type));
+                    err_(p.span, "C ABI parameter type is not FFI-safe: " + std::string(p.name));
+                }
+            }
+        }
+
         // ----------------------------
         // 1) 함수 스코프 진입 + fn ctx 설정
         // ----------------------------
@@ -519,7 +582,12 @@ namespace parus::tyck {
         // ----------------------------
         // 3) 본문 체크
         // ----------------------------
-        if (s.a != ast::k_invalid_stmt) {
+        if (s.is_extern) {
+            if (s.a != ast::k_invalid_stmt) {
+                diag_(diag::Code::kTypeErrorGeneric, s.span, "extern function declaration must not have a body");
+                err_(s.span, "extern function declaration must not have a body");
+            }
+        } else if (s.a != ast::k_invalid_stmt) {
             check_stmt_(s.a);
         }
 
@@ -536,7 +604,7 @@ namespace parus::tyck {
         // 반환 타입이 void(Unit)/never면 "끝까지 도달" 허용
         const ty::TypeId fn_ret = fn_ctx_.ret;
 
-        if (!is_unit(fn_ret) && !is_never(fn_ret)) {
+        if (!s.is_extern && !is_unit(fn_ret) && !is_never(fn_ret)) {
             // body가 항상 return 하는지 검사
             auto stmt_always_returns = [&](auto&& self, ast::StmtId sid) -> bool {
                 if (sid == ast::k_invalid_stmt) return false;

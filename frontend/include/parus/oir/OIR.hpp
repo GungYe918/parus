@@ -184,10 +184,19 @@ namespace parus::oir {
     // ----------------------
     // Function
     // ----------------------
+    enum class FunctionAbi : uint8_t {
+        Parus = 0,
+        C,
+    };
+
     struct Function {
         std::string name;
         // 디버깅/엔트리 판단용 원본 함수 이름(맹글링 전)
         std::string source_name;
+        FunctionAbi abi = FunctionAbi::Parus;
+        bool is_extern = false;
+        bool is_pure = false;
+        bool is_comptime = false;
 
         // return type (used by builder/dumper)
         TypeId ret_ty = kInvalidId;

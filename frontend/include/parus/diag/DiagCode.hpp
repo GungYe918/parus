@@ -132,7 +132,7 @@ namespace parus::diag {
         kSwitchOnlyCaseOrDefaultAllowed,  // switch 내부에 case/default 외 토큰
 
         // ---- var parsing ----
-        kVarMutMustFollowKw,        // "set mut x"만 허용, "set x mut" 금지
+        kVarMutMustFollowKw,        // mut must appear right after declaration keyword (let/set/static)
 
         // ---- &, &&관련 ----
         kBorrowOperandMustBePlace,
@@ -184,6 +184,10 @@ namespace parus::diag {
         kOverloadNoMatchingCall,// args[0]=fn, args[1]=call_signature
         kOverloadAmbiguousCall, // args[0]=fn, args[1]=candidate_list
         kMangleSymbolCollision, // args[0]=mangled_symbol, args[1]=lhs, args[2]=rhs
+        kAbiCOverloadNotAllowed,// args[0]=fn
+        kAbiCNamedGroupNotAllowed, // args[0]=fn
+        kAbiCTypeNotFfiSafe,       // args[0]=entity, args[1]=type
+        kAbiCGlobalMustBeStatic,   // args[0]=name
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)
         kTypeBreakValueOnlyInLoopExpr, // break value is only allowed in loop expression

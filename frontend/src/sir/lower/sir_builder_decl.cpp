@@ -43,7 +43,9 @@ namespace parus::sir::detail {
 
         // qualifiers / mode
         f.is_export = s.is_export;
+        f.is_extern = s.is_extern;
         f.fn_mode = lower_fn_mode(s.fn_mode);
+        f.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
 
         f.is_pure = s.is_pure;
         f.is_comptime = s.is_comptime;
@@ -229,6 +231,9 @@ namespace parus::sir {
                 g.is_set = s.is_set;
                 g.is_mut = s.is_mut;
                 g.is_static = s.is_static;
+                g.is_export = s.is_export;
+                g.is_extern = s.is_extern;
+                g.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
 
                 g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
                 if (g.declared_type == k_invalid_type) {
