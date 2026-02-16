@@ -1,40 +1,6 @@
-field layout(c) AsciiMsg {
-    b0: u8;
-    b1: u8;
-    b2: u8;
-    b3: u8;
-    b4: u8;
-    b5: u8;
-    b6: u8;
-    b7: u8;
-    b8: u8;
-    b9: u8;
-    b10: u8;
-    b11: u8;
-    b12: u8;
-}
-
-extern "C" static mut g_msg: AsciiMsg;
-extern "C" fn c_print_g_msg() -> i32;
-
-fn fill_message() -> void {
-    g_msg.b0 = 72u8;
-    g_msg.b1 = 101u8;
-    g_msg.b2 = 108u8;
-    g_msg.b3 = 108u8;
-    g_msg.b4 = 111u8;
-    g_msg.b5 = 44u8;
-    g_msg.b6 = 32u8;
-    g_msg.b7 = 87u8;
-    g_msg.b8 = 111u8;
-    g_msg.b9 = 114u8;
-    g_msg.b10 = 108u8;
-    g_msg.b11 = 100u8;
-    g_msg.b12 = 0u8;
-}
+extern "C" fn c_print_text(msg: text) -> i32;
 
 fn main() -> i32 {
-    fill_message();
-    c_print_g_msg();
+    c_print_text(msg: "Hello, World");
     return 0i32;
 }

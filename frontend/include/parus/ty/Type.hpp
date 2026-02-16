@@ -18,6 +18,7 @@ namespace parus::ty {
 
         kBool,
         kChar,
+        kText,   // builtin string slice: {ptr u8, usize}
 
         // signed integers
         kI8,  kI16,  kI32,  kI64, kI128,

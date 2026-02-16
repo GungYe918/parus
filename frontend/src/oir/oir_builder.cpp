@@ -132,6 +132,16 @@ namespace parus::oir {
                 return r;
             }
 
+            ValueId emit_const_text(TypeId ty, std::string bytes) {
+                ValueId r = make_value(ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstConstText{std::move(bytes)};
+                inst.eff = Effect::Pure;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
             ValueId emit_const_null(TypeId ty) {
                 ValueId r = make_value(ty, Effect::Pure);
                 Inst inst{};
@@ -429,6 +439,91 @@ namespace parus::oir {
             return std::nullopt;
         }
 
+        bool is_hex_digit_(char c) {
+            return (c >= '0' && c <= '9') ||
+                   (c >= 'a' && c <= 'f') ||
+                   (c >= 'A' && c <= 'F');
+        }
+
+        uint8_t hex_digit_value_(char c) {
+            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
+            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(10 + (c - 'A'));
+            return 0;
+        }
+
+        std::string decode_escaped_string_body_(std::string_view body) {
+            std::string out;
+            out.reserve(body.size());
+
+            for (size_t i = 0; i < body.size(); ++i) {
+                const char c = body[i];
+                if (c != '\\') {
+                    out.push_back(c);
+                    continue;
+                }
+
+                if (i + 1 >= body.size()) {
+                    out.push_back('\\');
+                    break;
+                }
+
+                const char esc = body[++i];
+                switch (esc) {
+                    case 'n': out.push_back('\n'); break;
+                    case 'r': out.push_back('\r'); break;
+                    case 't': out.push_back('\t'); break;
+                    case '\\': out.push_back('\\'); break;
+                    case '"': out.push_back('"'); break;
+                    case '\'': out.push_back('\''); break;
+                    case '0': out.push_back('\0'); break;
+                    case 'x': {
+                        if (i + 2 < body.size() &&
+                            is_hex_digit_(body[i + 1]) &&
+                            is_hex_digit_(body[i + 2])) {
+                            const uint8_t hi = hex_digit_value_(body[i + 1]);
+                            const uint8_t lo = hex_digit_value_(body[i + 2]);
+                            out.push_back(static_cast<char>((hi << 4) | lo));
+                            i += 2;
+                            break;
+                        }
+                        out.push_back('x');
+                        break;
+                    }
+                    default:
+                        out.push_back(esc);
+                        break;
+                }
+            }
+            return out;
+        }
+
+        bool starts_with_(std::string_view s, std::string_view pfx) {
+            return s.size() >= pfx.size() && s.substr(0, pfx.size()) == pfx;
+        }
+
+        bool ends_with_(std::string_view s, std::string_view sfx) {
+            return s.size() >= sfx.size() && s.substr(s.size() - sfx.size()) == sfx;
+        }
+
+        std::string parse_string_literal_bytes_(std::string_view text) {
+            if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+                const auto body = text.substr(1, text.size() - 2);
+                return decode_escaped_string_body_(body);
+            }
+
+            if (starts_with_(text, "R\"\"\"") && ends_with_(text, "\"\"\"") && text.size() >= 7) {
+                return std::string(text.substr(4, text.size() - 7));
+            }
+
+            if (starts_with_(text, "F\"\"\"") && ends_with_(text, "\"\"\"") && text.size() >= 7) {
+                // v0: F-string interpolation is not yet lowered. Keep body as raw UTF-8 text.
+                return std::string(text.substr(4, text.size() - 7));
+            }
+
+            return std::string(text);
+        }
+
         std::string normalize_symbol_fragment_(std::string_view in) {
             std::string out;
             out.reserve(in.size());
@@ -588,6 +683,9 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kBoolLit:
                 return emit_const_bool(v.type, v.text == "true");
+
+            case parus::sir::ValueKind::kStringLit:
+                return emit_const_text(v.type, parse_string_literal_bytes_(v.text));
 
             case parus::sir::ValueKind::kNullLit:
                 return emit_const_null(v.type);
@@ -1220,6 +1318,8 @@ namespace parus::oir {
                         case TB::kF32:
                         case TB::kChar:
                             return {4u, 4u};
+                        case TB::kText:
+                            return {16u, 8u};
                         case TB::kI128:
                         case TB::kU128:
                         case TB::kF128:

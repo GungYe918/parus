@@ -212,6 +212,7 @@ namespace parus::oir {
                         apply(x.value);
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                          std::is_same_v<T, InstConstBool> ||
+                                         std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
                                          std::is_same_v<T, InstAllocaLocal>) {
                         // no operand
@@ -349,6 +350,7 @@ namespace parus::oir {
                         add(x.value);
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                          std::is_same_v<T, InstConstBool> ||
+                                         std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
                                          std::is_same_v<T, InstAllocaLocal>) {
                         // no operand
@@ -418,6 +420,7 @@ namespace parus::oir {
                     fn(x.value);
                 } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                      std::is_same_v<T, InstConstBool> ||
+                                     std::is_same_v<T, InstConstText> ||
                                      std::is_same_v<T, InstConstNull> ||
                                      std::is_same_v<T, InstAllocaLocal>) {
                     // no operand
@@ -1363,6 +1366,7 @@ namespace parus::oir {
                         return false;
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                          std::is_same_v<T, InstConstBool> ||
+                                         std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
                                          std::is_same_v<T, InstAllocaLocal>) {
                         return false;
@@ -1852,6 +1856,9 @@ namespace parus::oir {
                     return oss.str();
                 } else if constexpr (std::is_same_v<T, InstConstBool>) {
                     oss << "cb:" << result_ty << ":" << (x.value ? "1" : "0");
+                    return oss.str();
+                } else if constexpr (std::is_same_v<T, InstConstText>) {
+                    oss << "ct:" << result_ty << ":" << x.bytes;
                     return oss.str();
                 } else if constexpr (std::is_same_v<T, InstConstNull>) {
                     oss << "cn:" << result_ty;

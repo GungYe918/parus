@@ -256,6 +256,34 @@ namespace parus {
         return t;
     }
 
+    Token Lexer::lex_prefixed_triple_string(char prefix) {
+        const size_t start = pos_;
+        (void)prefix;
+
+        // prefix + opening """
+        bump(); // prefix
+        bump(); // "
+        bump(); // "
+        bump(); // "
+
+        while (!eof()) {
+            if (peek() == '"' && peek(1) == '"' && peek(2) == '"') {
+                bump();
+                bump();
+                bump();
+                break;
+            }
+            bump();
+        }
+
+        const size_t end = pos_;
+        Token t;
+        t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(end)};
+        t.lexeme = source_.substr(start, end - start);
+        t.kind = syntax::TokenKind::kStringLit;
+        return t;
+    }
+
     Token Lexer::lex_char() {
         // assumes current char is '\''
         const size_t start = pos_;
@@ -443,6 +471,12 @@ namespace parus {
 
             if (std::isdigit(u)) {
                 out.push_back(lex_number());
+                continue;
+            }
+
+            if ((c == 'R' || c == 'F') &&
+                peek(1) == '"' && peek(2) == '"' && peek(3) == '"') {
+                out.push_back(lex_prefixed_triple_string(c));
                 continue;
             }
 

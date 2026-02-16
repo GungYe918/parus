@@ -217,6 +217,7 @@ namespace parus::ty {
 
             if (name == "bool")   { out = Builtin::kBool; return true; }
             if (name == "char")   { out = Builtin::kChar; return true; }
+            if (name == "text")   { out = Builtin::kText; return true; }
 
             if (name == "i8")   { out = Builtin::kI8; return true; }
             if (name == "i16")  { out = Builtin::kI16; return true; }
@@ -257,6 +258,7 @@ namespace parus::ty {
 
                 case Builtin::kBool:   return "bool";
                 case Builtin::kChar:   return "char";
+                case Builtin::kText:   return "text";
 
                 case Builtin::kI8:   return "i8";
                 case Builtin::kI16:  return "i16";

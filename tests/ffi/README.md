@@ -8,7 +8,7 @@ Build once from repo root:
 ./run.sh
 ```
 
-## 1) Hello, World (`printf` wrapper + `extern "C"`)
+## 1) Hello, World (`text` + `extern "C"` `printf` wrapper)
 
 ```bash
 /usr/bin/clang -c tests/ffi/hello_printf_wrapper.c -o /tmp/hello_printf_wrapper.o
@@ -22,6 +22,10 @@ Expected output:
 ```text
 Hello, World
 ```
+
+Note:
+- C wrapper receives Parus `text` as `{data,len}` (UTF-8 span compatible).
+- Output check is byte-exact (`Hello, World` without newline).
 
 ## 2) Scalar extern call
 

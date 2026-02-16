@@ -192,6 +192,59 @@ namespace {
         return ok;
     }
 
+    /// @brief text/문자열 리터럴이 OIR->LLVM에서 rodata 상수 + `{ptr,len}` ABI로 내려가는지 검사한다.
+    static bool test_text_literal_rodata_and_c_abi_span_signature() {
+        const std::string src = R"(
+            extern "C" fn sink(msg: text) -> i32;
+
+            fn main() -> i32 {
+                sink(msg: "A\nB");
+                sink(msg: R"""A\nB""");
+                sink(msg: F"""A{1}B""");
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "text literal source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        size_t text_const_count = 0;
+        {
+            std::string_view hay = lowered.llvm_ir;
+            constexpr std::string_view needle = "@.parus_text.";
+            size_t pos = 0;
+            while (true) {
+                const size_t found = hay.find(needle, pos);
+                if (found == std::string_view::npos) break;
+                ++text_const_count;
+                pos = found + needle.size();
+            }
+        }
+
+        ok &= require_(lowered.ok, "LLVM text lowering for text literal case must succeed");
+        ok &= require_(lowered.llvm_ir.find("declare i32 @sink({ ptr, i64 })") != std::string::npos,
+                       "extern \"C\" text parameter must be emitted as `{ptr,i64}` aggregate");
+        ok &= require_(text_const_count >= 3,
+                       "three string literals must be emitted as rodata constants");
+        ok &= require_(lowered.llvm_ir.find("A\\0AB\\00") != std::string::npos,
+                       "escaped normal string must contain decoded newline byte (0x0A)");
+        ok &= require_(lowered.llvm_ir.find("A\\5CnB\\00") != std::string::npos,
+                       "raw string must preserve backslash+n byte sequence");
+        ok &= require_(lowered.llvm_ir.find("A{1}B\\00") != std::string::npos,
+                       "format triple string must currently preserve body text");
+        ok &= require_(lowered.llvm_ir.find("malloc") == std::string::npos,
+                       "text literal lowering must not introduce heap allocation calls");
+        return ok;
+    }
+
     /// @brief 수동 OIR field 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
     static bool test_manual_field_lowering_memory_model() {
         parus::ty::TypePool types;
@@ -728,6 +781,7 @@ int main() {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
+        {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},

@@ -96,6 +96,7 @@ namespace parus::oir {
     // ----------------------
     struct InstConstInt   { std::string text; };
     struct InstConstBool  { bool value = false; };
+    struct InstConstText  { std::string bytes; };
     struct InstConstNull  { };
 
     struct InstUnary      { UnOp op; ValueId src; };
@@ -120,6 +121,7 @@ namespace parus::oir {
     using InstData = std::variant<
         InstConstInt,
         InstConstBool,
+        InstConstText,
         InstConstNull,
         InstUnary,
         InstBinOp,

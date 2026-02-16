@@ -31,6 +31,12 @@ namespace parus::backend::aot {
             uint32_t align = 8;
         };
 
+        struct TextConstantInfo {
+            std::string symbol{};
+            uint64_t len = 0;
+            uint64_t storage_len = 0;
+        };
+
         /// @brief 함수 이름을 LLVM 심볼 이름으로 정규화한다.
         std::string sanitize_symbol_(std::string_view in) {
             std::string out;
@@ -91,6 +97,7 @@ namespace parus::backend::aot {
             if (ty == "float" || ty == "double") return "0.0";
             if (ty == "fp128") return "0xL00000000000000000000000000000000";
             if (ty == "ptr") return "null";
+            if (!ty.empty() && (ty.front() == '[' || ty.front() == '{')) return "zeroinitializer";
             return "0";
         }
 
@@ -106,6 +113,23 @@ namespace parus::backend::aot {
         bool is_aggregate_llvm_ty_(const std::string& ty) {
             if (ty.empty()) return false;
             return ty.front() == '[' || ty.front() == '{';
+        }
+
+        /// @brief raw bytes를 LLVM c"..." 상수 리터럴 본문으로 이스케이프한다.
+        std::string llvm_escape_c_bytes_(std::string_view bytes) {
+            static constexpr char kHex[] = "0123456789ABCDEF";
+            std::string out;
+            out.reserve(bytes.size() * 4 + 4);
+            for (unsigned char b : bytes) {
+                if (b >= 0x20 && b <= 0x7E && b != '\\' && b != '"') {
+                    out.push_back(static_cast<char>(b));
+                    continue;
+                }
+                out.push_back('\\');
+                out.push_back(kHex[(b >> 4) & 0x0F]);
+                out.push_back(kHex[b & 0x0F]);
+            }
+            return out;
         }
 
         /// @brief 타입을 LLVM 타입 문자열로 재귀 변환한다.
@@ -132,6 +156,7 @@ namespace parus::backend::aot {
                         case B::kNever: return "void";
                         case B::kBool:  return "i1";
                         case B::kChar:  return "i32";
+                        case B::kText:  return "{ ptr, i64 }";
                         case B::kI8:    return "i8";
                         case B::kI16:   return "i16";
                         case B::kI32:   return "i32";
@@ -225,6 +250,7 @@ namespace parus::backend::aot {
                         case B::kU32:
                         case B::kF32:
                         case B::kChar: return 4;
+                        case B::kText: return 16;
                         case B::kI64:
                         case B::kU64:
                         case B::kF64:
@@ -316,6 +342,7 @@ namespace parus::backend::aot {
                         as_value(x.value);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstConstInt> ||
                                          std::is_same_v<T, parus::oir::InstConstBool> ||
+                                         std::is_same_v<T, parus::oir::InstConstText> ||
                                          std::is_same_v<T, parus::oir::InstConstNull> ||
                                          std::is_same_v<T, parus::oir::InstGlobalRef> ||
                                          std::is_same_v<T, parus::oir::InstAllocaLocal>) {
@@ -504,14 +531,16 @@ namespace parus::backend::aot {
                 const std::vector<std::string>& value_types,
                 const std::vector<ValueUseInfo>& value_uses,
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
-                const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets
+                const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
+                const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants
             ) : m_(m),
                 types_(types),
                 fn_(fn),
                 value_types_(value_types),
                 value_uses_(value_uses),
                 named_layouts_(named_layouts),
-                field_offsets_(field_offsets) {
+                field_offsets_(field_offsets),
+                text_constants_(text_constants) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -580,6 +609,7 @@ namespace parus::backend::aot {
             const std::vector<ValueUseInfo>& value_uses_;
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts_;
             const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
+            const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
@@ -1058,6 +1088,67 @@ namespace parus::backend::aot {
                 }
             }
 
+            /// @brief text 상수를 `{ptr,len}` 헤더 슬롯으로 물질화한다.
+            void emit_const_text_(
+                std::ostringstream& os,
+                parus::oir::InstId iid,
+                const parus::oir::Inst& inst
+            ) {
+                using namespace parus::oir;
+                if (inst.result == kInvalidId) return;
+
+                const auto it = text_constants_.find(iid);
+                const auto tid = value_type_id_(inst.result);
+                const std::string text_ty = map_type_(types_, tid, &named_layouts_);
+
+                const std::string slot = next_tmp_();
+                os << "  " << slot << " = alloca " << text_ty << "\n";
+
+                const std::string data_gep = next_tmp_();
+                os << "  " << data_gep << " = getelementptr " << text_ty
+                   << ", ptr " << slot << ", i32 0, i32 0\n";
+
+                if (it != text_constants_.end()) {
+                    const auto& info = it->second;
+                    const std::string data_ptr = next_tmp_();
+                    os << "  " << data_ptr << " = getelementptr ["
+                       << info.storage_len << " x i8], ptr @" << info.symbol
+                       << ", i32 0, i32 0\n";
+                    os << "  store ptr " << data_ptr << ", ptr " << data_gep << "\n";
+
+                    const std::string len_gep = next_tmp_();
+                    os << "  " << len_gep << " = getelementptr " << text_ty
+                       << ", ptr " << slot << ", i32 0, i32 1\n";
+                    os << "  store i64 " << info.len << ", ptr " << len_gep << "\n";
+                } else {
+                    os << "  store ptr null, ptr " << data_gep << "\n";
+                    const std::string len_gep = next_tmp_();
+                    os << "  " << len_gep << " = getelementptr " << text_ty
+                       << ", ptr " << slot << ", i32 0, i32 1\n";
+                    os << "  store i64 0, ptr " << len_gep << "\n";
+                }
+
+                address_ref_by_value_[inst.result] = slot;
+
+                const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                    return;
+                }
+                if (is_value_read_(inst.result)) {
+                    os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << slot << "\n";
+                    return;
+                }
+                if (is_int_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                } else if (is_float_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                       << ", " << zero_literal_(rty) << "\n";
+                } else {
+                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                }
+            }
+
             /// @brief 명령들을 LLVM-IR 문장으로 출력한다.
             void emit_insts_(std::ostringstream& os, const parus::oir::Block& block) {
                 using namespace parus::oir;
@@ -1085,6 +1176,8 @@ namespace parus::backend::aot {
                         } else if constexpr (std::is_same_v<T, InstConstBool>) {
                             if (inst.result == kInvalidId) return;
                             os << "  " << vref_(inst.result) << " = add i1 0, " << (x.value ? "1" : "0") << "\n";
+                        } else if constexpr (std::is_same_v<T, InstConstText>) {
+                            emit_const_text_(os, iid, inst);
                         } else if constexpr (std::is_same_v<T, InstConstNull>) {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
@@ -1401,6 +1494,31 @@ namespace parus::backend::aot {
             }
         }
 
+        std::unordered_map<parus::oir::InstId, TextConstantInfo> text_constants;
+        uint32_t text_const_seq = 0;
+        for (size_t i = 0; i < oir.insts.size(); ++i) {
+            const auto* ct = std::get_if<parus::oir::InstConstText>(&oir.insts[i].data);
+            if (ct == nullptr) continue;
+
+            TextConstantInfo info{};
+            info.symbol = ".parus_text." + std::to_string(text_const_seq++);
+            info.len = static_cast<uint64_t>(ct->bytes.size());
+            info.storage_len = info.len + 1; // trailing NUL for C interop friendliness
+            text_constants[static_cast<parus::oir::InstId>(i)] = info;
+
+            std::string bytes_with_nul = ct->bytes;
+            bytes_with_nul.push_back('\0');
+            os << "@" << info.symbol
+               << " = private unnamed_addr constant ["
+               << info.storage_len
+               << " x i8] c\""
+               << llvm_escape_c_bytes_(bytes_with_nul)
+               << "\", align 1\n";
+        }
+        if (!text_constants.empty()) {
+            os << "\n";
+        }
+
         if (!oir.globals.empty()) {
             for (const auto& g : oir.globals) {
                 const std::string sym = sanitize_symbol_(g.name);
@@ -1486,7 +1604,16 @@ namespace parus::backend::aot {
                 }
             }
 
-            FunctionEmitter fe(oir, types, fn, value_types, value_uses, named_layouts, field_offsets);
+            FunctionEmitter fe(
+                oir,
+                types,
+                fn,
+                value_types,
+                value_uses,
+                named_layouts,
+                field_offsets,
+                text_constants
+            );
             os << fe.emit(need_call_stub) << "\n";
         }
 

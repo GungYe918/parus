@@ -173,7 +173,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> expr_overload_target_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
-        // for "string literal" placeholder type
+        // builtin text type for string literals
         ty::TypeId string_type_ = ty::kInvalidType;
 
 

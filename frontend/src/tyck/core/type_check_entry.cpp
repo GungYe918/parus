@@ -48,10 +48,9 @@ namespace parus::tyck {
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
 
-        // string literal 타입(필요 시)
+        // string literal은 builtin text 타입으로 고정한다.
         if (string_type_ == ty::kInvalidType) {
-            // 지금은 string builtin이 없으니 placeholder로 error() 사용
-            string_type_ = types_.error();
+            string_type_ = types_.builtin(ty::Builtin::kText);
         }
 
         // ------------------------------------------
@@ -221,6 +220,7 @@ namespace parus::tyck {
                     case B::kUSize:
                     case B::kF32:
                     case B::kF64:
+                    case B::kText:
                         return true;
                     case B::kUnit:
                         return allow_void;
@@ -1041,6 +1041,7 @@ namespace parus::tyck {
             case B::kNull:
             case B::kUnit:
             case B::kNever:
+            case B::kText:
             case B::kInferInteger:
                 return false;
         }

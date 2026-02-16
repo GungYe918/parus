@@ -760,6 +760,8 @@ namespace parusc::dump {
                             std::cout << "ConstInt \"" << x.text << "\"";
                         } else if constexpr (std::is_same_v<T, oir::InstConstBool>) {
                             std::cout << "ConstBool " << (x.value ? "true" : "false");
+                        } else if constexpr (std::is_same_v<T, oir::InstConstText>) {
+                            std::cout << "ConstText bytes=" << x.bytes.size();
                         } else if constexpr (std::is_same_v<T, oir::InstConstNull>) {
                             std::cout << "ConstNull";
                         } else if constexpr (std::is_same_v<T, oir::InstUnary>) {

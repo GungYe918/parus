@@ -164,6 +164,53 @@ namespace {
         return ok;
     }
 
+    static bool test_text_string_literal_typecheck_ok() {
+        const std::string src = R"(
+            fn main() -> i32 {
+                let s: text = "Hello, text";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "text literal source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "text literal source must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_raw_and_format_triple_string_lex_parse_ok() {
+        const std::string src = R"(
+            fn main() -> i32 {
+                let raw: text = R"""line1\nline2""";
+                let fmt: text = F"""sum={1 + 2}""";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool saw_raw = false;
+        bool saw_fmt = false;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind != parus::ast::ExprKind::kStringLit) continue;
+            if (e.text.size() >= 4 && e.text.substr(0, 4) == "R\"\"\"") saw_raw = true;
+            if (e.text.size() >= 4 && e.text.substr(0, 4) == "F\"\"\"") saw_fmt = true;
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "R/F triple string source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "R/F triple string source must not emit tyck errors");
+        ok &= require_(saw_raw, "parser must retain raw triple string literal token");
+        ok &= require_(saw_fmt, "parser must retain format triple string literal token");
+        return ok;
+    }
+
     static bool test_null_coalesce_assign_parsed_as_assign() {
         // '??='가 이항식이 아니라 대입식(Assign)으로 파싱되어야 한다.
         const std::string src = R"(
@@ -1100,6 +1147,8 @@ int main() {
 
     const Case cases[] = {
         {"suffix_literals_work", test_suffix_literals_work},
+        {"text_string_literal_typecheck_ok", test_text_string_literal_typecheck_ok},
+        {"raw_and_format_triple_string_lex_parse_ok", test_raw_and_format_triple_string_lex_parse_ok},
         {"null_coalesce_assign_parsed_as_assign", test_null_coalesce_assign_parsed_as_assign},
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
         {"while_break_value_rejected", test_while_break_value_rejected},
