@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -22,6 +23,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 extern char** environ;
+#endif
+
+#if defined(__APPLE__)
+#include <mach-o/loader.h>
 #endif
 
 namespace {
@@ -526,6 +531,141 @@ namespace {
         return false;
     }
 
+#if defined(__APPLE__)
+    struct DarwinVersion {
+        uint32_t major = 0;
+        uint32_t minor = 0;
+        uint32_t patch = 0;
+    };
+
+    int compare_darwin_version_(const DarwinVersion& a, const DarwinVersion& b) {
+        if (a.major != b.major) return (a.major < b.major) ? -1 : 1;
+        if (a.minor != b.minor) return (a.minor < b.minor) ? -1 : 1;
+        if (a.patch != b.patch) return (a.patch < b.patch) ? -1 : 1;
+        return 0;
+    }
+
+    std::string darwin_version_to_string_(const DarwinVersion& v) {
+        if (v.patch == 0) {
+            return std::to_string(v.major) + "." + std::to_string(v.minor);
+        }
+        return std::to_string(v.major) + "." + std::to_string(v.minor) + "." + std::to_string(v.patch);
+    }
+
+    std::optional<DarwinVersion> parse_darwin_version_(std::string_view s) {
+        if (s.empty()) return std::nullopt;
+        std::vector<uint32_t> parts;
+        size_t i = 0;
+        while (i <= s.size()) {
+            const size_t j = s.find('.', i);
+            const size_t end = (j == std::string_view::npos) ? s.size() : j;
+            if (end <= i) return std::nullopt;
+            try {
+                const auto p = std::stoul(std::string(s.substr(i, end - i)));
+                parts.push_back(static_cast<uint32_t>(p));
+            } catch (...) {
+                return std::nullopt;
+            }
+            if (j == std::string_view::npos) break;
+            i = j + 1;
+        }
+        if (parts.size() < 2 || parts.size() > 3) return std::nullopt;
+        DarwinVersion out{};
+        out.major = parts[0];
+        out.minor = parts[1];
+        out.patch = (parts.size() == 3) ? parts[2] : 0;
+        return out;
+    }
+
+    DarwinVersion decode_macho_version_(uint32_t encoded) {
+        DarwinVersion out{};
+        out.major = (encoded >> 16) & 0xffffu;
+        out.minor = (encoded >> 8) & 0xffu;
+        out.patch = encoded & 0xffu;
+        return out;
+    }
+
+    std::optional<DarwinVersion> read_macho_minos_(const std::filesystem::path& path) {
+        std::ifstream ifs(path, std::ios::binary);
+        if (!ifs.is_open()) return std::nullopt;
+        ifs.seekg(0, std::ios::end);
+        const auto end_pos = ifs.tellg();
+        if (end_pos <= 0) return std::nullopt;
+        const size_t file_size = static_cast<size_t>(end_pos);
+        ifs.seekg(0, std::ios::beg);
+
+        std::vector<uint8_t> bytes(file_size);
+        if (!bytes.empty()) {
+            ifs.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        }
+        if (!ifs.good() && !ifs.eof()) return std::nullopt;
+        if (bytes.size() < sizeof(uint32_t)) return std::nullopt;
+
+        auto read_u32 = [&](size_t off) -> uint32_t {
+            uint32_t v = 0;
+            std::memcpy(&v, bytes.data() + off, sizeof(v));
+            return v;
+        };
+
+        uint32_t ncmds = 0;
+        uint32_t sizeofcmds = 0;
+        size_t offset = 0;
+        const uint32_t magic = read_u32(0);
+        if (magic == MH_MAGIC_64) {
+            if (bytes.size() < sizeof(mach_header_64)) return std::nullopt;
+            mach_header_64 mh{};
+            std::memcpy(&mh, bytes.data(), sizeof(mh));
+            ncmds = mh.ncmds;
+            sizeofcmds = mh.sizeofcmds;
+            offset = sizeof(mach_header_64);
+        } else if (magic == MH_MAGIC) {
+            if (bytes.size() < sizeof(mach_header)) return std::nullopt;
+            mach_header mh{};
+            std::memcpy(&mh, bytes.data(), sizeof(mh));
+            ncmds = mh.ncmds;
+            sizeofcmds = mh.sizeofcmds;
+            offset = sizeof(mach_header);
+        } else {
+            return std::nullopt;
+        }
+
+        if (offset + sizeofcmds > bytes.size()) return std::nullopt;
+        for (uint32_t i = 0; i < ncmds; ++i) {
+            if (offset + sizeof(load_command) > bytes.size()) return std::nullopt;
+            load_command lc{};
+            std::memcpy(&lc, bytes.data() + offset, sizeof(lc));
+            if (lc.cmdsize < sizeof(load_command)) return std::nullopt;
+            if (offset + lc.cmdsize > bytes.size()) return std::nullopt;
+
+            if (lc.cmd == LC_BUILD_VERSION && lc.cmdsize >= sizeof(build_version_command)) {
+                build_version_command bvc{};
+                std::memcpy(&bvc, bytes.data() + offset, sizeof(bvc));
+                return decode_macho_version_(bvc.minos);
+            }
+            if (lc.cmd == LC_VERSION_MIN_MACOSX && lc.cmdsize >= sizeof(version_min_command)) {
+                version_min_command vm{};
+                std::memcpy(&vm, bytes.data() + offset, sizeof(vm));
+                return decode_macho_version_(vm.version);
+            }
+
+            offset += lc.cmdsize;
+        }
+        return std::nullopt;
+    }
+
+    std::optional<DarwinVersion> detect_input_min_version_(const LinkPlan& plan) {
+        std::optional<DarwinVersion> out;
+        for (const auto& in : plan.object_inputs) {
+            const auto v = read_macho_minos_(in);
+            if (!v.has_value()) continue;
+            if (!out.has_value() || compare_darwin_version_(*v, *out) > 0) {
+                out = *v;
+            }
+        }
+        return out;
+    }
+#endif
+
     std::vector<std::string> build_backend_argv_(
         const std::string& backend,
         const DriverOptions& opt,
@@ -538,29 +678,36 @@ namespace {
 
 #if defined(__APPLE__)
         const std::string arch = infer_darwin_arch_(resolved_target);
-        const std::string min_ver = getenv_string_("PARUS_DARWIN_MIN_VERSION").empty()
-            ? "14.0"
-            : getenv_string_("PARUS_DARWIN_MIN_VERSION");
-        const std::string sdk_ver = getenv_string_("PARUS_DARWIN_SDK_VERSION").empty()
-            ? min_ver
-            : getenv_string_("PARUS_DARWIN_SDK_VERSION");
+        DarwinVersion min_ver = DarwinVersion{14, 0, 0};
+        if (const auto from_env = parse_darwin_version_(getenv_string_("PARUS_DARWIN_MIN_VERSION"));
+            from_env.has_value()) {
+            min_ver = *from_env;
+        }
+        if (const auto from_obj = detect_input_min_version_(plan);
+            from_obj.has_value() && compare_darwin_version_(*from_obj, min_ver) > 0) {
+            min_ver = *from_obj;
+        }
+
+        DarwinVersion sdk_ver = min_ver;
+        if (const auto from_env = parse_darwin_version_(getenv_string_("PARUS_DARWIN_SDK_VERSION"));
+            from_env.has_value()) {
+            sdk_ver = *from_env;
+        }
+        if (compare_darwin_version_(sdk_ver, min_ver) < 0) {
+            sdk_ver = min_ver;
+        }
 
         argv.push_back("-arch");
         argv.push_back(arch);
         argv.push_back("-platform_version");
         argv.push_back("macos");
-        argv.push_back(min_ver);
-        argv.push_back(sdk_ver);
+        argv.push_back(darwin_version_to_string_(min_ver));
+        argv.push_back(darwin_version_to_string_(sdk_ver));
 
         if (!sdk_root.empty()) {
             argv.push_back("-syslibroot");
             argv.push_back(sdk_root);
             argv.push_back("-L" + (std::filesystem::path(sdk_root) / "usr/lib").string());
-            const auto crt1 = (std::filesystem::path(sdk_root) / "usr/lib/crt1.o");
-            std::error_code ec;
-            if (std::filesystem::exists(crt1, ec) && !ec) {
-                argv.push_back(crt1.string());
-            }
         }
 #endif
 

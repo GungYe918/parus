@@ -7,26 +7,17 @@
 #include <string>
 #include <utility>
 #include <vector>
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <spawn.h>
 #include <sys/wait.h>
+extern char** environ;
 #endif
 
 namespace parus::backend::link {
 
     namespace {
-
-        /// @brief 쉘 인자 1개를 안전한 single-quote 형식으로 이스케이프한다.
-        std::string shell_quote_(const std::string& s) {
-            std::string out;
-            out.reserve(s.size() + 8);
-            out.push_back('\'');
-            for (char c : s) {
-                if (c == '\'') out += "'\\''";
-                else out.push_back(c);
-            }
-            out.push_back('\'');
-            return out;
-        }
 
         /// @brief 실행 파일 후보를 찾는다(절대 경로 우선, 없으면 PATH 의존 이름 그대로).
         std::string resolve_tool_candidate_(const std::string& name_or_path) {
@@ -73,25 +64,36 @@ namespace parus::backend::link {
             return fs::path(path).filename().string();
         }
 
-        /// @brief 명령을 실행하고 종료 코드를 반환한다.
-        int decode_wait_status_(int raw_status) {
-            if (raw_status == -1) return -1;
+        /// @brief argv 기반으로 프로세스를 실행하고 종료 코드를 반환한다.
+        int run_argv_(const std::vector<std::string>& argv) {
+            if (argv.empty()) return 1;
 #if defined(_WIN32)
-            return raw_status;
+            std::vector<const char*> cargs;
+            cargs.reserve(argv.size() + 1);
+            for (const auto& a : argv) cargs.push_back(a.c_str());
+            cargs.push_back(nullptr);
+            const int rc = _spawnvp(_P_WAIT, argv[0].c_str(), cargs.data());
+            return (rc < 0) ? 1 : rc;
 #else
-            if (WIFEXITED(raw_status)) return WEXITSTATUS(raw_status);
-            if (WIFSIGNALED(raw_status)) return 128 + WTERMSIG(raw_status);
-            return raw_status;
+            std::vector<char*> cargs;
+            cargs.reserve(argv.size() + 1);
+            for (const auto& a : argv) cargs.push_back(const_cast<char*>(a.c_str()));
+            cargs.push_back(nullptr);
+
+            pid_t pid = -1;
+            const int sp = posix_spawnp(&pid, argv[0].c_str(), nullptr, nullptr, cargs.data(), environ);
+            if (sp != 0) return 1;
+
+            int status = 0;
+            if (waitpid(pid, &status, 0) < 0) return 1;
+            if (WIFEXITED(status)) return WEXITSTATUS(status);
+            if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+            return 1;
 #endif
         }
 
-        /// @brief 명령을 실행하고 표준화된 종료 코드를 반환한다.
-        int run_command_(const std::string& cmd) {
-            return decode_wait_status_(std::system(cmd.c_str()));
-        }
-
-        /// @brief object -> executable 링크 명령을 조립한다.
-        std::string build_link_command_(
+        /// @brief object -> executable 링크 argv를 조립한다.
+        std::vector<std::string> build_link_argv_(
             const std::string& linker,
             const std::vector<std::string>& objects,
             const std::string& output,
@@ -99,12 +101,12 @@ namespace parus::backend::link {
             const LinkOptions& opt,
             bool is_parus_lld_mode
         ) {
-            std::string cmd;
-            cmd.reserve(512);
+            std::vector<std::string> argv;
+            argv.reserve(objects.size() + 16);
+            argv.push_back(linker);
 
-            cmd += shell_quote_(linker);
             if (use_lld_via_clang) {
-                cmd += " -fuse-ld=lld";
+                argv.push_back("-fuse-ld=lld");
             }
 
             if (is_parus_lld_mode) {
@@ -127,35 +129,34 @@ namespace parus::backend::link {
                 }
 
                 if (!opt.target_triple.empty()) {
-                    cmd += " --target ";
-                    cmd += shell_quote_(opt.target_triple);
+                    argv.push_back("--target");
+                    argv.push_back(opt.target_triple);
                 }
                 if (!sysroot.empty()) {
-                    cmd += " --sysroot ";
-                    cmd += shell_quote_(sysroot);
+                    argv.push_back("--sysroot");
+                    argv.push_back(sysroot);
                 }
                 if (!sdk_root.empty()) {
-                    cmd += " --apple-sdk-root ";
-                    cmd += shell_quote_(sdk_root);
+                    argv.push_back("--apple-sdk-root");
+                    argv.push_back(sdk_root);
                 }
                 if (toolchain_hash != 0) {
-                    cmd += " --toolchain-hash ";
-                    cmd += shell_quote_(std::to_string(toolchain_hash));
+                    argv.push_back("--toolchain-hash");
+                    argv.push_back(std::to_string(toolchain_hash));
                 }
                 if (target_hash != 0) {
-                    cmd += " --target-hash ";
-                    cmd += shell_quote_(std::to_string(target_hash));
+                    argv.push_back("--target-hash");
+                    argv.push_back(std::to_string(target_hash));
                 }
             }
 
             for (const auto& obj : objects) {
-                cmd += " ";
-                cmd += shell_quote_(obj);
+                argv.push_back(obj);
             }
 
-            cmd += " -o ";
-            cmd += shell_quote_(output);
-            return cmd;
+            argv.push_back("-o");
+            argv.push_back(output);
+            return argv;
         }
 
         /// @brief 링커 시도 1회를 실행하고 결과 메시지를 만든다.
@@ -179,7 +180,7 @@ namespace parus::backend::link {
             const bool is_parus_lld_mode =
                 !use_lld_via_clang &&
                 basename_(linker).find("parus-lld") != std::string::npos;
-            const std::string cmd = build_link_command_(
+            const std::vector<std::string> argv = build_link_argv_(
                 linker,
                 objects,
                 output,
@@ -187,7 +188,7 @@ namespace parus::backend::link {
                 opt,
                 is_parus_lld_mode
             );
-            const int rc = run_command_(cmd);
+            const int rc = run_argv_(argv);
             if (rc == 0) {
                 return {
                     true,
