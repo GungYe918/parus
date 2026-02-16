@@ -290,6 +290,11 @@ namespace parus::sir {
         kC,
     };
 
+    enum class FieldLayout : uint8_t {
+        kNone = 0,
+        kC,
+    };
+
     struct Func {
         parus::Span span{};
         std::string_view name{};
@@ -347,6 +352,9 @@ namespace parus::sir {
         std::string_view name{};
         SymbolId sym = k_invalid_symbol;
         bool is_export = false;
+        FieldLayout layout = FieldLayout::kNone;
+        uint32_t align = 0; // 0 means unspecified
+        TypeId self_type = k_invalid_type;
 
         uint32_t member_begin = 0;
         uint32_t member_count = 0;

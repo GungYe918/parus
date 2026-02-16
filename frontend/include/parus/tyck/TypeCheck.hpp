@@ -14,6 +14,7 @@
 #include <vector>
 #include <optional>
 #include <unordered_map> 
+#include <unordered_set>
 
 
 namespace parus::tyck {
@@ -227,7 +228,16 @@ namespace parus::tyck {
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
+        bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
         void check_c_abi_global_decl_(const ast::Stmt& s);
+
+        struct FieldAbiMeta {
+            ast::StmtId sid = ast::k_invalid_stmt;
+            ast::FieldLayout layout = ast::FieldLayout::kNone;
+            uint32_t align = 0;
+        };
+
+        std::unordered_map<ty::TypeId, FieldAbiMeta> field_abi_meta_by_type_;
 
     };
 

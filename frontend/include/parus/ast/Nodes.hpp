@@ -246,6 +246,12 @@ namespace parus::ast {
         kC,
     };
 
+    /// @brief field 레이아웃 지정자(v0: 미지정/ C 레이아웃)
+    enum class FieldLayout : uint8_t {
+        kNone = 0,
+        kC,
+    };
+
     // use stmt
     enum class UseKind : uint8_t {
         kError,
@@ -318,6 +324,8 @@ namespace parus::ast {
         bool has_default = false;
 
         // ---- field decl ----
+        FieldLayout field_layout = FieldLayout::kNone;
+        uint32_t field_align = 0; // 0 means unspecified
         uint32_t field_member_begin = 0;
         uint32_t field_member_count = 0;
 

@@ -122,6 +122,40 @@ namespace {
         return ok;
     }
 
+    /// @brief layout(c)/align(n) field + C ABI global이 LLVM-IR에 반영되는지 검사한다.
+    static bool test_c_abi_field_layout_and_global_symbol() {
+        const std::string src = R"(
+            field layout(c) align(16) Vec2 {
+                x: f32;
+                y: f32;
+            }
+
+            extern "C" static mut g_vec: Vec2;
+
+            export "C" fn probe() -> i32 {
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "C ABI field/global source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for C ABI field/global case must succeed");
+        ok &= require_(lowered.llvm_ir.find("@g_vec = external global [16 x i8], align 16") != std::string::npos,
+                       "C ABI global symbol must be emitted as external global with layout(c) align");
+        ok &= require_(lowered.llvm_ir.find("define i32 @probe(") != std::string::npos,
+                       "export \"C\" function probe must keep unmangled symbol");
+        return ok;
+    }
+
     /// @brief 수동 OIR field 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
     static bool test_manual_field_lowering_memory_model() {
         parus::ty::TypePool types;
@@ -129,6 +163,16 @@ namespace {
 
         const auto tid_i32 = types.builtin(parus::ty::Builtin::kI32);
         const auto tid_named = types.intern_ident("Vec2");
+
+        parus::oir::FieldLayoutDecl vec2_layout{};
+        vec2_layout.name = "Vec2";
+        vec2_layout.self_type = tid_named;
+        vec2_layout.layout = parus::oir::FieldLayout::C;
+        vec2_layout.align = 16;
+        vec2_layout.size = 16;
+        vec2_layout.members.push_back(parus::oir::FieldMemberLayout{"x", tid_i32, 0});
+        vec2_layout.members.push_back(parus::oir::FieldMemberLayout{"y", tid_i32, 4});
+        (void)m.add_field(vec2_layout);
 
         const parus::oir::BlockId entry = m.add_block(parus::oir::Block{});
 
@@ -166,7 +210,7 @@ namespace {
         emit_inst(parus::oir::InstConstInt{"42"}, parus::oir::Effect::Pure, v_c42);
 
         const auto v_field = add_value(tid_i32, parus::oir::Effect::MayReadMem);
-        emit_inst(parus::oir::InstField{v_slot, "x"}, parus::oir::Effect::MayReadMem, v_field);
+        emit_inst(parus::oir::InstField{v_slot, "y"}, parus::oir::Effect::MayReadMem, v_field);
 
         emit_inst(parus::oir::InstStore{v_field, v_c42}, parus::oir::Effect::MayWriteMem, parus::oir::kInvalidId);
 
@@ -191,8 +235,10 @@ namespace {
         );
 
         ok &= require_(lowered.ok, "manual field case lowering must succeed");
-        ok &= require_(lowered.llvm_ir.find("getelementptr i8") != std::string::npos,
+        ok &= require_(lowered.llvm_ir.find("getelementptr i8, ptr") != std::string::npos,
                        "field lowering must emit byte-offset GEP");
+        ok &= require_(lowered.llvm_ir.find("i64 4") != std::string::npos,
+                       "field lowering must use ABI metadata offset (y=4)");
         ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
                        "field lowering must emit typed store");
         ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
@@ -484,6 +530,7 @@ int main() {
 
     const Case cases[] = {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
+        {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},

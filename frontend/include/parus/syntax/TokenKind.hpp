@@ -49,6 +49,8 @@ namespace parus::syntax {
         // ---- keywords (decl / control) ----
         kKwExport,
         kKwExtern,
+        kKwLayout,
+        kKwAlign,
         kKwFn,
         kKwField,
         kKwActs,
@@ -160,6 +162,8 @@ namespace parus::syntax {
             case TokenKind::kKwFn: return "fn";
             case TokenKind::kKwExport: return "export";
             case TokenKind::kKwExtern: return "extern";
+            case TokenKind::kKwLayout: return "layout";
+            case TokenKind::kKwAlign: return "align";
             case TokenKind::kKwField: return "field";
             case TokenKind::kKwActs: return "acts";
             case TokenKind::kKwLet: return "let";

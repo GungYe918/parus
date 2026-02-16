@@ -25,6 +25,7 @@ namespace parus::oir {
             const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
+            const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
 
             Function* fn = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -32,6 +33,7 @@ namespace parus::oir {
             // symbol -> SSA value or slot
             struct Binding {
                 bool is_slot = false;
+                bool is_direct_address = false; // true for symbol that is already an address (e.g. globals)
                 ValueId v = kInvalidId; // if is_slot: slot value id, else: SSA value id
             };
 
@@ -64,7 +66,7 @@ namespace parus::oir {
                 if (!env_stack.empty()) {
                     auto it = env.find(sym);
                     if (it != env.end()) env_stack.back().push_back({sym, it->second});
-                    else env_stack.back().push_back({sym, Binding{false, kInvalidId}});
+                    else env_stack.back().push_back({sym, Binding{false, false, kInvalidId}});
                 }
                 env[sym] = b;
             }
@@ -176,6 +178,20 @@ namespace parus::oir {
                 ValueId r = make_value(ptr_ty, Effect::Pure);
                 Inst inst{};
                 inst.data = InstFuncRef{fid, name};
+                inst.eff = Effect::Pure;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
+            ValueId emit_global_ref(uint32_t gid, const std::string& name) {
+                const TypeId ptr_ty =
+                    (types != nullptr)
+                        ? (TypeId)types->builtin(parus::ty::Builtin::kNull)
+                        : kInvalidId;
+                ValueId r = make_value(ptr_ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstGlobalRef{gid, name};
                 inst.eff = Effect::Pure;
                 inst.result = r;
                 emit_inst(inst);
@@ -302,6 +318,17 @@ namespace parus::oir {
                     return emit_const_null(want_ty);
                 }
                 if (!it->second.is_slot) return it->second.v;
+                if (it->second.is_direct_address) {
+                    if (types != nullptr && want_ty != parus::ty::kInvalidType) {
+                        const auto& wt = types->get(want_ty);
+                        if (wt.kind == parus::ty::Kind::kNamedUser ||
+                            wt.kind == parus::ty::Kind::kArray ||
+                            wt.kind == parus::ty::Kind::kOptional) {
+                            return it->second.v;
+                        }
+                    }
+                    return emit_load(want_ty, it->second.v);
+                }
                 return emit_load(want_ty, it->second.v);
             }
 
@@ -318,7 +345,7 @@ namespace parus::oir {
                     emit_store(slot, it->second.v);
                 }
 
-                bind(sym, Binding{true, slot});
+                bind(sym, Binding{true, false, slot});
                 return slot;
             }
         };
@@ -375,6 +402,22 @@ namespace parus::oir {
                 case parus::sir::FuncAbi::kParus:
                 default: return FunctionAbi::Parus;
             }
+        }
+
+        FieldLayout map_field_layout_(parus::sir::FieldLayout layout) {
+            switch (layout) {
+                case parus::sir::FieldLayout::kC:
+                    return FieldLayout::C;
+                case parus::sir::FieldLayout::kNone:
+                default:
+                    return FieldLayout::None;
+            }
+        }
+
+        uint32_t align_to_(uint32_t value, uint32_t align) {
+            if (align == 0 || align == 1) return value;
+            const uint32_t rem = value % align;
+            return (rem == 0) ? value : (value + (align - rem));
         }
 
         // -----------------------
@@ -746,10 +789,10 @@ namespace parus::oir {
                 if (s.is_set || s.is_mut) {
                     ValueId slot = emit_alloca(declared);
                     emit_store(slot, init);
-                    bind(s.sym, Binding{true, slot});
+                    bind(s.sym, Binding{true, false, slot});
                 } else {
                     // immutable let => SSA binding
-                    bind(s.sym, Binding{false, init});
+                    bind(s.sym, Binding{false, false, init});
                 }
                 return;
             }
@@ -965,6 +1008,150 @@ namespace parus::oir {
             return out;
         }
 
+        std::unordered_map<parus::ty::TypeId, std::pair<uint32_t, uint32_t>> named_layout_by_type;
+        auto type_size_align = [&](const auto& self, parus::ty::TypeId tid) -> std::pair<uint32_t, uint32_t> {
+            using TK = parus::ty::Kind;
+            using TB = parus::ty::Builtin;
+
+            if (tid == parus::ty::kInvalidType) return {8u, 8u};
+            const auto& t = ty_.get(tid);
+
+            switch (t.kind) {
+                case TK::kError:
+                    return {8u, 8u};
+
+                case TK::kBuiltin:
+                    switch (t.builtin) {
+                        case TB::kBool:
+                        case TB::kI8:
+                        case TB::kU8:
+                            return {1u, 1u};
+                        case TB::kI16:
+                        case TB::kU16:
+                            return {2u, 2u};
+                        case TB::kI32:
+                        case TB::kU32:
+                        case TB::kF32:
+                        case TB::kChar:
+                            return {4u, 4u};
+                        case TB::kI128:
+                        case TB::kU128:
+                        case TB::kF128:
+                            return {16u, 16u};
+                        case TB::kUnit:
+                            return {1u, 1u};
+                        case TB::kNever:
+                        case TB::kI64:
+                        case TB::kU64:
+                        case TB::kF64:
+                        case TB::kISize:
+                        case TB::kUSize:
+                        case TB::kNull:
+                        case TB::kInferInteger:
+                            return {8u, 8u};
+                    }
+                    return {8u, 8u};
+
+                case TK::kPtr:
+                case TK::kBorrow:
+                case TK::kEscape:
+                case TK::kFn:
+                    return {8u, 8u};
+
+                case TK::kOptional: {
+                    const auto [elem_size, elem_align] = self(self, t.elem);
+                    const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                    const uint32_t body = align_to_(1u, a) + std::max<uint32_t>(1u, elem_size);
+                    return {body, a};
+                }
+
+                case TK::kArray: {
+                    const auto [elem_size, elem_align] = self(self, t.elem);
+                    const uint32_t e = std::max<uint32_t>(1u, elem_size);
+                    const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                    if (!t.array_has_size) return {16u, 8u};
+                    return {e * std::max<uint32_t>(1u, t.array_size), a};
+                }
+
+                case TK::kNamedUser: {
+                    auto it = named_layout_by_type.find(tid);
+                    if (it != named_layout_by_type.end()) return it->second;
+                    return {8u, 8u};
+                }
+            }
+
+            return {8u, 8u};
+        };
+
+        // 필드 레이아웃 메타를 OIR 모듈로 복사한다.
+        for (const auto& sf : sir_.fields) {
+            FieldLayoutDecl of{};
+            of.name = std::string(sf.name);
+            of.self_type = sf.self_type;
+            of.layout = map_field_layout_(sf.layout);
+            of.align = sf.align;
+
+            const uint64_t begin = sf.member_begin;
+            const uint64_t end = begin + sf.member_count;
+            uint32_t offset = 0;
+            uint32_t struct_align = std::max<uint32_t>(1u, of.align);
+
+            if (begin <= sir_.field_members.size() && end <= sir_.field_members.size()) {
+                for (uint32_t i = sf.member_begin; i < sf.member_begin + sf.member_count; ++i) {
+                    const auto& sm = sir_.field_members[i];
+                    const auto [member_size_raw, member_align_raw] = type_size_align(type_size_align, sm.type);
+                    const uint32_t member_size = std::max<uint32_t>(1u, member_size_raw);
+                    const uint32_t member_align = std::max<uint32_t>(1u, member_align_raw);
+
+                    if (of.layout == FieldLayout::C) {
+                        offset = align_to_(offset, member_align);
+                    }
+
+                    FieldMemberLayout om{};
+                    om.name = std::string(sm.name);
+                    om.type = sm.type;
+                    om.offset = offset;
+                    of.members.push_back(std::move(om));
+
+                    offset += member_size;
+                    struct_align = std::max(struct_align, member_align);
+                }
+            }
+
+            if (of.layout == FieldLayout::C) {
+                of.size = std::max<uint32_t>(1u, align_to_(offset, struct_align));
+            } else {
+                of.size = std::max<uint32_t>(1u, offset);
+            }
+            if (of.align == 0) of.align = struct_align;
+
+            const uint32_t idx = out.mod.add_field(of);
+            (void)idx;
+            if (of.self_type != parus::ty::kInvalidType) {
+                named_layout_by_type[of.self_type] = {std::max<uint32_t>(1u, of.size), std::max<uint32_t>(1u, of.align)};
+            }
+        }
+
+        std::unordered_map<parus::sir::SymbolId, uint32_t> global_symbol_to_global;
+        for (const auto& sg : sir_.globals) {
+            GlobalDecl g{};
+            if (sg.abi == parus::sir::FuncAbi::kC || sg.is_export) {
+                g.name = std::string(sg.name);
+            } else {
+                g.name = std::string(sg.name) + "$g";
+            }
+            g.type = sg.declared_type;
+            g.abi = map_func_abi_(sg.abi);
+            g.is_extern = sg.is_extern;
+            g.is_mut = sg.is_mut;
+            g.is_export = sg.is_export;
+
+            const uint32_t gid = out.mod.add_global(g);
+            if (sg.sym != parus::sir::k_invalid_symbol) {
+                global_symbol_to_global[sg.sym] = gid;
+            }
+        }
+
         // Build all functions in SIR module.
         // Strategy:
         // 1) 함수 쉘/엔트리 블록을 먼저 전부 생성해 심볼->FuncId를 고정한다.
@@ -1025,8 +1212,17 @@ namespace parus::oir {
             fb.fn_symbol_to_func = &fn_symbol_to_func;
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
             fb.fn_decl_to_func = &fn_decl_to_func;
+            fb.global_symbol_to_global = &global_symbol_to_global;
             fb.fn = &out.mod.funcs[fid];
             fb.cur_bb = entry;
+
+            for (const auto& kv : global_symbol_to_global) {
+                const auto gid = kv.second;
+                if ((size_t)gid >= out.mod.globals.size()) continue;
+                const auto& g = out.mod.globals[gid];
+                ValueId gref = fb.emit_global_ref(gid, g.name);
+                fb.bind(kv.first, FuncBuild::Binding{true, true, gref});
+            }
 
             // 함수 파라미터를 entry block parameter로 시드하고 심볼 바인딩을 연결한다.
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
@@ -1039,9 +1235,9 @@ namespace parus::oir {
                     if (sp.is_mut) {
                         ValueId slot = fb.emit_alloca((TypeId)sp.type);
                         fb.emit_store(slot, pv);
-                        fb.bind(sp.sym, FuncBuild::Binding{true, slot});
+                        fb.bind(sp.sym, FuncBuild::Binding{true, false, slot});
                     } else {
-                        fb.bind(sp.sym, FuncBuild::Binding{false, pv});
+                        fb.bind(sp.sym, FuncBuild::Binding{false, false, pv});
                     }
                 }
             }

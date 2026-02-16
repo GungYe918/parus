@@ -664,6 +664,14 @@ namespace parus::tyck {
     void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
 
+        if (s.field_align != 0) {
+            if ((s.field_align & (s.field_align - 1u)) != 0u) {
+                const std::string msg = "field align(n) must be a power of two";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
+        }
+
         const uint32_t begin = s.field_member_begin;
         const uint32_t end = s.field_member_begin + s.field_member_count;
         if (begin > ast_.field_members().size() || end > ast_.field_members().size() || begin > end) {
@@ -674,16 +682,41 @@ namespace parus::tyck {
 
         for (uint32_t i = begin; i < end; ++i) {
             const auto& m = ast_.field_members()[i];
-            if (is_field_pod_value_type_(types_, m.type)) {
+            const bool member_ok = (s.field_layout == ast::FieldLayout::kC)
+                ? is_c_abi_safe_type_(m.type, /*allow_void=*/false)
+                : is_field_pod_value_type_(types_, m.type);
+
+            if (member_ok) {
                 continue;
             }
 
             std::ostringstream oss;
-            oss << "field member '" << m.name
-                << "' must use a POD value builtin type (e.g., i32/u32/f32/bool/char), got "
-                << types_.to_string(m.type);
-            diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
+            if (s.field_layout == ast::FieldLayout::kC) {
+                oss << "layout(c) field member '" << m.name
+                    << "' must use a C ABI FFI-safe type, got "
+                    << types_.to_string(m.type);
+                diag_(diag::Code::kAbiCTypeNotFfiSafe, m.span,
+                      std::string("field member '") + std::string(m.name) + "'",
+                      types_.to_string(m.type));
+            } else {
+                oss << "field member '" << m.name
+                    << "' must use a POD value builtin type (e.g., i32/u32/f32/bool/char), got "
+                    << types_.to_string(m.type);
+                diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
+            }
             err_(m.span, oss.str());
+        }
+
+        ty::TypeId self_ty = s.type;
+        if (self_ty == ty::kInvalidType && !s.name.empty()) {
+            self_ty = types_.intern_ident(s.name);
+        }
+        if (self_ty != ty::kInvalidType) {
+            FieldAbiMeta meta{};
+            meta.sid = sid;
+            meta.layout = s.field_layout;
+            meta.align = s.field_align;
+            field_abi_meta_by_type_[self_ty] = meta;
         }
     }
 

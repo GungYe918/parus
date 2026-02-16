@@ -32,6 +32,7 @@ namespace parus::tyck {
         pending_int_expr_.clear();
         sym_is_mut_.clear();
         acts_default_operator_map_.clear();
+        field_abi_meta_by_type_.clear();
 
         // sym_ “완전 초기화”
         // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
@@ -181,6 +182,15 @@ namespace parus::tyck {
     }
 
     bool TypeChecker::is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const {
+        std::unordered_set<ty::TypeId> visiting;
+        return is_c_abi_safe_type_impl_(t, allow_void, visiting);
+    }
+
+    bool TypeChecker::is_c_abi_safe_type_impl_(
+        ty::TypeId t,
+        bool allow_void,
+        std::unordered_set<ty::TypeId>& visiting
+    ) const {
         if (t == ty::kInvalidType) return false;
         const auto& tt = types_.get(t);
 
@@ -213,18 +223,46 @@ namespace parus::tyck {
 
             case ty::Kind::kPtr:
                 // ptr T / ptr mut T: pointee도 FFI-safe여야 한다.
-                return is_c_abi_safe_type_(tt.elem, /*allow_void=*/false);
+                return is_c_abi_safe_type_impl_(tt.elem, /*allow_void=*/false, visiting);
 
             case ty::Kind::kBorrow:
             case ty::Kind::kEscape:
             case ty::Kind::kOptional:
             case ty::Kind::kArray:
             case ty::Kind::kFn:
-            case ty::Kind::kNamedUser:
                 // v0.0.1 규칙:
                 // - borrow/escape/optional/direct function type 금지
-                // - layout(c) field는 추후 별도 메타 검증 추가 전까지 보수적으로 금지
                 return false;
+
+            case ty::Kind::kNamedUser: {
+                const auto it = field_abi_meta_by_type_.find(t);
+                if (it == field_abi_meta_by_type_.end()) return false;
+                if (it->second.layout != ast::FieldLayout::kC) return false;
+                if (it->second.sid == ast::k_invalid_stmt) return false;
+                if ((size_t)it->second.sid >= ast_.stmts().size()) return false;
+
+                // 순환 타입이 있더라도 무한 재귀를 피한다.
+                if (!visiting.insert(t).second) return true;
+
+                const auto& fs = ast_.stmt(it->second.sid);
+                const uint64_t begin = fs.field_member_begin;
+                const uint64_t end = begin + fs.field_member_count;
+                if (end > ast_.field_members().size()) {
+                    visiting.erase(t);
+                    return false;
+                }
+
+                for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+                    const auto& m = ast_.field_members()[i];
+                    if (!is_c_abi_safe_type_impl_(m.type, /*allow_void=*/false, visiting)) {
+                        visiting.erase(t);
+                        return false;
+                    }
+                }
+
+                visiting.erase(t);
+                return true;
+            }
         }
 
         return false;
@@ -257,6 +295,26 @@ namespace parus::tyck {
 
         // ensure map is reset for each check_program call
         fn_decl_by_name_.clear();
+
+        // C ABI safe 판정을 위해 field layout 메타를 먼저 수집한다.
+        for (uint32_t i = 0; i < prog.stmt_count; ++i) {
+            const ast::StmtId cid = ast_.stmt_children()[prog.stmt_begin + i];
+            if (cid == ast::k_invalid_stmt || (size_t)cid >= ast_.stmts().size()) continue;
+            const ast::Stmt& s = ast_.stmt(cid);
+            if (s.kind != ast::StmtKind::kFieldDecl) continue;
+
+            ty::TypeId field_ty = s.type;
+            if (field_ty == ty::kInvalidType && !s.name.empty()) {
+                field_ty = types_.intern_ident(s.name);
+            }
+            if (field_ty == ty::kInvalidType) continue;
+
+            FieldAbiMeta meta{};
+            meta.sid = cid;
+            meta.layout = s.field_layout;
+            meta.align = s.field_align;
+            field_abi_meta_by_type_[field_ty] = meta;
+        }
 
         // global scope는 SymbolTable이 이미 push되어 있음.
         for (uint32_t i = 0; i < prog.stmt_count; ++i) {
@@ -374,7 +432,12 @@ namespace parus::tyck {
             // top-level field decl
             // ----------------------------
             if (s.kind == ast::StmtKind::kFieldDecl) {
-                auto ins = sym_.insert(sema::SymbolKind::kField, s.name, ty::kInvalidType, s.span);
+                ty::TypeId field_ty = s.type;
+                if (field_ty == ty::kInvalidType && !s.name.empty()) {
+                    field_ty = types_.intern_ident(s.name);
+                }
+
+                auto ins = sym_.insert(sema::SymbolKind::kField, s.name, field_ty, s.span);
                 if (!ins.ok && ins.is_duplicate) {
                     err_(s.span, "duplicate symbol (field): " + std::string(s.name));
                     diag_(diag::Code::kDuplicateDecl, s.span, s.name);

@@ -102,6 +102,7 @@ namespace parus::oir {
     struct InstBinOp      { BinOp op; ValueId lhs; ValueId rhs; };
     struct InstCast       { CastKind kind; TypeId to; ValueId src; };
     struct InstFuncRef    { FuncId func = kInvalidId; std::string name; };
+    struct InstGlobalRef  { uint32_t global = kInvalidId; std::string name; };
     struct InstCall       {
         ValueId callee;
         std::vector<ValueId> args;
@@ -124,6 +125,7 @@ namespace parus::oir {
         InstBinOp,
         InstCast,
         InstFuncRef,
+        InstGlobalRef,
         InstCall,
         InstIndex,
         InstField,
@@ -189,6 +191,11 @@ namespace parus::oir {
         C,
     };
 
+    enum class FieldLayout : uint8_t {
+        None = 0,
+        C,
+    };
+
     struct Function {
         std::string name;
         // 디버깅/엔트리 판단용 원본 함수 이름(맹글링 전)
@@ -205,6 +212,30 @@ namespace parus::oir {
         std::vector<BlockId> blocks;
 
         BlockId entry = kInvalidId;
+    };
+
+    struct FieldMemberLayout {
+        std::string name;
+        TypeId type = kInvalidId;
+        uint32_t offset = 0;
+    };
+
+    struct FieldLayoutDecl {
+        std::string name;
+        TypeId self_type = kInvalidId;
+        FieldLayout layout = FieldLayout::None;
+        uint32_t align = 0; // 0 means unspecified
+        uint32_t size = 0;
+        std::vector<FieldMemberLayout> members{};
+    };
+
+    struct GlobalDecl {
+        std::string name;
+        TypeId type = kInvalidId;
+        FunctionAbi abi = FunctionAbi::Parus;
+        bool is_extern = false;
+        bool is_mut = false;
+        bool is_export = false;
     };
 
     /// @brief OIR에서 추적하는 escape-handle 힌트(런타임 객체가 아닌 최적화 메타).
@@ -240,6 +271,8 @@ namespace parus::oir {
         std::vector<Block>    blocks;
         std::vector<Inst>     insts;
         std::vector<Value>    values;
+        std::vector<FieldLayoutDecl> fields;
+        std::vector<GlobalDecl> globals;
         std::vector<EscapeHandleHint> escape_hints;
         OptStats opt_stats{};
 
@@ -262,6 +295,16 @@ namespace parus::oir {
         FuncId add_func(const Function& f) {
             funcs.push_back(f);
             return static_cast<FuncId>(funcs.size() - 1);
+        }
+
+        uint32_t add_field(const FieldLayoutDecl& f) {
+            fields.push_back(f);
+            return static_cast<uint32_t>(fields.size() - 1);
+        }
+
+        uint32_t add_global(const GlobalDecl& g) {
+            globals.push_back(g);
+            return static_cast<uint32_t>(globals.size() - 1);
         }
 
         uint32_t add_escape_hint(const EscapeHandleHint& h) {

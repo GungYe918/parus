@@ -26,6 +26,11 @@ namespace parus::backend::aot {
             bool as_slot = false;
         };
 
+        struct NamedLayoutInfo {
+            uint32_t size = 32;
+            uint32_t align = 8;
+        };
+
         /// @brief 함수 이름을 LLVM 심볼 이름으로 정규화한다.
         std::string sanitize_symbol_(std::string_view in) {
             std::string out;
@@ -107,7 +112,8 @@ namespace parus::backend::aot {
         std::string map_type_rec_(
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
-            uint32_t depth
+            uint32_t depth,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts
         ) {
             if (tid == parus::ty::kInvalidType) return "i64";
             if (depth > 8) return "i64";
@@ -147,13 +153,13 @@ namespace parus::backend::aot {
                     return "i64";
 
                 case K::kOptional: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1);
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts);
                     if (elem == "void") elem = "i8";
                     return "{ i1, " + elem + " }";
                 }
 
                 case K::kArray: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1);
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts);
                     if (elem == "void") elem = "i8";
                     if (t.array_has_size) {
                         return "[" + std::to_string(t.array_size) + " x " + elem + "]";
@@ -169,8 +175,13 @@ namespace parus::backend::aot {
                     return "ptr";
 
                 case K::kNamedUser:
-                    // field/class/tablet 레이아웃 메타가 아직 OIR에 직접 연결되지 않으므로
-                    // v0에서는 고정 크기 바이트 버퍼로 모델링한다.
+                    if (named_layouts != nullptr) {
+                        auto it = named_layouts->find(tid);
+                        if (it != named_layouts->end()) {
+                            const uint32_t sz = std::max<uint32_t>(1u, it->second.size);
+                            return "[" + std::to_string(sz) + " x i8]";
+                        }
+                    }
                     return "[32 x i8]";
             }
 
@@ -178,15 +189,20 @@ namespace parus::backend::aot {
         }
 
         /// @brief 타입 ID를 LLVM 타입 문자열로 변환한다.
-        std::string map_type_(const parus::ty::TypePool& types, parus::ty::TypeId tid) {
-            return map_type_rec_(types, tid, 0);
+        std::string map_type_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr
+        ) {
+            return map_type_rec_(types, tid, 0, named_layouts);
         }
 
         /// @brief 타입의 대략적 바이트 크기를 계산한다.
         uint64_t type_size_bytes_rec_(
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
-            uint32_t depth
+            uint32_t depth,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts
         ) {
             if (tid == parus::ty::kInvalidType) return 8;
             if (depth > 8) return 8;
@@ -226,9 +242,9 @@ namespace parus::backend::aot {
                     }
                     return 8;
                 case K::kOptional:
-                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1));
+                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts));
                 case K::kArray: {
-                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1));
+                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts));
                     if (t.array_has_size) return elem * std::max<uint64_t>(1, t.array_size);
                     return 16; // {ptr,len}
                 }
@@ -237,15 +253,26 @@ namespace parus::backend::aot {
                 case K::kPtr:
                 case K::kFn:
                     return 8;
-                case K::kNamedUser:
+                case K::kNamedUser: {
+                    if (named_layouts != nullptr) {
+                        auto it = named_layouts->find(tid);
+                        if (it != named_layouts->end()) {
+                            return std::max<uint64_t>(1u, it->second.size);
+                        }
+                    }
                     return 32;
+                }
             }
             return 8;
         }
 
         /// @brief 타입의 대략적 바이트 크기를 계산한다.
-        uint64_t type_size_bytes_(const parus::ty::TypePool& types, parus::ty::TypeId tid) {
-            return type_size_bytes_rec_(types, tid, 0);
+        uint64_t type_size_bytes_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr
+        ) {
+            return type_size_bytes_rec_(types, tid, 0, named_layouts);
         }
 
         /// @brief OIR 모듈에서 value 사용 문맥(값/슬롯)을 수집한다.
@@ -290,6 +317,7 @@ namespace parus::backend::aot {
                     } else if constexpr (std::is_same_v<T, parus::oir::InstConstInt> ||
                                          std::is_same_v<T, parus::oir::InstConstBool> ||
                                          std::is_same_v<T, parus::oir::InstConstNull> ||
+                                         std::is_same_v<T, parus::oir::InstGlobalRef> ||
                                          std::is_same_v<T, parus::oir::InstAllocaLocal>) {
                         // no operand
                     }
@@ -345,11 +373,12 @@ namespace parus::backend::aot {
         /// @brief Value 타입 테이블을 만든다.
         std::vector<std::string> build_value_type_table_(
             const parus::oir::Module& m,
-            const parus::ty::TypePool& types
+            const parus::ty::TypePool& types,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts
         ) {
             std::vector<std::string> out(m.values.size(), "i64");
             for (size_t i = 0; i < m.values.size(); ++i) {
-                out[i] = map_type_(types, m.values[i].ty);
+                out[i] = map_type_(types, m.values[i].ty, &named_layouts);
                 if (out[i] == "void") {
                     // LLVM SSA value는 void 타입을 가질 수 없다.
                     out[i] = "i8";
@@ -364,6 +393,10 @@ namespace parus::backend::aot {
                 if (inst.result == parus::oir::kInvalidId || static_cast<size_t>(inst.result) >= out.size()) continue;
 
                 if (std::holds_alternative<parus::oir::InstAllocaLocal>(inst.data)) {
+                    out[inst.result] = "ptr";
+                    continue;
+                }
+                if (std::holds_alternative<parus::oir::InstGlobalRef>(inst.data)) {
                     out[inst.result] = "ptr";
                     continue;
                 }
@@ -382,7 +415,7 @@ namespace parus::backend::aot {
                 }
                 if (std::holds_alternative<parus::oir::InstCast>(inst.data)) {
                     const auto& c = std::get<parus::oir::InstCast>(inst.data);
-                    out[inst.result] = map_type_(types, c.to);
+                    out[inst.result] = map_type_(types, c.to, &named_layouts);
                     if (is_aggregate_llvm_ty_(out[inst.result])) out[inst.result] = "ptr";
                 }
             }
@@ -469,8 +502,16 @@ namespace parus::backend::aot {
                 const parus::ty::TypePool& types,
                 const parus::oir::Function& fn,
                 const std::vector<std::string>& value_types,
-                const std::vector<ValueUseInfo>& value_uses
-            ) : m_(m), types_(types), fn_(fn), value_types_(value_types), value_uses_(value_uses) {
+                const std::vector<ValueUseInfo>& value_uses,
+                const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
+                const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets
+            ) : m_(m),
+                types_(types),
+                fn_(fn),
+                value_types_(value_types),
+                value_uses_(value_uses),
+                named_layouts_(named_layouts),
+                field_offsets_(field_offsets) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -478,7 +519,7 @@ namespace parus::backend::aot {
             /// @brief 함수 본문을 생성한다.
             std::string emit(bool& need_call_stub) {
                 std::ostringstream os;
-                const std::string ret_ty = map_type_(types_, fn_.ret_ty);
+                const std::string ret_ty = map_type_(types_, fn_.ret_ty, &named_layouts_);
                 const std::string sym = sanitize_symbol_(fn_.name);
 
                 // extern 함수는 본문 없이 선언으로만 내린다.
@@ -537,6 +578,8 @@ namespace parus::backend::aot {
             const parus::oir::Function& fn_;
             const std::vector<std::string>& value_types_;
             const std::vector<ValueUseInfo>& value_uses_;
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts_;
+            const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
@@ -617,7 +660,7 @@ namespace parus::backend::aot {
                 const auto& target = m_.funcs[target_fid];
                 DirectCalleeInfo info{};
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
-                info.ret_ty = map_type_(types_, target.ret_ty);
+                info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_);
                 info.abi = target.abi;
 
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
@@ -640,6 +683,14 @@ namespace parus::backend::aot {
 
             /// @brief field 오프셋(바이트)을 type+field 조합 기준으로 결정한다.
             uint64_t field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
+                auto fit = field_offsets_.find(base_ty);
+                if (fit != field_offsets_.end()) {
+                    auto oit = fit->second.find(std::string(field));
+                    if (oit != fit->second.end()) {
+                        return static_cast<uint64_t>(oit->second);
+                    }
+                }
+
                 const uint64_t h = std::hash<std::string_view>{}(field);
                 const uint64_t key = (uint64_t(base_ty) << 32u) ^ (h & 0xFFFF'FFFFu);
 
@@ -812,7 +863,7 @@ namespace parus::backend::aot {
                 const auto idx64 = coerce_value_(os, x.index, "i64");
 
                 const auto elem_ty_id = value_type_id_(inst.result);
-                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id));
+                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id, &named_layouts_));
 
                 std::string byte_off = idx64;
                 if (elem_size != 1) {
@@ -1040,6 +1091,19 @@ namespace parus::backend::aot {
                             } else {
                                 os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                             }
+                        } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
+                            if (inst.result == kInvalidId) return;
+                            const std::string sym = sanitize_symbol_(x.name);
+                            address_ref_by_value_[inst.result] = "@" + sym;
+                            if (!is_value_read_(inst.result)) return;
+                            const auto rty = value_ty_(inst.result);
+                            if (rty == "ptr") {
+                                os << "  " << vref_(inst.result) << " = bitcast ptr @" << sym << " to ptr\n";
+                            } else if (is_int_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = ptrtoint ptr @" << sym << " to " << rty << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                            }
                         } else if constexpr (std::is_same_v<T, InstCall>) {
                             std::vector<std::string> arg_tys{};
                             std::vector<std::string> arg_vals{};
@@ -1135,7 +1199,7 @@ namespace parus::backend::aot {
                             emit_field_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
-                            auto slot_ty = map_type_(types_, x.slot_ty);
+                            auto slot_ty = map_type_(types_, x.slot_ty, &named_layouts_);
                             if (slot_ty == "void") slot_ty = "i8";
                             os << "  " << vref_(inst.result) << " = alloca " << slot_ty << "\n";
                             address_ref_by_value_[inst.result] = vref_(inst.result);
@@ -1232,7 +1296,52 @@ namespace parus::backend::aot {
         os << "; NOTE: OIR->LLVM lowering with index/field/aggregate memory model bootstrap.\n";
         os << "source_filename = \"parus.oir\"\n\n";
 
-        const auto value_types = build_value_type_table_(oir, types);
+        std::unordered_map<parus::ty::TypeId, NamedLayoutInfo> named_layouts;
+        std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>> field_offsets;
+        for (const auto& f : oir.fields) {
+            if (f.self_type == parus::ty::kInvalidType) continue;
+            NamedLayoutInfo li{};
+            li.size = std::max<uint32_t>(1u, f.size);
+            li.align = std::max<uint32_t>(1u, f.align);
+            named_layouts[f.self_type] = li;
+
+            auto& om = field_offsets[f.self_type];
+            for (const auto& m : f.members) {
+                om[m.name] = m.offset;
+            }
+        }
+
+        if (!oir.globals.empty()) {
+            for (const auto& g : oir.globals) {
+                const std::string sym = sanitize_symbol_(g.name);
+                const std::string gty = map_type_(types, g.type, &named_layouts);
+
+                bool is_internal = false;
+                if (!g.is_extern && g.abi == parus::oir::FunctionAbi::Parus && !g.is_export) {
+                    is_internal = true;
+                }
+
+                if (g.is_extern) {
+                    os << "@" << sym << " = external global " << gty;
+                } else {
+                    const char* kind = g.is_mut ? "global" : "constant";
+                    os << "@" << sym << " = ";
+                    if (is_internal) os << "internal ";
+                    os << kind << " " << gty << " zeroinitializer";
+                }
+
+                if (g.type != parus::ty::kInvalidType && types.get(g.type).kind == parus::ty::Kind::kNamedUser) {
+                    auto it = named_layouts.find(g.type);
+                    if (it != named_layouts.end() && it->second.align > 0) {
+                        os << ", align " << it->second.align;
+                    }
+                }
+                os << "\n";
+            }
+            os << "\n";
+        }
+
+        const auto value_types = build_value_type_table_(oir, types, named_layouts);
         const auto value_uses = build_value_use_table_(oir);
         const auto phi_contract_errors = verify_phi_incoming_contract_(oir, value_types);
         if (!phi_contract_errors.empty()) {
@@ -1277,7 +1386,7 @@ namespace parus::backend::aot {
                     static_cast<size_t>(fn.entry) < oir.blocks.size()) {
                     is_zero_arity = oir.blocks[fn.entry].params.empty();
                 }
-                const std::string ret_ty = map_type_(types, fn.ret_ty);
+                const std::string ret_ty = map_type_(types, fn.ret_ty, &named_layouts);
                 if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
                     if (!main_entry_candidate.has_value()) {
                         main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
@@ -1287,7 +1396,7 @@ namespace parus::backend::aot {
                 }
             }
 
-            FunctionEmitter fe(oir, types, fn, value_types, value_uses);
+            FunctionEmitter fe(oir, types, fn, value_types, value_uses, named_layouts, field_offsets);
             os << fe.emit(need_call_stub) << "\n";
         }
 

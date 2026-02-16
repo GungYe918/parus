@@ -183,6 +183,12 @@ namespace parus::oir {
                         oss << "inst #" << iid << " has invalid function ref id f" << x.func;
                         push_error_(errs, oss.str());
                     }
+                } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
+                    if (x.global == kInvalidId || (size_t)x.global >= m.globals.size()) {
+                        std::ostringstream oss;
+                        oss << "inst #" << iid << " has invalid global ref id g" << x.global;
+                        push_error_(errs, oss.str());
+                    }
                 } else if constexpr (std::is_same_v<T, InstCall>) {
                     if (x.direct_callee == kInvalidId) {
                         (void)check_value_id_(m, errs, iid, "inst(call callee)", x.callee);

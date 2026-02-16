@@ -14,6 +14,16 @@ namespace parus::sir::detail {
         }
     }
 
+    FieldLayout lower_field_layout(parus::ast::FieldLayout l) {
+        switch (l) {
+            case parus::ast::FieldLayout::kC:
+                return FieldLayout::kC;
+            case parus::ast::FieldLayout::kNone:
+            default:
+                return FieldLayout::kNone;
+        }
+    }
+
     /// @brief AST 함수 선언 1개를 SIR Func로 lower하여 모듈에 추가한다.
     FuncId lower_func_decl_(
         Module& m,
@@ -125,6 +135,9 @@ namespace parus::sir::detail {
         f.name = s.name;
         f.is_export = s.is_export;
         f.sym = resolve_symbol_from_stmt(nres, sid);
+        f.layout = lower_field_layout(s.field_layout);
+        f.align = s.field_align;
+        f.self_type = s.type;
 
         f.member_begin = (uint32_t)m.field_members.size();
         f.member_count = 0;

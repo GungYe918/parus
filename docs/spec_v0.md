@@ -142,7 +142,7 @@ fn utf8_identifiers() -> void {
 * 제어: if, elif, else, switch, case, default, while, loop, break, continue, return
 * 상탯값: true, false, null
 * 논리: and, or, not, xor
-* 시스템: import, use, nest, func::ffi, struct::ffi, commit, recast
+* 시스템: import, use, nest, extern, export, layout, align, commit, recast
 * 접근 제한: public, private
 * 메모리/수명/복사: **copy, clone, delete**
 * slice 관련 타입 표기(토큰이 아니라 타입 표기): **[T]**, **&[T]**, **&mut [T]**
@@ -396,45 +396,38 @@ Parus v0는 경로 접근과 값 접근을 분리한다.
 * `obj.method(x)`는 메서드 해소 후 UFCS 형태로 lowering 가능하다.
 * `Type::method(obj, x)`와 의미가 같더라도 표면 문법 규칙(`.` vs `::`)은 유지한다.
 
-### 3.3 FFI 임포트
+### 3.3 FFI 선언
 
-* extern 키워드는 제공하지 않는다.
-* FFI는 항상 use로 명시적으로 가져온다.
+* ABI/FFI 관련 정본은 `docs/abi/v0.0.1/ABI.md`를 따른다.
+* `use func::ffi`, `use struct::ffi` 문법은 폐기한다.
+* FFI 경계 함수/전역은 `extern "C"` / `export "C"`로 선언한다.
 * FFI는 ABI 경계이므로 pure/comptime에서 기본 금지다. (타입체커 규칙)
 
 예시
 
 ```parus
-use func::ffi<int (int, int)> c_add;
-use struct::ffi Vec2C { float32 x; float32 y; }
+extern "C" fn c_add(a: i32, b: i32) -> i32;
+extern "C" static mut errno: i32;
 
-fn call_c(a: int, b: int) -> int {
-  return c_add(a: a, b: b);
+export "C" fn p_add(a: i32, b: i32) -> i32 {
+  return a + b;
 }
 ```
 
-### 3.3.1 FFI-safe 타입
+### 3.3.1 FFI-safe 타입 (`c-v0`)
 
-**FFI-safe로 허용되는 타입(v0 권장):**
+허용:
 
-* 고정 폭 정수/부동소수/bool/char
-* `field` 중에서:
+* 정수: `i8/i16/i32/i64`, `u8/u16/u32/u64`, `isize/usize`
+* 부동소수: `f32/f64`
+* 포인터: `ptr T`, `ptr mut T` (T가 FFI-safe일 때)
+* `layout(c)`를 만족하는 `field`
 
-  * 멤버가 모두 FFI-safe이고
-  * 레이아웃이 C와 호환(정렬/패딩 규칙 고정)인 것
-* `T[N]` (T가 FFI-safe)
-* 불투명 핸들: `handle<T>`는 C에서 `void*` 또는 `struct Handle_T*`로 취급(불투명)
+금지:
 
-**FFI에서 금지(v0 강권):**
-
-* `class` 타입
-* `tablet` 값 전달(생성자/소멸자/가상 디스패치 등 개입 가능)
-* `string`, `T[]`, `closure`
-* `&T`, `&mut T` (이미 규칙상 “FFI로 전달 금지”라고 했으니 확정)
-
-즉, FFI 경계에서는:
-
-* “POD 데이터(field)” + “불투명 핸들(handle)”만 통과한다.
+* borrow/escape (`&`, `&mut`, `&&`)
+* optional, class, tablet 직접 값 전달
+* 구현 의존 내부 타입
 
 ### 3.3.2 Parus의 개념이 C에서 어떻게 대응되는가
 
@@ -4061,22 +4054,11 @@ UseStmt       := "use" UseBody ";" ;
 UseBody       := UseTypeAlias
                | UsePathAlias
                | UseTextSubst
-               | UseFFIFunc
-               | UseFFIStruct
                ;
 
 UseTypeAlias  := Ident "=" Type ;
 UsePathAlias  := Path "=" Ident ;              /* 경로 별칭 */
 UseTextSubst  := Ident Expr ;                  /* IDENT 단위 치환(매크로 함수 금지) */
-
-UseFFIFunc    := "func::ffi" "<" FFISignature ">" Ident ;
-UseFFIStruct  := "struct::ffi" Ident FFIStructBody ;
-
-FFIStructBody := "{" FFIStructField* "}" ;
-FFIStructField:= Type Ident ";" ;              /* 예: float32 x; */
-
-FFISignature  := Type "(" FFIParamTypesOpt ")" ;
-FFIParamTypesOpt := (Type ("," Type)*)? ;
 ```
 
 ---
@@ -4105,19 +4087,23 @@ AccessMod     := "public" ":" | "private" ":" ;
 
 ---
 
-### 16.6 전역/정적 변수 선언 (`static`, `let/set`, `mut`)
+### 16.6 전역/정적 변수 선언
 
 ```ebnf
-GlobalVarDecl := StorageOpt MutOpt VarKw IdentVarDecl ";" ;
+GlobalVarDecl    := CAbiGlobalDecl | NormalGlobalDecl ;
 
-StorageOpt    := "static" | ε ;
-MutOpt        := "mut" | ε ;
-VarKw         := "let" | "set" ;
+CAbiGlobalDecl   := LinkPrefix "static" MutOpt Ident ":" Type CAbiInitOpt ";" ;
+LinkPrefix       := ("extern" | "export") "\"C\"" ;
+CAbiInitOpt      := "=" Expr | ε ;              /* extern 경로에서는 ε */
 
-IdentVarDecl  := LetDecl | SetDecl ;
+NormalGlobalDecl := StorageOpt MutOpt VarKw IdentVarDecl ";" ;
+StorageOpt       := "static" | ε ;
+MutOpt           := "mut" | ε ;
+VarKw            := "let" | "set" ;
 
-LetDecl       := Ident ":" Type "=" Expr ;
-SetDecl       := Ident "=" Expr ;
+IdentVarDecl     := LetDecl | SetDecl ;
+LetDecl          := Ident ":" Type "=" Expr ;
+SetDecl          := Ident "=" Expr ;
 ```
 
 ---
@@ -4125,7 +4111,10 @@ SetDecl       := Ident "=" Expr ;
 ### 16.7 함수 선언 (attribute/export/mode/qualifier/예외접미 `?`/params/named-group)
 
 ```ebnf
-FuncDecl      := Attribute* ExportOpt "fn" ModeOpt QualifierOpt FuncName FuncParams "->" Type Block ;
+FuncDecl      := CAbiFuncDecl | NormalFuncDecl ;
+
+CAbiFuncDecl  := LinkPrefix "fn" FuncName FuncParams "->" Type (Block | ";") ;
+NormalFuncDecl:= Attribute* ExportOpt "fn" ModeOpt QualifierOpt FuncName FuncParams "->" Type Block ;
 
 FuncName      := Ident QMarkOpt ;
 QMarkOpt      := "?" | ε ;                     /* 예외 허용 함수 표기 */
@@ -4194,9 +4183,11 @@ TypeSuffix    := "?" ;                      /* nullable: T? (접미가 &보다 �
 ### 16.9 클래스 / field / proto / tablet / acts
 
 ```ebnf
-FieldDecl     := ExportOpt "field" Ident BlockField ;
+FieldDecl     := "field" FieldLayoutOpt FieldAlignOpt Ident BlockField ;
+FieldLayoutOpt:= "layout" "(" "c" ")" | ε ;
+FieldAlignOpt := "align" "(" IntLit ")" | ε ;
 BlockField    := "{" FieldMember* "}" ;
-FieldMember   := Type Ident ";" ;           /* field 내부 함수 금지 */
+FieldMember   := Ident ":" Type ";" ;       /* field 내부 함수 금지 */
 
 ProtoDecl     := ExportOpt "proto" Ident BlockProto ;
 BlockProto    := "{" ProtoMember* "}" ;

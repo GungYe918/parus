@@ -5,6 +5,7 @@
 #include <parus/ty/TypePool.hpp>
 
 #include <string>
+#include <limits>
 #include <vector>
 
 
@@ -16,6 +17,24 @@ namespace parus {
         bool is_c_abi_lit_(const Token& t) {
             if (t.kind != syntax::TokenKind::kStringLit) return false;
             return t.lexeme == "\"C\"";
+        }
+
+        /// @brief align 인자 토큰에서 u32 정수값을 추출한다.
+        bool parse_u32_align_lit_(const Token& t, uint32_t& out) {
+            if (t.kind != syntax::TokenKind::kIntLit) return false;
+
+            uint64_t v = 0;
+            bool saw_digit = false;
+            for (const char c : t.lexeme) {
+                if (c == '_') continue;
+                if (c < '0' || c > '9') break;
+                saw_digit = true;
+                v = v * 10u + static_cast<uint64_t>(c - '0');
+                if (v > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) return false;
+            }
+            if (!saw_digit) return false;
+            out = static_cast<uint32_t>(v);
+            return true;
         }
 
     } // namespace
@@ -149,17 +168,19 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `field Name { Type member; ... }` 선언을 파싱한다.
+    /// @brief `field layout(c)? align(n)? Name { member: Type; ... }` 선언을 파싱한다.
     ast::StmtId Parser::parse_decl_field() {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
         Span start = start_tok.span;
 
-        bool is_export = false;
-        if (cursor_.at(K::kKwExport)) {
-            is_export = true;
-            start = cursor_.bump().span; // export
+        // ABI 규칙: field에는 export/extern를 붙이지 않는다.
+        while (cursor_.at(K::kKwExport) || cursor_.at(K::kKwExtern)) {
+            const Token bad = cursor_.bump();
+            start = bad.span;
+            diag_report(diag::Code::kUnexpectedToken, bad.span,
+                        "'export/extern' is not allowed on field declarations");
         }
 
         if (!cursor_.at(K::kKwField)) {
@@ -174,6 +195,75 @@ namespace parus {
             return ast_.add_stmt(s);
         }
         cursor_.bump(); // field
+
+        ast::FieldLayout field_layout = ast::FieldLayout::kNone;
+        uint32_t field_align = 0;
+        bool seen_layout = false;
+        bool seen_align = false;
+
+        // qualifier loop: layout(c) / align(n)
+        while (!is_aborted()) {
+            if (cursor_.at(K::kKwLayout) ||
+                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "layout")) {
+                const Token qtok = cursor_.bump();
+                if (seen_layout) {
+                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated layout(...) in field declaration");
+                }
+                seen_layout = true;
+
+                if (!cursor_.eat(K::kLParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                }
+
+                const Token arg = cursor_.peek();
+                if (arg.kind == K::kIdent && arg.lexeme == "c") {
+                    field_layout = ast::FieldLayout::kC;
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, arg.span, "only layout(c) is supported");
+                    if (arg.kind != K::kRParen && arg.kind != K::kEof) cursor_.bump();
+                }
+
+                if (!cursor_.eat(K::kRParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    recover_to_delim(K::kRParen, K::kIdent, K::kLBrace);
+                    cursor_.eat(K::kRParen);
+                }
+                continue;
+            }
+
+            if (cursor_.at(K::kKwAlign) ||
+                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "align")) {
+                const Token qtok = cursor_.bump();
+                if (seen_align) {
+                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated align(...) in field declaration");
+                }
+                seen_align = true;
+
+                if (!cursor_.eat(K::kLParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                }
+
+                const Token arg = cursor_.peek();
+                uint32_t parsed_align = 0;
+                if (parse_u32_align_lit_(arg, parsed_align)) {
+                    field_align = parsed_align;
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, arg.span, "align(...) requires a positive integer literal");
+                    if (arg.kind != K::kRParen && arg.kind != K::kEof) cursor_.bump();
+                }
+
+                if (!cursor_.eat(K::kRParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    recover_to_delim(K::kRParen, K::kIdent, K::kLBrace);
+                    cursor_.eat(K::kRParen);
+                }
+                continue;
+            }
+
+            break;
+        }
 
         std::string_view name{};
         const Token name_tok = cursor_.peek();
@@ -198,29 +288,48 @@ namespace parus {
                 continue;
             }
 
-            // field 내부 함수/선언은 금지: Type name;만 허용
+            // field 내부 함수/선언은 금지: member: Type; 혹은 (legacy) Type member;만 허용
             if (is_decl_start(cursor_.peek().kind) || cursor_.at(K::kKwIf) || cursor_.at(K::kKwWhile)) {
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "field member declaration 'Type name;' (use class for value+behavior)");
+                            "field member declaration 'name: Type;' (use class for value+behavior)");
                 recover_to_delim(K::kSemicolon, K::kRBrace);
                 cursor_.eat(K::kSemicolon);
                 continue;
             }
 
-            const auto parsed_ty = parse_type();
-            if (parsed_ty.id == ty::kInvalidType) {
-                recover_to_delim(K::kSemicolon, K::kRBrace);
-                cursor_.eat(K::kSemicolon);
-                continue;
-            }
-
-            const Token member_name_tok = cursor_.peek();
             std::string_view member_name{};
-            if (member_name_tok.kind == K::kIdent) {
+            ParsedType parsed_ty{};
+            Token member_name_tok{};
+            bool parse_ok = true;
+
+            // ABI 문법 우선: name: Type;
+            if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColon) {
+                member_name_tok = cursor_.peek();
                 member_name = member_name_tok.lexeme;
                 cursor_.bump();
+                cursor_.bump(); // :
+                parsed_ty = parse_type();
+                if (parsed_ty.id == ty::kInvalidType) {
+                    parse_ok = false;
+                }
             } else {
-                diag_report(diag::Code::kFieldMemberNameExpected, member_name_tok.span);
+                // legacy 호환: Type name;
+                parsed_ty = parse_type();
+                if (parsed_ty.id == ty::kInvalidType) {
+                    parse_ok = false;
+                } else {
+                    member_name_tok = cursor_.peek();
+                    if (member_name_tok.kind == K::kIdent) {
+                        member_name = member_name_tok.lexeme;
+                        cursor_.bump();
+                    } else {
+                        diag_report(diag::Code::kFieldMemberNameExpected, member_name_tok.span);
+                        parse_ok = false;
+                    }
+                }
+            }
+
+            if (!parse_ok) {
                 recover_to_delim(K::kSemicolon, K::kRBrace);
                 cursor_.eat(K::kSemicolon);
                 continue;
@@ -260,7 +369,10 @@ namespace parus {
         s.kind = ast::StmtKind::kFieldDecl;
         s.span = span_join(start, end_sp);
         s.name = name;
-        s.is_export = is_export;
+        s.is_export = false;
+        s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
+        s.field_layout = field_layout;
+        s.field_align = field_align;
         s.field_member_begin = field_member_begin;
         s.field_member_count = field_member_count;
         return ast_.add_stmt(s);

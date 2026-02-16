@@ -963,6 +963,68 @@ namespace {
         return ok;
     }
 
+    static bool test_c_abi_layout_c_field_ok() {
+        const std::string src = R"(
+            field layout(c) align(16) Vec2 {
+                x: f32;
+                y: f32;
+            }
+
+            extern "C" fn consume(v: Vec2) -> i32;
+
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "layout(c) field in C ABI signature must pass diagnostics");
+        ok &= require_(ty.errors.empty(), "layout(c) field in C ABI signature must pass tyck");
+        return ok;
+    }
+
+    static bool test_c_abi_reject_non_layout_field() {
+        const std::string src = R"(
+            field Vec2 {
+                x: f32;
+                y: f32;
+            }
+
+            extern "C" fn consume(v: Vec2) -> i32;
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCTypeNotFfiSafe),
+            "non-layout(c) field in C ABI signature must emit AbiCTypeNotFfiSafe");
+        return ok;
+    }
+
+    static bool test_field_export_disallowed() {
+        const std::string src = R"(
+            export field layout(c) Vec2 {
+                x: f32;
+                y: f32;
+            }
+            fn main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kUnexpectedToken),
+            "export field must be rejected by parser");
+        return ok;
+    }
+
     static bool test_var_mut_prefix_forbidden_on_set() {
         const std::string src = R"(
             fn main() -> i32 {
@@ -1069,6 +1131,9 @@ int main() {
         {"c_abi_reject_non_ffi_safe_type", test_c_abi_reject_non_ffi_safe_type},
         {"c_abi_reject_named_group", test_c_abi_reject_named_group},
         {"c_abi_global_requires_static", test_c_abi_global_requires_static},
+        {"c_abi_layout_c_field_ok", test_c_abi_layout_c_field_ok},
+        {"c_abi_reject_non_layout_field", test_c_abi_reject_non_layout_field},
+        {"field_export_disallowed", test_field_export_disallowed},
         {"var_mut_prefix_forbidden_on_set", test_var_mut_prefix_forbidden_on_set},
         {"var_mut_prefix_forbidden_on_static", test_var_mut_prefix_forbidden_on_static},
         {"file_cases_directory", test_file_cases_directory},
