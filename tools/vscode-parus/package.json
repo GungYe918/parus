@@ -1,0 +1,105 @@
+{
+  "name": "vscode-parus",
+  "displayName": "Parus",
+  "description": "VSCode extension for Parus language via parusc/parusd LSP",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "parus",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:parus",
+    "onCommand:parus.restartLanguageServer",
+    "onCommand:parus.showLanguageServerLogs",
+    "onCommand:parus.configureServerPath"
+  ],
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "check": "tsc --noEmit -p ./",
+    "clean": "rm -rf out"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "parus",
+        "aliases": [
+          "Parus",
+          "parus"
+        ],
+        "extensions": [
+          ".parus",
+          ".pr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "parus.restartLanguageServer",
+        "title": "Parus: Restart Language Server"
+      },
+      {
+        "command": "parus.showLanguageServerLogs",
+        "title": "Parus: Show Language Server Logs"
+      },
+      {
+        "command": "parus.configureServerPath",
+        "title": "Parus: Configure Language Server Path"
+      }
+    ],
+    "configuration": {
+      "title": "Parus",
+      "properties": {
+        "parus.server.path": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to parusc or parusd executable."
+        },
+        "parus.server.mode": {
+          "type": "string",
+          "enum": [
+            "driver",
+            "direct"
+          ],
+          "default": "driver",
+          "description": "Preferred server launch mode. Driver tries parusc lsp first; direct uses parusd --stdio."
+        },
+        "parus.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace communication with the language server."
+        },
+        "parus.diagnostics.debounceMs": {
+          "type": "number",
+          "default": 200,
+          "minimum": 0,
+          "maximum": 5000,
+          "description": "Debounce interval before sending document changes to the language server in milliseconds."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.3",
+    "@types/vscode": "^1.109.0",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3"
+  }
+}
