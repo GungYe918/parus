@@ -53,7 +53,7 @@ namespace parus {
             if (k1 == K::kStringLit && (k2 == K::kKwField || k2 == K::kKwActs || k2 == K::kKwNest)) {
                 // `export "C"`는 함수/전역 심볼 선언용이므로 data-decl에는 허용하지 않는다.
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek(1).span,
-                            "'export \"C\"' is only allowed on fn/global symbol declarations");
+                            "'export \"C\"' is only allowed on def/global symbol declarations");
             }
             if (k1 == K::kStringLit && (k2 == K::kKwStatic || k2 == K::kKwMut || k2 == K::kKwLet || k2 == K::kKwSet)) {
                 return parse_decl_extern_var();
@@ -78,11 +78,11 @@ namespace parus {
             if (k1 == K::kKwStatic || k1 == K::kKwMut || k1 == K::kKwLet || k1 == K::kKwSet) {
                 return parse_decl_extern_var();
             }
-            // fallback: fn 파서로 넘겨 링크 문법 진단을 일관 처리한다.
+            // fallback: def 파서로 넘겨 링크 문법 진단을 일관 처리한다.
             return parse_decl_fn();
         }
 
-        // fn decl
+        // def decl
         if (t.kind == K::kAt || t.kind == K::kKwFn) {
             return parse_decl_fn();
         }

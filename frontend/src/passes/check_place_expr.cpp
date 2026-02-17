@@ -137,6 +137,19 @@ namespace parus::passes {
                 if (e.loop_iter != ast::k_invalid_expr) walk_expr(ast, e.loop_iter, bag);
                 break;
 
+            case ast::ExprKind::kFieldInit: {
+                const auto& inits = ast.field_init_entries();
+                const uint64_t begin = e.field_init_begin;
+                const uint64_t end = begin + e.field_init_count;
+                if (begin <= inits.size() && end <= inits.size()) {
+                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                        const auto& ent = inits[e.field_init_begin + i];
+                        if (ent.expr != ast::k_invalid_expr) walk_expr(ast, ent.expr, bag);
+                    }
+                }
+                break;
+            }
+
             default:
                 break;
         }

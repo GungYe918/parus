@@ -330,9 +330,9 @@ namespace parus {
             }
         }
 
-        // 3) fn
+        // 3) def
         if (!cursor_.at(K::kKwFn)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "fn");
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "def");
 
             stmt_sync_to_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
@@ -342,7 +342,7 @@ namespace parus {
             s.span = span_join(start, cursor_.prev().span);
             return ast_.add_stmt(s);
         }
-        cursor_.bump(); // 'fn'
+        cursor_.bump(); // 'def'
 
         // 4) qualifier*
         bool is_pure_kw = false;
@@ -403,14 +403,14 @@ namespace parus {
 
         // ------------------------------------------------------------------
         // FIX (핵심):
-        // TypePool의 fn 시그니처에는 "positional 파라미터"만 포함한다.
+        // TypePool의 def 시그니처에는 "positional 파라미터"만 포함한다.
         // named-group 파라미터는 시그니처에 넣지 말고,
         // FnDecl 메타(param list + flags)로만 보관한 뒤 tyck에서 별도 검증한다.
         //
         // 예)
-        //   fn sub(a,b,{clamp})  -> sig: fn(i32,i32)->i32   (positional_count=2)
-        //   fn mul({a,b})        -> sig: fn()->i32          (positional_count=0)
-        //   fn div(a,b,{rounding=0,bias}) -> sig: fn(i32,i32)->i32
+        //   def sub(a,b,{clamp})  -> sig: def(i32,i32)->i32   (positional_count=2)
+        //   def mul({a,b})        -> sig: def()->i32          (positional_count=0)
+        //   def div(a,b,{rounding=0,bias}) -> sig: def(i32,i32)->i32
         // ------------------------------------------------------------------
         ty::TypeId sig_id = ty::kInvalidType;
         {
@@ -437,7 +437,7 @@ namespace parus {
             if (cursor_.at(K::kLBrace)) {
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
                             "extern function declaration must not have a body");
-                (void)parse_stmt_required_block("extern fn");
+                (void)parse_stmt_required_block("extern def");
             }
             if (cursor_.at(K::kSemicolon)) {
                 end_sp = cursor_.bump().span;
@@ -445,7 +445,7 @@ namespace parus {
                 end_sp = stmt_consume_semicolon_or_recover(end_sp);
             }
         } else {
-            body = parse_stmt_required_block("fn");
+            body = parse_stmt_required_block("def");
             end_sp = ast_.stmt(body).span;
             if (cursor_.at(K::kSemicolon)) {
                 end_sp = cursor_.bump().span;

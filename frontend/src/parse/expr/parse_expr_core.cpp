@@ -553,7 +553,7 @@ namespace parus {
             cursor_.bump();
 
             std::string joined(t.lexeme);
-            Span sp = t.span;
+            Span path_sp = t.span;
             bool has_path_tail = false;
 
             auto eat_coloncolon = [&]() -> bool {
@@ -575,14 +575,87 @@ namespace parus {
                 cursor_.bump();
                 joined += "::";
                 joined.append(seg.lexeme.data(), seg.lexeme.size());
-                sp = span_join(sp, seg.span);
+                path_sp = span_join(path_sp, seg.span);
                 has_path_tail = true;
+            }
+
+            const std::string_view path_text = has_path_tail
+                ? ast_.add_owned_string(std::move(joined))
+                : t.lexeme;
+
+            // Field literal primary:
+            //   TypePath{ name: expr, ... }
+            if (cursor_.at(syntax::TokenKind::kLBrace)) {
+                const Token lb = cursor_.bump(); // '{'
+                const uint32_t begin = static_cast<uint32_t>(ast_.field_init_entries().size());
+                uint32_t count = 0;
+
+                while (!cursor_.at(syntax::TokenKind::kRBrace) &&
+                       !cursor_.at(syntax::TokenKind::kEof) &&
+                       !is_aborted()) {
+                    if (cursor_.eat(syntax::TokenKind::kComma)) {
+                        continue;
+                    }
+
+                    const Token name_tok = cursor_.peek();
+                    if (name_tok.kind != syntax::TokenKind::kIdent) {
+                        diag_report(diag::Code::kFieldMemberNameExpected, name_tok.span);
+                        recover_to_delim(syntax::TokenKind::kComma, syntax::TokenKind::kRBrace, syntax::TokenKind::kSemicolon);
+                        if (cursor_.eat(syntax::TokenKind::kComma)) continue;
+                        break;
+                    }
+                    cursor_.bump();
+
+                    if (!cursor_.eat(syntax::TokenKind::kColon)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                        recover_to_delim(syntax::TokenKind::kComma, syntax::TokenKind::kRBrace, syntax::TokenKind::kSemicolon);
+                        if (cursor_.eat(syntax::TokenKind::kComma)) continue;
+                        break;
+                    }
+
+                    ast::ExprId rhs = parse_expr_pratt(0, ternary_depth);
+                    rhs = parse_expr_postfix(rhs, ternary_depth);
+
+                    ast::FieldInitEntry ent{};
+                    ent.name = name_tok.lexeme;
+                    ent.expr = rhs;
+                    ent.span = span_join(name_tok.span, ast_.expr(rhs).span);
+                    ast_.add_field_init_entry(ent);
+                    ++count;
+
+                    if (cursor_.eat(syntax::TokenKind::kComma)) {
+                        if (cursor_.at(syntax::TokenKind::kRBrace)) break; // trailing comma
+                        continue;
+                    }
+                    break;
+                }
+
+                Span end_span = lb.span;
+                if (!cursor_.eat(syntax::TokenKind::kRBrace)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+                    recover_to_delim(syntax::TokenKind::kRBrace, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRParen);
+                    if (cursor_.eat(syntax::TokenKind::kRBrace)) {
+                        end_span = cursor_.prev().span;
+                    } else {
+                        end_span = cursor_.peek().span;
+                    }
+                } else {
+                    end_span = cursor_.prev().span;
+                }
+
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kFieldInit;
+                e.text = path_text;
+                e.field_init_begin = begin;
+                e.field_init_count = count;
+                e.span = span_join(path_sp, end_span);
+                return ast_.add_expr(e);
             }
 
             ast::Expr e{};
             e.kind = ast::ExprKind::kIdent;
-            e.span = sp;
-            e.text = has_path_tail ? ast_.add_owned_string(std::move(joined)) : t.lexeme;
+            e.span = path_sp;
+            e.text = path_text;
             return ast_.add_expr(e);
         }
 

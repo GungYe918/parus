@@ -1,9 +1,9 @@
 // 비허용 케이스: 괄호/세미콜론 누락 후에도 이후 문장을 가능한 한 복구해야 함
-fn g(a: i32, b: i32) -> i32 {
+def g(a: i32, b: i32) -> i32 {
   return a + b;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
   set x = g(1i32, 2i32;
   set y = 3i32
   return y;

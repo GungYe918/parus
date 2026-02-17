@@ -1,0 +1,10 @@
+field Vec2 {
+    x: i32;
+    y: i32;
+}
+
+def main() -> i32 {
+    let v: Vec2 = Vec2{ x: 0i32, y: 0i32 };
+    v.x = 10i32;
+    return v.x;
+}

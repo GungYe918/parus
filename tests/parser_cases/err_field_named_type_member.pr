@@ -7,6 +7,6 @@ field Outer {
     Inner item;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
     return 0i32;
 }

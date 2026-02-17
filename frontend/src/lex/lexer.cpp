@@ -395,7 +395,7 @@ namespace parus {
         if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }
 
-        if (t.lexeme == "fn")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
+        if (t.lexeme == "def")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
         if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }

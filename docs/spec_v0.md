@@ -30,7 +30,7 @@ ABI/FFI 정본 우선순위:
 
 ```parus
 @pure
-export fn demo_small_big() -> void {
+export def demo_small_big() -> void {
   set x = 3;
   set y = x + 2;
 
@@ -52,11 +52,11 @@ export fn demo_small_big() -> void {
 class Counter {
   // draft.count 라는 큰 상태를 가진다고 가정
 
-  fn sub get() -> int {
+  def sub get() -> int {
     return draft.count;
   }
 
-  fn pub inc() -> void {
+  def pub inc() -> void {
     draft.count += 1;
     commit;
   }
@@ -79,13 +79,13 @@ export field Vec2 {
 }
 
 proto Drawable {
-  fn draw() -> void;
+  def draw() -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
-    fn draw() -> void { /* ... */ }
+    def draw() -> void { /* ... */ }
 }
 ```
 
@@ -102,7 +102,7 @@ tablet Sprite : Drawable {
 예시
 
 ```parus
-export fn basic_blocks() -> void {
+export def basic_blocks() -> void {
   set a = 1;
   if (a == 1) { set b = 2; }
 }
@@ -116,7 +116,7 @@ export fn basic_blocks() -> void {
 예시
 
 ```parus
-fn comments() -> void {
+def comments() -> void {
   // line comment
   /* block comment */
   set x = 1;
@@ -137,7 +137,7 @@ v0 권장 규칙:
 예시 (UTF-8 식별자, 이모지 포함)
 
 ```parus
-fn utf8_identifiers() -> void {
+def utf8_identifiers() -> void {
   let 한글이름: int = 3;
   let `🍣`: int = 7;
   set 합 = 한글이름 + `🍣`;
@@ -146,7 +146,7 @@ fn utf8_identifiers() -> void {
 
 ### 1.4 키워드 (v0 핵심)
 
-* 선언/구조: field, proto, tablet, acts, class, fn, let, set, mut, &, &&
+* 선언/구조: field, proto, tablet, acts, class, def, let, set, mut, &, &&
 * 제어: if, elif, else, switch, case, default, while, loop, break, continue, return
 * 상탯값: true, false, null
 * 논리: and, or, not, xor
@@ -165,7 +165,7 @@ fn utf8_identifiers() -> void {
 예시
 
 ```parus
-fn keywords_demo() -> void {
+def keywords_demo() -> void {
   set ok = true;
   if (ok and not false) { /* ... */ }
 }
@@ -184,7 +184,7 @@ fn keywords_demo() -> void {
 예시
 
 ```parus
-fn int_literals() -> void {
+def int_literals() -> void {
   let a: u32 = 123u32;
   let b: u64 = 1_000_000u64;
 }
@@ -200,7 +200,7 @@ fn int_literals() -> void {
 예시
 
 ```parus
-fn float_literals() -> void {
+def float_literals() -> void {
   let x: float32 = 3.14f;
   let y: float64 = 2.71828lf;
 }
@@ -214,7 +214,7 @@ fn float_literals() -> void {
 예시
 
 ```parus
-fn bool_null() -> void {
+def bool_null() -> void {
   let t: bool = true;
   let f: bool = false;
   // let x: int = null; // error
@@ -229,7 +229,7 @@ fn bool_null() -> void {
 예시
 
 ```parus
-fn char_literals() -> void {
+def char_literals() -> void {
   let c1: char = 'a';
   let c2: char = '\n';
   let c3: char = '\u{AC00}';
@@ -249,7 +249,7 @@ fn char_literals() -> void {
 예시
 
 ```parus
-fn strings() -> void {
+def strings() -> void {
   let raw_name: text = "parus";
   // let owned: String = String::from_text(src: raw_name); // std 링크 후 명시 변환
 }
@@ -320,7 +320,7 @@ import foo::net as fnet;
 import foo;
 import goo as g;
 
-fn demo() -> void {
+def demo() -> void {
   foo::math::add(a: 1, b: 2);
   g::io::print(msg: "ok");
 }
@@ -369,7 +369,7 @@ nest engine::math;
 // 블록형 선언
 nest engine {
   nest math {
-    export fn add(a: i32, b: i32) -> i32 { return a + b; }
+    export def add(a: i32, b: i32) -> i32 { return a + b; }
   }
 }
 ```
@@ -414,10 +414,10 @@ Parus v0는 경로 접근과 값 접근을 분리한다.
 예시
 
 ```parus
-extern "C" fn c_add(a: i32, b: i32) -> i32;
+extern "C" def c_add(a: i32, b: i32) -> i32;
 extern "C" static mut errno: i32;
 
-export "C" fn p_add(a: i32, b: i32) -> i32 {
+export "C" def p_add(a: i32, b: i32) -> i32 {
   return a + b;
 }
 ```
@@ -452,10 +452,10 @@ export "C" fn p_add(a: i32, b: i32) -> i32 {
 
 ```parus
 class Counter {
-  fn inc() : pub { draft.count += 1u32; commit; }
+  def inc() : pub { draft.count += 1u32; commit; }
 }
 
-fn counter_inc_ffi(h: handle<Counter>) -> void {
+def counter_inc_ffi(h: handle<Counter>) -> void {
   // 내부적으로 h의 Counter 인스턴스에 대해 pub 호출
 }
 ```
@@ -525,7 +525,7 @@ v0 권장 전략은 단순하다:
 예시
 
 ```parus
-fn primitives() -> void{
+def primitives() -> void{
   let a: int32 = 1i32;
   let b: uint64 = 2u64;
   let c: bool = true;
@@ -544,7 +544,7 @@ fn primitives() -> void{
 예시
 
 ```parus
-fn nullable_demo() -> void {
+def nullable_demo() -> void {
   let a: int? = null;
   let b: int? = 3i32;
 
@@ -562,7 +562,7 @@ fn nullable_demo() -> void {
 예시
 
 ```parus
-fn arrays_lists() -> void {
+def arrays_lists() -> void {
   let xs: int[3] = [1, 2, 3];
   // let ys: int[] = [1, 2, 3]; // 리스트 리터럴 문법은 v0에서 선택 구현
 }
@@ -581,7 +581,7 @@ v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한�
 향후 확장 (v1+ 로드맵 성격, v0에 포함되는 개념만 선명히):
 
 * 제네릭 타입: TypeName<T> 형태
-* 제네릭 함수: fn foo<T>(...) ...
+* 제네릭 함수: def foo<T>(...) ...
 * 제네릭 특수화와 monomorphization (컴파일 시 실체화) 혹은 제한된 형태의 dictionary passing 중 택1
 * 타입 추론 강화: set 바인딩의 추론, 간단한 반환 타입 추론 (v0에서는 강제 유지)
 * trait 비슷한 개념을 acts/proto/tablet 조합으로 자연스럽게 확장
@@ -638,7 +638,7 @@ freestanding에서 “나중에 초기화”가 필요한 전역 자원은 다�
 ```parus
 static mut LOGGER: Logger? = null;
 
-fn init_logger() -> void {
+def init_logger() -> void {
   LOGGER = Logger::init(); // 런타임 초기화(명시적)
 }
 ```
@@ -673,7 +673,7 @@ fn init_logger() -> void {
 예시
 
 ```parus
-fn bindings() -> void{
+def bindings() -> void{
   let a: int = 1i32;
   set b = a + 2;
   set mut c = 0;
@@ -690,7 +690,7 @@ fn bindings() -> void{
 예시
 
 ```parus
-fn shadowing() -> void {
+def shadowing() -> void {
   set x = 1;
   if (x == 1) {
     set x = 2; // 다른 스코프, 허용 가능(정책 선택)
@@ -715,7 +715,7 @@ Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해
 
 * `@attribute` : 0개 이상 (예: `@pure`, `@comptime` 등)
 * `[export]` : 선택
-* `fn`
+* `def`
 * `[mode]` : 선택 (`sub`, `pub` 등. class 문맥에서 의미 있음)
 * `[qualifier]` : 선택 (`pure`, `comptime` 등. 또는 `@pure` 같은 attribute로만 둘 수도 있음)
 * `Name`
@@ -727,7 +727,7 @@ Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해
 
 ```ebnf
 FuncDecl :=
-  Attribute* ExportOpt "fn" ModeOpt QualifierOpt Ident FuncParams "->" Type Block
+  Attribute* ExportOpt "def" ModeOpt QualifierOpt Ident FuncParams "->" Type Block
 
 ExportOpt := "export" | ε
 ModeOpt   := "sub" | "pub" | ε
@@ -782,7 +782,7 @@ NamedParam := Ident ":" Type DefaultOpt
 
 ```parus
 @pure
-export fn add(a: int, b: int) -> int {
+export def add(a: int, b: int) -> int {
   return a + b;
 }
 ```
@@ -790,7 +790,7 @@ export fn add(a: int, b: int) -> int {
 #### 2) named group만 (전부 라벨 전달)
 
 ```parus
-export fn make_window({w: int, h: int, title: string = "Parus"}) -> handle<Window> {
+export def make_window({w: int, h: int, title: string = "Parus"}) -> handle<Window> {
   // ...
 }
 ```
@@ -798,7 +798,7 @@ export fn make_window({w: int, h: int, title: string = "Parus"}) -> handle<Windo
 #### 3) 위치 + named group (권장 “실전형”)
 
 ```parus
-export fn spawn_entity(
+export def spawn_entity(
   world: handle<World>,
   kind: EntityKind,
   { x: float32 = 0.0f, y: float32 = 0.0f, tag: string? = null }
@@ -892,7 +892,7 @@ set e = spawn_entity(
 
 ### 6.1.6 named group 매칭 규칙 (필수/선택, 중복, 누락)
 
-`fn f(a: int, {x: int = 0, y: int}) -> ...` 같은 선언이 있을 때:
+`def f(a: int, {x: int = 0, y: int}) -> ...` 같은 선언이 있을 때:
 
 * `{}` 안 파라미터 전달은 **라벨로만** 가능
 * `{}` 안 라벨은 **중복 금지**
@@ -905,7 +905,7 @@ set e = spawn_entity(
 예:
 
 ```parus
-export fn f(a: int, {x: int = 0, y: int}) -> int { return a + x + y; }
+export def f(a: int, {x: int = 0, y: int}) -> int { return a + x + y; }
 
 set ok  = f(1, {y: 2});        // ok: x는 default 0
 set bad = f(1, {x: 3});        // error: y가 누락(필수)
@@ -1024,8 +1024,8 @@ p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 #### (H) 예시
 
 ```parus
-fn add(a: i32, b: i32) -> i32 { return a + b; }
-fn add(a: i32, {b: i32 = 0}) -> i32 { return a + b; }
+def add(a: i32, b: i32) -> i32 { return a + b; }
+def add(a: i32, {b: i32 = 0}) -> i32 { return a + b; }
 
 set x = add(1, 2);         // positional -> 첫 번째
 set y = add(1, {b: 3});    // named-group -> 두 번째
@@ -1062,7 +1062,7 @@ v0 보수 규칙:
 
 ```parus
 @pure
-fn clamp(p: int, lo: int, hi: int) -> int {
+def clamp(p: int, lo: int, hi: int) -> int {
   if (p < lo) { return lo; }
   if (p > hi) { return hi; }
   return p;
@@ -1105,7 +1105,7 @@ comptime 호출 위치 (v0 권장):
 
 ```parus
 @comptime
-fn pow2(n: int) -> int {
+def pow2(n: int) -> int {
   // 단순 루프는 comptime 엔진이 지원한다고 가정
   set mut r = 1;
   set mut i = 0;
@@ -1117,7 +1117,7 @@ fn pow2(n: int) -> int {
 }
 
 
-fn use_comptime() -> void {
+def use_comptime() -> void {
   let x: int = pow2(a: 5); // error: comptime 함수는 런타임에서 호출 불가
   // v0에서는 컴파일 타임 컨텍스트에서만 호출되도록 별도 문맥 규칙이 필요
 }
@@ -1146,9 +1146,9 @@ v0에서의 실용 규칙(권장):
 예시
 
 ```parus
-fn f(a: int, b: int) -> int { return a + b; }
+def f(a: int, b: int) -> int { return a + b; }
 
-fn calls() -> void {
+def calls() -> void {
   set x = f(1, 2);         // ok: positional
   set y = f(a: 1, b: 2);   // ok: labeled
   // set z = f(1, b: 2);   // error: mixed
@@ -1173,8 +1173,8 @@ Parus은 함수 단위로 “예외(throw) 경로”를 **정적 분리**한다.
 문법 예시:
 
 ```parus
-fn parse_u32(text: string) -> Result<u32> { ... }     // non-?
-fn read_file?(path: string) -> bytes { ... }          // ?
+def parse_u32(text: string) -> Result<u32> { ... }     // non-?
+def read_file?(path: string) -> bytes { ... }          // ?
 ```
 
 > `?`는 반환 타입(nullable)과 무관하며, **오직 예외 메커니즘(throw/catch) 허용 여부**만 뜻한다.
@@ -1193,11 +1193,11 @@ non-? 함수 본문에서는 아래가 **컴파일 에러**다.
 예시:
 
 ```parus
-fn bad() -> void {
+def bad() -> void {
   throw Err("nope");          // error
 }
 
-fn also_bad() -> void {
+def also_bad() -> void {
   try { ... } catch (e) { }   // error
 }
 ```
@@ -1209,7 +1209,7 @@ fn also_bad() -> void {
 ? 함수는 `throw`, `try...catch`를 사용할 수 있으며, **잡히지 않은 예외는 자동 전파**된다.
 
 ```parus
-fn open_config?(path: string) -> Config {
+def open_config?(path: string) -> Config {
   set bytes = read_file?(path: path);   // 여기서 throw되면 자동 전파
   return parse_config?(bytes: bytes);   // 자동 전파
 }
@@ -1234,7 +1234,7 @@ let r: Result<T> = attempt some_throwing_call?(...);
 예시:
 
 ```parus
-fn load_config(path: string) -> Result<Config> {
+def load_config(path: string) -> Result<Config> {
   set bytes_r = attempt read_file?(path: path);   // Result<bytes>
   switch (bytes_r) {
     case Ok(bytes): {
@@ -1275,7 +1275,7 @@ fn load_config(path: string) -> Result<Config> {
 ### 예시
 
 ```parus
-fn sign(x: int) -> int {
+def sign(x: int) -> int {
   if (x < 0) { return -1; }
   elif (x == 0) { return 0; }
   else { return 1; }
@@ -1313,7 +1313,7 @@ switch (expr) {
 ### 예시
 
 ```parus
-fn demo(r: Result<u32>) -> u32 {
+def demo(r: Result<u32>) -> u32 {
   switch (r) {
     case Ok(v): { return v; }
     case Err(e): {
@@ -1351,7 +1351,7 @@ while (cond) { ... }
 ### 예시
 
 ```parus
-fn sum_to(n: int) -> int {
+def sum_to(n: int) -> int {
   set mut i = 0;
   set mut s = 0;
   while (i <= n) {
@@ -1663,7 +1663,7 @@ let b: i32? = a as? i32;     // safe cast -> optional
 예시:
 
 ```parus
-fn retry() -> int? {
+def retry() -> int? {
   set attempts = 0;
   loop {
     attempts = attempts + 1;
@@ -1693,7 +1693,7 @@ fn retry() -> int? {
 예시:
 
 ```parus
-fn sum_arr(xs: int[4]) -> int {
+def sum_arr(xs: int[4]) -> int {
   set mut s = 0;
   loop (v in xs) {
     s = s + v;
@@ -1703,7 +1703,7 @@ fn sum_arr(xs: int[4]) -> int {
 ```
 
 ```parus
-fn find_positive(xs: int[]) -> int? {
+def find_positive(xs: int[]) -> int? {
   loop (v in xs) {
     if (v > 0) { break v; }
   }
@@ -1718,7 +1718,7 @@ fn find_positive(xs: int[]) -> int? {
 * `a..:b` : `b` 이하
 
 ```parus
-fn sum_range(n: int) -> int {
+def sum_range(n: int) -> int {
   set mut s = 0;
   loop (i in 0..:n) {
     s = s + i;
@@ -1778,7 +1778,7 @@ fn sum_range(n: int) -> int {
 예시
 
 ```parus
-fn exprs() -> void {
+def exprs() -> void {
   set a = 1 + 2 * 3;
   set ok = (a >= 7) and (a != 0);
   set r = ok ? 10 : 20; // 중첩은 금지
@@ -1803,11 +1803,11 @@ fn exprs() -> void {
 예시
 
 ```parus
-fn add(a: int, b: int) -> int { return a + b; }
+def add(a: int, b: int) -> int { return a + b; }
 
-fn mul(x: int, y: int) -> int { return x * y; }
+def mul(x: int, y: int) -> int { return x * y; }
 
-fn pipe_demo() -> void {
+def pipe_demo() -> void {
   set r = 1 << add(a: _, b: 2) << mul(x: _, y: 10);
 }
 ```
@@ -1935,11 +1935,11 @@ borrow는 비탈출이므로, 아래는 금지된다.
 #### 예시 1: 읽기 전용 borrow
 
 ```parus
-fn sum2(a: &i32, b: &i32) -> i32 {
+def sum2(a: &i32, b: &i32) -> i32 {
   return a + b;
 }
 
-fn demo_read_borrow() -> void {
+def demo_read_borrow() -> void {
   let x: i32 = 10;
   let y: i32 = 20;
   let s: i32 = sum2(a: &x, b: &y);
@@ -1949,11 +1949,11 @@ fn demo_read_borrow() -> void {
 #### 예시 2: `&mut`로 수정 권한 위임
 
 ```parus
-fn inc(x: &mut i32) -> void {
+def inc(x: &mut i32) -> void {
   x = x + 1;
 }
 
-fn demo_write_borrow() -> void {
+def demo_write_borrow() -> void {
   let mut a: i32 = 0;
   inc(x: &mut a);
 }
@@ -1962,12 +1962,12 @@ fn demo_write_borrow() -> void {
 #### 예시 3: borrow 비탈출 규칙(금지 사례)
 
 ```parus
-fn bad_return_ref() -> &i32 {
+def bad_return_ref() -> &i32 {
   let x: i32 = 3;
   return &x;   // error: borrow 값은 함수 밖으로 탈출할 수 없다
 }
 
-fn bad_store_global() -> void {
+def bad_store_global() -> void {
   // draft.someRef = &x; // error: draft/field/tablet 멤버 저장 금지
 }
 ```
@@ -1977,10 +1977,10 @@ fn bad_store_global() -> void {
 ```parus
 tablet File {
   public:
-    fn close() -> void { /* ... */ }
+    def close() -> void { /* ... */ }
 }
 
-fn open_file() -> Handle<File> {
+def open_file() -> Handle<File> {
   set f = File();
   return &&f;
 }
@@ -1992,7 +1992,7 @@ fn open_file() -> Handle<File> {
 #### 예시 5: `&mut` 배타 규칙(충돌)
 
 ```parus
-fn demo_exclusive() -> void {
+def demo_exclusive() -> void {
   let mut x: i32 = 1;
 
   set r = &mut x;
@@ -2006,7 +2006,7 @@ fn demo_exclusive() -> void {
 #### 예시 6: 논리 연산은 키워드만 사용
 
 ```parus
-fn demo_logic() -> void {
+def demo_logic() -> void {
   set a = true;
   set b = false;
 
@@ -2170,7 +2170,7 @@ KIND 태그 정의(v0):
 패턴:
 
 ```parus
-fn make() -> Handle<T> {
+def make() -> Handle<T> {
   set x = T();
   return &&x;
 }
@@ -2197,9 +2197,9 @@ lowering 핵심:
 패턴:
 
 ```parus
-fn g(h: Handle<T>) -> void { /* ... */ }
+def g(h: Handle<T>) -> void { /* ... */ }
 
-fn f() -> void {
+def f() -> void {
   set x = T();
   g(h: &&x);
 }
@@ -2224,7 +2224,7 @@ lowering:
 패턴:
 
 ```parus
-fn f() -> void {
+def f() -> void {
   set x = T();
   set h = &&x;
   // h를 더 이상 쓰지 않음
@@ -2253,7 +2253,7 @@ ctrl 기반 증명:
 패턴:
 
 ```parus
-fn drop_it(h: Handle<T>) -> void {
+def drop_it(h: Handle<T>) -> void {
   // 스코프 종료 시 드랍
 }
 ```
@@ -2282,7 +2282,7 @@ ctrl 연계:
 패턴:
 
 ```parus
-fn pass() -> Handle<T> {
+def pass() -> Handle<T> {
   set x = T();
   set h = &&x;     // 여기서는 STACK_SLOT
   return h;        // 여기서 탈출
@@ -2355,7 +2355,7 @@ v0에서 `&&x`의 대상 `x`는 place expression이어야 하며, 그 place는 �
 ```parus
 static mut G: i32 = 7i32;
 
-fn get_g() -> Handle<i32> {
+def get_g() -> Handle<i32> {
   // G는 static place이므로 &&로 탈출 가능
   return &&G;
 }
@@ -2388,7 +2388,7 @@ fn get_g() -> Handle<i32> {
 ```parus
 unique static mut LOG: Logger? = null;
 
-fn take_log() -> Handle<Logger> {
+def take_log() -> Handle<Logger> {
   if (LOG == null) { throw Error::from_code(code: 2); }
   set v = unwrap_move(LOG);
   return &&v; // caller-slot
@@ -2413,7 +2413,7 @@ borrow(`&T`, `&mut T`, slice borrow 등)는 8.3.2 규칙에 의해 저장/캡처
 금지 사례(의도 설명):
 
 ```parus
-fn bad_escape_store() -> void {
+def bad_escape_store() -> void {
   set x = T();
 
   set h = &&x;
@@ -2497,7 +2497,7 @@ slice borrow는 일반 borrow와 동일한 성질을 가진다.
 #### (5) 예시: 요청한 형태 그대로
 
 ```parus
-fn slice_demo() -> void {
+def slice_demo() -> void {
   let x: int[8] = [0,1,2,3,4,5,6,7];
 
   // 슬라이스 생성(읽기 전용)
@@ -2516,7 +2516,7 @@ fn slice_demo() -> void {
 #### (6) 함수 파라미터에서의 사용 예시
 
 ```parus
-fn sum(xs: &[int]) -> int {
+def sum(xs: &[int]) -> int {
   set mut s = 0;
   // v0에서는 slice 반복을 단순화하기 위해 표준 라이브러리 helper가 필요할 수 있음
   // 최소 구현: xs[i] 인덱싱을 허용(범위 내라고 가정하거나 디버그 검사)
@@ -2528,7 +2528,7 @@ fn sum(xs: &[int]) -> int {
   return s;
 }
 
-fn use_sum() -> void {
+def use_sum() -> void {
   let a: int[6] = [10,20,30,40,50,60];
   set mid = &a[1..:4];     // &[int] (20,30,40,50)
   set r = sum(xs: mid);
@@ -2596,17 +2596,17 @@ Parus의 “명시적 비용” 철학상 정책 A가 더 보수적이고 구현
 #### (5) 예시(반환/대입/초기화)
 
 ```parus
-fn demo_copy_return(a: int) -> int {
+def demo_copy_return(a: int) -> int {
   // int는 내장 copy 가능
   return copy a;
 }
 
-fn demo_copy_assign() -> void {
+def demo_copy_assign() -> void {
   let x: int = 3;
   let y: int = copy x;   // 명시적 복사
 }
 
-fn demo_clone_assign() -> void {
+def demo_clone_assign() -> void {
   let s: string = "hi";
   let t: string = clone s;   // 깊은 복제(새 버퍼)
 }
@@ -2701,9 +2701,9 @@ v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 �
 
 ```parus
 acts string {
-  fn do_clone(self: string) : op(clone) -> string { return __intrin_string_clone(s: self); }
+  def do_clone(self: string) : op(clone) -> string { return __intrin_string_clone(s: self); }
 
-  fn drop(self: string) : op(drop) -> void { __intrin_string_drop(s: self); }
+  def drop(self: string) : op(drop) -> void { __intrin_string_drop(s: self); }
 }
 ```
 
@@ -2724,7 +2724,7 @@ Parus의 `throw`는 “아무거나 던지기”를 금지한다. v0에서는 �
 // std::error::Error 가 있다고 가정
 use std::error::Error;
 
-fn fail?( ) -> void {
+def fail?( ) -> void {
   throw Error::from_msg(msg: "boom");
 }
 ```
@@ -2738,7 +2738,7 @@ fn fail?( ) -> void {
 * Expr의 타입은 `Error`여야 한다(또는 `Error`로의 명시적 변환이 있어야 한다).
 
 ```parus
-fn read_file?(path: string) -> bytes {
+def read_file?(path: string) -> bytes {
   if (path == "") {
     throw Error::from_code(code: 12);   // ok
   }
@@ -2768,7 +2768,7 @@ try {
 예시:
 
 ```parus
-fn load_user?(id: u32) -> User {
+def load_user?(id: u32) -> User {
   try {
     return fetch_user?(id: id);
   } catch (e: Error) {
@@ -2821,7 +2821,7 @@ class는 “큰 공유 상태”를 제공한다. v0의 핵심 구현 모델은 
 class Game {
   // draft.score 같은 상태가 존재한다고 가정
 
-  fn sub score() -> int { return draft.score; }
+  def sub score() -> int { return draft.score; }
 }
 ```
 
@@ -2850,7 +2850,7 @@ recast (추가 설명):
 
 ```parus
 class Counter {
-  fn sub get() -> u32 {
+  def sub get() -> u32 {
     // 오래된 스냅샷이면 갱신하고 싶을 때
     if (draft.stale) {
       recast;
@@ -2888,7 +2888,7 @@ v0 권장:
 
 ```parus
 class Counter {
-  fn pub add(delta: int) -> void {
+  def pub add(delta: int) -> void {
     if (delta < 0) {
       // commit; // 있어도 최종 commit으로는 인정되지 않음 (정책에 따라 경고/에러 가능)
     }
@@ -2905,7 +2905,7 @@ pub의 핵심은 “draft 변경 + 최종 commit”이다. `&&`는 “소유권 
 예:
 
 ```parus
-fn add_sprite() : pub {
+def add_sprite() : pub {
   set s = Sprite();
   draft.sprite = &&s;   // handle로 승격해 draft에 저장
   commit;
@@ -2948,7 +2948,7 @@ commit 경계에서의 규칙(강제):
 
 ```parus
 class Bad {
-  fn pub f() -> void {
+  def pub f() -> void {
     set r = &mut draft.count;
     draft.count = 1u32;
     commit;              // error: borrow 살아있음
@@ -2975,7 +2975,7 @@ pub는 한 번의 호출 안에서 여러 번 commit할 수 있다. 의미는 �
 
 ```parus
 class Progress {
-  fn pub run() -> void {
+  def pub run() -> void {
     draft.step = 1u32;
     commit;          // step=1 발행
 
@@ -3011,7 +3011,7 @@ pub는 “상태 발행을 반드시 명시”해야 하므로, 반환 정책을
 
 ```parus
 class Counter {
-  fn pub add(delta: u32) -> u32 {
+  def pub add(delta: u32) -> u32 {
     draft.count += delta;
     commit return draft.count;     // 발행 + 반환
   }
@@ -3022,7 +3022,7 @@ class Counter {
 
 ```parus
 class Counter {
-  fn pub inc() -> void {
+  def pub inc() -> void {
     draft.count += 1u32;
     commit;                        // 발행 + 종료(암묵 return)
   }
@@ -3048,13 +3048,13 @@ draft는 “데이터 레코드 + 핸들”로 유지한다(기존 철학 강화
 class Scene {
   // draft.sprites: handle<SpriteList> 라고 가정
 
-  fn pub add_sprite(s: handle<Sprite>) -> void {
+  def pub add_sprite(s: handle<Sprite>) -> void {
     // SpriteList는 tablet이고, draft에는 handle만 저장
     draft.sprites.push(x: s);   // push는 handle/tablet 쪽 메서드
     commit;
   }
 
-  fn sub count() -> u32 {
+  def sub count() -> u32 {
     return draft.sprites.len();
   }
 }
@@ -3144,6 +3144,20 @@ tablet은 “일반 구현 타입”이므로 멤버 포함을 폭넓게 허용�
 * field는 proto/tablet/class 내부에 포함 가능하다.
 * field는 기본적으로 copy 가능 조건을 가진다. (모든 멤버가 copy 가능일 때)
 
+field 리터럴/초기화 규칙 (v0):
+
+* 생성 문법: `TypePath{ name: expr, ... }`
+* 모든 멤버를 반드시 명시 초기화해야 한다.
+  * 누락 멤버: 컴파일 오류
+  * 중복 멤버: 컴파일 오류
+  * 존재하지 않는 멤버: 컴파일 오류
+* `TypePath{}`는 멤버 수가 0인 field에서만 허용한다.
+* optional 멤버(`T?`)도 생략은 불가하며 `name: null`을 명시해야 한다.
+* non-optional 멤버에 `null`을 넣으면 컴파일 오류다.
+* `field` 멤버 선언에는 `mut`를 도입하지 않는다.
+  * 가변성은 바인딩에서만 표현한다 (`let mut v: Vec2 = ...; v.x = ...;`)
+* `layout(c)` field 멤버에는 optional(`T?`)을 허용하지 않는다.
+
 추가 (field 타입 제한 파라미터, 추가):
 
 * field는 선택적으로 타입 파라미터/제약을 가질 수 있다.
@@ -3219,7 +3233,7 @@ field<u32, i32> OnlyInts {
 
 ```parus
 proto Drawable {
-  fn draw() -> void;
+  def draw() -> void;
 }
 ```
 
@@ -3237,14 +3251,14 @@ proto Drawable {
 
 ```parus
 proto Drawable {
-  fn draw() -> void;
+  def draw() -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    fn draw() -> void {
+    def draw() -> void {
       // ...
     }
 }
@@ -3258,7 +3272,7 @@ tablet Sprite : Drawable {
 * 멤버 종류(v0):
 
   * 데이터 멤버: `let name: Type;` 또는 `let mut name: Type;`(선택)
-  * 메서드: `fn ... { ... }`
+  * 메서드: `def ... { ... }`
   * 생성자/소멸자: `construct`, `destruct` (아래 10.3.3)
 * 접근 제한자:
 
@@ -3273,10 +3287,10 @@ tablet A {
   let x: int;        // private
 
   public:
-    fn get_x() -> int { return self.x; }
+    def get_x() -> int { return self.x; }
 
   private:
-    fn helper() -> void { ... }
+    def helper() -> void { ... }
 }
 ```
 
@@ -3286,12 +3300,12 @@ tablet A {
 
 Parus은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 **명시적으로 단순화**한다.
 
-* `tablet` 내부의 `fn name(...) -> R { ... }` 는 **항상 인스턴스 메서드**다.
+* `tablet` 내부의 `def name(...) -> R { ... }` 는 **항상 인스턴스 메서드**다.
 * 메서드에는 암묵 수신자 `self`가 존재한다.
 * v0에서 수신자 타입은 아래 둘 중 하나다.
 
-  * `fn name(...)`  : `self`는 `&Self` (읽기 전용)
-  * `fn mut name(...)` : `self`는 `&mut Self` (수정 가능)
+  * `def name(...)`  : `self`는 `&Self` (읽기 전용)
+  * `def mut name(...)` : `self`는 `&mut Self` (수정 가능)
 
 즉, “메서드가 객체를 바꾸려면 반드시 `mut`를 써야 한다.”
 이 규칙 하나로 C++의 암묵 변경 가능성 + Rust의 복잡한 추론 사이에서 깔끔하게 중간 지점을 잡는다.
@@ -3303,11 +3317,11 @@ tablet Counter {
   public:
     let mut n: int;
 
-    fn get() -> int {            // self: &Counter
+    def get() -> int {            // self: &Counter
       return self.n;
     }
 
-    fn mut inc() -> void {       // self: &mut Counter
+    def mut inc() -> void {       // self: &mut Counter
       self.n += 1;
     }
 }
@@ -3316,7 +3330,7 @@ tablet Counter {
 추가 규칙(v0):
 
 * `self`는 예약 식별자다(키워드 취급 권장).
-* `pure/comptime` 함수 안에서는 `fn mut` 메서드 호출을 금지할 수 있다(권장).
+* `pure/comptime` 함수 안에서는 `def mut` 메서드 호출을 금지할 수 있다(권장).
   (관측 가능한 상태 변경을 정적으로 차단)
 
 ---
@@ -3327,17 +3341,17 @@ tablet Counter {
 
 * 생성자(선택):
 
-  * `fn construct(params...) -> void { ... }`
+  * `def construct(params...) -> void { ... }`
 * 소멸자(선택):
 
-  * `fn destruct() -> void { ... }`
+  * `def destruct() -> void { ... }`
 
 호출/동작:
 
 * `set x = T(args...)` 는 `T.construct(args...)`를 호출해 `x`를 초기화한다.
 * 스코프 종료 시 `destruct()`가 호출된다(존재한다면).
-* `fn construct(...) = delete;` 로 생성을 금지할 수 있다.
-* `fn destruct() = delete;` 는 v0에서는 **금지 권장**(파괴 금지 객체는 모델이 꼬임). 대신 “drop이 없는 handle” 같은 타입으로 해결.
+* `def construct(...) = delete;` 로 생성을 금지할 수 있다.
+* `def destruct() = delete;` 는 v0에서는 **금지 권장**(파괴 금지 객체는 모델이 꼬임). 대신 “drop이 없는 handle” 같은 타입으로 해결.
 
 예시
 
@@ -3346,11 +3360,11 @@ tablet File {
   public:
     let fd: int;
 
-    fn construct(path: string) -> void {
+    def construct(path: string) -> void {
       // open...
     }
 
-    fn destruct() -> void {
+    def destruct() -> void {
       // close...
     }
 }
@@ -3367,7 +3381,7 @@ tablet File {
   * 함수명 동일
   * 파라미터 타입 동일
   * 반환 타입 동일
-  * `mut` 여부 동일 (`fn` vs `fn mut`)
+  * `mut` 여부 동일 (`def` vs `def mut`)
   * `? 함수` 여부는 **proto에서는 v0 금지 권장**
     (예외 전파가 인터페이스 경계를 넘으면 ABI/최적화 모델이 확 흔들림)
 
@@ -3401,15 +3415,15 @@ v0에서 proto는 “값으로 들고 다니는 타입”이 아니라 **참조/
 
 너 문서의 proto 섹션에 이 한 줄만 추가해도 구현 난이도가 확 줄어:
 
-* proto 내부 메서드는 기본이 `fn`(즉 `self: &Proto`)이고,
-* 수정 가능한 메서드는 반드시 `fn mut`로 선언한다.
+* proto 내부 메서드는 기본이 `def`(즉 `self: &Proto`)이고,
+* 수정 가능한 메서드는 반드시 `def mut`로 선언한다.
 
 예시
 
 ```parus
 proto Stream {
-  fn read(buf: &mut [u8]) -> u32;
-  fn mut seek(pos: u64) -> void;   // self: &mut Stream
+  def read(buf: &mut [u8]) -> u32;
+  def mut seek(pos: u64) -> void;   // self: &mut Stream
 }
 ```
 
@@ -3444,10 +3458,10 @@ Parus v0에는 acts 블록이 **세 가지 형태**로 존재한다.
 
 ```parus
 acts Math {
-  fn add(a: i32, b: i32) -> i32 { return a + b; }
+  def add(a: i32, b: i32) -> i32 { return a + b; }
 }
 
-fn demo() -> void {
+def demo() -> void {
   set x = Math::add(1, 2);
 }
 ```
@@ -3482,10 +3496,10 @@ fn demo() -> void {
 
 ```parus
 acts for Packet {
-  fn checksum(self p: &Packet, seed: u32) -> u32 { return p.crc + seed; }
+  def checksum(self p: &Packet, seed: u32) -> u32 { return p.crc + seed; }
 }
 
-fn demo(p: Packet) -> void {
+def demo(p: Packet) -> void {
   set a = p.checksum(5u32);          // dot 호출
   set b = Packet::checksum(p, 5u32); // UFCS 호출
 }
@@ -3524,8 +3538,8 @@ v0에서 export는 다음으로 고정한다.
 
 ```parus
 export acts for Packet {
-  fn checksum(self a: &Packet, foo: i32) -> u32 { ... }
-  fn verify(self a: &Packet) -> bool { ... }
+  def checksum(self a: &Packet, foo: i32) -> u32 { ... }
+  def verify(self a: &Packet) -> bool { ... }
 }
 ```
 
@@ -3533,7 +3547,7 @@ export acts for Packet {
 
 ```parus
 acts for Packet {
-  export fn checksum(...) -> u32 { ... } // 금지: acts 내부 개별 export 없음
+  export def checksum(...) -> u32 { ... } // 금지: acts 내부 개별 export 없음
 }
 ```
 
@@ -3544,7 +3558,7 @@ acts for Packet {
 #### (1) `self`는 “파라미터 이름”이 아니라 **리시버 마커(modifier)** 다
 
 ```parus
-fn checksum(self a: &T, seed: u32) -> u32 { ... }
+def checksum(self a: &T, seed: u32) -> u32 { ... }
 ```
 
 여기서
@@ -3574,7 +3588,7 @@ T::f(x, 1, 2);
 
 ```parus
 acts for T {
-  fn make(a: i32, b: i32) -> T { ... } // self 없음
+  def make(a: i32, b: i32) -> T { ... } // self 없음
 }
 
 set t1 = T::make(1,2);
@@ -3593,7 +3607,7 @@ set t2 = someT.make(1,2); // 허용: T::make(1,2)로 lowering (리시버 전달 
 
 ```parus
 acts for T {
-  fn checksum(self x: &T, seed: u32) -> u32 { ... }
+  def checksum(self x: &T, seed: u32) -> u32 { ... }
 }
 ```
 
@@ -3601,7 +3615,7 @@ acts for T {
 
 ```parus
 acts for T {
-  fn make_seed(x: i32, y: i32) -> u64 { ... } // T 인자 없음
+  def make_seed(x: i32, y: i32) -> u64 { ... } // T 인자 없음
 }
 ```
 
@@ -3621,9 +3635,9 @@ operator(++pre)(self x: &mut T) -> T { ... }
 operator(++post)(self x: &mut T) -> T { ... }
 ```
 
-#### (1) operator 선언은 `fn` 키워드를 붙이지 않는다
+#### (1) operator 선언은 `def` 키워드를 붙이지 않는다
 
-* `operator(...)`는 acts 내부의 **특수 선언**이며, 문법적으로 `fn`을 사용하지 않는다.
+* `operator(...)`는 acts 내부의 **특수 선언**이며, 문법적으로 `def`을 사용하지 않는다.
 
 #### (2) operator는 **타입 부착형에서만 허용**
 
@@ -3688,7 +3702,7 @@ export field Foo {
 }
 
 export acts for Foo {
-  fn inc(self x: &mut Foo) -> void { x.v = x.v + 1u32; }
+  def inc(self x: &mut Foo) -> void { x.v = x.v + 1u32; }
 
   operator(+)(self a: Foo, rhs: Foo) -> Foo {
     return Foo{ v: a.v + rhs.v };
@@ -3699,7 +3713,7 @@ export acts for Foo {
 사용:
 
 ```parus
-fn demo(mut a: Foo, b: Foo) -> Foo {
+def demo(mut a: Foo, b: Foo) -> Foo {
   a.inc();          // dot -> Foo::inc(a)
   set c = a + b;    // 자동: acts for Foo의 operator(+)
   return c;
@@ -3718,7 +3732,7 @@ export acts FooMath for Foo {
     return Foo{ v: __intrin_u32_saturating_add(a.v, rhs.v) };
   }
 
-  fn describe(self x: &Foo) -> string {
+  def describe(self x: &Foo) -> string {
     return F"""Foo(v={x.v})""";
   }
 }
@@ -3727,7 +3741,7 @@ export acts FooMath for Foo {
 사용(기본 세트 vs 선택 세트):
 
 ```parus
-fn demo2(a: Foo, b: Foo) -> void {
+def demo2(a: Foo, b: Foo) -> void {
   // 기본 세트(acts for Foo)로 동작
   set x = a + b;
 
@@ -3775,7 +3789,7 @@ export acts for u32 {
 예시
 
 ```parus
-fn lambdas() -> void {
+def lambdas() -> void {
   set f = [](x: int) { return x + 1; };
   set y = f(3);
 }
@@ -3908,14 +3922,14 @@ field<u32, i32> OnlyInts {
 }
 
 proto Drawable {
-  fn draw() -> void;
+  def draw() -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    fn draw() -> void {
+    def draw() -> void {
       // draw using pos
     }
 
@@ -3934,23 +3948,23 @@ acts for u32 {
 }
 
 class Counter {
-  fn sub get() -> u32 {
+  def sub get() -> u32 {
     // 필요하면 관찰 뷰를 재설정
     recast;
     return draft.count;
   }
 
-  fn pub inc() -> void {
+  def pub inc() -> void {
     draft.count += 1u32;
     commit;
   }
 }
 
-fn f(a: int) -> int { return a; }
+def f(a: int) -> int { return a; }
 
-fn f(a: int, b: int) -> int { return a + b; }
+def f(a: int, b: int) -> int { return a + b; }
 
-fn main() -> void {
+def main() -> void {
   let xs: u32[3] = [1u32, 2u32, 3u32];
 
   set mut s = 0u32;
@@ -4122,8 +4136,8 @@ SetDecl          := Ident "=" Expr ;
 ```ebnf
 FuncDecl      := CAbiFuncDecl | NormalFuncDecl ;
 
-CAbiFuncDecl  := LinkPrefix "fn" FuncName FuncParams "->" Type (Block | ";") ;
-NormalFuncDecl:= Attribute* ExportOpt "fn" ModeOpt QualifierOpt FuncName FuncParams "->" Type Block ;
+CAbiFuncDecl  := LinkPrefix "def" FuncName FuncParams "->" Type (Block | ";") ;
+NormalFuncDecl:= Attribute* ExportOpt "def" ModeOpt QualifierOpt FuncName FuncParams "->" Type Block ;
 
 FuncName      := Ident QMarkOpt ;
 QMarkOpt      := "?" | ε ;                     /* 예외 허용 함수 표기 */

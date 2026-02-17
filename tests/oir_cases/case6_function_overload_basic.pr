@@ -1,13 +1,13 @@
 // OIR->LLVM 케이스: 함수 오버로딩(i32 / i64) direct-call 경로
-fn add(a: i32, b: i32) -> i32 {
+def add(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
-fn add(a: i64, b: i64) -> i64 {
+def add(a: i64, b: i64) -> i64 {
     return a + b;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
     let x: i32 = add(a: 1i32, b: 2i32);
     let y: i64 = add(a: 3i64, b: 4i64);
     return x;

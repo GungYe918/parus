@@ -297,6 +297,11 @@ namespace parus {
                 continue;
             }
 
+            if (cursor_.at(K::kKwMut)) {
+                diag_report(diag::Code::kFieldMemberMutNotAllowed, cursor_.peek().span);
+                cursor_.bump();
+            }
+
             std::string_view member_name{};
             ParsedType parsed_ty{};
             Token member_name_tok{};
@@ -664,7 +669,7 @@ namespace parus {
             }
 
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "acts member (fn declaration only; use class for mixed value+behavior)");
+                        "acts member (def declaration only; use class for mixed value+behavior)");
             recover_to_delim(K::kSemicolon, K::kRBrace);
             cursor_.eat(K::kSemicolon);
         }

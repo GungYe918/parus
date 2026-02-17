@@ -11,7 +11,7 @@ namespace parus::oir {
         const Module* m = nullptr;
         const Function* f = nullptr;
 
-        explicit CFGView(const Module& mod, const Function& fn) : m(&mod), f(&fn) {}
+        explicit CFGView(const Module& mod, const Function& def) : m(&mod), f(&def) {}
     };
 
 } // namespace parus::oir

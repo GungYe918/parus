@@ -1,5 +1,5 @@
 // OIR->LLVM 케이스: 루프 + 인덱스 조합
-fn main() -> i32 {
+def main() -> i32 {
     let mut x: i32[4] = [1, 2, 3, 4];
     let mut i: i32 = 0;
     while (i < 4) {

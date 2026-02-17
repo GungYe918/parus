@@ -189,14 +189,14 @@ namespace parus::ty {
             return push_(t);
         }
 
-        // ---- fn signature introspection ----
+        // ---- def signature introspection ----
         bool is_fn(TypeId id) const {
             return id != kInvalidType && id < types_.size() && types_[id].kind == Kind::kFn;
         }
 
-        TypeId fn_param_at(TypeId fn, uint32_t i) const {
-            if (!is_fn(fn)) return error();
-            const Type& t = types_[fn];
+        TypeId fn_param_at(TypeId def, uint32_t i) const {
+            if (!is_fn(def)) return error();
+            const Type& t = types_[def];
             if (i >= t.param_count) return error();
             return fn_params_[t.param_begin + i];
         }
@@ -477,7 +477,7 @@ namespace parus::ty {
 
                 case Kind::kFn: {
                     // (T1, T2) -> R
-                    out += "fn(";
+                    out += "def(";
                     for (uint32_t i = 0; i < t.param_count; ++i) {
                         if (i) out += ", ";
                         const TypeId pid = fn_params_[t.param_begin + i];

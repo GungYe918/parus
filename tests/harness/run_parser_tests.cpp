@@ -146,7 +146,7 @@ namespace {
     static bool test_suffix_literals_work() {
         // 타입 접미사가 붙은 숫자(정수/실수)가 파싱+타입체크에서 정상 동작해야 함
         const std::string src = R"(
-            fn main() -> u32 {
+            def main() -> u32 {
                 set x = 1u32;
                 let a: f32 = 10.0f;
                 let b: f64 = 10lf;
@@ -195,7 +195,7 @@ namespace {
 
     static bool test_text_string_literal_typecheck_ok() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let s: text = "Hello, text";
                 return 0i32;
             }
@@ -213,7 +213,7 @@ namespace {
 
     static bool test_raw_and_format_triple_string_lex_parse_ok() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let raw: text = R"""line1\nline2""";
                 let fmt: text = F"""sum={1 + 2}""";
                 return 0i32;
@@ -242,7 +242,7 @@ namespace {
 
     static bool test_fstring_parts_and_escape_split_ok() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let s: text = F"""A{{B}}C{1 + 2}D{3 * 4}E""";
                 return 0i32;
             }
@@ -288,7 +288,7 @@ namespace {
 
     static bool test_fstring_brace_error_diagnostics() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let a: text = F"""x}y""";
                 let b: text = F"""x{}y""";
                 let c: text = F"""x{1 + 2""";
@@ -309,7 +309,7 @@ namespace {
     static bool test_null_coalesce_assign_parsed_as_assign() {
         // '??='가 이항식이 아니라 대입식(Assign)으로 파싱되어야 한다.
         const std::string src = R"(
-            fn main() -> void {
+            def main() -> void {
                 let mut o: i32? = null;
                 o ??= 1;
                 return;
@@ -339,7 +339,7 @@ namespace {
     static bool test_loop_expr_break_value_allowed() {
         // loop 표현식 내부에서는 break 값이 허용되어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x = loop {
                     break 7i32;
                 };
@@ -360,7 +360,7 @@ namespace {
     static bool test_while_break_value_rejected() {
         // while 같은 statement-loop에서는 break 값이 금지되어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 while (true) {
                     break 1i32;
                 }
@@ -383,7 +383,7 @@ namespace {
     static bool test_loop_header_var_name_resolved() {
         // loop (v in xs) 에서 v가 body에서 UndefinedName 없이 해석되어야 한다.
         const std::string src = R"(
-            fn main(xs: i32[]) -> i32 {
+            def main(xs: i32[]) -> i32 {
                 loop (v in xs) {
                     set tmp = v;
                     break;
@@ -404,7 +404,7 @@ namespace {
     static bool test_diag_ambiguous_amp_prefix_chain() {
         // &&&x 는 모호한 접두사 체인으로 진단되어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x = 1i32;
                 set y = &&&x;
                 return 0i32;
@@ -424,10 +424,10 @@ namespace {
     static bool test_diag_call_no_args_after_named_group() {
         // named-group 뒤에 추가 인자가 오면 전용 진단이 나와야 한다.
         const std::string src = R"(
-            fn sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
+            def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
                 return a - b + clamp;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 return sub(1, 2, { clamp: 1 }, 3);
             }
         )";
@@ -445,7 +445,7 @@ namespace {
     static bool test_diag_var_decl_name_expected() {
         // 변수 선언에서 이름이 빠지면 전용 진단이 나와야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let : i32 = 1i32;
                 return 0i32;
             }
@@ -464,7 +464,7 @@ namespace {
     static bool test_diag_set_initializer_required() {
         // set 선언은 '=' 초기화식이 반드시 필요하다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x;
                 return 0i32;
             }
@@ -483,7 +483,7 @@ namespace {
     static bool test_diag_var_initializer_expected() {
         // '=' 뒤에 초기화식이 없으면 전용 진단이 나와야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let x: i32 = ;
                 return 0i32;
             }
@@ -502,7 +502,7 @@ namespace {
     static bool test_diag_cast_target_type_expected() {
         // as/as?/as! 뒤에는 타입이 필요하다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x = 1i32 as ;
                 return 0i32;
             }
@@ -519,9 +519,9 @@ namespace {
     }
 
     static bool test_diag_fn_name_expected() {
-        // fn 선언에는 함수 이름 식별자가 필요하다.
+        // def 선언에는 함수 이름 식별자가 필요하다.
         const std::string src = R"(
-            fn (x: i32) -> i32 {
+            def (x: i32) -> i32 {
                 return x;
             }
         )";
@@ -558,7 +558,7 @@ namespace {
         // acts for / operator(...) 기본 파싱과 tyck 경로가 동작해야 한다.
         const std::string src = R"(
             acts for i32 {
-                fn keep(self x: i32) -> i32 { return x; }
+                def keep(self x: i32) -> i32 { return x; }
                 operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
             }
         )";
@@ -578,7 +578,7 @@ namespace {
     static bool test_diag_block_tail_expr_required() {
         // value-required block(if expr branch)에서 tail 식이 없으면 전용 진단이 나와야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x = if (true) {
                     set y = 1i32;
                 } else {
@@ -601,7 +601,7 @@ namespace {
     static bool test_cap_escape_on_slice_borrow_rejected() {
         // slice borrow 값에 &&를 적용하면 금지되어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let arr: i32[3] = [1, 2, 3];
                 set s = &arr[0..:1];
                 set h = &&s;
@@ -626,10 +626,10 @@ namespace {
     static bool test_borrow_read_in_arithmetic_ok() {
         // &i32 파라미터를 산술식에서 읽기 값으로 사용할 수 있어야 한다.
         const std::string src = R"(
-            fn sum2(a: &i32, b: &i32) -> i32 {
+            def sum2(a: &i32, b: &i32) -> i32 {
                 return a + b;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 let x: i32 = 10;
                 let y: i32 = 20;
                 set s = sum2(a: &x, b: &y);
@@ -654,11 +654,11 @@ namespace {
     static bool test_mut_borrow_write_through_assignment_ok() {
         // &mut T 바인딩은 대입을 통해 pointee 쓰기가 가능해야 한다.
         const std::string src = R"(
-            fn inc(x: &mut i32) -> void {
+            def inc(x: &mut i32) -> void {
                 x = x + 1;
                 return;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 set mut a = 1i32;
                 inc(x: &mut a);
                 return a;
@@ -682,7 +682,7 @@ namespace {
     static bool test_cap_shared_conflict_with_mut() {
         // 활성 &mut borrow가 있으면 shared borrow(&)를 추가로 만들 수 없어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set mut x = 1i32;
                 set m = &mut x;
                 set r = &x;
@@ -705,7 +705,7 @@ namespace {
     static bool test_cap_mut_conflict_with_shared() {
         // 활성 shared borrow가 있으면 &mut borrow를 만들 수 없어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set mut x = 1i32;
                 set r = &x;
                 set m = &mut x;
@@ -728,7 +728,7 @@ namespace {
     static bool test_cap_shared_write_conflict() {
         // 활성 shared borrow가 있는 동안에는 해당 place에 쓰기를 할 수 없어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set mut x = 1i32;
                 set r = &x;
                 x = 2i32;
@@ -751,7 +751,7 @@ namespace {
     static bool test_escape_requires_static_or_boundary() {
         // &&는 static place이거나 return/call-arg 경계에서만 허용되어야 한다.
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 set x = 1i32;
                 set h = &&x;
                 return 0i32;
@@ -777,7 +777,7 @@ namespace {
         const std::string src = R"(
             static G: i32 = 7i32;
             static mut HG: &&i32 = &&G;
-            fn main() -> i32 {
+            def main() -> i32 {
                 return 0i32;
             }
         )";
@@ -800,10 +800,10 @@ namespace {
         // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
-            fn sink(h: &&i32) -> i32 {
+            def sink(h: &&i32) -> i32 {
                 return 0i32;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 return sink(h: &&G);
             }
         )";
@@ -840,10 +840,10 @@ namespace {
         // OIR lowering 진입 전 게이트는 escape-handle verify 실패 시 lowering을 중단해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
-            fn sink(h: &&i32) -> i32 {
+            def sink(h: &&i32) -> i32 {
                 return 0i32;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 return sink(h: &&G);
             }
         )";
@@ -873,11 +873,11 @@ namespace {
     static bool test_sir_mut_analysis_allows_mut_borrow_write_through() {
         // SIR mut-analysis는 &mut write-through를 불법 쓰기로 오검출하면 안 된다.
         const std::string src = R"(
-            fn inc(x: &mut i32) -> void {
+            def inc(x: &mut i32) -> void {
                 x = x + 1;
                 return;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 set mut a = 1i32;
                 inc(x: &mut a);
                 return a;
@@ -911,7 +911,7 @@ namespace {
     static bool test_sir_uses_symbol_declared_type_for_set() {
         // SIR var decl의 declared_type은 init expr 타입이 아니라 SymbolTable의 확정 타입을 써야 한다.
         const std::string src = R"(
-            fn main() -> i64 {
+            def main() -> i64 {
                 set x = 1;
                 let y: i64 = x;
                 return y;
@@ -937,11 +937,11 @@ namespace {
         ok &= require_(verrs.empty(), "SIR verifier must pass on declared_type test");
         if (!ok) return false;
 
-        const auto& fn = mod.funcs.front();
-        ok &= require_(fn.entry != parus::sir::k_invalid_block, "function entry block must exist");
+        const auto& def = mod.funcs.front();
+        ok &= require_(def.entry != parus::sir::k_invalid_block, "function entry block must exist");
         if (!ok) return false;
 
-        const auto& entry = mod.blocks[fn.entry];
+        const auto& entry = mod.blocks[def.entry];
         const auto i64_ty = p.types.builtin(parus::ty::Builtin::kI64);
 
         bool found_x = false;
@@ -961,7 +961,7 @@ namespace {
     static bool test_sir_control_flow_block_layout() {
         // while body / loop body / if branch stmt가 entry block에 섞이면 안 된다.
         const std::string src = R"(
-            fn f1() -> i32 {
+            def f1() -> i32 {
                 set mut n = 0i32;
                 while (n < 1i32) {
                     n = n + 1i32;
@@ -969,14 +969,14 @@ namespace {
                 return n;
             }
 
-            fn f2() -> i32 {
+            def f2() -> i32 {
                 set x = loop {
                     break 7i32;
                 };
                 return x;
             }
 
-            fn f3() -> i32 {
+            def f3() -> i32 {
                 let cond: bool = true;
                 if (cond) {
                     return 1i32;
@@ -1006,9 +1006,9 @@ namespace {
 
         auto check_entry_stmt_kinds = [&](size_t fi, std::vector<parus::sir::StmtKind> expected) {
             if (fi >= mod.funcs.size()) return false;
-            const auto& fn = mod.funcs[fi];
-            if (fn.entry == parus::sir::k_invalid_block || (size_t)fn.entry >= mod.blocks.size()) return false;
-            const auto& b = mod.blocks[fn.entry];
+            const auto& def = mod.funcs[fi];
+            if (def.entry == parus::sir::k_invalid_block || (size_t)def.entry >= mod.blocks.size()) return false;
+            const auto& b = mod.blocks[def.entry];
             if (b.stmt_count != expected.size()) return false;
             for (uint32_t i = 0; i < b.stmt_count; ++i) {
                 const uint32_t sid = b.stmt_begin + i;
@@ -1035,14 +1035,14 @@ namespace {
 
     static bool test_c_abi_extern_export_ok() {
         const std::string src = R"(
-            extern "C" fn c_add(a: i32, b: i32) -> i32;
+            extern "C" def c_add(a: i32, b: i32) -> i32;
             extern "C" static mut errno: i32;
 
-            export "C" fn p_add(a: i32, b: i32) -> i32 {
+            export "C" def p_add(a: i32, b: i32) -> i32 {
                 return a + b;
             }
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 return p_add(1i32, 2i32);
             }
         )";
@@ -1059,8 +1059,8 @@ namespace {
 
     static bool test_c_abi_reject_non_ffi_safe_type() {
         const std::string src = R"(
-            extern "C" fn bad_ref(x: &i32) -> i32;
-            fn main() -> i32 { return 0i32; }
+            extern "C" def bad_ref(x: &i32) -> i32;
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1075,8 +1075,8 @@ namespace {
 
     static bool test_c_abi_reject_named_group() {
         const std::string src = R"(
-            extern "C" fn bad_ng(a: i32, { b: i32 }) -> i32;
-            fn main() -> i32 { return 0i32; }
+            extern "C" def bad_ng(a: i32, { b: i32 }) -> i32;
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1092,7 +1092,7 @@ namespace {
     static bool test_c_abi_global_requires_static() {
         const std::string src = R"(
             extern "C" mut errno: i32;
-            fn main() -> i32 { return 0i32; }
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1112,9 +1112,9 @@ namespace {
                 y: f32;
             }
 
-            extern "C" fn consume(v: Vec2) -> i32;
+            extern "C" def consume(v: Vec2) -> i32;
 
-            fn main() -> i32 { return 0i32; }
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1134,8 +1134,8 @@ namespace {
                 y: f32;
             }
 
-            extern "C" fn consume(v: Vec2) -> i32;
-            fn main() -> i32 { return 0i32; }
+            extern "C" def consume(v: Vec2) -> i32;
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1154,7 +1154,7 @@ namespace {
                 x: f32;
                 y: f32;
             }
-            fn main() -> i32 { return 0i32; }
+            def main() -> i32 { return 0i32; }
         )";
 
         auto p = parse_program(src);
@@ -1169,7 +1169,7 @@ namespace {
 
     static bool test_var_mut_prefix_forbidden_on_set() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 mut set a = 6i32;
                 return a;
             }
@@ -1188,7 +1188,7 @@ namespace {
     static bool test_var_mut_prefix_forbidden_on_static() {
         const std::string src = R"(
             mut static G: i32 = 1i32;
-            fn main() -> i32 { return G; }
+            def main() -> i32 { return G; }
         )";
 
         auto p = parse_program(src);
@@ -1237,7 +1237,7 @@ namespace {
 int main() {
     struct Case {
         const char* name;
-        bool (*fn)();
+        bool (*def)();
     };
 
     const Case cases[] = {
@@ -1289,7 +1289,7 @@ int main() {
     int failed = 0;
     for (const auto& tc : cases) {
         std::cout << "[TEST] " << tc.name << "\n";
-        const bool ok = tc.fn();
+        const bool ok = tc.def();
         if (!ok) {
             ++failed;
             std::cout << "  -> FAIL\n";

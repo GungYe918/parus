@@ -105,7 +105,11 @@ namespace parus::sir {
             new_args.reserve(old_args.size());
 
             for (auto& v : m.values) {
-                if (v.kind != ValueKind::kCall && v.kind != ValueKind::kArrayLit) continue;
+                if (v.kind != ValueKind::kCall &&
+                    v.kind != ValueKind::kArrayLit &&
+                    v.kind != ValueKind::kFieldInit) {
+                    continue;
+                }
 
                 uint32_t begin = v.arg_begin;
                 uint32_t count = v.arg_count;
@@ -158,7 +162,8 @@ namespace parus::sir {
                     Arg plain = src;
                     plain.child_begin = 0;
                     plain.child_count = 0;
-                    if (v.kind == ValueKind::kArrayLit && plain.kind == ArgKind::kNamedGroup) {
+                    if ((v.kind == ValueKind::kArrayLit || v.kind == ValueKind::kFieldInit) &&
+                        plain.kind == ArgKind::kNamedGroup) {
                         plain.kind = ArgKind::kPositional;
                     }
                     new_args.push_back(plain);
@@ -276,7 +281,8 @@ namespace parus::sir {
                     }
                     break;
                 }
-                case ValueKind::kArrayLit: {
+                case ValueKind::kArrayLit:
+                case ValueKind::kFieldInit: {
                     const uint64_t end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
                     if (end <= (uint64_t)m.args.size()) {
                         for (uint32_t i = 0; i < v.arg_count; ++i) {
@@ -299,4 +305,3 @@ namespace parus::sir {
     }
 
 } // namespace parus::sir
-

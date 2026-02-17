@@ -1,5 +1,5 @@
 // 비허용 케이스: do 본문은 반드시 block이어야 함
-fn main() -> i32 {
+def main() -> i32 {
   do set x = 1i32;
   return 0i32;
 }

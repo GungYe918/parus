@@ -9,6 +9,7 @@
 #include <parus/tyck/TypeCheck.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -18,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -453,6 +455,59 @@ namespace {
         std::string message{};
     };
 
+    enum class SemTokenType : uint32_t {
+        kNamespace = 0,
+        kType,
+        kClass,
+        kFunction,
+        kParameter,
+        kVariable,
+        kProperty,
+        kKeyword,
+        kString,
+        kNumber,
+        kOperator,
+        kDecorator,
+    };
+
+    struct SemToken {
+        uint32_t line = 0;
+        uint32_t start_character = 0;
+        uint32_t length = 0;
+        uint32_t token_type = 0;
+        uint32_t token_modifiers = 0;
+    };
+
+    struct SemClass {
+        uint32_t token_type = static_cast<uint32_t>(SemTokenType::kVariable);
+        uint32_t token_modifiers = 0;
+    };
+
+    static constexpr uint32_t kSemModDeclaration = 1u << 0;
+    static constexpr uint32_t kSemModReadonly = 1u << 1;
+    static constexpr uint32_t kSemModStatic = 1u << 2;
+
+    constexpr std::array<std::string_view, 12> kSemTokenTypeNames = {
+        "namespace",
+        "type",
+        "class",
+        "function",
+        "parameter",
+        "variable",
+        "property",
+        "keyword",
+        "string",
+        "number",
+        "operator",
+        "decorator",
+    };
+
+    constexpr std::array<std::string_view, 3> kSemTokenModifierNames = {
+        "declaration",
+        "readonly",
+        "static",
+    };
+
     struct Position {
         uint32_t line = 0;
         uint32_t character = 0;
@@ -555,6 +610,484 @@ namespace {
             default:
                 return 1;
         }
+    }
+
+    uint64_t sem_span_key_(const parus::Span& sp) {
+        return (static_cast<uint64_t>(sp.lo) << 32) | static_cast<uint64_t>(sp.hi);
+    }
+
+    bool sem_token_from_span_(
+        const parus::SourceManager& sm,
+        const parus::Span& sp,
+        const SemClass& sem_class,
+        SemToken& out
+    ) {
+        if (sp.hi <= sp.lo) return false;
+
+        const auto begin_lc = sm.line_col(sp.file_id, sp.lo);
+        const auto end_lc = sm.line_col(sp.file_id, sp.hi);
+        if (begin_lc.line == 0 || begin_lc.col == 0 || end_lc.line == 0 || end_lc.col == 0) {
+            return false;
+        }
+
+        const uint32_t start_line = begin_lc.line - 1;
+        const uint32_t end_line = end_lc.line - 1;
+        if (start_line != end_line) {
+            return false;
+        }
+
+        const uint32_t start_col = begin_lc.col - 1;
+        const uint32_t end_col = end_lc.col - 1;
+
+        SemToken tok{};
+        tok.line = start_line;
+        tok.start_character = start_col;
+        tok.length = (end_col > start_col) ? (end_col - start_col) : 1;
+        tok.token_type = sem_class.token_type;
+        tok.token_modifiers = sem_class.token_modifiers;
+        out = tok;
+        return true;
+    }
+
+    bool is_keyword_token_kind_(parus::syntax::TokenKind kind) {
+        using K = parus::syntax::TokenKind;
+        switch (kind) {
+            case K::kKwTrue:
+            case K::kKwFalse:
+            case K::kKwNull:
+            case K::kKwAnd:
+            case K::kKwOr:
+            case K::kKwNot:
+            case K::kKwXor:
+            case K::kKwMut:
+            case K::kKwStatic:
+            case K::kKwLet:
+            case K::kKwSet:
+            case K::kKwIf:
+            case K::kKwElif:
+            case K::kKwElse:
+            case K::kKwWhile:
+            case K::kKwDo:
+            case K::kKwReturn:
+            case K::kKwBreak:
+            case K::kKwContinue:
+            case K::kKwManual:
+            case K::kKwExport:
+            case K::kKwExtern:
+            case K::kKwLayout:
+            case K::kKwAlign:
+            case K::kKwFn:
+            case K::kKwField:
+            case K::kKwActs:
+            case K::kKwClass:
+            case K::kKwSwitch:
+            case K::kKwCase:
+            case K::kKwDefault:
+            case K::kKwLoop:
+            case K::kKwIn:
+            case K::kKwCommit:
+            case K::kKwRecast:
+            case K::kKwPub:
+            case K::kKwSub:
+            case K::kKwPure:
+            case K::kKwComptime:
+            case K::kKwUse:
+            case K::kKwImport:
+            case K::kKwModule:
+            case K::kKwAs:
+            case K::kKwNest:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool is_operator_token_kind_(parus::syntax::TokenKind kind) {
+        using K = parus::syntax::TokenKind;
+        switch (kind) {
+            case K::kArrow:
+            case K::kLParen:
+            case K::kRParen:
+            case K::kLBrace:
+            case K::kRBrace:
+            case K::kLBracket:
+            case K::kRBracket:
+            case K::kComma:
+            case K::kColon:
+            case K::kSemicolon:
+            case K::kQuestion:
+            case K::kQuestionQuestion:
+            case K::kQuestionQuestionAssign:
+            case K::kDot:
+            case K::kAssign:
+            case K::kPlusAssign:
+            case K::kMinusAssign:
+            case K::kStarAssign:
+            case K::kSlashAssign:
+            case K::kPercentAssign:
+            case K::kPlus:
+            case K::kMinus:
+            case K::kStar:
+            case K::kSlash:
+            case K::kPercent:
+            case K::kPlusPlus:
+            case K::kBang:
+            case K::kCaret:
+            case K::kAmp:
+            case K::kAmpAmp:
+            case K::kPipePipe:
+            case K::kEqEq:
+            case K::kBangEq:
+            case K::kLt:
+            case K::kLtEq:
+            case K::kGt:
+            case K::kGtEq:
+            case K::kShiftLeft:
+            case K::kShiftRight:
+            case K::kPipeFwd:
+            case K::kPipeRev:
+            case K::kDotDot:
+            case K::kDotDotColon:
+            case K::kColonColon:
+            case K::kUnknownPunct:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    SemClass sem_class_from_binding_(parus::passes::BindingKind bind) {
+        switch (bind) {
+            case parus::passes::BindingKind::kFn:
+                return SemClass{static_cast<uint32_t>(SemTokenType::kFunction), 0};
+            case parus::passes::BindingKind::kParam:
+                return SemClass{static_cast<uint32_t>(SemTokenType::kParameter), 0};
+            case parus::passes::BindingKind::kType:
+                return SemClass{static_cast<uint32_t>(SemTokenType::kType), 0};
+            case parus::passes::BindingKind::kLocalVar:
+            default:
+                return SemClass{static_cast<uint32_t>(SemTokenType::kVariable), 0};
+        }
+    }
+
+    std::unordered_map<uint64_t, SemClass> collect_decl_semantic_map_(
+        const std::vector<parus::Token>& toks
+    ) {
+        std::unordered_map<uint64_t, SemClass> out;
+        using K = parus::syntax::TokenKind;
+
+        auto mark_ident = [&](size_t idx, SemTokenType type, uint32_t mods) {
+            if (idx >= toks.size()) return;
+            if (toks[idx].kind != K::kIdent) return;
+            const uint64_t key = sem_span_key_(toks[idx].span);
+            out[key] = SemClass{static_cast<uint32_t>(type), mods | kSemModDeclaration};
+        };
+
+        for (size_t i = 0; i < toks.size(); ++i) {
+            const auto kind = toks[i].kind;
+
+            if (kind == K::kKwFn) {
+                const size_t name_idx = i + 1;
+                mark_ident(name_idx, SemTokenType::kFunction, 0);
+
+                size_t lparen_idx = name_idx;
+                while (lparen_idx < toks.size()) {
+                    if (toks[lparen_idx].kind == K::kLParen) break;
+                    if (toks[lparen_idx].kind == K::kLBrace || toks[lparen_idx].kind == K::kSemicolon) break;
+                    ++lparen_idx;
+                }
+
+                if (lparen_idx < toks.size() && toks[lparen_idx].kind == K::kLParen) {
+                    uint32_t depth = 0;
+                    for (size_t j = lparen_idx; j < toks.size(); ++j) {
+                        const auto jk = toks[j].kind;
+                        if (jk == K::kLParen) {
+                            ++depth;
+                            continue;
+                        }
+                        if (jk == K::kRParen) {
+                            if (depth == 0) break;
+                            --depth;
+                            if (depth == 0) break;
+                            continue;
+                        }
+                        if (depth != 1) continue;
+                        if (jk != K::kIdent) continue;
+                        if (j + 1 < toks.size() && toks[j + 1].kind == K::kColon) {
+                            mark_ident(j, SemTokenType::kParameter, 0);
+                        }
+                    }
+                }
+            }
+
+            if (kind == K::kKwLet || kind == K::kKwSet) {
+                bool is_static = false;
+                bool is_mut = false;
+                size_t j = i + 1;
+                while (j < toks.size()) {
+                    if (toks[j].kind == K::kKwMut) {
+                        is_mut = true;
+                        ++j;
+                        continue;
+                    }
+                    if (toks[j].kind == K::kKwStatic) {
+                        is_static = true;
+                        ++j;
+                        continue;
+                    }
+                    break;
+                }
+                uint32_t mods = 0;
+                if (is_static) mods |= kSemModStatic;
+                if (kind == K::kKwLet && !is_mut) mods |= kSemModReadonly;
+                mark_ident(j, SemTokenType::kVariable, mods);
+            }
+
+            if (kind == K::kKwStatic) {
+                size_t j = i + 1;
+                bool is_mut = false;
+                while (j < toks.size() && toks[j].kind == K::kKwMut) {
+                    is_mut = true;
+                    ++j;
+                }
+                uint32_t mods = kSemModStatic;
+                if (!is_mut) mods |= kSemModReadonly;
+                mark_ident(j, SemTokenType::kVariable, mods);
+            }
+
+            if (kind == K::kKwLoop) {
+                size_t lparen_idx = i + 1;
+                while (lparen_idx < toks.size()) {
+                    if (toks[lparen_idx].kind == K::kLParen) break;
+                    if (toks[lparen_idx].kind == K::kLBrace || toks[lparen_idx].kind == K::kSemicolon) break;
+                    ++lparen_idx;
+                }
+                if (lparen_idx < toks.size() && toks[lparen_idx].kind == K::kLParen) {
+                    uint32_t depth = 0;
+                    for (size_t j = lparen_idx; j < toks.size(); ++j) {
+                        const auto jk = toks[j].kind;
+                        if (jk == K::kLParen) {
+                            ++depth;
+                            continue;
+                        }
+                        if (jk == K::kRParen) {
+                            if (depth == 0) break;
+                            --depth;
+                            if (depth == 0) break;
+                            continue;
+                        }
+                        if (depth != 1) continue;
+                        if (jk == K::kIdent && j + 1 < toks.size() && toks[j + 1].kind == K::kKwIn) {
+                            mark_ident(j, SemTokenType::kVariable, 0);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (kind == K::kKwField) {
+                mark_ident(i + 1, SemTokenType::kType, 0);
+            }
+
+            if (kind == K::kKwActs || kind == K::kKwClass) {
+                mark_ident(i + 1, SemTokenType::kClass, 0);
+            }
+
+            if (kind == K::kKwModule || kind == K::kKwNest) {
+                mark_ident(i + 1, SemTokenType::kNamespace, 0);
+            }
+
+            if (kind == K::kKwImport) {
+                for (size_t j = i + 1; j < toks.size(); ++j) {
+                    if (toks[j].kind == K::kSemicolon) break;
+                    if (toks[j].kind == K::kKwAs) {
+                        mark_ident(j + 1, SemTokenType::kNamespace, 0);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return out;
+    }
+
+    std::unordered_map<uint64_t, SemClass> collect_resolved_semantic_map_(
+        const parus::passes::NameResolveResult& resolve
+    ) {
+        std::unordered_map<uint64_t, SemClass> out;
+
+        for (const auto rid : resolve.expr_to_resolved) {
+            if (rid == parus::passes::NameResolveResult::k_invalid_resolved) continue;
+            if (rid >= resolve.resolved.size()) continue;
+            const auto& rs = resolve.resolved[rid];
+            if (rs.span.hi <= rs.span.lo) continue;
+            out[sem_span_key_(rs.span)] = sem_class_from_binding_(rs.bind);
+        }
+
+        return out;
+    }
+
+    std::vector<SemToken> analyze_semantic_tokens_(std::string_view uri, std::string_view source) {
+        std::vector<SemToken> out;
+
+        parus::SourceManager sm;
+        const uint32_t file_id = sm.add(std::string(uri), std::string(source));
+
+        parus::diag::Bag bag;
+        parus::Lexer lx(sm.content(file_id), file_id, &bag);
+        const auto toks = lx.lex_all();
+
+        parus::ast::AstArena ast;
+        parus::ty::TypePool types;
+        parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/256);
+        const auto root = parser.parse_program();
+
+        parus::passes::PassOptions popt{};
+        const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+
+        const auto decl_map = collect_decl_semantic_map_(toks);
+        const auto resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
+
+        out.reserve(toks.size());
+        using K = parus::syntax::TokenKind;
+
+        for (size_t i = 0; i < toks.size(); ++i) {
+            const auto& tok = toks[i];
+            if (tok.kind == K::kEof || tok.kind == K::kError) continue;
+
+            const auto prev_kind = (i > 0) ? toks[i - 1].kind : K::kError;
+            const auto next_kind = (i + 1 < toks.size()) ? toks[i + 1].kind : K::kError;
+            SemClass sem_class{};
+            bool has_sem_class = false;
+
+            if (tok.kind == K::kIdent || tok.kind == K::kHole) {
+                const uint64_t key = sem_span_key_(tok.span);
+                const auto decl_it = decl_map.find(key);
+                if (decl_it != decl_map.end()) {
+                    sem_class = decl_it->second;
+                    has_sem_class = true;
+                } else {
+                    const auto resolved_it = resolved_map.find(key);
+                    if (resolved_it != resolved_map.end()) {
+                        sem_class = resolved_it->second;
+                        has_sem_class = true;
+                    }
+                }
+
+                if (!has_sem_class) {
+                    if (next_kind == K::kColonColon || prev_kind == K::kColonColon) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kNamespace), 0};
+                    } else if (
+                        prev_kind == K::kColon ||
+                        prev_kind == K::kArrow ||
+                        prev_kind == K::kKwAs ||
+                        prev_kind == K::kKwRecast
+                    ) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), 0};
+                    } else {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kVariable), 0};
+                    }
+                    has_sem_class = true;
+                }
+            } else if (tok.kind == K::kIntLit || tok.kind == K::kFloatLit) {
+                sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kNumber), 0};
+                has_sem_class = true;
+            } else if (tok.kind == K::kStringLit || tok.kind == K::kCharLit) {
+                sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kString), 0};
+                has_sem_class = true;
+            } else if (tok.kind == K::kAt) {
+                sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kDecorator), 0};
+                has_sem_class = true;
+            } else if (is_keyword_token_kind_(tok.kind)) {
+                sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kKeyword), 0};
+                has_sem_class = true;
+            } else if (is_operator_token_kind_(tok.kind)) {
+                sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kOperator), 0};
+                has_sem_class = true;
+            }
+
+            if (!has_sem_class) continue;
+
+            SemToken sem_tok{};
+            if (sem_token_from_span_(sm, tok.span, sem_class, sem_tok)) {
+                out.push_back(sem_tok);
+            }
+        }
+
+        return out;
+    }
+
+    std::vector<uint32_t> encode_semantic_tokens_data_(std::vector<SemToken> toks) {
+        std::sort(toks.begin(), toks.end(), [](const SemToken& a, const SemToken& b) {
+            if (a.line != b.line) return a.line < b.line;
+            if (a.start_character != b.start_character) return a.start_character < b.start_character;
+            if (a.length != b.length) return a.length < b.length;
+            if (a.token_type != b.token_type) return a.token_type < b.token_type;
+            return a.token_modifiers < b.token_modifiers;
+        });
+
+        std::vector<uint32_t> data;
+        data.reserve(toks.size() * 5);
+
+        uint32_t prev_line = 0;
+        uint32_t prev_start = 0;
+        bool first = true;
+
+        for (const auto& tok : toks) {
+            const uint32_t delta_line = first ? tok.line : (tok.line - prev_line);
+            const uint32_t delta_start = (first || delta_line != 0)
+                ? tok.start_character
+                : (tok.start_character - prev_start);
+
+            data.push_back(delta_line);
+            data.push_back(delta_start);
+            data.push_back(tok.length);
+            data.push_back(tok.token_type);
+            data.push_back(tok.token_modifiers);
+
+            prev_line = tok.line;
+            prev_start = tok.start_character;
+            first = false;
+        }
+
+        return data;
+    }
+
+    std::string build_semantic_tokens_result_(const std::vector<SemToken>& toks) {
+        const auto data = encode_semantic_tokens_data_(toks);
+        std::string json = "{\"data\":[";
+        for (size_t i = 0; i < data.size(); ++i) {
+            if (i != 0) json += ",";
+            json += std::to_string(data[i]);
+        }
+        json += "]}";
+        return json;
+    }
+
+    std::string build_initialize_result_() {
+        std::string json = "{\"capabilities\":{";
+        json += "\"textDocumentSync\":{\"openClose\":true,\"change\":2},";
+        json += "\"positionEncoding\":\"utf-16\",";
+        json += "\"semanticTokensProvider\":{";
+        json += "\"legend\":{";
+        json += "\"tokenTypes\":[";
+        for (size_t i = 0; i < kSemTokenTypeNames.size(); ++i) {
+            if (i != 0) json += ",";
+            json += "\"" + json_escape_(kSemTokenTypeNames[i]) + "\"";
+        }
+        json += "],";
+        json += "\"tokenModifiers\":[";
+        for (size_t i = 0; i < kSemTokenModifierNames.size(); ++i) {
+            if (i != 0) json += ",";
+            json += "\"" + json_escape_(kSemTokenModifierNames[i]) + "\"";
+        }
+        json += "]";
+        json += "},";
+        json += "\"full\":true,";
+        json += "\"range\":false";
+        json += "}";
+        json += "}}";
+        return json;
     }
 
     std::vector<LspDiag> analyze_document_(std::string_view uri, std::string_view source) {
@@ -678,9 +1211,7 @@ namespace {
 
                 const auto params = obj_get_(msg, "params");
                 if (*method == "initialize") {
-                    const std::string result = "{\"capabilities\":{"
-                        "\"textDocumentSync\":{\"openClose\":true,\"change\":2},"
-                        "\"positionEncoding\":\"utf-16\"}}";
+                    const std::string result = build_initialize_result_();
                     const auto response = build_response_result_(id, result);
                     if (!response.empty()) write_lsp_message_(std::cout, response);
                     continue;
@@ -713,6 +1244,11 @@ namespace {
 
                 if (*method == "textDocument/didClose") {
                     handle_did_close_(params);
+                    continue;
+                }
+
+                if (*method == "textDocument/semanticTokens/full") {
+                    handle_semantic_tokens_full_(id, params);
                     continue;
                 }
 
@@ -786,6 +1322,40 @@ namespace {
 
             documents_.erase(std::string(*uri));
             publish_diagnostics_(*uri, /*version=*/0, {});
+        }
+
+        void handle_semantic_tokens_full_(const JsonValue* id, const JsonValue* params) {
+            if (id == nullptr) return;
+            if (params == nullptr || params->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto td = obj_get_(*params, "textDocument");
+            if (td == nullptr || td->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto uri = as_string_(obj_get_(*td, "uri"));
+            if (!uri.has_value()) {
+                const auto response = build_response_error_(id, -32602, "textDocument.uri is required");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            std::string source;
+            const auto it = documents_.find(std::string(*uri));
+            if (it != documents_.end()) {
+                source = it->second.text;
+            }
+
+            const auto sem_tokens = analyze_semantic_tokens_(*uri, source);
+            const auto result = build_semantic_tokens_result_(sem_tokens);
+            const auto response = build_response_result_(id, result);
+            if (!response.empty()) write_lsp_message_(std::cout, response);
         }
 
         std::unordered_map<std::string, DocumentState> documents_{};

@@ -121,11 +121,11 @@ field String {
 }
 
 acts for String {
-  fn from_text(src: text) -> String;
-  fn as_text(self s: &String) -> text;
-  fn into_utf8_buf(self s: String) -> Utf8Buf;
-  fn from_utf8_buf(buf: Utf8Buf) -> String;
-  fn drop(self s: String) -> void;
+  def from_text(src: text) -> String;
+  def as_text(self s: &String) -> text;
+  def into_utf8_buf(self s: String) -> Utf8Buf;
+  def from_utf8_buf(buf: Utf8Buf) -> String;
+  def drop(self s: String) -> void;
 }
 ```
 

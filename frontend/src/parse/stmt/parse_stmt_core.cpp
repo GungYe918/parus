@@ -142,7 +142,7 @@ namespace parus {
             diag_report(diag::Code::kPubSubOnlyAllowedInClass, tok.span);
             cursor_.bump(); // pub/sub 소비
 
-            // 뒤가 fn/export/fn-attrs면 decl로 계속 파싱해서 연쇄 오류를 막는다.
+            // 뒤가 def/export/def-attrs면 decl로 계속 파싱해서 연쇄 오류를 막는다.
             if (is_decl_start(cursor_.peek().kind)) {
                 return parse_decl_any();
             }

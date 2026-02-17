@@ -1,9 +1,9 @@
 // 비허용 케이스: labeled 인자와 named-group을 한 호출에서 혼용
-fn f(a: i32, { b: i32 = 0i32 }) -> i32 {
+def f(a: i32, { b: i32 = 0i32 }) -> i32 {
   return a + b;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
   set x = f(a: 1i32, { b: 2i32 });
   return x;
 }

@@ -1,5 +1,5 @@
 // slice borrow 값에 &&를 적용하면 capability 에러여야 한다.
-fn main() -> i32 {
+def main() -> i32 {
     let arr: i32[3] = [1, 2, 3];
     set s = &arr[0..:1];
     set h = &&s;

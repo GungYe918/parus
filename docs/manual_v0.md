@@ -81,7 +81,7 @@ ABI 경계 호출 허용:
 
 ## 5.2 금지
 
-1. `manual fn` 선언 (함수 단위 전파 금지)
+1. `manual def` 선언 (함수 단위 전파 금지)
 2. `manual`로 borrow/escape 규칙 무효화
 3. ABI 경계에 `&`, `&mut`, `&&` 타입 직접 전달
 4. 언어 안전성 진단을 끄는 목적의 전역 스위치 사용
@@ -111,9 +111,9 @@ ABI 경계 호출 허용:
 ## 8. FFI 중심 예시
 
 ```parus
-extern "C" fn c_write(fd: i32, buf: ptr u8, len: usize) -> isize;
+extern "C" def c_write(fd: i32, buf: ptr u8, len: usize) -> isize;
 
-fn write_chunk(fd: i32, buf: ptr u8, len: usize) -> isize {
+def write_chunk(fd: i32, buf: ptr u8, len: usize) -> isize {
     manual[get, abi] {
         return c_write(fd: fd, buf: buf, len: len);
     }
@@ -121,9 +121,9 @@ fn write_chunk(fd: i32, buf: ptr u8, len: usize) -> isize {
 ```
 
 ```parus
-extern "C" fn c_fill(dst: ptr mut u8, len: usize, v: u8) -> void;
+extern "C" def c_fill(dst: ptr mut u8, len: usize, v: u8) -> void;
 
-fn fill_zero(dst: ptr mut u8, len: usize) -> void {
+def fill_zero(dst: ptr mut u8, len: usize) -> void {
     manual[set, abi] {
         c_fill(dst: dst, len: len, v: 0u8);
     }

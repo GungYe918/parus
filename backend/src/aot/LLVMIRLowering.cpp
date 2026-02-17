@@ -457,9 +457,9 @@ namespace parus::backend::aot {
             using namespace parus::oir;
             std::vector<std::string> errs;
 
-            for (const auto& fn : m.funcs) {
+            for (const auto& def : m.funcs) {
                 std::unordered_set<BlockId> owned;
-                for (auto bb : fn.blocks) owned.insert(bb);
+                for (auto bb : def.blocks) owned.insert(bb);
 
                 auto check_edge = [&](BlockId pred, BlockId target, const std::vector<ValueId>& args) {
                     if (target == kInvalidId || static_cast<size_t>(target) >= m.blocks.size()) return;
@@ -468,7 +468,7 @@ namespace parus::backend::aot {
 
                     if (args.size() != tb.params.size()) {
                         errs.push_back(
-                            "phi incoming arity mismatch in function '" + fn.name +
+                            "phi incoming arity mismatch in function '" + def.name +
                             "': pred bb" + std::to_string(pred) +
                             " -> bb" + std::to_string(target) +
                             " has " + std::to_string(args.size()) +
@@ -489,7 +489,7 @@ namespace parus::backend::aot {
                         if (value_types[arg] == value_types[param]) continue;
 
                         errs.push_back(
-                            "phi incoming type mismatch in function '" + fn.name +
+                            "phi incoming type mismatch in function '" + def.name +
                             "': pred bb" + std::to_string(pred) +
                             " -> bb" + std::to_string(target) +
                             ", idx " + std::to_string(i) +
@@ -499,7 +499,7 @@ namespace parus::backend::aot {
                     }
                 };
 
-                for (auto bb : fn.blocks) {
+                for (auto bb : def.blocks) {
                     if (bb == kInvalidId || static_cast<size_t>(bb) >= m.blocks.size()) continue;
                     const auto& b = m.blocks[bb];
                     if (!b.has_term) continue;
@@ -527,7 +527,7 @@ namespace parus::backend::aot {
             FunctionEmitter(
                 const parus::oir::Module& m,
                 const parus::ty::TypePool& types,
-                const parus::oir::Function& fn,
+                const parus::oir::Function& def,
                 const std::vector<std::string>& value_types,
                 const std::vector<ValueUseInfo>& value_uses,
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
@@ -535,7 +535,7 @@ namespace parus::backend::aot {
                 const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants
             ) : m_(m),
                 types_(types),
-                fn_(fn),
+                fn_(def),
                 value_types_(value_types),
                 value_uses_(value_uses),
                 named_layouts_(named_layouts),
@@ -1573,28 +1573,28 @@ namespace parus::backend::aot {
         std::optional<MainEntryCandidate> main_entry_candidate{};
 
         /// @brief 함수가 사용자 엔트리(main) 후보인지 판정한다.
-        auto is_main_entry_candidate_name = [](const parus::oir::Function& fn) -> bool {
+        auto is_main_entry_candidate_name = [](const parus::oir::Function& def) -> bool {
             // 신규 경로: OIR Function이 맹글링 전 이름을 함께 보존한 경우.
-            if (!fn.source_name.empty()) {
-                return fn.source_name == "main";
+            if (!def.source_name.empty()) {
+                return def.source_name == "main";
             }
             // 구버전 OIR과의 호환: 맹글링된 main 패턴을 허용한다.
-            return fn.name == "main" || fn.name.rfind("main_fn", 0) == 0;
+            return def.name == "main" || def.name.rfind("main_fn", 0) == 0;
         };
 
-        for (const auto& fn : oir.funcs) {
-            const std::string fn_sym = sanitize_symbol_(fn.name);
+        for (const auto& def : oir.funcs) {
+            const std::string fn_sym = sanitize_symbol_(def.name);
             if (fn_sym == "main") {
                 has_raw_main_symbol = true;
             }
 
-            if (!fn.is_extern && is_main_entry_candidate_name(fn)) {
+            if (!def.is_extern && is_main_entry_candidate_name(def)) {
                 bool is_zero_arity = false;
-                if (fn.entry != parus::oir::kInvalidId &&
-                    static_cast<size_t>(fn.entry) < oir.blocks.size()) {
-                    is_zero_arity = oir.blocks[fn.entry].params.empty();
+                if (def.entry != parus::oir::kInvalidId &&
+                    static_cast<size_t>(def.entry) < oir.blocks.size()) {
+                    is_zero_arity = oir.blocks[def.entry].params.empty();
                 }
-                const std::string ret_ty = map_type_(types, fn.ret_ty, &named_layouts);
+                const std::string ret_ty = map_type_(types, def.ret_ty, &named_layouts);
                 if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
                     if (!main_entry_candidate.has_value()) {
                         main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
@@ -1607,7 +1607,7 @@ namespace parus::backend::aot {
             FunctionEmitter fe(
                 oir,
                 types,
-                fn,
+                def,
                 value_types,
                 value_uses,
                 named_layouts,

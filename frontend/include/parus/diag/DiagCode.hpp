@@ -45,6 +45,7 @@ namespace parus::diag {
         kFnParamNameExpected,        // function parameter name identifier is required
         kFieldNameExpected,          // field declaration name identifier is required
         kFieldMemberNameExpected,    // field member name identifier is required
+        kFieldMemberMutNotAllowed,   // mut is not allowed on field members
         kActsNameExpected,           // acts declaration name identifier is required
         kCallArgMixNotAllowed,
         kCallNoArgsAfterNamedGroup,      // no extra args after named-group '{...}'
@@ -64,11 +65,11 @@ namespace parus::diag {
         kStaticVarExpectedLetOrSet,       // 'static' must be followed by [mut] let/set
         kStaticVarRequiresInitializer,    // static var must have initializer
 
-        // fn param default rules
+        // def param default rules
         kFnParamDefaultNotAllowedOutsideNamedGroup, // positional param can't have "= expr"
         kFnParamDefaultExprExpected,                // named-group param has "=", but expr missing
 
-        // fn param named-group count
+        // def param named-group count
         kFnOnlyOneNamedGroupAllowed,
         kActsForNotSupported,             // acts for T is not supported yet in parser
         kActsMemberExportNotAllowed,      // member-level export inside acts is not allowed
@@ -77,14 +78,14 @@ namespace parus::diag {
         kOperatorKeyExpected,             // operator(<key>) key is missing/invalid
         kOperatorSelfFirstParamRequired,  // operator(...) first parameter must be `self`
         
-        // fn body parsing rule
+        // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
 
         // pub/sub misuse
         kPubSubOnlyAllowedInClass,
 
         // ---- type parsing ----
-        kTypeFnSignatureExpected, // type-context 'fn' must be followed by '('
+        kTypeFnSignatureExpected, // type-context 'def' must be followed by '('
         kTypeNameExpected,          // type name (ident) expected
         kTypeArrayMissingRBracket,  // missing ']' in T[]
         kTypeOptionalDuplicate,     // T?? 같은 중복
@@ -180,12 +181,12 @@ namespace parus::diag {
         kTypeSetAssignMismatch, // args[0]=var, args[1]=expected, args[2]=got
         kTypeArgCountMismatch,  // args[0]=expected, args[1]=got
         kTypeArgTypeMismatch,   // args[0]=index, args[1]=expected, args[2]=got
-        kOverloadDeclConflict,  // args[0]=fn, args[1]=reason
-        kOverloadNoMatchingCall,// args[0]=fn, args[1]=call_signature
-        kOverloadAmbiguousCall, // args[0]=fn, args[1]=candidate_list
+        kOverloadDeclConflict,  // args[0]=def, args[1]=reason
+        kOverloadNoMatchingCall,// args[0]=def, args[1]=call_signature
+        kOverloadAmbiguousCall, // args[0]=def, args[1]=candidate_list
         kMangleSymbolCollision, // args[0]=mangled_symbol, args[1]=lhs, args[2]=rhs
-        kAbiCOverloadNotAllowed,// args[0]=fn
-        kAbiCNamedGroupNotAllowed, // args[0]=fn
+        kAbiCOverloadNotAllowed,// args[0]=def
+        kAbiCNamedGroupNotAllowed, // args[0]=def
         kAbiCTypeNotFfiSafe,       // args[0]=entity, args[1]=type
         kAbiCGlobalMustBeStatic,   // args[0]=name
         kTypeReturnOutsideFn,   // (no args)
@@ -243,6 +244,12 @@ namespace parus::diag {
         kTypeArrayLiteralEmptyNeedsContext,
         kTypeFieldMemberRangeInvalid,
         kTypeFieldMemberMustBePodBuiltin, // args[0]=member, args[1]=got_type
+        kFieldInitTypeExpected,          // args[0]=type path
+        kFieldInitUnknownMember,         // args[0]=type, args[1]=member
+        kFieldInitDuplicateMember,       // args[0]=member
+        kFieldInitMissingMember,         // args[0]=type, args[1]=member
+        kFieldInitNonOptionalNull,       // args[0]=member, args[1]=type
+        kFieldInitEmptyNotAllowed,       // args[0]=type
 
         // ---- mut check ----
         kWriteToImmutable

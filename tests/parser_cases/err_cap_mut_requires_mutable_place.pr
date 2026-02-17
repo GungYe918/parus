@@ -1,5 +1,5 @@
 // 비허용 케이스: &mut 대상은 mut place여야 한다.
-fn main() -> void {
+def main() -> void {
   let x: i32 = 1i32;
   set r = &mut x;
   return;

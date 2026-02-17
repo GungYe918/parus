@@ -1,16 +1,16 @@
 // sema_smoke.pr
 
-@comptime @pure export fn scale_add(a: int, b: int, { scale: int = 2, bias: int = 0 }) -> int {
+@comptime @pure export def scale_add(a: int, b: int, { scale: int = 2, bias: int = 0 }) -> int {
   // (a + b) * scale + bias
   set s = (a + b) * scale;
   return s + bias;
 }
 
-@inline @no_mangle fn id_u32(x: u32) -> u32 {
+@inline @no_mangle def id_u32(x: u32) -> u32 {
   return x;
 }
 
-export fn entry() -> void {
+export def entry() -> void {
   set a = 3;
   set b = 4;
 
@@ -33,14 +33,14 @@ export fn entry() -> void {
   }
 }
 
-export fn find42(xs: int[]) -> int? {
+export def find42(xs: int[]) -> int? {
   set found = loop (v in xs) {
     if (v == 42) { break v; }
   };
   return found;
 }
 
-fn sum_to(n: int) -> int {
+def sum_to(n: int) -> int {
   // 아직 mut 키워드 파싱 못함
   set mut s = 0;
   loop (i in 0..:n) {
@@ -49,7 +49,7 @@ fn sum_to(n: int) -> int {
   return s;
 }
 
-fn make_value() -> int {
+def make_value() -> int {
   set x = loop {
     break 7;
   };
@@ -57,7 +57,7 @@ fn make_value() -> int {
 }
 
 // 이건 오류이지만(while안에서는 break;만 가능) 파서 단계에서 잡지 않음
-fn add() -> int {
+def add() -> int {
   while (1) {
     break 42;
   }

@@ -240,6 +240,7 @@ namespace parusc::dump {
             case K::kBoolLit: return "BoolLit";
             case K::kNullLit: return "NullLit";
             case K::kArrayLit: return "ArrayLit";
+            case K::kFieldInit: return "FieldInit";
             case K::kIdent: return "Ident";
             case K::kHole: return "Hole";
             case K::kUnary: return "Unary";
@@ -548,7 +549,7 @@ namespace parusc::dump {
         for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
             const auto& f = m.funcs[fi];
 
-            std::cout << "\n  fn #" << fi
+            std::cout << "\n  def #" << fi
                     << " name=" << f.name
                     << " sym=" << f.sym
                     << " entry=" << f.entry
@@ -711,7 +712,7 @@ namespace parusc::dump {
 
         for (size_t fi = 0; fi < m.funcs.size(); ++fi) {
             const auto& f = m.funcs[fi];
-            std::cout << "\n  fn #" << fi
+            std::cout << "\n  def #" << fi
                     << " name=" << f.name
                     << " ret=" << types.to_string((ty::TypeId)f.ret_ty) << " <id " << f.ret_ty << ">"
                     << " entry=" << f.entry
@@ -1004,6 +1005,23 @@ namespace parusc::dump {
                     }
                     std::cout << "\n";
                     dump_expr(ast, a.expr, indent + 2);
+                }
+                break;
+            }
+
+            case parus::ast::ExprKind::kFieldInit: {
+                const auto& inits = ast.field_init_entries();
+                const uint64_t begin = e.field_init_begin;
+                const uint64_t end = begin + e.field_init_count;
+                if (begin <= inits.size() && end <= inits.size()) {
+                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                        const auto& ent = inits[e.field_init_begin + i];
+                        for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
+                        std::cout << "Init[" << i << "] " << ent.name << "\n";
+                        if (ent.expr != parus::ast::k_invalid_expr) {
+                            dump_expr(ast, ent.expr, indent + 2);
+                        }
+                    }
                 }
                 break;
             }

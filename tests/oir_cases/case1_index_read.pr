@@ -1,5 +1,5 @@
 // OIR->LLVM 케이스: 배열 인덱스 읽기
-fn main() -> i32 {
+def main() -> i32 {
     let x: i32[3] = [1, 2, 3];
     return x[2];
 }

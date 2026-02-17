@@ -47,7 +47,7 @@ namespace parus::ty {
         kEscape,    // &&T
         kPtr,       // ptr T / ptr mut T
 
-        kFn,        // fn(T1, T2, ...) -> R
+        kFn,        // def(T1, T2, ...) -> R
     };
 
     struct Type {

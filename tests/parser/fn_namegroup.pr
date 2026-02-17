@@ -2,29 +2,29 @@
 // 목표: 함수 선언 4개 + 호출 4개, 전부 파싱 통과
 // 제약: 타입은 i32만, 제네릭/커스텀 타입/enum 등 사용 금지
 
-fn add(a: i32, b: i32) -> i32 {
+def add(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
 // positional + named-group
-fn sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
+def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
     // clamp는 파서 테스트용(기본값/그룹 문법 확인)
     return a - b + clamp;
 }
 
 // named-group only
-fn mul({ a: i32, b: i32 }) -> i32 {
+def mul({ a: i32, b: i32 }) -> i32 {
     return a * b;
 }
 
 @comptime
-export fn div(a: i32, b: i32, { rounding: i32 = 0, bias: i32 }) -> i32 {
+export def div(a: i32, b: i32, { rounding: i32 = 0, bias: i32 }) -> i32 {
     // bias는 필수(named group, default 없음) -> 호출에서 반드시 제공
     return a / b + rounding + bias;
 }
 
 
-fn main() -> i32 {
+def main() -> i32 {
     // --- calls (4)
     // (1) positional call
     set r1 = add(10, 20);

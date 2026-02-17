@@ -364,6 +364,33 @@ namespace parus::sir::detail {
                 break;
             }
 
+            case parus::ast::ExprKind::kFieldInit: {
+                v.kind = ValueKind::kFieldInit;
+                v.text = e.text;
+                v.arg_begin = (uint32_t)m.args.size();
+                v.arg_count = 0;
+
+                const auto& inits = ast.field_init_entries();
+                const uint64_t begin = e.field_init_begin;
+                const uint64_t end = begin + e.field_init_count;
+                if (begin <= inits.size() && end <= inits.size()) {
+                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                        const auto& ent = inits[e.field_init_begin + i];
+                        Arg a{};
+                        a.kind = ArgKind::kLabeled;
+                        a.has_label = true;
+                        a.label = ent.name;
+                        a.span = ent.span;
+                        if (ent.expr != parus::ast::k_invalid_expr) {
+                            a.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, ent.expr);
+                        }
+                        m.add_arg(a);
+                        v.arg_count++;
+                    }
+                }
+                break;
+            }
+
             case parus::ast::ExprKind::kIndex: {
                 v.kind = ValueKind::kIndex;
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -436,6 +463,7 @@ namespace parus::sir::detail {
                 break;
 
             case ValueKind::kArrayLit:
+            case ValueKind::kFieldInit:
                 if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
                     for (uint32_t i = 0; i < v.arg_count; ++i) {
                         join_child(m.args[v.arg_begin + i].value);

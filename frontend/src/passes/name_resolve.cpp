@@ -396,6 +396,21 @@ namespace parus::passes {
                     break;
                 }
 
+                case ast::ExprKind::kFieldInit: {
+                    const auto& inits = ast.field_init_entries();
+                    const uint64_t begin = e.field_init_begin;
+                    const uint64_t end = begin + e.field_init_count;
+                    if (begin <= inits.size() && end <= inits.size()) {
+                        for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                            const auto& ent = inits[e.field_init_begin + i];
+                            if (is_valid_expr_id_(r, ent.expr)) {
+                                stack.push_back(ent.expr);
+                            }
+                        }
+                    }
+                    break;
+                }
+
                 case ast::ExprKind::kLoop: {
                     // loop expression introduces its own scope for header var.
                     ScopeGuard g(sym);

@@ -6,20 +6,20 @@ static G0: i32 = 11i32;
 static G1: i32 = 22i32;
 static mut SLOT: &&i32 = &&G0;
 
-fn read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
+def read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return (a + b) * scale + bias;
 }
 
-fn bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> void {
+def bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> void {
   x = x + delta;
   return;
 }
 
-fn consume(h: &&i32) -> i32 {
+def consume(h: &&i32) -> i32 {
   return 0i32;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
   let mut arr: i32[4] = [1i32, 2i32, 3i32, 4i32];
   let mut out: i32 = 0i32;
 

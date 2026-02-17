@@ -1,7 +1,7 @@
-fn f() -> i32 { return 1; }
-fn g() -> i32 { return 2; }
+def f() -> i32 { return 1; }
+def g() -> i32 { return 2; }
 
-fn main() -> i32 {
+def main() -> i32 {
     let x: i32? = null;
     let y: i64? = x as? i64; // 이건 ok
 
@@ -15,7 +15,7 @@ fn main() -> i32 {
     p = 4;
 }
 
-fn add(a: i32, b: i32) -> i32 {
+def add(a: i32, b: i32) -> i32 {
     let c: i32 = a + b;
     return c;
 }

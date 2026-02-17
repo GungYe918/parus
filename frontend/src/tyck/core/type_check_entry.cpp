@@ -709,7 +709,7 @@ namespace parus::tyck {
 
         const auto project_mangled_name = [&](const DeclShape& d) -> std::string {
             std::ostringstream sig;
-            sig << "fn(";
+            sig << "def(";
             bool first = true;
             for (const auto& p : d.positional) {
                 if (!first) sig << ", ";
@@ -945,12 +945,12 @@ namespace parus::tyck {
 
         ast::StmtId selected = ast::k_invalid_stmt;
         for (const auto& decl : it->second) {
-            const auto& fn = ast_.stmt(decl.fn_sid);
-            if (fn.kind != ast::StmtKind::kFnDecl) continue;
-            if (fn.param_count < 2) continue;
+            const auto& def = ast_.stmt(decl.fn_sid);
+            if (def.kind != ast::StmtKind::kFnDecl) continue;
+            if (def.param_count < 2) continue;
 
-            const auto& p0 = ast_.params()[fn.param_begin + 0];
-            const auto& p1 = ast_.params()[fn.param_begin + 1];
+            const auto& p0 = ast_.params()[def.param_begin + 0];
+            const auto& p1 = ast_.params()[def.param_begin + 1];
             if (!can_assign_(p0.type, lhs)) continue;
             if (!can_assign_(p1.type, rhs)) continue;
 
@@ -971,11 +971,11 @@ namespace parus::tyck {
 
         ast::StmtId selected = ast::k_invalid_stmt;
         for (const auto& decl : it->second) {
-            const auto& fn = ast_.stmt(decl.fn_sid);
-            if (fn.kind != ast::StmtKind::kFnDecl) continue;
-            if (fn.param_count < 1) continue;
+            const auto& def = ast_.stmt(decl.fn_sid);
+            if (def.kind != ast::StmtKind::kFnDecl) continue;
+            if (def.param_count < 1) continue;
 
-            const auto& p0 = ast_.params()[fn.param_begin + 0];
+            const auto& p0 = ast_.params()[def.param_begin + 0];
             if (!can_assign_(p0.type, lhs)) continue;
 
             if (selected != ast::k_invalid_stmt) {
@@ -1015,6 +1015,10 @@ namespace parus::tyck {
     bool TypeChecker::is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id) {
         if (id == ty::kInvalidType) return false;
         const auto& t = types.get(id);
+        if (t.kind == ty::Kind::kOptional) {
+            // non-layout(c) field policy (v0): Optional<POD> is allowed.
+            return is_field_pod_value_type_(types, t.elem);
+        }
         if (t.kind != ty::Kind::kBuiltin) return false;
 
         using B = ty::Builtin;

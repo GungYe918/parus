@@ -94,7 +94,7 @@ namespace {
     /// @brief 소스 기반 index lowering이 실제 메모리 주소 계산(getelementptr)을 생성하는지 검사한다.
     static bool test_source_index_lowering_uses_gep() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 let mut x: i32[3] = [1, 2, 3];
                 x[1] = 9;
                 return x[1];
@@ -132,7 +132,7 @@ namespace {
 
             extern "C" static mut g_vec: Vec2;
 
-            export "C" fn probe() -> i32 {
+            export "C" def probe() -> i32 {
                 return 0i32;
             }
         )";
@@ -164,9 +164,9 @@ namespace {
                 y: i32;
             }
 
-            extern "C" fn takes(v: Vec2) -> i32;
+            extern "C" def takes(v: Vec2) -> i32;
 
-            export "C" fn pass(v: Vec2) -> i32 {
+            export "C" def pass(v: Vec2) -> i32 {
                 return takes(v: v);
             }
         )";
@@ -195,9 +195,9 @@ namespace {
     /// @brief text/문자열 리터럴이 OIR->LLVM에서 rodata 상수 + `{ptr,len}` ABI로 내려가는지 검사한다.
     static bool test_text_literal_rodata_and_c_abi_span_signature() {
         const std::string src = R"(
-            extern "C" fn sink(msg: text) -> i32;
+            extern "C" def sink(msg: text) -> i32;
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 sink(msg: "A\nB");
                 sink(msg: R"""A\nB""");
                 sink(msg: F"""A{1}B""");
@@ -338,7 +338,7 @@ namespace {
     /// @brief LLVM API object emission 경로가 동작하거나(툴체인 존재) 명확한 불가 진단을 내는지 검사한다.
     static bool test_object_emission_api_path() {
         const std::string src = R"(
-            fn main() -> i32 {
+            def main() -> i32 {
                 return 7i32;
             }
         )";
@@ -451,15 +451,15 @@ namespace {
                 }
             };
 
-            fn add(a: i32, b: i32) -> i32 {
+            def add(a: i32, b: i32) -> i32 {
                 return a + b;
             }
 
-            fn add(a: i64, b: i64) -> i64 {
+            def add(a: i64, b: i64) -> i64 {
                 return a + b;
             }
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 let x: i32 = add(a: 1i32, b: 2i32);
                 let y: i64 = add(a: 3i64, b: 4i64);
                 let z: i32 = 10i32 + 20i32;
@@ -507,13 +507,13 @@ namespace {
         const std::string src = R"(
             nest engine {
                 nest math {
-                    fn add(a: i32, b: i32) -> i32 {
+                    def add(a: i32, b: i32) -> i32 {
                         return a + b;
                     }
                 }
             }
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 return engine::math::add(a: 1i32, b: 2i32);
             }
         )";
@@ -544,13 +544,13 @@ namespace {
 
             nest engine {
                 nest math {
-                    fn add(a: i32, b: i32) -> i32 {
+                    def add(a: i32, b: i32) -> i32 {
                         return a + b;
                     }
                 }
             }
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 return m::add(a: 3i32, b: 4i32);
             }
         )";
@@ -574,7 +574,7 @@ namespace {
     /// @brief switch 문이 LLVM condbr 체인으로 lowering되는지 검사한다.
     static bool test_switch_stmt_lowering_cfg_() {
         const std::string src = R"(
-            fn pick(x: i32) -> i32 {
+            def pick(x: i32) -> i32 {
                 switch (x) {
                     case 1: { return 11i32; }
                     case 2: { return 22i32; }
@@ -583,7 +583,7 @@ namespace {
                 return 0i32;
             }
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 return pick(x: 2i32);
             }
         )";
@@ -620,7 +620,7 @@ namespace {
 
             extern "C" static mut g_vec: Vec2;
 
-            fn main() -> i32 {
+            def main() -> i32 {
                 g_vec.x = 7i32;
                 return g_vec.x;
             }
@@ -649,13 +649,49 @@ namespace {
         return ok;
     }
 
+    /// @brief field literal 생성/수정/읽기가 LLVM field 주소 계산 경로로 내려가는지 검사한다.
+    static bool test_field_literal_lowering_() {
+        const std::string src = R"(
+            field Vec2 {
+                x: i32;
+                y: i32;
+            }
+
+            def main() -> i32 {
+                let mut v: Vec2 = Vec2{ x: 1i32, y: 2i32 };
+                v.y = 9i32;
+                return v.y;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "field literal source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "field literal lowering must succeed");
+        ok &= require_(count_substr_(lowered.llvm_ir, "getelementptr i8, ptr") >= 3,
+                       "field literal init/update/read must emit field address GEPs");
+        ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
+                       "field literal lowering must emit typed store");
+        ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
+                       "field literal lowering must emit typed load");
+        return ok;
+    }
+
     /// @brief 오버로딩/연산자 오버로딩 소스를 다수 순회하며 LLVM-IR + 오브젝트 생성을 함께 검증한다.
     static bool test_overload_object_emission_matrix_() {
         const std::vector<std::string> sources = {
             R"(
-                fn sum(a: i32, b: i32) -> i32 { return a + b; }
-                fn sum(a: i64, b: i64) -> i64 { return a + b; }
-                fn main() -> i32 {
+                def sum(a: i32, b: i32) -> i32 { return a + b; }
+                def sum(a: i64, b: i64) -> i64 { return a + b; }
+                def main() -> i32 {
                     let x: i32 = sum(a: 1i32, b: 2i32);
                     let y: i64 = sum(a: 3i64, b: 4i64);
                     return x;
@@ -665,7 +701,7 @@ namespace {
                 acts for i32 {
                     operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
                 };
-                fn main() -> i32 {
+                def main() -> i32 {
                     let a: i32 = 1i32;
                     let b: i32 = 2i32;
                     let c: i32 = a + b;
@@ -676,9 +712,9 @@ namespace {
                 acts for i32 {
                     operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
                 };
-                fn mix(a: i32, b: i32) -> i32 { return a + b; }
-                fn mix(a: i64, b: i64) -> i64 { return a + b; }
-                fn main() -> i32 {
+                def mix(a: i32, b: i32) -> i32 { return a + b; }
+                def mix(a: i64, b: i64) -> i64 { return a + b; }
+                def main() -> i32 {
                     let p: i32 = mix(a: 7i32, b: 8i32);
                     let q: i64 = mix(a: 9i64, b: 10i64);
                     let r: i32 = p + 1i32;
@@ -774,7 +810,7 @@ namespace {
 int main() {
     struct Case {
         const char* name;
-        bool (*fn)();
+        bool (*def)();
     };
 
     const Case cases[] = {
@@ -789,6 +825,7 @@ int main() {
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
         {"global_field_member_chain_lowering", test_global_field_member_chain_lowering_},
+        {"field_literal_lowering", test_field_literal_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"oir_case_directory", test_oir_case_directory},
     };
@@ -796,7 +833,7 @@ int main() {
     int failed = 0;
     for (const auto& tc : cases) {
         std::cout << "[TEST] " << tc.name << "\n";
-        const bool ok = tc.fn();
+        const bool ok = tc.def();
         if (!ok) {
             ++failed;
             std::cout << "  -> FAIL\n";

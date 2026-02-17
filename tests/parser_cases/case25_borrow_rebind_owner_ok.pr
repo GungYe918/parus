@@ -1,5 +1,5 @@
 // 허용 케이스: borrow 바인딩 심볼 재대입 시 이전 borrow 수명이 정리되어야 함
-fn main() -> i32 {
+def main() -> i32 {
   set mut x = 1i32;
   set mut y = 2i32;
   set mut r = &x;

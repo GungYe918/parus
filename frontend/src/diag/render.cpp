@@ -54,6 +54,7 @@ namespace parus::diag {
             case Code::kFnParamNameExpected: return "FnParamNameExpected";
             case Code::kFieldNameExpected: return "FieldNameExpected";
             case Code::kFieldMemberNameExpected: return "FieldMemberNameExpected";
+            case Code::kFieldMemberMutNotAllowed: return "FieldMemberMutNotAllowed";
             case Code::kActsNameExpected: return "ActsNameExpected";
             case Code::kCallArgMixNotAllowed: return "CallArgMixNotAllowed";
             case Code::kCallNoArgsAfterNamedGroup: return "CallNoArgsAfterNamedGroup";
@@ -213,6 +214,12 @@ namespace parus::diag {
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "TypeArrayLiteralEmptyNeedsContext";
             case Code::kTypeFieldMemberRangeInvalid: return "TypeFieldMemberRangeInvalid";
             case Code::kTypeFieldMemberMustBePodBuiltin: return "TypeFieldMemberMustBePodBuiltin";
+            case Code::kFieldInitTypeExpected: return "FieldInitTypeExpected";
+            case Code::kFieldInitUnknownMember: return "FieldInitUnknownMember";
+            case Code::kFieldInitDuplicateMember: return "FieldInitDuplicateMember";
+            case Code::kFieldInitMissingMember: return "FieldInitMissingMember";
+            case Code::kFieldInitNonOptionalNull: return "FieldInitNonOptionalNull";
+            case Code::kFieldInitEmptyNotAllowed: return "FieldInitEmptyNotAllowed";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -244,12 +251,13 @@ namespace parus::diag {
             case Code::kFnParamNameExpected: return "function parameter name identifier is required";
             case Code::kFieldNameExpected: return "field name identifier is required";
             case Code::kFieldMemberNameExpected: return "field member name identifier is required";
+            case Code::kFieldMemberMutNotAllowed: return "field members must not use 'mut' (declare mutability on bindings instead)";
             case Code::kActsNameExpected: return "acts name identifier is required";
             case Code::kCallArgMixNotAllowed: return "mixing labeled and positional arguments is not allowed";
             case Code::kCallNoArgsAfterNamedGroup: return "no additional arguments are allowed after named-group '{ ... }'";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry must be 'label: expr' or 'label: _'";
             case Code::kCallOnlyOneNamedGroupAllowed: return "only one named-group '{ ... }' is allowed in a call";
-            case Code::kFnReturnTypeRequired: return "function return type is required (use: fn name(...) -> T { ... })";
+            case Code::kFnReturnTypeRequired: return "function return type is required (use: def name(...) -> T { ... })";
             case Code::kAttrNameExpectedAfterAt: return "attribute name expected after '@'";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "default value is only allowed inside named-group '{ ... }'";
             case Code::kFnParamDefaultExprExpected: return "default expression expected after '='";
@@ -272,7 +280,7 @@ namespace parus::diag {
             case Code::kOperatorKeyExpected: return "operator key is missing or invalid (e.g., +, ==, ++pre)";
             case Code::kOperatorSelfFirstParamRequired: return "operator(...) first parameter must be a receiver marked with 'self'";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
-            case Code::kTypeFnSignatureExpected: return "type-context 'fn' must be followed by '('";
+            case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
             case Code::kTypeArrayMissingRBracket: return "array type suffix requires closing ']'";
             case Code::kTypeOptionalDuplicate: return "duplicate optional suffix '?'";
@@ -410,6 +418,12 @@ namespace parus::diag {
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "empty array literal requires an explicit contextual type";
             case Code::kTypeFieldMemberRangeInvalid: return "internal: field member range is out of AST bounds";
             case Code::kTypeFieldMemberMustBePodBuiltin: return "field member '{0}' must use a POD builtin value type (got {1})";
+            case Code::kFieldInitTypeExpected: return "field initializer head must be a field type (got '{0}')";
+            case Code::kFieldInitUnknownMember: return "field initializer for '{0}' has unknown member '{1}'";
+            case Code::kFieldInitDuplicateMember: return "field initializer has duplicate member '{0}'";
+            case Code::kFieldInitMissingMember: return "field initializer for '{0}' is missing member '{1}'";
+            case Code::kFieldInitNonOptionalNull: return "field member '{0}' of type '{1}' is non-optional and cannot be initialized with null";
+            case Code::kFieldInitEmptyNotAllowed: return "empty field initializer is not allowed for non-empty field type '{0}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -440,11 +454,12 @@ namespace parus::diag {
             case Code::kFnParamNameExpected: return "함수 파라미터 이름 식별자가 필요합니다";
             case Code::kFieldNameExpected: return "field 이름 식별자가 필요합니다";
             case Code::kFieldMemberNameExpected: return "field 멤버 이름 식별자가 필요합니다";
+            case Code::kFieldMemberMutNotAllowed: return "field 멤버에는 'mut'를 사용할 수 없습니다(가변성은 바인딩에서 표현하세요)";
             case Code::kActsNameExpected: return "acts 이름 식별자가 필요합니다";
             case Code::kCallArgMixNotAllowed: return "라벨 인자와 위치 인자를 섞어 호출할 수 없습니다";
             case Code::kCallNoArgsAfterNamedGroup: return "named-group '{ ... }' 뒤에는 추가 인자를 둘 수 없습니다";
             case Code::kNamedGroupEntryExpectedColon: return "named-group entry는 'label: expr' 또는 'label: _' 형태여야 합니다";
-            case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: fn name(...) -> T { ... })";
+            case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: def name(...) -> T { ... })";
             case Code::kCallOnlyOneNamedGroupAllowed: return "호출 인자에서 named-group '{ ... }'는 1개만 허용됩니다";
             case Code::kAttrNameExpectedAfterAt: return "'@' 뒤에는 attribute 이름이 와야 합니다";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "기본값은 named-group '{ ... }' 안에서만 사용할 수 있습니다";
@@ -468,7 +483,7 @@ namespace parus::diag {
             case Code::kOperatorKeyExpected: return "operator 키가 없거나 올바르지 않습니다 (예: +, ==, ++pre)";
             case Code::kOperatorSelfFirstParamRequired: return "operator(...)의 첫 번째 파라미터는 'self' 리시버여야 합니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
-            case Code::kTypeFnSignatureExpected: return "타입 문맥의 'fn' 뒤에는 '('이(가) 필요합니다";
+            case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
             case Code::kTypeArrayMissingRBracket: return "배열 타입 접미사 '[]'를 닫는 ']'이(가) 필요합니다";
             case Code::kTypeOptionalDuplicate: return "nullable 접미사 '?'가 중복되었습니다";
@@ -612,6 +627,12 @@ namespace parus::diag {
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "빈 배열 리터럴은 명시적 문맥 타입이 필요합니다";
             case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: field 멤버 범위가 AST 범위를 벗어났습니다";
             case Code::kTypeFieldMemberMustBePodBuiltin: return "field 멤버 '{0}'는 POD 내장 값 타입이어야 합니다(현재 {1})";
+            case Code::kFieldInitTypeExpected: return "field 초기화 헤드는 field 타입이어야 합니다(현재 '{0}')";
+            case Code::kFieldInitUnknownMember: return "field '{0}' 초기화에 존재하지 않는 멤버 '{1}'가 있습니다";
+            case Code::kFieldInitDuplicateMember: return "field 초기화에서 멤버 '{0}'가 중복되었습니다";
+            case Code::kFieldInitMissingMember: return "field '{0}' 초기화에서 멤버 '{1}'가 누락되었습니다";
+            case Code::kFieldInitNonOptionalNull: return "멤버 '{0}' 타입 '{1}'는 non-optional이므로 null로 초기화할 수 없습니다";
+            case Code::kFieldInitEmptyNotAllowed: return "멤버가 있는 field 타입 '{0}'에는 빈 초기화 '{}'를 사용할 수 없습니다";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

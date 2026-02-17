@@ -96,7 +96,7 @@ namespace {
     static std::vector<parus::backend::parlib::ParlibExportCEntry> collect_export_c_symbols_(std::string_view src) {
         using namespace parus::backend::parlib;
         std::vector<ParlibExportCEntry> out;
-        const std::string_view needle = "export \"C\" fn ";
+        const std::string_view needle = "export \"C\" def ";
         size_t pos = 0;
         while (true) {
             const size_t hit = src.find(needle, pos);
@@ -554,7 +554,7 @@ namespace {
 int main() {
     struct Case {
         const char* name;
-        bool (*fn)();
+        bool (*def)();
     };
 
     const Case cases[] = {
@@ -567,7 +567,7 @@ int main() {
     int failed = 0;
     for (const auto& tc : cases) {
         std::cout << "[TEST] " << tc.name << "\n";
-        const bool ok = tc.fn();
+        const bool ok = tc.def();
         if (!ok) {
             ++failed;
             std::cout << "  -> FAIL\n";

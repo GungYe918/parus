@@ -277,7 +277,7 @@ namespace {
 int main() {
     struct Case {
         const char* name;
-        bool (*fn)();
+        bool (*def)();
     };
 
     const Case cases[] = {
@@ -289,7 +289,7 @@ int main() {
     int failed = 0;
     for (const auto& tc : cases) {
         std::cout << "[TEST] " << tc.name << "\n";
-        const bool ok = tc.fn();
+        const bool ok = tc.def();
         if (!ok) {
             ++failed;
             std::cout << "  -> FAIL\n";

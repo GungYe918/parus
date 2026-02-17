@@ -47,7 +47,7 @@ namespace parus::sir::detail {
         f.sig = s.type;
         f.ret = s.fn_ret;
 
-        // decl symbol (fn name)
+        // decl symbol (def name)
         f.sym = resolve_symbol_from_stmt(nres, sid);
 
         // nested namespace를 통과한 내부 함수는 qualified symbol name을 사용한다.

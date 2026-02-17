@@ -1,4 +1,4 @@
-fn main() -> i64? {
+def main() -> i64? {
     let x: i32? = null;
     let y: i64? = x as? i64;
     return y;

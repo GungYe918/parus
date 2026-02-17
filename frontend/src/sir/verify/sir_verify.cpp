@@ -325,11 +325,14 @@ namespace parus::sir {
                     break;
                 }
 
-                case ValueKind::kArrayLit: {
+                case ValueKind::kArrayLit:
+                case ValueKind::kFieldInit: {
+                    const char* kind_name =
+                        (v.kind == ValueKind::kFieldInit) ? "field initializer" : "array literal";
                     const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
                     if (arg_end > (uint64_t)m.args.size()) {
                         std::ostringstream oss;
-                        oss << "value #" << vid << " array literal has out-of-range args slice";
+                        oss << "value #" << vid << " " << kind_name << " has out-of-range args slice";
                         push_error_(errs, oss.str());
                         break;
                     }
@@ -338,7 +341,7 @@ namespace parus::sir {
                         const auto& a = m.args[v.arg_begin + i];
                         if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
                             std::ostringstream oss;
-                            oss << "value #" << vid << " array literal element has invalid value id " << a.value;
+                            oss << "value #" << vid << " " << kind_name << " element has invalid value id " << a.value;
                             push_error_(errs, oss.str());
                         }
                     }

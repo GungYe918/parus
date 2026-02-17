@@ -485,12 +485,12 @@ namespace parus::tyck {
 
         ty::TypeId ret = ty::kInvalidType;
 
-        // (1) 파서가 Stmt.type에 fn 시그니처를 넣어준 경우
+        // (1) 파서가 Stmt.type에 def 시그니처를 넣어준 경우
         if (sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn) {
             ret = types_.get(sig).ret;
         } else {
             // (2) 아니면 tyck에서 직접 만든다.
-            //     - s.type가 fn이 아니면 "반환 타입"으로 들어왔을 가능성이 높으므로 그걸 우선 ret로 사용
+            //     - s.type가 def이 아니면 "반환 타입"으로 들어왔을 가능성이 높으므로 그걸 우선 ret로 사용
             if (sig != ty::kInvalidType && types_.get(sig).kind != ty::Kind::kFn) {
                 ret = sig;
             }
@@ -498,7 +498,7 @@ namespace parus::tyck {
                 // 반환 타입을 얻을 길이 없으면 error로 둔다.
                 // (나중에 AST에 fn_ret_type 필드를 확정하면 여기서 그 필드를 쓰면 됨)
                 ret = types_.error();
-                err_(s.span, "fn decl is missing return type (cannot form signature)");
+                err_(s.span, "def decl is missing return type (cannot form signature)");
             }
 
             std::vector<ty::TypeId> params;
@@ -542,7 +542,7 @@ namespace parus::tyck {
         }
 
         // ----------------------------
-        // 1) 함수 스코프 진입 + fn ctx 설정
+        // 1) 함수 스코프 진입 + def ctx 설정
         // ----------------------------
         sym_.push_scope();
 
@@ -708,6 +708,19 @@ namespace parus::tyck {
 
         for (uint32_t i = begin; i < end; ++i) {
             const auto& m = ast_.field_members()[i];
+            const bool optional_member = is_optional_(m.type);
+
+            if (s.field_layout == ast::FieldLayout::kC && optional_member) {
+                std::ostringstream oss;
+                oss << "layout(c) field member '" << m.name
+                    << "' must not use optional type in v0";
+                diag_(diag::Code::kAbiCTypeNotFfiSafe, m.span,
+                      std::string("field member '") + std::string(m.name) + "'",
+                      types_.to_string(m.type));
+                err_(m.span, oss.str());
+                continue;
+            }
+
             const bool member_ok = (s.field_layout == ast::FieldLayout::kC)
                 ? is_c_abi_safe_type_(m.type, /*allow_void=*/false)
                 : is_field_pod_value_type_(types_, m.type);

@@ -59,14 +59,14 @@ FFI 경계는 선언 키워드로 고정한다.
 ### 4.1 외부 심볼 가져오기
 
 ```parus
-extern "C" fn puts(s: ptr u8) -> i32;
+extern "C" def puts(s: ptr u8) -> i32;
 extern "C" static mut errno: i32;
 ```
 
 ### 4.2 심볼 내보내기
 
 ```parus
-export "C" fn parus_add(a: i32, b: i32) -> i32 {
+export "C" def parus_add(a: i32, b: i32) -> i32 {
     return a + b;
 }
 ```
@@ -93,7 +93,9 @@ field layout(c) align(16) Vec2 {
 
 1. C ABI 경계로 노출되는 `field`는 `layout(c)`를 명시해야 한다
 2. `align(n)`은 ABI와 성능 정책(벡터화/캐시 정렬) 양쪽에 사용 가능하다
-3. `@{repr:"C"}` 형태는 ABI 공식 문법으로 채택하지 않는다
+3. `layout(c)` field 멤버에는 optional(`T?`)을 허용하지 않는다 (`c-v0` 안전 정책)
+4. `field` 멤버 선언에는 `mut` 키워드를 붙이지 않는다 (가변성은 바인딩에서 표현)
+5. `@{repr:"C"}` 형태는 ABI 공식 문법으로 채택하지 않는다
 
 ---
 
@@ -109,8 +111,8 @@ Rust식 `*const/*mut` 대신 Parus 고유 표기를 사용한다.
 예:
 
 ```parus
-extern "C" fn read(buf: ptr u8, len: usize) -> isize;
-extern "C" fn write(buf: ptr mut u8, len: usize) -> isize;
+extern "C" def read(buf: ptr u8, len: usize) -> isize;
+extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 ```
 
 ---

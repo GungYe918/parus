@@ -5,15 +5,15 @@ acts for i32 {
     }
 };
 
-fn mix(a: i32, b: i32) -> i32 {
+def mix(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
-fn mix(a: i64, b: i64) -> i64 {
+def mix(a: i64, b: i64) -> i64 {
     return a + b;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
     let p: i32 = mix(a: 7i32, b: 8i32);
     let q: i64 = mix(a: 9i64, b: 10i64);
     let r: i32 = p + 1i32;

@@ -30,7 +30,7 @@ namespace parus::tyck {
         bool ok = true;
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
         std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
-        std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // fn decl stmt -> qualified path name
+        std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
         std::vector<TyError> errors;
     };
 
@@ -120,6 +120,7 @@ namespace parus::tyck {
         ty::TypeId check_expr_call_(const ast::Expr& e);
         ty::TypeId check_expr_index_(const ast::Expr& e);
         ty::TypeId check_expr_array_lit_(const ast::Expr& e);
+        ty::TypeId check_expr_field_init_(const ast::Expr& e);
         ty::TypeId check_expr_if_(const ast::Expr& e);
         ty::TypeId check_expr_block_(const ast::Expr& e);
         ty::TypeId check_expr_loop_(const ast::Expr& e);
@@ -238,7 +239,7 @@ namespace parus::tyck {
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
 
-        // qualified-name -> overloaded fn decl stmt ids
+        // qualified-name -> overloaded def decl stmt ids
         // NOTE: std::string을 key로 쓰는 이유:
         // - string_view는 AST storage lifetime에 의존하는데,
         //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.

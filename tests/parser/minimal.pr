@@ -1,12 +1,12 @@
-fn mul({ a: i32, b: i32 }) -> i32 {
+def mul({ a: i32, b: i32 }) -> i32 {
     return a * b;
 }
 
-fn add(a: i32, {b: i32 = 5, c: i32 = 6}) -> i32 {
+def add(a: i32, {b: i32 = 5, c: i32 = 6}) -> i32 {
     return a + b + c; 
 }
 
-fn main() -> i32 {
+def main() -> i32 {
     mul(a: 4, b: 5); // 이건 정상 통과
     
     // mul(a: 6, 6);   // 라벨 호출 + 일반 호출 양립 불가(한 named-group안임) -> 여기서는 에러로 잡힘

@@ -532,6 +532,21 @@ namespace parus::cap {
                         return;
                     }
 
+                    case ast::ExprKind::kFieldInit: {
+                        const auto& inits = ast_.field_init_entries();
+                        const uint64_t begin = e.field_init_begin;
+                        const uint64_t end = begin + e.field_init_count;
+                        if (begin <= inits.size() && end <= inits.size()) {
+                            for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                                const auto& ent = inits[e.field_init_begin + i];
+                                if (ent.expr != ast::k_invalid_expr) {
+                                    walk_expr_(ent.expr, ExprUse::kValue);
+                                }
+                            }
+                        }
+                        return;
+                    }
+
                     case ast::ExprKind::kIndex:
                         walk_expr_(e.a, use == ExprUse::kAssignLhs ? ExprUse::kAssignLhs : ExprUse::kValue);
                         walk_expr_(e.b, ExprUse::kValue);

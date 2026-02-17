@@ -395,29 +395,29 @@ namespace parus::oir {
 
         /// @brief inst operand을 순회한다.
         template <typename Fn>
-        void for_each_inst_operand_(const Inst& inst, Fn&& fn) {
+        void for_each_inst_operand_(const Inst& inst, Fn&& def) {
             std::visit([&](auto&& x) {
                 using T = std::decay_t<decltype(x)>;
                 if constexpr (std::is_same_v<T, InstUnary>) {
-                    fn(x.src);
+                    def(x.src);
                 } else if constexpr (std::is_same_v<T, InstBinOp>) {
-                    fn(x.lhs);
-                    fn(x.rhs);
+                    def(x.lhs);
+                    def(x.rhs);
                 } else if constexpr (std::is_same_v<T, InstCast>) {
-                    fn(x.src);
+                    def(x.src);
                 } else if constexpr (std::is_same_v<T, InstCall>) {
-                    fn(x.callee);
-                    for (auto a : x.args) fn(a);
+                    def(x.callee);
+                    for (auto a : x.args) def(a);
                 } else if constexpr (std::is_same_v<T, InstIndex>) {
-                    fn(x.base);
-                    fn(x.index);
+                    def(x.base);
+                    def(x.index);
                 } else if constexpr (std::is_same_v<T, InstField>) {
-                    fn(x.base);
+                    def(x.base);
                 } else if constexpr (std::is_same_v<T, InstLoad>) {
-                    fn(x.slot);
+                    def(x.slot);
                 } else if constexpr (std::is_same_v<T, InstStore>) {
-                    fn(x.slot);
-                    fn(x.value);
+                    def(x.slot);
+                    def(x.value);
                 } else if constexpr (std::is_same_v<T, InstConstInt> ||
                                      std::is_same_v<T, InstConstBool> ||
                                      std::is_same_v<T, InstConstText> ||
@@ -430,17 +430,17 @@ namespace parus::oir {
 
         /// @brief terminator operand을 순회한다.
         template <typename Fn>
-        void for_each_term_operand_(const Terminator& term, Fn&& fn) {
+        void for_each_term_operand_(const Terminator& term, Fn&& def) {
             std::visit([&](auto&& t) {
                 using T = std::decay_t<decltype(t)>;
                 if constexpr (std::is_same_v<T, TermRet>) {
-                    if (t.has_value) fn(t.value);
+                    if (t.has_value) def(t.value);
                 } else if constexpr (std::is_same_v<T, TermBr>) {
-                    for (auto a : t.args) fn(a);
+                    for (auto a : t.args) def(a);
                 } else if constexpr (std::is_same_v<T, TermCondBr>) {
-                    fn(t.cond);
-                    for (auto a : t.then_args) fn(a);
-                    for (auto a : t.else_args) fn(a);
+                    def(t.cond);
+                    for (auto a : t.then_args) def(a);
+                    for (auto a : t.else_args) def(a);
                 }
             }, term);
         }
@@ -601,10 +601,10 @@ namespace parus::oir {
         bool run_guarded_pass_once_(
             Module& m,
             bool require_loop_fixpoint,
-            Fn&& fn
+            Fn&& def
         ) {
             Module snapshot = m;
-            const bool changed = fn(m);
+            const bool changed = def(m);
             if (!changed) return false;
             if (!verify_pipeline_invariants_(m, require_loop_fixpoint)) {
                 m = std::move(snapshot);
@@ -619,12 +619,12 @@ namespace parus::oir {
             Module& m,
             bool require_loop_fixpoint,
             uint32_t max_rounds,
-            Fn&& fn
+            Fn&& def
         ) {
             bool any_changed = false;
             for (uint32_t round = 0; round < max_rounds; ++round) {
                 Module snapshot = m;
-                const bool changed = fn(m);
+                const bool changed = def(m);
                 if (!changed) break;
                 if (!verify_pipeline_invariants_(m, require_loop_fixpoint)) {
                     m = std::move(snapshot);

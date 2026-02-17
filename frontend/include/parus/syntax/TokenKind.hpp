@@ -159,7 +159,7 @@ namespace parus::syntax {
             case TokenKind::kKwMut: return "mut";
             case TokenKind::kKwStatic: return "static";
 
-            case TokenKind::kKwFn: return "fn";
+            case TokenKind::kKwFn: return "def";
             case TokenKind::kKwExport: return "export";
             case TokenKind::kKwExtern: return "extern";
             case TokenKind::kKwLayout: return "layout";

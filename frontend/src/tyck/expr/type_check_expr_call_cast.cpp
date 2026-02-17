@@ -110,7 +110,7 @@ namespace parus::tyck {
         }
 
         // ------------------------------------------------------------
-        // 1) find callee fn decl meta if possible (Ident-only in v0)
+        // 1) find callee def decl meta if possible (Ident-only in v0)
         // ------------------------------------------------------------
         std::string callee_name;
         bool callee_is_fn_symbol = false;
@@ -263,25 +263,25 @@ namespace parus::tyck {
         candidates.reserve(overload_decl_ids.size());
 
         for (const ast::StmtId sid : overload_decl_ids) {
-            const ast::Stmt& fn = ast_.stmt(sid);
-            if (fn.kind != ast::StmtKind::kFnDecl) continue;
+            const ast::Stmt& def = ast_.stmt(sid);
+            if (def.kind != ast::StmtKind::kFnDecl) continue;
 
             Candidate c{};
             c.decl_id = sid;
-            c.ret = (fn.fn_ret != ty::kInvalidType)
-                ? fn.fn_ret
-                : ((fn.type != ty::kInvalidType && types_.get(fn.type).kind == ty::Kind::kFn)
-                    ? types_.get(fn.type).ret
+            c.ret = (def.fn_ret != ty::kInvalidType)
+                ? def.fn_ret
+                : ((def.type != ty::kInvalidType && types_.get(def.type).kind == ty::Kind::kFn)
+                    ? types_.get(def.type).ret
                     : ct.ret);
 
-            uint32_t pos_cnt = fn.positional_param_count;
-            if (pos_cnt > fn.param_count) pos_cnt = fn.param_count;
+            uint32_t pos_cnt = def.positional_param_count;
+            if (pos_cnt > def.param_count) pos_cnt = def.param_count;
 
             c.positional.reserve(pos_cnt);
-            c.named.reserve(fn.param_count - pos_cnt);
+            c.named.reserve(def.param_count - pos_cnt);
 
-            for (uint32_t i = 0; i < fn.param_count; ++i) {
-                const auto& p = ast_.params()[fn.param_begin + i];
+            for (uint32_t i = 0; i < def.param_count; ++i) {
+                const auto& p = ast_.params()[def.param_begin + i];
                 ParamInfo info{};
                 info.decl_index = i;
                 info.name = std::string(p.name);

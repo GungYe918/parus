@@ -4,7 +4,7 @@ field Vec2 {
   i32 y;
 }
 
-fn sum_slice(xs: &[i32], { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
+def sum_slice(xs: &[i32], { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   let mut acc: i32 = bias;
   let mut i: i32 = 0i32;
   while (i < 3i32) {
@@ -14,12 +14,12 @@ fn sum_slice(xs: &[i32], { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return acc;
 }
 
-fn bump(x: &mut i32, { delta: i32 = 1i32 }) -> void {
+def bump(x: &mut i32, { delta: i32 = 1i32 }) -> void {
   x = x + delta;
   return;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
   let mut raw: i32[3] = [1i32, 2i32, 3i32];
   let mut s: i32 = 0i32;
   {

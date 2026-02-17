@@ -29,7 +29,7 @@ namespace parus::oir {
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
 
-            Function* fn = nullptr;
+            Function* def = nullptr;
             BlockId cur_bb = kInvalidId;
 
             // symbol -> SSA value or slot
@@ -549,7 +549,7 @@ namespace parus::oir {
         std::string mangle_func_name_(const parus::sir::Func& sf, const parus::ty::TypePool& types) {
             std::string sig = (sf.sig != parus::ty::kInvalidType)
                 ? types.to_string(sf.sig)
-                : std::string("fn(?)");
+                : std::string("def(?)");
 
             const std::string qname(sf.name);
             std::string path = "_";
@@ -649,7 +649,7 @@ namespace parus::oir {
             condbr(cond, then_bb, {}, else_bb, {});
 
             // THEN
-            fn->blocks.push_back(then_bb);
+            def->blocks.push_back(then_bb);
             cur_bb = then_bb;
             push_scope();
             ValueId then_val = lower_value(then_sir);
@@ -657,7 +657,7 @@ namespace parus::oir {
             if (!has_term()) br(join_bb, {then_val});
 
             // ELSE
-            fn->blocks.push_back(else_bb);
+            def->blocks.push_back(else_bb);
             cur_bb = else_bb;
             push_scope();
             ValueId else_val = lower_value(else_sir);
@@ -665,7 +665,7 @@ namespace parus::oir {
             if (!has_term()) br(join_bb, {else_val});
 
             // JOIN
-            fn->blocks.push_back(join_bb);
+            def->blocks.push_back(join_bb);
             cur_bb = join_bb;
 
             // NOTE: In v0 we do not yet verify arg counts strictly here,
@@ -719,6 +719,50 @@ namespace parus::oir {
                     }
                 }
                 return arr_slot;
+            }
+
+            case parus::sir::ValueKind::kFieldInit: {
+                // v0: field 리터럴은 임시 슬롯에 멤버를 순서대로 store하여 물질화한다.
+                // 반환값은 aggregate slot 포인터 표현을 따른다.
+                ValueId obj_slot = emit_alloca(v.type);
+
+                const FieldLayoutDecl* layout = nullptr;
+                for (const auto& f : out->fields) {
+                    if (f.self_type == v.type) {
+                        layout = &f;
+                        break;
+                    }
+                }
+
+                auto lookup_member_ty = [&](std::string_view member) -> TypeId {
+                    if (layout == nullptr) return kInvalidId;
+                    for (const auto& m : layout->members) {
+                        if (m.name == member) return m.type;
+                    }
+                    return kInvalidId;
+                };
+
+                const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                if (arg_end <= (uint64_t)sir->args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto& a = sir->args[v.arg_begin + i];
+                        if (a.value == parus::sir::k_invalid_value) continue;
+
+                        ValueId rhs = lower_value(a.value);
+                        TypeId member_ty = lookup_member_ty(a.label);
+                        if (member_ty == kInvalidId &&
+                            rhs != kInvalidId &&
+                            (size_t)rhs < out->values.size()) {
+                            member_ty = out->values[rhs].ty;
+                        }
+                        if (member_ty == kInvalidId) member_ty = v.type;
+
+                        ValueId place = emit_field(member_ty, obj_slot, std::string(a.label));
+                        emit_store(place, rhs);
+                    }
+                }
+
+                return obj_slot;
             }
 
             case parus::sir::ValueKind::kLocal:
@@ -941,7 +985,7 @@ namespace parus::oir {
 
                 if (!has_term()) br(body_bb, {});
 
-                fn->blocks.push_back(body_bb);
+                def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
@@ -955,7 +999,7 @@ namespace parus::oir {
                 loop_stack.pop_back();
                 if (!has_term()) br(body_bb, {});
 
-                fn->blocks.push_back(exit_bb);
+                def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
                 if (has_value) return break_param;
                 return emit_const_null(v.type);
@@ -1014,13 +1058,13 @@ namespace parus::oir {
                 if (!has_term()) br(cond_bb, {});
 
                 // cond block
-                fn->blocks.push_back(cond_bb);
+                def->blocks.push_back(cond_bb);
                 cur_bb = cond_bb;
                 ValueId cond = lower_value(s.expr);
                 condbr(cond, body_bb, {}, exit_bb, {});
 
                 // body
-                fn->blocks.push_back(body_bb);
+                def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
@@ -1035,7 +1079,7 @@ namespace parus::oir {
                 if (!has_term()) br(cond_bb, {});
 
                 // exit
-                fn->blocks.push_back(exit_bb);
+                def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
                 return;
             }
@@ -1057,7 +1101,7 @@ namespace parus::oir {
                 if (!has_term()) br(body_bb, {});
 
                 // body
-                fn->blocks.push_back(body_bb);
+                def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
@@ -1072,13 +1116,13 @@ namespace parus::oir {
                 if (!has_term()) br(cond_bb, {});
 
                 // cond
-                fn->blocks.push_back(cond_bb);
+                def->blocks.push_back(cond_bb);
                 cur_bb = cond_bb;
                 ValueId cond = lower_value(s.expr);
                 condbr(cond, body_bb, {}, exit_bb, {});
 
                 // exit
-                fn->blocks.push_back(exit_bb);
+                def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
                 return;
             }
@@ -1101,7 +1145,7 @@ namespace parus::oir {
                 condbr(cond, then_bb, {}, else_bb, {});
 
                 // then
-                fn->blocks.push_back(then_bb);
+                def->blocks.push_back(then_bb);
                 cur_bb = then_bb;
                 push_scope();
                 lower_block(s.a);
@@ -1109,7 +1153,7 @@ namespace parus::oir {
                 if (!has_term()) br(join_bb, {});
 
                 // else
-                fn->blocks.push_back(else_bb);
+                def->blocks.push_back(else_bb);
                 cur_bb = else_bb;
                 push_scope();
                 if (s.b != parus::sir::k_invalid_block) lower_block(s.b);
@@ -1117,7 +1161,7 @@ namespace parus::oir {
                 if (!has_term()) br(join_bb, {});
 
                 // join
-                fn->blocks.push_back(join_bb);
+                def->blocks.push_back(join_bb);
                 cur_bb = join_bb;
                 return;
             }
@@ -1181,14 +1225,14 @@ namespace parus::oir {
                         const ValueId cond = emit_case_match_cond(c);
                         condbr(cond, match_bb, {}, next_bb, {});
 
-                        fn->blocks.push_back(match_bb);
+                        def->blocks.push_back(match_bb);
                         cur_bb = match_bb;
                         push_scope();
                         lower_block(c.body);
                         pop_scope();
                         if (!has_term()) br(exit_bb, {});
 
-                        fn->blocks.push_back(next_bb);
+                        def->blocks.push_back(next_bb);
                         cur_bb = next_bb;
                     }
                 }
@@ -1197,7 +1241,7 @@ namespace parus::oir {
                     const BlockId def_bb = new_block();
                     if (!has_term()) br(def_bb, {});
 
-                    fn->blocks.push_back(def_bb);
+                    def->blocks.push_back(def_bb);
                     cur_bb = def_bb;
                     push_scope();
                     lower_block(default_case->body);
@@ -1207,7 +1251,7 @@ namespace parus::oir {
                     if (!has_term()) br(exit_bb, {});
                 }
 
-                fn->blocks.push_back(exit_bb);
+                def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
                 return;
             }
@@ -1499,7 +1543,7 @@ namespace parus::oir {
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
-            fb.fn = &out.mod.funcs[fid];
+            fb.def = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
             for (const auto& kv : global_symbol_to_global) {

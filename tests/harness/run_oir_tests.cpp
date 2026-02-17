@@ -75,10 +75,10 @@ namespace {
     /// @brief OIR lowering에서 Call 노드가 실제 InstCall로 생성되는지 검사한다.
     static bool test_oir_call_lowering_ok() {
         const std::string src = R"(
-            fn add(a: i32, b: i32) -> i32 {
+            def add(a: i32, b: i32) -> i32 {
                 return a + b;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 return add(a: 1i32, b: 2i32);
             }
         )";
@@ -289,10 +289,10 @@ namespace {
     static bool test_oir_gate_rejects_invalid_escape_handle() {
         const std::string src = R"(
             static G: i32 = 7i32;
-            fn sink(h: &&i32) -> i32 {
+            def sink(h: &&i32) -> i32 {
                 return 0i32;
             }
-            fn main() -> i32 {
+            def main() -> i32 {
                 return sink(h: &&G);
             }
         )";
@@ -599,7 +599,7 @@ namespace {
 int main() {
     struct Case {
         const char* name;
-        bool (*fn)();
+        bool (*def)();
     };
 
     const Case cases[] = {
@@ -617,7 +617,7 @@ int main() {
     int failed = 0;
     for (const auto& tc : cases) {
         std::cout << "[TEST] " << tc.name << "\n";
-        const bool ok = tc.fn();
+        const bool ok = tc.def();
         if (!ok) {
             ++failed;
             std::cout << "  -> FAIL\n";

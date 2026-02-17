@@ -1,14 +1,14 @@
 // 허용 케이스: 일반 acts A { ... } 형태를 파싱한다.
 acts Math {
-    fn add(a: i32, b: i32) -> i32 {
+    def add(a: i32, b: i32) -> i32 {
         return a + b;
     }
 
-    fn twice(v: i32) -> i32 {
+    def twice(v: i32) -> i32 {
         return v + v;
     }
 };
 
-fn main() -> i32 {
+def main() -> i32 {
     return 1i32;
 }

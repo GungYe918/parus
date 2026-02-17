@@ -43,6 +43,7 @@ namespace parus::ast {
         kBoolLit,
         kNullLit,
         kArrayLit,
+        kFieldInit, // TypePath{ name: expr, ... }
         kIdent,
         kHole,     // "_" expression (특히 pipe-hole / call hole 용)
 
@@ -181,6 +182,12 @@ namespace parus::ast {
         Span span{};
     };
 
+    struct FieldInitEntry {
+        std::string_view name{};
+        ExprId expr = k_invalid_expr;
+        Span span{};
+    };
+
     struct FStringPart {
         bool is_expr = false;
         std::string_view text{};
@@ -225,6 +232,10 @@ namespace parus::ast {
         // call args storage (Arg 배열 slice)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
+
+        // field init entries storage (FieldInitEntry 배열 slice)
+        uint32_t field_init_begin = 0;
+        uint32_t field_init_count = 0;
 
         // Loop expr
         bool loop_has_header = false;      // loop (v in xs) { ... }
@@ -302,7 +313,7 @@ namespace parus::ast {
         TypeId type = k_invalid_type;
         ExprId init = k_invalid_expr;
 
-        // ---- fn decl ----
+        // ---- def decl ----
         uint32_t attr_begin = 0;
         uint32_t attr_count = 0;
 
@@ -329,7 +340,7 @@ namespace parus::ast {
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
 
-        // fn/operator
+        // def/operator
         bool fn_is_operator = false; // true when declared as `operator(...)`
         syntax::TokenKind fn_operator_token = syntax::TokenKind::kError;
         bool fn_operator_is_postfix = false; // used for ++pre/++post disambiguation
@@ -395,6 +406,11 @@ namespace parus::ast {
             return (uint32_t)field_members_.size() - 1;
         }
 
+        uint32_t add_field_init_entry(const FieldInitEntry& f) {
+            field_init_entries_.push_back(f);
+            return (uint32_t)field_init_entries_.size() - 1;
+        }
+
         uint32_t add_fstring_part(const FStringPart& p) {
             fstring_parts_.push_back(p);
             return (uint32_t)fstring_parts_.size() - 1;
@@ -439,6 +455,9 @@ namespace parus::ast {
         const std::vector<FieldMember>& field_members() const { return field_members_; }
         std::vector<FieldMember>& field_members_mut() { return field_members_; }
 
+        const std::vector<FieldInitEntry>& field_init_entries() const { return field_init_entries_; }
+        std::vector<FieldInitEntry>& field_init_entries_mut() { return field_init_entries_; }
+
         const std::vector<FStringPart>& fstring_parts() const { return fstring_parts_; }
         std::vector<FStringPart>& fstring_parts_mut() { return fstring_parts_; }
 
@@ -459,6 +478,7 @@ namespace parus::ast {
 
         std::vector<SwitchCase> switch_cases_;
         std::vector<FieldMember> field_members_;
+        std::vector<FieldInitEntry> field_init_entries_;
         std::vector<FStringPart> fstring_parts_;
         std::deque<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;

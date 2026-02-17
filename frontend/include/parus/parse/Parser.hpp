@@ -64,7 +64,7 @@ namespace parus {
         //  중단 상태인지 확인
         bool is_aborted() const { return aborted_; }
 
-        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, fn, field, acts)
+        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, def, field, acts)
         bool is_decl_start(syntax::TokenKind k) const;
 
         bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
@@ -163,14 +163,14 @@ namespace parus {
         ast::StmtId parse_stmt_use();
         ast::StmtId parse_stmt_import();
 
-        //  if/while/fn에서 블록이 필수일 때
+        //  if/while/def에서 블록이 필수일 때
         ast::StmtId parse_stmt_required_block(std::string_view ctx);
 
         // --------------------
         // decl
         // --------------------
 
-        //  decl 엔트리(현재는 fn decl만 지원)
+        //  decl 엔트리(현재는 def decl만 지원)
         ast::StmtId parse_decl_any();
 
         //  함수 선언(스펙 6.1)을 파싱

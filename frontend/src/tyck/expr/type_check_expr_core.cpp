@@ -637,6 +637,10 @@ namespace parus::tyck {
                 t = check_expr_array_lit_(e);
                 break;
 
+            case ast::ExprKind::kFieldInit:
+                t = check_expr_field_init_(e);
+                break;
+
             case ast::ExprKind::kIfExpr:
                 t = check_expr_if_(e, slot);
                 break;
@@ -1540,6 +1544,120 @@ namespace parus::tyck {
         if (has_error) elem = types_.error();
 
         return types_.make_array(elem, /*has_size=*/true, e.arg_count);
+    }
+
+    ty::TypeId TypeChecker::check_expr_field_init_(const ast::Expr& e) {
+        auto type_sym = lookup_symbol_(e.text);
+        if (!type_sym) {
+            diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
+            err_(e.span, "field initializer head is not a known field type");
+            return types_.error();
+        }
+
+        const auto& sym = sym_.symbol(*type_sym);
+        if (sym.kind != sema::SymbolKind::kField || sym.declared_type == ty::kInvalidType) {
+            diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
+            err_(e.span, "field initializer head must resolve to a field type");
+            return types_.error();
+        }
+
+        const ty::TypeId field_ty = sym.declared_type;
+        auto meta_it = field_abi_meta_by_type_.find(field_ty);
+        if (meta_it == field_abi_meta_by_type_.end()) {
+            diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
+            err_(e.span, "field initializer target has no field metadata");
+            return types_.error();
+        }
+
+        const auto& meta = meta_it->second;
+        if (meta.sid == ast::k_invalid_stmt || meta.sid >= ast_.stmts().size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "invalid field metadata statement id");
+            return types_.error();
+        }
+
+        const auto& fs = ast_.stmt(meta.sid);
+        const uint64_t member_begin = fs.field_member_begin;
+        const uint64_t member_end = member_begin + fs.field_member_count;
+        if (member_begin > ast_.field_members().size() || member_end > ast_.field_members().size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "invalid field member range");
+            return types_.error();
+        }
+
+        if (e.field_init_count == 0 && fs.field_member_count != 0) {
+            diag_(diag::Code::kFieldInitEmptyNotAllowed, e.span, types_.to_string(field_ty));
+            err_(e.span, "empty field initializer is only allowed for zero-member field");
+        }
+
+        const auto& inits = ast_.field_init_entries();
+        const uint64_t init_begin = e.field_init_begin;
+        const uint64_t init_end = init_begin + e.field_init_count;
+        if (init_begin > inits.size() || init_end > inits.size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "field initializer entry range is out of AST bounds");
+            return types_.error();
+        }
+
+        std::unordered_map<std::string_view, uint32_t> member_index_by_name;
+        member_index_by_name.reserve(fs.field_member_count);
+        for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+            member_index_by_name[ast_.field_members()[i].name] = i;
+        }
+
+        std::unordered_set<std::string_view> seen_members;
+        seen_members.reserve(e.field_init_count);
+
+        for (uint32_t i = 0; i < e.field_init_count; ++i) {
+            const auto& ent = inits[e.field_init_begin + i];
+
+            const bool inserted = seen_members.insert(ent.name).second;
+            if (!inserted) {
+                diag_(diag::Code::kFieldInitDuplicateMember, ent.span, ent.name);
+                err_(ent.span, "duplicate member in field initializer: " + std::string(ent.name));
+                if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+                continue;
+            }
+
+            auto mit = member_index_by_name.find(ent.name);
+            if (mit == member_index_by_name.end()) {
+                diag_(diag::Code::kFieldInitUnknownMember, ent.span, types_.to_string(field_ty), ent.name);
+                err_(ent.span, "unknown member in field initializer: " + std::string(ent.name));
+                if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+                continue;
+            }
+
+            const auto& member = ast_.field_members()[mit->second];
+            ty::TypeId rhs_t = check_expr_(ent.expr);
+
+            if (!is_error_(rhs_t)) {
+                const auto& rt = types_.get(rhs_t);
+                if (rt.kind == ty::Kind::kBuiltin && rt.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(ent.expr, member.type);
+                    rhs_t = check_expr_(ent.expr);
+                }
+            }
+
+            if (is_null_(rhs_t) && !is_optional_(member.type)) {
+                diag_(diag::Code::kFieldInitNonOptionalNull, ent.span, member.name, types_.to_string(member.type));
+                err_(ent.span, "null is only allowed for optional field members");
+                continue;
+            }
+
+            if (!can_assign_(member.type, rhs_t)) {
+                diag_(diag::Code::kTypeAssignMismatch, ent.span, types_.to_string(member.type), types_.to_string(rhs_t));
+                err_(ent.span, "field initializer member type mismatch");
+            }
+        }
+
+        for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+            const auto& member = ast_.field_members()[i];
+            if (seen_members.find(member.name) != seen_members.end()) continue;
+            diag_(diag::Code::kFieldInitMissingMember, e.span, types_.to_string(field_ty), member.name);
+            err_(e.span, "missing member in field initializer: " + std::string(member.name));
+        }
+
+        return field_ty;
     }
 
     ty::TypeId TypeChecker::check_expr_index_(const ast::Expr& e) {

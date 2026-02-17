@@ -56,7 +56,7 @@ namespace parus {
         //      PrimaryType ( '?' | '[]' )*
         //
         //  PrimaryType :=
-        //      'fn' '(' TypeList? ')' '->' Type
+        //      'def' '(' TypeList? ')' '->' Type
         //    | Ident
         //    | '(' Type ')'
         //
@@ -87,16 +87,16 @@ namespace parus {
         auto parse_primary = [&]() -> ParsedType {
             const Token s = cursor_.peek();
 
-            // ---- fn(...) -> R ----
+            // ---- def(...) -> R ----
             // IMPORTANT:
-            // 타입 문맥에서만 "fn (" 형태를 함수 타입으로 인정한다.
-            // "fn Ident ..." (함수 선언 헤더처럼 보이는 형태)는 타입 파서가 과소비하지 않도록
+            // 타입 문맥에서만 "def (" 형태를 함수 타입으로 인정한다.
+            // "def Ident ..." (함수 선언 헤더처럼 보이는 형태)는 타입 파서가 과소비하지 않도록
             // 여기서 즉시 에러로 처리하고 토큰을 많이 먹지 않는다.
             if (cursor_.at(K::kKwFn)) {
                 if (cursor_.peek(1).kind != K::kLParen) {
-                    // fn 타입이 아닌데 type 위치에 등장한 경우: 과도한 recover 금지
+                    // def 타입이 아닌데 type 위치에 등장한 경우: 과도한 recover 금지
                     diag_report(diag::Code::kTypeFnSignatureExpected, s.span);
-                    cursor_.bump(); // consume only 'fn' to ensure progress
+                    cursor_.bump(); // consume only 'def' to ensure progress
 
                     ParsedType out{};
                     out.id = types_.error();
@@ -104,7 +104,7 @@ namespace parus {
                     return out;
                 }
 
-                cursor_.bump(); // 'fn'
+                cursor_.bump(); // 'def'
 
                 // '('
                 cursor_.bump(); // '(' guaranteed by lookahead

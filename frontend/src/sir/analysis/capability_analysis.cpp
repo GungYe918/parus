@@ -1066,6 +1066,17 @@ namespace parus::sir {
                         return;
                     }
 
+                    case ValueKind::kFieldInit: {
+                        const uint64_t end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                        if (end <= (uint64_t)m_.args.size()) {
+                            for (uint32_t i = 0; i < v.arg_count; ++i) {
+                                const auto& a = m_.args[v.arg_begin + i];
+                                if (!a.is_hole) analyze_value_(a.value, ValueUse::kValue, k_invalid_symbol);
+                            }
+                        }
+                        return;
+                    }
+
                     case ValueKind::kError:
                     case ValueKind::kIntLit:
                     case ValueKind::kFloatLit:
@@ -1075,7 +1086,6 @@ namespace parus::sir {
                     case ValueKind::kNullLit:
                     case ValueKind::kGlobal:
                     case ValueKind::kParam:
-                    case ValueKind::kFieldInit:
                         return;
                 }
             }

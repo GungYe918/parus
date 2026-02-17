@@ -1,9 +1,9 @@
 // OIR->LLVM 케이스: named-group + 배열 인자
-fn sum3(xs: i32[3], { bias: i32 = 0i32 }) -> i32 {
+def sum3(xs: i32[3], { bias: i32 = 0i32 }) -> i32 {
     return xs[0] + xs[1] + xs[2] + bias;
 }
 
-fn main() -> i32 {
+def main() -> i32 {
     let x: i32[3] = [3, 4, 5];
     return sum3(x, { bias: 1i32 });
 }

@@ -197,7 +197,7 @@ namespace parus::sir {
     };
 
     // ---------------------------------------------
-    // Attributes (fn-level)
+    // Attributes (def-level)
     // ---------------------------------------------
     struct Attr {
         std::string_view name{};
@@ -205,7 +205,7 @@ namespace parus::sir {
     };
 
     // ---------------------------------------------
-    // Function Params (fn decl까지 보존)
+    // Function Params (def decl까지 보존)
     // ---------------------------------------------
     struct Param {
         std::string_view name{};
@@ -299,7 +299,7 @@ namespace parus::sir {
     };
 
     // ---------------------------------------------
-    // Function Decl metadata (fn decl까지)
+    // Function Decl metadata (def decl까지)
     // ---------------------------------------------
     enum class FnMode : uint8_t {
         kNone = 0,
@@ -354,12 +354,12 @@ namespace parus::sir {
 
         // body
         BlockId entry = k_invalid_block;
-        uint32_t origin_stmt = 0xFFFF'FFFFu; // AST StmtId of source fn decl
+        uint32_t origin_stmt = 0xFFFF'FFFFu; // AST StmtId of source def decl
 
         // hint: whether any stmt/value in this func may write
         bool has_any_write = false;
 
-        // acts 소속 함수 여부 (일반 top-level fn이면 false)
+        // acts 소속 함수 여부 (일반 top-level def이면 false)
         bool is_acts_member = false;
         ActsId owner_acts = k_invalid_acts;
     };
