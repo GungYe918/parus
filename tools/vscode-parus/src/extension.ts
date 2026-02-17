@@ -46,6 +46,7 @@ type PathPickAction =
   | { kind: "auto" }
   | { kind: "workspace-parusc"; command: string }
   | { kind: "workspace-parusd"; command: string }
+  | { kind: "finder" }
   | { kind: "input" };
 
 interface PathPickItem extends vscode.QuickPickItem {
@@ -58,6 +59,7 @@ const COMMAND_RESTART = "parus.restartLanguageServer";
 const COMMAND_SHOW_LOGS = "parus.showLanguageServerLogs";
 const COMMAND_CONFIGURE_SERVER_PATH = "parus.configureServerPath";
 const STATUSBAR_PROBLEMS_COMMAND = "workbench.actions.view.problems";
+const START_TIMEOUT_MS = 10_000;
 
 let client: LanguageClient | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
@@ -67,6 +69,7 @@ let lintStatusBarItem: vscode.StatusBarItem | undefined;
 let changeDebouncer: ChangeDebouncer | undefined;
 let suppressConfigRestart = false;
 const parusDiagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
+let lifecycleQueue: Promise<void> = Promise.resolve();
 
 class ChangeDebouncer {
   private readonly buckets = new Map<string, PendingChangeBucket>();
@@ -207,31 +210,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   traceChannel = vscode.window.createOutputChannel("Parus Language Server Trace");
   context.subscriptions.push(outputChannel, traceChannel);
 
-  serverPathStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 110);
-  serverPathStatusBarItem.command = COMMAND_CONFIGURE_SERVER_PATH;
-  serverPathStatusBarItem.show();
-  context.subscriptions.push(serverPathStatusBarItem);
-
-  lintStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 109);
-  lintStatusBarItem.command = STATUSBAR_PROBLEMS_COMMAND;
-  lintStatusBarItem.show();
-  context.subscriptions.push(lintStatusBarItem);
-
   const log = getLogger();
   log("확장이 활성화되었습니다.");
-  updateServerPathStatusBar(readConfig());
-  refreshLintStatusBar();
 
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_RESTART, async () => {
       log("사용자 명령으로 서버 재시작을 요청했습니다.");
-      try {
-        await restartLanguageClient("user-command");
-      } catch (error) {
-        log(`재시작 명령 처리 중 오류: ${toErrorMessage(error)}`);
-      }
+      await enqueueLifecycle(() => restartLanguageClient("user-command"), "재시작 명령");
     }),
-    vscode.commands.registerCommand(COMMAND_SHOW_LOGS, () => {
+    vscode.commands.registerCommand(COMMAND_SHOW_LOGS, async () => {
       outputChannel?.show(true);
       traceChannel?.show(true);
     }),
@@ -276,7 +263,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (affectsPath || affectsMode) {
         log("서버 경로/모드 설정이 변경되어 서버를 재시작합니다.");
-        await restartLanguageClient("config-change");
+        await enqueueLifecycle(() => restartLanguageClient("config-change"), "설정 변경 재시작");
       }
     }),
     vscode.window.onDidChangeActiveTextEditor(() => {
@@ -288,11 +275,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  try {
-    await startLanguageClient("activate");
-  } catch (error) {
-    log(`초기 시작 중 오류: ${toErrorMessage(error)}`);
-  }
+  serverPathStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 110);
+  serverPathStatusBarItem.command = {
+    command: COMMAND_CONFIGURE_SERVER_PATH,
+    title: "Parus: Configure Language Server Path",
+  };
+  serverPathStatusBarItem.show();
+  context.subscriptions.push(serverPathStatusBarItem);
+
+  lintStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 109);
+  lintStatusBarItem.command = {
+    command: STATUSBAR_PROBLEMS_COMMAND,
+    title: "Open Problems",
+  };
+  lintStatusBarItem.show();
+  context.subscriptions.push(lintStatusBarItem);
+
+  updateServerPathStatusBar(readConfig());
+  refreshLintStatusBar();
+
+  void enqueueLifecycle(() => startLanguageClient("activate"), "초기 시작");
 }
 
 export async function deactivate(): Promise<void> {
@@ -308,6 +310,11 @@ export async function deactivate(): Promise<void> {
 }
 
 async function configureServerPathFromStatusBar(): Promise<void> {
+  getLogger()("서버 경로 설정 UI를 엽니다.");
+  // 커맨드 팔레트에서 호출된 경우 기존 Quick Open을 먼저 닫아야 picker가 안정적으로 뜬다.
+  await vscode.commands.executeCommand("workbench.action.closeQuickOpen");
+  await sleep(30);
+
   const cfg = readConfig();
   const workspaceRoot = getPrimaryWorkspaceFolder();
 
@@ -337,6 +344,11 @@ async function configureServerPathFromStatusBar(): Promise<void> {
     });
   }
   items.push({
+    label: "$(folder-opened) Finder에서 실행 파일 선택",
+    detail: "macOS Finder에서 parusc/parusd 실행 파일 선택",
+    action: { kind: "finder" },
+  });
+  items.push({
     label: "$(edit) 경로 직접 입력",
     detail: "절대/상대 경로 또는 PATH 상의 명령어를 직접 입력",
     action: { kind: "input" },
@@ -345,6 +357,9 @@ async function configureServerPathFromStatusBar(): Promise<void> {
   const picked = await vscode.window.showQuickPick(items, {
     placeHolder: "Parus Language Server 실행 경로를 선택하세요",
     title: "Parus: Configure Server Path",
+    ignoreFocusOut: true,
+    matchOnDescription: true,
+    matchOnDetail: true,
   });
   if (!picked) {
     return;
@@ -369,6 +384,17 @@ async function configureServerPathFromStatusBar(): Promise<void> {
     void vscode.window.showInformationMessage(
       `Parus: parusd 경로를 설정했습니다.\n${picked.action.command}`
     );
+    return;
+  }
+
+  if (picked.action.kind === "finder") {
+    const selected = await pickExecutableWithFinder(workspaceRoot);
+    if (!selected) {
+      return;
+    }
+    const mode = detectModeFromCommand(selected, cfg.serverMode);
+    await applyServerPathConfig(selected, mode);
+    void vscode.window.showInformationMessage(`Parus: 서버 경로를 설정했습니다 (${mode}).\n${selected}`);
     return;
   }
 
@@ -397,6 +423,40 @@ async function configureServerPathFromStatusBar(): Promise<void> {
   );
 }
 
+async function pickExecutableWithFinder(
+  workspaceRoot: string | undefined
+): Promise<string | undefined> {
+  const startUri = workspaceRoot
+    ? vscode.Uri.file(workspaceRoot)
+    : vscode.Uri.file(process.env.HOME ?? "/");
+
+  const selected = await vscode.window.showOpenDialog({
+    title: "Parus Language Server 실행 파일 선택",
+    defaultUri: startUri,
+    canSelectFiles: true,
+    canSelectFolders: false,
+    canSelectMany: false,
+    openLabel: "선택",
+  });
+  if (!selected || selected.length === 0) {
+    return undefined;
+  }
+
+  const first = selected[0];
+  if (!first) {
+    return undefined;
+  }
+  const chosenPath = first.fsPath;
+  const resolved = await resolveExecutableFile(chosenPath);
+  if (!resolved) {
+    void vscode.window.showErrorMessage(
+      `Parus: 선택한 파일을 실행할 수 없습니다.\n${chosenPath}\n실행 권한(chmod +x) 또는 경로를 확인하세요.`
+    );
+    return undefined;
+  }
+  return resolved;
+}
+
 async function applyServerPathConfig(serverPath: string, mode: ServerMode): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(SETTINGS_SECTION);
   const target = getConfigTarget();
@@ -410,7 +470,10 @@ async function applyServerPathConfig(serverPath: string, mode: ServerMode): Prom
   }
 
   updateServerPathStatusBar(readConfig());
-  await restartLanguageClient("statusbar-configure");
+  await enqueueLifecycle(
+    () => restartLanguageClient("statusbar-configure"),
+    "상태바 경로 설정 재시작"
+  );
 }
 
 function getConfigTarget(): vscode.ConfigurationTarget {
@@ -460,7 +523,11 @@ async function startLanguageClient(reason: string): Promise<void> {
     documentSelector: [{ scheme: "file", language: LANGUAGE_ID }],
     outputChannel,
     traceOutputChannel: traceChannel,
-    revealOutputChannelOn: RevealOutputChannelOn.Never,
+    revealOutputChannelOn: RevealOutputChannelOn.Error,
+    initializationFailedHandler: (error) => {
+      log(`서버 초기화 실패: ${toErrorMessage(error)}`);
+      return false;
+    },
     middleware: {
       // didChange를 순서 보장 디바운스로 보내 서버 진단 품질을 안정화한다.
       didChange: (event, next) => changeDebouncer?.didChange(event, next) ?? next(event),
@@ -495,10 +562,14 @@ async function startLanguageClient(reason: string): Promise<void> {
       log(`클라이언트 상태 변경: ${event.oldState} -> ${event.newState}`);
     });
 
+    client = nextClient;
     try {
-      await nextClient.start();
+      await withTimeout(
+        nextClient.start(),
+        START_TIMEOUT_MS,
+        `LSP initialize 응답 대기 시간이 ${START_TIMEOUT_MS}ms를 초과했습니다.`
+      );
       await nextClient.setTrace(toTraceLevel(cfg.traceServer));
-      client = nextClient;
       log(`서버 시작 성공: ${formatExecutable(candidate.executable)}`);
       if (candidate.reason) {
         log(candidate.reason);
@@ -508,10 +579,9 @@ async function startLanguageClient(reason: string): Promise<void> {
       log(
         `서버 시작 실패: ${formatExecutable(candidate.executable)} / ${toErrorMessage(error)}`
       );
-      try {
-        await nextClient.stop();
-      } catch {
-        // noop
+      await safeStopClient(nextClient, log);
+      if (client === nextClient) {
+        client = undefined;
       }
     }
   }
@@ -537,11 +607,7 @@ async function stopLanguageClient(reason: string): Promise<void> {
   const current = client;
   client = undefined;
   log(`서버 중지 요청: reason=${reason}`);
-  try {
-    await current.stop();
-  } catch (error) {
-    log(`서버 중지 중 오류: ${toErrorMessage(error)}`);
-  }
+  await safeStopClient(current, log);
 }
 
 function readConfig(): ParusConfig {
@@ -1019,4 +1085,62 @@ function getLogger(): (line: string) => void {
   return (line: string) => {
     outputChannel?.appendLine(`[${new Date().toISOString()}] ${line}`);
   };
+}
+
+async function safeStopClient(
+  target: LanguageClient,
+  log: (line: string) => void
+): Promise<void> {
+  try {
+    await target.stop();
+  } catch (error) {
+    log(`서버 중지 중 오류: ${toErrorMessage(error)}`);
+  }
+}
+
+function enqueueLifecycle(
+  task: () => Promise<void>,
+  label: string
+): Promise<void> {
+  const log = getLogger();
+  lifecycleQueue = lifecycleQueue
+    .catch((error) => {
+      log(`이전 라이프사이클 작업 오류(${label} 전): ${toErrorMessage(error)}`);
+    })
+    .then(async () => {
+      try {
+        await task();
+      } catch (error) {
+        log(`라이프사이클 작업 오류(${label}): ${toErrorMessage(error)}`);
+      }
+    });
+  return lifecycleQueue;
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race<T>([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(timeoutMessage));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

@@ -75,13 +75,15 @@ namespace {
         }
 
         bool parse_bool_(JsonValue& out) {
-            if (consume_literal_("true")) {
+            if (src_.substr(pos_, 4) == "true") {
+                pos_ += 4;
                 out = JsonValue{};
                 out.kind = JsonValue::Kind::kBool;
                 out.bool_v = true;
                 return true;
             }
-            if (consume_literal_("false")) {
+            if (src_.substr(pos_, 5) == "false") {
+                pos_ += 5;
                 out = JsonValue{};
                 out.kind = JsonValue::Kind::kBool;
                 out.bool_v = false;
