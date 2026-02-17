@@ -1,7 +1,11 @@
-// OIR->LLVM 케이스: 함수 오버로딩 + operator 오버로딩 혼합
-acts for i32 {
-    operator(+)(self a: i32, rhs: i32) -> i32 {
-        return a;
+// OIR->LLVM 케이스: 함수 오버로딩 + field operator 오버로딩 혼합
+field I32Box {
+    v: i32;
+};
+
+acts for I32Box {
+    operator(+)(self a: I32Box, rhs: I32Box) -> I32Box {
+        return I32Box { v: a.v + rhs.v };
     }
 };
 
@@ -16,6 +20,6 @@ def mix(a: i64, b: i64) -> i64 {
 def main() -> i32 {
     let p: i32 = mix(a: 7i32, b: 8i32);
     let q: i64 = mix(a: 9i64, b: 10i64);
-    let r: i32 = p + 1i32;
-    return r;
+    let r: I32Box = I32Box { v: p } + I32Box { v: 1i32 };
+    return r.v;
 }

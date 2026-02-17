@@ -1,13 +1,17 @@
-// OIR->LLVM 케이스: acts for 기반 operator(+) 오버로딩
-acts for i32 {
-    operator(+)(self a: i32, rhs: i32) -> i32 {
-        return a;
+// OIR->LLVM 케이스: field 기반 acts for operator(+) 오버로딩
+field I32Box {
+    v: i32;
+};
+
+acts for I32Box {
+    operator(+)(self a: I32Box, rhs: I32Box) -> I32Box {
+        return I32Box { v: a.v + rhs.v };
     }
 };
 
 def main() -> i32 {
-    let a: i32 = 1i32;
-    let b: i32 = 2i32;
-    let c: i32 = a + b;
-    return c;
+    let a: I32Box = I32Box { v: 1i32 };
+    let b: I32Box = I32Box { v: 2i32 };
+    let c: I32Box = a + b;
+    return c.v;
 }

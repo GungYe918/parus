@@ -193,37 +193,15 @@ namespace parus {
             return ast_.add_stmt(s);
         }
 
-        // use acts Name for T;
+        // legacy syntax removal:
+        //   use acts Name for T;
         if (cursor_.at(K::kKwActs)) {
-            cursor_.bump(); // acts
-
-            auto [pb, pc] = parse_path_segments();
-            s.use_path_begin = pb;
-            s.use_path_count = pc;
-            if (pc > 0) {
-                const auto& segs = ast_.path_segs();
-                s.use_name = segs[pb + pc - 1];
-            }
-
-            const auto is_for_token = [](const Token& t) -> bool {
-                return t.kind == K::kIdent && t.lexeme == "for";
-            };
-
-            if (!is_for_token(cursor_.peek())) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "for");
-                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
-                s.span = span_join(use_kw.span, end);
-                return ast_.add_stmt(s);
-            }
-            cursor_.bump(); // for
-
-            const auto ty = parse_type();
-            s.acts_target_type = ty.id;
-            if (s.acts_target_type == ast::k_invalid_type) {
-                diag_report(diag::Code::kActsForTypeExpected, ty.span);
-            }
-
-            s.use_kind = ast::UseKind::kActsEnable;
+            diag_report(
+                diag::Code::kUnexpectedToken,
+                cursor_.peek().span,
+                "legacy syntax is removed; use 'use T with acts(NameOrDefault);'"
+            );
+            stmt_sync_to_boundary();
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);
@@ -248,12 +226,73 @@ namespace parus {
         // parse path: Ident ('::' Ident)*
         auto [pb, pc] = parse_path_segments();
 
+        // ------------------------------------------------------------
+        // 2-A) acts selection: use T with acts(NameOrDefault);
+        // ------------------------------------------------------------
+        const auto is_with_token = [](const Token& t) -> bool {
+            return t.kind == K::kIdent && t.lexeme == "with";
+        };
+        if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
+            auto join_path = [&](uint32_t begin, uint32_t count) -> std::string {
+                if (count == 0) return {};
+                const auto& segs = ast_.path_segs();
+                if (begin >= segs.size() || begin + count > segs.size()) return {};
+                std::string out;
+                for (uint32_t i = 0; i < count; ++i) {
+                    if (i) out += "::";
+                    out += std::string(segs[begin + i]);
+                }
+                return out;
+            };
+
+            const std::string target_path = join_path(pb, pc);
+            if (target_path.empty()) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "acts target type path");
+            } else {
+                s.acts_target_type = types_.intern_ident(target_path);
+            }
+
+            cursor_.bump(); // with
+            cursor_.bump(); // acts
+
+            if (!cursor_.eat(K::kLParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                recover_to_delim(K::kRParen, K::kSemicolon);
+            }
+
+            if (cursor_.at(K::kKwDefault)) {
+                s.use_name = "default";
+                cursor_.bump();
+            } else {
+                auto [sb, sc] = parse_path_segments();
+                s.use_path_begin = sb;
+                s.use_path_count = sc;
+                if (sc > 0) {
+                    const auto& segs = ast_.path_segs();
+                    s.use_name = segs[sb + sc - 1];
+                } else {
+                    diag_report(diag::Code::kActsNameExpected, cursor_.peek().span);
+                }
+            }
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+
+            s.use_kind = ast::UseKind::kActsEnable;
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
         // separator can be '=' or 'as'
         const bool has_assign = cursor_.at(K::kAssign);
         const bool has_as     = cursor_.at(K::kKwAs);
 
         // ------------------------------------------------------------
-        // 2-A) alias forms: ( '=' | 'as' )
+        // 2-B) alias forms: ( '=' | 'as' )
         // ------------------------------------------------------------
         if (has_assign || has_as) {
             if (has_assign) {
@@ -322,7 +361,7 @@ namespace parus {
         }
 
         // ------------------------------------------------------------
-        // 2-B) Text substitution: use NAME LITERAL;
+        // 2-C) Text substitution: use NAME LITERAL;
         //      Only allowed when pc == 1 (single ident)
         // ------------------------------------------------------------
         if (pc != 1) {

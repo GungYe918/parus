@@ -3,7 +3,7 @@ field Vec2 {
     y: i32;
 };
 
-use acts MathOps for Vec2;
+use Vec2 with acts(MathOps);
 
 acts MathOps for Vec2 {
     def add(self v: Vec2, rhs: i32) -> i32 {

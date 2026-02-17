@@ -445,9 +445,13 @@ namespace {
     /// @brief 함수 오버로딩 + 연산자 오버로딩(acts for) 경로가 올바른 LLVM 호출로 내려가는지 검사한다.
     static bool test_overload_and_operator_lowering_patterns_() {
         const std::string src = R"(
-            acts for i32 {
-                operator(+)(self a: i32, rhs: i32) -> i32 {
-                    return a;
+            field I32Box {
+                v: i32;
+            };
+
+            acts for I32Box {
+                operator(+)(self a: I32Box, rhs: I32Box) -> i32 {
+                    return a.v + rhs.v;
                 }
             };
 
@@ -462,7 +466,7 @@ namespace {
             def main() -> i32 {
                 let x: i32 = add(a: 1i32, b: 2i32);
                 let y: i64 = add(a: 3i64, b: 4i64);
-                let z: i32 = 10i32 + 20i32;
+                let z: i32 = I32Box { v: 10i32 } + I32Box { v: 20i32 };
                 return x + z;
             }
         )";
@@ -749,26 +753,32 @@ namespace {
                 }
             )",
             R"(
-                acts for i32 {
-                    operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
+                field I32Box {
+                    v: i32;
+                };
+                acts for I32Box {
+                    operator(+)(self a: I32Box, rhs: I32Box) -> i32 { return a.v + rhs.v; }
                 };
                 def main() -> i32 {
-                    let a: i32 = 1i32;
-                    let b: i32 = 2i32;
+                    let a: I32Box = I32Box { v: 1i32 };
+                    let b: I32Box = I32Box { v: 2i32 };
                     let c: i32 = a + b;
                     return c;
                 }
             )",
             R"(
-                acts for i32 {
-                    operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
+                field I32Box {
+                    v: i32;
+                };
+                acts for I32Box {
+                    operator(+)(self a: I32Box, rhs: I32Box) -> i32 { return a.v + rhs.v; }
                 };
                 def mix(a: i32, b: i32) -> i32 { return a + b; }
                 def mix(a: i64, b: i64) -> i64 { return a + b; }
                 def main() -> i32 {
                     let p: i32 = mix(a: 7i32, b: 8i32);
                     let q: i64 = mix(a: 9i64, b: 10i64);
-                    let r: i32 = p + 1i32;
+                    let r: i32 = I32Box { v: p } + I32Box { v: 1i32 };
                     return r;
                 }
             )"

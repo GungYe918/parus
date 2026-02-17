@@ -557,9 +557,13 @@ namespace {
     static bool test_acts_for_parse_and_tyck_ok() {
         // acts for / operator(...) 기본 파싱과 tyck 경로가 동작해야 한다.
         const std::string src = R"(
-            acts for i32 {
-                def keep(self x: i32) -> i32 { return x; }
-                operator(+)(self a: i32, rhs: i32) -> i32 { return a; }
+            field I32Box {
+                v: i32;
+            }
+
+            acts for I32Box {
+                def keep(self x: I32Box) -> I32Box { return x; }
+                operator(+)(self a: I32Box, rhs: I32Box) -> I32Box { return a; }
             }
         )";
 

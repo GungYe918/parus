@@ -1,0 +1,23 @@
+field Vec2 {
+    x: i32;
+    y: i32;
+};
+
+acts A for Vec2 {
+    def add(self v: Vec2, rhs: i32) -> i32 {
+        return v.x + rhs;
+    }
+};
+
+acts B for Vec2 {
+    def add(self v: Vec2, rhs: i32) -> i32 {
+        return v.y + rhs;
+    }
+};
+
+def main() -> i32 {
+    use Vec2 with acts(A);
+    use Vec2 with acts(B); // conflicting selection in same lexical scope
+    let v: Vec2 = Vec2 { x: 1i32, y: 2i32 };
+    return v.add(1i32);
+}

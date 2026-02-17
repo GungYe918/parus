@@ -117,10 +117,8 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
                 }
-                if (s.use_kind == ast::UseKind::kActsEnable && block_depth_ != 0) {
-                    const std::string msg = "use acts is only allowed at file scope";
-                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                    err_(s.span, msg);
+                if (s.use_kind == ast::UseKind::kActsEnable) {
+                    (void)apply_use_acts_selection_(s);
                 }
                 return;
 
@@ -160,6 +158,7 @@ namespace parus::tyck {
         // 블록 진입 시 새 스코프 생성
         const uint32_t scope_id = sym_.push_scope();
         (void)scope_id; // 디버그용이면 남겨두기
+        push_acts_selection_scope_();
         ++block_depth_;
 
         // s.stmt_begin/count 는 ast_.stmt_children()의 slice
@@ -172,6 +171,7 @@ namespace parus::tyck {
         }
 
         if (block_depth_ > 0) --block_depth_;
+        pop_acts_selection_scope_();
         sym_.pop_scope();
     }
 
@@ -733,6 +733,31 @@ namespace parus::tyck {
     /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
     void TypeChecker::check_stmt_acts_decl_(const ast::Stmt& s) {
         sym_.push_scope();
+
+        if (s.acts_is_for) {
+            bool owner_ok = false;
+            if (s.acts_target_type != ty::kInvalidType) {
+                const auto& owner_ty = types_.get(s.acts_target_type);
+                if (owner_ty.kind == ty::Kind::kNamedUser) {
+                    const std::string owner_name = types_.to_string(s.acts_target_type);
+                    if (auto owner_sym = lookup_symbol_(owner_name)) {
+                        const auto& ss = sym_.symbol(*owner_sym);
+                        // v0 fixed policy:
+                        // - acts-for attachment is allowed on field/tablet
+                        // - current implementation tracks concrete value records as kField
+                        owner_ok = (ss.kind == sema::SymbolKind::kField);
+                    }
+                }
+            }
+
+            if (!owner_ok) {
+                std::ostringstream oss;
+                oss << "acts-for target must be a field/tablet type in v0, got "
+                    << types_.to_string(s.acts_target_type);
+                diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
+                err_(s.span, oss.str());
+            }
+        }
 
         const auto& kids = ast_.stmt_children();
         const uint32_t begin = s.stmt_begin;

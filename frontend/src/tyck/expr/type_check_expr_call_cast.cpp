@@ -111,16 +111,44 @@ namespace parus::tyck {
                             owner_t = ot.elem;
                         }
                     }
-                    if (const auto* methods = lookup_acts_default_methods_(owner_t, rhs.text)) {
-                        for (const auto& md : *methods) {
-                            if (md.fn_sid != ast::k_invalid_stmt) {
-                                overload_decl_ids.push_back(md.fn_sid);
-                            }
+                    const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text);
+                    bool any_method_named = false;
+                    if (owner_t != ty::kInvalidType) {
+                        auto oit = acts_default_method_map_.find(owner_t);
+                        if (oit != acts_default_method_map_.end()) {
+                            auto mit = oit->second.find(std::string(rhs.text));
+                            any_method_named = (mit != oit->second.end() && !mit->second.empty());
                         }
-                        if (!overload_decl_ids.empty()) {
-                            is_dot_method_call = true;
-                            callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
-                        }
+                    }
+
+                    bool has_self_receiver_candidate = false;
+                    for (const auto& md : selected_methods) {
+                        if (md.fn_sid == ast::k_invalid_stmt) continue;
+                        if (!md.receiver_is_self) continue;
+                        has_self_receiver_candidate = true;
+                        overload_decl_ids.push_back(md.fn_sid);
+                    }
+
+                    if (has_self_receiver_candidate) {
+                        is_dot_method_call = true;
+                        callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                    } else if (any_method_named && !selected_methods.empty()) {
+                        std::string msg =
+                            "dot method call is only allowed for acts members with a self receiver (use path call for non-self acts functions)";
+                        diag_(diag::Code::kTypeErrorGeneric, rhs.span, msg);
+                        err_(rhs.span, msg);
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    } else if (any_method_named && selected_methods.empty()) {
+                        std::ostringstream oss;
+                        oss << "no active acts method '" << rhs.text
+                            << "' for type " << types_.to_string(owner_t)
+                            << " (select with 'use " << types_.to_string(owner_t)
+                            << " with acts(Name);' or use default)";
+                        diag_(diag::Code::kTypeErrorGeneric, rhs.span, oss.str());
+                        err_(rhs.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
                     }
                 }
             }
