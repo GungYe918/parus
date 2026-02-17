@@ -48,6 +48,35 @@ namespace parus::tyck {
         TyckResult check_program(ast::StmtId program_stmt);
 
     private:
+        enum class AssignSite : uint8_t {
+            LetInit = 0,
+            SetInit,
+            Assign,
+            FieldInit,
+            CallArg,
+            Return,
+            DefaultArg,
+            NullCoalesceAssign,
+        };
+
+        enum class CoercionKind : uint8_t {
+            Exact = 0,
+            NullToOptionalNone,
+            LiftToOptionalSome,
+            InferThenExact,
+            InferThenLiftToOptionalSome,
+            Reject,
+        };
+
+        struct CoercionPlan {
+            bool ok = false;
+            CoercionKind kind = CoercionKind::Reject;
+            ty::TypeId dst = ty::kInvalidType;
+            ty::TypeId src_before = ty::kInvalidType;
+            ty::TypeId src_after = ty::kInvalidType;
+            ty::TypeId optional_elem = ty::kInvalidType;
+        };
+
         struct FStringConstValue {
             enum class Kind : uint8_t {
                 kInvalid = 0,
@@ -164,6 +193,13 @@ namespace parus::tyck {
         // - null -> T? OK
         // - T -> T? (암시적 승격은 일단 OFF: 필요하면 ON으로 바꾸기 쉬움)
         bool can_assign_(ty::TypeId dst, ty::TypeId src) const;
+        CoercionPlan classify_assign_with_coercion_(
+            AssignSite site,
+            ty::TypeId dst,
+            ast::ExprId src_eid,
+            Span diag_span
+        );
+        std::string type_for_user_diag_(ty::TypeId t, ast::ExprId eid) const;
 
         // 두 타입을 하나로 합치기(삼항/if-expr 등):
         // - 같으면 그대로
@@ -257,10 +293,22 @@ namespace parus::tyck {
         };
         std::unordered_map<uint64_t, std::vector<ActsOperatorDecl>> acts_default_operator_map_;
 
+        struct ActsMethodDecl {
+            ast::StmtId fn_sid = ast::k_invalid_stmt;
+            ty::TypeId owner_type = ty::kInvalidType;
+            bool receiver_is_self = false;
+        };
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
+        std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
+        std::unordered_set<ast::StmtId> acts_named_activated_;
+
         static uint64_t acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix);
-        void collect_acts_operator_decl_(const ast::Stmt& acts_decl);
+        static std::string acts_named_decl_key_(ty::TypeId owner_type, std::string_view set_qname);
+        void collect_acts_operator_decl_(const ast::Stmt& acts_decl, bool allow_named_set = false);
+        void collect_acts_method_decl_(const ast::Stmt& acts_decl, bool allow_named_set = false);
         ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs) const;
         ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const;
+        const std::vector<ActsMethodDecl>* lookup_acts_default_methods_(ty::TypeId owner_type, std::string_view name) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;

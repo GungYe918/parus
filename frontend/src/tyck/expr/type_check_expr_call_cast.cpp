@@ -26,9 +26,6 @@ namespace parus::tyck {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
 
-        ty::TypeId callee_t = check_expr_(e.a);
-        const auto& ct = types_.get(callee_t);
-
         auto check_all_arg_exprs_only = [&]() {
             for (uint32_t i = 0; i < e.arg_count; ++i) {
                 const auto& a = ast_.args()[e.arg_begin + i];
@@ -42,13 +39,6 @@ namespace parus::tyck {
                 }
             }
         };
-
-        if (ct.kind != ty::Kind::kFn) {
-            diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
-            err_(e.span, "call target is not a function");
-            check_all_arg_exprs_only();
-            return types_.error();
-        }
 
         // ------------------------------------------------------------
         // 0) split args + call form classification
@@ -95,28 +85,63 @@ namespace parus::tyck {
             else form = CallForm::kPositional;
         }
 
-        if (has_duplicate_group) {
-            diag_(diag::Code::kCallOnlyOneNamedGroupAllowed, duplicate_group_span);
-            err_(duplicate_group_span, "only one named-group '{ ... }' is allowed in a call");
-            check_all_arg_exprs_only();
-            return ct.ret;
-        }
+        ty::TypeId fallback_ret = types_.error();
+        ty::TypeId callee_t = ty::kInvalidType;
+        uint32_t callee_param_count = 0;
 
-        if (form == CallForm::kMixedInvalid) {
-            diag_(diag::Code::kCallArgMixNotAllowed, e.span);
-            err_(e.span, "mixing labeled and positional arguments is not allowed");
-            check_all_arg_exprs_only();
-            return ct.ret;
-        }
-
-        // ------------------------------------------------------------
-        // 1) find callee def decl meta if possible (Ident-only in v0)
-        // ------------------------------------------------------------
         std::string callee_name;
-        bool callee_is_fn_symbol = false;
+        bool is_dot_method_call = false;
         std::vector<ast::StmtId> overload_decl_ids;
 
+        // ------------------------------------------------------------
+        // 1) method call fast-path: `value.ident(...)`
+        // ------------------------------------------------------------
         {
+            const ast::Expr& callee_expr = ast_.expr(e.a);
+            if (callee_expr.kind == ast::ExprKind::kBinary &&
+                callee_expr.op == K::kDot &&
+                callee_expr.a != ast::k_invalid_expr &&
+                callee_expr.b != ast::k_invalid_expr) {
+                const ast::Expr& rhs = ast_.expr(callee_expr.b);
+                if (rhs.kind == ast::ExprKind::kIdent) {
+                    ty::TypeId owner_t = check_expr_(callee_expr.a);
+                    if (owner_t != ty::kInvalidType) {
+                        const auto& ot = types_.get(owner_t);
+                        if (ot.kind == ty::Kind::kBorrow) {
+                            owner_t = ot.elem;
+                        }
+                    }
+                    if (const auto* methods = lookup_acts_default_methods_(owner_t, rhs.text)) {
+                        for (const auto& md : *methods) {
+                            if (md.fn_sid != ast::k_invalid_stmt) {
+                                overload_decl_ids.push_back(md.fn_sid);
+                            }
+                        }
+                        if (!overload_decl_ids.empty()) {
+                            is_dot_method_call = true;
+                            callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
+        // 2) non-method path: regular callee typing + ident overload lookup
+        // ------------------------------------------------------------
+        if (!is_dot_method_call) {
+            callee_t = check_expr_(e.a);
+            const auto& ct = types_.get(callee_t);
+            if (ct.kind != ty::Kind::kFn) {
+                diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
+                err_(e.span, "call target is not a function");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+
+            fallback_ret = ct.ret;
+            callee_param_count = ct.param_count;
+
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kIdent) {
                 std::string lookup_name = std::string(callee_expr.text);
@@ -127,19 +152,32 @@ namespace parus::tyck {
                 callee_name = lookup_name;
                 if (auto sid = lookup_symbol_(lookup_name)) {
                     const auto& sym = sym_.symbol(*sid);
-                    callee_is_fn_symbol = (sym.kind == sema::SymbolKind::kFn);
-                    if (callee_is_fn_symbol) {
+                    if (sym.kind == sema::SymbolKind::kFn) {
                         callee_name = sym.name;
-                    }
-                }
-
-                if (callee_is_fn_symbol) {
-                    auto it = fn_decl_by_name_.find(callee_name);
-                    if (it != fn_decl_by_name_.end()) {
-                        overload_decl_ids = it->second;
+                        auto it = fn_decl_by_name_.find(callee_name);
+                        if (it != fn_decl_by_name_.end()) {
+                            overload_decl_ids = it->second;
+                        }
                     }
                 }
             }
+        }
+
+        if (fallback_ret == ty::kInvalidType) fallback_ret = types_.error();
+        if (callee_name.empty()) callee_name = "<callee>";
+
+        if (has_duplicate_group) {
+            diag_(diag::Code::kCallOnlyOneNamedGroupAllowed, duplicate_group_span);
+            err_(duplicate_group_span, "only one named-group '{ ... }' is allowed in a call");
+            check_all_arg_exprs_only();
+            return fallback_ret;
+        }
+
+        if (form == CallForm::kMixedInvalid) {
+            diag_(diag::Code::kCallArgMixNotAllowed, e.span);
+            err_(e.span, "mixing labeled and positional arguments is not allowed");
+            check_all_arg_exprs_only();
+            return fallback_ret;
         }
 
         // 라벨 중복은 오버로드 해소 이전에 무조건 진단한다.
@@ -173,26 +211,26 @@ namespace parus::tyck {
                 diag_(diag::Code::kDuplicateDecl, dup_sp, dup_label);
                 err_(dup_sp, "duplicate argument label '" + dup_label + "'");
                 check_all_arg_exprs_only();
-                return ct.ret;
+                return fallback_ret;
             }
             if (has_duplicate_labels(group_entries, dup_sp, dup_label)) {
                 diag_(diag::Code::kDuplicateDecl, dup_sp, dup_label);
                 err_(dup_sp, "duplicate named argument label '" + dup_label + "'");
                 check_all_arg_exprs_only();
-                return ct.ret;
+                return fallback_ret;
             }
         }
 
         // ------------------------------------------------------------
-        // 2) fallback: overload 집합을 못 찾으면 기존 signature 기반으로만 검사
+        // 3) fallback: overload 집합을 못 찾으면 signature 기반 검사
         // ------------------------------------------------------------
-        if (!callee_is_fn_symbol || overload_decl_ids.empty()) {
+        if (overload_decl_ids.empty()) {
             const uint32_t provided_non_group =
                 static_cast<uint32_t>(outside_positional.size() + outside_labeled.size());
 
-            if (provided_non_group != ct.param_count) {
+            if (provided_non_group != callee_param_count) {
                 diag_(diag::Code::kTypeArgCountMismatch, e.span,
-                    std::to_string(ct.param_count), std::to_string(provided_non_group));
+                    std::to_string(callee_param_count), std::to_string(provided_non_group));
                 err_(e.span, "argument count mismatch");
             }
 
@@ -210,20 +248,20 @@ namespace parus::tyck {
 
                 ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
 
-                if (pi < ct.param_count) {
+                if (pi < callee_param_count) {
                     ty::TypeId expected = types_.fn_param_at(callee_t, pi);
-
-                    const auto& st = types_.get(at);
-                    if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                        if (a.expr != ast::k_invalid_expr) {
-                            (void)resolve_infer_int_in_context_(a.expr, expected);
-                            at = check_expr_(a.expr);
+                    if (a.expr != ast::k_invalid_expr) {
+                        const CoercionPlan plan = classify_assign_with_coercion_(
+                            AssignSite::CallArg, expected, a.expr, a.span);
+                        at = plan.src_after;
+                        if (!plan.ok) {
+                            diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                                std::to_string(pi), types_.to_string(expected), type_for_user_diag_(at, a.expr));
+                            err_(a.span, "argument type mismatch");
                         }
-                    }
-
-                    if (!can_assign_(expected, at)) {
+                    } else {
                         diag_(diag::Code::kTypeArgTypeMismatch, a.span,
-                            std::to_string(pi), types_.to_string(expected), types_.to_string(at));
+                            std::to_string(pi), types_.to_string(expected), "<missing>");
                         err_(a.span, "argument type mismatch");
                     }
                 }
@@ -237,11 +275,11 @@ namespace parus::tyck {
                 err_(group_arg->span, msg);
             }
 
-            return ct.ret;
+            return fallback_ret;
         }
 
         // ------------------------------------------------------------
-        // 3) overload 후보 구성
+        // 4) overload 후보 구성
         // ------------------------------------------------------------
         struct ParamInfo {
             uint32_t decl_index = 0;
@@ -253,6 +291,7 @@ namespace parus::tyck {
         struct Candidate {
             ast::StmtId decl_id = ast::k_invalid_stmt;
             ty::TypeId ret = ty::kInvalidType;
+            bool inject_receiver = false;
             std::vector<ParamInfo> positional;
             std::vector<ParamInfo> named;
             std::unordered_map<std::string, size_t> positional_by_label;
@@ -272,15 +311,27 @@ namespace parus::tyck {
                 ? def.fn_ret
                 : ((def.type != ty::kInvalidType && types_.get(def.type).kind == ty::Kind::kFn)
                     ? types_.get(def.type).ret
-                    : ct.ret);
+                    : fallback_ret);
 
             uint32_t pos_cnt = def.positional_param_count;
             if (pos_cnt > def.param_count) pos_cnt = def.param_count;
 
-            c.positional.reserve(pos_cnt);
-            c.named.reserve(def.param_count - pos_cnt);
+            uint32_t start_idx = 0;
+            if (is_dot_method_call && def.param_count > 0) {
+                const auto& p0 = ast_.params()[def.param_begin + 0];
+                if (p0.is_self) {
+                    c.inject_receiver = true;
+                    start_idx = 1;
+                }
+            }
+            if (start_idx > pos_cnt) pos_cnt = start_idx;
 
-            for (uint32_t i = 0; i < def.param_count; ++i) {
+            const uint32_t eff_pos_cnt = (pos_cnt > start_idx) ? (pos_cnt - start_idx) : 0u;
+            const uint32_t eff_named_cnt = (def.param_count > pos_cnt) ? (def.param_count - pos_cnt) : 0u;
+            c.positional.reserve(eff_pos_cnt);
+            c.named.reserve(eff_named_cnt);
+
+            for (uint32_t i = start_idx; i < def.param_count; ++i) {
                 const auto& p = ast_.params()[def.param_begin + i];
                 ParamInfo info{};
                 info.decl_index = i;
@@ -307,7 +358,7 @@ namespace parus::tyck {
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, "no declaration candidates");
             err_(e.span, msg);
             check_all_arg_exprs_only();
-            return ct.ret;
+            return fallback_ret;
         }
 
         std::unordered_map<std::string, const ast::Arg*> labeled_by_label;
@@ -329,7 +380,12 @@ namespace parus::tyck {
 
         const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
             const ty::TypeId at = arg_type_now(a);
-            return can_assign_(expected, at);
+            if (can_assign_(expected, at)) return true;
+            if (is_optional_(expected)) {
+                const ty::TypeId elem = optional_elem_(expected);
+                if (elem != ty::kInvalidType && can_assign_(elem, at)) return true;
+            }
+            return false;
         };
 
         /// @brief 호출 지점의 형태/타입 요약 문자열을 생성한다.
@@ -424,7 +480,7 @@ namespace parus::tyck {
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
             check_all_arg_exprs_only();
-            return ct.ret;
+            return fallback_ret;
         }
 
         /// @brief spec 6.1.7(E)의 단계 A/B를 구현하는 후보 매칭 함수.
@@ -496,7 +552,7 @@ namespace parus::tyck {
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
             check_all_arg_exprs_only();
-            return ct.ret;
+            return fallback_ret;
         }
 
         if (final_matches.size() > 1) {
@@ -509,7 +565,7 @@ namespace parus::tyck {
             diag_(diag::Code::kOverloadAmbiguousCall, e.span, callee_name, candidate_list);
             err_(e.span, msg);
             check_all_arg_exprs_only();
-            return ct.ret;
+            return fallback_ret;
         }
 
         const Candidate& selected = candidates[final_matches.front()];
@@ -520,19 +576,19 @@ namespace parus::tyck {
 
         /// @brief 선택된 후보에 대해 infer-int 해소를 포함한 최종 타입 검증을 수행한다.
         const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {
-            ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
-
-            const auto& st = types_.get(at);
-            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                if (a.expr != ast::k_invalid_expr) {
-                    (void)resolve_infer_int_in_context_(a.expr, p.type);
-                    at = check_expr_(a.expr);
-                }
+            if (a.expr == ast::k_invalid_expr) {
+                diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                    std::to_string(p.decl_index), types_.to_string(p.type), "<missing>");
+                err_(a.span, "argument type mismatch for parameter '" + p.name + "'");
+                return;
             }
 
-            if (!can_assign_(p.type, at)) {
+            const CoercionPlan plan = classify_assign_with_coercion_(
+                AssignSite::CallArg, p.type, a.expr, a.span);
+            const ty::TypeId at = plan.src_after;
+            if (!plan.ok) {
                 diag_(diag::Code::kTypeArgTypeMismatch, a.span,
-                    std::to_string(p.decl_index), types_.to_string(p.type), types_.to_string(at));
+                    std::to_string(p.decl_index), types_.to_string(p.type), type_for_user_diag_(at, a.expr));
                 err_(a.span, "argument type mismatch for parameter '" + p.name + "'");
             }
         };

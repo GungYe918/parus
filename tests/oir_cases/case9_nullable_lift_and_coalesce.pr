@@ -1,0 +1,17 @@
+def takes_opt(x: i32?) -> i32 {
+    return x ?? 99i32;
+}
+
+def ret_opt() -> i32? {
+    return 9i32;
+}
+
+def main() -> i32 {
+    let a: i32? = 5;
+    let mut b: i32? = null;
+    b = 7;
+    let c: i32 = takes_opt(x: 3);
+    let d: i32? = ret_opt();
+    let e: i32 = d ?? 0i32;
+    return (a ?? 0i32) + (b ?? 0i32) + c + e;
+}

@@ -5,6 +5,7 @@
 
 이 문서는 Parus ABI 구현의 단일 신뢰 기준이다.  
 `docs/spec_v0.md`와 충돌 시, ABI 관련 사항은 본 문서를 우선한다.
+OOP/다형성/행동 부착 관련 사항은 `docs/abi/v0.0.1/OOP_MODEL.md`를 우선한다.
 
 ---
 
@@ -175,7 +176,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 
 ---
 
-## 11. 문자열/저장소 정책 연결
+## 11. 문자열/저장소/OOP 정책 연결
 
 본 문서는 문자열 및 저장소 정책을 "요약만" 포함한다.
 상세 규칙은 아래 보조 명세를 따른다.
@@ -184,6 +185,10 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `docs/abi/v0.0.1/STRING_MODEL.md`
 2. 스택/힙/정적 저장소 정책 및 `&&` 비힙 규칙:
    - `docs/abi/v0.0.1/STORAGE_POLICY.md`
+3. nullable(`T?`) 의미 규칙/승격 정책/하강 정합성:
+   - `docs/abi/v0.0.1/NULLABLE_MODEL.md`
+4. OOP 역할 분리/`self`-`Self`/`acts`-`proto`-`tablet`-`class` 규칙:
+   - `docs/abi/v0.0.1/OOP_MODEL.md`
 
 요약 고정 규칙:
 
@@ -192,6 +197,14 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 3. `text -> String` 암시 변환은 허용하지 않는다.
 4. `&&`는 힙에 materialize할 수 없다.
 5. C ABI 문자열 경계는 `Utf8Span`/`Utf8Buf`를 사용한다.
+6. nullable은 하이브리드 모델을 따른다.
+   - `T?`는 1급 값 타입이다.
+   - `T -> T?`는 대입 경계에서만 허용한다.
+   - `T <: T?` 전역 승격은 허용하지 않는다.
+7. OOP 모델은 역할 분리를 고정한다.
+   - `acts for` 부착 대상: `field`, `tablet`
+   - `class`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
+   - `proto`는 계약 전용이며 연산자 재정의를 담당하지 않는다
 
 ---
 
@@ -211,3 +224,4 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 3. `text` 기본 리터럴 타입, `text -> String` 비암시 변환 규칙 요약 추가
 4. `&&` 비힙 materialization 규칙 요약 추가
 5. 상세 명세를 `STRING_MODEL.md`, `STORAGE_POLICY.md`로 분리
+6. nullable 하이브리드 정본 문서 `NULLABLE_MODEL.md` 연결 규칙 추가

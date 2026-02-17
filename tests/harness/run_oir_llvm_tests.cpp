@@ -685,6 +685,57 @@ namespace {
         return ok;
     }
 
+    /// @brief nullable 경계 승격(T->T?)과 `??` lowering이 optional payload/tag 경로로 내려가는지 검사한다.
+    static bool test_nullable_lift_and_coalesce_lowering_() {
+        const std::string src = R"(
+            def takes_opt(x: i32?) -> i32 {
+                return x ?? 99i32;
+            }
+
+            def ret_opt() -> i32? {
+                return 9i32;
+            }
+
+            def main() -> i32 {
+                let a: i32? = 5;
+                let mut b: i32? = null;
+                b = 7;
+                let c: i32 = takes_opt(x: 3);
+                let d: i32? = ret_opt();
+                let e: i32 = d ?? 0i32;
+                return (a ?? 0i32) + (b ?? 0i32) + c + e;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "nullable source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "nullable LLVM text lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("define { i1, i32 } @p$main$_$ret_opt") != std::string::npos,
+                       "nullable return function must keep optional aggregate signature");
+        ok &= require_(lowered.llvm_ir.find("extractvalue { i1, i32 }") != std::string::npos,
+                       "nullable `??` lowering must read optional tag/payload");
+        ok &= require_(lowered.llvm_ir.find("select i1 ") != std::string::npos,
+                       "nullable `??` lowering must emit select on optional tag");
+        ok &= require_(lowered.llvm_ir.find("store i1 true") != std::string::npos,
+                       "nullable lift(T->T?) must materialize Some(tag=true)");
+        ok &= require_(lowered.llvm_ir.find("inttoptr i32") == std::string::npos,
+                       "nullable lift must not degrade to int->ptr reinterpret cast");
+        ok &= require_(lowered.llvm_ir.find("ptrtoint ptr") == std::string::npos,
+                       "nullable coalesce must not degrade to ptr->int reinterpret cast");
+        if (!ok) return false;
+
+        return emit_object_for_test_case_(lowered.llvm_ir, "nullable_lift_coalesce_patterns");
+    }
+
     /// @brief 오버로딩/연산자 오버로딩 소스를 다수 순회하며 LLVM-IR + 오브젝트 생성을 함께 검증한다.
     static bool test_overload_object_emission_matrix_() {
         const std::vector<std::string> sources = {
@@ -826,6 +877,7 @@ int main() {
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
         {"global_field_member_chain_lowering", test_global_field_member_chain_lowering_},
         {"field_literal_lowering", test_field_literal_lowering_},
+        {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"oir_case_directory", test_oir_case_directory},
     };

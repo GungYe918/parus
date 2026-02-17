@@ -360,6 +360,32 @@ namespace parus::oir {
                 bind(sym, Binding{true, false, slot});
                 return slot;
             }
+
+            // util: boundary coercion (hybrid nullable policy)
+            ValueId coerce_value_for_target(TypeId dst_ty, ValueId src) {
+                if (src == kInvalidId) return src;
+                if (dst_ty == kInvalidId || types == nullptr || out == nullptr) return src;
+                if ((size_t)src >= out->values.size()) return src;
+
+                const TypeId src_ty = out->values[src].ty;
+                if (src_ty == dst_ty) return src;
+
+                const auto& dt = types->get(dst_ty);
+                if (dt.kind == parus::ty::Kind::kOptional) {
+                    const TypeId elem_ty = dt.elem;
+                    const TypeId null_ty = (TypeId)types->builtin(parus::ty::Builtin::kNull);
+
+                    if (src_ty == null_ty) {
+                        return emit_const_null(dst_ty);
+                    }
+                    if (elem_ty != kInvalidId && src_ty == elem_ty) {
+                        // Optional some(T): represent as typed cast at OIR boundary.
+                        return emit_cast(dst_ty, Effect::Pure, CastKind::As, dst_ty, src);
+                    }
+                }
+
+                return src;
+            }
         };
 
         static BinOp map_binop(parus::syntax::TokenKind k) {
@@ -757,6 +783,7 @@ namespace parus::oir {
                         }
                         if (member_ty == kInvalidId) member_ty = v.type;
 
+                        rhs = coerce_value_for_target(member_ty, rhs);
                         ValueId place = emit_field(member_ty, obj_slot, std::string(a.label));
                         emit_store(place, rhs);
                     }
@@ -912,6 +939,19 @@ namespace parus::oir {
                     callee = lower_value(v.a);
                 }
 
+                if (direct_callee != kInvalidId && (size_t)direct_callee < out->funcs.size()) {
+                    const auto& f = out->funcs[direct_callee];
+                    if (f.entry != kInvalidId && (size_t)f.entry < out->blocks.size()) {
+                        const auto& entry = out->blocks[f.entry];
+                        const size_t n = std::min(entry.params.size(), args.size());
+                        for (size_t ai = 0; ai < n; ++ai) {
+                            const ValueId p = entry.params[ai];
+                            if ((size_t)p >= out->values.size()) continue;
+                            args[ai] = coerce_value_for_target(out->values[p].ty, args[ai]);
+                        }
+                    }
+                }
+
                 return emit_call(v.type, callee, std::move(args), direct_callee);
             }
 
@@ -930,6 +970,8 @@ namespace parus::oir {
                 // v.a = place, v.b = rhs
                 const auto& place = sir->values[v.a];
                 ValueId rhs = lower_value(v.b);
+                const bool is_null_coalesce_assign =
+                    (v.op == static_cast<uint32_t>(parus::syntax::TokenKind::kQuestionQuestionAssign));
 
                 if (place.kind == parus::sir::ValueKind::kLocal) {
                     // slot 타입은 place_elem_type 우선 (없으면 기존 place.type)
@@ -938,7 +980,19 @@ namespace parus::oir {
                             ? (TypeId)place.place_elem_type
                             : (TypeId)place.type;
 
+                    if (is_null_coalesce_assign && types != nullptr && slot_elem_ty != kInvalidId) {
+                        const auto& st = types->get(slot_elem_ty);
+                        if (st.kind == parus::ty::Kind::kOptional && st.elem != kInvalidId) {
+                            const ValueId lhs_cur = read_local(place.sym, slot_elem_ty);
+                            const ValueId rhs_elem = coerce_value_for_target(st.elem, rhs);
+                            const ValueId merged_elem = emit_binop(
+                                st.elem, Effect::Pure, BinOp::NullCoalesce, lhs_cur, rhs_elem);
+                            rhs = coerce_value_for_target(slot_elem_ty, merged_elem);
+                        }
+                    }
+
                     ValueId slot = ensure_slot(place.sym, slot_elem_ty);
+                    rhs = coerce_value_for_target(slot_elem_ty, rhs);
                     emit_store(slot, rhs);
                     return rhs; // assign expr result
                 }
@@ -946,6 +1000,22 @@ namespace parus::oir {
                 // local 외 place(index/field 등)은 generic store로 남긴다.
                 // (백엔드에서 place 해석을 확장할 수 있도록 형태를 유지)
                 ValueId place_v = lower_value(v.a);
+                if (place_v != kInvalidId && (size_t)place_v < out->values.size()) {
+                    if (is_null_coalesce_assign && types != nullptr) {
+                        const TypeId target_ty = out->values[place_v].ty;
+                        if (target_ty != kInvalidId) {
+                            const auto& tt = types->get(target_ty);
+                            if (tt.kind == parus::ty::Kind::kOptional && tt.elem != kInvalidId) {
+                                const ValueId lhs_cur = emit_load(target_ty, place_v);
+                                const ValueId rhs_elem = coerce_value_for_target(tt.elem, rhs);
+                                const ValueId merged_elem = emit_binop(
+                                    tt.elem, Effect::Pure, BinOp::NullCoalesce, lhs_cur, rhs_elem);
+                                rhs = coerce_value_for_target(target_ty, merged_elem);
+                            }
+                        }
+                    }
+                    rhs = coerce_value_for_target(out->values[place_v].ty, rhs);
+                }
                 emit_store(place_v, rhs);
                 return rhs;
             }
@@ -1022,6 +1092,7 @@ namespace parus::oir {
                 TypeId declared = s.declared_type;
                 ValueId init = (s.init != parus::sir::k_invalid_value) ? lower_value(s.init)
                                                                     : emit_const_null(declared);
+                init = coerce_value_for_target(declared, init);
 
                 // if set or mut => slot
                 if (s.is_set || s.is_mut) {
@@ -1042,6 +1113,9 @@ namespace parus::oir {
             case parus::sir::StmtKind::kReturn:
                 if (s.expr != parus::sir::k_invalid_value) {
                     ValueId rv = lower_value(s.expr);
+                    if (def != nullptr && def->ret_ty != kInvalidId) {
+                        rv = coerce_value_for_target(def->ret_ty, rv);
+                    }
                     ret(rv);
                 } else {
                     ret_void();

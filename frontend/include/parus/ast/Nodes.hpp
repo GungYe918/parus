@@ -286,6 +286,7 @@ namespace parus::ast {
         kTypeAlias,    // use NewT = u32;
         kPathAlias,    // use A::B = name;
         kTextSubst,    // use PI 3.14f;
+        kActsEnable,   // use acts Name for T;
     };
 
     struct Stmt {

@@ -780,6 +780,89 @@ namespace parus::tyck {
         return false;
     }
 
+    std::string TypeChecker::type_for_user_diag_(ty::TypeId t, ast::ExprId eid) const {
+        (void)eid;
+        if (t == ty::kInvalidType) return "<invalid>";
+        const auto& tt = types_.get(t);
+        if (tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger) {
+            return "unsuffixed integer literal";
+        }
+        return types_.to_string(t);
+    }
+
+    TypeChecker::CoercionPlan TypeChecker::classify_assign_with_coercion_(
+        AssignSite site,
+        ty::TypeId dst,
+        ast::ExprId src_eid,
+        Span diag_span
+    ) {
+        (void)site;
+        (void)diag_span;
+
+        CoercionPlan plan{};
+        plan.dst = dst;
+        if (src_eid == ast::k_invalid_expr) {
+            plan.ok = false;
+            plan.kind = CoercionKind::Reject;
+            plan.src_before = types_.error();
+            plan.src_after = types_.error();
+            return plan;
+        }
+
+        ty::TypeId src = check_expr_(src_eid);
+        plan.src_before = src;
+        plan.src_after = src;
+        if (is_error_(dst) || is_error_(src)) {
+            plan.ok = true;
+            plan.kind = CoercionKind::Exact;
+            return plan;
+        }
+
+        const bool dst_is_opt = is_optional_(dst);
+        const ty::TypeId dst_elem = dst_is_opt ? optional_elem_(dst) : ty::kInvalidType;
+        plan.optional_elem = dst_elem;
+
+        bool infer_resolved = false;
+        if (!is_error_(src)) {
+            const auto& st = types_.get(src);
+            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
+                const ty::TypeId infer_expected =
+                    (dst_is_opt && dst_elem != ty::kInvalidType) ? dst_elem : dst;
+                if (infer_expected != ty::kInvalidType) {
+                    infer_resolved = resolve_infer_int_in_context_(src_eid, infer_expected);
+                    src = check_expr_(src_eid);
+                    plan.src_after = src;
+                }
+            }
+        }
+
+        if (can_assign_(dst, src)) {
+            plan.ok = true;
+            plan.kind = infer_resolved ? CoercionKind::InferThenExact : CoercionKind::Exact;
+            return plan;
+        }
+
+        if (dst_is_opt && dst_elem != ty::kInvalidType) {
+            if (is_null_(src)) {
+                plan.ok = true;
+                plan.kind = CoercionKind::NullToOptionalNone;
+                return plan;
+            }
+
+            if (can_assign_(dst_elem, src)) {
+                plan.ok = true;
+                plan.kind = infer_resolved
+                    ? CoercionKind::InferThenLiftToOptionalSome
+                    : CoercionKind::LiftToOptionalSome;
+                return plan;
+            }
+        }
+
+        plan.ok = false;
+        plan.kind = CoercionKind::Reject;
+        return plan;
+    }
+
     ty::TypeId TypeChecker::unify_(ty::TypeId a, ty::TypeId b) {
         if (is_error_(a) || is_error_(b)) return types_.error();
         if (a == b) return a;
@@ -1096,19 +1179,12 @@ namespace parus::tyck {
                 return types_.error();
             }
 
-            // rhs가 {integer}면 elem 컨텍스트로 해소 시도
-            {
-                const auto& st = types_.get(rt);
-                if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                    (void)resolve_infer_int_in_context_(e.b, elem);
-                    rt = check_expr_(e.b);
-                }
-            }
-
-            // rhs는 elem에 대입 가능해야 함
-            if (!can_assign_(elem, rt)) {
+            const CoercionPlan rhs_plan = classify_assign_with_coercion_(
+                AssignSite::Assign, elem, e.b, e.span);
+            rt = rhs_plan.src_after;
+            if (!rhs_plan.ok) {
                 diag_(diag::Code::kTypeNullCoalesceRhsMismatch, e.span,
-                    types_.to_string(elem), types_.to_string(rt));
+                    types_.to_string(elem), type_for_user_diag_(rt, e.b));
                 err_(e.span, "operator '?" "?' rhs mismatch");
                 return types_.error();
             }
@@ -1393,18 +1469,12 @@ namespace parus::tyck {
                 return types_.error();
             }
 
-            // RHS가 {integer}면, elem 타입 컨텍스트로 해소 시도
-            {
-                const auto& st = types_.get(rt);
-                if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                    (void)resolve_infer_int_in_context_(e.b, elem);
-                    rt = check_expr_(e.b);
-                }
-            }
-
-            if (!can_assign_(elem, rt)) {
+            const CoercionPlan rhs_plan = classify_assign_with_coercion_(
+                AssignSite::NullCoalesceAssign, elem, e.b, e.span);
+            rt = rhs_plan.src_after;
+            if (!rhs_plan.ok) {
                 diag_(diag::Code::kTypeNullCoalesceAssignRhsMismatch, e.span,
-                    types_.to_string(elem), types_.to_string(rt));
+                    types_.to_string(elem), type_for_user_diag_(rt, e.b));
                 err_(e.span, "operator '?" "?=' rhs mismatch");
                 return types_.error();
             }
@@ -1447,19 +1517,13 @@ namespace parus::tyck {
 
         ty::TypeId rt = check_expr_(e.b);
 
-        // RHS가 {integer}면, LHS 타입 컨텍스트로 해소 시도
-        {
-            const auto& st = types_.get(rt);
-            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                (void)resolve_infer_int_in_context_(e.b, lhs_target);
-                rt = check_expr_(e.b);
-            }
-        }
-
-        if (!can_assign_(lhs_target, rt)) {
+        const CoercionPlan assign_plan = classify_assign_with_coercion_(
+            AssignSite::Assign, lhs_target, e.b, e.span);
+        rt = assign_plan.src_after;
+        if (!assign_plan.ok) {
             diag_(
                 diag::Code::kTypeAssignMismatch, e.span,
-                types_.to_string(lhs_target), types_.to_string(rt)
+                types_.to_string(lhs_target), type_for_user_diag_(rt, e.b)
             );
             err_(e.span, "assign mismatch");
         }
@@ -1628,15 +1692,9 @@ namespace parus::tyck {
             }
 
             const auto& member = ast_.field_members()[mit->second];
-            ty::TypeId rhs_t = check_expr_(ent.expr);
-
-            if (!is_error_(rhs_t)) {
-                const auto& rt = types_.get(rhs_t);
-                if (rt.kind == ty::Kind::kBuiltin && rt.builtin == ty::Builtin::kInferInteger) {
-                    (void)resolve_infer_int_in_context_(ent.expr, member.type);
-                    rhs_t = check_expr_(ent.expr);
-                }
-            }
+            const CoercionPlan plan = classify_assign_with_coercion_(
+                AssignSite::FieldInit, member.type, ent.expr, ent.span);
+            ty::TypeId rhs_t = plan.src_after;
 
             if (is_null_(rhs_t) && !is_optional_(member.type)) {
                 diag_(diag::Code::kFieldInitNonOptionalNull, ent.span, member.name, types_.to_string(member.type));
@@ -1644,8 +1702,8 @@ namespace parus::tyck {
                 continue;
             }
 
-            if (!can_assign_(member.type, rhs_t)) {
-                diag_(diag::Code::kTypeAssignMismatch, ent.span, types_.to_string(member.type), types_.to_string(rhs_t));
+            if (!plan.ok) {
+                diag_(diag::Code::kTypeAssignMismatch, ent.span, types_.to_string(member.type), type_for_user_diag_(rhs_t, ent.expr));
                 err_(ent.span, "field initializer member type mismatch");
             }
         }

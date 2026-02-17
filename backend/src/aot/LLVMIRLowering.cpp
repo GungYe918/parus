@@ -1180,6 +1180,31 @@ namespace parus::backend::aot {
                             emit_const_text_(os, iid, inst);
                         } else if constexpr (std::is_same_v<T, InstConstNull>) {
                             if (inst.result == kInvalidId) return;
+
+                            const auto tid = value_type_id_(inst.result);
+                            if (tid != parus::ty::kInvalidType) {
+                                const auto& tt = types_.get(tid);
+                                if (tt.kind == parus::ty::Kind::kOptional) {
+                                    const std::string agg_ty = map_type_(types_, tid, &named_layouts_);
+                                    const std::string slot = next_tmp_();
+                                    os << "  " << slot << " = alloca " << agg_ty << "\n";
+                                    os << "  store " << agg_ty << " zeroinitializer, ptr " << slot << "\n";
+                                    address_ref_by_value_[inst.result] = slot;
+
+                                    const auto rty = value_ty_(inst.result);
+                                    if (rty == "ptr") {
+                                        os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                                    } else if (is_aggregate_llvm_ty_(rty)) {
+                                        os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << slot << "\n";
+                                    } else if (is_float_ty_(rty)) {
+                                        os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
+                                    } else {
+                                        os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                                    }
+                                    return;
+                                }
+                            }
+
                             const auto rty = value_ty_(inst.result);
                             if (rty == "ptr") {
                                 os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
@@ -1215,6 +1240,42 @@ namespace parus::backend::aot {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
                             using B = BinOp;
+                            if (x.op == B::NullCoalesce) {
+                                const auto lhs_tid = value_type_id_(x.lhs);
+                                if (lhs_tid != parus::ty::kInvalidType) {
+                                    const auto& lhs_tt = types_.get(lhs_tid);
+                                    if (lhs_tt.kind == parus::ty::Kind::kOptional &&
+                                        lhs_tt.elem != parus::ty::kInvalidType) {
+                                        const std::string opt_ty = map_type_(types_, lhs_tid, &named_layouts_);
+                                        std::string elem_ty = map_type_(types_, lhs_tt.elem, &named_layouts_);
+                                        if (elem_ty == "void") elem_ty = "i8";
+
+                                        const std::string lhs_ptr = slot_ptr_ref_(os, x.lhs);
+                                        const std::string lhs_agg = next_tmp_();
+                                        os << "  " << lhs_agg << " = load " << opt_ty << ", ptr " << lhs_ptr << "\n";
+
+                                        const std::string lhs_tag = next_tmp_();
+                                        os << "  " << lhs_tag << " = extractvalue " << opt_ty << " " << lhs_agg << ", 0\n";
+                                        const std::string lhs_payload = next_tmp_();
+                                        os << "  " << lhs_payload << " = extractvalue " << opt_ty << " " << lhs_agg << ", 1\n";
+
+                                        const std::string rhs = coerce_value_(os, x.rhs, elem_ty);
+                                        const std::string picked = next_tmp_();
+                                        os << "  " << picked << " = select i1 " << lhs_tag
+                                           << ", " << elem_ty << " " << lhs_payload
+                                           << ", " << elem_ty << " " << rhs << "\n";
+
+                                        const std::string final_ref = coerce_ref_(os, picked, elem_ty, rty);
+                                        os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, final_ref) << "\n";
+                                        return;
+                                    }
+                                }
+
+                                const auto lhs = coerce_value_(os, x.lhs, rty);
+                                os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, lhs) << "\n";
+                                return;
+                            }
+
                             if (x.op == B::Lt || x.op == B::Le || x.op == B::Gt ||
                                 x.op == B::Ge || x.op == B::Eq || x.op == B::Ne) {
                                 const auto lty = value_ty_(x.lhs);
@@ -1246,10 +1307,6 @@ namespace parus::backend::aot {
                                     case B::Mul: op = is_fp ? "fmul" : "mul"; break;
                                     case B::Div: op = is_fp ? "fdiv" : "sdiv"; break;
                                     case B::Rem: op = is_fp ? "frem" : "srem"; break;
-                                    case B::NullCoalesce:
-                                        // v0 초기 구현: null 병합은 lhs 전달로 낮춘다.
-                                        os << "  " << vref_(inst.result) << " = " << copy_expr_(aty, lhs) << "\n";
-                                        return;
                                     default:
                                         break;
                                 }
@@ -1258,6 +1315,71 @@ namespace parus::backend::aot {
                         } else if constexpr (std::is_same_v<T, InstCast>) {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
+
+                            if (x.to != parus::ty::kInvalidType) {
+                                const auto& to_tt = types_.get(x.to);
+                                if (to_tt.kind == parus::ty::Kind::kOptional &&
+                                    to_tt.elem != parus::ty::kInvalidType) {
+                                    const std::string opt_ty = map_type_(types_, x.to, &named_layouts_);
+                                    std::string elem_ty = map_type_(types_, to_tt.elem, &named_layouts_);
+                                    if (elem_ty == "void") elem_ty = "i8";
+
+                                    const std::string slot = next_tmp_();
+                                    os << "  " << slot << " = alloca " << opt_ty << "\n";
+                                    os << "  store " << opt_ty << " zeroinitializer, ptr " << slot << "\n";
+
+                                    const auto src_tid = value_type_id_(x.src);
+                                    bool copied_opt_to_opt = false;
+                                    if (src_tid != parus::ty::kInvalidType) {
+                                        const auto& src_tt = types_.get(src_tid);
+                                        if (src_tt.kind == parus::ty::Kind::kOptional) {
+                                            const std::string src_ptr = slot_ptr_ref_(os, x.src);
+                                            const std::string src_agg_ty = map_type_(types_, src_tid, &named_layouts_);
+                                            const std::string src_loaded = next_tmp_();
+                                            os << "  " << src_loaded << " = load " << src_agg_ty << ", ptr " << src_ptr << "\n";
+                                            std::string copied = src_loaded;
+                                            if (src_agg_ty != opt_ty) {
+                                                copied = coerce_ref_(os, src_loaded, src_agg_ty, opt_ty);
+                                            }
+                                            os << "  store " << opt_ty << " " << copied << ", ptr " << slot << "\n";
+                                            copied_opt_to_opt = true;
+                                        }
+                                    }
+
+                                    if (!copied_opt_to_opt) {
+                                        const bool src_is_null =
+                                            (src_tid != parus::ty::kInvalidType &&
+                                             types_.get(src_tid).kind == parus::ty::Kind::kBuiltin &&
+                                             types_.get(src_tid).builtin == parus::ty::Builtin::kNull);
+
+                                        if (!src_is_null) {
+                                            const std::string tag_gep = next_tmp_();
+                                            os << "  " << tag_gep << " = getelementptr " << opt_ty
+                                               << ", ptr " << slot << ", i32 0, i32 0\n";
+                                            os << "  store i1 true, ptr " << tag_gep << "\n";
+
+                                            const std::string payload_gep = next_tmp_();
+                                            os << "  " << payload_gep << " = getelementptr " << opt_ty
+                                               << ", ptr " << slot << ", i32 0, i32 1\n";
+                                            const std::string payload = coerce_value_(os, x.src, elem_ty);
+                                            os << "  store " << elem_ty << " " << payload << ", ptr " << payload_gep << "\n";
+                                        }
+                                    }
+
+                                    address_ref_by_value_[inst.result] = slot;
+                                    if (rty == "ptr") {
+                                        os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                                    } else if (is_aggregate_llvm_ty_(rty)) {
+                                        os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << slot << "\n";
+                                    } else if (is_float_ty_(rty)) {
+                                        os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
+                                    } else {
+                                        os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                                    }
+                                    return;
+                                }
+                            }
+
                             const auto src = coerce_value_(os, x.src, rty);
                             os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, src) << "\n";
                         } else if constexpr (std::is_same_v<T, InstFuncRef>) {
@@ -1390,10 +1512,49 @@ namespace parus::backend::aot {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
                             const auto ptr = slot_ptr_ref_(os, x.slot);
+
+                            const auto tid = value_type_id_(inst.result);
+                            if (tid != parus::ty::kInvalidType) {
+                                const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                if (is_aggregate_llvm_ty_(full_ty) && rty == "ptr") {
+                                    const std::string val = next_tmp_();
+                                    os << "  " << val << " = load " << full_ty << ", ptr " << ptr << "\n";
+                                    const std::string tmp_slot = next_tmp_();
+                                    os << "  " << tmp_slot << " = alloca " << full_ty << "\n";
+                                    os << "  store " << full_ty << " " << val << ", ptr " << tmp_slot << "\n";
+                                    address_ref_by_value_[inst.result] = tmp_slot;
+                                    os << "  " << vref_(inst.result) << " = bitcast ptr " << tmp_slot << " to ptr\n";
+                                    return;
+                                }
+                            }
+
                             os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << ptr << "\n";
                         } else if constexpr (std::is_same_v<T, InstStore>) {
-                            const auto vty = value_ty_(x.value);
                             const auto ptr = slot_ptr_ref_(os, x.slot);
+
+                            const auto slot_tid = value_type_id_(x.slot);
+                            if (slot_tid != parus::ty::kInvalidType) {
+                                const std::string slot_full_ty = map_type_(types_, slot_tid, &named_layouts_);
+                                if (is_aggregate_llvm_ty_(slot_full_ty)) {
+                                    const auto value_tid = value_type_id_(x.value);
+                                    if (value_tid != parus::ty::kInvalidType) {
+                                        const std::string value_full_ty = map_type_(types_, value_tid, &named_layouts_);
+                                        if (is_aggregate_llvm_ty_(value_full_ty) && value_ty_(x.value) == "ptr") {
+                                            const std::string src_ptr = slot_ptr_ref_(os, x.value);
+                                            const std::string loaded = next_tmp_();
+                                            os << "  " << loaded << " = load " << value_full_ty << ", ptr " << src_ptr << "\n";
+                                            std::string copied = loaded;
+                                            if (value_full_ty != slot_full_ty) {
+                                                copied = coerce_ref_(os, loaded, value_full_ty, slot_full_ty);
+                                            }
+                                            os << "  store " << slot_full_ty << " " << copied << ", ptr " << ptr << "\n";
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+
+                            const auto vty = value_ty_(x.value);
                             const auto val = coerce_value_(os, x.value, vty);
                             os << "  store " << vty << " " << val << ", ptr " << ptr << "\n";
                         }

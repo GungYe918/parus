@@ -193,6 +193,42 @@ namespace parus {
             return ast_.add_stmt(s);
         }
 
+        // use acts Name for T;
+        if (cursor_.at(K::kKwActs)) {
+            cursor_.bump(); // acts
+
+            auto [pb, pc] = parse_path_segments();
+            s.use_path_begin = pb;
+            s.use_path_count = pc;
+            if (pc > 0) {
+                const auto& segs = ast_.path_segs();
+                s.use_name = segs[pb + pc - 1];
+            }
+
+            const auto is_for_token = [](const Token& t) -> bool {
+                return t.kind == K::kIdent && t.lexeme == "for";
+            };
+
+            if (!is_for_token(cursor_.peek())) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "for");
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+            cursor_.bump(); // for
+
+            const auto ty = parse_type();
+            s.acts_target_type = ty.id;
+            if (s.acts_target_type == ast::k_invalid_type) {
+                diag_report(diag::Code::kActsForTypeExpected, ty.span);
+            }
+
+            s.use_kind = ast::UseKind::kActsEnable;
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
         // ------------------------------------------------------------
         // 2) non-module forms must start with Ident (path head)
         //    - TypeAlias:   use NewT (=|as) Type;

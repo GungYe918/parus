@@ -180,7 +180,7 @@ namespace parus {
         //  field 선언 파싱
         ast::StmtId parse_decl_field();
 
-        //  acts 선언 파싱 (v0: 일반 acts A { ... }만 지원)
+        //  acts 선언 파싱 (v0: acts A, acts for T, acts Name for T)
         ast::StmtId parse_decl_acts();
         ast::StmtId parse_decl_acts_operator(ast::TypeId owner_type, bool allow_operator);
 

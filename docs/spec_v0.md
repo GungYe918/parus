@@ -209,7 +209,10 @@ def float_literals() -> void {
 ### 2.3 불리언, null
 
 * true, false
-* null은 그 자체로만 존재하며 자동 변환이 없다.
+* null은 값 부재를 나타내는 리터럴이다.
+* `T <: T?` 전역 승격은 허용하지 않는다.
+* 단, 대입 경계(let/set 초기화, `=`, field init, call arg, return, default arg, `??=`)에서는
+  `T -> T?` 암시 주입을 허용한다.
 
 예시
 
@@ -326,9 +329,9 @@ def demo() -> void {
 }
 ```
 
-### 3.1.3 `use` 문 (로컬 alias/치환 전용)
+### 3.1.3 `use` 문 (로컬 alias/치환 + acts 선택)
 
-`use`는 로컬 축약과 치환에만 사용한다.
+`use`는 로컬 축약/치환과 acts 선택에 사용한다.
 
 1. 타입 별칭
 
@@ -343,11 +346,18 @@ use foo::math::add as add_i32;
 use foo::io::print = println;
 ```
 
-3. 파일 스코프 상수/치환
+3. 스코프 상수/치환
 
 ```parus
 use PI 3.14f;
 use GAME_NAME "Parus";
+```
+
+4. 타입별 acts 세트 선택
+
+```parus
+use Vec2 with acts(A);
+use Vec2 with acts(default);
 ```
 
 제약(v0 강제):
@@ -355,6 +365,9 @@ use GAME_NAME "Parus";
 * `use`는 예약어/토큰을 바꾸지 않는다.
 * `use NAME expr;` 치환 대상은 식별자(IDENT)만 가능하다.
 * 함수형 매크로(인자), 토큰 결합/분해는 금지한다.
+* acts 선택은 `use T with acts(NameOrDefault);` 문법만 허용한다.
+* `use acts Foo for T;` 문법은 폐기한다.
+* acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용하며, lexical scope 규칙을 따른다.
 
 ### 3.1.4 `nest` 네임스페이스
 
@@ -536,10 +549,14 @@ def primitives() -> void{
 
 ### 4.2 nullable 타입 (T?)
 
-* null은 그 자체로만 존재한다.
-* nullable은 T? 로 표기한다.
-* non-nullable T 에 null을 대입/반환/전달하면 에러다.
-* if (x == null) 비교는 T? 에서만 허용한다.
+* nullable은 `T?`로 표기한다.
+* `T?`는 `T` 값 또는 `null`을 담는 1급 값 타입이다.
+* non-nullable `T`에 `null`을 대입/반환/전달하면 에러다.
+* `if (x == null)` 비교는 nullable 문맥에서만 허용한다.
+* 하이브리드 승격 규칙:
+  * 대입 경계에서는 `T -> T?` 암시 주입 허용
+  * 표현식 전역 승격(`T <: T? everywhere`)은 금지
+* nullable 관련 정본은 `docs/abi/v0.0.1/NULLABLE_MODEL.md`를 따른다.
 
 예시
 
@@ -3431,6 +3448,8 @@ proto Stream {
 
 ## 11. acts: 행동 묶음과 타입 부착(메서드/연산자)
 
+보조 안내 문서는 `docs/acts/v0/ACTS_MODEL.md`를 따른다. 충돌 시 본 섹션이 우선한다.
+
 ### 11.1 acts의 목적
 
 * **field는 저장소, acts는 행동**이다. (field/tablet 내부에 “행동을 강제”하지 않고, 행동은 acts로 분리한다.)
@@ -3445,16 +3464,18 @@ proto Stream {
 
 ---
 
-### 11.2 acts의 세 형태: `acts A {}` vs `acts for T {}` vs `acts Foo for T {}`
+### 11.2 acts의 세 형태: `acts A {}` vs `acts for T {}` vs `acts Name for T {}`
 
-Parus v0에는 acts 블록이 **세 가지 형태**로 존재한다.
+Parus v0에는 acts 블록이 세 가지 형태로 존재한다.
 
 #### (1) 일반 acts(네임스페이스): `acts A { ... }`
 
-* `acts A {}`는 **A라는 이름의 acts 네임스페이스(행동 묶음)** 를 만든다.
-* 이 블록 안의 선언은 **항상 스코프 호출(정적 호출)** 로 사용한다.
+* `acts A {}`는 A라는 이름의 acts 네임스페이스(행동 묶음)를 만든다.
+* 이 블록 안의 선언은 정적 경로 호출(`A::f(...)`)로만 사용한다.
+* `acts A` 내부 함수는 dot 호출 sugar 대상이 아니다.
+* `acts A` 내부에 operator 선언은 금지한다.
 
-호출 예시:
+예시:
 
 ```parus
 acts Math {
@@ -3466,33 +3487,19 @@ def demo() -> void {
 }
 ```
 
-규칙:
-
-* `acts A` 내부 함수는 **dot 호출 sugar의 대상이 아니다.**
-* `acts A` 내부에 operator 선언은 불가능하다.
-  (연산자 재정의는 **반드시 타입 부착형**에서만 가능)
-
 ---
 
-#### (2) 기본 부착형 acts(기본 동작/기본 연산자): `acts for T { ... }`
+#### (2) 기본 부착형 acts: `acts for T { ... }`
 
-* `acts for T {}`는 **타입 T에 행동을 부착**한다.
-* 이 acts는 **해당 타입의 “기본 acts”** 로 취급되며, **use 없이 자동 활성**이다.
-
-> **field 부착의 의미**:
-> `field Foo { ... }`가 있다고 해서 “부착 문법”이 따로 있는 게 아니라,
-> **`acts for Foo { ... }`를 정의하는 행위 자체가 Foo에 부착**이다.
+* `acts for T`는 타입 `T`의 **default acts**다.
+* default acts는 타입에 자동 부착되며, named acts lookup 실패 시 fallback 대상으로 사용된다.
 
 핵심 규칙(v0):
 
-* 타입 `T`에 대한 **기본 acts는 프로그램 전체에서 하나의 집합**이다.
-* 구현 편의상 v0에서는:
+* 타입 `T`의 default acts 집합은 의미적으로 하나여야 한다.
+* 동일 시그니처(함수 시그니처 / operator key + 시그니처) 중복 정의는 에러다.
 
-  * `acts for T`를 여러 블록으로 “쪼개어” 쓸 수 있더라도 **한 파일 안에서만** 허용한다.
-  * 파일을 넘어 분산(partial)하는 것은 금지한다.
-* 동일한 시그니처(동일 함수 시그니처, 동일 operator key/시그니처)를 중복 정의하면 에러.
-
-호출(메서드/UFCS) 예시:
+예시:
 
 ```parus
 acts for Packet {
@@ -3500,133 +3507,94 @@ acts for Packet {
 }
 
 def demo(p: Packet) -> void {
-  set a = p.checksum(5u32);          // dot 호출
-  set b = Packet::checksum(p, 5u32); // UFCS 호출
+  set a = p.checksum(5u32);
+  set b = Packet::checksum(p, 5u32);
 }
 ```
 
 ---
 
-#### (3) 이름 있는 부착형 acts(선택 가능한 “행동/연산자 세트”): `acts Foo for T { ... }`
+#### (3) 이름 있는 부착형 acts: `acts Name for T { ... }`
 
-* `acts Foo for T {}`는 **타입 T에 부착되지만 기본 활성은 아니다.**
-* 이 acts는 **이름이 Foo인 “선택 가능한 acts 세트”** 이다.
-* 사용하려면 **반드시** 아래처럼 명시해야 한다:
-
-```parus
-use acts Foo for T;
-```
-
-중요 규칙(v0):
-
-* 같은 타입 `T`에 대해 `acts Foo for T`, `acts Goo for T`가 동시에 존재할 수 있다.
-* 그러나 **한 스코프에서 동시에 둘 이상 활성화할 수 없다.**
-
-  * `use acts Foo for T;`와 `use acts Goo for T;`를 같은 스코프에 두면 에러
-* 선택 acts에서 정의되지 않은 연산자는 **fallback**으로 기본 동작을 따른다(11.7).
-
----
-
-### 11.3 export 규칙: “acts 블록 단위 export”만 존재
-
-v0에서 export는 다음으로 고정한다.
-
-* `export`는 **acts 블록 전체**에만 적용된다.
-* acts 내부의 개별 함수/연산자만 export하는 기능은 **없다**.
+* `acts Name for T`는 타입 `T`에 부착되는 named acts 세트다.
+* named acts는 자동 활성되지 않는다.
+* 활성화는 `use T with acts(Name);`로 수행한다.
 
 예시:
 
 ```parus
-export acts for Packet {
-  def checksum(self a: &Packet, foo: i32) -> u32 { ... }
-  def verify(self a: &Packet) -> bool { ... }
-}
-```
-
-금지 예시(존재하지 않는 문법):
-
-```parus
-acts for Packet {
-  export def checksum(...) -> u32 { ... } // 금지: acts 내부 개별 export 없음
+acts FastMath for Vec2 {
+  operator(+)(self a: Vec2, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
 ---
 
-### 11.4 `acts for T` / `acts Foo for T`의 리시버(self) 규칙과 호출 규칙
+### 11.3 acts 선택 문법과 스코프 규칙
 
-#### (1) `self`는 “파라미터 이름”이 아니라 **리시버 마커(modifier)** 다
+acts 세트 선택 문법은 아래로 고정한다.
+
+```parus
+use Vec2 with acts(FastMath);
+use Vec2 with acts(default);
+```
+
+규칙(v0):
+
+1. `use T with acts(Name);`는 현재 lexical scope에서 타입 `T`의 활성 named acts를 `Name`으로 설정한다.
+2. `use T with acts(default);`는 현재 lexical scope에서 타입 `T`를 default acts 전용으로 되돌린다.
+3. acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용한다.
+4. 내부 스코프 선택이 외부 스코프 선택을 shadowing하며, 블록 종료 시 자동 해제된다.
+5. 폐기 문법: `use acts Foo for T;`
+
+---
+
+### 11.4 export 규칙: acts 블록 단위 export만 허용
+
+v0에서 export는 acts 블록 전체에만 적용한다.
+
+```parus
+export acts for Packet {
+  def checksum(self a: &Packet, seed: i32) -> u32 { ... }
+}
+```
+
+금지:
+
+```parus
+acts for Packet {
+  export def checksum(...) -> u32 { ... } // 금지
+}
+```
+
+---
+
+### 11.5 `acts for T` / `acts Name for T` 리시버(self) 규칙
+
+`self`는 파라미터 이름이 아니라 리시버 마커다.
 
 ```parus
 def checksum(self a: &T, seed: u32) -> u32 { ... }
 ```
 
-여기서
+강제 규칙(v0):
 
-* `self` : 예약된 **리시버 마커**
-* `a` : 유저가 고르는 **진짜 파라미터 이름**
-* `&T`, `&mut T`, `T` 등은 리시버 전달 방식을 의미
+1. `self`는 첫 번째 파라미터 위치에서만 허용한다.
+2. `self` 파라미터 타입은 `T` 또는 `&T`/`&mut T` 등 T 기반이어야 한다.
+3. `self`가 붙은 함수만 메서드(dot 호출) 대상이다.
 
-**강제 규칙(v0):**
-
-* `self` 마커는 **반드시 첫 번째 파라미터 앞**에만 올 수 있다.
-* `self`가 붙은 파라미터는 **반드시 타입이 T(또는 &T / &mut T 등 T 기반)** 이어야 한다.
-* `self`가 붙은 함수만이 “메서드(리시버 보유)”로 취급된다.
-
-#### (2) dot 호출: 리시버 인자는 **암묵 전달(첫 인자 생략)**
-
-아래는 동일 의미:
+dot 호출 lowering:
 
 ```parus
-x.f(1, 2);
+x.f(1, 2);      // == T::f(x, 1, 2)
 T::f(x, 1, 2);
 ```
 
-즉, dot 호출은 `T::f(x, ...)`로 lowering 된다.
-
-#### (3) “self가 없는 함수”는 메서드가 아니며, 호출은 자유(정적 dot sugar 허용)
-
-```parus
-acts for T {
-  def make(a: i32, b: i32) -> T { ... } // self 없음
-}
-
-set t1 = T::make(1,2);
-set t2 = someT.make(1,2); // 허용: T::make(1,2)로 lowering (리시버 전달 의미 없음)
-```
-
 ---
 
-### 11.5 `acts for T` 내부 함수의 “T 인자 요구” 규칙
+### 11.6 연산자 오버로딩 규칙
 
-`acts ... for T` 안에서 “T에 붙는 동작”을 정의할 때,
-
-* **T를 인자로 받는다면 반드시 `self`로 리시버를 선언**한다.
-
-예:
-
-```parus
-acts for T {
-  def checksum(self x: &T, seed: u32) -> u32 { ... }
-}
-```
-
-반대로, T를 받지 않으면 `self`를 쓰지 않는다:
-
-```parus
-acts for T {
-  def make_seed(x: i32, y: i32) -> u64 { ... } // T 인자 없음
-}
-```
-
----
-
-### 11.6 연산자 오버로딩: `operator(...)`만 유일하게 존재 (기존 op("TOKEN") 완전 폐기)
-
-v0에서 연산자 정의 방식은 **오직 하나**만 존재한다.
-
-* 기존의 `: op("TOKEN")` 매핑 방식은 **언어에서 삭제**된다.
-* 연산자는 항상 다음 형태로 선언한다:
+연산자 선언은 `operator(...)` 문법만 사용한다.
 
 ```parus
 operator(+)(self a: T, rhs: T) -> T { ... }
@@ -3635,142 +3603,86 @@ operator(++pre)(self x: &mut T) -> T { ... }
 operator(++post)(self x: &mut T) -> T { ... }
 ```
 
-#### (1) operator 선언은 `def` 키워드를 붙이지 않는다
+규칙(v0):
 
-* `operator(...)`는 acts 내부의 **특수 선언**이며, 문법적으로 `def`을 사용하지 않는다.
-
-#### (2) operator는 **타입 부착형에서만 허용**
-
-* `operator(...)` 선언은 아래 둘에서만 허용:
-
-  * `acts for T { ... }`
-  * `acts Foo for T { ... }`
-* `acts A { ... }`(일반 acts) 내부에서 operator 선언은 **금지**한다.
-
-#### (3) operator의 “리시버(self)”는 항상 존재한다
-
-* 모든 operator 선언은 해당 타입에 바인딩되므로 첫 파라미터는 항상 `self`를 사용한다.
-
-#### (4) `++`는 `(++pre)`, `(++post)`만 존재한다
-
-* `operator(++pre)` : `++x`
-* `operator(++post)` : `x++`
+1. `operator(...)`는 `def` 키워드를 쓰지 않는다.
+2. operator 선언은 `acts for T`와 `acts Name for T`에서만 허용한다.
+3. 일반 `acts A {}` 안의 operator 선언은 금지한다.
+4. operator 해석은 활성 named acts 우선, 없으면 default acts fallback 순서를 따른다.
 
 ---
 
-### 11.7 연산자/메서드 해석(리졸브) 규칙 요약 (v0)
+### 11.7 메서드/연산자 해석 규칙 (named-first + default fallback)
 
-표현식에서 연산자나 dot-호출을 해석할 때 타입체커는 **“활성 acts 세트”** 를 사용한다.
+타입이 `T`이고 현재 스코프 선택이 `use T with acts(S);`일 때:
 
-#### (1) 활성 acts 세트 결정 규칙
+1. `acts S for T`에서 후보를 먼저 찾는다.
+2. 없으면 `acts for T`(default)에서 찾는다.
+3. 그래도 없으면 builtin 규칙(해당 시)으로 넘어가고, 없으면 타입 에러다.
 
-타입이 `T`일 때, 현재 스코프에서:
+`use T with acts(default);`일 때:
 
-1. `use acts Foo for T;`가 존재하면 -> **활성 세트 = Foo**
-2. 없으면 -> **활성 세트 = 기본 acts (`acts for T`)**
+1. default acts만 사용한다.
+2. named acts는 조회하지 않는다.
 
-추가 규칙(v0):
+충돌 규칙(v0, 필수):
 
-* 같은 스코프에서 `use acts Foo for T;`와 `use acts Goo for T;`가 동시에 있으면 **에러**
-* “섞기”는 불가능하다(의도적으로 단순화).
-
-#### (2) operator 해석 순서(fallback 포함)
-
-피연산자 타입이 `T`이고 현재 활성 세트가 `S`라면:
-
-1. `acts S for T` 안에서 `operator(KEY)` 찾기
-2. 없으면 `acts for T`(기본 acts)에서 찾기
-3. 그래도 없으면 primitive 등에서 가능한 **builtin 기본 연산**으로 처리(가능한 경우)
-4. 전부 없으면 타입 에러
-
-#### (3) 메서드(dot)/UFCS 해석도 동일한 “활성 세트”를 따른다
-
-`x.method(...)`나 `T::method(x, ...)`도
-
-* 먼저 활성 세트(예: `acts Foo for T`)에서 찾고,
-* 없으면 기본 acts(`acts for T`)에서 찾는다.
+1. 활성 named acts와 default acts에 동일 시그니처가 동시에 존재하면 컴파일 에러다.
+2. 같은 lexical scope에서 타입 `T`에 서로 다른 named acts를 동시에 활성화하면 컴파일 에러다.
 
 ---
 
-### 11.8 예시 모음 (v0 스타일, “확정된 규칙” 반영)
+### 11.8 예시 모음
 
-#### (1) field + 기본 acts for(자동 부착/자동 활성)
+#### (1) default acts만 사용
 
 ```parus
 export field Foo {
-  u32 v;
+  v: u32;
 }
 
 export acts for Foo {
   def inc(self x: &mut Foo) -> void { x.v = x.v + 1u32; }
-
-  operator(+)(self a: Foo, rhs: Foo) -> Foo {
-    return Foo{ v: a.v + rhs.v };
-  }
+  operator(+)(self a: Foo, rhs: Foo) -> Foo { return Foo{ v: a.v + rhs.v }; }
 }
-```
 
-사용:
-
-```parus
 def demo(mut a: Foo, b: Foo) -> Foo {
-  a.inc();          // dot -> Foo::inc(a)
-  set c = a + b;    // 자동: acts for Foo의 operator(+)
-  return c;
+  a.inc();
+  return a + b;
 }
 ```
 
----
-
-#### (2) 선택 acts Foo for T + use로 세트 선택 + fallback
+#### (2) named acts 선택 + fallback
 
 ```parus
 export acts FooMath for Foo {
-  // +만 “다른 의미”로 재정의
   operator(+)(self a: Foo, rhs: Foo) -> Foo {
-    // 예: saturating add 같은 정책
     return Foo{ v: __intrin_u32_saturating_add(a.v, rhs.v) };
   }
+}
 
-  def describe(self x: &Foo) -> string {
-    return F"""Foo(v={x.v})""";
+def demo2(a: Foo, b: Foo) -> Foo {
+  set x = a + b;                 // default acts
+
+  use Foo with acts(FooMath);    // 현재 스코프에서 named 선택
+  set y = a + b;                 // FooMath 우선
+
+  use Foo with acts(default);    // default로 복귀
+  set z = a + b;
+  return z;
+}
+```
+
+#### (3) 블록 단위 acts 선택
+
+```parus
+def demo3(a: Foo, b: Foo) -> Foo {
+  set x = a + b;                 // 외부 스코프: default
+  {
+    use Foo with acts(FooMath);  // 내부 블록에서만 FooMath
+    set y = a + b;
   }
-}
-```
-
-사용(기본 세트 vs 선택 세트):
-
-```parus
-def demo2(a: Foo, b: Foo) -> void {
-  // 기본 세트(acts for Foo)로 동작
-  set x = a + b;
-
-  // 여기서부터 FooMath 세트 활성
-  use acts FooMath for Foo;
-
-  set y = a + b;         // FooMath의 + 사용
-  set s = a.describe();  // FooMath의 메서드 사용
-
-  // FooMath에 없는 연산자는 fallback:
-  // 예: operator(==)가 FooMath에 없으면 -> acts for Foo -> builtin 순으로 탐색
-}
-```
-
-**주의(v0 규칙)**: 같은 스코프에 아래 둘을 동시에 두면 에러
-
-```parus
-use acts FooMath for Foo;
-use acts GooMath for Foo; // 에러: acts 세트 혼합 금지
-```
-
----
-
-#### (3) primitive 기본 연산은 코어 라이브러리의 `acts for u32`가 담당
-
-```parus
-export acts for u32 {
-  operator(+)(self a: u32, rhs: u32) -> u32 { return __intrin_u32_add(a, rhs); }
-  operator(==)(self a: u32, rhs: u32) -> bool { return __intrin_u32_eq(a, rhs); }
+  return x + b;                  // 블록 종료 후 default
 }
 ```
 
@@ -4077,11 +3989,15 @@ UseStmt       := "use" UseBody ";" ;
 UseBody       := UseTypeAlias
                | UsePathAlias
                | UseTextSubst
+               | UseActsSelect
                ;
 
 UseTypeAlias  := Ident "=" Type ;
 UsePathAlias  := Path "=" Ident ;              /* 경로 별칭 */
 UseTextSubst  := Ident Expr ;                  /* IDENT 단위 치환(매크로 함수 금지) */
+UseActsSelect := ActsTargetType "with" "acts" "(" ActsSetName ")" ;
+ActsTargetType:= PathType ;
+ActsSetName   := Ident | "default" ;
 ```
 
 ---
@@ -4237,14 +4153,17 @@ CtorBodyOrDelete := Block | "= delete" ";" ;
 DtorDecl      := "destruct" DtorBodyOrDelete ;
 DtorBodyOrDelete := Block | "= delete" ";" ;
 
-ActsDecl      := ExportOpt "acts" Type BlockActs ;
+ActsDecl      := ExportOpt "acts" ActsHead BlockActs ;
+ActsHead      := "for" Type
+               | Ident
+               | Ident "for" Type ;
 BlockActs     := "{" ActsMember* "}" ;
 ActsMember    := FuncDecl
                | OperatorDecl
                | ";" ;
 
-OperatorDecl  := "op" OperatorName FuncParams "->" Type Block ;
-OperatorName  := Ident | PunctOp ;
+OperatorDecl  := "operator" "(" OperatorName ")" FuncParams "->" Type Block ;
+OperatorName  := PunctOp | "++pre" | "++post" ;
 
 PunctOp       := "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">="
                | "[]" | "()" | "++" | "=" | "+=" | "-=" | "*=" | "/=" | "%="
@@ -4275,6 +4194,7 @@ Block         := "{" Stmt* "}" ;
 
 Stmt          := ";"
                | Block
+               | UseStmt
                | VarStmt
                | IfExprStmt
                | WhileStmt

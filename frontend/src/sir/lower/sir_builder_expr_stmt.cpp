@@ -237,17 +237,53 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
+                bool inject_implicit_receiver = false;
+                parus::ast::ExprId receiver_eid = parus::ast::k_invalid_expr;
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
+
+                    // acts-for method call sugar:
+                    //   obj.m(...)  -> T::m(obj, ...)  when selected overload has `self` receiver.
+                    if ((size_t)overload_sid < ast.stmts().size() &&
+                        e.a != parus::ast::k_invalid_expr) {
+                        const auto& callee_expr = ast.expr(e.a);
+                        if (callee_expr.kind == parus::ast::ExprKind::kBinary &&
+                            callee_expr.op == parus::syntax::TokenKind::kDot &&
+                            callee_expr.a != parus::ast::k_invalid_expr) {
+                            const auto& def = ast.stmt(overload_sid);
+                            if (def.kind == parus::ast::StmtKind::kFnDecl && def.param_count > 0) {
+                                const auto& p0 = ast.params()[def.param_begin + 0];
+                                if (p0.is_self) {
+                                    inject_implicit_receiver = true;
+                                    receiver_eid = callee_expr.a;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // callee
-                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                if (overload_sid != ast::k_invalid_stmt) {
+                    v.a = k_invalid_value;
+                } else {
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                }
 
                 // args slice into Module::args
                 v.arg_begin = (uint32_t)m.args.size();
                 v.arg_count = 0;
+
+                if (inject_implicit_receiver && receiver_eid != parus::ast::k_invalid_expr) {
+                    Arg recv{};
+                    recv.kind = ArgKind::kPositional;
+                    recv.has_label = false;
+                    recv.is_hole = false;
+                    recv.span = ast.expr(receiver_eid).span;
+                    recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
+                    m.add_arg(recv);
+                    v.arg_count++;
+                }
 
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
                     const auto& aa = ast.args()[e.arg_begin + i];

@@ -4,8 +4,10 @@
 
 - 현재 고정 버전: `v0.0.1`
 - 단일 신뢰 문서: `docs/abi/v0.0.1/ABI.md`
+- OOP 모델 정본: `docs/abi/v0.0.1/OOP_MODEL.md`
 - 문자열 모델 상세: `docs/abi/v0.0.1/STRING_MODEL.md`
 - 저장소 정책 상세: `docs/abi/v0.0.1/STORAGE_POLICY.md`
+- nullable 모델 상세: `docs/abi/v0.0.1/NULLABLE_MODEL.md`
 
 ## 버전 정책 (`MAJOR.MINOR.PATCH`)
 

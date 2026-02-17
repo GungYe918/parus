@@ -1,0 +1,14 @@
+def takes(x: i32?) -> i32 {
+    return x ?? 99i32;
+}
+
+def make() -> i32? {
+    return 7i32;
+}
+
+def main() -> i32 {
+    let a: i32? = 5;
+    let b: i32 = takes(x: 3);
+    let c: i32 = make() ?? 0i32;
+    return (a ?? 0i32) + b + c;
+}

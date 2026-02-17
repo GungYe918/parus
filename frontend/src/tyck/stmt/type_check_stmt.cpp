@@ -117,6 +117,11 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
                 }
+                if (s.use_kind == ast::UseKind::kActsEnable && block_depth_ != 0) {
+                    const std::string msg = "use acts is only allowed at file scope";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                }
                 return;
 
             case ast::StmtKind::kNestDecl:
@@ -221,38 +226,13 @@ namespace parus::tyck {
 
             ty::TypeId init_t = ty::kInvalidType;
             if (s.init != ast::k_invalid_expr) {
-                init_t = check_expr_(s.init);
+                const CoercionPlan init_plan = classify_assign_with_coercion_(
+                    AssignSite::LetInit, s.type, s.init, s.span);
+                init_t = init_plan.src_after;
 
-                // 컨텍스트 해소:
-                // - let x: i32 = 123;
-                // - let x: i32[] = [1, 2, 3];
-                // 같은 케이스에서 RHS 내부의 {integer}를 declared type 문맥으로 확정한다.
-                if (s.type != ty::kInvalidType) {
-                    auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
-                        if (tid == ty::kInvalidType) return false;
-                        const auto& tt = types_.get(tid);
-                        switch (tt.kind) {
-                            case ty::Kind::kBuiltin:
-                                return tt.builtin == ty::Builtin::kInferInteger;
-                            case ty::Kind::kOptional:
-                            case ty::Kind::kArray:
-                            case ty::Kind::kBorrow:
-                            case ty::Kind::kEscape:
-                                return self(tt.elem, self);
-                            default:
-                                return false;
-                        }
-                    };
-
-                    if (type_contains_infer_int(init_t, type_contains_infer_int)) {
-                        (void)resolve_infer_int_in_context_(s.init, s.type);
-                        init_t = check_expr_(s.init); // 논리적 재평가 의도
-                    }
-                }
-
-                if (s.type != ty::kInvalidType && !can_assign_(s.type, init_t)) {
+                if (s.type != ty::kInvalidType && !init_plan.ok) {
                     diag_(diag::Code::kTypeLetInitMismatch, s.span,
-                        s.name, types_.to_string(s.type), types_.to_string(init_t));
+                        s.name, types_.to_string(s.type), type_for_user_diag_(init_t, s.init));
                     err_(s.span, "let init mismatch");
                 }
             }
@@ -451,15 +431,11 @@ namespace parus::tyck {
         }
 
         ty::TypeId v = check_expr_(s.expr);
-
-        const auto& vt0 = types_.get(v);
-        if (vt0.kind == ty::Kind::kBuiltin && vt0.builtin == ty::Builtin::kInferInteger) {
-            (void)resolve_infer_int_in_context_(s.expr, rt);
-            v = check_expr_(s.expr);
-        }
-
-        if (!can_assign_(rt, v)) {
-            diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), types_.to_string(v));
+        const CoercionPlan ret_plan = classify_assign_with_coercion_(
+            AssignSite::Return, rt, s.expr, s.span);
+        v = ret_plan.src_after;
+        if (!ret_plan.ok) {
+            diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), type_for_user_diag_(v, s.expr));
 
             err_(s.span, "return mismatch"); // 저장만 수행, 출력은 위 diag_ 하나로 종결
         }
@@ -585,21 +561,16 @@ namespace parus::tyck {
 
             // named-group default만 타입 검사
             if (p.is_named_group && p.has_default && p.default_expr != ast::k_invalid_expr) {
-                ty::TypeId dt = check_expr_(p.default_expr);
-
-                const auto& dtt = types_.get(dt);
-                if (dtt.kind == ty::Kind::kBuiltin && dtt.builtin == ty::Builtin::kInferInteger) {
-                    (void)resolve_infer_int_in_context_(p.default_expr, pt);
-                    dt = check_expr_(p.default_expr);
-                }
-
-                if (!can_assign_(pt, dt)) {
+                const CoercionPlan dplan = classify_assign_with_coercion_(
+                    AssignSite::DefaultArg, pt, p.default_expr, p.span);
+                const ty::TypeId dt = dplan.src_after;
+                if (!dplan.ok) {
                     std::ostringstream oss;
                     oss << "default value type mismatch for param '" << p.name
                         << "': expected " << types_.to_string(pt)
-                        << ", got " << types_.to_string(dt);
+                        << ", got " << type_for_user_diag_(dt, p.default_expr);
                     diag_(diag::Code::kTypeParamDefaultMismatch, p.span,
-                            p.name, types_.to_string(pt), types_.to_string(dt));
+                            p.name, types_.to_string(pt), type_for_user_diag_(dt, p.default_expr));
                     err_(p.span, oss.str());
                 }
             }

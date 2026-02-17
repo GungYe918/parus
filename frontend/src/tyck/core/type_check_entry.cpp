@@ -32,6 +32,9 @@ namespace parus::tyck {
         pending_int_expr_.clear();
         sym_is_mut_.clear();
         acts_default_operator_map_.clear();
+        acts_default_method_map_.clear();
+        acts_named_decl_by_owner_and_name_.clear();
+        acts_named_activated_.clear();
         field_abi_meta_by_type_.clear();
         fn_qualified_name_by_stmt_.clear();
         namespace_stack_.clear();
@@ -417,6 +420,17 @@ namespace parus::tyck {
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
         import_alias_to_path_.clear();
+        acts_named_decl_by_owner_and_name_.clear();
+        acts_named_activated_.clear();
+
+        struct PendingActsEnable {
+            std::string raw_path{};
+            std::string qualified_path{};
+            ty::TypeId owner_type = ty::kInvalidType;
+            Span span{};
+        };
+        std::vector<PendingActsEnable> pending_named_acts_enable;
+        pending_named_acts_enable.reserve(16);
 
         auto build_fn_sig = [&](const ast::Stmt& s) -> ty::TypeId {
             ty::TypeId sig = s.type;
@@ -520,6 +534,26 @@ namespace parus::tyck {
                 return;
             }
 
+            if (s.kind == ast::StmtKind::kUse && s.use_kind == ast::UseKind::kActsEnable) {
+                if (!file_scope) return;
+                if (s.use_path_count == 0) return;
+                if (s.acts_target_type == ty::kInvalidType) return;
+
+                const std::string raw_path = path_join_(s.use_path_begin, s.use_path_count);
+                if (raw_path.empty()) return;
+
+                PendingActsEnable pending{};
+                pending.raw_path = raw_path;
+                pending.owner_type = s.acts_target_type;
+                pending.span = s.span;
+                pending.qualified_path = raw_path;
+                if (raw_path.find("::") == std::string::npos) {
+                    pending.qualified_path = qualify_decl_name_(raw_path);
+                }
+                pending_named_acts_enable.push_back(std::move(pending));
+                return;
+            }
+
             if (s.kind == ast::StmtKind::kFnDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
                 fn_qualified_name_by_stmt_[sid] = qname;
@@ -613,7 +647,12 @@ namespace parus::tyck {
                     err_(s.span, "duplicate symbol (acts): " + qname);
                     diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
-                collect_acts_operator_decl_(s);
+                if (s.acts_is_for && s.acts_has_set_name && s.acts_target_type != ty::kInvalidType) {
+                    acts_named_decl_by_owner_and_name_[acts_named_decl_key_(s.acts_target_type, qname)] = sid;
+                } else {
+                    collect_acts_operator_decl_(s);
+                    collect_acts_method_decl_(s);
+                }
                 return;
             }
         };
@@ -625,6 +664,79 @@ namespace parus::tyck {
             for (uint32_t i = 0; i < prog.stmt_count; ++i) {
                 collect_stmt(collect_stmt, kids[prog.stmt_begin + i], /*file_scope=*/true);
             }
+        }
+
+        std::unordered_map<ty::TypeId, ast::StmtId> active_named_set_by_owner;
+        active_named_set_by_owner.reserve(8);
+
+        auto try_activate_named_acts = [&](const PendingActsEnable& req) {
+            std::vector<std::string> candidates;
+            candidates.reserve(4);
+            auto add_candidate = [&](std::string candidate) {
+                if (candidate.empty()) return;
+                if (std::find(candidates.begin(), candidates.end(), candidate) == candidates.end()) {
+                    candidates.push_back(std::move(candidate));
+                }
+            };
+
+            add_candidate(req.raw_path);
+            if (auto rewritten = rewrite_imported_path_(req.raw_path)) {
+                add_candidate(*rewritten);
+            }
+            add_candidate(req.qualified_path);
+            if (!req.qualified_path.empty()) {
+                if (auto rewritten = rewrite_imported_path_(req.qualified_path)) {
+                    add_candidate(*rewritten);
+                }
+            }
+
+            ast::StmtId selected_sid = ast::k_invalid_stmt;
+            for (const auto& candidate_name : candidates) {
+                const auto it = acts_named_decl_by_owner_and_name_.find(
+                    acts_named_decl_key_(req.owner_type, candidate_name));
+                if (it != acts_named_decl_by_owner_and_name_.end()) {
+                    selected_sid = it->second;
+                    break;
+                }
+            }
+
+            if (selected_sid == ast::k_invalid_stmt) {
+                std::ostringstream oss;
+                oss << "unknown acts set '" << req.raw_path
+                    << "' for type " << types_.to_string(req.owner_type)
+                    << " (declare 'acts " << req.raw_path << " for " << types_.to_string(req.owner_type)
+                    << "' and enable with 'use acts ... for ...')";
+                diag_(diag::Code::kTypeErrorGeneric, req.span, oss.str());
+                err_(req.span, oss.str());
+                return;
+            }
+
+            auto active_it = active_named_set_by_owner.find(req.owner_type);
+            if (active_it != active_named_set_by_owner.end() && active_it->second != selected_sid) {
+                std::ostringstream oss;
+                oss << "multiple named acts sets are not allowed for type "
+                    << types_.to_string(req.owner_type)
+                    << " in the same scope";
+                diag_(diag::Code::kTypeErrorGeneric, req.span, oss.str());
+                err_(req.span, oss.str());
+                return;
+            }
+            if (active_it == active_named_set_by_owner.end()) {
+                active_named_set_by_owner.emplace(req.owner_type, selected_sid);
+            }
+
+            if (!acts_named_activated_.insert(selected_sid).second) {
+                return;
+            }
+
+            if ((size_t)selected_sid >= ast_.stmts().size()) return;
+            const auto& acts_decl = ast_.stmt(selected_sid);
+            collect_acts_operator_decl_(acts_decl, /*allow_named_set=*/true);
+            collect_acts_method_decl_(acts_decl, /*allow_named_set=*/true);
+        };
+
+        for (const auto& req : pending_named_acts_enable) {
+            try_activate_named_acts(req);
         }
 
         struct ParamShape {
@@ -876,6 +988,13 @@ namespace parus::tyck {
         return (owner << 32) | (op << 1) | pf;
     }
 
+    std::string TypeChecker::acts_named_decl_key_(ty::TypeId owner_type, std::string_view set_qname) {
+        std::string out = std::to_string(static_cast<uint64_t>(owner_type));
+        out += "::";
+        out += std::string(set_qname);
+        return out;
+    }
+
     /// @brief 실제 파라미터 타입이 acts owner 타입과 호환되는지 판정한다.
     bool TypeChecker::type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual) {
         if (owner == ty::kInvalidType || actual == ty::kInvalidType) return false;
@@ -888,9 +1007,9 @@ namespace parus::tyck {
     }
 
     /// @brief acts decl 하나에서 기본 acts(`acts for T`) operator 멤버를 인덱싱한다.
-    void TypeChecker::collect_acts_operator_decl_(const ast::Stmt& acts_decl) {
+    void TypeChecker::collect_acts_operator_decl_(const ast::Stmt& acts_decl, bool allow_named_set) {
         if (!acts_decl.acts_is_for) return;
-        if (acts_decl.acts_has_set_name) return; // v0: named-set operator는 추후 활성화 규칙과 함께 처리
+        if (acts_decl.acts_has_set_name && !allow_named_set) return;
         if (acts_decl.acts_target_type == ty::kInvalidType) return;
 
         const auto& kids = ast_.stmt_children();
@@ -935,6 +1054,50 @@ namespace parus::tyck {
                 .is_postfix = member.fn_operator_is_postfix,
             });
         }
+    }
+
+    /// @brief acts decl 하나에서 기본 acts(`acts for T`) 일반 메서드 멤버를 인덱싱한다.
+    void TypeChecker::collect_acts_method_decl_(const ast::Stmt& acts_decl, bool allow_named_set) {
+        if (!acts_decl.acts_is_for) return;
+        if (acts_decl.acts_has_set_name && !allow_named_set) return;
+        if (acts_decl.acts_target_type == ty::kInvalidType) return;
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = acts_decl.stmt_begin;
+        const uint32_t end = acts_decl.stmt_begin + acts_decl.stmt_count;
+        if (begin >= kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = begin; i < end; ++i) {
+            const ast::StmtId sid = kids[i];
+            if (sid == ast::k_invalid_stmt) continue;
+            const auto& member = ast_.stmt(sid);
+            if (member.kind != ast::StmtKind::kFnDecl) continue;
+            if (member.fn_is_operator) continue;
+
+            bool recv_self = false;
+            if (member.param_count > 0) {
+                const auto& p0 = ast_.params()[member.param_begin];
+                recv_self = p0.is_self;
+            }
+
+            acts_default_method_map_[acts_decl.acts_target_type]
+                [std::string(member.name)]
+                .push_back(ActsMethodDecl{
+                    .fn_sid = sid,
+                    .owner_type = acts_decl.acts_target_type,
+                    .receiver_is_self = recv_self,
+                });
+        }
+    }
+
+    const std::vector<TypeChecker::ActsMethodDecl>*
+    TypeChecker::lookup_acts_default_methods_(ty::TypeId owner_type, std::string_view name) const {
+        if (owner_type == ty::kInvalidType || name.empty()) return nullptr;
+        auto oit = acts_default_method_map_.find(owner_type);
+        if (oit == acts_default_method_map_.end()) return nullptr;
+        auto mit = oit->second.find(std::string(name));
+        if (mit == oit->second.end()) return nullptr;
+        return &mit->second;
     }
 
     /// @brief binary operator에 대응되는 기본 acts overload를 찾는다.

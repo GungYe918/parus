@@ -1,0 +1,8 @@
+field A {
+    x: i32?;
+}
+
+def main() -> i32 {
+    let a: A = A { x: 10 };
+    return a.x ?? 0i32;
+}
