@@ -4,3 +4,4 @@ docs/memo/*
 .ccache/
 tests/out/*
 tmp.txt
+main.pr

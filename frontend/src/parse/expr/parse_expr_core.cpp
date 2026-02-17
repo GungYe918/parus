@@ -568,6 +568,62 @@ namespace parus {
 
             while (eat_coloncolon()) {
                 const Token seg = cursor_.peek();
+                // explicit acts path segment:
+                //   TypePath::acts(NameOrPath)::member
+                if (seg.kind == syntax::TokenKind::kKwActs &&
+                    cursor_.peek(1).kind == syntax::TokenKind::kLParen) {
+                    const Token acts_kw = cursor_.bump(); // acts
+                    const Token lp = cursor_.bump();      // '('
+
+                    std::string acts_set;
+                    Span acts_end = lp.span;
+
+                    auto parse_acts_set_path = [&]() -> bool {
+                        const Token first_set = cursor_.peek();
+                        if (first_set.kind != syntax::TokenKind::kIdent) {
+                            diag_report(diag::Code::kUnexpectedToken, first_set.span, "acts name identifier");
+                            return false;
+                        }
+
+                        cursor_.bump();
+                        acts_set.assign(first_set.lexeme.data(), first_set.lexeme.size());
+                        acts_end = first_set.span;
+
+                        while (eat_coloncolon()) {
+                            const Token set_seg = cursor_.peek();
+                            if (set_seg.kind != syntax::TokenKind::kIdent) {
+                                diag_report(diag::Code::kUnexpectedToken, set_seg.span, "acts name path segment");
+                                return false;
+                            }
+                            cursor_.bump();
+                            acts_set += "::";
+                            acts_set.append(set_seg.lexeme.data(), set_seg.lexeme.size());
+                            acts_end = set_seg.span;
+                        }
+                        return true;
+                    };
+
+                    bool set_ok = parse_acts_set_path();
+                    if (!set_ok) {
+                        recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
+                    }
+
+                    if (!cursor_.eat(syntax::TokenKind::kRParen)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                        recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
+                        cursor_.eat(syntax::TokenKind::kRParen);
+                    } else {
+                        acts_end = cursor_.prev().span;
+                    }
+
+                    joined += "::acts(";
+                    joined += acts_set;
+                    joined += ")";
+                    path_sp = span_join(path_sp, acts_end.hi ? acts_end : acts_kw.span);
+                    has_path_tail = true;
+                    continue;
+                }
+
                 if (seg.kind != syntax::TokenKind::kIdent) {
                     diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
                     break;

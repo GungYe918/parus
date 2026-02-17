@@ -91,7 +91,38 @@ namespace parus::tyck {
 
         std::string callee_name;
         bool is_dot_method_call = false;
+        bool is_explicit_acts_path_call = false;
         std::vector<ast::StmtId> overload_decl_ids;
+
+        struct ExplicitActsPath {
+            std::string owner_path;
+            std::string set_name;
+            std::string member_name;
+        };
+
+        auto parse_explicit_acts_path = [](std::string_view text, ExplicitActsPath& out) -> bool {
+            constexpr std::string_view marker = "::acts(";
+            const size_t marker_pos = text.find(marker);
+            if (marker_pos == std::string_view::npos) return false;
+
+            const size_t close_pos = text.find(')', marker_pos + marker.size());
+            if (close_pos == std::string_view::npos) return false;
+            if (close_pos + 2 >= text.size()) return false;
+            if (text[close_pos + 1] != ':' || text[close_pos + 2] != ':') return false;
+
+            const std::string_view owner = text.substr(0, marker_pos);
+            const std::string_view set = text.substr(marker_pos + marker.size(),
+                                                     close_pos - (marker_pos + marker.size()));
+            const std::string_view member = text.substr(close_pos + 3);
+
+            if (owner.empty() || set.empty() || member.empty()) return false;
+            if (member.find("::") != std::string_view::npos) return false;
+
+            out.owner_path.assign(owner.data(), owner.size());
+            out.set_name.assign(set.data(), set.size());
+            out.member_name.assign(member.data(), member.size());
+            return true;
+        };
 
         // ------------------------------------------------------------
         // 1) method call fast-path: `value.ident(...)`
@@ -158,20 +189,112 @@ namespace parus::tyck {
         // 2) non-method path: regular callee typing + ident overload lookup
         // ------------------------------------------------------------
         if (!is_dot_method_call) {
-            callee_t = check_expr_(e.a);
-            const auto& ct = types_.get(callee_t);
-            if (ct.kind != ty::Kind::kFn) {
-                diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
-                err_(e.span, "call target is not a function");
-                check_all_arg_exprs_only();
-                return types_.error();
-            }
-
-            fallback_ret = ct.ret;
-            callee_param_count = ct.param_count;
-
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kIdent) {
+                ExplicitActsPath explicit_acts{};
+                if (parse_explicit_acts_path(callee_expr.text, explicit_acts)) {
+                    is_explicit_acts_path_call = true;
+                    callee_name = std::string(callee_expr.text);
+
+                    std::string owner_lookup = explicit_acts.owner_path;
+                    if (auto rewritten = rewrite_imported_path_(owner_lookup)) {
+                        owner_lookup = *rewritten;
+                    }
+
+                    const auto owner_sid = lookup_symbol_(owner_lookup);
+                    if (!owner_sid.has_value()) {
+                        std::ostringstream oss;
+                        oss << "unknown acts owner type path '" << explicit_acts.owner_path << "'";
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    const auto& owner_sym = sym_.symbol(*owner_sid);
+                    if (owner_sym.kind != sema::SymbolKind::kField) {
+                        std::ostringstream oss;
+                        oss << "acts path owner must be a field/tablet type in v0, got '"
+                            << owner_sym.name << "'";
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    const ty::TypeId owner_t = owner_sym.declared_type;
+                    auto owner_methods_it = acts_default_method_map_.find(owner_t);
+                    if (owner_methods_it == acts_default_method_map_.end()) {
+                        std::ostringstream oss;
+                        oss << "no acts methods are declared for type " << types_.to_string(owner_t);
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    auto member_it = owner_methods_it->second.find(explicit_acts.member_name);
+                    if (member_it == owner_methods_it->second.end()) {
+                        std::ostringstream oss;
+                        oss << "acts member '" << explicit_acts.member_name
+                            << "' is not declared for type " << types_.to_string(owner_t);
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    if (explicit_acts.set_name == "default") {
+                        for (const auto& md : member_it->second) {
+                            if (!md.from_named_set) overload_decl_ids.push_back(md.fn_sid);
+                        }
+                    } else {
+                        const auto named_sid = resolve_named_acts_decl_sid_(owner_t, explicit_acts.set_name);
+                        if (!named_sid.has_value()) {
+                            std::ostringstream oss;
+                            oss << "unknown acts set '" << explicit_acts.set_name
+                                << "' for type " << types_.to_string(owner_t);
+                            diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                            err_(callee_expr.span, oss.str());
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        for (const auto& md : member_it->second) {
+                            if (md.from_named_set && md.acts_decl_sid == *named_sid) {
+                                overload_decl_ids.push_back(md.fn_sid);
+                            }
+                        }
+                    }
+
+                    if (overload_decl_ids.empty()) {
+                        std::ostringstream oss;
+                        oss << "acts member '" << explicit_acts.member_name
+                            << "' is not available in acts(" << explicit_acts.set_name
+                            << ") for type " << types_.to_string(owner_t);
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+                }
+            }
+
+            if (!is_explicit_acts_path_call) {
+                callee_t = check_expr_(e.a);
+                const auto& ct = types_.get(callee_t);
+                if (ct.kind != ty::Kind::kFn) {
+                    diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
+                    err_(e.span, "call target is not a function");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+
+                fallback_ret = ct.ret;
+                callee_param_count = ct.param_count;
+            }
+
+            if (!is_explicit_acts_path_call && callee_expr.kind == ast::ExprKind::kIdent) {
                 std::string lookup_name = std::string(callee_expr.text);
                 if (auto rewritten = rewrite_imported_path_(lookup_name)) {
                     lookup_name = *rewritten;

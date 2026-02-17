@@ -263,6 +263,19 @@ namespace parus::passes {
         return std::nullopt;
     }
 
+    static bool is_explicit_acts_path_expr_(std::string_view text) {
+        constexpr std::string_view marker = "::acts(";
+        const size_t marker_pos = text.find(marker);
+        if (marker_pos == std::string_view::npos) return false;
+
+        const size_t close_pos = text.find(')', marker_pos + marker.size());
+        if (close_pos == std::string_view::npos) return false;
+        if (close_pos + 2 >= text.size()) return false;
+        if (text[close_pos + 1] != ':' || text[close_pos + 2] != ':') return false;
+        if (close_pos + 3 >= text.size()) return false;
+        return true;
+    }
+
     // -----------------------------------------------------------------------------
     // Expr walk (Ident resolve)
     // -----------------------------------------------------------------------------
@@ -301,6 +314,15 @@ namespace parus::passes {
 
             switch (e.kind) {
                 case ast::ExprKind::kIdent: {
+                    // v0: explicit acts path call callee
+                    //   T::acts(Set)::member(...)
+                    // 는 tyck의 acts 해소 단계에서 검증한다.
+                    // name_resolve 단계에서 일반 symbol lookup을 강제하면
+                    // false positive UndefinedName이 발생하므로 여기서 제외한다.
+                    if (is_explicit_acts_path_expr_(e.text)) {
+                        break;
+                    }
+
                     auto sid = lookup_symbol_(sym, e.text, namespace_stack, import_aliases);
                     if (!sid) {
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
