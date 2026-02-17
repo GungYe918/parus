@@ -6,6 +6,7 @@
 이 문서는 Parus ABI 구현의 단일 신뢰 기준이다.  
 `docs/spec_v0.md`와 충돌 시, ABI 관련 사항은 본 문서를 우선한다.
 OOP/다형성/행동 부착 관련 사항은 `docs/abi/v0.0.1/OOP_MODEL.md`를 우선한다.
+제네릭/제약 표기 관련 사항은 `docs/abi/v0.0.1/GENERICS_MODEL.md`를 우선한다.
 
 ---
 
@@ -189,6 +190,8 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `docs/abi/v0.0.1/NULLABLE_MODEL.md`
 4. OOP 역할 분리/`self`-`Self`/`acts`-`proto`-`tablet`-`class` 규칙:
    - `docs/abi/v0.0.1/OOP_MODEL.md`
+5. 제네릭/제약 표기(`with [ ... ]`) 및 proto 결합 방향:
+   - `docs/abi/v0.0.1/GENERICS_MODEL.md`
 
 요약 고정 규칙:
 
@@ -205,6 +208,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `acts for` 부착 대상: `field`, `tablet`
    - `class`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
    - `proto`는 계약 전용이며 연산자 재정의를 담당하지 않는다
+8. 제네릭 제약 표기는 `with [ ... ]` 단일 문법으로 고정한다.
 
 ---
 

@@ -79,13 +79,13 @@ export field Vec2 {
 }
 
 proto Drawable {
-  def draw() -> void;
+  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
-    def draw() -> void { /* ... */ }
+    def draw(self s: &Self, ctx: &mut RenderCtx) -> void { /* ... */ }
 }
 ```
 
@@ -587,6 +587,8 @@ def arrays_lists() -> void {
 
 ### 4.4 타입 시스템 작동 원리 (v0 -> 향후)
 
+> 제네릭/제약 표기의 합의 정본은 `docs/abi/v0.0.1/GENERICS_MODEL.md`다.
+
 v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한다.
 
 1. 파서가 AST를 만든다.
@@ -597,17 +599,18 @@ v0에서 타입 시스템은 다음 순서로 작동하는 것을 목표로 한�
 
 향후 확장 (v1+ 로드맵 성격, v0에 포함되는 개념만 선명히):
 
-* 제네릭 타입: TypeName<T> 형태
-* 제네릭 함수: def foo<T>(...) ...
-* 제네릭 특수화와 monomorphization (컴파일 시 실체화) 혹은 제한된 형태의 dictionary passing 중 택1
+* 제네릭 타입: `TypeName<T>` 형태
+* 제네릭 함수: `def foo<T>(...) with [...] -> R { ... }`
+* 제약 선언은 `with [ ... ]` 단일 표기로 사용
+* 제네릭 실체화 전략은 기본적으로 monomorphization(컴파일 시 실체화)을 우선
+* `proto`가 제네릭 capability 제약의 중심 역할을 맡는다
 * 타입 추론 강화: set 바인딩의 추론, 간단한 반환 타입 추론 (v0에서는 강제 유지)
-* trait 비슷한 개념을 acts/proto/tablet 조합으로 자연스럽게 확장
 
-예시 (향후 제네릭의 목표 형태, v0에서는 파싱만 선행 가능)
+예시 (향후 제네릭 목표 형태, v0에서는 파싱/문서 선행 가능):
 
 ```parus
-// v1+ 목표 예시
-// field Vec<T> { T x; T y; }
+// v1+ 목표 예시 (권장)
+// def contains<T>(xs: &[T], x: &T) with [T: Hashable, T: Equatable] -> bool { ... }
 ```
 
 ### 4.5 storage class 키워드: `static`
@@ -736,7 +739,9 @@ Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해
 * `[mode]` : 선택 (`sub`, `pub` 등. class 문맥에서 의미 있음)
 * `[qualifier]` : 선택 (`pure`, `comptime` 등. 또는 `@pure` 같은 attribute로만 둘 수도 있음)
 * `Name`
+* `[<TypeParams...>]` : 선택 (v1+)
 * `(...)` : 파라미터 목록 (아래 6.1.2~)
+* `[ConstraintClause]` : 선택 (`with [ ... ]` 단일 표기)
 * `-> ReturnType`
 * `Block`
 
@@ -744,13 +749,16 @@ Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해
 
 ```ebnf
 FuncDecl :=
-  Attribute* ExportOpt "def" ModeOpt QualifierOpt Ident FuncParams "->" Type Block
+  Attribute* ExportOpt "def" ModeOpt QualifierOpt Ident GenericParamClauseOpt FuncParams ConstraintClauseOpt "->" Type Block
 
 ExportOpt := "export" | ε
 ModeOpt   := "sub" | "pub" | ε
 QualifierOpt := "pure" | "comptime" | ε   // (또는 attribute로만 두는 정책도 가능)
 
+GenericParamClauseOpt := "<" TypeParam ("," TypeParam)* ">" | ε
+TypeParam := Ident
 FuncParams := "(" PositionalParamsOpt NamedGroupOpt ")"
+ConstraintClauseOpt := "with" "[" ConstraintList "]" | ε
 ```
 
 ---
@@ -3151,6 +3159,9 @@ tablet은 “일반 구현 타입”이므로 멤버 포함을 폭넓게 허용�
 
 ## 10. 타입 정의: field, proto, tablet, 접근 제한자
 
+> OOP/다형성 규칙의 정본은 `docs/abi/v0.0.1/OOP_MODEL.md`다.
+> 본 장은 구현 편의를 위한 요약이며, 충돌 시 OOP 모델 문서를 우선한다.
+
 ### 10.1 field (POD storage)
 
 정의:
@@ -3158,7 +3169,8 @@ tablet은 “일반 구현 타입”이므로 멤버 포함을 폭넓게 허용�
 * field는 POD 데이터 블록이다.
 * 생성자/소멸자 없다.
 * field 내부에는 값만 있다. 함수 선언/정의 금지.
-* field는 proto/tablet/class 내부에 포함 가능하다.
+* field는 tablet/class 내부에 포함 가능하다.
+* proto 내부 저장 field는 v0에서 금지한다(함수 계약으로 표현).
 * field는 기본적으로 copy 가능 조건을 가진다. (모든 멤버가 copy 가능일 때)
 
 field 리터럴/초기화 규칙 (v0):
@@ -3233,24 +3245,47 @@ field<u32, i32> OnlyInts {
 
 정의:
 
-* proto는 계약이다.
-* 생성자/소멸자 없다.
-* 함수 시그니처를 선언한다.
-* v0에서 proto는 구현을 담지 않는다.
-* proto 안에 field 선언은 "인터페이스가 요구하는 데이터 슬롯"으로만 해석하며, 실제 레이아웃은 tablet에서 확정되는 방식이 안전하다. (v0에서는 단순화를 위해 proto field는 선택 기능으로 둘 수 있다)
+* `proto`는 인터페이스 계약(시그니처 집합)이다.
+* 생성자/소멸자/구현 본문을 갖지 않는다.
+* 연산자 재정의는 `proto`가 담당하지 않는다. (`acts` 전용)
+* v0에서 `proto`는 정적 디스패치 계약으로 사용한다(`dyn` 미도입).
 
-추가 (proto field의 의미 보강, 추가):
+핵심 규칙(v0):
 
-* proto 안의 field 선언은 "실제 메모리 배치"가 아니라 "field로 향하는 접근 경로"로 해석할 수 있다.
-* 즉, proto는 인터페이스이므로, proto의 field는 "이 인터페이스를 만족하는 구현체가 제공해야 하는 field 접근"을 뜻한다.
-* 구현 관점에서 이는 "proto vtable 같은 인터페이스 객체 내부에 field에 대한 포인터/핸들 슬롯이 존재한다"는 의미로 해석할 수 있다.
-* v0에서는 이 기능을 파싱만 제공하고, 의미 부여(ABI, 레이아웃)는 보수적으로 나중으로 미룰 수 있다.
+1. `proto` 본문에는 함수 시그니처만 선언한다.
+2. `proto` 안의 저장 field 선언은 금지한다(v0 단순화).
+3. `proto`는 다른 `proto`를 상속(확장)할 수 있다.
+4. 구현 권한:
+   * v0: `tablet`만 `proto`를 구현할 수 있다.
+   * v1+ 확장 후보: `field`의 제한적 구현 허용
+   * `class`는 상태머신 보호를 위해 구현 대상에서 제외 권장
 
-예시
+`Self` 규칙:
+
+* `proto` 안에서 `Self`는 "해당 `proto`를 구현하는 구체 타입"을 뜻한다.
+* `Self`는 타입 위치에서만 사용한다.
+
+예시:
 
 ```parus
 proto Drawable {
-  def draw() -> void;
+  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+}
+```
+
+proto 상속(확장) 예시:
+
+```parus
+proto Hashable {
+  def hash(self v: &Self) -> u64;
+}
+
+proto Equatable {
+  def eq(self a: &Self, b: &Self) -> bool;
+}
+
+proto Keyable : Hashable, Equatable {
+  def key_id(self v: &Self) -> u64;
 }
 ```
 
@@ -3268,14 +3303,14 @@ proto Drawable {
 
 ```parus
 proto Drawable {
-  def draw() -> void;
+  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    def draw() -> void {
+    def draw(self s: &Self, ctx: &mut RenderCtx) -> void {
       // ...
     }
 }
@@ -3290,7 +3325,7 @@ tablet Sprite : Drawable {
 
   * 데이터 멤버: `let name: Type;` 또는 `let mut name: Type;`(선택)
   * 메서드: `def ... { ... }`
-  * 생성자/소멸자: `construct`, `destruct` (아래 10.3.3)
+  * 생성자/소멸자: `init`, `deinit` (아래 10.3.3)
 * 접근 제한자:
 
   * C++ 스타일 `public:` / `private:` 라벨을 사용한다.
@@ -3352,23 +3387,25 @@ tablet Counter {
 
 ---
 
-### 10.3.3 생성자/소멸자: `construct`, `destruct` (v0 단일 정의 규칙)
+### 10.3.3 생성자/소멸자: `init`, `deinit` (v0 단일 정의 규칙)
 
 일반 함수 오버로딩은 허용한다. 다만 v0 단순화를 위해 생성자/소멸자는 타입당 단일 정의만 허용한다.
 
 * 생성자(선택):
 
-  * `def construct(params...) -> void { ... }`
+  * `def init(params...) -> void { ... }`
 * 소멸자(선택):
 
-  * `def destruct() -> void { ... }`
+  * `def deinit() -> void { ... }`
 
 호출/동작:
 
-* `set x = T(args...)` 는 `T.construct(args...)`를 호출해 `x`를 초기화한다.
-* 스코프 종료 시 `destruct()`가 호출된다(존재한다면).
-* `def construct(...) = delete;` 로 생성을 금지할 수 있다.
-* `def destruct() = delete;` 는 v0에서는 **금지 권장**(파괴 금지 객체는 모델이 꼬임). 대신 “drop이 없는 handle” 같은 타입으로 해결.
+* `set x = T(args...)` 는 `T.init(args...)`를 호출해 `x`를 초기화한다.
+* 스코프 종료 시 `deinit()`가 호출된다(존재한다면).
+* `def init(...) = delete;` 로 생성을 금지할 수 있다.
+* `def deinit() = delete;` 는 v0에서는 **금지 권장**(파괴 금지 객체는 모델이 꼬임). 대신 “drop이 없는 handle” 같은 타입으로 해결.
+* 구현 전환기에서는 내부 lowering을 `construct`/`destruct`로 대응시킬 수 있다.
+  * 문서/예제 표면 문법은 `init`/`deinit`를 기준으로 한다.
 
 예시
 
@@ -3377,11 +3414,11 @@ tablet File {
   public:
     let fd: int;
 
-    def construct(path: string) -> void {
+    def init(path: string) -> void {
       // open...
     }
 
-    def destruct() -> void {
+    def deinit() -> void {
       // close...
     }
 }
@@ -3393,6 +3430,7 @@ tablet File {
 
 * `tablet X : ProtoA, ProtoB` 는 “X가 각 proto의 모든 메서드를 구현해야 함”을 뜻한다.
 * 구현 체크는 prepass 이후 타입체커 단계에서 수행한다.
+* proto 상속이 있을 경우, 조상 proto의 요구사항까지 전부 폐쇄(closure)해 검사한다.
 * 시그니처 일치 조건(v0):
 
   * 함수명 동일
@@ -3426,23 +3464,35 @@ v0에서 proto는 “값으로 들고 다니는 타입”이 아니라 **참조/
 
 * `meta`를 “vtable 포인터”로 쓰면 된다.
 
+`dyn` 통합 방향(v1+):
+
+1. `dyn Proto`를 명시 opt-in으로 도입한다.
+2. 기본 경로는 계속 정적 디스패치(제네릭 + 제약)다.
+3. `dyn` 경계에서는 간접 호출/vtable 비용을 허용하되, API에서 명시적으로 드러나야 한다.
+
 ---
 
-## 10.4 `proto` (interface) — v0에서 더 단단하게 못 박기
+## 10.4 proto + 제네릭 결합 방향(v1+)
 
-너 문서의 proto 섹션에 이 한 줄만 추가해도 구현 난이도가 확 줄어:
+`proto`는 v1+에서 제네릭 제약의 중심으로 확장한다.
 
-* proto 내부 메서드는 기본이 `def`(즉 `self: &Proto`)이고,
-* 수정 가능한 메서드는 반드시 `def mut`로 선언한다.
+권장 표기:
 
-예시
+1. 단일 표기: `with [ ... ]` 제약 절
+
+예시:
 
 ```parus
-proto Stream {
-  def read(buf: &mut [u8]) -> u32;
-  def mut seek(pos: u64) -> void;   // self: &mut Stream
+def contains<T>(xs: &[T], x: &T) with [T: Hashable, T: Equatable] -> bool {
+  ...
 }
 ```
+
+`with [ ... ]` 단일 표기 이유:
+
+1. 반환 화살표 `->`가 함수 시그니처에 한 번만 등장해 가독성이 좋다.
+2. 제약 구역이 시각적으로 분리되어 `<>` 과밀을 완화한다.
+3. 파서/포매터/LSP에서 "제약 시작(with) + 제약 범위([])"를 한 규칙으로 처리할 수 있다.
 
 ---
 
@@ -3493,6 +3543,9 @@ def demo() -> void {
 
 * `acts for T`는 타입 `T`의 **default acts**다.
 * default acts는 타입에 자동 부착되며, named acts lookup 실패 시 fallback 대상으로 사용된다.
+* 부착 대상 제한(v0):
+  * 허용: `field`, `tablet`
+  * 금지: `class`, `proto`
 
 핵심 규칙(v0):
 
@@ -3519,6 +3572,7 @@ def demo(p: Packet) -> void {
 * `acts Name for T`는 타입 `T`에 부착되는 named acts 세트다.
 * named acts는 자동 활성되지 않는다.
 * 활성화는 `use T with acts(Name);`로 수행한다.
+* 부착 대상 제한은 default acts와 동일하다(`field`/`tablet`만 허용).
 
 예시:
 
@@ -3834,14 +3888,14 @@ field<u32, i32> OnlyInts {
 }
 
 proto Drawable {
-  def draw() -> void;
+  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    def draw() -> void {
+    def draw(self s: &Self, ctx: &mut RenderCtx) -> void {
       // draw using pos
     }
 
@@ -4047,19 +4101,22 @@ SetDecl          := Ident "=" Expr ;
 
 ---
 
-### 16.7 함수 선언 (attribute/export/mode/qualifier/예외접미 `?`/params/named-group)
+### 16.7 함수 선언 (attribute/export/mode/qualifier/제네릭/제약/예외접미 `?`)
 
 ```ebnf
 FuncDecl      := CAbiFuncDecl | NormalFuncDecl ;
 
 CAbiFuncDecl  := LinkPrefix "def" FuncName FuncParams "->" Type (Block | ";") ;
-NormalFuncDecl:= Attribute* ExportOpt "def" ModeOpt QualifierOpt FuncName FuncParams "->" Type Block ;
+NormalFuncDecl:= Attribute* ExportOpt "def" ModeOpt QualifierOpt FuncName GenericParamClauseOpt FuncParams ConstraintClauseOpt "->" Type Block ;
 
 FuncName      := Ident QMarkOpt ;
 QMarkOpt      := "?" | ε ;                     /* 예외 허용 함수 표기 */
 
 ModeOpt       := "sub" | "pub" | ε ;           /* class 문맥에서 의미 있음 */
 QualifierOpt  := "pure" | "comptime" | ε ;     /* 또는 attribute로만 쓰는 정책도 가능 */
+
+GenericParamClauseOpt := "<" TypeParam ("," TypeParam)* ">" | ε ;
+TypeParam     := Ident ;
 
 FuncParams    := "(" ParamSectionOpt ")" ;
 
@@ -4082,6 +4139,13 @@ NamedParamListOpt :=
 NamedParam    := Ident ":" Type DefaultOpt ;
 
 DefaultOpt    := "=" Expr | ε ;
+
+ConstraintClauseOpt := WithBracketConstraintClause
+                     | ε ;
+
+WithBracketConstraintClause := "with" "[" ConstraintList "]" ;
+ConstraintList := Constraint ("," Constraint)* ;
+Constraint    := Ident ":" PathType ;
 ```
 
 ---
@@ -4128,9 +4192,11 @@ FieldAlignOpt := "align" "(" IntLit ")" | ε ;
 BlockField    := "{" FieldMember* "}" ;
 FieldMember   := Ident ":" Type ";" ;       /* field 내부 함수 금지 */
 
-ProtoDecl     := ExportOpt "proto" Ident BlockProto ;
+ProtoDecl     := ExportOpt "proto" Ident ProtoInheritOpt BlockProto ;
+ProtoInheritOpt := ":" PathType ("," PathType)* | ε ;
 BlockProto    := "{" ProtoMember* "}" ;
-ProtoMember   := FuncSig ";" ;              /* 본문 없는 시그니처 */
+ProtoMember   := ProtoMethodSig ";" ;       /* 본문 없는 시그니처 */
+ProtoMethodSig:= "def" MutOpt Ident FuncParams ConstraintClauseOpt "->" Type ;
 
 TabletDecl    := ExportOpt "tablet" Ident InheritOpt BlockTablet ;
 InheritOpt    := ":" Type ("," Type)* | ε ;
@@ -4145,12 +4211,14 @@ TabletMember  := AccessMod
 
 MemberVarDecl := MutOpt ("let" | "set") IdentVarDecl ";" ;
 
-CtorDecl      := "construct" CtorSigOpt CtorBodyOrDelete ;
-CtorSigOpt    := FuncParamsOpt ;            /* 선택: construct(...) */
+CtorDecl      := "init" CtorSigOpt CtorBodyOrDelete
+               | "construct" CtorSigOpt CtorBodyOrDelete ;   /* legacy alias */
+CtorSigOpt    := FuncParamsOpt ;            /* 선택: init(...) */
 FuncParamsOpt := "(" ParamSectionOpt ")" | ε ;
 CtorBodyOrDelete := Block | "= delete" ";" ;
 
-DtorDecl      := "destruct" DtorBodyOrDelete ;
+DtorDecl      := "deinit" DtorBodyOrDelete
+               | "destruct" DtorBodyOrDelete ;               /* legacy alias */
 DtorBodyOrDelete := Block | "= delete" ";" ;
 
 ActsDecl      := ExportOpt "acts" ActsHead BlockActs ;

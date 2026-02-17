@@ -5,6 +5,7 @@
 
 이 문서는 Parus의 OOP/다형성/행동 부착 모델의 단일 신뢰 기준이다.  
 OOP 관련 사항에서 `docs/spec_v0.md` 또는 다른 안내 문서와 충돌하면 본 문서를 우선한다.
+제네릭/제약 표기의 세부 합의 범위는 `docs/abi/v0.0.1/GENERICS_MODEL.md`를 따른다.
 
 ---
 
@@ -47,7 +48,8 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 
 1. 인터페이스 계약(시그니처 집합)이다.
 2. 구현 본문/연산자 정의를 포함하지 않는다.
-3. v1+에서 제네릭 제약의 중심으로 확장한다.
+3. 다른 `proto`를 상속(확장)할 수 있다.
+4. v1+에서 제네릭 제약의 중심으로 확장한다.
 
 ### 3.4 `tablet`
 
@@ -184,7 +186,9 @@ dot/연산자 해소 순서:
 2. 구현 본문 금지
 3. 연산자 선언 금지
 4. 저장 필드 선언 금지(v0 단순화; 접근 계약은 함수로 표현)
-5. `dyn` 미도입 상태에서는 정적 검증/정적 해소를 우선한다.
+5. `proto` 상속 허용 (`proto B : A { ... }`)
+6. 구현 권한은 v0에서 `tablet`에 한정한다.
+7. `dyn` 미도입 상태에서는 정적 검증/정적 해소를 우선한다.
 
 예시:
 
@@ -194,19 +198,41 @@ proto Drawable {
 }
 ```
 
+```parus
+proto Hashable {
+  def hash(self v: &Self) -> u64;
+}
+
+proto Equatable {
+  def eq(self a: &Self, b: &Self) -> bool;
+}
+
+proto Keyable : Hashable, Equatable {
+  def key_id(self v: &Self) -> u64;
+}
+```
+
 ### 7.2 v1+ 방향
 
 1. 제네릭 제약의 중심으로 확장
-2. `with` 절과 결합해 제약 표기
-3. 런타임 다형성(`dyn`)은 별도 문서에서 정의
+2. 제약 표기는 `with [ ... ]` 단일 문법으로 고정
+3. 구현 권한 확장 후보: `field`의 제한적 `proto` 구현 허용
+4. 런타임 다형성(`dyn`)은 명시 opt-in으로 분리
 
 예시(미래 문법 초안):
 
 ```parus
-def render(type T, x: &T) with T: Drawable -> void {
+def render<T>(x: &T) with [T: Drawable] -> void {
   x.draw(ctx: ...);
 }
 ```
+
+### 7.3 `dyn` 통합 방향(v1+)
+
+1. 기본 경로는 계속 정적 디스패치(`proto` 제약 + 제네릭)다.
+2. `dyn Proto`는 런타임 다형성 경계에서만 명시적으로 사용한다.
+3. `dyn` 경계는 간접 호출 비용이 있으므로 API 표면에서 타입으로 드러나야 한다.
+4. `Self` 반환 같은 시그니처는 `dyn` 경계에서 별도 제약/금지 규칙을 둔다.
 
 ---
 
@@ -297,14 +323,14 @@ class Scene {
 ### 11.2 v1+
 
 1. 신규 키워드 추가 없이 제네릭 제약에 재사용한다.
-2. 예: `def f(type T) with T: Drawable -> ...`
+2. 단일 표기: `def f<T>(x: &T) with [T: Drawable] -> ...`
 
 ---
 
 ## 12. `<>` 과밀 방지 지침
 
 1. 타입 파라미터 선언과 제약을 분리한다.
-2. 제약은 가능하면 `with` 절로 이동한다.
+2. 제약은 `with [ ... ]` 절로 고정한다.
 3. 호출부에서 명시 `<...>`는 추론이 실패할 때만 쓰도록 설계한다.
 4. API 설계 시 반환/인자에서 추론 가능한 형태를 우선한다.
 
@@ -317,7 +343,7 @@ def f<T: P<T>, U: Q<T, U>, V: R<U, V>>(...) -> ...
 권장:
 
 ```parus
-def f(type T, type U, type V, ...) with T: P, U: Q<T>, V: R<U> -> ...
+def f<T, U, V>(...) with [T: P, U: Q<T>, V: R<U>] -> ...
 ```
 
 ---
@@ -378,10 +404,11 @@ class Scene {
 1. `acts for` 부착 대상 제한(`field`/`tablet`)이 강제된다.
 2. `class`에 `acts for`를 시도하면 컴파일 에러가 난다.
 3. `proto`에서 연산자 선언이 금지된다.
-4. `self`/`Self` 규칙이 타입체커에서 일관 강제된다.
-5. `use T with acts(...)` lexical scope 선택이 일관 동작한다.
-6. dot/연산자 해석에서 모호성이 런타임이 아닌 컴파일 단계에서 제거된다.
-7. `tablet` 생명주기 표면 규칙(`init`/`deinit`)이 문서와 구현 계획에서 일치한다.
+4. `proto` 상속과 구현 요구사항 closure 검사가 일관 동작한다.
+5. `self`/`Self` 규칙이 타입체커에서 일관 강제된다.
+6. `use T with acts(...)` lexical scope 선택이 일관 동작한다.
+7. dot/연산자 해석에서 모호성이 런타임이 아닌 컴파일 단계에서 제거된다.
+8. `tablet` 생명주기 표면 규칙(`init`/`deinit`)이 문서와 구현 계획에서 일치한다.
 
 ---
 
