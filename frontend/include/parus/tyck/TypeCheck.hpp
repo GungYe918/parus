@@ -269,6 +269,7 @@ namespace parus::tyck {
         std::optional<std::string> rewrite_imported_path_(std::string_view path) const;
         std::string current_namespace_prefix_() const;
         std::string path_join_(uint32_t begin, uint32_t count) const;
+        ty::TypeId canonicalize_acts_owner_type_(ty::TypeId owner_type) const;
 
         // ----------------------------------------
         // Mut tracking (tyck-level)
@@ -318,19 +319,25 @@ namespace parus::tyck {
         };
 
         std::vector<std::unordered_map<ty::TypeId, ActiveActsSelection>> acts_selection_scope_stack_;
+        std::unordered_map<uint32_t, ActiveActsSelection> acts_selection_by_symbol_;
 
         static uint64_t acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix);
         static std::string acts_named_decl_key_(ty::TypeId owner_type, std::string_view set_qname);
         void push_acts_selection_scope_();
         void pop_acts_selection_scope_();
         const ActiveActsSelection* lookup_active_acts_selection_(ty::TypeId owner_type) const;
+        const ActiveActsSelection* lookup_symbol_acts_selection_(uint32_t symbol_id) const;
+        bool bind_symbol_acts_selection_(uint32_t symbol_id, ty::TypeId owner_type, const ast::Stmt& var_stmt, Span diag_span);
         std::optional<ast::StmtId> resolve_named_acts_decl_sid_(ty::TypeId owner_type, std::string_view raw_set_path) const;
         bool apply_use_acts_selection_(const ast::Stmt& use_stmt);
         void collect_acts_operator_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
         void collect_acts_method_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
-        ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs) const;
-        ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const;
-        std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name) const;
+        ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs,
+                                                      const ActiveActsSelection* forced_selection = nullptr) const;
+        ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs,
+                                                       const ActiveActsSelection* forced_selection = nullptr) const;
+        std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name,
+                                                                  const ActiveActsSelection* forced_selection = nullptr) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;

@@ -562,8 +562,8 @@ namespace {
             }
 
             acts for I32Box {
-                def keep(self x: I32Box) -> I32Box { return x; }
-                operator(+)(self a: I32Box, rhs: I32Box) -> I32Box { return a; }
+                def keep(self move) -> I32Box { return self; }
+                operator(+)(self move, rhs: I32Box) -> I32Box { return self; }
             }
         )";
 

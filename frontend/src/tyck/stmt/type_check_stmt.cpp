@@ -117,6 +117,22 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
                 }
+                if (s.use_kind == ast::UseKind::kPathAlias &&
+                    s.use_path_count > 0 &&
+                    !s.use_rhs_ident.empty()) {
+                    const std::string path = path_join_(s.use_path_begin, s.use_path_count);
+                    const std::string alias(s.use_rhs_ident);
+                    if (!path.empty() && !alias.empty()) {
+                        auto it = import_alias_to_path_.find(alias);
+                        if (it != import_alias_to_path_.end() && it->second != path) {
+                            diag_(diag::Code::kTypeErrorGeneric, s.span,
+                                  "conflicting use alias in same compilation unit: " + alias);
+                            err_(s.span, "conflicting use alias: " + alias);
+                        } else {
+                            import_alias_to_path_[alias] = path;
+                        }
+                    }
+                }
                 if (s.use_kind == ast::UseKind::kActsEnable) {
                     (void)apply_use_acts_selection_(s);
                 }
@@ -256,6 +272,9 @@ namespace parus::tyck {
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
             s.type = vt;
+            if (ins.ok && s.var_has_acts_binding) {
+                (void)bind_symbol_acts_selection_(ins.symbol_id, vt, s, s.span);
+            }
             check_c_abi_global_decl_(s);
             return;
         }
@@ -344,6 +363,9 @@ namespace parus::tyck {
 
         // (F) AST에 “추론된 타입” 기록
         s.type = inferred;
+        if (ins.ok && s.var_has_acts_binding) {
+            (void)bind_symbol_acts_selection_(ins.symbol_id, inferred, s, s.span);
+        }
         check_c_abi_global_decl_(s);
     }
 
@@ -539,6 +561,12 @@ namespace parus::tyck {
             if (!ins.ok && ins.is_duplicate) {
                 err_(p.span, "duplicate parameter name: " + std::string(p.name));
                 diag_(diag::Code::kTypeDuplicateParam, p.span, p.name);
+            }
+            if (ins.ok) {
+                // receiver mutability follows `self mut`; regular params follow `mut name: T`.
+                const bool param_is_mut = p.is_mut ||
+                    (p.is_self && p.self_kind == ast::SelfReceiverKind::kMut);
+                sym_is_mut_[ins.symbol_id] = param_is_mut;
             }
 
             // POLICY CHANGE:
@@ -736,10 +764,11 @@ namespace parus::tyck {
 
         if (s.acts_is_for) {
             bool owner_ok = false;
-            if (s.acts_target_type != ty::kInvalidType) {
-                const auto& owner_ty = types_.get(s.acts_target_type);
+            const ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
+            if (owner_type != ty::kInvalidType) {
+                const auto& owner_ty = types_.get(owner_type);
                 if (owner_ty.kind == ty::Kind::kNamedUser) {
-                    const std::string owner_name = types_.to_string(s.acts_target_type);
+                    const std::string owner_name = types_.to_string(owner_type);
                     if (auto owner_sym = lookup_symbol_(owner_name)) {
                         const auto& ss = sym_.symbol(*owner_sym);
                         // v0 fixed policy:
@@ -753,7 +782,7 @@ namespace parus::tyck {
             if (!owner_ok) {
                 std::ostringstream oss;
                 oss << "acts-for target must be a field/tablet type in v0, got "
-                    << types_.to_string(s.acts_target_type);
+                    << types_.to_string(owner_type);
                 diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
                 err_(s.span, oss.str());
             }
@@ -770,6 +799,37 @@ namespace parus::tyck {
                 if (sid == ast::k_invalid_stmt) continue;
                 const auto& member = ast_.stmt(sid);
                 if (member.kind != ast::StmtKind::kFnDecl) continue;
+
+                if (!member.fn_is_operator) {
+                    if (s.acts_is_for) {
+                        if (member.param_count == 0) {
+                            diag_(diag::Code::kTypeErrorGeneric, member.span,
+                                  "acts-for member requires a self receiver as the first parameter");
+                            err_(member.span, "acts-for member requires a self receiver");
+                        } else {
+                            const auto& p0 = ast_.params()[member.param_begin];
+                            if (!p0.is_self) {
+                                diag_(diag::Code::kTypeErrorGeneric, p0.span,
+                                      "acts-for member requires 'self' as first parameter");
+                                err_(p0.span, "acts-for member requires 'self' as first parameter");
+                            } else if (s.acts_target_type != ty::kInvalidType &&
+                                       !type_matches_acts_owner_(types_, s.acts_target_type, p0.type)) {
+                                const std::string msg = "self receiver type must match acts target type";
+                                diag_(diag::Code::kTypeErrorGeneric, p0.span, msg);
+                                err_(p0.span, msg);
+                            }
+                        }
+                    } else {
+                        if (member.param_count > 0) {
+                            const auto& p0 = ast_.params()[member.param_begin];
+                            if (p0.is_self) {
+                                diag_(diag::Code::kTypeErrorGeneric, p0.span,
+                                      "general acts namespace members must not declare a self receiver");
+                                err_(p0.span, "general acts namespace members must not use self");
+                            }
+                        }
+                    }
+                }
 
                 if (member.fn_is_operator) {
                     if (!s.acts_is_for) {

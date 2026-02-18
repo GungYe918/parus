@@ -730,6 +730,13 @@ namespace parus::passes {
                             import_aliases[alias] = path;
                         }
                     }
+                } else if (s.use_kind == ast::UseKind::kPathAlias &&
+                           s.use_path_count > 0 &&
+                           !s.use_rhs_ident.empty()) {
+                    const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                    if (!path.empty()) {
+                        import_aliases[std::string(s.use_rhs_ident)] = path;
+                    }
                 }
                 // NOTE: use의 선언성(별칭/타입별칭 등)을 심볼로 올릴지 여부는 스펙 결정 후 확장.
                 // 지금은 expr만 검사한다.
@@ -908,7 +915,15 @@ namespace parus::passes {
                     if (!is_valid_stmt_id_(r, msid)) continue;
                     const auto& ms = ast.stmt(msid);
                     if (ms.kind != ast::StmtKind::kFnDecl) continue;
-                    const std::string mqname = qualify_name_(namespace_stack, ms.name);
+
+                    // 2-lane acts model:
+                    // - acts Name {}: namespace function set -> expose Name::member
+                    // - acts for T / acts Name for T: method/operator lane -> not exposed as plain path symbol
+                    if (s.acts_is_for) continue;
+
+                    std::string mqname = qname;
+                    if (!mqname.empty()) mqname += "::";
+                    mqname += std::string(ms.name);
                     if (!sym.lookup(mqname)) {
                         (void)declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
                     }

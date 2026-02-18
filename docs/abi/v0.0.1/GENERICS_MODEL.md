@@ -59,7 +59,7 @@ def contains<T>(xs: &[T], x: &T) with [T: Hashable, T: Equatable] -> bool { ... 
 
 ```parus
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
 def render_all<T>(items: &[T], ctx: &mut RenderCtx) with [T: Drawable] -> void {

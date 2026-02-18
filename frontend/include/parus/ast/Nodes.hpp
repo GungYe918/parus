@@ -139,12 +139,20 @@ namespace parus::ast {
     // --------------------
     // Function Params
     // --------------------
+    enum class SelfReceiverKind : uint8_t {
+        kNone = 0,
+        kRead,   // self      -> &Self
+        kMut,    // self mut  -> &mut Self
+        kMove,   // self move -> Self
+    };
+
     struct Param {
         std::string_view name{};
         TypeId type = k_invalid_type;
 
         bool is_mut = false;
-        bool is_self = false; // acts-for receiver marker: `self name: T`
+        bool is_self = false; // receiver marker
+        SelfReceiverKind self_kind = SelfReceiverKind::kNone;
 
         // default 값: "= Expr"
         bool has_default = false;
@@ -375,6 +383,15 @@ namespace parus::ast {
         uint32_t use_path_begin = 0;
         uint32_t use_path_count = 0;
         std::string_view use_rhs_ident{}; // "= Ident" 의 Ident
+
+        // ---- var binding acts sugar ----
+        // let/set ... with acts(NameOrDefault) = ...
+        bool var_has_acts_binding = false;
+        bool var_acts_is_default = false;
+        TypeId var_acts_target_type = k_invalid_type; // typed let에서만 파싱 시점 확정
+        uint32_t var_acts_set_path_begin = 0;
+        uint32_t var_acts_set_path_count = 0;
+        std::string_view var_acts_set_name{};
 
         // ---- nest decl ----
         uint32_t nest_path_begin = 0;

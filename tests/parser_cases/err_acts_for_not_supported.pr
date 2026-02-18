@@ -1,7 +1,7 @@
 // 비허용 케이스: acts for 뒤에 대상 타입이 빠지면 에러여야 한다.
 acts for {
-    def f(self a: i32) -> i32 {
-        return a;
+    def f(self) -> i32 {
+        return 1i32;
     }
 }
 

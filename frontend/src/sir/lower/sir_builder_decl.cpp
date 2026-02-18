@@ -54,13 +54,15 @@ namespace parus::sir::detail {
         // C ABI 함수는 선언 원문 이름을 그대로 유지한다(no-mangle).
         if (s.link_abi == parus::ast::LinkAbi::kC) {
             f.name = s.name;
-        } else if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
-            f.name = sym.symbol(f.sym).name;
         } else {
             auto qit = tyck.fn_qualified_names.find(sid);
-            f.name = (qit != tyck.fn_qualified_names.end())
-                ? std::string_view(qit->second)
-                : s.name;
+            if (qit != tyck.fn_qualified_names.end()) {
+                f.name = std::string_view(qit->second);
+            } else if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+                f.name = sym.symbol(f.sym).name;
+            } else {
+                f.name = s.name;
+            }
         }
 
         // qualifiers / mode

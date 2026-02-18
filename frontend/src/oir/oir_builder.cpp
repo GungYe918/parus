@@ -884,9 +884,11 @@ namespace parus::oir {
                     }
                 }
 
-                // 오버로드 정보가 빠진 경우(예: 일반 call 경로)에도
-                // 심볼+인자 타입으로 가장 정확한 함수 대상을 재선택한다.
+                // 오버로드 decl-id가 이미 선택된 경우(direct_callee 유효)는
+                // 해당 결정을 유지한다. 심볼 기반 재선택은 decl-id 정보가
+                // 없는 일반 call 경로에서만 수행한다.
                 if (callee == kInvalidId &&
+                    direct_callee == kInvalidId &&
                     v.callee_sym != parus::sir::k_invalid_symbol &&
                     fn_symbol_to_funcs != nullptr) {
                     auto fit = fn_symbol_to_funcs->find(v.callee_sym);

@@ -450,8 +450,8 @@ namespace {
             };
 
             acts for I32Box {
-                operator(+)(self a: I32Box, rhs: I32Box) -> i32 {
-                    return a.v + rhs.v;
+                operator(+)(self move, rhs: I32Box) -> i32 {
+                    return self.v + rhs.v;
                 }
             };
 
@@ -493,10 +493,14 @@ namespace {
                        "i32 overload call must be direct in LLVM-IR");
         ok &= require_(lowered.llvm_ir.find("call i64 @p$main$_$add$Mnone$Rnone$S") != std::string::npos,
                        "i64 overload call must be direct in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("define i32 @p$main$_$__op_") != std::string::npos,
-                       "operator overload function must be present in LLVM-IR");
-        ok &= require_(lowered.llvm_ir.find("call i32 @p$main$_$__op_") != std::string::npos,
-                       "operator overload must lower to direct call");
+        const bool has_operator_def =
+            lowered.llvm_ir.find("define i32 @p$main$__acts_") != std::string::npos ||
+            lowered.llvm_ir.find("define i32 @p$main$_$__op_") != std::string::npos;
+        const bool has_operator_call =
+            lowered.llvm_ir.find("call i32 @p$main$__acts_") != std::string::npos ||
+            lowered.llvm_ir.find("call i32 @p$main$_$__op_") != std::string::npos;
+        ok &= require_(has_operator_def, "operator overload function must be present in LLVM-IR");
+        ok &= require_(has_operator_call, "operator overload must lower to direct call");
         ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
                        "direct overload lowering should not require call stub");
         ok &= require_(lowered.llvm_ir.find("add i64") != std::string::npos,
@@ -757,7 +761,7 @@ namespace {
                     v: i32;
                 };
                 acts for I32Box {
-                    operator(+)(self a: I32Box, rhs: I32Box) -> i32 { return a.v + rhs.v; }
+                    operator(+)(self move, rhs: I32Box) -> i32 { return self.v + rhs.v; }
                 };
                 def main() -> i32 {
                     let a: I32Box = I32Box { v: 1i32 };
@@ -771,7 +775,7 @@ namespace {
                     v: i32;
                 };
                 acts for I32Box {
-                    operator(+)(self a: I32Box, rhs: I32Box) -> i32 { return a.v + rhs.v; }
+                    operator(+)(self move, rhs: I32Box) -> i32 { return self.v + rhs.v; }
                 };
                 def mix(a: i32, b: i32) -> i32 { return a + b; }
                 def mix(a: i64, b: i64) -> i64 { return a + b; }

@@ -80,13 +80,13 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 1. `self`는 값 이름이 아니라 리시버 마커다.
 2. 함수 파라미터의 첫 위치에서만 허용한다.
 3. 허용 형태:
-   - `self a: T`
-   - `self a: &T`
-   - `self a: &mut T`
+   - `self` (기본: read-only receiver)
+   - `self mut` (mutable receiver)
+   - `self move` (by-value consume receiver)
 4. 의미:
-   - `self T`: move/consume
-   - `self &T`: read-only
-   - `self &mut T`: mutating
+   - `self`: `&Self`로 해석
+   - `self mut`: `&mut Self`로 해석
+   - `self move`: `Self`로 해석
 
 ### 5.2 `Self` (문맥 타입 이름)
 
@@ -110,11 +110,11 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 
 ```parus
 proto Cloneable {
-  def clone(self s: &Self) -> Self;
+  def clone(self) -> Self;
 }
 
 acts for Vec2 {
-  def len2(self v: &Self) -> i32 { return v.x * v.x + v.y * v.y; }
+  def len2(self) -> i32 { return self.x * self.x + self.y * self.y; }
 }
 ```
 
@@ -141,6 +141,8 @@ acts for Vec2 {
 ```parus
 use Vec2 with acts(FastMath);
 use Vec2 with acts(default);
+
+set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
 ```
 
 규칙:
@@ -148,6 +150,13 @@ use Vec2 with acts(default);
 1. lexical scope 기반으로 작동한다.
 2. 파일/함수/블록 어디서든 선언 가능하다.
 3. 내부 스코프 선언은 외부를 shadowing하며 블록 종료 시 해제된다.
+4. 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
+5. 명시 경로 선택도 허용한다:
+   - `Vec2::acts(FastMath)::add(v, 1, 2)`
+   - `Vec2::acts(default)::add(v, 1, 2)`
+6. alias 정합:
+   - `use Vec2 as v2; v2::acts(FastMath)::add(...)`가 유효해야 한다.
+   - `use acts(Math) as m; m::add(...)`가 유효해야 한다.
 
 ### 6.4 해소 순서와 충돌 규칙
 
@@ -162,7 +171,14 @@ dot/연산자 해소 순서:
 1. 동일 시그니처 다중 후보는 자동 선택 금지, 컴파일 에러
 2. named/default 동일 시그니처 중복은 컴파일 에러
 3. inherent vs acts 동일 시그니처 중복도 컴파일 에러(가림 허용 안 함)
-4. `self` 없는 acts 함수는 dot sugar 금지, 정적 경로 호출만 허용
+4. `acts for T`/`acts Name for T` 함수는 첫 파라미터 `self` 계열이 필수다.
+5. 일반 `acts Name {}` 함수는 `self`를 가질 수 없다(정적 경로 호출 전용).
+
+정적 경로 호출:
+
+1. 타입 부착 acts 함수: `Vec2::acts(FastMath)::add(v, 1, 2)`
+2. 일반 acts 네임스페이스 함수: `acts(Math)::add(1, 2)`
+3. 일반 acts alias: `use acts(Math) as m; m::add(1, 2)`
 
 ### 6.5 연산자 규칙
 
@@ -194,21 +210,21 @@ dot/연산자 해소 순서:
 
 ```parus
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 ```
 
 ```parus
 proto Hashable {
-  def hash(self v: &Self) -> u64;
+  def hash(self) -> u64;
 }
 
 proto Equatable {
-  def eq(self a: &Self, b: &Self) -> bool;
+  def eq(self, b: &Self) -> bool;
 }
 
 proto Keyable : Hashable, Equatable {
-  def key_id(self v: &Self) -> u64;
+  def key_id(self) -> u64;
 }
 ```
 
@@ -263,7 +279,7 @@ tablet Sprite : Drawable {
   public:
     def init(tex: Handle<Texture>, pos: Vec2) -> void { ... }
     def deinit() -> void { ... }
-    def draw(self s: &Self, ctx: &mut RenderCtx) -> void { ... }
+    def draw(self, ctx: &mut RenderCtx) -> void { ... }
 }
 ```
 
@@ -361,8 +377,8 @@ field Vec2 {
 }
 
 acts for Vec2 {
-  operator(+)(self a: Self, rhs: Self) -> Self {
-    return Vec2{ x: a.x + rhs.x, y: a.y + rhs.y };
+  operator(+)(self move, rhs: Self) -> Self {
+    return Vec2{ x: self.x + rhs.x, y: self.y + rhs.y };
   }
 }
 ```
@@ -371,13 +387,13 @@ acts for Vec2 {
 
 ```parus
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   def init(pos: Vec2) -> void { ... }
   def deinit() -> void { ... }
-  def draw(self s: &Self, ctx: &mut RenderCtx) -> void { ... }
+  def draw(self, ctx: &mut RenderCtx) -> void { ... }
 }
 ```
 

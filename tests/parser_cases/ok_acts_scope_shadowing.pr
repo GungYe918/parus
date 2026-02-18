@@ -4,14 +4,14 @@ field Vec2 {
 };
 
 acts for Vec2 {
-    def add(self v: Vec2, rhs: i32) -> i32 {
-        return v.x + rhs;
+    def add(self, rhs: i32) -> i32 {
+        return self.x + rhs;
     }
 };
 
 acts Alt for Vec2 {
-    def add(self v: Vec2, rhs: i32) -> i32 {
-        return v.y + rhs;
+    def add(self, lhs: i32, rhs: i32) -> i32 {
+        return self.y + lhs + rhs;
     }
 };
 
@@ -20,7 +20,7 @@ def main() -> i32 {
     let a: i32 = v.add(1i32);
     {
         use Vec2 with acts(Alt);
-        let b: i32 = v.add(1i32);
+        let b: i32 = v.add(1i32, 2i32);
     }
     use Vec2 with acts(default);
     let c: i32 = v.add(1i32);

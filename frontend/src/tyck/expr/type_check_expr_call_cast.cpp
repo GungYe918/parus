@@ -142,7 +142,19 @@ namespace parus::tyck {
                             owner_t = ot.elem;
                         }
                     }
-                    const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text);
+                    const ActiveActsSelection* bound_selection = nullptr;
+                    const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
+                    if (recv_expr.kind == ast::ExprKind::kIdent) {
+                        std::string recv_lookup = std::string(recv_expr.text);
+                        if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
+                            recv_lookup = *rewritten;
+                        }
+                        if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                            bound_selection = lookup_symbol_acts_selection_(*recv_sid);
+                        }
+                    }
+
+                    const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text, bound_selection);
                     bool any_method_named = false;
                     if (owner_t != ty::kInvalidType) {
                         auto oit = acts_default_method_map_.find(owner_t);
@@ -214,7 +226,16 @@ namespace parus::tyck {
                     const auto& owner_sym = sym_.symbol(*owner_sid);
                     if (owner_sym.kind != sema::SymbolKind::kField) {
                         std::ostringstream oss;
-                        oss << "acts path owner must be a field/tablet type in v0, got '"
+                        oss << "acts path owner must be a type path (use T::acts(...), not value::acts(...))";
+                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                        err_(callee_expr.span, oss.str());
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+                    ty::TypeId owner_t = canonicalize_acts_owner_type_(owner_sym.declared_type);
+                    if (owner_t == ty::kInvalidType) {
+                        std::ostringstream oss;
+                        oss << "acts path owner must resolve to a field/tablet type in v0, got '"
                             << owner_sym.name << "'";
                         diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
                         err_(callee_expr.span, oss.str());
@@ -222,31 +243,46 @@ namespace parus::tyck {
                         return types_.error();
                     }
 
-                    const ty::TypeId owner_t = owner_sym.declared_type;
-                    auto owner_methods_it = acts_default_method_map_.find(owner_t);
-                    if (owner_methods_it == acts_default_method_map_.end()) {
-                        std::ostringstream oss;
-                        oss << "no acts methods are declared for type " << types_.to_string(owner_t);
-                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
-                        err_(callee_expr.span, oss.str());
-                        check_all_arg_exprs_only();
-                        return types_.error();
-                    }
+                    auto collect_member_from_decl = [&](ast::StmtId acts_sid) {
+                        if (acts_sid == ast::k_invalid_stmt || (size_t)acts_sid >= ast_.stmts().size()) return;
+                        const auto& acts_decl = ast_.stmt(acts_sid);
+                        if (acts_decl.kind != ast::StmtKind::kActsDecl) return;
 
-                    auto member_it = owner_methods_it->second.find(explicit_acts.member_name);
-                    if (member_it == owner_methods_it->second.end()) {
-                        std::ostringstream oss;
-                        oss << "acts member '" << explicit_acts.member_name
-                            << "' is not declared for type " << types_.to_string(owner_t);
-                        diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
-                        err_(callee_expr.span, oss.str());
-                        check_all_arg_exprs_only();
-                        return types_.error();
-                    }
+                        const auto& kids = ast_.stmt_children();
+                        const uint32_t begin = acts_decl.stmt_begin;
+                        const uint32_t end = acts_decl.stmt_begin + acts_decl.stmt_count;
+                        if (begin >= kids.size() || end > kids.size()) return;
+
+                        for (uint32_t i = begin; i < end; ++i) {
+                            const ast::StmtId msid = kids[i];
+                            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                            const auto& member = ast_.stmt(msid);
+                            if (member.kind != ast::StmtKind::kFnDecl) continue;
+                            if (member.fn_is_operator) continue;
+                            if (member.name != explicit_acts.member_name) continue;
+                            overload_decl_ids.push_back(msid);
+                        }
+                    };
 
                     if (explicit_acts.set_name == "default") {
-                        for (const auto& md : member_it->second) {
-                            if (!md.from_named_set) overload_decl_ids.push_back(md.fn_sid);
+                        bool has_default_decl = false;
+                        for (uint32_t sid = 0; sid < (uint32_t)ast_.stmts().size(); ++sid) {
+                            const auto& s = ast_.stmt(sid);
+                            if (s.kind != ast::StmtKind::kActsDecl) continue;
+                            if (!s.acts_is_for || s.acts_has_set_name) continue;
+                            const ty::TypeId decl_owner = canonicalize_acts_owner_type_(s.acts_target_type);
+                            if (decl_owner != owner_t) continue;
+                            has_default_decl = true;
+                            collect_member_from_decl(sid);
+                        }
+
+                        if (!has_default_decl) {
+                            std::ostringstream oss;
+                            oss << "no default acts are declared for type " << types_.to_string(owner_t);
+                            diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
+                            err_(callee_expr.span, oss.str());
+                            check_all_arg_exprs_only();
+                            return types_.error();
                         }
                     } else {
                         const auto named_sid = resolve_named_acts_decl_sid_(owner_t, explicit_acts.set_name);
@@ -259,12 +295,7 @@ namespace parus::tyck {
                             check_all_arg_exprs_only();
                             return types_.error();
                         }
-
-                        for (const auto& md : member_it->second) {
-                            if (md.from_named_set && md.acts_decl_sid == *named_sid) {
-                                overload_decl_ids.push_back(md.fn_sid);
-                            }
-                        }
+                        collect_member_from_decl(*named_sid);
                     }
 
                     if (overload_decl_ids.empty()) {

@@ -79,13 +79,13 @@ export field Vec2 {
 }
 
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
-    def draw(self s: &Self, ctx: &mut RenderCtx) -> void { /* ... */ }
+    def draw(self, ctx: &mut RenderCtx) -> void { /* ... */ }
 }
 ```
 
@@ -360,6 +360,13 @@ use Vec2 with acts(A);
 use Vec2 with acts(default);
 ```
 
+5. 바인딩 시점 acts 선택(syntax sugar)
+
+```parus
+set mut v with acts(A) = Vec2{ x: 42, y: 42 };
+let mut w: Vec2 with acts(default) = Vec2{ x: 1, y: 2 };
+```
+
 제약(v0 강제):
 
 * `use`는 예약어/토큰을 바꾸지 않는다.
@@ -368,6 +375,7 @@ use Vec2 with acts(default);
 * acts 선택은 `use T with acts(NameOrDefault);` 문법만 허용한다.
 * `use acts Foo for T;` 문법은 폐기한다.
 * acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용하며, lexical scope 규칙을 따른다.
+* 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에만 영향한다.
 
 ### 3.1.4 `nest` 네임스페이스
 
@@ -2661,7 +2669,7 @@ field Big {
 }
 
 acts for Big {
-  operator(copy)(self: Big) -> Big {
+  operator(copy)(self move) -> Big {
     // field는 POD이므로 단순 복사로 충분
     return __intrin_memcpy_big(x: self);
   }
@@ -2728,9 +2736,9 @@ v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 �
 
 ```parus
 acts string {
-  def do_clone(self: string) : op(clone) -> string { return __intrin_string_clone(s: self); }
+  def do_clone(self move) : op(clone) -> string { return __intrin_string_clone(s: self); }
 
-  def drop(self: string) : op(drop) -> void { __intrin_string_drop(s: self); }
+  def drop(self move) : op(drop) -> void { __intrin_string_drop(s: self); }
 }
 ```
 
@@ -3271,7 +3279,7 @@ field<u32, i32> OnlyInts {
 
 ```parus
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 ```
 
@@ -3279,15 +3287,15 @@ proto 상속(확장) 예시:
 
 ```parus
 proto Hashable {
-  def hash(self v: &Self) -> u64;
+  def hash(self) -> u64;
 }
 
 proto Equatable {
-  def eq(self a: &Self, b: &Self) -> bool;
+  def eq(self, b: &Self) -> bool;
 }
 
 proto Keyable : Hashable, Equatable {
-  def key_id(self v: &Self) -> u64;
+  def key_id(self) -> u64;
 }
 ```
 
@@ -3305,14 +3313,14 @@ proto Keyable : Hashable, Equatable {
 
 ```parus
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    def draw(self s: &Self, ctx: &mut RenderCtx) -> void {
+    def draw(self, ctx: &mut RenderCtx) -> void {
       // ...
     }
 }
@@ -3371,11 +3379,11 @@ tablet Counter {
   public:
     let mut n: int;
 
-    def get() -> int {            // self: &Counter
+    def get() -> int {            // receiver: self
       return self.n;
     }
 
-    def mut inc() -> void {       // self: &mut Counter
+    def mut inc() -> void {       // receiver: self mut
       self.n += 1;
     }
 }
@@ -3530,8 +3538,10 @@ Parus v0에는 acts 블록이 세 가지 형태로 존재한다.
 #### (1) 일반 acts(네임스페이스): `acts A { ... }`
 
 * `acts A {}`는 A라는 이름의 acts 네임스페이스(행동 묶음)를 만든다.
-* 이 블록 안의 선언은 정적 경로 호출(`A::f(...)`)로만 사용한다.
+* 이 블록 안의 선언은 정적 경로 호출(`acts(A)::f(...)`)로만 사용한다.
+* alias를 쓸 때는 `use acts(A) as a; a::f(...);`를 사용한다.
 * `acts A` 내부 함수는 dot 호출 sugar 대상이 아니다.
+* `acts A` 내부 함수는 `self` 리시버를 가질 수 없다.
 * `acts A` 내부에 operator 선언은 금지한다.
 
 예시:
@@ -3542,7 +3552,7 @@ acts Math {
 }
 
 def demo() -> void {
-  set x = Math::add(1, 2);
+  set x = acts(Math)::add(1, 2);
 }
 ```
 
@@ -3565,7 +3575,7 @@ def demo() -> void {
 
 ```parus
 acts for Packet {
-  def checksum(self p: &Packet, seed: u32) -> u32 { return p.crc + seed; }
+  def checksum(self, seed: u32) -> u32 { return self.crc + seed; }
 }
 
 def demo(p: Packet) -> void {
@@ -3587,7 +3597,7 @@ def demo(p: Packet) -> void {
 
 ```parus
 acts FastMath for Vec2 {
-  operator(+)(self a: Vec2, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
@@ -3602,6 +3612,10 @@ use Vec2 with acts(FastMath);
 use Vec2 with acts(default);
 ```
 
+```parus
+set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
+```
+
 규칙(v0):
 
 1. `use T with acts(Name);`는 현재 lexical scope에서 타입 `T`의 활성 named acts를 `Name`으로 설정한다.
@@ -3609,6 +3623,20 @@ use Vec2 with acts(default);
 3. acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용한다.
 4. 내부 스코프 선택이 외부 스코프 선택을 shadowing하며, 블록 종료 시 자동 해제된다.
 5. 폐기 문법: `use acts Foo for T;`
+6. 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
+
+명시 경로 선택(v0):
+
+```parus
+Vec2::acts(FastMath)::add(v, 1, 2);
+Vec2::acts(default)::add(v, 1, 2);
+```
+
+alias 정합성 규칙(v0):
+
+1. `use Vec2 as v2;`를 선언했다면 `v2::acts(FastMath)::add(...)`도 동일하게 유효해야 한다.
+2. `use acts(Math) as m;`를 선언했다면 `m::add(...)`로 일반 acts 네임스페이스 함수에 접근할 수 있어야 한다.
+3. alias 해석은 import/path/type/acts alias를 통합한 lexical alias resolver로 동작해야 한다.
 
 ---
 
@@ -3618,7 +3646,7 @@ v0에서 export는 acts 블록 전체에만 적용한다.
 
 ```parus
 export acts for Packet {
-  def checksum(self a: &Packet, seed: i32) -> u32 { ... }
+  def checksum(self, seed: i32) -> u32 { ... }
 }
 ```
 
@@ -3637,14 +3665,20 @@ acts for Packet {
 `self`는 파라미터 이름이 아니라 리시버 마커다.
 
 ```parus
-def checksum(self a: &T, seed: u32) -> u32 { ... }
+def checksum(self, seed: u32) -> u32 { ... }
 ```
 
 강제 규칙(v0):
 
 1. `self`는 첫 번째 파라미터 위치에서만 허용한다.
-2. `self` 파라미터 타입은 `T` 또는 `&T`/`&mut T` 등 T 기반이어야 한다.
-3. `self`가 붙은 함수만 메서드(dot 호출) 대상이다.
+2. `acts for T` / `acts Name for T` 내부 함수는 첫 파라미터로 `self` 계열이 필수다.
+3. `self` 표기는 `self` / `self mut` / `self move` 세 형태만 허용한다.
+4. 의미:
+   - `self`      : `&Self`
+   - `self mut`  : `&mut Self`
+   - `self move` : `Self`
+5. 일반 `acts A {}` 내부 함수에는 `self`를 쓸 수 없다.
+6. `self`가 붙은 함수만 메서드(dot 호출) 대상이다.
 
 dot 호출 lowering:
 
@@ -3660,10 +3694,10 @@ T::f(x, 1, 2);
 연산자 선언은 `operator(...)` 문법만 사용한다.
 
 ```parus
-operator(+)(self a: T, rhs: T) -> T { ... }
-operator(==)(self a: &T, rhs: &T) -> bool { ... }
-operator(++pre)(self x: &mut T) -> T { ... }
-operator(++post)(self x: &mut T) -> T { ... }
+operator(+)(self move, rhs: T) -> T { ... }
+operator(==)(self, rhs: &T) -> bool { ... }
+operator(++pre)(self mut) -> T { ... }
+operator(++post)(self mut) -> T { ... }
 ```
 
 규칙(v0):
@@ -3705,8 +3739,8 @@ export field Foo {
 }
 
 export acts for Foo {
-  def inc(self x: &mut Foo) -> void { x.v = x.v + 1u32; }
-  operator(+)(self a: Foo, rhs: Foo) -> Foo { return Foo{ v: a.v + rhs.v }; }
+  def inc(self mut) -> void { self.v = self.v + 1u32; }
+  operator(+)(self move, rhs: Foo) -> Foo { return Foo{ v: self.v + rhs.v }; }
 }
 
 def demo(mut a: Foo, b: Foo) -> Foo {
@@ -3719,8 +3753,8 @@ def demo(mut a: Foo, b: Foo) -> Foo {
 
 ```parus
 export acts FooMath for Foo {
-  operator(+)(self a: Foo, rhs: Foo) -> Foo {
-    return Foo{ v: __intrin_u32_saturating_add(a.v, rhs.v) };
+  operator(+)(self move, rhs: Foo) -> Foo {
+    return Foo{ v: __intrin_u32_saturating_add(self.v, rhs.v) };
   }
 }
 
@@ -3897,14 +3931,14 @@ field<u32, i32> OnlyInts {
 }
 
 proto Drawable {
-  def draw(self d: &Self, ctx: &mut RenderCtx) -> void;
+  def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
 tablet Sprite : Drawable {
   public:
     let pos: Vec2;
 
-    def draw(self s: &Self, ctx: &mut RenderCtx) -> void {
+    def draw(self, ctx: &mut RenderCtx) -> void {
       // draw using pos
     }
 
@@ -3913,7 +3947,7 @@ tablet Sprite : Drawable {
 }
 
 acts for u32 {
-  operator(+)(self: u32, rhs: u32) -> u32 {
+  operator(+)(self move, rhs: u32) -> u32 {
     return __intrin_u32_add(a: self, b: rhs);
   }
 

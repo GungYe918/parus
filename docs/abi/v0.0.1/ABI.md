@@ -208,6 +208,8 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `acts for` 부착 대상: `field`, `tablet`
    - `class`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
    - `proto`는 계약 전용이며 연산자 재정의를 담당하지 않는다
+   - `acts for` 계열 함수는 `self`/`self mut`/`self move` 리시버를 첫 파라미터로 강제한다
+   - acts 선택은 `use T with acts(...)` 및 바인딩 sugar(`let/set ... with acts(...) = ...`)를 따른다
 8. 제네릭 제약 표기는 `with [ ... ]` 단일 문법으로 고정한다.
    - `with T: P`(브래킷 없는 with)와 `[]` 단독 제약 절은 허용하지 않는다.
    - 제약이 1개여도 `with [T: P]`를 유지한다.

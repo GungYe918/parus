@@ -4,8 +4,8 @@ field I32Box {
 };
 
 acts for I32Box {
-    operator(+)(self a: I32Box, rhs: I32Box) -> I32Box {
-        return I32Box { v: a.v + rhs.v };
+    operator(+)(self move, rhs: I32Box) -> I32Box {
+        return I32Box { v: self.v + rhs.v };
     }
 };
 

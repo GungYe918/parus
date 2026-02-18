@@ -546,6 +546,77 @@ namespace parus {
             return parse_expr_array_lit(ternary_depth);
         }
 
+        if (t.kind == syntax::TokenKind::kKwActs &&
+            cursor_.peek(1).kind == syntax::TokenKind::kLParen) {
+            // general acts namespace path:
+            //   acts(Foo::Bar)::member
+            // lowers to ident path:
+            //   Foo::Bar::member
+            const Token acts_kw = cursor_.bump(); // acts
+            const Token lp = cursor_.bump();      // '('
+
+            auto eat_coloncolon = [&]() -> bool {
+                if (cursor_.eat(syntax::TokenKind::kColonColon)) return true;
+                if (cursor_.at(syntax::TokenKind::kColon) && cursor_.peek(1).kind == syntax::TokenKind::kColon) {
+                    cursor_.bump();
+                    cursor_.bump();
+                    return true;
+                }
+                return false;
+            };
+
+            std::string joined;
+            Span path_sp = span_join(acts_kw.span, lp.span);
+
+            const Token first_seg = cursor_.peek();
+            if (first_seg.kind != syntax::TokenKind::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, first_seg.span, "acts namespace path segment");
+            } else {
+                cursor_.bump();
+                joined.assign(first_seg.lexeme.data(), first_seg.lexeme.size());
+                path_sp = span_join(path_sp, first_seg.span);
+
+                while (eat_coloncolon()) {
+                    const Token seg = cursor_.peek();
+                    if (seg.kind != syntax::TokenKind::kIdent) {
+                        diag_report(diag::Code::kUnexpectedToken, seg.span, "acts namespace path segment");
+                        break;
+                    }
+                    cursor_.bump();
+                    joined += "::";
+                    joined.append(seg.lexeme.data(), seg.lexeme.size());
+                    path_sp = span_join(path_sp, seg.span);
+                }
+            }
+
+            if (!cursor_.eat(syntax::TokenKind::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(syntax::TokenKind::kRParen, syntax::TokenKind::kSemicolon, syntax::TokenKind::kRBrace);
+                cursor_.eat(syntax::TokenKind::kRParen);
+            }
+            if (cursor_.prev().kind == syntax::TokenKind::kRParen) {
+                path_sp = span_join(path_sp, cursor_.prev().span);
+            }
+
+            while (eat_coloncolon()) {
+                const Token seg = cursor_.peek();
+                if (seg.kind != syntax::TokenKind::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
+                    break;
+                }
+                cursor_.bump();
+                if (!joined.empty()) joined += "::";
+                joined.append(seg.lexeme.data(), seg.lexeme.size());
+                path_sp = span_join(path_sp, seg.span);
+            }
+
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kIdent;
+            e.span = path_sp;
+            e.text = ast_.add_owned_string(std::move(joined));
+            return ast_.add_expr(e);
+        }
+
         if (t.kind == syntax::TokenKind::kIdent) {
             // Path primary:
             //   Ident ('::' Ident)*
@@ -580,6 +651,13 @@ namespace parus {
 
                     auto parse_acts_set_path = [&]() -> bool {
                         const Token first_set = cursor_.peek();
+                        if (first_set.kind == syntax::TokenKind::kKwDefault) {
+                            cursor_.bump();
+                            acts_set = "default";
+                            acts_end = first_set.span;
+                            return true;
+                        }
+
                         if (first_set.kind != syntax::TokenKind::kIdent) {
                             diag_report(diag::Code::kUnexpectedToken, first_set.span, "acts name identifier");
                             return false;

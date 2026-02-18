@@ -4,8 +4,8 @@ field Vec2 {
 };
 
 acts MathOps for Vec2 {
-    def add(self v: Vec2, rhs: i32) -> i32 {
-        return v.x + rhs;
+    def add(self, rhs: i32) -> i32 {
+        return self.x + rhs;
     }
 };
 

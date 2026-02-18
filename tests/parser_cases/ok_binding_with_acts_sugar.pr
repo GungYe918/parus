@@ -3,13 +3,13 @@ field Vec2 {
     y: i32;
 };
 
-acts MathOps for Vec2 {
+acts A for Vec2 {
     def add(self, rhs: i32) -> i32 {
         return self.x + rhs;
     }
 };
 
 def main() -> i32 {
-    let v: Vec2 = Vec2 {x: 1, y: 2};
-    return v.add(3);
+    set mut v with acts(A) = Vec2 { x: 10, y: 0 };
+    return v.add(32);
 }

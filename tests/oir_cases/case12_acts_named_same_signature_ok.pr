@@ -1,0 +1,22 @@
+field Vec2 {
+    x: i32;
+    y: i32;
+};
+
+acts A for Vec2 {
+    def sub(self move, b: i32) -> i32 {
+        return self.x - b;
+    }
+};
+
+acts B for Vec2 {
+    def sub(self move, b: i32) -> i32 {
+        return 42;
+    }
+};
+
+def main() -> i32 {
+    let x: i32 = Vec2::acts(A)::sub(Vec2 { x: 50, y: 0 }, 8);
+    let y: i32 = Vec2::acts(B)::sub(Vec2 { x: 9, y: 9 }, 9);
+    return x + y;
+}

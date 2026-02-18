@@ -35,6 +35,7 @@ namespace parus::tyck {
         acts_default_method_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();
         acts_selection_scope_stack_.clear();
+        acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
         fn_qualified_name_by_stmt_.clear();
         namespace_stack_.clear();
@@ -408,6 +409,20 @@ namespace parus::tyck {
         return std::nullopt;
     }
 
+    ty::TypeId TypeChecker::canonicalize_acts_owner_type_(ty::TypeId owner_type) const {
+        if (owner_type == ty::kInvalidType) return owner_type;
+        const auto& tt = types_.get(owner_type);
+        if (tt.kind != ty::Kind::kNamedUser) return owner_type;
+
+        if (auto sid = lookup_symbol_(types_.to_string(owner_type))) {
+            const auto& ss = sym_.symbol(*sid);
+            if (ss.kind == sema::SymbolKind::kField && ss.declared_type != ty::kInvalidType) {
+                return ss.declared_type;
+            }
+        }
+        return owner_type;
+    }
+
     // --------------------
     // pass 1: collect top-level decls
     // --------------------
@@ -500,8 +515,9 @@ namespace parus::tyck {
                 return;
             }
 
-            if (s.kind == ast::StmtKind::kUse && s.use_kind == ast::UseKind::kImport) {
-                if (!file_scope) return;
+            if (s.kind == ast::StmtKind::kUse &&
+                (s.use_kind == ast::UseKind::kImport || s.use_kind == ast::UseKind::kPathAlias)) {
+                if (s.use_kind == ast::UseKind::kImport && !file_scope) return;
                 if (s.use_path_count == 0) return;
 
                 const std::string path = path_join_(s.use_path_begin, s.use_path_count);
@@ -519,7 +535,7 @@ namespace parus::tyck {
                 auto it = import_alias_to_path_.find(alias);
                 if (it != import_alias_to_path_.end() && it->second != path) {
                     diag_(diag::Code::kDuplicateDecl, s.span, alias);
-                    err_(s.span, "duplicate import alias: " + alias);
+                    err_(s.span, "duplicate use alias: " + alias);
                     return;
                 }
                 import_alias_to_path_[alias] = path;
@@ -619,8 +635,89 @@ namespace parus::tyck {
                     err_(s.span, "duplicate symbol (acts): " + qname);
                     diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
-                if (s.acts_is_for && s.acts_has_set_name && s.acts_target_type != ty::kInvalidType) {
-                    acts_named_decl_by_owner_and_name_[acts_named_decl_key_(s.acts_target_type, qname)] = sid;
+
+                ty::TypeId owner_type = s.acts_target_type;
+                if (s.acts_is_for) {
+                    owner_type = canonicalize_acts_owner_type_(owner_type);
+                    if (owner_type != s.acts_target_type) {
+                        ast_.stmt_mut(sid).acts_target_type = owner_type;
+                    }
+                }
+
+                if (s.acts_is_for && s.acts_has_set_name && owner_type != ty::kInvalidType) {
+                    acts_named_decl_by_owner_and_name_[acts_named_decl_key_(owner_type, qname)] = sid;
+                }
+
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    auto materialize_self_type = [&](ast::Param& p) {
+                        if (!p.is_self || owner_type == ty::kInvalidType) return;
+                        switch (p.self_kind) {
+                            case ast::SelfReceiverKind::kRead:
+                                p.type = types_.make_borrow(owner_type, /*is_mut=*/false);
+                                break;
+                            case ast::SelfReceiverKind::kMut:
+                                p.type = types_.make_borrow(owner_type, /*is_mut=*/true);
+                                break;
+                            case ast::SelfReceiverKind::kMove:
+                                p.type = owner_type;
+                                break;
+                            case ast::SelfReceiverKind::kNone:
+                                // parser/self-rewrite 경로의 방어 fallback
+                                p.type = types_.make_borrow(owner_type, /*is_mut=*/false);
+                                break;
+                        }
+                    };
+
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                        const auto& ms = ast_.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl) continue;
+
+                        if (ms.param_count > 0) {
+                            auto& p0 = ast_.params_mut()[ms.param_begin];
+                            materialize_self_type(p0);
+                        }
+
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(ms.name);
+                        fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+
+                        // general acts namespace members are callable via path:
+                        //   acts(Foo)::bar(...)
+                        //   use acts(Foo) as f; f::bar(...)
+                        if (!s.acts_is_for) {
+                            ty::TypeId ret = ms.fn_ret;
+                            if (ret == ty::kInvalidType) {
+                                ret = types_.builtin(ty::Builtin::kUnit);
+                            }
+
+                            std::vector<ty::TypeId> params;
+                            params.reserve(ms.param_count);
+                            for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
+                                const auto& p = ast_.params()[ms.param_begin + pi];
+                                ty::TypeId pt = p.type;
+                                if (pt == ty::kInvalidType) pt = types_.error();
+                                params.push_back(pt);
+                            }
+
+                            ty::TypeId sig = types_.make_fn(ret, params.data(), (uint32_t)params.size());
+                            ast_.stmt_mut(msid).type = sig;
+
+                            const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                            auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, sig, ms.span);
+                            if (!fins.ok && fins.is_duplicate) {
+                                err_(ms.span, "duplicate symbol (acts function): " + qfn);
+                                diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                            } else {
+                                fn_decl_by_name_[qfn].push_back(msid);
+                            }
+                        }
+                    }
                 }
                 collect_acts_operator_decl_(sid, s, /*allow_named_set=*/true);
                 collect_acts_method_decl_(sid, s, /*allow_named_set=*/true);
@@ -651,7 +748,8 @@ namespace parus::tyck {
                 oss << "|p" << i << ":" << std::string(p.name) << ":" << p.type
                     << ":" << (p.is_named_group ? "N" : "P")
                     << ":" << (p.has_default ? "D" : "R")
-                    << ":" << (p.is_self ? "S" : "_");
+                    << ":" << (p.is_self ? "S" : "_")
+                    << ":sk=" << (uint32_t)p.self_kind;
             }
             oss << "|ret=" << def.fn_ret;
             return oss.str();
@@ -1008,8 +1106,70 @@ namespace parus::tyck {
         return nullptr;
     }
 
+    const TypeChecker::ActiveActsSelection*
+    TypeChecker::lookup_symbol_acts_selection_(uint32_t symbol_id) const {
+        auto it = acts_selection_by_symbol_.find(symbol_id);
+        if (it == acts_selection_by_symbol_.end()) return nullptr;
+        return &it->second;
+    }
+
+    bool TypeChecker::bind_symbol_acts_selection_(
+        uint32_t symbol_id,
+        ty::TypeId owner_type,
+        const ast::Stmt& var_stmt,
+        Span diag_span
+    ) {
+        if (!var_stmt.var_has_acts_binding) return true;
+        owner_type = canonicalize_acts_owner_type_(owner_type);
+        if (owner_type == ty::kInvalidType) {
+            diag_(diag::Code::kTypeErrorGeneric, diag_span, "binding acts target type is invalid");
+            err_(diag_span, "binding acts target type is invalid");
+            return false;
+        }
+
+        ActiveActsSelection selection{};
+        selection.span = diag_span;
+        if (var_stmt.var_acts_is_default || var_stmt.var_acts_set_name == "default") {
+            selection.kind = ActiveActsSelectionKind::kDefaultOnly;
+            selection.named_decl_sid = ast::k_invalid_stmt;
+            selection.set_name = "default";
+            acts_selection_by_symbol_[symbol_id] = std::move(selection);
+            return true;
+        }
+
+        std::string raw_set_path;
+        if (var_stmt.var_acts_set_path_count > 0) {
+            raw_set_path = path_join_(var_stmt.var_acts_set_path_begin, var_stmt.var_acts_set_path_count);
+        }
+        if (raw_set_path.empty() && !var_stmt.var_acts_set_name.empty()) {
+            raw_set_path = std::string(var_stmt.var_acts_set_name);
+        }
+        if (raw_set_path.empty()) {
+            diag_(diag::Code::kTypeErrorGeneric, diag_span, "acts set name is required for binding");
+            err_(diag_span, "acts set name is required for binding");
+            return false;
+        }
+
+        const auto named_sid = resolve_named_acts_decl_sid_(owner_type, raw_set_path);
+        if (!named_sid.has_value()) {
+            std::ostringstream oss;
+            oss << "unknown acts set '" << raw_set_path
+                << "' for type " << types_.to_string(owner_type);
+            diag_(diag::Code::kTypeErrorGeneric, diag_span, oss.str());
+            err_(diag_span, oss.str());
+            return false;
+        }
+
+        selection.kind = ActiveActsSelectionKind::kNamed;
+        selection.named_decl_sid = *named_sid;
+        selection.set_name = raw_set_path;
+        acts_selection_by_symbol_[symbol_id] = std::move(selection);
+        return true;
+    }
+
     std::optional<ast::StmtId>
     TypeChecker::resolve_named_acts_decl_sid_(ty::TypeId owner_type, std::string_view raw_set_path) const {
+        owner_type = canonicalize_acts_owner_type_(owner_type);
         if (owner_type == ty::kInvalidType || raw_set_path.empty()) return std::nullopt;
 
         std::vector<std::string> candidates;
@@ -1049,7 +1209,7 @@ namespace parus::tyck {
     bool TypeChecker::apply_use_acts_selection_(const ast::Stmt& use_stmt) {
         if (use_stmt.use_kind != ast::UseKind::kActsEnable) return true;
 
-        ty::TypeId owner_type = use_stmt.acts_target_type;
+        ty::TypeId owner_type = canonicalize_acts_owner_type_(use_stmt.acts_target_type);
         if (owner_type == ty::kInvalidType) {
             diag_(diag::Code::kTypeErrorGeneric, use_stmt.span, "acts selection target type is invalid");
             err_(use_stmt.span, "acts selection target type is invalid");
@@ -1127,7 +1287,14 @@ namespace parus::tyck {
         if (owner == ty::kInvalidType || actual == ty::kInvalidType) return false;
         if (owner == actual) return true;
         const auto& at = types.get(actual);
+        if (at.kind == ty::Kind::kNamedUser && types.to_string(actual) == "Self") {
+            return true;
+        }
         if (at.kind == ty::Kind::kBorrow) {
+            const auto& elem = types.get(at.elem);
+            if (elem.kind == ty::Kind::kNamedUser && types.to_string(at.elem) == "Self") {
+                return true;
+            }
             return at.elem == owner;
         }
         return false;
@@ -1137,7 +1304,8 @@ namespace parus::tyck {
     void TypeChecker::collect_acts_operator_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set) {
         if (!acts_decl.acts_is_for) return;
         if (acts_decl.acts_has_set_name && !allow_named_set) return;
-        if (acts_decl.acts_target_type == ty::kInvalidType) return;
+        const ty::TypeId owner_type = canonicalize_acts_owner_type_(acts_decl.acts_target_type);
+        if (owner_type == ty::kInvalidType) return;
 
         const auto& kids = ast_.stmt_children();
         const uint32_t begin = acts_decl.stmt_begin;
@@ -1162,7 +1330,7 @@ namespace parus::tyck {
                 err_(first.span, "operator declaration requires 'self' on first parameter");
                 continue;
             }
-            if (!type_matches_acts_owner_(types_, acts_decl.acts_target_type, first.type)) {
+            if (!type_matches_acts_owner_(types_, owner_type, first.type)) {
                 std::string msg = "operator self type must match acts target type";
                 diag_(diag::Code::kTypeErrorGeneric, first.span, msg);
                 err_(first.span, msg);
@@ -1170,14 +1338,14 @@ namespace parus::tyck {
             }
 
             const uint64_t key = acts_operator_key_(
-                acts_decl.acts_target_type,
+                owner_type,
                 member.fn_operator_token,
                 member.fn_operator_is_postfix
             );
             acts_default_operator_map_[key].push_back(ActsOperatorDecl{
                 .fn_sid = sid,
                 .acts_decl_sid = acts_decl_sid,
-                .owner_type = acts_decl.acts_target_type,
+                .owner_type = owner_type,
                 .op_token = member.fn_operator_token,
                 .is_postfix = member.fn_operator_is_postfix,
                 .from_named_set = acts_decl.acts_has_set_name,
@@ -1189,7 +1357,8 @@ namespace parus::tyck {
     void TypeChecker::collect_acts_method_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set) {
         if (!acts_decl.acts_is_for) return;
         if (acts_decl.acts_has_set_name && !allow_named_set) return;
-        if (acts_decl.acts_target_type == ty::kInvalidType) return;
+        const ty::TypeId owner_type = canonicalize_acts_owner_type_(acts_decl.acts_target_type);
+        if (owner_type == ty::kInvalidType) return;
 
         const auto& kids = ast_.stmt_children();
         const uint32_t begin = acts_decl.stmt_begin;
@@ -1209,12 +1378,12 @@ namespace parus::tyck {
                 recv_self = p0.is_self;
             }
 
-            acts_default_method_map_[acts_decl.acts_target_type]
+            acts_default_method_map_[owner_type]
                 [std::string(member.name)]
                 .push_back(ActsMethodDecl{
                     .fn_sid = sid,
                     .acts_decl_sid = acts_decl_sid,
-                    .owner_type = acts_decl.acts_target_type,
+                    .owner_type = owner_type,
                     .receiver_is_self = recv_self,
                     .from_named_set = acts_decl.acts_has_set_name,
                 });
@@ -1222,15 +1391,20 @@ namespace parus::tyck {
     }
 
     std::vector<TypeChecker::ActsMethodDecl>
-    TypeChecker::lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name) const {
+    TypeChecker::lookup_acts_methods_for_call_(
+        ty::TypeId owner_type,
+        std::string_view name,
+        const ActiveActsSelection* forced_selection
+    ) const {
         std::vector<ActsMethodDecl> out;
+        owner_type = canonicalize_acts_owner_type_(owner_type);
         if (owner_type == ty::kInvalidType || name.empty()) return out;
         auto oit = acts_default_method_map_.find(owner_type);
         if (oit == acts_default_method_map_.end()) return out;
         auto mit = oit->second.find(std::string(name));
         if (mit == oit->second.end()) return out;
 
-        const auto* active = lookup_active_acts_selection_(owner_type);
+        const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(owner_type);
         if (active == nullptr || active->kind == ActiveActsSelectionKind::kDefaultOnly) {
             for (const auto& d : mit->second) {
                 if (!d.from_named_set) out.push_back(d);
@@ -1250,7 +1424,13 @@ namespace parus::tyck {
     }
 
     /// @brief binary operator에 대응되는 기본 acts overload를 찾는다.
-    ast::StmtId TypeChecker::resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs) const {
+    ast::StmtId TypeChecker::resolve_binary_operator_overload_(
+        syntax::TokenKind op,
+        ty::TypeId lhs,
+        ty::TypeId rhs,
+        const ActiveActsSelection* forced_selection
+    ) const {
+        lhs = canonicalize_acts_owner_type_(lhs);
         const uint64_t key = acts_operator_key_(lhs, op, /*is_postfix=*/false);
         auto it = acts_default_operator_map_.find(key);
         if (it == acts_default_operator_map_.end()) return ast::k_invalid_stmt;
@@ -1283,7 +1463,7 @@ namespace parus::tyck {
             return selected;
         };
 
-        const auto* active = lookup_active_acts_selection_(lhs);
+        const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(lhs);
         if (active != nullptr && active->kind == ActiveActsSelectionKind::kNamed) {
             bool amb_named = false;
             const ast::StmtId named = select_from(/*named_stage=*/true, active->named_decl_sid, amb_named);
@@ -1298,7 +1478,12 @@ namespace parus::tyck {
     }
 
     /// @brief postfix operator(++ 등)에 대응되는 기본 acts overload를 찾는다.
-    ast::StmtId TypeChecker::resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs) const {
+    ast::StmtId TypeChecker::resolve_postfix_operator_overload_(
+        syntax::TokenKind op,
+        ty::TypeId lhs,
+        const ActiveActsSelection* forced_selection
+    ) const {
+        lhs = canonicalize_acts_owner_type_(lhs);
         const uint64_t key = acts_operator_key_(lhs, op, /*is_postfix=*/true);
         auto it = acts_default_operator_map_.find(key);
         if (it == acts_default_operator_map_.end()) return ast::k_invalid_stmt;
@@ -1330,7 +1515,7 @@ namespace parus::tyck {
             return selected;
         };
 
-        const auto* active = lookup_active_acts_selection_(lhs);
+        const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(lhs);
         if (active != nullptr && active->kind == ActiveActsSelectionKind::kNamed) {
             bool amb_named = false;
             const ast::StmtId named = select_from(/*named_stage=*/true, active->named_decl_sid, amb_named);

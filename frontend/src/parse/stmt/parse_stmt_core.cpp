@@ -383,6 +383,55 @@ namespace parus {
             }
         }
 
+        // ---- optional binding acts sugar ----
+        //   let/set ... with acts(NameOrDefault) = ...
+        bool var_has_acts_binding = false;
+        bool var_acts_is_default = false;
+        ast::TypeId var_acts_target_type = ast::k_invalid_type;
+        uint32_t var_acts_set_path_begin = 0;
+        uint32_t var_acts_set_path_count = 0;
+        std::string_view var_acts_set_name{};
+
+        const auto is_with_token = [](const Token& tok) -> bool {
+            return tok.kind == K::kIdent && tok.lexeme == "with";
+        };
+        if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
+            var_has_acts_binding = true;
+            cursor_.bump(); // with
+            cursor_.bump(); // acts
+
+            if (!cursor_.eat(K::kLParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+            }
+
+            if (cursor_.at(K::kKwDefault)) {
+                var_acts_is_default = true;
+                var_acts_set_name = "default";
+                cursor_.bump();
+            } else {
+                auto [sb, sc] = parse_path_segments();
+                var_acts_set_path_begin = sb;
+                var_acts_set_path_count = sc;
+                if (sc > 0) {
+                    const auto& segs = ast_.path_segs();
+                    var_acts_set_name = segs[sb + sc - 1];
+                } else {
+                    diag_report(diag::Code::kActsNameExpected, cursor_.peek().span);
+                }
+            }
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+
+            if (type_id != ast::k_invalid_type) {
+                var_acts_target_type = type_id;
+            }
+        }
+
         // ---- initializer ----
         ast::ExprId init = ast::k_invalid_expr;
 
@@ -429,6 +478,12 @@ namespace parus {
         s.name = name;
         s.type = type_id;
         s.init = init;
+        s.var_has_acts_binding = var_has_acts_binding;
+        s.var_acts_is_default = var_acts_is_default;
+        s.var_acts_target_type = var_acts_target_type;
+        s.var_acts_set_path_begin = var_acts_set_path_begin;
+        s.var_acts_set_path_count = var_acts_set_path_count;
+        s.var_acts_set_name = var_acts_set_name;
         s.span = span_join(start_tok.span, end);
         return ast_.add_stmt(s);
     }

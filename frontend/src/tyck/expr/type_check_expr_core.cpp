@@ -1048,7 +1048,11 @@ namespace parus::tyck {
         }
 
         const ty::TypeId receiver_ty = write_through_borrow ? elem : at;
-        const ast::StmtId op_sid = resolve_postfix_operator_overload_(e.op, receiver_ty);
+        const ActiveActsSelection* forced_selection = nullptr;
+        if (auto sid = root_place_symbol_(e.a)) {
+            forced_selection = lookup_symbol_acts_selection_(*sid);
+        }
+        const ast::StmtId op_sid = resolve_postfix_operator_overload_(e.op, receiver_ty, forced_selection);
         if (op_sid != ast::k_invalid_stmt) {
             if (current_expr_id_ != ast::k_invalid_expr &&
                 current_expr_id_ < expr_overload_target_cache_.size()) {
@@ -1197,6 +1201,10 @@ namespace parus::tyck {
         ty::TypeId rt = check_expr_(e.b);
         lt = read_decay_borrow_(types_, lt);
         rt = read_decay_borrow_(types_, rt);
+        const ActiveActsSelection* forced_selection = nullptr;
+        if (auto sid = root_place_symbol_(e.a)) {
+            forced_selection = lookup_symbol_acts_selection_(*sid);
+        }
 
         auto is_builtin = [&](ty::TypeId t) -> bool {
             return t != ty::kInvalidType && types_.get(t).kind == ty::Kind::kBuiltin;
@@ -1232,7 +1240,7 @@ namespace parus::tyck {
         if (e.op == K::kEqEq || e.op == K::kBangEq) {
             // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
             if (!acts_default_operator_map_.empty()) {
-                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt, forced_selection);
                 if (op_sid != ast::k_invalid_stmt) {
                     if (current_expr_id_ != ast::k_invalid_expr &&
                         current_expr_id_ < expr_overload_target_cache_.size()) {
@@ -1278,7 +1286,7 @@ namespace parus::tyck {
         if (e.op == K::kPlus || e.op == K::kMinus || e.op == K::kStar || e.op == K::kSlash || e.op == K::kPercent) {
             // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
             if (!acts_default_operator_map_.empty()) {
-                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt, forced_selection);
                 if (op_sid != ast::k_invalid_stmt) {
                     if (current_expr_id_ != ast::k_invalid_expr &&
                         current_expr_id_ < expr_overload_target_cache_.size()) {
@@ -1336,7 +1344,7 @@ namespace parus::tyck {
         if (e.op == K::kLt || e.op == K::kLtEq || e.op == K::kGt || e.op == K::kGtEq) {
             // acts overload 우선 규칙: 오버로드가 존재하면 builtin보다 먼저 채택한다.
             if (!acts_default_operator_map_.empty()) {
-                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+                const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt, forced_selection);
                 if (op_sid != ast::k_invalid_stmt) {
                     if (current_expr_id_ != ast::k_invalid_expr &&
                         current_expr_id_ < expr_overload_target_cache_.size()) {
@@ -1390,7 +1398,7 @@ namespace parus::tyck {
         // TODO: logical ops, bitwise ops, pipe, etc.
         // ------------------------------------------------------------
         {
-            const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt);
+            const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt, forced_selection);
             if (op_sid != ast::k_invalid_stmt) {
                 if (current_expr_id_ != ast::k_invalid_expr &&
                     current_expr_id_ < expr_overload_target_cache_.size()) {

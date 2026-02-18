@@ -193,6 +193,50 @@ namespace parus {
             return ast_.add_stmt(s);
         }
 
+        // new general acts alias:
+        //   use acts(Foo::Bar) as fb;
+        if (cursor_.at(K::kKwActs) && cursor_.peek(1).kind == K::kLParen) {
+            cursor_.bump(); // acts
+            cursor_.bump(); // (
+
+            auto [pb, pc] = parse_path_segments();
+            s.use_path_begin = pb;
+            s.use_path_count = pc;
+            if (pc == 0) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "acts namespace path");
+            }
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kKwAs, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+
+            const bool has_assign = cursor_.at(K::kAssign);
+            const bool has_as = cursor_.at(K::kKwAs);
+            if (!has_assign && !has_as) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "expected 'as' or '=' for acts alias");
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+            cursor_.bump(); // as or =
+
+            const Token rhs = cursor_.peek();
+            if (rhs.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (acts alias)");
+            } else {
+                cursor_.bump();
+                s.use_kind = ast::UseKind::kPathAlias;
+                s.use_rhs_ident = rhs.lexeme;
+            }
+
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
         // legacy syntax removal:
         //   use acts Name for T;
         if (cursor_.at(K::kKwActs)) {
@@ -301,6 +345,24 @@ namespace parus {
                 cursor_.bump(); // 'as'
             }
 
+            // 'as'는 단일/복수 path 모두 path alias로 고정한다.
+            if (has_as) {
+                const Token rhs = cursor_.peek();
+                if (rhs.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (use path alias name)");
+                } else {
+                    cursor_.bump();
+                    s.use_kind = ast::UseKind::kPathAlias;
+                    s.use_path_begin = pb;
+                    s.use_path_count = pc;
+                    s.use_rhs_ident = rhs.lexeme;
+                }
+
+                Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                s.span = span_join(use_kw.span, end);
+                return ast_.add_stmt(s);
+            }
+
             // ---- PathAlias: pc >= 2, RHS must be Ident ----
             if (pc >= 2) {
                 const Token rhs = cursor_.peek();
@@ -320,7 +382,7 @@ namespace parus {
                 return ast_.add_stmt(s);
             }
 
-            // ---- pc == 1: TypeAlias (but keep v0 heuristic: forbid value-alias-looking cases) ----
+            // ---- pc == 1 && '=': TypeAlias (but keep v0 heuristic: forbid value-alias-looking cases) ----
             {
                 const std::string_view lhs = ast_.path_segs()[pb];
 

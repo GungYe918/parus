@@ -52,7 +52,10 @@ namespace parus {
         return { begin, count };
     }
 
-    // 파라미터 1개(Ident ':' Type ['=' Expr])를 파싱한다.
+    // 파라미터 1개를 파싱한다.
+    // v0(acts receiver):
+    // - 일반 파라미터: name ':' Type
+    // - 리시버 파라미터: self | self mut | self move
     bool Parser::parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self) {
         using K = syntax::TokenKind;
 
@@ -67,38 +70,92 @@ namespace parus {
         }
 
         bool is_self = false;
+        ast::SelfReceiverKind self_kind = ast::SelfReceiverKind::kNone;
+        std::string_view name{};
         Token name_tok = cursor_.peek();
+        Span type_span = name_tok.span;
+        ast::TypeId parsed_type = ast::k_invalid_type;
 
-        // self receiver marker: `self x: T`
+        // receiver form:
+        //   self | self mut | self move
         if (name_tok.kind == K::kIdent && name_tok.lexeme == "self") {
             is_self = true;
             start_span = is_mut ? start_span : name_tok.span;
-            cursor_.bump(); // self
-            name_tok = cursor_.peek();
-        }
+            const Token self_tok = cursor_.bump(); // self
 
-        std::string_view name{};
-        if (name_tok.kind == K::kIdent) {
-            name = name_tok.lexeme;
-            cursor_.bump();
+            if (cursor_.at(K::kKwMut)) {
+                self_kind = ast::SelfReceiverKind::kMut;
+                cursor_.bump(); // mut
+            } else if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "move") {
+                self_kind = ast::SelfReceiverKind::kMove;
+                cursor_.bump(); // move
+            } else {
+                self_kind = ast::SelfReceiverKind::kRead;
+            }
+
+            // legacy typed receiver removal:
+            //   self a: T
+            //   self: T
+            if ((cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColon) ||
+                cursor_.at(K::kColon)) {
+                diag_report(
+                    diag::Code::kUnexpectedToken,
+                    cursor_.peek().span,
+                    "legacy self typed syntax is removed (use 'self', 'self mut', or 'self move')"
+                );
+
+                if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColon) {
+                    cursor_.bump(); // legacy receiver name
+                }
+                if (cursor_.eat(K::kColon)) {
+                    (void)parse_type(); // consume legacy payload for recovery
+                }
+            }
+
+            if (is_mut) {
+                diag_report(
+                    diag::Code::kUnexpectedToken,
+                    self_tok.span,
+                    "use 'self mut' instead of prefix 'mut self'"
+                );
+            }
+
+            name = self_tok.lexeme; // "self"
+            ast::TypeId self_ty = types_.intern_ident("Self");
+            if (self_kind == ast::SelfReceiverKind::kMut) {
+                self_ty = types_.make_borrow(self_ty, /*is_mut=*/true);
+            } else if (self_kind == ast::SelfReceiverKind::kRead) {
+                self_ty = types_.make_borrow(self_ty, /*is_mut=*/false);
+            }
+            parsed_type = self_ty;
+            type_span = self_tok.span;
+            name_tok = self_tok;
         } else {
-            diag_report(diag::Code::kFnParamNameExpected, name_tok.span);
-            recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
-            return false;
+            // regular named parameter
+            if (name_tok.kind == K::kIdent) {
+                name = name_tok.lexeme;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kFnParamNameExpected, name_tok.span);
+                recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
+                return false;
+            }
+
+            // ':'
+            if (!cursor_.eat(K::kColon)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
+                return false;
+            }
+
+            // Type
+            auto ty = parse_type(); // ParsedType { id, span }
+            parsed_type = ty.id;
+            type_span = ty.span;
         }
 
         if (out_name) *out_name = name;
         if (out_is_self) *out_is_self = is_self;
-
-        // ':'
-        if (!cursor_.eat(K::kColon)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
-            recover_to_delim(K::kComma, K::kRParen, K::kRBrace);
-            return false;
-        }
-
-        // Type
-        auto ty = parse_type(); // ParsedType { id, span }
 
         // default
         //
@@ -110,7 +167,7 @@ namespace parus {
         ast::ExprId def = ast::k_invalid_expr;
 
         bool saw_eq = false;
-        Span eq_span = ty.span; // placeholder
+        Span eq_span = type_span; // placeholder
 
         if (cursor_.at(K::kAssign)) {
             const Token eq = cursor_.bump(); // '='
@@ -146,15 +203,16 @@ namespace parus {
 
         ast::Param p{};
         p.name = name;
-        p.type = ty.id;
-        p.is_mut = is_mut;
+        p.type = parsed_type;
+        p.is_mut = is_mut && !is_self;
         p.is_self = is_self;
+        p.self_kind = self_kind;
         p.is_named_group = is_named_group;
         p.has_default = has_default;
         p.default_expr = def;
 
         // span end
-        Span end = ty.span;
+        Span end = type_span;
         if (has_default && def != ast::k_invalid_expr) {
             end = ast_.expr(def).span;
         } else if (saw_eq) {

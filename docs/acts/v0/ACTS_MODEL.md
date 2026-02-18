@@ -37,19 +37,19 @@ acts Math {
 }
 ```
 
-2. default 부착 acts
+2. default 부착 acts(`acts for`)
 
 ```parus
 acts for Vec2 {
-  operator(+)(self a: Vec2, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
-3. named 부착 acts
+3. named 부착 acts(`acts Name for`)
 
 ```parus
 acts FastMath for Vec2 {
-  operator(+)(self a: Vec2, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
@@ -62,6 +62,8 @@ v0 선택 문법:
 ```parus
 use Vec2 with acts(FastMath);
 use Vec2 with acts(default);
+
+set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
 ```
 
 규칙:
@@ -70,6 +72,32 @@ use Vec2 with acts(default);
 2. `use T with acts(default);`는 해당 스코프에서 default acts만 사용하도록 복귀한다.
 3. 파일/함수/블록 어디서든 선언할 수 있다.
 4. 내부 블록 선언은 외부 선언을 가리고(block exit 시 해제된다).
+5. 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
+
+---
+
+## 4.1 2-레인 모델 (v0 고정)
+
+1. 레인 A: `acts for T` / `acts Name for T`
+   - 확장 메서드/연산자 전용
+   - 모든 함수 첫 파라미터에 `self` 계열 필수
+   - dot/operator 해소 대상
+2. 레인 B: `acts Name { ... }`
+   - 일반 네임스페이스 함수 전용
+   - `self` 금지, operator 금지
+   - 경로 호출 전용
+
+경로 호출 예시:
+
+```parus
+acts(Math)::add(1, 2);
+use acts(Math) as m;
+m::add(1, 2);
+
+use Vec2 as v2;
+set v = v2{ x: 1, y: 2 };
+v2::acts(FastMath)::add(v, 1);
+```
 
 ---
 
@@ -93,6 +121,8 @@ use Vec2 with acts(default);
 1. 활성 named acts와 default acts에 동일 시그니처가 동시에 존재하면 컴파일 에러.
 2. 같은 lexical scope에서 동일 타입 `T`에 서로 다른 named acts를 동시에 활성화하면 컴파일 에러.
 3. 오류 진단은 반드시 두 선언 위치(named/default)를 함께 보여야 한다.
+4. `acts for T` 함수에 `self`가 없으면 컴파일 에러.
+5. 일반 `acts Name {}` 함수에 `self`가 있으면 컴파일 에러.
 
 ---
 
@@ -114,11 +144,11 @@ field Vec2 {
 }
 
 acts for Vec2 {
-  def add(self v: &Vec2, rhs: i32) -> i32 { return v.x + rhs; }
+  def add(self, rhs: i32) -> i32 { return self.x + rhs; }
 }
 
 acts A for Vec2 {
-  def sub(self v: &Vec2, rhs: i32) -> i32 { return v.y - rhs; }
+  def sub(self, rhs: i32) -> i32 { return self.y - rhs; }
 }
 
 def demo(v: Vec2) -> i32 {
