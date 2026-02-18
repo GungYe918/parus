@@ -384,7 +384,11 @@ namespace parus {
         }
 
         // ---- optional binding acts sugar ----
-        //   let/set ... with acts(NameOrDefault) = ...
+        // canonical:
+        //   let/set ... = Expr with acts(NameOrDefault);
+        //
+        // legacy (removed):
+        //   let/set ... with acts(NameOrDefault) = Expr;
         bool var_has_acts_binding = false;
         bool var_acts_is_default = false;
         ast::TypeId var_acts_target_type = ast::k_invalid_type;
@@ -395,27 +399,36 @@ namespace parus {
         const auto is_with_token = [](const Token& tok) -> bool {
             return tok.kind == K::kIdent && tok.lexeme == "with";
         };
-        if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
-            var_has_acts_binding = true;
+        const auto parse_with_acts_clause = [&](bool record_binding, bool allow_assign_recovery) {
+            if (!(is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs)) return false;
             cursor_.bump(); // with
             cursor_.bump(); // acts
 
+            bool is_default = false;
+            uint32_t set_path_begin = 0;
+            uint32_t set_path_count = 0;
+            std::string_view set_name{};
+
             if (!cursor_.eat(K::kLParen)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-                recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+                if (allow_assign_recovery) {
+                    recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+                } else {
+                    recover_to_delim(K::kRParen, K::kSemicolon);
+                }
             }
 
             if (cursor_.at(K::kKwDefault)) {
-                var_acts_is_default = true;
-                var_acts_set_name = "default";
+                is_default = true;
+                set_name = "default";
                 cursor_.bump();
             } else {
                 auto [sb, sc] = parse_path_segments();
-                var_acts_set_path_begin = sb;
-                var_acts_set_path_count = sc;
+                set_path_begin = sb;
+                set_path_count = sc;
                 if (sc > 0) {
                     const auto& segs = ast_.path_segs();
-                    var_acts_set_name = segs[sb + sc - 1];
+                    set_name = segs[sb + sc - 1];
                 } else {
                     diag_report(diag::Code::kActsNameExpected, cursor_.peek().span);
                 }
@@ -423,13 +436,35 @@ namespace parus {
 
             if (!cursor_.eat(K::kRParen)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-                recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+                if (allow_assign_recovery) {
+                    recover_to_delim(K::kRParen, K::kAssign, K::kSemicolon);
+                } else {
+                    recover_to_delim(K::kRParen, K::kSemicolon);
+                }
                 cursor_.eat(K::kRParen);
             }
 
-            if (type_id != ast::k_invalid_type) {
-                var_acts_target_type = type_id;
+            if (record_binding) {
+                var_has_acts_binding = true;
+                var_acts_is_default = is_default;
+                var_acts_set_path_begin = set_path_begin;
+                var_acts_set_path_count = set_path_count;
+                var_acts_set_name = set_name;
+                if (type_id != ast::k_invalid_type) {
+                    var_acts_target_type = type_id;
+                }
             }
+            return true;
+        };
+
+        // legacy placement: `... with acts(...) = expr;`
+        if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
+            diag_report(
+                diag::Code::kUnexpectedToken,
+                cursor_.peek().span,
+                "binding acts clause must appear after initializer (use: 'name = expr with acts(NameOrDefault);')"
+            );
+            (void)parse_with_acts_clause(/*record_binding=*/false, /*allow_assign_recovery=*/true);
         }
 
         // ---- initializer ----
@@ -466,6 +501,9 @@ namespace parus {
         if (is_static && init == ast::k_invalid_expr && !static_init_diag_emitted) {
             diag_report(diag::Code::kStaticVarRequiresInitializer, cursor_.peek().span);
         }
+
+        // canonical placement: `... = expr with acts(NameOrDefault);`
+        (void)parse_with_acts_clause(/*record_binding=*/true, /*allow_assign_recovery=*/false);
 
         // ---- ';' or recover ----
         const Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);

@@ -363,8 +363,8 @@ use Vec2 with acts(default);
 5. 바인딩 시점 acts 선택(syntax sugar)
 
 ```parus
-set mut v with acts(A) = Vec2{ x: 42, y: 42 };
-let mut w: Vec2 with acts(default) = Vec2{ x: 1, y: 2 };
+set mut v = Vec2{ x: 42, y: 42 } with acts(A);
+let mut w: Vec2 = Vec2{ x: 1, y: 2 } with acts(default);
 ```
 
 제약(v0 강제):
@@ -375,7 +375,7 @@ let mut w: Vec2 with acts(default) = Vec2{ x: 1, y: 2 };
 * acts 선택은 `use T with acts(NameOrDefault);` 문법만 허용한다.
 * `use acts Foo for T;` 문법은 폐기한다.
 * acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용하며, lexical scope 규칙을 따른다.
-* 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에만 영향한다.
+* 바인딩 sugar(`let/set ... = expr with acts(...)`)는 해당 바인딩의 dot/operator 해소 우선순위에만 영향한다.
 
 ### 3.1.4 `nest` 네임스페이스
 
@@ -3613,7 +3613,7 @@ use Vec2 with acts(default);
 ```
 
 ```parus
-set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
+set mut v = Vec2{ x: 42, y: 42 } with acts(FastMath);
 ```
 
 규칙(v0):
@@ -3623,7 +3623,7 @@ set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
 3. acts 선택 `use`는 파일/함수/블록 스코프에서 모두 허용한다.
 4. 내부 스코프 선택이 외부 스코프 선택을 shadowing하며, 블록 종료 시 자동 해제된다.
 5. 폐기 문법: `use acts Foo for T;`
-6. 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
+6. 바인딩 sugar(`let/set ... = expr with acts(...)`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
 
 명시 경로 선택(v0):
 

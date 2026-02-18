@@ -1,0 +1,20 @@
+nest game::math;
+
+field Vec2 {
+    x: i32;
+    y: i32;
+};
+
+acts A for game::math::Vec2 {
+    def add(self, b: i32) -> i32 {
+        return self.x + b;
+    }
+};
+
+def main() -> i32 {
+    use game::math::Vec2 as V2;
+    set mut v = Vec2 { x: 10, y: 0 } with acts(A);
+    let a: i32 = v.add(1);
+    let b: i32 = V2::acts(A)::add(&v, 2);
+    return a + b;
+}

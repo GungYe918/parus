@@ -10,6 +10,6 @@ acts A for Vec2 {
 };
 
 def main() -> i32 {
-    set mut v = Vec2 { x: 10, y: 0 } with acts(A);
+    set mut v with acts(A) = Vec2 { x: 10, y: 0 };
     return v.add(32);
 }

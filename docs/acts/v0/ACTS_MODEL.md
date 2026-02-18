@@ -63,7 +63,7 @@ v0 선택 문법:
 use Vec2 with acts(FastMath);
 use Vec2 with acts(default);
 
-set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
+set mut v = Vec2{ x: 42, y: 42 } with acts(FastMath);
 ```
 
 규칙:
@@ -72,7 +72,7 @@ set mut v with acts(FastMath) = Vec2{ x: 42, y: 42 };
 2. `use T with acts(default);`는 해당 스코프에서 default acts만 사용하도록 복귀한다.
 3. 파일/함수/블록 어디서든 선언할 수 있다.
 4. 내부 블록 선언은 외부 선언을 가리고(block exit 시 해제된다).
-5. 바인딩 sugar(`let/set ... with acts(...) = ...`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
+5. 바인딩 sugar(`let/set ... = expr with acts(...)`)는 해당 바인딩의 dot/operator 해소 우선순위에 적용된다.
 
 ---
 

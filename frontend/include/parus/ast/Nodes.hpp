@@ -385,7 +385,7 @@ namespace parus::ast {
         std::string_view use_rhs_ident{}; // "= Ident" 의 Ident
 
         // ---- var binding acts sugar ----
-        // let/set ... with acts(NameOrDefault) = ...
+        // let/set ... = Expr with acts(NameOrDefault);
         bool var_has_acts_binding = false;
         bool var_acts_is_default = false;
         TypeId var_acts_target_type = k_invalid_type; // typed let에서만 파싱 시점 확정
