@@ -9,6 +9,8 @@
 - 문자열 모델 상세: `docs/abi/v0.0.1/STRING_MODEL.md`
 - 저장소 정책 상세: `docs/abi/v0.0.1/STORAGE_POLICY.md`
 - nullable 모델 상세: `docs/abi/v0.0.1/NULLABLE_MODEL.md`
+- 언어 용어 정본: `docs/language/TERMINOLOGY.md`
+- 파일 item 규칙 정본: `docs/language/ITEM_MODEL.md`
 
 ## 버전 정책 (`MAJOR.MINOR.PATCH`)
 

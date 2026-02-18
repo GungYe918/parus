@@ -41,7 +41,7 @@ acts Math {
 
 ```parus
 acts for Vec2 {
-  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
@@ -49,7 +49,7 @@ acts for Vec2 {
 
 ```parus
 acts FastMath for Vec2 {
-  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 

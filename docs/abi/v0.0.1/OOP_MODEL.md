@@ -82,11 +82,10 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 3. 허용 형태:
    - `self` (기본: read-only receiver)
    - `self mut` (mutable receiver)
-   - `self move` (by-value consume receiver)
-4. 의미:
+4. `self move`는 v0에서 보류한다.
+5. 의미:
    - `self`: `&Self`로 해석
    - `self mut`: `&mut Self`로 해석
-   - `self move`: `Self`로 해석
 
 ### 5.2 `Self` (문맥 타입 이름)
 
@@ -276,10 +275,9 @@ def render<T>(x: &T) with [T: Drawable] -> void {
 
 ```parus
 tablet Sprite : Drawable {
-  public:
-    def init(tex: Handle<Texture>, pos: Vec2) -> void { ... }
-    def deinit() -> void { ... }
-    def draw(self, ctx: &mut RenderCtx) -> void { ... }
+  def init(tex: Handle<Texture>, pos: Vec2) -> void { ... }
+  def deinit() -> void { ... }
+  def draw(self, ctx: &mut RenderCtx) -> void { ... }
 }
 ```
 
@@ -377,7 +375,7 @@ field Vec2 {
 }
 
 acts for Vec2 {
-  operator(+)(self move, rhs: Self) -> Self {
+  operator(+)(self, rhs: Self) -> Self {
     return Vec2{ x: self.x + rhs.x, y: self.y + rhs.y };
   }
 }

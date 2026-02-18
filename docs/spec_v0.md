@@ -83,7 +83,6 @@ proto Drawable {
 }
 
 tablet Sprite : Drawable {
-  public:
     let pos: Vec2;
     def draw(self, ctx: &mut RenderCtx) -> void { /* ... */ }
 }
@@ -402,6 +401,33 @@ nest engine {
 * `nest` 내부에 `use`를 둘 수 있다(lexical alias).
 * `import`는 파일 스코프에서만 허용한다.
 
+### 3.1.5 파일 `item` 규칙 (v0 고정)
+
+Parus는 파일 최상위를 `statement`가 아니라 `item` 집합으로 다룬다.
+
+핵심 규칙:
+
+* 파일은 `item`과 `empty item`(`;`)의 반복을 허용한다. (`statement`는 블록 내부 전용)
+* `item = declaration item + directive item`
+* `declaration item (braced)`:
+  * `def` 본문 선언
+  * `field`
+  * `acts`
+  * (미래) `proto` / `tablet` / `class`
+  * 선언 자체는 종결 `;`를 요구하지 않는다
+  * 뒤에 `;`가 오면 별도 `empty item`으로 해석한다 (허용)
+* `simple item`:
+  * `import` / `use`
+  * `nest path;` (파일 지시어)
+  * `extern "C" def ...;`
+  * 전역 변수 선언
+  * 끝 `;` 필수
+
+용어/예제/진단 관례는 아래 문서를 함께 따른다.
+
+* 용어 정본: `docs/language/TERMINOLOGY.md`
+* item 규칙 상세: `docs/language/ITEM_MODEL.md`
+
 ### 3.2 `.` / `::` 접근 규칙
 
 Parus v0는 경로 접근과 값 접근을 분리한다.
@@ -430,7 +456,7 @@ Parus v0는 경로 접근과 값 접근을 분리한다.
 * 본 절은 `ABI.md`의 요약이며, 충돌 시 본 절 해석을 중단하고 `ABI.md`를 적용한다.
 * `use func::ffi`, `use struct::ffi` 문법은 폐기한다.
 * FFI 경계 함수/전역은 `extern "C"` / `export "C"`로 선언한다.
-* FFI는 ABI 경계이므로 pure/comptime에서 기본 금지다. (타입체커 규칙)
+* `pure`/`comptime`와 FFI의 결합 제약은 v0에서 상세 규칙을 보류한다.
 
 예시
 
@@ -651,10 +677,8 @@ static mut Name: T = Init;
 v0 권장(= freestanding 친화) 규칙:
 
 * `static` 선언은 **반드시 초기화 값을 가져야 한다.**
-* `static`의 초기화 표현식은 **`comptime`에서 평가 가능한 형태로 제한**하는 것이 권장된다.
-
-  * 예: 리터럴, 배열/튜플/field 리터럴, `null`, `comptime` 함수 호출(허용하는 구현 한정)
-  * 금지(권장): 런타임 함수 호출, 힙 할당, I/O, FFI 등 “동적 초기화”가 필요한 것
+* `static` 초기화와 `comptime` 결합 규칙은 v0에서 상세를 보류한다.
+  * 현재는 구현/도구체인 상황에 따라 보수적으로 제한할 수 있다.
 
 이 규칙은 다음을 보장한다.
 
@@ -747,7 +771,7 @@ Parus의 함수는 **(1) 선언 형식이 단순**하면서도, **(2) 호출 해
 * `[export]` : 선택
 * `def`
 * `[mode]` : 선택 (`sub`, `pub` 등. class 문맥에서 의미 있음)
-* `[qualifier]` : 선택 (`pure`, `comptime` 등. 또는 `@pure` 같은 attribute로만 둘 수도 있음)
+* `[qualifier]` : v0에서는 보류 (문서 표기는 `@pure`, `@comptime` 속성 중심)
 * `Name`
 * `[<TypeParams...>]` : 선택 (v1+)
 * `(...)` : 파라미터 목록 (아래 6.1.2~)
@@ -763,7 +787,7 @@ FuncDecl :=
 
 ExportOpt := "export" | ε
 ModeOpt   := "sub" | "pub" | ε
-QualifierOpt := "pure" | "comptime" | ε   // (또는 attribute로만 두는 정책도 가능)
+QualifierOpt := ε   // v0: qualifier 키워드 문법 보류, @attribute 경로만 문서화
 
 GenericParamClauseOpt := "<" TypeParam ("," TypeParam)* ">" | ε
 TypeParam := Ident
@@ -855,13 +879,10 @@ v0 권장 정책(가장 단단함):
 * **named group `{}` 안에서만 기본값을 적극 권장**
 * 위치 파라미터의 기본값도 허용은 가능하지만, v0에서는 아래 (3)의 “해소 우선순위”를 반드시 적용해야 한다.
 
-#### (2) 기본값의 타입 제약(강권)
+#### (2) 기본값의 타입 제약(기본 원칙)
 
 * `DefaultExpr`는 **해당 파라미터 타입에 대입 가능**해야 한다.
-* v0에서 구현을 단단히 하려면:
-
-  * `@pure` 또는 `@comptime` 가능한 **컴파일타임 상수식**으로 제한하는 걸 권장
-  * (특히 `string`, `handle`, `class` 관련은 런타임 비용/의미가 커질 수 있음)
+* `pure`/`comptime`과의 결합 세부 규칙은 v0에서 보류한다.
 
 #### (3) 오버로딩 + 기본값: 호출 해소 우선순위(필수 규칙)
 
@@ -1070,107 +1091,24 @@ set y = add(1, {b: 3});    // named-group -> 두 번째
 ---
 
 
-### 6.2 qualifier: pure, comptime
+### 6.2 qualifier: pure, comptime (v0 축약)
 
-#### 6.2.1 pure
+v0에서는 `pure`와 `comptime`의 존재만 고정하고, 상세 의미/검사 규칙은 보류한다.
 
-정의:
+고정 사항:
 
-* pure 함수는 관측 가능한 부수효과가 없어야 한다.
+1. 표면 표기는 `@pure`, `@comptime` 속성으로만 문서화한다.
+2. 키워드형 qualifier(`def pure ...`, `def comptime ...`)는 v0 정식 문법으로 고정하지 않는다.
+3. 타입체커/실행 제약(부수효과, 호출 위치, 평가 모델) 세부 규칙은 후속 문서에서 확정한다.
 
-v0 보수 규칙:
-
-* 금지:
-
-  * commit, recast 사용
-  * pub 호출 (큰 상태 수정 경로)
-  * FFI 호출 (`extern "C"` 선언 함수 호출)
-  * I/O 성격 표준 라이브러리 호출
-  * && 사용
-
-* 허용:
-
-  * 지역 계산
-  * 불변 데이터 읽기
-
-예시
+예시:
 
 ```parus
 @pure
-def clamp(p: int, lo: int, hi: int) -> int {
-  if (p < lo) { return lo; }
-  if (p > hi) { return hi; }
-  return p;
-}
-```
+def clamp(p: int, lo: int, hi: int) -> int { ... }
 
-#### 6.2.2 comptime (정의 보강)
-
-정의:
-
-* comptime 함수는 컴파일 타임에만 호출되는 함수다.
-* 런타임 호출은 금지된다.
-
-comptime의 목적:
-
-* 상수 계산
-* 코드 생성 보조 (향후)
-* 정적 테이블 생성, 전처리 대체
-
-v0 규칙 (단순하고 강한 제약):
-
-* comptime 함수는 pure 규칙을 기본으로 포함한다.
-* 추가로 금지:
-
-  * heap 할당 (표준 라이브러리 호출 포함)
-  * 파일/시간/환경 의존 값 접근
-  * 전역 가변 상태 접근
-* 허용:
-
-  * 정수/실수/문자/문자열 조합
-  * 배열 리터럴, 단순 루프 (컴파일 타임 실행기에서 지원하는 범위 내)
-
-comptime 호출 위치 (v0 권장):
-
-* let 초기화 식
-* field 초기값 (향후)
-* 배열 크기 N 계산 (지원 시)
-
-예시
-
-```parus
 @comptime
-def pow2(n: int) -> int {
-  // 단순 루프는 comptime 엔진이 지원한다고 가정
-  set mut r = 1;
-  set mut i = 0;
-  while (i < n) {
-    r = r * 2;
-    i = i + 1;
-  }
-  return r;
-}
-
-
-def use_comptime() -> void {
-  let x: int = pow2(a: 5); // error: comptime 함수는 런타임에서 호출 불가
-  // v0에서는 컴파일 타임 컨텍스트에서만 호출되도록 별도 문맥 규칙이 필요
-}
-```
-
-v0에서의 실용 규칙(권장):
-
-* "comptime 호출"은 다음 형태로만 허용한다.
-
-  * comptime set NAME = expr;
-  * 또는 배열 길이, type parameter 등 컴파일러가 지정한 위치
-* v0 구현이 단단해질 때까지는 "런타임 본문 안에서 comptime 호출"을 전부 금지하는 방식이 안전하다.
-
-예시 (권장 형태, v0에 넣기 좋은 문법)
-
-```parus
-// v0 권장 추가 문법(선택):
-// comptime set N = pow2(a: 5);
+def pow2(n: int) -> int { ... }
 ```
 
 ### 6.3 호출 규칙: 위치 인자 vs 라벨 인자
@@ -1956,12 +1894,9 @@ borrow는 비탈출이므로, 아래는 금지된다.
 * `&&(&x)` : 에러
 * `&&r` (r: &T) : 에러
 
-#### (4) `pure` / `comptime` 제약 (v0 강제 권장)
+#### (4) `pure` / `comptime` 제약
 
-* `pure` 함수 안에서는 `&&` 사용 금지
-* `comptime` 함수 안에서는 `&&` 사용 금지
-
-(향후 v1+에서 “순수 핸들” 계열을 정식 도입할 경우 완화 가능)
+* `&&`와 `pure`/`comptime`의 결합 규칙은 v0에서 상세를 보류한다.
 
 ---
 
@@ -2011,7 +1946,6 @@ def bad_store_global() -> void {
 
 ```parus
 tablet File {
-  public:
     def close() -> void { /* ... */ }
 }
 
@@ -2347,7 +2281,7 @@ v0 기본 lowering:
 * borrow(`&T`, `&mut T`, `&[T]`, `&mut [T]`)는 절대 탈출 불가
 * `&&`는 borrow에 적용 불가
 * 논리 연산은 `and/or/not/xor` 키워드만 사용 (`&&`는 escape 예약)
-* `pure` / `comptime` 내부에서 `&&` 사용 금지(v0 강제 권장)
+* `pure` / `comptime`과 `&&` 결합 규칙은 v0에서 상세를 보류한다.
 
 ---
 
@@ -2669,7 +2603,7 @@ field Big {
 }
 
 acts for Big {
-  operator(copy)(self move) -> Big {
+  operator(copy)(self) -> Big {
     // field는 POD이므로 단순 복사로 충분
     return __intrin_memcpy_big(x: self);
   }
@@ -2702,7 +2636,7 @@ v0에서 구현 난이도를 낮추기 위해 다음처럼 제한을 권장한�
 
 * 허용: `&&`로 생성된 handle(escape 소유 객체), 또는 명확한 소유 객체(tablet 값)
 * 금지: borrow(`&T`, `&mut T`, `&[T]`, `&mut [T]`)에 대한 delete
-* 금지: `pure` / `comptime` 내부에서 delete
+* `pure` / `comptime` 문맥에서의 `delete` 제약은 v0에서 상세를 보류한다.
 
 > 주의: tablet 생성자/소멸자 삭제 문법의 `= delete;`는 “선언” 문맥이고,
 > 여기의 `delete x;`는 “문장” 문맥이다. 둘은 충돌하지 않는다.
@@ -2736,9 +2670,9 @@ v0에서는 증감(++/--)을 기본 수치 타입에 내장으로 제공해도 �
 
 ```parus
 acts string {
-  def do_clone(self move) : op(clone) -> string { return __intrin_string_clone(s: self); }
+  def do_clone(self) : op(clone) -> string { return __intrin_string_clone(s: self); }
 
-  def drop(self move) : op(drop) -> void { __intrin_string_drop(s: self); }
+  def drop(self) : op(drop) -> void { __intrin_string_drop(s: self); }
 }
 ```
 
@@ -3317,7 +3251,6 @@ proto Drawable {
 }
 
 tablet Sprite : Drawable {
-  public:
     let pos: Vec2;
 
     def draw(self, ctx: &mut RenderCtx) -> void {
@@ -3328,31 +3261,24 @@ tablet Sprite : Drawable {
 
 ---
 
-### 10.3.1 멤버와 접근 제한자: `public:` / `private:`
+### 10.3.1 멤버 구성 규칙 (v0)
 
-* `tablet` 본문은 “멤버 목록”이다.
+* `tablet` 본문은 멤버 목록으로 구성한다.
 * 멤버 종류(v0):
-
-  * 데이터 멤버: `let name: Type;` 또는 `let mut name: Type;`(선택)
+  * 데이터 멤버: `let name: Type;` / `let mut name: Type;`
   * 메서드: `def ... { ... }`
   * 생성자/소멸자: `init`, `deinit` (아래 10.3.3)
-* 접근 제한자:
-
-  * C++ 스타일 `public:` / `private:` 라벨을 사용한다.
-  * 라벨은 “이후 멤버들에 적용되는 모드”를 바꾼다.
-  * v0 기본 접근은 `private`로 둔다.
+* `public:` / `private:` 접근 라벨은 v0에서 보류한다.
+  * 문법은 아직 정식 확정하지 않는다.
+  * 접근제어 모델은 tablet 설계 문서 확정 시 별도로 고정한다.
 
 예시
 
 ```parus
 tablet A {
-  let x: int;        // private
-
-  public:
-    def get_x() -> int { return self.x; }
-
-  private:
-    def helper() -> void { ... }
+  let x: int;
+  def get_x(self) -> int { return self.x; }
+  def helper(self) -> void { ... }
 }
 ```
 
@@ -3364,26 +3290,25 @@ Parus은 borrow 설계가 있기 때문에, 메서드의 수신자(receiver)를 
 
 * `tablet` 내부의 `def name(...) -> R { ... }` 는 **항상 인스턴스 메서드**다.
 * 메서드에는 암묵 수신자 `self`가 존재한다.
-* v0에서 수신자 타입은 아래 둘 중 하나다.
+* v0에서 수신자 표기는 아래 둘만 허용한다.
 
-  * `def name(...)`  : `self`는 `&Self` (읽기 전용)
-  * `def mut name(...)` : `self`는 `&mut Self` (수정 가능)
+  * `self` : `&Self` (기본, 읽기 전용)
+  * `self mut` : `&mut Self` (가변)
 
-즉, “메서드가 객체를 바꾸려면 반드시 `mut`를 써야 한다.”
-이 규칙 하나로 C++의 암묵 변경 가능성 + Rust의 복잡한 추론 사이에서 깔끔하게 중간 지점을 잡는다.
+* `self move`는 v0에서 보류한다.
+* `def mut` 문법은 v0에서 사용하지 않는다.
 
 예시
 
 ```parus
 tablet Counter {
-  public:
     let mut n: int;
 
-    def get() -> int {            // receiver: self
+    def get(self) -> int {
       return self.n;
     }
 
-    def mut inc() -> void {       // receiver: self mut
+    def inc(self mut) -> void {
       self.n += 1;
     }
 }
@@ -3392,8 +3317,7 @@ tablet Counter {
 추가 규칙(v0):
 
 * `self`는 예약 식별자다(키워드 취급 권장).
-* `pure/comptime` 함수 안에서는 `def mut` 메서드 호출을 금지할 수 있다(권장).
-  (관측 가능한 상태 변경을 정적으로 차단)
+* `pure/comptime` 제약 상세는 v0에서 보류한다. (6.2 참조)
 
 ---
 
@@ -3421,7 +3345,6 @@ tablet Counter {
 
 ```parus
 tablet File {
-  public:
     let fd: int;
 
     def init(path: string) -> void {
@@ -3446,7 +3369,7 @@ tablet File {
   * 함수명 동일
   * 파라미터 타입 동일
   * 반환 타입 동일
-  * `mut` 여부 동일 (`def` vs `def mut`)
+  * receiver kind 동일 (`self` vs `self mut`)
   * `? 함수` 여부는 **proto에서는 v0 금지 권장**
     (예외 전파가 인터페이스 경계를 넘으면 ABI/최적화 모델이 확 흔들림)
 
@@ -3597,7 +3520,7 @@ def demo(p: Packet) -> void {
 
 ```parus
 acts FastMath for Vec2 {
-  operator(+)(self move, rhs: Vec2) -> Vec2 { ... }
+  operator(+)(self, rhs: Vec2) -> Vec2 { ... }
 }
 ```
 
@@ -3672,13 +3595,13 @@ def checksum(self, seed: u32) -> u32 { ... }
 
 1. `self`는 첫 번째 파라미터 위치에서만 허용한다.
 2. `acts for T` / `acts Name for T` 내부 함수는 첫 파라미터로 `self` 계열이 필수다.
-3. `self` 표기는 `self` / `self mut` / `self move` 세 형태만 허용한다.
-4. 의미:
+3. `self` 표기는 `self` / `self mut` 두 형태만 허용한다.
+4. `self move`는 v0에서 보류한다.
+5. 의미:
    - `self`      : `&Self`
    - `self mut`  : `&mut Self`
-   - `self move` : `Self`
-5. 일반 `acts A {}` 내부 함수에는 `self`를 쓸 수 없다.
-6. `self`가 붙은 함수만 메서드(dot 호출) 대상이다.
+6. 일반 `acts A {}` 내부 함수에는 `self`를 쓸 수 없다.
+7. `self`가 붙은 함수만 메서드(dot 호출) 대상이다.
 
 dot 호출 lowering:
 
@@ -3694,7 +3617,7 @@ T::f(x, 1, 2);
 연산자 선언은 `operator(...)` 문법만 사용한다.
 
 ```parus
-operator(+)(self move, rhs: T) -> T { ... }
+operator(+)(self, rhs: T) -> T { ... }
 operator(==)(self, rhs: &T) -> bool { ... }
 operator(++pre)(self mut) -> T { ... }
 operator(++post)(self mut) -> T { ... }
@@ -3740,7 +3663,7 @@ export field Foo {
 
 export acts for Foo {
   def inc(self mut) -> void { self.v = self.v + 1u32; }
-  operator(+)(self move, rhs: Foo) -> Foo { return Foo{ v: self.v + rhs.v }; }
+  operator(+)(self, rhs: Foo) -> Foo { return Foo{ v: self.v + rhs.v }; }
 }
 
 def demo(mut a: Foo, b: Foo) -> Foo {
@@ -3753,7 +3676,7 @@ def demo(mut a: Foo, b: Foo) -> Foo {
 
 ```parus
 export acts FooMath for Foo {
-  operator(+)(self move, rhs: Foo) -> Foo {
+  operator(+)(self, rhs: Foo) -> Foo {
     return Foo{ v: __intrin_u32_saturating_add(self.v, rhs.v) };
   }
 }
@@ -3904,9 +3827,7 @@ p$<BundleId>$<Path>$<BaseName>$M<Mode>$R<Recv>$S<ParamSig>$H<Hash>
 * 삼항 중첩 금지 검사
 * class sub/pub 제약
 * pub 최종 commit 검사
-* pure/comptime 제약
-
-  * pure/comptime에서 recast 금지 포함 (추가)
+* pure/comptime 제약 (상세 규칙은 후속 단계에서 확정)
 * acts 기반 연산자 해석
 * 오버로딩 해소:
 
@@ -3935,19 +3856,16 @@ proto Drawable {
 }
 
 tablet Sprite : Drawable {
-  public:
     let pos: Vec2;
 
     def draw(self, ctx: &mut RenderCtx) -> void {
       // draw using pos
     }
-
-  private:
     let secret: int;
 }
 
 acts for u32 {
-  operator(+)(self move, rhs: u32) -> u32 {
+  operator(+)(self, rhs: u32) -> u32 {
     return __intrin_u32_add(a: self, b: rhs);
   }
 
@@ -4050,14 +3968,30 @@ WS            := /* spaces/tabs/newlines */ ;
 ### 16.2 프로그램 구조: project/bundle/module/file 단위
 
 ```ebnf
-File          := FileItem* EOF ;
+File          := (Item | EmptyItem)* EOF ;
 
-FileItem      := ImportStmt
+EmptyItem     := ";" ;
+
+Item          := DeclItem
+               | DirectiveItem ;
+
+DeclItem      := BracedDeclItem
+               | SimpleDeclItem ;
+
+BracedDeclItem:= NormalFuncDecl
+               | CAbiFuncDef
+               | FieldDecl
+               | ProtoDecl
+               | TabletDecl
+               | ActsDecl
+               | ClassDecl ;
+
+SimpleDeclItem:= CAbiFuncDecl
+               | GlobalVarDecl ;
+
+DirectiveItem := ImportStmt
                | UseStmt
-               | NamespaceDecl
-               | Decl
-               | ";"              /* 허용: 빈 문장(파일 스코프) */
-               ;
+               | NamespaceDecl ;
 ```
 
 ---
@@ -4147,16 +4081,17 @@ SetDecl          := Ident "=" Expr ;
 ### 16.7 함수 선언 (attribute/export/mode/qualifier/제네릭/제약/예외접미 `?`)
 
 ```ebnf
-FuncDecl      := CAbiFuncDecl | NormalFuncDecl ;
+FuncDecl      := CAbiFuncDecl | CAbiFuncDef | NormalFuncDecl ;
 
-CAbiFuncDecl  := LinkPrefix "def" FuncName FuncParams "->" Type (Block | ";") ;
+CAbiFuncDecl  := "extern" "\"C\"" "def" FuncName FuncParams "->" Type ";" ;
+CAbiFuncDef   := "export" "\"C\"" "def" FuncName FuncParams "->" Type Block ;
 NormalFuncDecl:= Attribute* ExportOpt "def" ModeOpt QualifierOpt FuncName GenericParamClauseOpt FuncParams ConstraintClauseOpt "->" Type Block ;
 
 FuncName      := Ident QMarkOpt ;
 QMarkOpt      := "?" | ε ;                     /* 예외 허용 함수 표기 */
 
 ModeOpt       := "sub" | "pub" | ε ;           /* class 문맥에서 의미 있음 */
-QualifierOpt  := "pure" | "comptime" | ε ;     /* 또는 attribute로만 쓰는 정책도 가능 */
+QualifierOpt  := ε ;                             /* v0: qualifier 키워드 문법은 보류, @attribute 경로만 문서화 */
 
 GenericParamClauseOpt := "<" TypeParam ("," TypeParam)* ">" | ε ;
 TypeParam     := Ident ;
