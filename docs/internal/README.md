@@ -1,8 +1,15 @@
-# Internal Docs
+# Internal Docs Hub
 
-이 디렉터리는 컴파일러 개발자용 내부 문서를 모은다.
+이 디렉터리는 링크 허브 전용이다.
+구현 본문 문서는 소스트리 인접 `*/docs`로 이동했다.
 
-1. `compiler/`: frontend/backend/driver/link/parlib/toolchain 설계
-2. `contributing/`: 코딩/기여 규약
+## 컴파일러 내부 문서 허브
 
-Internal 문서는 구현 지침과 TODO를 담는다. 언어/ABI 의미 충돌 시 reference를 우선한다.
+1. `docs/internal/compiler/README.md`
+2. `docs/internal/contributing/CodeConventions.md`
+
+## 정책
+
+1. `docs/internal/**`에는 구현 상세 본문을 두지 않는다.
+2. 구현 문서는 해당 컴포넌트 루트(`frontend/docs`, `backend/docs`, `compiler/*/docs`, `tools/*/docs`, `sysroot/*.md`)에 둔다.
+3. 언어/ABI 의미 정본은 항상 `docs/reference/**`를 우선한다.

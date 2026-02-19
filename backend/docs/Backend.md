@@ -1,4 +1,3 @@
-<!-- docs/internal/compiler/backend/Backend.md -->
 # Parus Backend Structure
 
 ## 1) 목표

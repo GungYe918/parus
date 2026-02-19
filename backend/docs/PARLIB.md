@@ -4,7 +4,7 @@
 상태: `Normative (Single Source of Truth)`
 
 이 문서는 Parus `parlib` 구현의 단일 신뢰 기준이다.  
-`docs/internal/compiler/backend/Backend.md` 또는 기존 구현 주석과 충돌 시, **parlib 관련 사항은 본 문서를 우선**한다.
+`backend/docs/Backend.md` 또는 기존 구현 주석과 충돌 시, **parlib 관련 사항은 본 문서를 우선**한다.
 
 ---
 

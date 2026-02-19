@@ -189,3 +189,8 @@ def demo(v: Vec2) -> i32 {
 1. `docs/reference/language/SPEC.md`
 2. `docs/reference/abi/v0.0.1/OOP_MODEL.md`
 3. `docs/reference/abi/v0.0.1/GENERICS_MODEL.md`
+
+구현 문서:
+
+1. `frontend/docs/parse/FIELD_AND_ACTS_DECL.md`
+2. `frontend/docs/tyck/ACTS_RESOLUTION.md`

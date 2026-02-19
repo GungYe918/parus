@@ -10,17 +10,32 @@ Parus is a systems programming language focused on explicit control flow, data-o
 
 ## Documentation
 
-- Language reference index: `docs/reference/language/SPEC.md`
-- ABI reference index: `docs/reference/abi/README.md`
-- User guide: `docs/guides/user/manual_v0.md`
-- Internal compiler docs: `docs/internal/compiler/README.md`
+User-facing canonical docs:
+
+1. Language reference: `docs/reference/language/SPEC.md`
+2. ABI reference: `docs/reference/abi/README.md`
+3. User manual: `docs/guides/user/manual_v0.md`
+
+Compiler implementation docs (source-tree adjacent):
+
+1. `frontend/docs/README.md`
+2. `backend/docs/README.md`
+3. `compiler/parusc/docs/README.md`
+4. `tools/parusd/docs/README.md`
+5. `backend/tools/parus-lld/docs/README.md`
+
+Internal hub index:
+
+1. `docs/internal/compiler/README.md`
 
 ## Repository Layout (high level)
 
-- `frontend/`: parser, name resolution, type checker, SIR
-- `backend/`: OIR, LLVM lowering, linker integration
+- `frontend/`: parser, name resolution, type checker, SIR/OIR handoff
+- `backend/`: OIR/backend integration, LLVM lowering, linker integration
 - `compiler/parusc/`: compiler driver
-- `docs/`: documentation hierarchy
+- `tools/parusd/`: standalone LSP server
+- `backend/tools/parus-lld/`: linker driver
+- `docs/`: reference and hub documentation
 - `tests/`: language and FFI tests
 
 ## Build
@@ -37,4 +52,4 @@ Parus is a systems programming language focused on explicit control flow, data-o
 
 ## Note
 
-This repository prioritizes explicit specs. For language and ABI rules, always start from the docs under `docs/reference/`.
+Language and ABI semantics are governed by `docs/reference/**`.
