@@ -483,6 +483,11 @@ namespace {
         uint32_t token_modifiers = 0;
     };
 
+    struct AnalysisResult {
+        std::vector<LspDiag> diagnostics{};
+        std::vector<SemToken> semantic_tokens{};
+    };
+
     static constexpr uint32_t kSemModDeclaration = 1u << 0;
     static constexpr uint32_t kSemModReadonly = 1u << 1;
     static constexpr uint32_t kSemModStatic = 1u << 2;
@@ -534,7 +539,72 @@ namespace {
             size_t end = 0;
         };
         std::vector<EditWindow> pending_edits{};
+
+        struct AnalysisCache {
+            uint64_t revision = 0;
+            bool valid = false;
+            std::vector<LspDiag> diagnostics{};
+            std::vector<SemToken> semantic_tokens{};
+        } analysis{};
     };
+
+    bool decode_utf8_code_point_(std::string_view text, size_t off, uint32_t& cp, size_t& len) {
+        if (off >= text.size()) return false;
+
+        const auto b0 = static_cast<unsigned char>(text[off]);
+        auto is_cont = [](unsigned char b) -> bool { return (b & 0xC0) == 0x80; };
+
+        if (b0 < 0x80) {
+            cp = b0;
+            len = 1;
+            return true;
+        }
+
+        if (b0 >= 0xC2 && b0 <= 0xDF) {
+            if (off + 1 >= text.size()) return false;
+            const auto b1 = static_cast<unsigned char>(text[off + 1]);
+            if (!is_cont(b1)) return false;
+            cp = (static_cast<uint32_t>(b0 & 0x1F) << 6) | static_cast<uint32_t>(b1 & 0x3F);
+            len = 2;
+            return true;
+        }
+
+        if (b0 >= 0xE0 && b0 <= 0xEF) {
+            if (off + 2 >= text.size()) return false;
+            const auto b1 = static_cast<unsigned char>(text[off + 1]);
+            const auto b2 = static_cast<unsigned char>(text[off + 2]);
+            if (!is_cont(b1) || !is_cont(b2)) return false;
+            if (b0 == 0xE0 && b1 < 0xA0) return false;
+            if (b0 == 0xED && b1 >= 0xA0) return false;
+            cp = (static_cast<uint32_t>(b0 & 0x0F) << 12)
+               | (static_cast<uint32_t>(b1 & 0x3F) << 6)
+               | static_cast<uint32_t>(b2 & 0x3F);
+            len = 3;
+            return true;
+        }
+
+        if (b0 >= 0xF0 && b0 <= 0xF4) {
+            if (off + 3 >= text.size()) return false;
+            const auto b1 = static_cast<unsigned char>(text[off + 1]);
+            const auto b2 = static_cast<unsigned char>(text[off + 2]);
+            const auto b3 = static_cast<unsigned char>(text[off + 3]);
+            if (!is_cont(b1) || !is_cont(b2) || !is_cont(b3)) return false;
+            if (b0 == 0xF0 && b1 < 0x90) return false;
+            if (b0 == 0xF4 && b1 > 0x8F) return false;
+            cp = (static_cast<uint32_t>(b0 & 0x07) << 18)
+               | (static_cast<uint32_t>(b1 & 0x3F) << 12)
+               | (static_cast<uint32_t>(b2 & 0x3F) << 6)
+               | static_cast<uint32_t>(b3 & 0x3F);
+            len = 4;
+            return true;
+        }
+
+        return false;
+    }
+
+    uint32_t utf16_units_for_code_point_(uint32_t cp) {
+        return (cp > 0xFFFF) ? 2u : 1u;
+    }
 
     size_t byte_offset_from_position_(std::string_view text, const Position& p) {
         size_t off = 0;
@@ -545,10 +615,22 @@ namespace {
         }
 
         size_t col_off = off;
-        uint32_t col = 0;
-        while (col_off < text.size() && text[col_off] != '\n' && col < p.character) {
-            ++col_off;
-            ++col;
+        uint32_t col_utf16 = 0;
+        while (col_off < text.size() && text[col_off] != '\n' && col_utf16 < p.character) {
+            uint32_t cp = 0;
+            size_t len = 1;
+            if (!decode_utf8_code_point_(text, col_off, cp, len)) {
+                cp = static_cast<unsigned char>(text[col_off]);
+                len = 1;
+            }
+
+            const uint32_t units = utf16_units_for_code_point_(cp);
+            if (col_utf16 + units > p.character) {
+                break;
+            }
+
+            col_off += len;
+            col_utf16 += units;
         }
         return col_off;
     }
@@ -583,23 +665,28 @@ namespace {
         return true;
     }
 
-    void apply_text_change_(DocumentState& doc, const TextChange& ch) {
+    bool apply_text_change_(DocumentState& doc, const TextChange& ch) {
         if (!ch.has_range) {
+            if (doc.text == ch.text) return false;
             doc.text = ch.text;
             doc.pending_edits.clear();
-            return;
+            return true;
         }
 
         const size_t start = byte_offset_from_position_(doc.text, ch.range.start);
         const size_t end = byte_offset_from_position_(doc.text, ch.range.end);
         const size_t lo = std::min(start, end);
         const size_t hi = std::max(start, end);
-        if (lo > doc.text.size()) return;
+        if (lo > doc.text.size()) return false;
 
         const size_t clamped_hi = std::min(hi, doc.text.size());
+        if (doc.text.compare(lo, clamped_hi - lo, ch.text) == 0) {
+            return false;
+        }
         doc.text.replace(lo, clamped_hi - lo, ch.text);
 
         doc.pending_edits.push_back(DocumentState::EditWindow{lo, lo + ch.text.size()});
+        return true;
     }
 
     int to_lsp_severity_(parus::diag::Severity sev) {
@@ -927,8 +1014,8 @@ namespace {
         return out;
     }
 
-    std::vector<SemToken> analyze_semantic_tokens_(std::string_view uri, std::string_view source) {
-        std::vector<SemToken> out;
+    AnalysisResult analyze_document_(std::string_view uri, std::string_view source) {
+        AnalysisResult out;
 
         parus::SourceManager sm;
         const uint32_t file_id = sm.add(std::string(uri), std::string(source));
@@ -942,13 +1029,24 @@ namespace {
         parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/256);
         const auto root = parser.parse_program();
 
-        parus::passes::PassOptions popt{};
-        const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+        std::unordered_map<uint64_t, SemClass> resolved_map;
+        if (!bag.has_error()) {
+            parus::passes::PassOptions popt{};
+            const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+            resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
+
+            if (!bag.has_error()) {
+                parus::tyck::TypeChecker tc(ast, types, bag);
+                const auto ty = tc.check_program(root);
+
+                if (!bag.has_error() && ty.errors.empty()) {
+                    (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
+                }
+            }
+        }
 
         const auto decl_map = collect_decl_semantic_map_(toks);
-        const auto resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
-
-        out.reserve(toks.size());
+        out.semantic_tokens.reserve(toks.size());
         using K = parus::syntax::TokenKind;
 
         for (size_t i = 0; i < toks.size(); ++i) {
@@ -1010,8 +1108,26 @@ namespace {
 
             SemToken sem_tok{};
             if (sem_token_from_span_(sm, tok.span, sem_class, sem_tok)) {
-                out.push_back(sem_tok);
+                out.semantic_tokens.push_back(sem_tok);
             }
+        }
+
+        out.diagnostics.reserve(bag.diags().size());
+        for (const auto& d : bag.diags()) {
+            const auto sp = d.span();
+            const uint32_t end_off = (sp.hi >= sp.lo) ? sp.hi : sp.lo;
+            const auto begin_lc = sm.line_col(sp.file_id, sp.lo);
+            const auto end_lc = sm.line_col(sp.file_id, end_off);
+
+            LspDiag ld{};
+            ld.start_line = (begin_lc.line > 0) ? (begin_lc.line - 1) : 0;
+            ld.start_character = (begin_lc.col > 0) ? (begin_lc.col - 1) : 0;
+            ld.end_line = (end_lc.line > 0) ? (end_lc.line - 1) : 0;
+            ld.end_character = (end_lc.col > 0) ? (end_lc.col - 1) : 0;
+            ld.severity = to_lsp_severity_(d.severity());
+            ld.code = parus::diag::code_name(d.code());
+            ld.message = parus::diag::render_message(d, parus::diag::Language::kEn);
+            out.diagnostics.push_back(std::move(ld));
         }
 
         return out;
@@ -1088,57 +1204,6 @@ namespace {
         json += "}";
         json += "}}";
         return json;
-    }
-
-    std::vector<LspDiag> analyze_document_(std::string_view uri, std::string_view source) {
-        std::vector<LspDiag> out;
-
-        parus::SourceManager sm;
-        const uint32_t file_id = sm.add(std::string(uri), std::string(source));
-
-        parus::diag::Bag bag;
-        parus::Lexer lx(sm.content(file_id), file_id, &bag);
-        const auto toks = lx.lex_all();
-
-        parus::ast::AstArena ast;
-        parus::ty::TypePool types;
-
-        parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/256);
-        const auto root = parser.parse_program();
-
-        if (!bag.has_error()) {
-            parus::passes::PassOptions popt{};
-            const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
-
-            if (!bag.has_error()) {
-                parus::tyck::TypeChecker tc(ast, types, bag);
-                const auto ty = tc.check_program(root);
-
-                if (!bag.has_error() && ty.errors.empty()) {
-                    (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
-                }
-            }
-        }
-
-        out.reserve(bag.diags().size());
-        for (const auto& d : bag.diags()) {
-            const auto sp = d.span();
-            const uint32_t end_off = (sp.hi >= sp.lo) ? sp.hi : sp.lo;
-            const auto begin_lc = sm.line_col(sp.file_id, sp.lo);
-            const auto end_lc = sm.line_col(sp.file_id, end_off);
-
-            LspDiag ld{};
-            ld.start_line = (begin_lc.line > 0) ? (begin_lc.line - 1) : 0;
-            ld.start_character = (begin_lc.col > 0) ? (begin_lc.col - 1) : 0;
-            ld.end_line = (end_lc.line > 0) ? (end_lc.line - 1) : 0;
-            ld.end_character = (end_lc.col > 0) ? (end_lc.col - 1) : 0;
-            ld.severity = to_lsp_severity_(d.severity());
-            ld.code = parus::diag::code_name(d.code());
-            ld.message = parus::diag::render_message(d, parus::diag::Language::kEn);
-            out.push_back(std::move(ld));
-        }
-
-        return out;
     }
 
     std::string build_publish_diagnostics_(
@@ -1265,6 +1330,18 @@ namespace {
             write_lsp_message_(std::cout, msg);
         }
 
+        void ensure_analysis_cache_(std::string_view uri, DocumentState& st) {
+            if (st.analysis.valid && st.analysis.revision == st.revision) {
+                return;
+            }
+
+            auto analyzed = analyze_document_(uri, st.text);
+            st.analysis.revision = st.revision;
+            st.analysis.valid = true;
+            st.analysis.diagnostics = std::move(analyzed.diagnostics);
+            st.analysis.semantic_tokens = std::move(analyzed.semantic_tokens);
+        }
+
         void handle_did_open_(const JsonValue* params) {
             if (params == nullptr || params->kind != JsonValue::Kind::kObject) return;
             const auto td = obj_get_(*params, "textDocument");
@@ -1279,9 +1356,9 @@ namespace {
             st.version = as_i64_(obj_get_(*td, "version")).value_or(0);
             st.revision = ++revision_seq_;
 
-            documents_[std::string(*uri)] = st;
-            const auto diags = analyze_document_(*uri, st.text);
-            publish_diagnostics_(*uri, st.version, diags);
+            auto it = documents_.insert_or_assign(std::string(*uri), std::move(st)).first;
+            ensure_analysis_cache_(*uri, it->second);
+            publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
         }
 
         void handle_did_change_(const JsonValue* params) {
@@ -1298,17 +1375,39 @@ namespace {
             auto it = documents_.find(std::string(*uri));
             if (it == documents_.end()) return;
 
+            const auto incoming_version = as_i64_(obj_get_(*td, "version"));
+            if (incoming_version.has_value() && *incoming_version <= it->second.version) {
+                return;
+            }
+
+            bool has_valid_change = false;
+            bool changed_any = false;
             for (const auto& change_node : changes->array_v) {
                 TextChange change{};
                 if (!parse_text_change_(change_node, change)) continue;
-                apply_text_change_(it->second, change);
+                has_valid_change = true;
+                if (apply_text_change_(it->second, change)) {
+                    changed_any = true;
+                }
+            }
+            if (!has_valid_change) return;
+
+            if (!changed_any) {
+                if (incoming_version.has_value()) {
+                    it->second.version = *incoming_version;
+                }
+                ensure_analysis_cache_(*uri, it->second);
+                publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
+                it->second.pending_edits.clear();
+                return;
             }
 
-            it->second.version = as_i64_(obj_get_(*td, "version")).value_or(it->second.version + 1);
+            it->second.version = incoming_version.value_or(it->second.version + 1);
             it->second.revision = ++revision_seq_;
+            it->second.analysis.valid = false;
 
-            const auto diags = analyze_document_(*uri, it->second.text);
-            publish_diagnostics_(*uri, it->second.version, diags);
+            ensure_analysis_cache_(*uri, it->second);
+            publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
             it->second.pending_edits.clear();
         }
 
@@ -1346,14 +1445,16 @@ namespace {
                 return;
             }
 
-            std::string source;
             const auto it = documents_.find(std::string(*uri));
-            if (it != documents_.end()) {
-                source = it->second.text;
+            if (it == documents_.end()) {
+                const auto result = build_semantic_tokens_result_({});
+                const auto response = build_response_result_(id, result);
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
             }
 
-            const auto sem_tokens = analyze_semantic_tokens_(*uri, source);
-            const auto result = build_semantic_tokens_result_(sem_tokens);
+            ensure_analysis_cache_(*uri, it->second);
+            const auto result = build_semantic_tokens_result_(it->second.analysis.semantic_tokens);
             const auto response = build_response_result_(id, result);
             if (!response.empty()) write_lsp_message_(std::cout, response);
         }

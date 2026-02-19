@@ -82,6 +82,13 @@
           "minimum": 0,
           "maximum": 5000,
           "description": "Debounce interval before sending document changes to the language server in milliseconds."
+        },
+        "parus.server.idleTimeoutSec": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 3600,
+          "description": "Stop Parus Language Server after N seconds of inactivity. Set 0 to disable."
         }
       }
     }

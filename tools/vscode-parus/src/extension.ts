@@ -22,6 +22,7 @@ interface ParusConfig {
   serverMode: ServerMode;
   traceServer: TraceSetting;
   diagnosticsDebounceMs: number;
+  idleTimeoutSec: number;
 }
 
 interface LaunchCandidate {
@@ -67,6 +68,7 @@ let traceChannel: vscode.OutputChannel | undefined;
 let serverPathStatusBarItem: vscode.StatusBarItem | undefined;
 let lintStatusBarItem: vscode.StatusBarItem | undefined;
 let changeDebouncer: ChangeDebouncer | undefined;
+let idleStopController: IdleStopController | undefined;
 let suppressConfigRestart = false;
 const parusDiagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
 let lifecycleQueue: Promise<void> = Promise.resolve();
@@ -205,6 +207,37 @@ class ChangeDebouncer {
   }
 }
 
+class IdleStopController {
+  private timer: NodeJS.Timeout | undefined;
+
+  constructor(
+    private readonly getIdleTimeoutSec: () => number,
+    private readonly onIdle: () => Promise<void>
+  ) {}
+
+  public touch(): void {
+    const timeoutSec = Math.max(0, this.getIdleTimeoutSec());
+    if (timeoutSec <= 0) {
+      this.clear();
+      return;
+    }
+
+    this.clear();
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      void this.onIdle();
+    }, timeoutSec * 1000);
+  }
+
+  public clear(): void {
+    if (!this.timer) {
+      return;
+    }
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   outputChannel = vscode.window.createOutputChannel("Parus Language Server");
   traceChannel = vscode.window.createOutputChannel("Parus Language Server Trace");
@@ -212,6 +245,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const log = getLogger();
   log("확장이 활성화되었습니다.");
+  idleStopController = new IdleStopController(
+    () => readConfig().idleTimeoutSec,
+    async () => {
+      if (!client) {
+        return;
+      }
+      log("유휴 시간 제한에 도달하여 서버를 중지합니다.");
+      await enqueueLifecycle(() => stopLanguageClient("idle-timeout"), "유휴 중지");
+    }
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_RESTART, async () => {
@@ -239,7 +282,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const affectsDebounce = event.affectsConfiguration(
         `${SETTINGS_SECTION}.diagnostics.debounceMs`
       );
-      if (!affectsPath && !affectsMode && !affectsTrace && !affectsDebounce) {
+      const affectsIdle = event.affectsConfiguration(`${SETTINGS_SECTION}.server.idleTimeoutSec`);
+      if (!affectsPath && !affectsMode && !affectsTrace && !affectsDebounce && !affectsIdle) {
         return;
       }
 
@@ -256,6 +300,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (affectsDebounce) {
         log(`진단 디바운스 값을 ${cfg.diagnosticsDebounceMs}ms로 갱신했습니다.`);
       }
+      if (affectsIdle) {
+        log(`유휴 중지 타임아웃을 ${cfg.idleTimeoutSec}s로 갱신했습니다.`);
+        idleStopController?.touch();
+      }
 
       if (suppressConfigRestart) {
         return;
@@ -266,8 +314,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await enqueueLifecycle(() => restartLanguageClient("config-change"), "설정 변경 재시작");
       }
     }),
-    vscode.window.onDidChangeActiveTextEditor(() => {
+    vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshLintStatusBar();
+      if (editor?.document.languageId === LANGUAGE_ID) {
+        void onParusActivity("active-editor");
+      }
+    }),
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (doc.languageId === LANGUAGE_ID) {
+        void onParusActivity("did-open");
+      }
+    }),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document.languageId === LANGUAGE_ID) {
+        void onParusActivity("did-change");
+      }
     }),
     vscode.workspace.onDidCloseTextDocument((doc) => {
       parusDiagnosticsByUri.delete(doc.uri.toString());
@@ -294,17 +355,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateServerPathStatusBar(readConfig());
   refreshLintStatusBar();
 
-  void enqueueLifecycle(() => startLanguageClient("activate"), "초기 시작");
+  if (hasParusDocumentContext()) {
+    void enqueueLifecycle(() => startLanguageClient("activate"), "초기 시작");
+  } else {
+    log("Parus 문서가 열릴 때까지 서버 시작을 지연합니다.");
+  }
 }
 
 export async function deactivate(): Promise<void> {
   await stopLanguageClient("deactivate");
+  idleStopController?.clear();
   serverPathStatusBarItem?.dispose();
   lintStatusBarItem?.dispose();
   outputChannel?.dispose();
   traceChannel?.dispose();
   serverPathStatusBarItem = undefined;
   lintStatusBarItem = undefined;
+  idleStopController = undefined;
   outputChannel = undefined;
   traceChannel = undefined;
 }
@@ -482,6 +549,24 @@ function getConfigTarget(): vscode.ConfigurationTarget {
     : vscode.ConfigurationTarget.Global;
 }
 
+function hasParusDocumentContext(): boolean {
+  if (vscode.window.activeTextEditor?.document.languageId === LANGUAGE_ID) {
+    return true;
+  }
+  return vscode.workspace.textDocuments.some((doc) => doc.languageId === LANGUAGE_ID);
+}
+
+async function onParusActivity(reason: string): Promise<void> {
+  idleStopController?.touch();
+  if (client || !hasParusDocumentContext()) {
+    return;
+  }
+
+  const log = getLogger();
+  log(`Parus 문서 활동 감지로 서버 시작을 시도합니다. (reason=${reason})`);
+  await enqueueLifecycle(() => startLanguageClient(`activity:${reason}`), "활동 기반 시작");
+}
+
 async function restartLanguageClient(reason: string): Promise<void> {
   await stopLanguageClient(`restart:${reason}`);
   await startLanguageClient(`restart:${reason}`);
@@ -489,6 +574,12 @@ async function restartLanguageClient(reason: string): Promise<void> {
 
 async function startLanguageClient(reason: string): Promise<void> {
   const log = getLogger();
+  if (client) {
+    idleStopController?.touch();
+    log(`서버 시작 요청을 건너뜁니다. 이미 실행 중입니다. (reason=${reason})`);
+    return;
+  }
+
   const cfg = readConfig();
   const workspaceRoot = getPrimaryWorkspaceFolder();
 
@@ -574,6 +665,7 @@ async function startLanguageClient(reason: string): Promise<void> {
       if (candidate.reason) {
         log(candidate.reason);
       }
+      idleStopController?.touch();
       return;
     } catch (error) {
       log(
@@ -593,6 +685,7 @@ async function startLanguageClient(reason: string): Promise<void> {
 
 async function stopLanguageClient(reason: string): Promise<void> {
   const log = getLogger();
+  idleStopController?.clear();
 
   changeDebouncer?.dispose();
   changeDebouncer = undefined;
@@ -616,12 +709,14 @@ function readConfig(): ParusConfig {
   const mode = cfg.get<string>("server.mode", "driver");
   const trace = cfg.get<string>("trace.server", "off");
   const debounceMs = cfg.get<number>("diagnostics.debounceMs", 200);
+  const idleTimeoutSec = cfg.get<number>("server.idleTimeoutSec", 0);
 
   return {
     serverPath: rawPath.trim(),
     serverMode: mode === "direct" ? "direct" : "driver",
     traceServer: trace === "messages" || trace === "verbose" ? trace : "off",
     diagnosticsDebounceMs: clampNumber(debounceMs, 0, 5000),
+    idleTimeoutSec: clampNumber(idleTimeoutSec, 0, 3600),
   };
 }
 
