@@ -101,14 +101,20 @@ namespace parus::passes {
         }
     }
 
+    void check_pipe_hole_node(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag) {
+        if (id == ast::k_invalid_expr) return;
+        const auto& e = ast.expr(id);
+        if (e.kind != ast::ExprKind::kBinary) return;
+        if (e.op != syntax::TokenKind::kPipeFwd && e.op != syntax::TokenKind::kPipeRev) return;
+        check_pipe(ast, e, bag);
+    }
+
     class PipeHoleVisitor final : public ast::TreeVisitor {
     public:
         PipeHoleVisitor(const ast::AstArena& ast, diag::Bag& bag) : ast_(ast), bag_(bag) {}
 
-        void enter_expr(ast::ExprId, const ast::Expr& e) override {
-            if (e.kind != ast::ExprKind::kBinary) return;
-            if (e.op != syntax::TokenKind::kPipeFwd && e.op != syntax::TokenKind::kPipeRev) return;
-            check_pipe(ast_, e, bag_);
+        void enter_expr(ast::ExprId id, const ast::Expr&) override {
+            check_pipe_hole_node(ast_, id, bag_);
         }
 
     private:

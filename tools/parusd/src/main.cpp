@@ -1014,12 +1014,22 @@ namespace {
     ) {
         std::unordered_map<uint64_t, SemClass> out;
 
-        for (const auto rid : resolve.expr_to_resolved) {
-            if (rid == parus::passes::NameResolveResult::k_invalid_resolved) continue;
-            if (rid >= resolve.resolved.size()) continue;
+        auto append_resolved = [&](parus::passes::NameResolveResult::ResolvedId rid) {
+            if (rid == parus::passes::NameResolveResult::k_invalid_resolved) return;
+            if (rid >= resolve.resolved.size()) return;
             const auto& rs = resolve.resolved[rid];
-            if (rs.span.hi <= rs.span.lo) continue;
+            if (rs.span.hi <= rs.span.lo) return;
             out[sem_span_key_(rs.span)] = sem_class_from_binding_(rs.bind);
+        };
+
+        for (const auto rid : resolve.expr_to_resolved) {
+            append_resolved(rid);
+        }
+        for (const auto rid : resolve.stmt_to_resolved) {
+            append_resolved(rid);
+        }
+        for (const auto rid : resolve.param_to_resolved) {
+            append_resolved(rid);
         }
 
         return out;
@@ -1099,7 +1109,9 @@ namespace {
                 }
 
                 if (!has_sem_class) {
-                    if (next_kind == K::kColonColon || prev_kind == K::kColonColon) {
+                    if (next_kind == K::kLParen) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kFunction), 0};
+                    } else if (next_kind == K::kColonColon || prev_kind == K::kColonColon) {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kNamespace), 0};
                     } else if (
                         prev_kind == K::kColon ||
@@ -1108,6 +1120,10 @@ namespace {
                         prev_kind == K::kKwRecast
                     ) {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), 0};
+                    } else if (prev_kind == K::kKwField) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), kSemModDeclaration};
+                    } else if (prev_kind == K::kKwActs || prev_kind == K::kKwClass) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kClass), kSemModDeclaration};
                     } else {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kVariable), 0};
                     }

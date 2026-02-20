@@ -32,7 +32,11 @@
           ".parus",
           ".pr"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./assets/parus_logo_icon.png",
+          "dark": "./assets/parus_logo_icon.png"
+        }
       }
     ],
     "commands": [

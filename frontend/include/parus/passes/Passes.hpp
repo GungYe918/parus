@@ -18,7 +18,7 @@ namespace parus::passes {
         NameResolveResult name_resolve;
     };
 
-    // expr 루트에 대한 passes (expr-only: pipe-hole 등)
+    // expr 루트에 대한 passes (expr-only: pipe-hole/place 규칙 등)
     void run_on_expr(
         const ast::AstArena& ast,
         ast::ExprId root,

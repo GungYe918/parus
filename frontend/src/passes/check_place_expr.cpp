@@ -66,14 +66,20 @@ namespace parus::passes {
         }
     }
 
+    void check_place_expr_node(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag) {
+        if (id == ast::k_invalid_expr) return;
+        const auto& e = ast.expr(id);
+        if (e.kind == ast::ExprKind::kUnary || e.kind == ast::ExprKind::kPostfixUnary) {
+            check_unary_place_rules(ast, e, bag);
+        }
+    }
+
     class PlaceExprVisitor final : public ast::TreeVisitor {
     public:
         PlaceExprVisitor(const ast::AstArena& ast, diag::Bag& bag) : ast_(ast), bag_(bag) {}
 
-        void enter_expr(ast::ExprId, const ast::Expr& e) override {
-            if (e.kind == ast::ExprKind::kUnary || e.kind == ast::ExprKind::kPostfixUnary) {
-                check_unary_place_rules(ast_, e, bag_);
-            }
+        void enter_expr(ast::ExprId id, const ast::Expr&) override {
+            check_place_expr_node(ast_, id, bag_);
         }
 
     private:
