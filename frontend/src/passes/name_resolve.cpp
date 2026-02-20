@@ -47,7 +47,6 @@ namespace parus::passes {
         uint32_t expr_count = 0;
         uint32_t stmt_count = 0;
         uint32_t arg_count = 0;
-        uint32_t ng_count = 0;
         uint32_t stmt_children_count = 0;
         uint32_t param_count = 0;
         uint32_t switch_case_count = 0;
@@ -58,7 +57,6 @@ namespace parus::passes {
         r.expr_count = (uint32_t)ast.exprs().size();
         r.stmt_count = (uint32_t)ast.stmts().size();
         r.arg_count = (uint32_t)ast.args().size();
-        r.ng_count = (uint32_t)ast.named_group_args().size();
         r.stmt_children_count = (uint32_t)ast.stmt_children().size();
         r.param_count = (uint32_t)ast.params().size();
         r.switch_case_count = (uint32_t)ast.switch_cases().size();
@@ -378,23 +376,9 @@ namespace parus::passes {
                     const uint32_t arg_end = e.arg_begin + e.arg_count;
                     if (e.arg_begin < r.arg_count && arg_end <= r.arg_count) {
                         const auto& args = ast.args();
-                        const auto& ng   = ast.named_group_args();
 
                         for (uint32_t i = 0; i < e.arg_count; ++i) {
                             const auto& a = args[e.arg_begin + i];
-
-                            if (a.kind == ast::ArgKind::kNamedGroup) {
-                                const uint32_t ng_end = a.child_begin + a.child_count;
-                                if (a.child_begin < r.ng_count && ng_end <= r.ng_count) {
-                                    for (uint32_t j = 0; j < a.child_count; ++j) {
-                                        const auto& entry = ng[a.child_begin + j];
-                                        if (!entry.is_hole && is_valid_expr_id_(r, entry.expr)) {
-                                            stack.push_back(entry.expr);
-                                        }
-                                    }
-                                }
-                                continue;
-                            }
 
                             if (!a.is_hole && is_valid_expr_id_(r, a.expr)) {
                                 stack.push_back(a.expr);

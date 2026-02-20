@@ -337,15 +337,7 @@ namespace parusc::dump {
                 if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
                     for (uint32_t i = 0; i < v.arg_count; ++i) {
                         const auto& a = m.args[v.arg_begin + i];
-                        if (a.kind == ArgKind::kNamedGroup) {
-                            if ((uint64_t)a.child_begin + (uint64_t)a.child_count <= (uint64_t)m.args.size()) {
-                                for (uint32_t j = 0; j < a.child_count; ++j) {
-                                    push_value(m.args[a.child_begin + j].value);
-                                }
-                            }
-                        } else {
-                            push_value(a.value);
-                        }
+                        push_value(a.value);
                     }
                 }
                 break;
@@ -606,16 +598,12 @@ namespace parusc::dump {
             const auto& a = m.args[ai];
             std::cout << "    arg#" << ai
                     << " kind=" << (a.kind == sir::ArgKind::kPositional ? "positional"
-                                    : a.kind == sir::ArgKind::kLabeled ? "labeled" : "named_group")
+                                    : "labeled")
                     << " label=";
             if (a.has_label) std::cout << a.label;
             else std::cout << "<none>";
             std::cout << " hole=" << (a.is_hole ? "true" : "false")
                     << " value=" << a.value;
-            if (a.kind == sir::ArgKind::kNamedGroup) {
-                std::cout << " child_begin=" << a.child_begin
-                        << " child_count=" << a.child_count;
-            }
             std::cout << "\n";
         }
 
@@ -940,41 +928,12 @@ namespace parusc::dump {
                 dump_expr(ast, e.a, indent + 1);
 
                 const auto& args = ast.args();
-                const auto& ngs  = ast.named_group_args();
 
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
                     const auto& a = args[e.arg_begin + i];
 
                     for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
                     std::cout << "Arg ";
-
-                    if (a.kind == parus::ast::ArgKind::kNamedGroup) {
-                        std::cout << "{\n";
-
-                        for (uint32_t k = 0; k < a.child_count; ++k) {
-                            const auto& entry = ngs[a.child_begin + k];
-
-                            for (int j = 0; j < indent + 2; ++j) std::cout << "  ";
-                            std::cout << entry.label << ": ";
-
-                            if (entry.is_hole) {
-                                std::cout << "_\n";
-                                continue;
-                            }
-
-                            std::cout << "\n";
-                            if (entry.expr == parus::ast::k_invalid_expr) {
-                                for (int j = 0; j < indent + 3; ++j) std::cout << "  ";
-                                std::cout << "<invalid-expr>\n";
-                            } else {
-                                dump_expr(ast, entry.expr, indent + 3);
-                            }
-                        }
-
-                        for (int j = 0; j < indent + 1; ++j) std::cout << "  ";
-                        std::cout << "}\n";
-                        continue;
-                    }
 
                     if (a.has_label) std::cout << a.label << ": ";
 

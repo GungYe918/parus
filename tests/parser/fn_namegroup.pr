@@ -1,4 +1,4 @@
-// --- named-group call parsing test (6.1.2 ~ 6.1.6)
+// --- named-group call parsing test (tail labeled call form)
 // 목표: 함수 선언 4개 + 호출 4개, 전부 파싱 통과
 // 제약: 타입은 i32만, 제네릭/커스텀 타입/enum 등 사용 금지
 
@@ -6,7 +6,7 @@ def add(a: i32, b: i32) -> i32 {
     return a + b;
 }
 
-// positional + named-group
+// positional + named-group declaration
 def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
     // clamp는 파서 테스트용(기본값/그룹 문법 확인)
     return a - b + clamp;
@@ -34,11 +34,11 @@ def main() -> i32 {
     // (2) labeled call (기존 규칙: 전부 라벨)
     set r2 = add(a: 7, b: 5);
 
-    // (3) positional + named-group call (Dart 스타일)
-    set r3 = sub(30, 12, { clamp: 1 });
+    // (3) positional + labeled tail call
+    set r3 = sub(30, 12, clamp: 1);
 
-    // (4) positional + named-group call (named group 내부 순서 무관, 필수 bias 제공)
-    // set r4 = div(100, 5, { rounding: 5 }); // 여기서는 bias부분을 채우지 않음 -> 오류
+    // (4) positional + labeled tail call (named group 내부 순서 무관, 필수 bias 제공)
+    // set r4 = div(100, 5, rounding: 5); // 여기서는 bias부분을 채우지 않음 -> 오류
         
     
     return 42;

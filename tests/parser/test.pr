@@ -70,7 +70,7 @@ def paint(x: i32, { color: i32, alpha: i32 }) -> i32 {
 }
 
 def mmain() -> i32 {
-    //paint(10, { color: 3, alpha: 5 });
+    //paint(10, color: 3, alpha: 5);
 
     return 42;
 }

@@ -29,14 +29,7 @@ namespace parus::tyck {
         auto check_all_arg_exprs_only = [&]() {
             for (uint32_t i = 0; i < e.arg_count; ++i) {
                 const auto& a = ast_.args()[e.arg_begin + i];
-                if (a.kind == ast::ArgKind::kNamedGroup) {
-                    for (uint32_t k = 0; k < a.child_count; ++k) {
-                        const auto& ca = ast_.named_group_args()[a.child_begin + k];
-                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
-                    }
-                } else {
-                    if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
-                }
+                if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
             }
         };
 
@@ -45,44 +38,40 @@ namespace parus::tyck {
         // ------------------------------------------------------------
         std::vector<const ast::Arg*> outside_positional;
         std::vector<const ast::Arg*> outside_labeled;
-        const ast::Arg* group_arg = nullptr;
+        outside_positional.reserve(e.arg_count);
+        outside_labeled.reserve(e.arg_count);
 
-        bool has_duplicate_group = false;
-        Span duplicate_group_span{};
+        bool seen_labeled = false;
+        bool has_invalid_order = false;
 
         for (uint32_t i = 0; i < e.arg_count; ++i) {
             const auto& a = ast_.args()[e.arg_begin + i];
-
-            if (a.kind == ast::ArgKind::kNamedGroup) {
-                if (group_arg != nullptr) {
-                    has_duplicate_group = true;
-                    if (duplicate_group_span.hi == 0) duplicate_group_span = a.span;
-                } else {
-                    group_arg = &a;
-                }
-                continue;
-            }
-
             const bool is_labeled = a.has_label || (a.kind == ast::ArgKind::kLabeled);
-            if (is_labeled) outside_labeled.push_back(&a);
-            else outside_positional.push_back(&a);
+            if (is_labeled) {
+                seen_labeled = true;
+                outside_labeled.push_back(&a);
+            } else {
+                if (seen_labeled) has_invalid_order = true;
+                outside_positional.push_back(&a);
+            }
         }
 
         enum class CallForm : uint8_t {
-            kPositional,
-            kLabeled,
-            kPositionalPlusNamedGroup,
+            kPositionalOnly,
+            kLabeledOnly,
+            kPositionalThenLabeled,
             kMixedInvalid,
         };
 
-        CallForm form = CallForm::kPositional;
-        if (group_arg != nullptr) {
-            form = outside_labeled.empty() ? CallForm::kPositionalPlusNamedGroup
-                                        : CallForm::kMixedInvalid;
+        CallForm form = CallForm::kPositionalOnly;
+        if (has_invalid_order) {
+            form = CallForm::kMixedInvalid;
+        } else if (!outside_positional.empty() && !outside_labeled.empty()) {
+            form = CallForm::kPositionalThenLabeled;
+        } else if (!outside_labeled.empty()) {
+            form = CallForm::kLabeledOnly;
         } else {
-            if (!outside_labeled.empty() && !outside_positional.empty()) form = CallForm::kMixedInvalid;
-            else if (!outside_labeled.empty()) form = CallForm::kLabeled;
-            else form = CallForm::kPositional;
+            form = CallForm::kPositionalOnly;
         }
 
         ty::TypeId fallback_ret = types_.error();
@@ -348,13 +337,6 @@ namespace parus::tyck {
         if (fallback_ret == ty::kInvalidType) fallback_ret = types_.error();
         if (callee_name.empty()) callee_name = "<callee>";
 
-        if (has_duplicate_group) {
-            diag_(diag::Code::kCallOnlyOneNamedGroupAllowed, duplicate_group_span);
-            err_(duplicate_group_span, "only one named-group '{ ... }' is allowed in a call");
-            check_all_arg_exprs_only();
-            return fallback_ret;
-        }
-
         if (form == CallForm::kMixedInvalid) {
             diag_(diag::Code::kCallArgMixNotAllowed, e.span);
             err_(e.span, "mixing labeled and positional arguments is not allowed");
@@ -377,15 +359,6 @@ namespace parus::tyck {
             return false;
         };
 
-        std::vector<const ast::Arg*> group_entries;
-        if (group_arg != nullptr) {
-            group_entries.reserve(group_arg->child_count);
-            for (uint32_t k = 0; k < group_arg->child_count; ++k) {
-                const auto& ca = ast_.named_group_args()[group_arg->child_begin + k];
-                group_entries.push_back(&ca);
-            }
-        }
-
         {
             Span dup_sp{};
             std::string dup_label;
@@ -395,66 +368,223 @@ namespace parus::tyck {
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
-            if (has_duplicate_labels(group_entries, dup_sp, dup_label)) {
-                diag_(diag::Code::kDuplicateDecl, dup_sp, dup_label);
-                err_(dup_sp, "duplicate named argument label '" + dup_label + "'");
+        }
+
+        std::unordered_map<std::string, const ast::Arg*> labeled_by_label;
+        labeled_by_label.reserve(outside_labeled.size());
+        for (const auto* a : outside_labeled) {
+            labeled_by_label.emplace(std::string(a->label), a);
+        }
+
+        const auto arg_type_now = [&](const ast::Arg* a) -> ty::TypeId {
+            if (a == nullptr || a->expr == ast::k_invalid_expr) return types_.error();
+            return check_expr_(a->expr);
+        };
+
+        const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
+            const ty::TypeId at = arg_type_now(a);
+            if (can_assign_(expected, at)) return true;
+            if (is_optional_(expected)) {
+                const ty::TypeId elem = optional_elem_(expected);
+                if (elem != ty::kInvalidType && can_assign_(elem, at)) return true;
+            }
+            return false;
+        };
+
+        const auto make_callsite_summary = [&]() -> std::string {
+            std::ostringstream oss;
+            if (form == CallForm::kPositionalOnly) oss << "positional(";
+            else if (form == CallForm::kLabeledOnly) oss << "labeled(";
+            else if (form == CallForm::kPositionalThenLabeled) oss << "positional+labeled(";
+            else oss << "mixed-invalid(";
+
+            bool first = true;
+            for (const auto* a : outside_positional) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << type_for_user_diag_(arg_type_now(a), a->expr);
+            }
+            for (const auto* a : outside_labeled) {
+                if (!first) oss << ", ";
+                first = false;
+                oss << std::string(a->label) << ":" << type_for_user_diag_(arg_type_now(a), a->expr);
+            }
+            oss << ")";
+            return oss.str();
+        };
+
+        // ------------------------------------------------------------
+        // 3) fallback: overload 집합을 못 찾으면 function type call-shape로 검사
+        // ------------------------------------------------------------
+        if (overload_decl_ids.empty()) {
+            if (callee_t == ty::kInvalidType || types_.get(callee_t).kind != ty::Kind::kFn) {
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
-        }
 
-        // ------------------------------------------------------------
-        // 3) fallback: overload 집합을 못 찾으면 signature 기반 검사
-        // ------------------------------------------------------------
-        if (overload_decl_ids.empty()) {
-            const uint32_t provided_non_group =
-                static_cast<uint32_t>(outside_positional.size() + outside_labeled.size());
+            const uint32_t total_cnt = callee_param_count;
+            const uint32_t pos_cnt = types_.fn_positional_count(callee_t);
+            const uint32_t named_cnt = (total_cnt > pos_cnt) ? (total_cnt - pos_cnt) : 0u;
 
-            if (provided_non_group != callee_param_count) {
-                diag_(diag::Code::kTypeArgCountMismatch, e.span,
-                    std::to_string(callee_param_count), std::to_string(provided_non_group));
-                err_(e.span, "argument count mismatch");
+            struct ShapeParam {
+                uint32_t idx = 0;
+                std::string name{};
+                ty::TypeId type = ty::kInvalidType;
+                bool has_default = false;
+            };
+
+            std::vector<ShapeParam> pos_params;
+            std::vector<ShapeParam> named_params;
+            std::unordered_map<std::string, size_t> pos_by_label;
+            std::unordered_map<std::string, size_t> named_by_label;
+            pos_params.reserve(pos_cnt);
+            named_params.reserve(named_cnt);
+
+            for (uint32_t i = 0; i < total_cnt; ++i) {
+                ShapeParam p{};
+                p.idx = i;
+                p.type = types_.fn_param_at(callee_t, i);
+                p.name = std::string(types_.fn_param_label_at(callee_t, i));
+                p.has_default = types_.fn_param_has_default_at(callee_t, i);
+
+                if (i < pos_cnt) {
+                    if (!p.name.empty()) pos_by_label.emplace(p.name, pos_params.size());
+                    pos_params.push_back(std::move(p));
+                } else {
+                    if (!p.name.empty()) named_by_label.emplace(p.name, named_params.size());
+                    named_params.push_back(std::move(p));
+                }
             }
 
-            uint32_t pi = 0;
-            for (uint32_t i = 0; i < e.arg_count; ++i) {
-                const auto& a = ast_.args()[e.arg_begin + i];
-
-                if (a.kind == ast::ArgKind::kNamedGroup) {
-                    for (uint32_t k = 0; k < a.child_count; ++k) {
-                        const auto& ca = ast_.named_group_args()[a.child_begin + k];
-                        if (ca.expr != ast::k_invalid_expr) (void)check_expr_(ca.expr);
+            auto match_fallback_shape = [&](bool allow_defaults) -> bool {
+                if (form == CallForm::kPositionalOnly) {
+                    if (outside_positional.size() != pos_params.size()) return false;
+                    for (size_t i = 0; i < outside_positional.size(); ++i) {
+                        if (!arg_assignable_now(outside_positional[i], pos_params[i].type)) return false;
                     }
-                    continue;
-                }
-
-                ty::TypeId at = (a.expr != ast::k_invalid_expr) ? check_expr_(a.expr) : types_.error();
-
-                if (pi < callee_param_count) {
-                    ty::TypeId expected = types_.fn_param_at(callee_t, pi);
-                    if (a.expr != ast::k_invalid_expr) {
-                        const CoercionPlan plan = classify_assign_with_coercion_(
-                            AssignSite::CallArg, expected, a.expr, a.span);
-                        at = plan.src_after;
-                        if (!plan.ok) {
-                            diag_(diag::Code::kTypeArgTypeMismatch, a.span,
-                                std::to_string(pi), types_.to_string(expected), type_for_user_diag_(at, a.expr));
-                            err_(a.span, "argument type mismatch");
+                    if (!named_params.empty()) {
+                        if (!allow_defaults) return false;
+                        for (const auto& p : named_params) {
+                            if (!p.has_default) return false;
                         }
-                    } else {
-                        diag_(diag::Code::kTypeArgTypeMismatch, a.span,
-                            std::to_string(pi), types_.to_string(expected), "<missing>");
-                        err_(a.span, "argument type mismatch");
                     }
+                    return true;
                 }
 
-                ++pi;
+                if (form == CallForm::kLabeledOnly) {
+                    for (const auto& pair : labeled_by_label) {
+                        if (pos_by_label.find(pair.first) == pos_by_label.end() &&
+                            named_by_label.find(pair.first) == named_by_label.end()) {
+                            return false;
+                        }
+                    }
+
+                    for (const auto& p : pos_params) {
+                        if (p.name.empty()) return false;
+                        auto it = labeled_by_label.find(p.name);
+                        if (it == labeled_by_label.end()) {
+                            if (!allow_defaults || !p.has_default) return false;
+                            continue;
+                        }
+                        if (!arg_assignable_now(it->second, p.type)) return false;
+                    }
+
+                    for (const auto& p : named_params) {
+                        if (p.name.empty()) return false;
+                        auto it = labeled_by_label.find(p.name);
+                        if (it == labeled_by_label.end()) {
+                            if (!allow_defaults || !p.has_default) return false;
+                            continue;
+                        }
+                        if (!arg_assignable_now(it->second, p.type)) return false;
+                    }
+                    return true;
+                }
+
+                if (form == CallForm::kPositionalThenLabeled) {
+                    if (named_params.empty()) return false;
+                    if (outside_positional.size() != pos_params.size()) return false;
+
+                    for (size_t i = 0; i < outside_positional.size(); ++i) {
+                        if (!arg_assignable_now(outside_positional[i], pos_params[i].type)) return false;
+                    }
+
+                    for (const auto& pair : labeled_by_label) {
+                        if (named_by_label.find(pair.first) == named_by_label.end()) return false;
+                    }
+
+                    for (const auto& p : named_params) {
+                        if (p.name.empty()) return false;
+                        auto it = labeled_by_label.find(p.name);
+                        if (it == labeled_by_label.end()) {
+                            if (!allow_defaults || !p.has_default) return false;
+                            continue;
+                        }
+                        if (!arg_assignable_now(it->second, p.type)) return false;
+                    }
+                    return true;
+                }
+
+                return false;
+            };
+
+            const bool stage_a_ok = match_fallback_shape(/*allow_defaults=*/false);
+            const bool final_ok = stage_a_ok || match_fallback_shape(/*allow_defaults=*/true);
+            if (!final_ok) {
+                diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                err_(e.span, "no matching callable shape for indirect function call");
+                check_all_arg_exprs_only();
+                return fallback_ret;
             }
 
-            if (group_arg) {
-                std::string msg = "named-group arguments require a direct function declaration lookup in v0";
-                diag_(diag::Code::kTypeErrorGeneric, group_arg->span, msg);
-                err_(group_arg->span, msg);
+            const auto check_arg_against_type = [&](const ast::Arg& a, ty::TypeId expected, uint32_t idx) {
+                if (a.expr == ast::k_invalid_expr) {
+                    diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                        std::to_string(idx), types_.to_string(expected), "<missing>");
+                    err_(a.span, "argument type mismatch");
+                    return;
+                }
+
+                const CoercionPlan plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, expected, a.expr, a.span);
+                if (!plan.ok) {
+                    diag_(diag::Code::kTypeArgTypeMismatch, a.span,
+                        std::to_string(idx), types_.to_string(expected),
+                        type_for_user_diag_(plan.src_after, a.expr));
+                    err_(a.span, "argument type mismatch");
+                }
+            };
+
+            if (form == CallForm::kPositionalOnly) {
+                for (size_t i = 0; i < outside_positional.size() && i < pos_params.size(); ++i) {
+                    check_arg_against_type(*outside_positional[i], pos_params[i].type, pos_params[i].idx);
+                }
+            } else if (form == CallForm::kLabeledOnly) {
+                for (const auto& p : pos_params) {
+                    if (p.name.empty()) continue;
+                    auto it = labeled_by_label.find(p.name);
+                    if (it != labeled_by_label.end()) {
+                        check_arg_against_type(*it->second, p.type, p.idx);
+                    }
+                }
+                for (const auto& p : named_params) {
+                    if (p.name.empty()) continue;
+                    auto it = labeled_by_label.find(p.name);
+                    if (it != labeled_by_label.end()) {
+                        check_arg_against_type(*it->second, p.type, p.idx);
+                    }
+                }
+            } else if (form == CallForm::kPositionalThenLabeled) {
+                for (size_t i = 0; i < outside_positional.size() && i < pos_params.size(); ++i) {
+                    check_arg_against_type(*outside_positional[i], pos_params[i].type, pos_params[i].idx);
+                }
+                for (const auto& p : named_params) {
+                    if (p.name.empty()) continue;
+                    auto it = labeled_by_label.find(p.name);
+                    if (it != labeled_by_label.end()) {
+                        check_arg_against_type(*it->second, p.type, p.idx);
+                    }
+                }
             }
 
             return fallback_ret;
@@ -543,63 +673,7 @@ namespace parus::tyck {
             return fallback_ret;
         }
 
-        std::unordered_map<std::string, const ast::Arg*> labeled_by_label;
-        labeled_by_label.reserve(outside_labeled.size());
-        for (const auto* a : outside_labeled) {
-            labeled_by_label.emplace(std::string(a->label), a);
-        }
-
-        std::unordered_map<std::string, const ast::Arg*> group_by_label;
-        group_by_label.reserve(group_entries.size());
-        for (const auto* a : group_entries) {
-            group_by_label.emplace(std::string(a->label), a);
-        }
-
-        const auto arg_type_now = [&](const ast::Arg* a) -> ty::TypeId {
-            if (a == nullptr || a->expr == ast::k_invalid_expr) return types_.error();
-            return check_expr_(a->expr);
-        };
-
-        const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
-            const ty::TypeId at = arg_type_now(a);
-            if (can_assign_(expected, at)) return true;
-            if (is_optional_(expected)) {
-                const ty::TypeId elem = optional_elem_(expected);
-                if (elem != ty::kInvalidType && can_assign_(elem, at)) return true;
-            }
-            return false;
-        };
-
-        /// @brief 호출 지점의 형태/타입 요약 문자열을 생성한다.
-        const auto make_callsite_summary = [&]() -> std::string {
-            std::ostringstream oss;
-            if (form == CallForm::kPositional) oss << "positional(";
-            else if (form == CallForm::kLabeled) oss << "labeled(";
-            else if (form == CallForm::kPositionalPlusNamedGroup) oss << "positional+named-group(";
-            else oss << "mixed-invalid(";
-
-            bool first = true;
-            for (const auto* a : outside_positional) {
-                if (!first) oss << ", ";
-                first = false;
-                oss << types_.to_string(arg_type_now(a));
-            }
-            for (const auto* a : outside_labeled) {
-                if (!first) oss << ", ";
-                first = false;
-                oss << std::string(a->label) << ":" << types_.to_string(arg_type_now(a));
-            }
-            for (const auto* a : group_entries) {
-                if (!first) oss << ", ";
-                first = false;
-                oss << "{" << std::string(a->label) << ":" << types_.to_string(arg_type_now(a)) << "}";
-            }
-            oss << ")";
-            return oss.str();
-        };
-
-        /// @brief 후보 시그니처를 사람이 읽기 좋은 문자열로 만든다.
-        const auto format_candidate = [&](const Candidate& c) -> std::string {
+        auto format_candidate = [&](const Candidate& c) -> std::string {
             std::ostringstream oss;
             oss << callee_name << "(";
             bool first = true;
@@ -624,37 +698,12 @@ namespace parus::tyck {
 
         std::vector<size_t> filtered;
         filtered.reserve(candidates.size());
-
         for (size_t i = 0; i < candidates.size(); ++i) {
             const auto& c = candidates[i];
-
-            if (form == CallForm::kPositional) {
-                if (!c.named.empty()) continue; // spec 6.1.7(D)-1
-                filtered.push_back(i);
+            if (form == CallForm::kPositionalThenLabeled && c.named.empty()) {
                 continue;
             }
-
-            if (form == CallForm::kLabeled) {
-                if (!c.named.empty()) continue; // spec 6.1.7(D)-2
-                if (outside_labeled.size() != c.positional.size()) continue;
-
-                bool label_set_ok = true;
-                for (const auto& pp : c.positional) {
-                    if (labeled_by_label.find(pp.name) == labeled_by_label.end()) {
-                        label_set_ok = false;
-                        break;
-                    }
-                }
-                if (!label_set_ok) continue;
-                filtered.push_back(i);
-                continue;
-            }
-
-            if (form == CallForm::kPositionalPlusNamedGroup) {
-                if (c.named.empty()) continue; // spec 6.1.7(D)-3
-                filtered.push_back(i);
-                continue;
-            }
+            filtered.push_back(i);
         }
 
         if (filtered.empty()) {
@@ -665,18 +714,39 @@ namespace parus::tyck {
             return fallback_ret;
         }
 
-        /// @brief spec 6.1.7(E)의 단계 A/B를 구현하는 후보 매칭 함수.
-        const auto match_candidate = [&](const Candidate& c, bool allow_defaults) -> bool {
-            if (form == CallForm::kPositional) {
+        auto match_candidate = [&](const Candidate& c, bool allow_defaults) -> bool {
+            if (form == CallForm::kPositionalOnly) {
                 if (outside_positional.size() != c.positional.size()) return false;
                 for (size_t i = 0; i < outside_positional.size(); ++i) {
                     if (!arg_assignable_now(outside_positional[i], c.positional[i].type)) return false;
                 }
+                if (!c.named.empty()) {
+                    if (!allow_defaults) return false;
+                    for (const auto& p : c.named) {
+                        if (!p.has_default) return false;
+                    }
+                }
                 return true;
             }
 
-            if (form == CallForm::kLabeled) {
+            if (form == CallForm::kLabeledOnly) {
+                for (const auto& pair : labeled_by_label) {
+                    if (c.positional_by_label.find(pair.first) == c.positional_by_label.end() &&
+                        c.named_by_label.find(pair.first) == c.named_by_label.end()) {
+                        return false;
+                    }
+                }
+
                 for (const auto& p : c.positional) {
+                    auto it = labeled_by_label.find(p.name);
+                    if (it == labeled_by_label.end()) {
+                        if (!allow_defaults || !p.has_default) return false;
+                        continue;
+                    }
+                    if (!arg_assignable_now(it->second, p.type)) return false;
+                }
+
+                for (const auto& p : c.named) {
                     auto it = labeled_by_label.find(p.name);
                     if (it == labeled_by_label.end()) {
                         if (!allow_defaults || !p.has_default) return false;
@@ -687,19 +757,19 @@ namespace parus::tyck {
                 return true;
             }
 
-            if (form == CallForm::kPositionalPlusNamedGroup) {
+            if (form == CallForm::kPositionalThenLabeled) {
                 if (outside_positional.size() != c.positional.size()) return false;
                 for (size_t i = 0; i < outside_positional.size(); ++i) {
                     if (!arg_assignable_now(outside_positional[i], c.positional[i].type)) return false;
                 }
 
-                for (const auto& pair : group_by_label) {
+                for (const auto& pair : labeled_by_label) {
                     if (c.named_by_label.find(pair.first) == c.named_by_label.end()) return false;
                 }
 
                 for (const auto& p : c.named) {
-                    auto it = group_by_label.find(p.name);
-                    if (it == group_by_label.end()) {
+                    auto it = labeled_by_label.find(p.name);
+                    if (it == labeled_by_label.end()) {
                         if (!allow_defaults || !p.has_default) return false;
                         continue;
                     }
@@ -756,7 +826,6 @@ namespace parus::tyck {
             expr_overload_target_cache_[current_expr_id_] = selected.decl_id;
         }
 
-        /// @brief 선택된 후보에 대해 infer-int 해소를 포함한 최종 타입 검증을 수행한다.
         const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {
             if (a.expr == ast::k_invalid_expr) {
                 diag_(diag::Code::kTypeArgTypeMismatch, a.span,
@@ -775,24 +844,30 @@ namespace parus::tyck {
             }
         };
 
-        if (form == CallForm::kPositional) {
+        if (form == CallForm::kPositionalOnly) {
             for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
                 check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
             }
-        } else if (form == CallForm::kLabeled) {
+        } else if (form == CallForm::kLabeledOnly) {
             for (const auto& p : selected.positional) {
                 auto it = labeled_by_label.find(p.name);
                 if (it != labeled_by_label.end()) {
                     check_arg_against_param_final(*it->second, p);
                 }
             }
-        } else if (form == CallForm::kPositionalPlusNamedGroup) {
+            for (const auto& p : selected.named) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
+                    check_arg_against_param_final(*it->second, p);
+                }
+            }
+        } else if (form == CallForm::kPositionalThenLabeled) {
             for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
                 check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
             }
             for (const auto& p : selected.named) {
-                auto it = group_by_label.find(p.name);
-                if (it != group_by_label.end()) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
                     check_arg_against_param_final(*it->second, p);
                 }
             }
@@ -801,7 +876,8 @@ namespace parus::tyck {
         return selected.ret;
     }
 
-    ty::TypeId TypeChecker::check_expr_cast_(const ast::Expr& e) {
+
+ty::TypeId TypeChecker::check_expr_cast_(const ast::Expr& e) {
         // AST contract:
         // - e.a: operand
         // - e.cast_type: target type

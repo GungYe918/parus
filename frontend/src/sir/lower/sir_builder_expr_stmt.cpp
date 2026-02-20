@@ -287,75 +287,15 @@ namespace parus::sir::detail {
 
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
                     const auto& aa = ast.args()[e.arg_begin + i];
-
-                    // Parent entry (one per "argument slot" in AST args list)
                     Arg parent{};
                     parent.span = aa.span;
                     parent.has_label = aa.has_label;
                     parent.is_hole = aa.is_hole;
                     parent.label = aa.label;
+                    parent.kind = (aa.kind == parus::ast::ArgKind::kLabeled)
+                        ? ArgKind::kLabeled
+                        : ArgKind::kPositional;
 
-                    parent.kind =
-                        (aa.kind == parus::ast::ArgKind::kPositional) ? ArgKind::kPositional :
-                        (aa.kind == parus::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
-                        ArgKind::kNamedGroup;
-
-                    if (aa.kind == parus::ast::ArgKind::kNamedGroup) {
-                        // NamedGroup children are stored in ast.named_group_args().
-                        //
-                        // SIR policy:
-                        // - emit ONE parent Arg with kind=kNamedGroup
-                        // - then emit children Args as adjacent entries in Module::args
-                        // - patch parent.child_begin/child_count after children emitted
-
-                        parent.value = k_invalid_value;
-
-                        const uint32_t parent_idx = m.add_arg(parent);
-                        v.arg_count++;
-
-                        const uint32_t child_begin = (uint32_t)m.args.size();
-                        uint32_t child_emitted = 0;
-
-                        const uint32_t ng_begin = aa.child_begin;
-                        const uint32_t ng_end   = aa.child_begin + aa.child_count;
-
-                        if (ng_begin < (uint32_t)ast.named_group_args().size() &&
-                            ng_end   <= (uint32_t)ast.named_group_args().size()) {
-
-                            for (uint32_t j = 0; j < aa.child_count; ++j) {
-                                const auto& child = ast.named_group_args()[aa.child_begin + j];
-
-                                Arg sc{};
-                                sc.span = child.span;
-                                sc.has_label = child.has_label;
-                                sc.is_hole = child.is_hole;
-                                sc.label = child.label;
-
-                                sc.kind =
-                                    (child.kind == parus::ast::ArgKind::kPositional) ? ArgKind::kPositional :
-                                    (child.kind == parus::ast::ArgKind::kLabeled) ? ArgKind::kLabeled :
-                                    ArgKind::kNamedGroup; // (shouldn't nest in v0)
-
-                                if (!child.is_hole && child.expr != parus::ast::k_invalid_expr) {
-                                    sc.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, child.expr);
-                                } else {
-                                    sc.value = k_invalid_value;
-                                }
-
-                                m.add_arg(sc);
-                                v.arg_count++;
-                                child_emitted++;
-                            }
-                        }
-
-                        // patch parent now that children are emitted
-                        m.args[parent_idx].child_begin = child_begin;
-                        m.args[parent_idx].child_count = child_emitted;
-
-                        continue; // IMPORTANT: keep processing remaining args
-                    }
-
-                    // Non-named-group: normal value
                     if (!aa.is_hole && aa.expr != parus::ast::k_invalid_expr) {
                         parent.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, aa.expr);
                     } else {

@@ -209,9 +209,6 @@ namespace parus {
         //  일반 인자(positional or labeled)를 파싱
         ast::Arg parse_call_arg(int ternary_depth);
 
-        //  call-site named-group '{ ... }' 자체를 파싱
-        ast::Arg parse_call_named_group_arg(int ternary_depth);
-
         // --------------------
         // recovery & misc
         // --------------------

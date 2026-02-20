@@ -78,6 +78,9 @@ namespace parus::ty {
         TypeId ret = kInvalidType;
         uint32_t param_begin = 0;
         uint32_t param_count = 0;
+        uint32_t positional_param_count = 0;
+        uint32_t label_begin = 0;
+        uint32_t default_begin = 0;
     };
 
 } // namespace parus::ty

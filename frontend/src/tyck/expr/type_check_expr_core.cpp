@@ -1303,10 +1303,10 @@ namespace parus::tyck {
                 return types_.error();
             }
 
-            // float + {integer} is forbidden (no implicit int->float)
+            // float + unsuffixed integer literal is forbidden (no implicit int->float)
             if ((is_float(lt) && is_infer_int(rt)) || (is_float(rt) && is_infer_int(lt))) {
                 diag_(diag::Code::kIntToFloatNotAllowed, e.span, "float-arithmetic");
-                err_(e.span, "cannot use deferred integer '{integer}' in float arithmetic (no implicit int->float)");
+                err_(e.span, "cannot use an unsuffixed integer literal in float arithmetic (no implicit int->float)");
                 return types_.error();
             }
 
@@ -1378,9 +1378,9 @@ namespace parus::tyck {
                 }
                 rt = lt;
             } else if (is_infer_int(lt) || is_infer_int(rt)) {
-                // {integer} vs {integer} (or vs non-int) => needs explicit context
+                // infer-int vs infer-int (or vs non-int) => needs explicit context
                 diag_(diag::Code::kIntLiteralNeedsTypeContext, e.span);
-                err_(e.span, "comparison with deferred integer '{integer}' needs an explicit integer type context");
+                err_(e.span, "comparison with unsuffixed integer literals needs an explicit integer type context");
                 return types_.builtin(ty::Builtin::kBool);
             }
 

@@ -120,53 +120,7 @@ namespace parus::sir {
 
                 for (uint32_t i = 0; i < count; ++i) {
                     const Arg& src = old_args[begin + i];
-
-                    if (v.kind == ValueKind::kCall && src.kind == ArgKind::kNamedGroup) {
-                        Arg parent = src;
-                        parent.child_begin = 0;
-                        parent.child_count = 0;
-
-                        const uint32_t parent_idx = (uint32_t)new_args.size();
-                        new_args.push_back(parent);
-                        ++new_count;
-
-                        uint32_t child_begin = src.child_begin;
-                        uint32_t child_count = src.child_count;
-                        clamp_arg_slice_(old_args, child_begin, child_count);
-
-                        const uint32_t packed_child_begin = (uint32_t)new_args.size();
-                        uint32_t packed_child_count = 0;
-
-                        for (uint32_t j = 0; j < child_count; ++j) {
-                            Arg child = old_args[child_begin + j];
-
-                            // v0 canonical rule:
-                            // - named-group 내부에서는 nested named-group을 허용하지 않는다.
-                            // - 잘못 들어온 경우 positional로 강등해 후속 패스를 안정화한다.
-                            if (child.kind == ArgKind::kNamedGroup) {
-                                child.kind = ArgKind::kPositional;
-                                child.child_begin = 0;
-                                child.child_count = 0;
-                            }
-
-                            new_args.push_back(child);
-                            ++new_count;
-                            ++packed_child_count;
-                        }
-
-                        new_args[parent_idx].child_begin = packed_child_begin;
-                        new_args[parent_idx].child_count = packed_child_count;
-                        continue;
-                    }
-
-                    Arg plain = src;
-                    plain.child_begin = 0;
-                    plain.child_count = 0;
-                    if ((v.kind == ValueKind::kArrayLit || v.kind == ValueKind::kFieldInit) &&
-                        plain.kind == ArgKind::kNamedGroup) {
-                        plain.kind = ArgKind::kPositional;
-                    }
-                    new_args.push_back(plain);
+                    new_args.push_back(src);
                     ++new_count;
                 }
 
@@ -267,16 +221,7 @@ namespace parus::sir {
                     if (end <= (uint64_t)m.args.size()) {
                         for (uint32_t i = 0; i < v.arg_count; ++i) {
                             const auto& a = m.args[v.arg_begin + i];
-                            if (a.kind == ArgKind::kNamedGroup) {
-                                const uint64_t cend = (uint64_t)a.child_begin + (uint64_t)a.child_count;
-                                if (cend <= (uint64_t)m.args.size()) {
-                                    for (uint32_t j = 0; j < a.child_count; ++j) {
-                                        join_child(m.args[a.child_begin + j].value);
-                                    }
-                                }
-                            } else {
-                                join_child(a.value);
-                            }
+                            join_child(a.value);
                         }
                     }
                     break;

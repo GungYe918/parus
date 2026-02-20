@@ -2,6 +2,7 @@
 #include <parus/passes/CheckPlaceExpr.hpp>
 
 #include <parus/ast/Nodes.hpp>
+#include <parus/ast/Visitor.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/DiagCode.hpp>
 #include <parus/syntax/TokenKind.hpp>
@@ -38,35 +39,6 @@ namespace parus::passes {
         return (e.kind == ast::ExprKind::kUnary) && (e.op == syntax::TokenKind::kAmp);
     }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag);
-
-    static void walk_call_args(
-        const ast::AstArena& ast,
-        uint32_t arg_begin,
-        uint32_t arg_count,
-        diag::Bag& bag
-    ) {
-        const auto& args = ast.args();
-        for (uint32_t i = 0; i < arg_count; ++i) {
-            const auto& a = args[arg_begin + i];
-
-            if (a.kind == ast::ArgKind::kNamedGroup) {
-                const auto& ng = ast.named_group_args();
-                for (uint32_t j = 0; j < a.child_count; ++j) {
-                    const auto& entry = ng[a.child_begin + j];
-                    if (!entry.is_hole && entry.expr != ast::k_invalid_expr) {
-                        walk_expr(ast, entry.expr, bag);
-                    }
-                }
-                continue;
-            }
-
-            if (!a.is_hole && a.expr != ast::k_invalid_expr) {
-                walk_expr(ast, a.expr, bag);
-            }
-        }
-    }
-
     static void check_unary_place_rules(const ast::AstArena& ast, const ast::Expr& u, diag::Bag& bag) {
         // & / && 는 operand가 place여야 함
         if (u.op == syntax::TokenKind::kAmp) {
@@ -94,69 +66,24 @@ namespace parus::passes {
         }
     }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag) {
-        if (id == ast::k_invalid_expr) return;
+    class PlaceExprVisitor final : public ast::TreeVisitor {
+    public:
+        PlaceExprVisitor(const ast::AstArena& ast, diag::Bag& bag) : ast_(ast), bag_(bag) {}
 
-        const auto& e = ast.expr(id);
-
-        switch (e.kind) {
-            case ast::ExprKind::kUnary:
-            case ast::ExprKind::kPostfixUnary:
-                check_unary_place_rules(ast, e, bag);
-                walk_expr(ast, e.a, bag);
-                break;
-
-            case ast::ExprKind::kCast:
-                // cast는 place가 아니지만 operand는 검사해야 함
-                walk_expr(ast, e.a, bag);
-                break;
-
-            case ast::ExprKind::kBinary:
-            case ast::ExprKind::kAssign:
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                break;
-
-            case ast::ExprKind::kTernary:
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                walk_expr(ast, e.c, bag);
-                break;
-
-            case ast::ExprKind::kCall:
-                walk_expr(ast, e.a, bag);
-                walk_call_args(ast, e.arg_begin, e.arg_count, bag);
-                break;
-
-            case ast::ExprKind::kIndex:
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                break;
-
-            case ast::ExprKind::kLoop:
-                if (e.loop_iter != ast::k_invalid_expr) walk_expr(ast, e.loop_iter, bag);
-                break;
-
-            case ast::ExprKind::kFieldInit: {
-                const auto& inits = ast.field_init_entries();
-                const uint64_t begin = e.field_init_begin;
-                const uint64_t end = begin + e.field_init_count;
-                if (begin <= inits.size() && end <= inits.size()) {
-                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
-                        const auto& ent = inits[e.field_init_begin + i];
-                        if (ent.expr != ast::k_invalid_expr) walk_expr(ast, ent.expr, bag);
-                    }
-                }
-                break;
+        void enter_expr(ast::ExprId, const ast::Expr& e) override {
+            if (e.kind == ast::ExprKind::kUnary || e.kind == ast::ExprKind::kPostfixUnary) {
+                check_unary_place_rules(ast_, e, bag_);
             }
-
-            default:
-                break;
         }
-    }
+
+    private:
+        const ast::AstArena& ast_;
+        diag::Bag& bag_;
+    };
 
     void check_place_expr(const ast::AstArena& ast, ast::ExprId root, diag::Bag& bag) {
-        walk_expr(ast, root, bag);
+        PlaceExprVisitor visitor(ast, bag);
+        ast::visit_expr_tree(ast, root, visitor);
     }
 
 } // namespace parus::passes

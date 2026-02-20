@@ -3,6 +3,7 @@
 ## 목적
 
 Parus frontend의 실행 순서와 단계별 계약을 고정한다.
+증분 파싱 구현 세부는 `pipeline/INCREMENTAL_PARSING.md`를 우선 참조한다.
 
 ## 현재 구현 (코드 근거)
 

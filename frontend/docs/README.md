@@ -11,17 +11,20 @@
 ## 인덱스
 
 1. `pipeline/FRONTEND_PIPELINE.md`: 전체 frontend 파이프라인
-2. `parse/TOP_LEVEL_ITEMS.md`: top-level item, empty item(`;`) 정책
-3. `parse/USE_IMPORT_NEST.md`: `use`/`import`/`nest` 파싱 규칙
-4. `parse/FIELD_AND_ACTS_DECL.md`: `field`, `acts` 선언 파싱
-5. `passes/NAME_RESOLVE.md`: 이름 해소와 alias rewrite
-6. `passes/PASS_PIPELINE.md`: pass 순서/입출력 계약
-7. `tyck/ASSIGN_COERCION_AND_NULLABLE.md`: nullable + 중앙 coercion
-8. `tyck/ACTS_RESOLUTION.md`: acts 해소 규칙
-9. `sir/SIR.md`: SIR 개요(이전 문서 이관)
-10. `sir/SIRandOIR.md`: SIR/OIR 설계 노트(이전 문서 이관)
-11. `sir/SIR_LOWERING.md`: AST -> SIR lowering 세부
-12. `oir/OIR_HANDOFF.md`: SIR -> OIR handoff 경계
+2. `pipeline/INCREMENTAL_PARSING.md`: 증분 파싱 API/구조(구현 기준)
+3. `parse/TOP_LEVEL_ITEMS.md`: top-level item, empty item(`;`) 정책
+4. `parse/USE_IMPORT_NEST.md`: `use`/`import`/`nest` 파싱 규칙
+5. `parse/FIELD_AND_ACTS_DECL.md`: `field`, `acts` 선언 파싱
+6. `passes/NAME_RESOLVE.md`: 이름 해소와 alias rewrite
+7. `passes/PASS_PIPELINE.md`: pass 순서/입출력 계약
+8. `tyck/ASSIGN_COERCION_AND_NULLABLE.md`: nullable + 중앙 coercion
+9. `tyck/ACTS_RESOLUTION.md`: acts 해소 규칙
+10. `sir/SIR.md`: SIR 개요(이전 문서 이관)
+11. `sir/SIRandOIR.md`: SIR/OIR 설계 노트(이전 문서 이관)
+12. `sir/SIR_LOWERING.md`: AST -> SIR lowering 세부
+13. `oir/OIR_HANDOFF.md`: SIR -> OIR handoff 경계
+
+증분 파싱 구현 상세는 `pipeline/INCREMENTAL_PARSING.md`를 정본으로 사용한다.
 
 ## 구현 우선순위 규칙
 

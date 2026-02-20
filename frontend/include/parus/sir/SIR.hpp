@@ -177,9 +177,9 @@ namespace parus::sir {
     };
 
     // ---------------------------------------------
-    // Call Args (mirrors AST args; named-group preserved)
+    // Call Args
     // ---------------------------------------------
-    enum class ArgKind : uint8_t { kPositional, kLabeled, kNamedGroup };
+    enum class ArgKind : uint8_t { kPositional, kLabeled };
 
     struct Arg {
         ArgKind kind = ArgKind::kPositional;
@@ -188,10 +188,6 @@ namespace parus::sir {
         bool is_hole = false;
         std::string_view label{};
         ValueId value = k_invalid_value;
-
-        // for NamedGroup: children are stored as adjacent Arg entries
-        uint32_t child_begin = 0;
-        uint32_t child_count = 0;
 
         parus::Span span{};
     };

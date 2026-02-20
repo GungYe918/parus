@@ -993,17 +993,6 @@ namespace parus::sir {
                             if ((size_t)aid >= m_.args.size()) break;
                             const auto& a = m_.args[aid];
 
-                            if (a.kind == ArgKind::kNamedGroup) {
-                                for (uint32_t j = 0; j < a.child_count; ++j) {
-                                    const uint32_t cid = a.child_begin + j;
-                                    if ((size_t)cid >= m_.args.size()) break;
-                                    const auto& ca = m_.args[cid];
-                                    if (!ca.is_hole) analyze_value_(ca.value, ValueUse::kCallArg, k_invalid_symbol);
-                                }
-                                i += 1 + a.child_count;
-                                continue;
-                            }
-
                             if (!a.is_hole) analyze_value_(a.value, ValueUse::kCallArg, k_invalid_symbol);
                             ++i;
                         }

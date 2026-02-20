@@ -110,7 +110,6 @@ namespace parus::ast {
     enum class ArgKind : uint8_t {
         kPositional,
         kLabeled,
-        kNamedGroup, // call-site "{ ... }" 그룹 자체
     };
 
     struct Arg {
@@ -120,10 +119,6 @@ namespace parus::ast {
         bool is_hole = false;     // label: _ (hole payload)
         std::string_view label{};
         ExprId expr = k_invalid_expr;
-
-        // for NamedGroup
-        uint32_t child_begin = 0;
-        uint32_t child_count = 0;
 
         Span span{};
     };
@@ -412,7 +407,6 @@ namespace parus::ast {
         StmtId add_stmt(const Stmt& s) { stmts_.push_back(s); return static_cast<StmtId>(stmts_.size() - 1); }
 
         uint32_t add_arg(const Arg& a) { args_.push_back(a); return static_cast<uint32_t>(args_.size() - 1); }
-        uint32_t add_named_group_arg(const Arg& a) { named_group_args_.push_back(a); return static_cast<uint32_t>(named_group_args_.size() - 1); }
 
         void add_fn_attr(const Attr& a) { fn_attrs_.push_back(a); }
         uint32_t add_param(const Param& p) {  params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1);  }
@@ -458,9 +452,6 @@ namespace parus::ast {
         const std::vector<Arg>& args() const { return args_; }
         std::vector<Arg>& args_mut() { return args_; }
 
-        const std::vector<Arg>& named_group_args() const { return named_group_args_; }
-        std::vector<Arg>& named_group_args_mut() { return named_group_args_; }
-
         const std::vector<Attr>& fn_attrs() const { return fn_attrs_; }
         std::vector<Attr>& fn_attrs_mut() { return fn_attrs_; }
 
@@ -489,7 +480,6 @@ namespace parus::ast {
         std::vector<Expr> exprs_;
         std::vector<Stmt> stmts_;
         std::vector<Arg>  args_;
-        std::vector<Arg>  named_group_args_;
 
         std::vector<Attr> fn_attrs_;
         std::vector<Param> params_;

@@ -856,18 +856,6 @@ namespace parus::oir {
                     if ((size_t)aid >= sir->args.size()) break;
                     const auto& a = sir->args[aid];
 
-                    if (a.kind == parus::sir::ArgKind::kNamedGroup) {
-                        for (uint32_t j = 0; j < a.child_count; ++j) {
-                            const uint32_t cid = a.child_begin + j;
-                            if ((size_t)cid >= sir->args.size()) break;
-                            const auto& child = sir->args[cid];
-                            if (child.is_hole || child.value == parus::sir::k_invalid_value) continue;
-                            args.push_back(lower_value(child.value));
-                        }
-                        i += 1 + a.child_count;
-                        continue;
-                    }
-
                     if (!a.is_hole && a.value != parus::sir::k_invalid_value) {
                         args.push_back(lower_value(a.value));
                     }

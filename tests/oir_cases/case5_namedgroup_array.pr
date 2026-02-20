@@ -5,5 +5,5 @@ def sum3(xs: i32[3], { bias: i32 = 0i32 }) -> i32 {
 
 def main() -> i32 {
     let x: i32[3] = [3, 4, 5];
-    return sum3(x, { bias: 1i32 });
+    return sum3(x, bias: 1i32);
 }

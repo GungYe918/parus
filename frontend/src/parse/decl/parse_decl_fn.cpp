@@ -460,30 +460,33 @@ namespace parus {
         auto ret_ty = parse_type();
 
         // ------------------------------------------------------------------
-        // FIX (핵심):
-        // TypePool의 def 시그니처에는 "positional 파라미터"만 포함한다.
-        // named-group 파라미터는 시그니처에 넣지 말고,
-        // FnDecl 메타(param list + flags)로만 보관한 뒤 tyck에서 별도 검증한다.
-        //
-        // 예)
-        //   def sub(a,b,{clamp})  -> sig: def(i32,i32)->i32   (positional_count=2)
-        //   def mul({a,b})        -> sig: def()->i32          (positional_count=0)
-        //   def div(a,b,{rounding=0,bias}) -> sig: def(i32,i32)->i32
+        // call-shape metadata:
+        // - 함수 타입에 positional_count + param labels + default flags를 같이 저장한다.
+        // - 직접 호출/간접 호출(함수값) 모두 동일한 호출 규칙을 재사용하기 위함이다.
         // ------------------------------------------------------------------
         ty::TypeId sig_id = ty::kInvalidType;
         {
             std::vector<ty::TypeId> pts;
-            pts.reserve(positional_count);
+            std::vector<std::string_view> labels;
+            std::vector<uint8_t> has_default_flags;
+            pts.reserve(param_count);
+            labels.reserve(param_count);
+            has_default_flags.reserve(param_count);
 
-            for (uint32_t i = 0; i < positional_count; ++i) {
+            for (uint32_t i = 0; i < param_count; ++i) {
                 const auto& p = ast_.params()[param_begin + i];
                 pts.push_back(p.type);
+                labels.push_back(p.name);
+                has_default_flags.push_back(p.has_default ? 1u : 0u);
             }
 
             sig_id = types_.make_fn(
                 ret_ty.id,
                 pts.empty() ? nullptr : pts.data(),
-                (uint32_t)pts.size()
+                (uint32_t)pts.size(),
+                positional_count,
+                labels.empty() ? nullptr : labels.data(),
+                has_default_flags.empty() ? nullptr : has_default_flags.data()
             );
         }
 
@@ -516,7 +519,7 @@ namespace parus {
 
         s.name = name;
 
-        s.type = sig_id;          // signature: positional-only
+        s.type = sig_id;
         s.fn_ret = ret_ty.id;
 
         s.a = body;

@@ -24,8 +24,8 @@ def main() -> i32 {
   let mut s: i32 = 0i32;
   {
     set window = &raw[0..:2];
-    s = sum_slice(window, { bias: 10i32, scale: 2i32 });
+    s = sum_slice(window, bias: 10i32, scale: 2i32);
   }
-  bump(&mut raw[1], { delta: 5i32 });
+  bump(&mut raw[1], delta: 5i32);
   return s + raw[1];
 }

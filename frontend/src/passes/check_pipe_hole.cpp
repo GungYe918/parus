@@ -1,5 +1,6 @@
 // frontend/src/passes/check_pipe_hole.cpp
 #include <parus/ast/Nodes.hpp>
+#include <parus/ast/Visitor.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/DiagCode.hpp>
 #include <parus/syntax/TokenKind.hpp>
@@ -15,8 +16,6 @@ namespace parus::passes {
     static bool is_call(const ast::Expr& e)      { return e.kind == ast::ExprKind::kCall; }
     static bool is_hole_expr(const ast::Expr& e) { return e.kind == ast::ExprKind::kHole; }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag);
-
     struct PipeScan {
         bool any_labeled = false;
         bool any_positional = false;
@@ -30,37 +29,9 @@ namespace parus::passes {
         uint32_t count,
         diag::Bag& bag,
         PipeScan& scan
-    );
-
-    static void scan_named_group_for_pipe(
-        const ast::AstArena& ast,
-        const ast::Arg& named_group,
-        diag::Bag& bag,
-        PipeScan& scan
-    ) {
-        // named-group 자체는 "라벨 인자 그룹"이므로 labeled로 취급
-        scan.any_labeled = true;
-
-        const auto& ng = ast.named_group_args();
-        scan_arg_list_for_pipe(ast, ng, named_group.child_begin, named_group.child_count, bag, scan);
-    }
-
-    static void scan_arg_list_for_pipe(
-        const ast::AstArena& ast,
-        const std::vector<ast::Arg>& args,
-        uint32_t begin,
-        uint32_t count,
-        diag::Bag& bag,
-        PipeScan& scan
     ) {
         for (uint32_t i = 0; i < count; ++i) {
             const auto& a = args[begin + i];
-
-            // named-group: 내부 엔트리들을 재귀적으로 스캔
-            if (a.kind == ast::ArgKind::kNamedGroup) {
-                scan_named_group_for_pipe(ast, a, bag, scan);
-                continue;
-            }
 
             // labeled / positional 분류
             const bool labeled = a.has_label;
@@ -81,8 +52,6 @@ namespace parus::passes {
                 const auto& ex = ast.expr(a.expr);
                 if (is_hole_expr(ex)) {
                     report(bag, diag::Code::kPipeHolePositionalNotAllowed, ex.span);
-                } else {
-                    walk_expr(ast, a.expr, bag);
                 }
             }
         }
@@ -132,89 +101,24 @@ namespace parus::passes {
         }
     }
 
-    static void walk_expr(const ast::AstArena& ast, ast::ExprId id, diag::Bag& bag) {
-        if (id == ast::k_invalid_expr) return;
+    class PipeHoleVisitor final : public ast::TreeVisitor {
+    public:
+        PipeHoleVisitor(const ast::AstArena& ast, diag::Bag& bag) : ast_(ast), bag_(bag) {}
 
-        const auto& e = ast.expr(id);
-
-        switch (e.kind) {
-            case ast::ExprKind::kUnary:
-            case ast::ExprKind::kPostfixUnary:
-                walk_expr(ast, e.a, bag);
-                break;
-
-            case ast::ExprKind::kBinary:
-                // pipe operators: |>  and  <|
-                if (e.op == syntax::TokenKind::kPipeFwd || e.op == syntax::TokenKind::kPipeRev) {
-                    check_pipe(ast, e, bag);
-                }
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                break;
-
-            case ast::ExprKind::kTernary:
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                walk_expr(ast, e.c, bag);
-                break;
-
-            case ast::ExprKind::kCast:
-                // cast operand만 순회하면 됨 (type은 Expr 트리가 아님)
-                walk_expr(ast, e.a, bag);
-                break;
-
-            case ast::ExprKind::kCall: {
-                walk_expr(ast, e.a, bag);
-
-                const auto& args = ast.args();
-                for (uint32_t i = 0; i < e.arg_count; ++i) {
-                    const auto& a = args[e.arg_begin + i];
-
-                    if (a.kind == ast::ArgKind::kNamedGroup) {
-                        const auto& ng = ast.named_group_args();
-                        for (uint32_t j = 0; j < a.child_count; ++j) {
-                            const auto& entry = ng[a.child_begin + j];
-                            if (!entry.is_hole && entry.expr != ast::k_invalid_expr) {
-                                walk_expr(ast, entry.expr, bag);
-                            }
-                        }
-                        continue;
-                    }
-
-                    if (!a.is_hole && a.expr != ast::k_invalid_expr) {
-                        walk_expr(ast, a.expr, bag);
-                    }
-                }
-                break;
-            }
-
-            case ast::ExprKind::kIndex:
-                walk_expr(ast, e.a, bag);
-                walk_expr(ast, e.b, bag);
-                break;
-
-            case ast::ExprKind::kFieldInit: {
-                const auto& inits = ast.field_init_entries();
-                const uint64_t begin = e.field_init_begin;
-                const uint64_t end = begin + e.field_init_count;
-                if (begin <= inits.size() && end <= inits.size()) {
-                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
-                        const auto& ent = inits[e.field_init_begin + i];
-                        if (ent.expr != ast::k_invalid_expr) {
-                            walk_expr(ast, ent.expr, bag);
-                        }
-                    }
-                }
-                break;
-            }
-
-            default:
-                break;
+        void enter_expr(ast::ExprId, const ast::Expr& e) override {
+            if (e.kind != ast::ExprKind::kBinary) return;
+            if (e.op != syntax::TokenKind::kPipeFwd && e.op != syntax::TokenKind::kPipeRev) return;
+            check_pipe(ast_, e, bag_);
         }
-    }
+
+    private:
+        const ast::AstArena& ast_;
+        diag::Bag& bag_;
+    };
 
     void check_pipe_hole(const ast::AstArena& ast, ast::ExprId root, diag::Bag& bag) {
-        walk_expr(ast, root, bag);
+        PipeHoleVisitor visitor(ast, bag);
+        ast::visit_expr_tree(ast, root, visitor);
     }
 
 } // namespace parus::passes

@@ -15,6 +15,8 @@ namespace parus::ty {
             // reserve: 128
             types_.reserve(128);
             fn_params_.reserve(256);
+            fn_param_labels_.reserve(256);
+            fn_param_has_default_.reserve(256);
             user_path_segs_.reserve(256);
 
             // [0] canonical error type
@@ -163,17 +165,50 @@ namespace parus::ty {
         }
 
         // ---- function signature type interning ----
-        TypeId make_fn(TypeId ret, const TypeId* params, uint32_t param_count) {
+        // positional_param_count:
+        // - if UINT32_MAX, treat as "all positional"
+        // labels/default flags:
+        // - nullptr means all empty-label / no-default.
+        TypeId make_fn(TypeId ret,
+                       const TypeId* params,
+                       uint32_t param_count,
+                       uint32_t positional_param_count = 0xFFFF'FFFFu,
+                       const std::string_view* labels = nullptr,
+                       const uint8_t* has_default = nullptr) {
+            if (positional_param_count == 0xFFFF'FFFFu) {
+                positional_param_count = param_count;
+            }
+            if (positional_param_count > param_count) {
+                positional_param_count = param_count;
+            }
+
             // linear search v0 (ok)
             for (TypeId i = 0; i < (TypeId)types_.size(); ++i) {
                 const auto& t = types_[i];
                 if (t.kind != Kind::kFn) continue;
                 if (t.ret != ret) continue;
                 if (t.param_count != param_count) continue;
+                if (t.positional_param_count != positional_param_count) continue;
 
                 bool same = true;
                 for (uint32_t k = 0; k < param_count; ++k) {
                     if (fn_params_[t.param_begin + k] != params[k]) { same = false; break; }
+                }
+                if (!same) continue;
+
+                for (uint32_t k = 0; k < param_count; ++k) {
+                    const std::string_view lhs_label = fn_param_labels_[t.label_begin + k];
+                    const std::string_view rhs_label = labels ? labels[k] : std::string_view{};
+                    if (lhs_label != rhs_label) {
+                        same = false;
+                        break;
+                    }
+                    const uint8_t lhs_def = fn_param_has_default_[t.default_begin + k];
+                    const uint8_t rhs_def = has_default ? has_default[k] : 0u;
+                    if (lhs_def != rhs_def) {
+                        same = false;
+                        break;
+                    }
                 }
                 if (same) return i;
             }
@@ -183,8 +218,15 @@ namespace parus::ty {
             t.ret = ret;
             t.param_begin = (uint32_t)fn_params_.size();
             t.param_count = param_count;
+            t.positional_param_count = positional_param_count;
+            t.label_begin = (uint32_t)fn_param_labels_.size();
+            t.default_begin = (uint32_t)fn_param_has_default_.size();
 
-            for (uint32_t k = 0; k < param_count; ++k) fn_params_.push_back(params[k]);
+            for (uint32_t k = 0; k < param_count; ++k) {
+                fn_params_.push_back(params ? params[k] : error());
+                fn_param_labels_.push_back(labels ? labels[k] : std::string_view{});
+                fn_param_has_default_.push_back(has_default ? has_default[k] : 0u);
+            }
 
             return push_(t);
         }
@@ -199,6 +241,26 @@ namespace parus::ty {
             const Type& t = types_[def];
             if (i >= t.param_count) return error();
             return fn_params_[t.param_begin + i];
+        }
+
+        uint32_t fn_positional_count(TypeId def) const {
+            if (!is_fn(def)) return 0;
+            const Type& t = types_[def];
+            return t.positional_param_count;
+        }
+
+        std::string_view fn_param_label_at(TypeId def, uint32_t i) const {
+            if (!is_fn(def)) return {};
+            const Type& t = types_[def];
+            if (i >= t.param_count) return {};
+            return fn_param_labels_[t.label_begin + i];
+        }
+
+        bool fn_param_has_default_at(TypeId def, uint32_t i) const {
+            if (!is_fn(def)) return false;
+            const Type& t = types_[def];
+            if (i >= t.param_count) return false;
+            return fn_param_has_default_[t.default_begin + i] != 0;
         }
 
         // convenience: ident -> (builtin or named_user)
@@ -279,7 +341,7 @@ namespace parus::ty {
                 case Builtin::kF64: return "f64";
                 case Builtin::kF128: return "f128";
 
-                case Builtin::kInferInteger: return "{integer}";
+                case Builtin::kInferInteger: return "unsuffixed integer literal";
             }
             return "<builtin?>";
         }
@@ -338,7 +400,8 @@ namespace parus::ty {
                     case Kind::kFn:
                         os << "(Fn ret=" << t.ret
                            << " params=[" << t.param_begin
-                           << ".." << (t.param_begin + t.param_count) << "])";
+                           << ".." << (t.param_begin + t.param_count) << "]"
+                           << " pos=" << t.positional_param_count << ")";
                         break;
                 }
 
@@ -480,9 +543,26 @@ namespace parus::ty {
                     out += "def(";
                     for (uint32_t i = 0; i < t.param_count; ++i) {
                         if (i) out += ", ";
+                        if (i >= t.positional_param_count) {
+                            if (i == t.positional_param_count) out += "{";
+                            const auto lab = fn_param_labels_[t.label_begin + i];
+                            if (!lab.empty()) {
+                                out.append(lab.data(), lab.size());
+                                out += ": ";
+                            }
+                        } else {
+                            const auto lab = fn_param_labels_[t.label_begin + i];
+                            if (!lab.empty()) {
+                                out.append(lab.data(), lab.size());
+                                out += ": ";
+                            }
+                        }
+
                         const TypeId pid = fn_params_[t.param_begin + i];
                         render_into_(out, pid, RenderCtx::kFnPart);
+                        if (fn_param_has_default_[t.default_begin + i]) out += "=?";
                     }
+                    if (t.param_count > t.positional_param_count) out += "}";
                     out += ") -> ";
                     render_into_(out, t.ret, RenderCtx::kFnPart);
                     return;
@@ -494,6 +574,8 @@ namespace parus::ty {
 
         std::vector<Type> types_;
         std::vector<TypeId> fn_params_;
+        std::vector<std::string_view> fn_param_labels_;
+        std::vector<uint8_t> fn_param_has_default_;
         std::vector<TypeId> builtin_ids_;
         std::vector<std::string_view> user_path_segs_;
     };      

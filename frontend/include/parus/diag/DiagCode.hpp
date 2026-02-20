@@ -48,13 +48,7 @@ namespace parus::diag {
         kFieldMemberMutNotAllowed,   // mut is not allowed on field members
         kActsNameExpected,           // acts declaration name identifier is required
         kCallArgMixNotAllowed,
-        kCallNoArgsAfterNamedGroup,      // no extra args after named-group '{...}'
-        kNamedGroupEntryExpectedColon,     // entry must be "label: expr|_"
-        kCallOnlyOneNamedGroupAllowed,     // only one "{ ... }" in a call
         kAttrNameExpectedAfterAt,          // '@' must be followed by attr name
-
-        kNamedGroupLabelMustBeIdent,     // label must be identifier (e.g., x: 1)
-        kNamedGroupLabelUnderscoreReserved, // '_' cannot be a label; only allowed as value
 
         // ---- var parsing ----
         kVarDeclTypeAnnotationRequired,   // let requires ': Type'

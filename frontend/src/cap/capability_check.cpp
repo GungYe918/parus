@@ -501,17 +501,9 @@ namespace parus::cap {
                         enter_scope_();
                         walk_expr_(e.a, ExprUse::kValue);
                         const auto& args = ast_.args();
-                        const auto& ngs = ast_.named_group_args();
 
                         for (uint32_t i = 0; i < e.arg_count; ++i) {
                             const auto& a = args[e.arg_begin + i];
-                            if (a.kind == ast::ArgKind::kNamedGroup) {
-                                for (uint32_t j = 0; j < a.child_count; ++j) {
-                                    const auto& na = ngs[a.child_begin + j];
-                                    if (!na.is_hole) walk_expr_(na.expr, ExprUse::kCallArg);
-                                }
-                                continue;
-                            }
                             if (!a.is_hole) walk_expr_(a.expr, ExprUse::kCallArg);
                         }
                         leave_scope_();

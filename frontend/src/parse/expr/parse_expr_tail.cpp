@@ -4,7 +4,6 @@
 #include <parus/diag/DiagCode.hpp>
 
 #include <string_view>
-#include <unordered_set>
 
 
 namespace parus {
@@ -49,90 +48,6 @@ namespace parus {
         return a;
     }
 
-    ast::Arg Parser::parse_call_named_group_arg(int ternary_depth) {
-        using K = syntax::TokenKind;
-
-        const Token lb = cursor_.peek();
-        diag_expect(K::kLBrace);
-
-        uint32_t begin = static_cast<uint32_t>(ast_.named_group_args().size());
-        uint32_t count = 0;
-
-        // SPEC 6.1.6: '{}' 내부 라벨 중복 금지
-        std::unordered_set<std::string_view> seen_labels;
-
-        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
-            const Token label_tok = cursor_.peek();
-
-            // '{ name: Expr, ... }'에서 label은 ident여야 한다.
-            if (label_tok.kind != K::kIdent) {
-                diag_report(diag::Code::kNamedGroupLabelMustBeIdent, label_tok.span);
-                recover_to_delim(K::kComma, K::kRBrace);
-                if (cursor_.eat(K::kComma)) continue;
-                break;
-            }
-
-            cursor_.bump(); // label
-
-            if (!cursor_.eat(K::kColon)) {
-                diag_report(diag::Code::kNamedGroupEntryExpectedColon, cursor_.peek().span);
-                recover_to_delim(K::kComma, K::kRBrace);
-                if (cursor_.eat(K::kComma)) continue;
-                break;
-            }
-
-            if (!seen_labels.insert(label_tok.lexeme).second) {
-                diag_report(diag::Code::kDuplicateDecl, label_tok.span, label_tok.lexeme);
-            }
-
-            ast::Arg entry{};
-            entry.kind = ast::ArgKind::kLabeled;
-            entry.has_label = true;
-            entry.label = label_tok.lexeme;
-
-            const Token next = cursor_.peek();
-            if (next.kind == K::kHole) {
-                cursor_.bump();
-                entry.is_hole = true;
-                entry.expr = ast::k_invalid_expr;
-                entry.span = span_join(label_tok.span, next.span);
-            } else if (next.kind == K::kComma || next.kind == K::kRBrace || next.kind == K::kEof) {
-                // label: 뒤의 값이 비어있는 경우
-                diag_report(diag::Code::kUnexpectedToken, next.span, "expression");
-                entry.expr = ast::k_invalid_expr;
-                entry.span = label_tok.span;
-            } else {
-                entry.expr = parse_expr_pratt(0, ternary_depth);
-                entry.span = span_join(label_tok.span, ast_.expr(entry.expr).span);
-            }
-
-            ast_.add_named_group_arg(entry);
-            ++count;
-
-            if (cursor_.eat(K::kComma)) {
-                if (cursor_.at(K::kRBrace)) break; // trailing comma
-                continue;
-            }
-
-            break;
-        }
-
-        Token rb = cursor_.peek();
-        if (!cursor_.eat(K::kRBrace)) {
-            diag_report(diag::Code::kExpectedToken, rb.span, "}");
-            recover_to_delim(K::kRBrace, K::kRParen, K::kSemicolon);
-            rb = cursor_.peek();
-            cursor_.eat(K::kRBrace);
-        }
-
-        ast::Arg g{};
-        g.kind = ast::ArgKind::kNamedGroup;
-        g.child_begin = begin;
-        g.child_count = count;
-        g.span = span_join(lb.span, rb.span);
-        return g;
-    }
-
     ast::ExprId Parser::parse_expr_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
         using K = syntax::TokenKind;
 
@@ -149,21 +64,23 @@ namespace parus {
         uint32_t count = 0;
 
         // ------------------------------------------------------------
-        // SPEC 6.1.5: 호출 모드는 3가지
-        //   (A) positional call: f(e1,e2,...)
-        //   (B) labeled call:    f(a:e1,b:e2,...)
-        //   (C) pos+named-group: f(pos..., {x:e,...})
+        // Call mode (v0):
+        //   - positional-only: f(e1, e2, ...)
+        //   - labeled-only:    f(a: e1, b: e2, ...)
+        //   - mixed-tail:      f(e1, e2, x: e3, y: e4)
+        //
+        // Rule:
+        //   positional prefix is allowed, but once labeled starts,
+        //   all trailing args must be labeled.
         // ------------------------------------------------------------
         enum class CallMode : uint8_t {
             kUnknown,
-            kPositional,
-            kLabeled,
-            kPositionalPlusNamedGroup,
+            kPositionalPrefix,
+            kLabeledTail,
             kInvalidMixed,
         };
 
         CallMode mode = CallMode::kUnknown;
-        bool seen_named_group = false;
 
         auto diag_mix = [&](Span sp) {
             diag_report(diag::Code::kCallArgMixNotAllowed, sp);
@@ -173,64 +90,34 @@ namespace parus {
             while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
                 const size_t before = cursor_.pos();
 
-                // named-group arg: '{' ... '}'
-                if (cursor_.at(K::kLBrace)) {
-                    if (seen_named_group) {
-                        diag_report(diag::Code::kCallOnlyOneNamedGroupAllowed, cursor_.peek().span);
-                        recover_to_delim(K::kComma, K::kRParen);
-                        cursor_.eat(K::kComma);
-                        continue;
-                    }
-
-                    // labeled-only 모드에서 '{}'는 허용하지 않는다.
-                    if (mode == CallMode::kLabeled) {
-                        diag_mix(cursor_.peek().span);
-                        mode = CallMode::kInvalidMixed;
-                    } else if (mode == CallMode::kUnknown || mode == CallMode::kPositional) {
-                        mode = CallMode::kPositionalPlusNamedGroup;
-                    }
-
-                    seen_named_group = true;
-
-                    ast::Arg g = parse_call_named_group_arg(ternary_depth);
-                    ast_.add_arg(g);
-                    ++count;
-
-                    // '{}'는 항상 마지막 구역
-                    if (cursor_.eat(K::kComma)) {
-                        if (!cursor_.at(K::kRParen)) {
-                            diag_report(diag::Code::kCallNoArgsAfterNamedGroup, cursor_.peek().span);
-                            recover_to_delim(K::kRParen);
-                        }
-                    }
-                    break;
-                }
-
-                // normal arg (positional or labeled)
+                // normal arg (positional / labeled)
                 ast::Arg a = parse_call_arg(ternary_depth);
-
-                if (seen_named_group) {
-                    diag_report(diag::Code::kCallNoArgsAfterNamedGroup, a.span);
-                }
 
                 const bool is_labeled = (a.kind == ast::ArgKind::kLabeled) || a.has_label;
 
                 if (is_labeled) {
                     if (mode == CallMode::kUnknown) {
-                        mode = CallMode::kLabeled;
-                    } else if (mode == CallMode::kPositional || mode == CallMode::kPositionalPlusNamedGroup) {
+                        mode = CallMode::kLabeledTail;
+                    } else if (mode == CallMode::kPositionalPrefix) {
+                        mode = CallMode::kLabeledTail;
+                    } else if (mode == CallMode::kLabeledTail) {
+                        // keep
+                    } else {
                         diag_mix(a.span.hi ? a.span : cursor_.prev().span);
                         mode = CallMode::kInvalidMixed;
                     }
                 } else {
                     if (mode == CallMode::kUnknown) {
-                        mode = CallMode::kPositional;
-                    } else if (mode == CallMode::kLabeled) {
+                        mode = CallMode::kPositionalPrefix;
+                    } else if (mode == CallMode::kPositionalPrefix) {
+                        // keep
+                    } else if (mode == CallMode::kLabeledTail) {
                         diag_mix(a.span.hi ? a.span : cursor_.prev().span);
                         mode = CallMode::kInvalidMixed;
-                } else if (mode == CallMode::kPositionalPlusNamedGroup) {
-                        diag_report(diag::Code::kCallNoArgsAfterNamedGroup, a.span);
-                }
+                    } else {
+                        diag_mix(a.span.hi ? a.span : cursor_.prev().span);
+                        mode = CallMode::kInvalidMixed;
+                    }
                 }
 
                 ast_.add_arg(a);

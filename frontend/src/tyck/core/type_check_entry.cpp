@@ -451,16 +451,14 @@ namespace parus::tyck {
             }
             if (ret == ty::kInvalidType) ret = types_.error();
 
-            uint32_t pos_cnt = 0;
-            if (s.positional_param_count != 0 || s.param_count == 0) {
-                pos_cnt = s.positional_param_count;
-            } else {
-                pos_cnt = s.param_count;
-            }
-
             std::vector<ty::TypeId> params;
-            params.reserve(pos_cnt);
-            for (uint32_t pi = 0; pi < pos_cnt; ++pi) {
+            std::vector<std::string_view> labels;
+            std::vector<uint8_t> has_default_flags;
+            params.reserve(s.param_count);
+            labels.reserve(s.param_count);
+            has_default_flags.reserve(s.param_count);
+
+            for (uint32_t pi = 0; pi < s.param_count; ++pi) {
                 const auto& p = ast_.params()[s.param_begin + pi];
                 ty::TypeId pt = p.type;
                 if (pt == ty::kInvalidType) {
@@ -469,9 +467,18 @@ namespace parus::tyck {
                     pt = types_.error();
                 }
                 params.push_back(pt);
+                labels.push_back(p.name);
+                has_default_flags.push_back(p.has_default ? 1u : 0u);
             }
 
-            return types_.make_fn(ret, params.empty() ? nullptr : params.data(), (uint32_t)params.size());
+            return types_.make_fn(
+                ret,
+                params.empty() ? nullptr : params.data(),
+                (uint32_t)params.size(),
+                s.positional_param_count,
+                labels.empty() ? nullptr : labels.data(),
+                has_default_flags.empty() ? nullptr : has_default_flags.data()
+            );
         };
 
         std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;

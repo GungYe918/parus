@@ -511,15 +511,24 @@ namespace parus {
         }
 
         std::vector<ty::TypeId> pts;
-        pts.reserve(positional_count);
-        for (uint32_t i = 0; i < positional_count; ++i) {
+        std::vector<std::string_view> labels;
+        std::vector<uint8_t> has_default_flags;
+        pts.reserve(param_count);
+        labels.reserve(param_count);
+        has_default_flags.reserve(param_count);
+        for (uint32_t i = 0; i < param_count; ++i) {
             const auto& p = ast_.params()[param_begin + i];
             pts.push_back(p.type);
+            labels.push_back(p.name);
+            has_default_flags.push_back(p.has_default ? 1u : 0u);
         }
         const ty::TypeId sig_id = types_.make_fn(
             ret_ty.id,
             pts.empty() ? nullptr : pts.data(),
-            (uint32_t)pts.size()
+            (uint32_t)pts.size(),
+            positional_count,
+            labels.empty() ? nullptr : labels.data(),
+            has_default_flags.empty() ? nullptr : has_default_flags.data()
         );
 
         const auto op_name = ast_.add_owned_string(

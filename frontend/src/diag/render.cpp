@@ -57,15 +57,10 @@ namespace parus::diag {
             case Code::kFieldMemberMutNotAllowed: return "FieldMemberMutNotAllowed";
             case Code::kActsNameExpected: return "ActsNameExpected";
             case Code::kCallArgMixNotAllowed: return "CallArgMixNotAllowed";
-            case Code::kCallNoArgsAfterNamedGroup: return "CallNoArgsAfterNamedGroup";
-            case Code::kNamedGroupEntryExpectedColon: return "NamedGroupEntryExpectedColon";
-            case Code::kCallOnlyOneNamedGroupAllowed: return "CallOnlyOneNamedGroupAllowed";
             case Code::kFnReturnTypeRequired: return "FnReturnTypeRequired";
             case Code::kAttrNameExpectedAfterAt:      return "AttrNameExpectedAfterAt";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "FnParamDefaultNotAllowedOutsideNamedGroup";
             case Code::kFnParamDefaultExprExpected:                return "FnParamDefaultExprExpected";
-            case Code::kNamedGroupLabelMustBeIdent: return "NamedGroupLabelMustBeIdent";
-            case Code::kNamedGroupLabelUnderscoreReserved: return "NamedGroupLabelUnderscoreReserved";
 
             case Code::kVarDeclTypeAnnotationRequired: return "VarDeclTypeAnnotationRequired";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "VarDeclTypeAnnotationNotAllowed";
@@ -254,15 +249,10 @@ namespace parus::diag {
             case Code::kFieldMemberMutNotAllowed: return "field members must not use 'mut' (declare mutability on bindings instead)";
             case Code::kActsNameExpected: return "acts name identifier is required";
             case Code::kCallArgMixNotAllowed: return "mixing labeled and positional arguments is not allowed";
-            case Code::kCallNoArgsAfterNamedGroup: return "no additional arguments are allowed after named-group '{ ... }'";
-            case Code::kNamedGroupEntryExpectedColon: return "named-group entry must be 'label: expr' or 'label: _'";
-            case Code::kCallOnlyOneNamedGroupAllowed: return "only one named-group '{ ... }' is allowed in a call";
             case Code::kFnReturnTypeRequired: return "function return type is required (use: def name(...) -> T { ... })";
             case Code::kAttrNameExpectedAfterAt: return "attribute name expected after '@'";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "default value is only allowed inside named-group '{ ... }'";
             case Code::kFnParamDefaultExprExpected: return "default expression expected after '='";
-            case Code::kNamedGroupLabelMustBeIdent: return "named-group label must be an identifier";
-            case Code::kNamedGroupLabelUnderscoreReserved: return "'_' cannot be used as a named-group label; use it only as a value (e.g., x: _)";
 
             case Code::kVarDeclTypeAnnotationRequired: return "type annotation is required for 'let' (use: let x: T = ...;)";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "type annotation is not allowed for 'set' (use: set x = ...;)";
@@ -457,15 +447,10 @@ namespace parus::diag {
             case Code::kFieldMemberMutNotAllowed: return "field 멤버에는 'mut'를 사용할 수 없습니다(가변성은 바인딩에서 표현하세요)";
             case Code::kActsNameExpected: return "acts 이름 식별자가 필요합니다";
             case Code::kCallArgMixNotAllowed: return "라벨 인자와 위치 인자를 섞어 호출할 수 없습니다";
-            case Code::kCallNoArgsAfterNamedGroup: return "named-group '{ ... }' 뒤에는 추가 인자를 둘 수 없습니다";
-            case Code::kNamedGroupEntryExpectedColon: return "named-group entry는 'label: expr' 또는 'label: _' 형태여야 합니다";
             case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: def name(...) -> T { ... })";
-            case Code::kCallOnlyOneNamedGroupAllowed: return "호출 인자에서 named-group '{ ... }'는 1개만 허용됩니다";
             case Code::kAttrNameExpectedAfterAt: return "'@' 뒤에는 attribute 이름이 와야 합니다";
             case Code::kFnParamDefaultNotAllowedOutsideNamedGroup: return "기본값은 named-group '{ ... }' 안에서만 사용할 수 있습니다";
             case Code::kFnParamDefaultExprExpected: return "'=' 뒤에는 기본값 식이 와야 합니다";
-            case Code::kNamedGroupLabelMustBeIdent: return "named-group의 라벨은 식별자(ident)여야 합니다";
-            case Code::kNamedGroupLabelUnderscoreReserved: return "'_'는 named-group의 라벨로 사용할 수 없습니다. 값 위치에서만 사용하세요(예: x: _)";
 
             case Code::kVarDeclTypeAnnotationRequired: return "let 선언은 타입을 명시해야 합니다 (예: let x: T = ...;)";
             case Code::kVarDeclTypeAnnotationNotAllowed: return "set 선언에 타입을 명시하는 것은 허용되지 않습니다 (예: set x = ...;)";

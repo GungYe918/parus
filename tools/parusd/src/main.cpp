@@ -2,6 +2,7 @@
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
+#include <parus/parse/IncrementalParse.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/passes/Passes.hpp>
 #include <parus/text/SourceManager.hpp>
@@ -15,7 +16,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -486,6 +489,7 @@ namespace {
     struct AnalysisResult {
         std::vector<LspDiag> diagnostics{};
         std::vector<SemToken> semantic_tokens{};
+        parus::parse::ReparseMode parse_mode = parus::parse::ReparseMode::kNone;
     };
 
     static constexpr uint32_t kSemModDeclaration = 1u << 0;
@@ -534,11 +538,10 @@ namespace {
         int64_t version = 0;
         uint64_t revision = 0;
 
-        struct EditWindow {
-            size_t start = 0;
-            size_t end = 0;
-        };
-        std::vector<EditWindow> pending_edits{};
+        std::vector<parus::parse::EditWindow> pending_edits{};
+
+        parus::parse::IncrementalParserSession parse_session{};
+        bool parse_ready = false;
 
         struct AnalysisCache {
             uint64_t revision = 0;
@@ -667,9 +670,14 @@ namespace {
 
     bool apply_text_change_(DocumentState& doc, const TextChange& ch) {
         if (!ch.has_range) {
+            const size_t old_size = doc.text.size();
             if (doc.text == ch.text) return false;
             doc.text = ch.text;
             doc.pending_edits.clear();
+            doc.pending_edits.push_back(parus::parse::EditWindow{
+                0u,
+                static_cast<uint32_t>(std::min(old_size, static_cast<size_t>(std::numeric_limits<uint32_t>::max())))
+            });
             return true;
         }
 
@@ -685,7 +693,10 @@ namespace {
         }
         doc.text.replace(lo, clamped_hi - lo, ch.text);
 
-        doc.pending_edits.push_back(DocumentState::EditWindow{lo, lo + ch.text.size()});
+        doc.pending_edits.push_back(parus::parse::EditWindow{
+            static_cast<uint32_t>(std::min(lo, static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+            static_cast<uint32_t>(std::min(clamped_hi, static_cast<size_t>(std::numeric_limits<uint32_t>::max()))),
+        });
         return true;
     }
 
@@ -1014,20 +1025,35 @@ namespace {
         return out;
     }
 
-    AnalysisResult analyze_document_(std::string_view uri, std::string_view source) {
+    AnalysisResult analyze_document_(std::string_view uri, DocumentState& doc) {
         AnalysisResult out;
 
         parus::SourceManager sm;
-        const uint32_t file_id = sm.add(std::string(uri), std::string(source));
+        const uint32_t file_id = sm.add(std::string(uri), std::string(doc.text));
 
         parus::diag::Bag bag;
-        parus::Lexer lx(sm.content(file_id), file_id, &bag);
-        const auto toks = lx.lex_all();
+        if (!doc.parse_ready || !doc.parse_session.ready()) {
+            doc.parse_ready = doc.parse_session.initialize(sm.content(file_id), file_id, bag);
+            doc.pending_edits.clear();
+        } else if (!doc.pending_edits.empty()) {
+            const auto edits = std::span<const parus::parse::EditWindow>(doc.pending_edits.data(),
+                                                                          doc.pending_edits.size());
+            doc.parse_ready = doc.parse_session.reparse_with_edits(sm.content(file_id), file_id, edits, bag);
+            doc.pending_edits.clear();
+        }
 
-        parus::ast::AstArena ast;
-        parus::ty::TypePool types;
-        parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/256);
-        const auto root = parser.parse_program();
+        if (!doc.parse_ready || !doc.parse_session.ready()) {
+            out.parse_mode = parus::parse::ReparseMode::kNone;
+            return out;
+        }
+
+        out.parse_mode = doc.parse_session.last_mode();
+
+        auto& snapshot = doc.parse_session.mutable_snapshot();
+        auto& ast = snapshot.ast;
+        auto& types = snapshot.types;
+        const auto root = snapshot.root;
+        const auto& toks = snapshot.tokens;
 
         std::unordered_map<uint64_t, SemClass> resolved_map;
         if (!bag.has_error()) {
@@ -1131,6 +1157,17 @@ namespace {
         }
 
         return out;
+    }
+
+    const char* reparse_mode_name_(parus::parse::ReparseMode mode) {
+        switch (mode) {
+            case parus::parse::ReparseMode::kFullRebuild: return "full";
+            case parus::parse::ReparseMode::kIncrementalMerge: return "incremental";
+            case parus::parse::ReparseMode::kFallbackFullRebuild: return "fallback-full";
+            case parus::parse::ReparseMode::kNone:
+            default:
+                return "none";
+        }
     }
 
     std::vector<uint32_t> encode_semantic_tokens_data_(std::vector<SemToken> toks) {
@@ -1335,11 +1372,18 @@ namespace {
                 return;
             }
 
-            auto analyzed = analyze_document_(uri, st.text);
+            auto analyzed = analyze_document_(uri, st);
             st.analysis.revision = st.revision;
             st.analysis.valid = true;
             st.analysis.diagnostics = std::move(analyzed.diagnostics);
             st.analysis.semantic_tokens = std::move(analyzed.semantic_tokens);
+
+            if (trace_incremental_) {
+                std::cerr << "[parusd] uri=" << uri
+                          << " revision=" << st.revision
+                          << " parse=" << reparse_mode_name_(analyzed.parse_mode)
+                          << "\n";
+            }
         }
 
         void handle_did_open_(const JsonValue* params) {
@@ -1462,6 +1506,7 @@ namespace {
         std::unordered_map<std::string, DocumentState> documents_{};
         bool shutdown_requested_ = false;
         uint64_t revision_seq_ = 0;
+        bool trace_incremental_ = (std::getenv("PARUSD_TRACE_INCREMENTAL") != nullptr);
     };
 
     void print_usage_() {

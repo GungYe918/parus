@@ -1,5 +1,6 @@
 #include <parus/lex/Lexer.hpp>
 #include <parus/parse/Parser.hpp>
+#include <parus/diag/Render.hpp>
 #include <parus/passes/Passes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/tyck/TypeCheck.hpp>
@@ -421,14 +422,14 @@ namespace {
         return ok;
     }
 
-    static bool test_diag_call_no_args_after_named_group() {
-        // named-group 뒤에 추가 인자가 오면 전용 진단이 나와야 한다.
+    static bool test_diag_call_arg_mix_not_allowed() {
+        // 라벨 인자 이후 위치 인자를 두면 혼합 호출 진단이 나와야 한다.
         const std::string src = R"(
             def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
                 return a - b + clamp;
             }
             def main() -> i32 {
-                return sub(1, 2, { clamp: 1 }, 3);
+                return sub(1, 2, clamp: 1, 3);
             }
         )";
 
@@ -437,8 +438,41 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(parus::diag::Code::kCallNoArgsAfterNamedGroup),
-            "args after named-group must emit CallNoArgsAfterNamedGroup");
+        ok &= require_(p.bag.has_code(parus::diag::Code::kCallArgMixNotAllowed),
+            "mixed labeled/positional call must emit CallArgMixNotAllowed");
+        return ok;
+    }
+
+    static bool test_diag_never_exposes_internal_infer_integer() {
+        // 사용자 진단 문자열에는 내부 타입 토큰 "{integer}"가 노출되면 안 된다.
+        const std::string src = R"(
+            def add(a: i32, {b: i32}) -> i32 {
+                return a + b;
+            }
+            def main() -> i32 {
+                add(1, 2);
+                return 42;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kOverloadNoMatchingCall),
+            "must emit overload no-matching-call diagnostic");
+
+        bool leaked = false;
+        for (const auto& d : p.bag.diags()) {
+            const std::string msg = parus::diag::render_message(d, parus::diag::Language::kEn);
+            if (msg.find("{integer}") != std::string::npos) {
+                leaked = true;
+                break;
+            }
+        }
+
+        ok &= require_(!leaked, "user diagnostics must not expose internal '{integer}' token");
         return ok;
     }
 
@@ -1256,7 +1290,8 @@ int main() {
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
         {"diag_ambiguous_amp_prefix_chain", test_diag_ambiguous_amp_prefix_chain},
-        {"diag_call_no_args_after_named_group", test_diag_call_no_args_after_named_group},
+        {"diag_call_arg_mix_not_allowed", test_diag_call_arg_mix_not_allowed},
+        {"diag_never_exposes_internal_infer_integer", test_diag_never_exposes_internal_infer_integer},
         {"diag_var_decl_name_expected", test_diag_var_decl_name_expected},
         {"diag_set_initializer_required", test_diag_set_initializer_required},
         {"diag_var_initializer_expected", test_diag_var_initializer_expected},

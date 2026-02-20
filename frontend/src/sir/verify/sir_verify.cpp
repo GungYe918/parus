@@ -307,15 +307,6 @@ namespace parus::sir {
 
                     for (uint32_t i = 0; i < v.arg_count; ++i) {
                         const auto& a = m.args[v.arg_begin + i];
-                        if (a.kind == ArgKind::kNamedGroup) {
-                            const uint64_t child_end = (uint64_t)a.child_begin + (uint64_t)a.child_count;
-                            if (child_end > (uint64_t)m.args.size()) {
-                                std::ostringstream oss;
-                                oss << "value #" << vid << " call has named-group arg with out-of-range children";
-                                push_error_(errs, oss.str());
-                            }
-                            continue;
-                        }
                         if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
                             std::ostringstream oss;
                             oss << "value #" << vid << " call arg has invalid value id " << a.value;
