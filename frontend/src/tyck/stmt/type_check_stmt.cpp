@@ -116,20 +116,32 @@ namespace parus::tyck {
                     const std::string msg = "import is only allowed at file scope";
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
+                    return;
                 }
-                if (s.use_kind == ast::UseKind::kPathAlias &&
-                    s.use_path_count > 0 &&
-                    !s.use_rhs_ident.empty()) {
+                if ((s.use_kind == ast::UseKind::kImport ||
+                     s.use_kind == ast::UseKind::kPathAlias ||
+                     s.use_kind == ast::UseKind::kNestAlias) &&
+                    s.use_path_count > 0) {
                     const std::string path = path_join_(s.use_path_begin, s.use_path_count);
-                    const std::string alias(s.use_rhs_ident);
+                    std::string alias(s.use_rhs_ident);
+                    if (alias.empty()) {
+                        const auto& segs = ast_.path_segs();
+                        if (s.use_path_begin + s.use_path_count <= segs.size()) {
+                            alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
+                        }
+                    }
                     if (!path.empty() && !alias.empty()) {
-                        auto it = import_alias_to_path_.find(alias);
-                        if (it != import_alias_to_path_.end() && it->second != path) {
-                            diag_(diag::Code::kTypeErrorGeneric, s.span,
-                                  "conflicting use alias in same compilation unit: " + alias);
-                            err_(s.span, "conflicting use alias: " + alias);
+                        if (s.use_kind == ast::UseKind::kNestAlias) {
+                            if (!is_known_namespace_path_(path)) {
+                                diag_(diag::Code::kUseNestPathExpectedNamespace, s.span, path);
+                                err_(s.span, "use nest target must be namespace path: " + path);
+                            } else {
+                                (void)define_alias_(alias, path, s.span, /*warn_use_nest_preferred=*/false);
+                            }
+                        } else if (s.use_kind == ast::UseKind::kPathAlias) {
+                            (void)define_alias_(alias, path, s.span, /*warn_use_nest_preferred=*/true);
                         } else {
-                            import_alias_to_path_[alias] = path;
+                            (void)define_alias_(alias, path, s.span, /*warn_use_nest_preferred=*/false);
                         }
                     }
                 }
@@ -154,7 +166,18 @@ namespace parus::tyck {
                         }
                     }
 
-                    check_stmt_(s.a);
+                    push_alias_scope_();
+                    const auto& body = ast_.stmt(s.a);
+                    if (body.kind == ast::StmtKind::kBlock) {
+                        const auto& children = ast_.stmt_children();
+                        for (uint32_t i = 0; i < body.stmt_count; ++i) {
+                            const ast::StmtId cid = children[body.stmt_begin + i];
+                            check_stmt_(cid);
+                        }
+                    } else {
+                        check_stmt_(s.a);
+                    }
+                    pop_alias_scope_();
 
                     while (pushed > 0) {
                         namespace_stack_.pop_back();
@@ -175,6 +198,7 @@ namespace parus::tyck {
         const uint32_t scope_id = sym_.push_scope();
         (void)scope_id; // 디버그용이면 남겨두기
         push_acts_selection_scope_();
+        push_alias_scope_();
         ++block_depth_;
 
         // s.stmt_begin/count 는 ast_.stmt_children()의 slice
@@ -187,12 +211,19 @@ namespace parus::tyck {
         }
 
         if (block_depth_ > 0) --block_depth_;
+        pop_alias_scope_();
         pop_acts_selection_scope_();
         sym_.pop_scope();
     }
 
     void TypeChecker::check_stmt_var_(ast::StmtId sid) {
         ast::Stmt& s = ast_.stmt_mut(sid); // mutable access (AST에 타입 기록 위해)
+        const bool is_global_decl =
+            (block_depth_ == 0) &&
+            (s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC));
+        const std::string decl_name = is_global_decl
+            ? qualify_decl_name_(s.name)
+            : std::string(s.name);
 
         // ----------------------------------------
         // extern variable declaration:
@@ -212,18 +243,37 @@ namespace parus::tyck {
             }
 
             ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
-            auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, vt, s.span);
-            if (!ins.ok) {
-                if (ins.is_duplicate) {
-                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
-                    err_(s.span, "duplicate symbol (extern var): " + std::string(s.name));
-                } else if (ins.is_shadowing) {
-                    diag_(diag::Code::kShadowing, s.span, s.name);
+            uint32_t var_sym = sema::SymbolTable::kNoScope;
+            if (is_global_decl) {
+                if (auto sid_existing = sym_.lookup(decl_name)) {
+                    const auto& existing = sym_.symbol(*sid_existing);
+                    if (existing.kind == sema::SymbolKind::kVar) {
+                        var_sym = *sid_existing;
+                    } else {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (extern var): " + decl_name);
+                    }
                 }
             }
 
-            if (ins.ok) {
-                sym_is_mut_[ins.symbol_id] = s.is_mut;
+            if (var_sym == sema::SymbolTable::kNoScope) {
+                auto ins = sym_.insert(sema::SymbolKind::kVar, decl_name, vt, s.span);
+                if (!ins.ok) {
+                    if (ins.is_duplicate) {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (extern var): " + decl_name);
+                    } else if (ins.is_shadowing) {
+                        diag_(diag::Code::kShadowing, s.span, decl_name);
+                    }
+                } else {
+                    var_sym = ins.symbol_id;
+                }
+            } else {
+                (void)sym_.update_declared_type(var_sym, vt);
+            }
+
+            if (var_sym != sema::SymbolTable::kNoScope) {
+                sym_is_mut_[var_sym] = s.is_mut;
             }
 
             s.type = vt;
@@ -255,25 +305,43 @@ namespace parus::tyck {
 
             ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
 
-            auto ins = sym_.insert(sema::SymbolKind::kVar, s.name, vt, s.span);
-            if (!ins.ok) {
-                if (ins.is_duplicate) {
-                    diag_(diag::Code::kDuplicateDecl, s.span, s.name);
-                    err_(s.span, "duplicate symbol (var): " + std::string(s.name));
-                } else if (ins.is_shadowing) {
-                    diag_(diag::Code::kShadowing, s.span, s.name);
+            uint32_t var_sym = sema::SymbolTable::kNoScope;
+            if (is_global_decl) {
+                if (auto sid_existing = sym_.lookup(decl_name)) {
+                    const auto& existing = sym_.symbol(*sid_existing);
+                    if (existing.kind == sema::SymbolKind::kVar) {
+                        var_sym = *sid_existing;
+                    } else {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (var): " + decl_name);
+                    }
                 }
             }
 
-            // NEW: mut tracking (let mut / let)
-            if (ins.ok) {
-                sym_is_mut_[ins.symbol_id] = s.is_mut;
+            if (var_sym == sema::SymbolTable::kNoScope) {
+                auto ins = sym_.insert(sema::SymbolKind::kVar, decl_name, vt, s.span);
+                if (!ins.ok) {
+                    if (ins.is_duplicate) {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (var): " + decl_name);
+                    } else if (ins.is_shadowing) {
+                        diag_(diag::Code::kShadowing, s.span, decl_name);
+                    }
+                } else {
+                    var_sym = ins.symbol_id;
+                }
+            } else {
+                (void)sym_.update_declared_type(var_sym, vt);
+            }
+
+            if (var_sym != sema::SymbolTable::kNoScope) {
+                sym_is_mut_[var_sym] = s.is_mut;
             }
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
             s.type = vt;
-            if (ins.ok && s.var_has_acts_binding) {
-                (void)bind_symbol_acts_selection_(ins.symbol_id, vt, s, s.span);
+            if (var_sym != sema::SymbolTable::kNoScope && s.var_has_acts_binding) {
+                (void)bind_symbol_acts_selection_(var_sym, vt, s, s.span);
             }
             check_c_abi_global_decl_(s);
             return;

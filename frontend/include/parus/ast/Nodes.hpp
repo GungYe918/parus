@@ -288,6 +288,7 @@ namespace parus::ast {
         kImport,       // import foo [as alias];
         kTypeAlias,    // use NewT = u32;
         kPathAlias,    // use A::B = name;
+        kNestAlias,    // use nest a::b [as alias];
         kTextSubst,    // use PI 3.14f;
         kActsEnable,   // use T with acts(NameOrDefault);
     };

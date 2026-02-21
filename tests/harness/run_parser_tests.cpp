@@ -108,6 +108,7 @@ namespace {
 
         const std::string file_name = p.filename().string();
         const bool expect_error = (file_name.rfind("err_", 0) == 0);
+        const bool expect_warning = (!expect_error && file_name.rfind("warn_", 0) == 0);
 
         if (expect_error) {
             const bool has_any_error =
@@ -127,6 +128,16 @@ namespace {
 
         bool ok = true;
         ok &= require_(!prog.bag.has_error(), "file case emitted parser/sema diagnostics");
+        if (expect_warning) {
+            bool has_warning = false;
+            for (const auto& d : prog.bag.diags()) {
+                if (d.severity() == parus::diag::Severity::kWarning) {
+                    has_warning = true;
+                    break;
+                }
+            }
+            ok &= require_(has_warning, "expected warning diagnostics for warn_ case, but none were emitted");
+        }
         ok &= require_(ty.errors.empty(), "file case emitted tyck errors");
         ok &= require_(cap.ok, "file case emitted AST capability errors");
         ok &= require_(sir.cap.ok, "file case emitted SIR capability errors");

@@ -1,0 +1,12 @@
+nest game {
+    nest math {
+        def add(a: i32, b: i32) -> i32 {
+            return a + b;
+        }
+    }
+}
+
+def main() -> i32 {
+    use nest game::math;
+    return math::add(1, 2);
+}

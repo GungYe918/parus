@@ -1,0 +1,21 @@
+nest world {
+    def add(a: i32, b: i32) -> i32 {
+        return a + b;
+    }
+}
+
+nest other {
+    def add(a: i32, b: i32) -> i32 {
+        return a - b;
+    }
+}
+
+def main() -> i32 {
+    do {
+        use nest world as w;
+        set t = w::add(4, 2);
+    };
+
+    use nest other as w;
+    return w::add(4, 2);
+}

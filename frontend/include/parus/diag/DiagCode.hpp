@@ -166,6 +166,9 @@ namespace parus::diag {
         // ---- use parsing ----
         kUseTextSubstExprExpected,     // use NAME ;  (값 누락)
         kUseTextSubstTrailingTokens,   // use NAME <expr> ... ; (expr 이후 ; 전 잔여 토큰)
+        kUseNestPathExpectedNamespace, // use nest path가 namespace 경로가 아님
+        kUseNestAliasAsOnly,           // use nest path = alias 금지(as만 허용)
+        kUseNestAliasPreferred,        // namespace path alias는 use nest ... 권장 (warning)
 
         // =========================
         // tyck (TYPE CHECK)

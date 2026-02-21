@@ -1,0 +1,17 @@
+nest hello;
+
+nest world {
+  static var: i32 = 10i32;
+
+  def inc(a: i32) -> i32 {
+    return a + var;
+  }
+}
+
+def add(a: i32, b: i32) -> i32 {
+  return world::inc(a + b) + world::var;
+}
+
+def main() -> i32 {
+  return add(1i32, 2i32);
+}

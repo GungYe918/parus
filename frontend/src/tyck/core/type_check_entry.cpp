@@ -40,6 +40,8 @@ namespace parus::tyck {
         fn_qualified_name_by_stmt_.clear();
         namespace_stack_.clear();
         import_alias_to_path_.clear();
+        known_namespace_paths_.clear();
+        import_alias_scope_stack_.clear();
         block_depth_ = 0;
 
         // sym_ “완전 초기화”
@@ -74,6 +76,7 @@ namespace parus::tyck {
 
         // 파일 기본 nest 지시어를 먼저 반영한다.
         init_file_namespace_(program_stmt);
+        collect_known_namespace_paths_(program_stmt);
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
@@ -92,11 +95,13 @@ namespace parus::tyck {
         //    PASS1에서 등록한 전역 심볼이 가려질 수 있다.)
         // ---------------------------------------------------------
         push_acts_selection_scope_();
+        push_alias_scope_();
         for (uint32_t i = 0; i < root.stmt_count; ++i) {
             const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
             check_stmt_(child_id);
             // 에러가 나도 계속 진행(정책)
         }
+        pop_alias_scope_();
         pop_acts_selection_scope_();
 
         // ----------------------------------------
@@ -179,6 +184,21 @@ namespace parus::tyck {
         d.add_arg(a0);
         d.add_arg(a1);
         d.add_arg(a2);
+        diag_bag_->add(std::move(d));
+    }
+
+    void TypeChecker::warn_(diag::Code code, Span sp, std::string_view a0) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kWarning, code, sp);
+        if (!a0.empty()) d.add_arg(a0);
+        diag_bag_->add(std::move(d));
+    }
+
+    void TypeChecker::warn_(diag::Code code, Span sp, std::string_view a0, std::string_view a1) {
+        if (!diag_bag_) return;
+        diag::Diagnostic d(diag::Severity::kWarning, code, sp);
+        if (!a0.empty()) d.add_arg(a0);
+        if (!a1.empty()) d.add_arg(a1);
         diag_bag_->add(std::move(d));
     }
 
@@ -358,18 +378,28 @@ namespace parus::tyck {
     std::optional<std::string> TypeChecker::rewrite_imported_path_(std::string_view path) const {
         if (path.empty()) return std::nullopt;
 
-        const size_t pos = path.find("::");
-        if (pos == std::string_view::npos) {
-            auto it = import_alias_to_path_.find(std::string(path));
+        auto lookup_alias = [&](std::string_view head) -> std::optional<std::string> {
+            if (!import_alias_scope_stack_.empty()) {
+                const auto& scope = import_alias_scope_stack_.back();
+                auto it = scope.find(std::string(head));
+                if (it != scope.end()) return it->second;
+                return std::nullopt;
+            }
+            auto it = import_alias_to_path_.find(std::string(head));
             if (it == import_alias_to_path_.end()) return std::nullopt;
             return it->second;
+        };
+
+        const size_t pos = path.find("::");
+        if (pos == std::string_view::npos) {
+            return lookup_alias(path);
         }
 
         const std::string first(path.substr(0, pos));
-        auto it = import_alias_to_path_.find(first);
-        if (it == import_alias_to_path_.end()) return std::nullopt;
+        auto resolved = lookup_alias(first);
+        if (!resolved.has_value()) return std::nullopt;
 
-        std::string out = it->second;
+        std::string out = *resolved;
         out += path.substr(pos);
         return out;
     }
@@ -386,13 +416,8 @@ namespace parus::tyck {
             return sid;
         }
 
-        // 이미 절대 경로(또는 import 확장 경로)이면 상대 namespace fallback을 하지 않는다.
-        if (key.find("::") != std::string::npos) {
-            return std::nullopt;
-        }
-
         // nest 경로 상대 해소:
-        // - 현재 namespace 경로를 바깥으로 줄여가며 `ns::name`을 시도한다.
+        // - 식별자(`name`)와 경로(`a::b`) 모두 현재 namespace 기준 상대 해소를 시도한다.
         for (size_t depth = namespace_stack_.size(); depth > 0; --depth) {
             std::string qname;
             for (size_t i = 0; i < depth; ++i) {
@@ -421,6 +446,154 @@ namespace parus::tyck {
             }
         }
         return owner_type;
+    }
+
+    void TypeChecker::push_alias_scope_() {
+        if (import_alias_scope_stack_.empty()) {
+            import_alias_scope_stack_.push_back(import_alias_to_path_);
+            return;
+        }
+        import_alias_scope_stack_.push_back(import_alias_scope_stack_.back());
+    }
+
+    void TypeChecker::pop_alias_scope_() {
+        if (!import_alias_scope_stack_.empty()) {
+            import_alias_scope_stack_.pop_back();
+        }
+    }
+
+    bool TypeChecker::define_alias_(
+        std::string_view alias,
+        std::string_view path,
+        Span diag_span,
+        bool warn_use_nest_preferred
+    ) {
+        if (alias.empty() || path.empty()) return false;
+        if (import_alias_scope_stack_.empty()) {
+            push_alias_scope_();
+        }
+
+        auto& scope = import_alias_scope_stack_.back();
+        const std::string alias_s(alias);
+        const std::string path_s(path);
+        auto it = scope.find(alias_s);
+        if (it != scope.end() && it->second != path_s) {
+            diag_(diag::Code::kTypeErrorGeneric, diag_span,
+                  "conflicting use alias in same lexical scope: " + alias_s);
+            err_(diag_span, "conflicting use alias: " + alias_s);
+            return false;
+        }
+
+        scope[alias_s] = path_s;
+        if (import_alias_scope_stack_.size() == 1) {
+            import_alias_to_path_[alias_s] = path_s;
+        }
+
+        if (warn_use_nest_preferred && is_known_namespace_path_(path_s)) {
+            warn_(diag::Code::kUseNestAliasPreferred, diag_span, path_s, alias_s);
+        }
+        return true;
+    }
+
+    bool TypeChecker::is_known_namespace_path_(std::string_view path) const {
+        if (path.empty()) return false;
+        return known_namespace_paths_.find(std::string(path)) != known_namespace_paths_.end();
+    }
+
+    void TypeChecker::collect_known_namespace_paths_(ast::StmtId program_stmt) {
+        known_namespace_paths_.clear();
+        if (program_stmt == ast::k_invalid_stmt) return;
+        if ((size_t)program_stmt >= ast_.stmts().size()) return;
+
+        std::vector<std::string> ns_stack = namespace_stack_;
+
+        auto add_ns_prefixes_of_symbol = [&](std::string_view symbol_path) {
+            if (symbol_path.empty()) return;
+            size_t pos = symbol_path.find("::");
+            while (pos != std::string_view::npos) {
+                known_namespace_paths_.insert(std::string(symbol_path.substr(0, pos)));
+                pos = symbol_path.find("::", pos + 2);
+            }
+        };
+
+        auto qualify_with_ns_stack = [&](std::string_view base_name) -> std::string {
+            if (base_name.empty()) return {};
+            if (ns_stack.empty()) return std::string(base_name);
+            std::string out;
+            for (size_t i = 0; i < ns_stack.size(); ++i) {
+                if (i) out += "::";
+                out += ns_stack[i];
+            }
+            out += "::";
+            out += std::string(base_name);
+            return out;
+        };
+
+        auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
+            if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
+            const auto& s = ast_.stmt(sid);
+
+            if (s.kind == ast::StmtKind::kBlock) {
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        self(self, kids[s.stmt_begin + i]);
+                    }
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kNestDecl) {
+                uint32_t pushed = 0;
+                const auto& segs = ast_.path_segs();
+                const uint64_t begin = s.nest_path_begin;
+                const uint64_t end = begin + s.nest_path_count;
+                if (begin <= segs.size() && end <= segs.size()) {
+                    for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                        ns_stack.push_back(std::string(segs[s.nest_path_begin + i]));
+                        ++pushed;
+                    }
+                }
+                if (!ns_stack.empty()) {
+                    std::string ns;
+                    for (size_t i = 0; i < ns_stack.size(); ++i) {
+                        if (i) ns += "::";
+                        ns += ns_stack[i];
+                        known_namespace_paths_.insert(ns);
+                    }
+                }
+                if (!s.nest_is_file_directive) {
+                    self(self, s.a);
+                }
+                while (pushed > 0) {
+                    ns_stack.pop_back();
+                    --pushed;
+                }
+                return;
+            }
+
+            if ((s.kind == ast::StmtKind::kFnDecl ||
+                 s.kind == ast::StmtKind::kFieldDecl ||
+                 s.kind == ast::StmtKind::kActsDecl) &&
+                !s.name.empty()) {
+                const std::string qname = qualify_with_ns_stack(s.name);
+                add_ns_prefixes_of_symbol(qname);
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kVar) {
+                const bool is_global_decl =
+                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                if (!is_global_decl || s.name.empty()) return;
+                const std::string qname = qualify_with_ns_stack(s.name);
+                add_ns_prefixes_of_symbol(qname);
+                return;
+            }
+        };
+
+        collect_stmt(collect_stmt, program_stmt);
     }
 
     // --------------------
@@ -483,7 +656,7 @@ namespace parus::tyck {
 
         std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;
 
-        auto collect_stmt = [&](auto&& self, ast::StmtId sid, bool file_scope) -> void {
+        auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
             if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
             const ast::Stmt& s = ast_.stmt(sid);
 
@@ -509,7 +682,7 @@ namespace parus::tyck {
                         const uint64_t be = bb + body.stmt_count;
                         if (bb <= kids.size() && be <= kids.size()) {
                             for (uint32_t i = 0; i < body.stmt_count; ++i) {
-                                self(self, kids[body.stmt_begin + i], /*file_scope=*/false);
+                                self(self, kids[body.stmt_begin + i]);
                             }
                         }
                     }
@@ -523,29 +696,11 @@ namespace parus::tyck {
             }
 
             if (s.kind == ast::StmtKind::kUse &&
-                (s.use_kind == ast::UseKind::kImport || s.use_kind == ast::UseKind::kPathAlias)) {
-                if (s.use_kind == ast::UseKind::kImport && !file_scope) return;
-                if (s.use_path_count == 0) return;
-
-                const std::string path = path_join_(s.use_path_begin, s.use_path_count);
-                if (path.empty()) return;
-
-                std::string alias = std::string(s.use_rhs_ident);
-                if (alias.empty()) {
-                    const auto& segs = ast_.path_segs();
-                    if (s.use_path_begin + s.use_path_count <= segs.size()) {
-                        alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
-                    }
-                }
-                if (alias.empty()) return;
-
-                auto it = import_alias_to_path_.find(alias);
-                if (it != import_alias_to_path_.end() && it->second != path) {
-                    diag_(diag::Code::kDuplicateDecl, s.span, alias);
-                    err_(s.span, "duplicate use alias: " + alias);
-                    return;
-                }
-                import_alias_to_path_[alias] = path;
+                (s.use_kind == ast::UseKind::kImport ||
+                 s.use_kind == ast::UseKind::kPathAlias ||
+                 s.use_kind == ast::UseKind::kNestAlias)) {
+                // v0: alias는 second-pass lexical 처리만 사용한다.
+                // first-pass에서는 별칭을 전역 pre-collect하지 않는다.
                 return;
             }
 
@@ -604,6 +759,30 @@ namespace parus::tyck {
             }
 
             if (s.kind == ast::StmtKind::kVar) {
+                const bool is_global_decl =
+                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                if (is_global_decl) {
+                    const std::string qname = qualify_decl_name_(s.name);
+                    ty::TypeId decl_ty = s.type;
+                    if (decl_ty == ty::kInvalidType) {
+                        decl_ty = types_.error();
+                    }
+
+                    if (auto existing = sym_.lookup_in_current(qname)) {
+                        const auto& existing_sym = sym_.symbol(*existing);
+                        if (existing_sym.kind != sema::SymbolKind::kVar) {
+                            err_(s.span, "duplicate symbol (global var): " + qname);
+                            diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        }
+                    } else {
+                        auto ins = sym_.insert(sema::SymbolKind::kVar, qname, decl_ty, s.span);
+                        if (!ins.ok && ins.is_duplicate) {
+                            err_(s.span, "duplicate symbol (global var): " + qname);
+                            diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        }
+                    }
+                }
+
                 if (s.link_abi == ast::LinkAbi::kC && !s.is_static) {
                     diag_(diag::Code::kAbiCGlobalMustBeStatic, s.span, s.name);
                     err_(s.span, "C ABI global must be static: " + std::string(s.name));
@@ -737,7 +916,7 @@ namespace parus::tyck {
         const uint64_t end = begin + prog.stmt_count;
         if (begin <= kids.size() && end <= kids.size()) {
             for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-                collect_stmt(collect_stmt, kids[prog.stmt_begin + i], /*file_scope=*/true);
+                collect_stmt(collect_stmt, kids[prog.stmt_begin + i]);
             }
         }
 

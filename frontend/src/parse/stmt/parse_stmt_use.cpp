@@ -252,6 +252,58 @@ namespace parus {
         }
 
         // ------------------------------------------------------------
+        // 1-B) namespace alias: use nest Path [as Alias];
+        //      - '=' is not allowed (as-only)
+        //      - alias omitted => last path segment
+        // ------------------------------------------------------------
+        if (cursor_.at(K::kKwNest)) {
+            cursor_.bump(); // nest
+
+            auto [pb, pc] = parse_path_segments();
+            s.use_path_begin = pb;
+            s.use_path_count = pc;
+            s.use_kind = ast::UseKind::kNestAlias;
+
+            if (pc == 0) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "namespace path");
+            }
+
+            std::string_view alias{};
+            if (pc > 0) {
+                const auto& segs = ast_.path_segs();
+                alias = segs[pb + pc - 1];
+            }
+
+            if (cursor_.at(K::kAssign)) {
+                diag_report(diag::Code::kUseNestAliasAsOnly, cursor_.peek().span);
+                cursor_.bump(); // '='
+                const Token rhs = cursor_.peek();
+                if (rhs.kind == K::kIdent) {
+                    cursor_.bump();
+                    alias = rhs.lexeme;
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (nest alias)");
+                }
+            } else if (cursor_.eat(K::kKwAs)) {
+                const Token rhs = cursor_.peek();
+                if (rhs.kind == K::kIdent) {
+                    cursor_.bump();
+                    alias = rhs.lexeme;
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, rhs.span, "identifier (nest alias)");
+                }
+            } else if (!cursor_.at(K::kSemicolon)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'as' or ';'");
+                recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+            }
+
+            s.use_rhs_ident = alias;
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
+        // ------------------------------------------------------------
         // 2) non-module forms must start with Ident (path head)
         //    - TypeAlias:   use NewT (=|as) Type;
         //    - PathAlias:   use A::B (=|as) name;

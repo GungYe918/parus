@@ -1,0 +1,9 @@
+nest hello;
+
+nest world {
+  static var: i32 = 10i32;
+}
+
+def main() -> i32 {
+  return world::missing;
+}

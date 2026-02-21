@@ -171,6 +171,8 @@ namespace parus::tyck {
         void diag_(diag::Code code, Span sp, std::string_view a0);
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2);
+        void warn_(diag::Code code, Span sp, std::string_view a0 = {});
+        void warn_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
 
         std::optional<uint32_t> root_place_symbol_(ast::ExprId place) const;
         bool is_mutable_symbol_(uint32_t sym_id) const;
@@ -270,6 +272,11 @@ namespace parus::tyck {
         std::string current_namespace_prefix_() const;
         std::string path_join_(uint32_t begin, uint32_t count) const;
         ty::TypeId canonicalize_acts_owner_type_(ty::TypeId owner_type) const;
+        void collect_known_namespace_paths_(ast::StmtId program_stmt);
+        bool is_known_namespace_path_(std::string_view path) const;
+        void push_alias_scope_();
+        void pop_alias_scope_();
+        bool define_alias_(std::string_view alias, std::string_view path, Span diag_span, bool warn_use_nest_preferred = false);
 
         // ----------------------------------------
         // Mut tracking (tyck-level)
@@ -284,6 +291,8 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, std::string> fn_qualified_name_by_stmt_;
         std::vector<std::string> namespace_stack_;
         std::unordered_map<std::string, std::string> import_alias_to_path_;
+        std::unordered_set<std::string> known_namespace_paths_;
+        std::vector<std::unordered_map<std::string, std::string>> import_alias_scope_stack_;
         uint32_t block_depth_ = 0;
 
         struct ActsOperatorDecl {

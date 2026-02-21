@@ -144,6 +144,9 @@ namespace parus::diag {
 
             case Code::kUseTextSubstExprExpected:   return "UseTextSubstExprExpected";
             case Code::kUseTextSubstTrailingTokens: return "UseTextSubstTrailingTokens";
+            case Code::kUseNestPathExpectedNamespace: return "UseNestPathExpectedNamespace";
+            case Code::kUseNestAliasAsOnly: return "UseNestAliasAsOnly";
+            case Code::kUseNestAliasPreferred: return "UseNestAliasPreferred";
 
             // =========================
             // tyck (TYPE CHECK)
@@ -338,6 +341,9 @@ namespace parus::diag {
 
             case Code::kUseTextSubstExprExpected: return "use substitution requires an expression (e.g., use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "unexpected tokens after use substitution expression; expected ';'";
+            case Code::kUseNestPathExpectedNamespace: return "use nest target must be a namespace path";
+            case Code::kUseNestAliasAsOnly: return "use nest alias requires 'as' (use: use nest a::b as x;)";
+            case Code::kUseNestAliasPreferred: return "namespace alias should prefer 'use nest ... as ...' (fix-it: use nest {0} as {1};)";
 
             // =========================
             // tyck (TYPE CHECK)
@@ -539,6 +545,9 @@ namespace parus::diag {
 
             case Code::kUseTextSubstExprExpected: return "use 치환에는 식이 필요합니다 (예: use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "use 치환 식 뒤에 예상치 못한 토큰이 있습니다. ';'가 필요합니다";
+            case Code::kUseNestPathExpectedNamespace: return "use nest 대상은 네임스페이스 경로여야 합니다";
+            case Code::kUseNestAliasAsOnly: return "use nest alias는 'as'만 허용합니다 (예: use nest a::b as x;)";
+            case Code::kUseNestAliasPreferred: return "네임스페이스 alias는 'use nest ... as ...' 사용을 권장합니다 (자동수정: use nest {0} as {1};)";
 
             // =========================
             // tyck (TYPE CHECK)

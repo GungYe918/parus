@@ -87,6 +87,15 @@
 
 `import`/`use`로 도입한 대체 이름.
 
+### 3.5 namespace alias (`use nest`)
+
+`use nest <Path> [as Alias];` 형태로 도입한 네임스페이스 경로 별칭.
+
+규칙:
+
+* namespace 경로에만 적용한다.
+* alias 생략 시 마지막 path segment를 별칭으로 사용한다.
+
 ---
 
 ## 4. 타입/메모리 용어

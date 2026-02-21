@@ -52,7 +52,8 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 
 1. `import ...;`
 2. `use ...;`
-3. `nest path;` (파일 지시어)
+3. `use nest ...;`
+4. `nest path;` (파일 지시어)
 
 `nest path { ... }`는 block을 갖는 declaration-style item으로 취급한다.
 
@@ -88,6 +89,7 @@ DirectiveItem   := ImportStmt | UseStmt | NamespaceDecl ;
 ```parus
 import game;
 use game::math::Vec2 as V2;
+use nest game::math as gm;
 nest app::core;
 ;
 ;;

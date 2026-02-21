@@ -1,0 +1,15 @@
+nest world {
+    def add(a: i32, b: i32) -> i32 {
+        return a + b;
+    }
+}
+
+def main() -> i32 {
+    do {
+        use nest world as w;
+        set tmp = w::add(1, 2);
+    };
+
+    use nest world as w;
+    return w::add(3, 4);
+}

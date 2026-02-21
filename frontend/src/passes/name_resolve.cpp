@@ -96,6 +96,16 @@ namespace parus::passes {
         ScopeGuard& operator=(const ScopeGuard&) = delete;
     };
 
+    struct AliasScopeGuard {
+        std::unordered_map<std::string, std::string>& aliases;
+        std::unordered_map<std::string, std::string> saved;
+        explicit AliasScopeGuard(std::unordered_map<std::string, std::string>& a)
+            : aliases(a), saved(a) {}
+        ~AliasScopeGuard() { aliases = std::move(saved); }
+        AliasScopeGuard(const AliasScopeGuard&) = delete;
+        AliasScopeGuard& operator=(const AliasScopeGuard&) = delete;
+    };
+
     // -----------------------------------------------------------------------------
     // ResolvedSymbol table helpers
     // -----------------------------------------------------------------------------
@@ -126,6 +136,7 @@ namespace parus::passes {
         std::unordered_set<uint32_t>& param_symbol_ids,
         std::vector<std::string>& namespace_stack,
         std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths,
         bool file_scope
     );
 
@@ -203,6 +214,101 @@ namespace parus::passes {
         return out;
     }
 
+    static void add_namespace_prefixes_of_symbol_path_(
+        std::string_view symbol_path,
+        std::unordered_set<std::string>& known_namespace_paths
+    ) {
+        if (symbol_path.empty()) return;
+        size_t pos = symbol_path.find("::");
+        while (pos != std::string_view::npos) {
+            known_namespace_paths.insert(std::string(symbol_path.substr(0, pos)));
+            pos = symbol_path.find("::", pos + 2);
+        }
+    }
+
+    static bool is_known_namespace_path_(
+        std::string_view path,
+        const std::unordered_set<std::string>& known_namespace_paths
+    ) {
+        if (path.empty()) return false;
+        return known_namespace_paths.find(std::string(path)) != known_namespace_paths.end();
+    }
+
+    static void collect_known_namespace_paths_stmt_(
+        const ast::AstArena& ast,
+        const IdRanges& r,
+        ast::StmtId sid,
+        std::vector<std::string>& namespace_stack,
+        std::unordered_set<std::string>& known_namespace_paths
+    ) {
+        if (!is_valid_stmt_id_(r, sid)) return;
+        const auto& s = ast.stmt(sid);
+
+        if (s.kind == ast::StmtKind::kBlock) {
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = s.stmt_begin;
+            const uint64_t end = begin + s.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                    collect_known_namespace_paths_stmt_(
+                        ast, r, kids[s.stmt_begin + i], namespace_stack, known_namespace_paths
+                    );
+                }
+            }
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kNestDecl) {
+            uint32_t pushed = 0;
+            const auto& segs = ast.path_segs();
+            const uint64_t begin = s.nest_path_begin;
+            const uint64_t end = begin + s.nest_path_count;
+            if (begin <= segs.size() && end <= segs.size()) {
+                for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                    namespace_stack.push_back(std::string(segs[s.nest_path_begin + i]));
+                    ++pushed;
+                }
+            }
+
+            if (!namespace_stack.empty()) {
+                std::string ns;
+                for (size_t i = 0; i < namespace_stack.size(); ++i) {
+                    if (i) ns += "::";
+                    ns += namespace_stack[i];
+                    known_namespace_paths.insert(ns);
+                }
+            }
+
+            if (!s.nest_is_file_directive) {
+                collect_known_namespace_paths_stmt_(ast, r, s.a, namespace_stack, known_namespace_paths);
+            }
+
+            while (pushed > 0) {
+                namespace_stack.pop_back();
+                --pushed;
+            }
+            return;
+        }
+
+        if ((s.kind == ast::StmtKind::kFnDecl ||
+             s.kind == ast::StmtKind::kFieldDecl ||
+             s.kind == ast::StmtKind::kActsDecl) &&
+            !s.name.empty()) {
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            add_namespace_prefixes_of_symbol_path_(qname, known_namespace_paths);
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kVar) {
+            const bool is_global_decl =
+                s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+            if (!is_global_decl || s.name.empty()) return;
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            add_namespace_prefixes_of_symbol_path_(qname, known_namespace_paths);
+            return;
+        }
+    }
+
     static std::optional<std::string> rewrite_imported_path_(
         std::string_view name,
         const std::unordered_map<std::string, std::string>& import_aliases
@@ -240,10 +346,6 @@ namespace parus::passes {
 
         if (auto sid = sym.lookup(name)) {
             return sid;
-        }
-
-        if (name.find("::") != std::string::npos) {
-            return std::nullopt;
         }
 
         for (size_t depth = namespace_stack.size(); depth > 0; --depth) {
@@ -287,7 +389,8 @@ namespace parus::passes {
         NameResolveResult& out,
         std::unordered_set<uint32_t>& param_symbol_ids,
         std::vector<std::string>& namespace_stack,
-        std::unordered_map<std::string, std::string>& import_aliases
+        std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths
     ) {
         (void)opt;
         if (root == ast::k_invalid_expr) return;
@@ -424,7 +527,7 @@ namespace parus::passes {
                     // Iter expression should be resolved BEFORE loop variable declaration.
                     // (loop header variable is body-local in v0 policy.)
                     if (is_valid_expr_id_(r, e.loop_iter)) {
-                        walk_expr(ast, r, e.loop_iter, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                        walk_expr(ast, r, e.loop_iter, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                     }
 
                     if (e.loop_has_header && !e.loop_var.empty()) {
@@ -439,7 +542,7 @@ namespace parus::passes {
 
                     // IMPORTANT: loop body is StmtId.
                     if (is_valid_stmt_id_(r, e.loop_body)) {
-                        walk_stmt(ast, r, e.loop_body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        walk_stmt(ast, r, e.loop_body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                     break;
                 }
@@ -452,14 +555,14 @@ namespace parus::passes {
                         stack.push_back(e.b);
                     } else {
                         const ast::StmtId sb = (ast::StmtId)e.b;
-                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, r, sb, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, r, sb, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
 
                     if (is_valid_expr_id_(r, e.c)) {
                         stack.push_back(e.c);
                     } else {
                         const ast::StmtId sc = (ast::StmtId)e.c;
-                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, r, sc, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, r, sc, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                     break;
                 }
@@ -470,7 +573,7 @@ namespace parus::passes {
                     // - e.b : tail ExprId (or invalid)
                     const ast::StmtId blk = (ast::StmtId)e.a;
                     if (is_valid_stmt_id_(r, blk)) {
-                        walk_stmt(ast, r, blk, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        walk_stmt(ast, r, blk, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                     if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
                     if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
@@ -498,6 +601,7 @@ namespace parus::passes {
         std::unordered_set<uint32_t>& param_symbol_ids,
         std::vector<std::string>& namespace_stack,
         std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths,
         bool file_scope
     ) {
         const auto& kids = ast.stmt_children();
@@ -509,7 +613,7 @@ namespace parus::passes {
         if (end > r.stmt_children_count) return;
 
         for (uint32_t i = begin; i < end; ++i) {
-            walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, file_scope);
+            walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, file_scope);
         }
     }
 
@@ -527,6 +631,7 @@ namespace parus::passes {
         std::unordered_set<uint32_t>& param_symbol_ids,
         std::vector<std::string>& namespace_stack,
         std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths,
         bool file_scope
     ) {
         if (!is_valid_stmt_id_(r, id)) return;
@@ -539,20 +644,38 @@ namespace parus::passes {
                 return;
 
             case ast::StmtKind::kExprStmt:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
             case ast::StmtKind::kVar: {
                 // init 먼저
                 if (s.init != ast::k_invalid_expr) {
-                    walk_expr(ast, r, s.init, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                    walk_expr(ast, r, s.init, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 }
 
-                auto ins = declare_(sema::SymbolKind::kVar, s.name, s.type, s.span, sym, bag, opt);
+                const bool is_global_decl =
+                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                const std::string decl_name = is_global_decl
+                    ? qualify_name_(namespace_stack, s.name)
+                    : std::string(s.name);
 
-                // decl stmt 기록(중복이어도 id는 남기지 않는 게 안전)
-                if (!ins.is_duplicate) {
-                    const auto rid = add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, s.span);
+                uint32_t var_sym = sema::SymbolTable::kNoScope;
+                if (auto sid_existing = sym.lookup(decl_name)) {
+                    const auto& existing = sym.symbol(*sid_existing);
+                    if (existing.kind == sema::SymbolKind::kVar) {
+                        var_sym = *sid_existing;
+                    } else {
+                        report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, s.span, decl_name);
+                    }
+                } else {
+                    auto ins = declare_(sema::SymbolKind::kVar, decl_name, s.type, s.span, sym, bag, opt);
+                    if (ins.ok && !ins.is_duplicate) {
+                        var_sym = ins.symbol_id;
+                    }
+                }
+
+                if (var_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kLocalVar, var_sym, s.span);
                     out.stmt_to_resolved[(uint32_t)id] = rid;
                 }
                 return;
@@ -560,33 +683,34 @@ namespace parus::passes {
 
             case ast::StmtKind::kBlock: {
                 ScopeGuard g(sym);
-                walk_block_children_(ast, r, s, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, file_scope);
+                AliasScopeGuard ag(import_aliases);
+                walk_block_children_(ast, r, s, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, file_scope);
                 return;
             }
 
             case ast::StmtKind::kIf:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
-                walk_stmt(ast, r, s.b, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                walk_stmt(ast, r, s.b, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
 
             case ast::StmtKind::kWhile:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
             case ast::StmtKind::kDoScope:
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
             case ast::StmtKind::kDoWhile:
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
             case ast::StmtKind::kManual:
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
 
             case ast::StmtKind::kReturn:
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
             case ast::StmtKind::kBreak:
@@ -610,6 +734,7 @@ namespace parus::passes {
 
                 // 2) 함수 바디 스코프
                 ScopeGuard g(sym);
+                AliasScopeGuard ag(import_aliases);
 
                 // 3) 파라미터 등록
                 const uint32_t pb = s.param_begin;
@@ -631,13 +756,13 @@ namespace parus::passes {
 
                         // default expr 내부 이름 사용 검사
                         if (p.has_default && p.default_expr != ast::k_invalid_expr) {
-                            walk_expr(ast, r, p.default_expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                            walk_expr(ast, r, p.default_expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                         }
                     }
                 }
 
                 // 4) body
-                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
             }
 
@@ -674,26 +799,27 @@ namespace parus::passes {
                 }
 
                 ScopeGuard g(sym);
+                AliasScopeGuard ag(import_aliases);
                 const auto& kids = ast.stmt_children();
                 const uint32_t begin = s.stmt_begin;
                 const uint32_t end = s.stmt_begin + s.stmt_count;
                 if (begin < r.stmt_children_count && end <= r.stmt_children_count) {
                     for (uint32_t i = begin; i < end; ++i) {
-                        walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        walk_stmt(ast, r, kids[i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                 }
                 return;
             }
 
             case ast::StmtKind::kSwitch: {
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
 
                 const uint32_t cb = s.case_begin;
                 const uint32_t ce = s.case_begin + s.case_count;
                 if (cb < r.switch_case_count && ce <= r.switch_case_count) {
                     const auto& cs = ast.switch_cases();
                     for (uint32_t i = cb; i < ce; ++i) {
-                        walk_stmt(ast, r, cs[i].body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                        walk_stmt(ast, r, cs[i].body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                 }
                 return;
@@ -714,6 +840,17 @@ namespace parus::passes {
                             import_aliases[alias] = path;
                         }
                     }
+                } else if (s.use_kind == ast::UseKind::kNestAlias &&
+                           s.use_path_count > 0 &&
+                           !s.use_rhs_ident.empty()) {
+                    const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                    if (!path.empty()) {
+                        if (!is_known_namespace_path_(path, known_namespace_paths)) {
+                            report(bag, diag::Severity::kError, diag::Code::kUseNestPathExpectedNamespace, s.span, path);
+                        } else {
+                            import_aliases[std::string(s.use_rhs_ident)] = path;
+                        }
+                    }
                 } else if (s.use_kind == ast::UseKind::kPathAlias &&
                            s.use_path_count > 0 &&
                            !s.use_rhs_ident.empty()) {
@@ -724,7 +861,7 @@ namespace parus::passes {
                 }
                 // NOTE: use의 선언성(별칭/타입별칭 등)을 심볼로 올릴지 여부는 스펙 결정 후 확장.
                 // 지금은 expr만 검사한다.
-                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
             case ast::StmtKind::kNestDecl:
@@ -741,13 +878,14 @@ namespace parus::passes {
                     }
 
                     if (is_valid_stmt_id_(r, s.a)) {
+                        AliasScopeGuard ag(import_aliases);
                         const auto& body = ast.stmt(s.a);
                         if (body.kind == ast::StmtKind::kBlock) {
                             // nest 본문은 lexical scope가 아니라 namespace declaration 영역이다.
                             // 심볼을 pop하지 않고 전역 경로 심볼 테이블에 유지한다.
-                            walk_block_children_(ast, r, body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                            walk_block_children_(ast, r, body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                         } else {
-                            walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/false);
+                            walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                         }
                     }
 
@@ -884,6 +1022,18 @@ namespace parus::passes {
             return;
         }
 
+        if (s.kind == ast::StmtKind::kVar) {
+            const bool is_global_decl =
+                s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+            if (!is_global_decl) return;
+
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (!sym.lookup(qname)) {
+                (void)declare_(sema::SymbolKind::kVar, qname, s.type, s.span, sym, bag, opt);
+            }
+            return;
+        }
+
         if (s.kind == ast::StmtKind::kActsDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
@@ -941,12 +1091,19 @@ namespace parus::passes {
         import_aliases.reserve(32);
         init_file_context_(ast, r, root, namespace_stack, import_aliases);
 
+        std::unordered_set<std::string> known_namespace_paths;
+        known_namespace_paths.reserve(64);
+        {
+            std::vector<std::string> collect_ns = namespace_stack;
+            collect_known_namespace_paths_stmt_(ast, r, root, collect_ns, known_namespace_paths);
+        }
+
         std::vector<std::string> predeclare_ns = namespace_stack;
         predeclare_namespace_decls_(ast, r, root, sym, bag, opt, predeclare_ns);
 
         walk_stmt(
             ast, r, root, sym, bag, opt, out_result,
-            param_symbol_ids, namespace_stack, import_aliases, /*file_scope=*/true
+            param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/true
         );
     }
 
