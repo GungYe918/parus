@@ -16,7 +16,13 @@ const lei::eval::Value* find_key(const lei::eval::Value::Object& obj, const std:
 
 } // namespace
 
-std::optional<BuildGraph> from_build_value(const lei::eval::Value& v, lei::diag::Bag& diags) {
+BuildConventions make_default_build_conventions() {
+    return BuildConventions{};
+}
+
+std::optional<BuildGraph> from_build_value(const lei::eval::Value& v,
+                                           lei::diag::Bag& diags,
+                                           const BuildConventions& conventions) {
     BuildGraph g{};
 
     auto root = v.as_object();
@@ -26,10 +32,10 @@ std::optional<BuildGraph> from_build_value(const lei::eval::Value& v, lei::diag:
         return std::nullopt;
     }
 
-    const auto* bundles_v = find_key(*root, "bundles");
+    const auto* bundles_v = find_key(*root, conventions.bundles_field);
     if (!bundles_v || !bundles_v->is_array()) {
         diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE, "<entry>", 1, 1,
-                  "build object must contain array field 'bundles'");
+                  "build object must contain array field '" + conventions.bundles_field + "'");
         return std::nullopt;
     }
 
@@ -42,15 +48,15 @@ std::optional<BuildGraph> from_build_value(const lei::eval::Value& v, lei::diag:
             return std::nullopt;
         }
 
-        const auto* name_v = find_key(*bobj, "name");
+        const auto* name_v = find_key(*bobj, conventions.bundle_name_field);
         if (!name_v || !name_v->is_string()) {
             diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE, "<entry>", 1, 1,
-                      "bundle must contain string field 'name'");
+                      "bundle must contain string field '" + conventions.bundle_name_field + "'");
             return std::nullopt;
         }
         g.bundle_names.push_back(std::get<std::string>(name_v->data));
 
-        const auto* module_map_v = find_key(*bobj, "module_map");
+        const auto* module_map_v = find_key(*bobj, conventions.module_map_field);
         if (module_map_v && module_map_v->is_object()) {
             const auto& mmap = std::get<lei::eval::Value::Object>(module_map_v->data);
             for (const auto& [mod_name, files_v] : mmap) {
@@ -100,4 +106,3 @@ std::optional<std::string> emit_ninja(const BuildGraph& graph, lei::diag::Bag& d
 }
 
 } // namespace lei::graph
-

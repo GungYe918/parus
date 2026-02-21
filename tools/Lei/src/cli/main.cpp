@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -65,7 +66,9 @@ int main(int argc, char** argv) {
 
     lei::diag::Bag diags;
     lei::eval::EvaluatorBudget budget{};
-    lei::eval::Evaluator evaluator(budget, diags);
+    auto builtins = lei::eval::make_default_builtin_registry();
+    lei::parse::ParserControl parser_control{};
+    lei::eval::Evaluator evaluator(budget, diags, std::move(builtins), parser_control);
 
     auto value = evaluator.evaluate_entry(std::filesystem::path(entry));
     if (!value || diags.has_error()) {
@@ -77,7 +80,8 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    auto graph = lei::graph::from_build_value(*value, diags);
+    auto conventions = lei::graph::make_default_build_conventions();
+    auto graph = lei::graph::from_build_value(*value, diags, conventions);
     if (!graph || diags.has_error()) {
         std::cerr << diags.render_text();
         return 1;
@@ -98,4 +102,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-

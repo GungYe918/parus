@@ -14,6 +14,7 @@ LEI는 Parus 빌드 시스템 전용 DSL이다. 이 문서는 LEI v0의 설계 �
 6. `06_SECURITY_AND_BUDGET.md`
 7. `07_DIAGNOSTICS_AND_TESTING.md`
 8. `08_ROADMAP.md`
+9. `09_INTRINSICS.md`
 
 ## 구현 범위 (v0)
 
@@ -21,11 +22,5 @@ LEI는 Parus 빌드 시스템 전용 DSL이다. 이 문서는 LEI v0의 설계 �
 2. 타입: `int`, `float`, `string`, `bool`
 3. 선언: `import`, `let`, `const`, `def`, `assert`, `export build`
 4. 모듈: `export` + named `import`
-5. intrinsic: `base`만 제공
+5. intrinsic: `base` 자동 제공(import 불필요)
 6. 보안: 비튜링 정책, 효과/동적실행 금지
-
-## 구현 코드 위치
-
-1. 소스: `tools/Lei`
-2. 문서: `tools/docs/LEI_dsl`
-

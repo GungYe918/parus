@@ -46,7 +46,56 @@ bool value_equal(const Value& a, const Value& b) {
     return false;
 }
 
+Value make_builtin_base_value(const BuiltinLiterals& literals) {
+    Value::Object defaults;
+    defaults[literals.profile_field].data = std::string("debug");
+    defaults[literals.opt_field].data = int64_t{0};
+
+    Value::Object root;
+    root[literals.version_field].data = std::string("0.1");
+    root[literals.backend_field].data = std::string("ninja");
+    root[literals.defaults_field].data = defaults;
+
+    Value v;
+    v.data = std::move(root);
+    return v;
+}
+
 } // namespace
+
+void BuiltinRegistry::register_value(std::string name, ValueFactory factory) {
+    factories_[std::move(name)] = std::move(factory);
+}
+
+void BuiltinRegistry::register_native_function(std::string name, BuiltinFunction::Callback callback) {
+    std::string stable_name = std::move(name);
+    factories_[stable_name] = [stable_name, callback = std::move(callback)]() mutable {
+        auto fn = std::make_shared<BuiltinFunction>();
+        fn->name = stable_name;
+        fn->callback = callback;
+
+        Value v;
+        v.data = std::move(fn);
+        return v;
+    };
+}
+
+void BuiltinRegistry::inject_into(std::unordered_map<std::string, Value>& symbols) const {
+    for (const auto& [name, factory] : factories_) {
+        symbols[name] = factory();
+    }
+}
+
+bool BuiltinRegistry::has_symbol(std::string_view name) const {
+    return factories_.find(std::string(name)) != factories_.end();
+}
+
+BuiltinRegistry make_default_builtin_registry(const BuiltinLiterals& literals) {
+    BuiltinRegistry reg;
+    reg.register_value(literals.base_symbol,
+                       [literals]() { return make_builtin_base_value(literals); });
+    return reg;
+}
 
 Evaluator::ModulePtr Evaluator::load_module(const std::filesystem::path& path) {
     const std::string key = normalize_path(path);
@@ -65,9 +114,7 @@ Evaluator::ModulePtr Evaluator::load_module(const std::filesystem::path& path) {
     auto mod = std::make_shared<ModuleContext>();
     mod->path = key;
 
-    auto toks = parse::lex(buf.str(), key, diags_);
-    parse::Parser p(std::move(toks), key, diags_);
-    mod->program = p.parse_program();
+    mod->program = parse::parse_source(buf.str(), key, diags_, parser_control_);
 
     module_cache_[key] = mod;
     return mod;
@@ -89,6 +136,9 @@ Evaluator::ModulePtr Evaluator::evaluate_module(const std::filesystem::path& pat
 
     module_mark_[key] = 1;
 
+    // Engine-level builtin registry injection.
+    builtins_.inject_into(mod->symbols);
+
     // Pass 1: predeclare defs for forward reference support.
     for (const auto& it : mod->program.items) {
         if (it.kind != ast::ItemKind::kDef) continue;
@@ -101,19 +151,6 @@ Evaluator::ModulePtr Evaluator::evaluate_module(const std::filesystem::path& pat
     // Pass 2: evaluate the rest.
     for (const auto& it : mod->program.items) {
         if (it.kind == ast::ItemKind::kDef) continue;
-
-        if (it.kind == ast::ItemKind::kImportIntrinsic) {
-            for (const auto& name : it.import_spec.names) {
-                if (name == "base") {
-                    mod->symbols[name] = make_intrinsic_base();
-                } else {
-                    add_diag(diag::Code::L_IMPORT_SYMBOL_NOT_FOUND, it.span,
-                             "unknown intrinsic symbol: " + name);
-                    return nullptr;
-                }
-            }
-            continue;
-        }
 
         if (it.kind == ast::ItemKind::kImportFrom) {
             std::filesystem::path import_path = std::filesystem::path(mod->path).parent_path() / it.import_spec.from_path;
@@ -188,21 +225,6 @@ void Evaluator::step_or_budget_error(const ast::Span& span) {
 
 void Evaluator::add_diag(diag::Code code, const ast::Span& span, std::string msg) {
     diags_.add(code, span.file, span.line, span.column, std::move(msg));
-}
-
-Value Evaluator::make_intrinsic_base() const {
-    Value::Object defaults;
-    defaults["profile"].data = std::string("debug");
-    defaults["opt"].data = int64_t{0};
-
-    Value::Object root;
-    root["version"].data = std::string("0.1");
-    root["backend"].data = std::string("ninja");
-    root["defaults"].data = defaults;
-
-    Value v;
-    v.data = std::move(root);
-    return v;
 }
 
 std::optional<Value> Evaluator::merge_objects(const Value& lhs, const Value& rhs, const ast::Span& span) {
@@ -498,12 +520,6 @@ std::optional<Value> Evaluator::eval_expr(ModulePtr mod,
         case ast::ExprKind::kCall: {
             auto callee = eval_expr(mod, expr->lhs.get(), locals, call_depth);
             if (!callee) return std::nullopt;
-            if (!callee->is_function()) {
-                add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "call target is not a function");
-                return std::nullopt;
-            }
-
-            const auto& fn = std::get<FunctionValue>(callee->data);
             if (call_depth + 1 > budget_.max_call_depth) {
                 add_diag(diag::Code::L_BUDGET_EXCEEDED, expr->span, "max_call_depth exceeded");
                 return std::nullopt;
@@ -516,6 +532,26 @@ std::optional<Value> Evaluator::eval_expr(ModulePtr mod,
                 if (!v) return std::nullopt;
                 args.push_back(*v);
             }
+
+            if (callee->is_native_function()) {
+                const auto fn = std::get<Value::NativeFunction>(callee->data);
+                if (!fn || !fn->callback) {
+                    add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "native function callback is missing");
+                    return std::nullopt;
+                }
+                auto ret = fn->callback(args, expr->span, diags_);
+                if (!ret && !diags_.has_error()) {
+                    add_diag(diag::Code::L_TYPE_MISMATCH, expr->span,
+                             "native function call failed: " + fn->name);
+                }
+                return ret;
+            }
+
+            if (!callee->is_function()) {
+                add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "call target is not a function");
+                return std::nullopt;
+            }
+            const auto& fn = std::get<FunctionValue>(callee->data);
 
             if (args.size() != fn.params.size()) {
                 add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "function argument count mismatch");
@@ -590,6 +626,12 @@ std::string to_string(const Value& v) {
     }
     if (auto p = std::get_if<Value::Function>(&v.data)) {
         return "<def " + p->name + ">";
+    }
+    if (auto p = std::get_if<Value::NativeFunction>(&v.data)) {
+        if (*p && (*p)->name.size() > 0) {
+            return "<builtin " + (*p)->name + ">";
+        }
+        return "<builtin>";
     }
     return "<unknown>";
 }

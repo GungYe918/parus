@@ -1,0 +1,8 @@
+let profile_name = make_profile();
+
+export build {
+  bundles: [],
+  defaults: {
+    profile: profile_name,
+  },
+};

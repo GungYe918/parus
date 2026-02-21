@@ -38,4 +38,3 @@
 
 1. Parus 테스트는 기존 `tests/` 유지
 2. LEI 테스트는 `tools/Lei/tests/`에 분리
-

@@ -33,3 +33,12 @@
 2. 실패는 항상 동일한 코드/위치로 보고된다.
 3. 시간/랜덤/환경 의존 내장값을 제공하지 않는다.
 
+## 공개 API (v0)
+
+1. `lei::parse::ParserControl`
+   1. 파서 동작 가드(예: 제거 문법 차단)를 외부에서 제어한다.
+2. `lei::eval::BuiltinRegistry`
+   1. C++ 엔진 코드에서 빌트인 값/네이티브 함수를 등록한다.
+   2. 기본 레지스트리는 `make_default_builtin_registry()`로 생성한다.
+3. `lei::graph::BuildConventions`
+   1. `module_map`, `bundles` 같은 빌드 객체 필드명을 외부에서 구성한다.

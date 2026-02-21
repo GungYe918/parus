@@ -1,4 +1,3 @@
-import intrinsic { base };
 import { TOOL, add1 } from "./lib.lei";
 
 let bundle_core = {

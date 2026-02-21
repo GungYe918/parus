@@ -19,7 +19,6 @@ syntax::TokenKind keyword_or_ident(std::string_view s) {
     using K = syntax::TokenKind;
     static const std::unordered_map<std::string_view, K> kMap = {
         {"import", K::kKwImport},
-        {"intrinsic", K::kKwIntrinsic},
         {"from", K::kKwFrom},
         {"export", K::kKwExport},
         {"build", K::kKwBuild},
@@ -260,4 +259,3 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
 }
 
 } // namespace lei::parse
-

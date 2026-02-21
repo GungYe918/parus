@@ -30,8 +30,7 @@ Item         := ImportStmt
              ;
 
 ImportStmt   := "import" ImportSpec ";" ;
-ImportSpec   := "intrinsic" "{" IdentList "}"
-             | "{" IdentList "}" "from" StringLit
+ImportSpec   := "{" IdentList "}" "from" StringLit
              ;
 
 LetStmt      := "let" Ident [ ":" PrimType ] "=" Expr ";" ;
@@ -84,4 +83,3 @@ ArgList      := Expr { "," Expr } [","] ;
 
 1. 객체/배열/match arm 리스트에서 trailing comma를 허용한다.
 2. 인자 목록과 import 이름 목록에서 trailing comma를 허용한다.
-

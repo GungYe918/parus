@@ -82,7 +82,6 @@ struct Expr {
 
 enum class ItemKind : uint8_t {
     kImportFrom,
-    kImportIntrinsic,
     kLet,
     kConst,
     kDef,
@@ -91,7 +90,6 @@ enum class ItemKind : uint8_t {
 };
 
 struct ImportSpec {
-    bool intrinsic = false;
     std::vector<std::string> names{};
     std::string from_path{};
 };
@@ -126,4 +124,3 @@ struct Program {
 };
 
 } // namespace lei::ast
-

@@ -16,7 +16,6 @@ enum class TokenKind : uint16_t {
     kStringLit,
 
     kKwImport,
-    kKwIntrinsic,
     kKwFrom,
     kKwExport,
     kKwBuild,
@@ -84,7 +83,6 @@ constexpr std::string_view token_kind_name(TokenKind k) {
         case TokenKind::kFloatLit: return "float_lit";
         case TokenKind::kStringLit: return "string_lit";
         case TokenKind::kKwImport: return "import";
-        case TokenKind::kKwIntrinsic: return "intrinsic";
         case TokenKind::kKwFrom: return "from";
         case TokenKind::kKwExport: return "export";
         case TokenKind::kKwBuild: return "build";
@@ -133,4 +131,3 @@ constexpr std::string_view token_kind_name(TokenKind k) {
 }
 
 } // namespace lei::syntax
-

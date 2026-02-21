@@ -107,31 +107,27 @@ ast::Item Parser::parse_import() {
 
     ast::Item it{};
     it.span = span_from(start);
+    it.kind = ast::ItemKind::kImportFrom;
 
-    if (eat(K::kKwIntrinsic)) {
-        it.kind = ast::ItemKind::kImportIntrinsic;
-        it.import_spec.intrinsic = true;
-        expect(K::kLBrace, "'{' after intrinsic");
-        if (!at(K::kRBrace)) {
-            while (true) {
-                if (!at(K::kIdent)) {
-                    diag_expected(peek(), "intrinsic symbol name");
-                    break;
-                }
-                it.import_spec.names.push_back(bump().lexeme);
-                if (eat(K::kComma)) {
-                    if (at(K::kRBrace)) break;
-                    continue;
-                }
-                break;
-            }
+    // Removed syntax guard:
+    //   import intrinsic { base };
+    if (control_.reject_removed_intrinsic_syntax
+        && at(K::kIdent)
+        && peek().lexeme == "intrinsic") {
+        const auto bad = bump();
+        diags_.add(diag::Code::C_UNEXPECTED_TOKEN,
+                   file_path_,
+                   bad.loc.line,
+                   bad.loc.column,
+                   "keyword 'intrinsic' was removed; use 'base' directly without import");
+        while (!at(K::kSemicolon) && !at(K::kEof)) {
+            bump();
         }
-        expect(K::kRBrace, "'}'");
-        expect(K::kSemicolon, "';'");
+        (void)eat(K::kSemicolon);
+        it.kind = ast::ItemKind::kAssert;
         return it;
     }
 
-    it.kind = ast::ItemKind::kImportFrom;
     expect(K::kLBrace, "'{' in named import");
     if (!at(K::kRBrace)) {
         while (true) {
@@ -559,6 +555,15 @@ std::unique_ptr<ast::Expr> Parser::parse_array() {
     }
     expect(K::kRBracket, "']'");
     return e;
+}
+
+ast::Program parse_source(std::string_view source,
+                          std::string_view file_path,
+                          diag::Bag& diags,
+                          ParserControl control) {
+    auto toks = lex(source, file_path, diags);
+    Parser p(std::move(toks), std::string(file_path), diags, control);
+    return p.parse_program();
 }
 
 } // namespace lei::parse

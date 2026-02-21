@@ -12,10 +12,22 @@ namespace lei::parse {
 
 std::vector<syntax::Token> lex(std::string_view source, std::string_view file_path, diag::Bag& diags);
 
+struct ParserControl {
+    // Backward-compat guard for removed syntax:
+    //   import intrinsic { base };
+    bool reject_removed_intrinsic_syntax = true;
+};
+
 class Parser {
 public:
-    Parser(std::vector<syntax::Token> tokens, std::string file_path, diag::Bag& diags)
-        : tokens_(std::move(tokens)), file_path_(std::move(file_path)), diags_(diags) {}
+    Parser(std::vector<syntax::Token> tokens,
+           std::string file_path,
+           diag::Bag& diags,
+           ParserControl control = {})
+        : tokens_(std::move(tokens)),
+          file_path_(std::move(file_path)),
+          diags_(diags),
+          control_(control) {}
 
     ast::Program parse_program();
 
@@ -62,8 +74,13 @@ private:
     std::vector<syntax::Token> tokens_;
     std::string file_path_;
     diag::Bag& diags_;
+    ParserControl control_{};
     size_t pos_ = 0;
 };
 
-} // namespace lei::parse
+ast::Program parse_source(std::string_view source,
+                          std::string_view file_path,
+                          diag::Bag& diags,
+                          ParserControl control = {});
 
+} // namespace lei::parse
