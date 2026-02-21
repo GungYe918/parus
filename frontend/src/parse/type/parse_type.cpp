@@ -42,6 +42,19 @@ namespace parus {
         const Token start = cursor_.peek();
         (void)start;
 
+        auto make_error_type_ = [&](Span sp) -> ParsedType {
+            ast::TypeNode n{};
+            n.kind = ast::TypeNodeKind::kError;
+            n.span = sp;
+            n.resolved_type = types_.error();
+
+            ParsedType out{};
+            out.node = ast_.add_type_node(n);
+            out.id = types_.error();
+            out.span = sp;
+            return out;
+        };
+
         // --------------------
         // type grammar (v0)
         // --------------------
@@ -97,11 +110,7 @@ namespace parus {
                     // def 타입이 아닌데 type 위치에 등장한 경우: 과도한 recover 금지
                     diag_report(diag::Code::kTypeFnSignatureExpected, s.span);
                     cursor_.bump(); // consume only 'def' to ensure progress
-
-                    ParsedType out{};
-                    out.id = types_.error();
-                    out.span = s.span;
-                    return out;
+                    return make_error_type_(s.span);
                 }
 
                 cursor_.bump(); // 'def'
@@ -110,13 +119,13 @@ namespace parus {
                 cursor_.bump(); // '(' guaranteed by lookahead
 
                 // params (TypeList?)
-                std::vector<ty::TypeId> params;
+                std::vector<ParsedType> params;
                 Span last = s.span;
 
                 if (!cursor_.at(K::kRParen)) {
                     while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
                         auto pt = parse_type();
-                        if (pt.id != ty::kInvalidType) params.push_back(pt.id);
+                        params.push_back(pt);
                         last = pt.span.hi ? pt.span : last;
 
                         if (cursor_.eat(K::kComma)) {
@@ -147,16 +156,34 @@ namespace parus {
                 auto rt = parse_type();
                 if (rt.id == ty::kInvalidType) rt.id = types_.error();
 
+                std::vector<ty::TypeId> param_ids{};
+                param_ids.reserve(params.size());
+                for (const auto& p : params) {
+                    param_ids.push_back(p.id);
+                }
+
                 ty::TypeId fn_id = ty::kInvalidType;
-                if (!params.empty()) {
-                    fn_id = types_.make_fn(rt.id, params.data(), (uint32_t)params.size());
+                if (!param_ids.empty()) {
+                    fn_id = types_.make_fn(rt.id, param_ids.data(), (uint32_t)param_ids.size());
                 } else {
                     fn_id = types_.make_fn(rt.id, nullptr, 0);
                 }
 
+                ast::TypeNode fn_node{};
+                fn_node.kind = ast::TypeNodeKind::kFn;
+                fn_node.span = span_join(s.span, rt.span.hi ? rt.span : cursor_.prev().span);
+                fn_node.fn_ret = rt.node;
+                fn_node.fn_param_begin = static_cast<uint32_t>(ast_.type_node_children().size());
+                fn_node.fn_param_count = static_cast<uint32_t>(params.size());
+                fn_node.resolved_type = fn_id;
+                for (const auto& p : params) {
+                    ast_.add_type_node_child(p.node);
+                }
+
                 ParsedType out{};
+                out.node = ast_.add_type_node(fn_node);
                 out.id = fn_id;
-                out.span = span_join(s.span, rt.span.hi ? rt.span : cursor_.prev().span);
+                out.span = fn_node.span;
                 return out;
             }
 
@@ -176,6 +203,7 @@ namespace parus {
                 }
 
                 ParsedType out{};
+                out.node = inner.node;
                 out.id = inner.id;
                 out.span = span_join(lp.span, rp.span.hi ? rp.span : inner.span);
                 return out;
@@ -197,9 +225,18 @@ namespace parus {
                     cursor_.eat(K::kRBracket);
                 }
 
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kArray;
+                n.span = span_join(lb.span, rb.span.hi ? rb.span : elem.span);
+                n.elem = elem.node;
+                n.array_has_size = false;
+                n.array_size = 0;
+                n.resolved_type = types_.make_array(elem.id);
+
                 ParsedType out{};
-                out.id = types_.make_array(elem.id);
-                out.span = span_join(lb.span, rb.span.hi ? rb.span : elem.span);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = n.span;
                 return out;
             }
 
@@ -214,9 +251,47 @@ namespace parus {
                 auto elem = parse_type();
                 if (elem.id == ty::kInvalidType) elem.id = types_.error();
 
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kPtr;
+                n.span = span_join(ptr_tok.span, elem.span.hi ? elem.span : ptr_tok.span);
+                n.elem = elem.node;
+                n.is_mut = is_mut;
+                n.resolved_type = types_.make_ptr(elem.id, is_mut);
+
                 ParsedType out{};
-                out.id = types_.make_ptr(elem.id, is_mut);
-                out.span = span_join(ptr_tok.span, elem.span.hi ? elem.span : ptr_tok.span);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = n.span;
+                return out;
+            }
+
+            // ---- Type macro call: $path(...) ----
+            if (cursor_.at(K::kDollar)) {
+                const Token dol = cursor_.bump();
+
+                uint32_t path_begin = 0;
+                uint32_t path_count = 0;
+                Span path_span = dol.span;
+                if (!parse_macro_call_path(path_begin, path_count, path_span)) {
+                    return make_error_type_(span_join(dol.span, cursor_.prev().span));
+                }
+
+                const auto [arg_begin, arg_count] = parse_macro_call_arg_tokens();
+                const Span out_sp = span_join(dol.span, cursor_.prev().span);
+
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kMacroCall;
+                n.span = out_sp;
+                n.macro_path_begin = path_begin;
+                n.macro_path_count = path_count;
+                n.macro_arg_begin = arg_begin;
+                n.macro_arg_count = arg_count;
+                n.resolved_type = types_.error();
+
+                ParsedType out{};
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = out_sp;
                 return out;
             }
 
@@ -250,15 +325,25 @@ namespace parus {
 
                 if (segs.size() == 1 && segs[0] == "unit") {
                     diag_report(diag::Code::kTypeInternalNameReserved, first.span, "unit");
-                    ParsedType out{};
-                    out.id = types_.error();
-                    out.span = span_join(first.span, last_span);
-                    return out;
+                    return make_error_type_(span_join(first.span, last_span));
                 }
 
+                const uint32_t pb = static_cast<uint32_t>(ast_.path_segs().size());
+                for (const auto seg : segs) {
+                    ast_.add_path_seg(seg);
+                }
+
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kNamedPath;
+                n.span = span_join(first.span, last_span);
+                n.path_begin = pb;
+                n.path_count = static_cast<uint32_t>(segs.size());
+                n.resolved_type = types_.intern_path(segs.data(), (uint32_t)segs.size());
+
                 ParsedType out{};
-                out.id = types_.intern_path(segs.data(), (uint32_t)segs.size());
-                out.span = span_join(first.span, last_span);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = n.span;
                 return out;
             }
 
@@ -266,10 +351,7 @@ namespace parus {
             diag_report(diag::Code::kTypeNameExpected, s.span);
             if (!cursor_.at(K::kEof)) cursor_.bump();
 
-            ParsedType out{};
-            out.id = types_.error();
-            out.span = s.span;
-            return out;
+            return make_error_type_(s.span);
         };
 
         auto parse_suffix = [&]() -> ParsedType {
@@ -282,8 +364,16 @@ namespace parus {
                 // ---- Optional suffix: T? ----
                 if (cursor_.at(K::kQuestion)) {
                     const Token q = cursor_.bump(); // '?'
-                    base.id = types_.make_optional(base.id);
-                    base.span = span_join(base.span, q.span);
+                    const Span sp = span_join(base.span, q.span);
+                    ast::TypeNode n{};
+                    n.kind = ast::TypeNodeKind::kOptional;
+                    n.span = sp;
+                    n.elem = base.node;
+                    n.resolved_type = types_.make_optional(base.id);
+
+                    base.node = ast_.add_type_node(n);
+                    base.id = n.resolved_type;
+                    base.span = sp;
                     continue;
                 }
 
@@ -316,8 +406,18 @@ namespace parus {
                         cursor_.eat(K::kRBracket);
                     }
 
-                    base.id = types_.make_array(base.id, has_size, size);
-                    base.span = span_join(base.span, rb.span.hi ? rb.span : lb.span);
+                    const Span sp = span_join(base.span, rb.span.hi ? rb.span : lb.span);
+                    ast::TypeNode n{};
+                    n.kind = ast::TypeNodeKind::kArray;
+                    n.span = sp;
+                    n.elem = base.node;
+                    n.array_has_size = has_size;
+                    n.array_size = size;
+                    n.resolved_type = types_.make_array(base.id, has_size, size);
+
+                    base.node = ast_.add_type_node(n);
+                    base.id = n.resolved_type;
+                    base.span = sp;
                     continue;
                 }
 
@@ -427,20 +527,51 @@ namespace parus {
         for (int i = (int)ops.size() - 1; i >= 0; --i) {
             const auto& op = ops[(size_t)i];
             if (op.kind == PrefixOp::Kind::kBorrow) {
-                out.id = types_.make_borrow(out.id, op.is_mut);
-                out.span = span_join(op.tok.span, out.span);
+                const Span sp = span_join(op.tok.span, out.span);
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kBorrow;
+                n.span = sp;
+                n.elem = out.node;
+                n.is_mut = op.is_mut;
+                n.resolved_type = types_.make_borrow(out.id, op.is_mut);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = sp;
             } else {
-                out.id = types_.make_escape(out.id);
-                out.span = span_join(op.tok.span, out.span);
+                const Span sp = span_join(op.tok.span, out.span);
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kEscape;
+                n.span = sp;
+                n.elem = out.node;
+                n.resolved_type = types_.make_escape(out.id);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = sp;
             }
         }
 
         if (saw_ambiguous_amp_run) {
             // Force error type id, but keep the best-effort span.
             out.id = types_.error();
+            if (out.node != ast::k_invalid_type_node &&
+                static_cast<size_t>(out.node) < ast_.type_nodes().size()) {
+                ast_.type_node_mut(out.node).resolved_type = out.id;
+            }
         }
 
         return out;
+    }
+
+    ast::TypeNodeId Parser::parse_type_full_for_macro(ty::TypeId* out_type) {
+        const auto p = parse_type();
+        if (out_type) *out_type = p.id;
+
+        if (!cursor_.at(syntax::TokenKind::kEof)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "end of type");
+            if (out_type) *out_type = types_.error();
+            return ast::k_invalid_type_node;
+        }
+        return p.node;
     }
 
 } // namespace parus

@@ -164,6 +164,15 @@ namespace parus {
         return false;
     }
 
+    bool Parser::is_context_keyword(const Token& t, std::string_view kw) const {
+        if (t.kind != syntax::TokenKind::kIdent) return false;
+        return t.lexeme == kw;
+    }
+
+    bool Parser::is_macro_decl_start() const {
+        return is_context_keyword(cursor_.peek(), "macro");
+    }
+
     bool Parser::is_expr_with_block_kind(ast::ExprKind k) {
         switch (k) {
             case ast::ExprKind::kLoop:
@@ -173,6 +182,154 @@ namespace parus {
             default:
                 return false;
         }
+    }
+
+    bool Parser::parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span) {
+        using K = syntax::TokenKind;
+        out_path_begin = static_cast<uint32_t>(ast_.path_segs().size());
+        out_path_count = 0;
+
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kUnexpectedToken, first.span, "macro path segment");
+            out_span = first.span;
+            return false;
+        }
+
+        cursor_.bump();
+        ast_.add_path_seg(first.lexeme);
+        out_path_count = 1;
+        out_span = first.span;
+
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.eat(K::kColonColon)) return true;
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
+
+        while (eat_coloncolon()) {
+            const Token seg = cursor_.peek();
+            if (seg.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, seg.span, "macro path segment");
+                return false;
+            }
+            cursor_.bump();
+            ast_.add_path_seg(seg.lexeme);
+            ++out_path_count;
+            out_span = span_join(out_span, seg.span);
+        }
+
+        return true;
+    }
+
+    std::pair<uint32_t, uint32_t> Parser::parse_macro_call_arg_tokens() {
+        using K = syntax::TokenKind;
+        const uint32_t begin = static_cast<uint32_t>(ast_.macro_tokens().size());
+        uint32_t count = 0;
+
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            return {begin, count};
+        }
+
+        int paren = 1;
+        int brace = 0;
+        int bracket = 0;
+
+        while (!cursor_.at(K::kEof) && paren > 0) {
+            const Token t = cursor_.peek();
+
+            if (t.kind == K::kLParen) {
+                ++paren;
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+            if (t.kind == K::kRParen) {
+                --paren;
+                if (paren == 0) {
+                    cursor_.bump(); // consume closing ')'
+                    break;
+                }
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+            if (t.kind == K::kLBrace) {
+                ++brace;
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+            if (t.kind == K::kRBrace) {
+                if (brace > 0) --brace;
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+            if (t.kind == K::kLBracket) {
+                ++bracket;
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+            if (t.kind == K::kRBracket) {
+                if (bracket > 0) --bracket;
+                ast_.add_macro_token(cursor_.bump());
+                ++count;
+                continue;
+            }
+
+            if (t.kind == K::kEof) break;
+
+            ast_.add_macro_token(cursor_.bump());
+            ++count;
+        }
+
+        if (paren != 0) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+        }
+
+        return {begin, count};
+    }
+
+    ast::ExprId Parser::parse_macro_call_expr() {
+        using K = syntax::TokenKind;
+        const Token dol = cursor_.peek();
+        if (!cursor_.eat(K::kDollar)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "$");
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = cursor_.peek().span;
+            e.text = "macro_call_expected_dollar";
+            return ast_.add_expr(e);
+        }
+
+        uint32_t path_begin = 0;
+        uint32_t path_count = 0;
+        Span path_sp = dol.span;
+        if (!parse_macro_call_path(path_begin, path_count, path_sp)) {
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = span_join(dol.span, cursor_.prev().span);
+            e.text = "macro_call_bad_path";
+            return ast_.add_expr(e);
+        }
+
+        auto [arg_begin, arg_count] = parse_macro_call_arg_tokens();
+
+        ast::Expr e{};
+        e.kind = ast::ExprKind::kMacroCall;
+        e.macro_path_begin = path_begin;
+        e.macro_path_count = path_count;
+        e.macro_token_begin = arg_begin;
+        e.macro_token_count = arg_count;
+        e.span = span_join(dol.span, cursor_.prev().span);
+        return ast_.add_expr(e);
     }
 
 } // namespace parus

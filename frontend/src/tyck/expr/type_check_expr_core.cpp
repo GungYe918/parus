@@ -656,6 +656,12 @@ namespace parus::tyck {
             case ast::ExprKind::kCast:
                 t = check_expr_cast_(e);
                 break;
+
+            case ast::ExprKind::kMacroCall:
+                diag_(diag::Code::kMacroReparseFail, e.span, "unexpanded expr macro placeholder");
+                err_(e.span, "unexpanded expr macro placeholder");
+                t = types_.error();
+                break;
         }
 
         // caching policy:

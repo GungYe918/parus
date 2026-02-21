@@ -574,6 +574,10 @@ namespace parus::cap {
                         walk_expr_(e.a, ExprUse::kValue);
                         return;
 
+                    case ast::ExprKind::kMacroCall:
+                        report_(diag::Code::kMacroReparseFail, e.span, "unexpanded expr macro placeholder");
+                        return;
+
                     case ast::ExprKind::kIntLit:
                     case ast::ExprKind::kFloatLit:
                     case ast::ExprKind::kStringLit:

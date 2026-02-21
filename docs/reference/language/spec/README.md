@@ -7,3 +7,4 @@
 1. 파일명은 순서 보존을 위해 `NN.md` 형식을 사용한다.
 2. 의미 해석은 `docs/reference/language/SPEC.md`를 통해 접근한다.
 3. EBNF 정본은 `28.md`를 따른다.
+4. 매크로 Phase1.5 드래프트는 `29.md`를 따른다.

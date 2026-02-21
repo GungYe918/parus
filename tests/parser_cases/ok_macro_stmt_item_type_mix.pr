@@ -1,0 +1,38 @@
+macro make_inc -> {
+    with item {
+        () => item {
+            def inc(x: i32) -> i32 {
+                return x + 1i32;
+            }
+        };
+    }
+}
+
+macro assign_from_value -> {
+    with stmt {
+        (dst: ident, value: expr) => stmt {
+            {
+                let tmp: i32 = $1;
+                $0 = tmp;
+            }
+        };
+    }
+}
+
+macro i32_ty -> {
+    with type {
+        () => type {
+            i32
+        };
+    }
+}
+
+$make_inc();
+
+def main() -> i32 {
+    let tmp: i32 = 10i32;
+    set mut out = 0i32;
+    $assign_from_value(out, inc(tmp));
+    let typed: $i32_ty() = out;
+    return typed;
+}

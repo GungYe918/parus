@@ -249,6 +249,7 @@ namespace parusc::dump {
             case K::kTernary: return "Ternary";
             case K::kCall: return "Call";
             case K::kIndex: return "Index";
+            case K::kMacroCall: return "MacroCall";
             case K::kError: return "Error";
             case K::kAssign: return "Assign";
             case K::kIfExpr: return "If";

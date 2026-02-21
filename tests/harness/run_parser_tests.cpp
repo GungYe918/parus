@@ -1,9 +1,11 @@
 #include <parus/lex/Lexer.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/diag/Render.hpp>
+#include <parus/macro/Expander.hpp>
 #include <parus/passes/Passes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/type/TypeResolve.hpp>
 #include <parus/sir/Builder.hpp>
 #include <parus/sir/CapabilityAnalysis.hpp>
 #include <parus/sir/MutAnalysis.hpp>
@@ -24,6 +26,9 @@ namespace {
         parus::ty::TypePool types;
         parus::diag::Bag bag;
         parus::ast::StmtId root = parus::ast::k_invalid_stmt;
+        parus::type::TypeResolveResult type_resolve{};
+        bool macro_type_ready = false;
+        bool macro_type_ok = false;
     };
 
     static ParsedProgram parse_program(const std::string& src) {
@@ -36,13 +41,34 @@ namespace {
         return p;
     }
 
+    static bool run_macro_and_type(ParsedProgram& p) {
+        if (p.macro_type_ready) return p.macro_type_ok;
+        p.macro_type_ready = true;
+
+        const bool macro_ok = parus::macro::expand_program(p.ast, p.types, p.root, p.bag);
+        if (p.bag.has_error() || !macro_ok) {
+            p.macro_type_ok = false;
+            return false;
+        }
+
+        p.type_resolve = parus::type::resolve_program_types(p.ast, p.types, p.root, p.bag);
+        p.macro_type_ok = (!p.bag.has_error() && p.type_resolve.ok);
+        return p.macro_type_ok;
+    }
+
     static parus::passes::PassResults run_passes(ParsedProgram& p) {
+        if (!run_macro_and_type(p)) {
+            return parus::passes::PassResults{};
+        }
         parus::passes::PassOptions opt{};
         return parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
     }
 
     static parus::tyck::TyckResult run_tyck(ParsedProgram& p) {
-        parus::tyck::TypeChecker tc(p.ast, p.types, p.bag);
+        if (!run_macro_and_type(p)) {
+            return parus::tyck::TyckResult{};
+        }
+        parus::tyck::TypeChecker tc(p.ast, p.types, p.bag, &p.type_resolve);
         return tc.check_program(p.root);
     }
 
@@ -51,6 +77,11 @@ namespace {
         const parus::passes::PassResults& pres,
         const parus::tyck::TyckResult& ty
     ) {
+        if (!run_macro_and_type(p)) {
+            parus::cap::CapabilityResult out{};
+            out.ok = false;
+            return out;
+        }
         return parus::cap::run_capability_check(
             p.ast, p.root, pres.name_resolve, ty, p.types, p.bag
         );
@@ -69,6 +100,10 @@ namespace {
         const parus::tyck::TyckResult& ty
     ) {
         SirRun out{};
+        if (!run_macro_and_type(p)) {
+            out.cap.ok = false;
+            return out;
+        }
         parus::sir::BuildOptions bopt{};
         out.mod = parus::sir::build_sir_module(
             p.ast, p.root, pres.sym, pres.name_resolve, ty, p.types, bopt

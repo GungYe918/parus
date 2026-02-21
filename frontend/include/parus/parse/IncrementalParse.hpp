@@ -3,6 +3,7 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/lex/Token.hpp>
+#include <parus/parse/Parser.hpp>
 #include <parus/ty/TypePool.hpp>
 
 #include <cstdint>
@@ -55,6 +56,9 @@ namespace parus::parse {
         bool ready() const { return ready_; }
         ReparseMode last_mode() const { return last_mode_; }
 
+        void set_feature_flags(ParserFeatureFlags flags) { feature_flags_ = flags; }
+        const ParserFeatureFlags& feature_flags() const { return feature_flags_; }
+
     private:
         bool full_rebuild_(std::string_view source,
                            uint32_t file_id,
@@ -69,6 +73,7 @@ namespace parus::parse {
         bool ready_ = false;
         ReparseMode last_mode_ = ReparseMode::kNone;
         uint64_t revision_seq_ = 0;
+        ParserFeatureFlags feature_flags_{};
 
         // AST/TypePool 내부 string_view 수명 보장을 위한 source 보관.
         std::vector<std::shared_ptr<std::string>> source_owners_{};

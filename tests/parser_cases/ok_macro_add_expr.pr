@@ -1,0 +1,12 @@
+macro add -> {
+    with expr {
+        (a: expr, b: expr) => expr {
+            $0 + $1
+        };
+    }
+}
+
+def main() -> i32 {
+    let v: i32 = $add(1i32, 2i32);
+    return v;
+}

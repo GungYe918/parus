@@ -51,8 +51,10 @@ namespace parus {
 
             const size_t before = cursor_.pos();
             ast::StmtId s = parse_stmt_any();
-            top.push_back(s);
-            last = ast_.stmt(s).span;
+            if (s != ast::k_invalid_stmt) {
+                top.push_back(s);
+                last = ast_.stmt(s).span;
+            }
 
             if (aborted_) break;
             if (cursor_.pos() == before && !cursor_.at(syntax::TokenKind::kEof)) {
@@ -157,7 +159,7 @@ namespace parus {
         return parse_stmt_expr();
     }
     // '{ ... }' 블록 파싱
-    ast::StmtId Parser::parse_stmt_block() {
+    ast::StmtId Parser::parse_stmt_block(bool allow_macro_decl) {
         const Token lb = cursor_.peek();
         diag_expect(syntax::TokenKind::kLBrace);
 
@@ -166,12 +168,26 @@ namespace parus {
         std::vector<ast::StmtId> local;
         local.reserve(16);
 
+        const uint32_t prev_depth = macro_scope_depth_;
+        if (allow_macro_decl) {
+            macro_scope_depth_ = prev_depth + 1;
+        }
+
         while (!cursor_.at(syntax::TokenKind::kRBrace) && !cursor_.at(syntax::TokenKind::kEof)) {
             if (aborted_) break;
 
             const size_t before = cursor_.pos();
+            if (is_macro_decl_start() && !allow_macro_decl) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "macro declaration is only allowed at top-level or nest body");
+                (void)parse_decl_macro();
+                continue;
+            }
+
             ast::StmtId child = parse_stmt_any();
-            local.push_back(child);
+            if (child != ast::k_invalid_stmt) {
+                local.push_back(child);
+            }
 
             if (aborted_) break;
             if (cursor_.pos() == before
@@ -185,6 +201,7 @@ namespace parus {
 
         const Token rb = cursor_.peek();
         diag_expect(syntax::TokenKind::kRBrace);
+        macro_scope_depth_ = prev_depth;
 
         // commit (append in one contiguous slice)
         uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());
@@ -357,6 +374,7 @@ namespace parus {
 
         // ---- type annotation ----
         ast::TypeId type_id = ast::k_invalid_type;
+        ast::TypeNodeId type_node = ast::k_invalid_type_node;
 
         if (is_static || !is_set) {
             // let: ':' required
@@ -372,7 +390,9 @@ namespace parus {
                 }
             } else {
                 // parse type normally
-                type_id = parse_type().id;
+                auto parsed = parse_type();
+                type_id = parsed.id;
+                type_node = parsed.node;
             }
         } else {
             // set: ':' not allowed
@@ -392,6 +412,7 @@ namespace parus {
         bool var_has_acts_binding = false;
         bool var_acts_is_default = false;
         ast::TypeId var_acts_target_type = ast::k_invalid_type;
+        ast::TypeNodeId var_acts_target_type_node = ast::k_invalid_type_node;
         uint32_t var_acts_set_path_begin = 0;
         uint32_t var_acts_set_path_count = 0;
         std::string_view var_acts_set_name{};
@@ -452,6 +473,7 @@ namespace parus {
                 var_acts_set_name = set_name;
                 if (type_id != ast::k_invalid_type) {
                     var_acts_target_type = type_id;
+                    var_acts_target_type_node = type_node;
                 }
             }
             return true;
@@ -515,10 +537,12 @@ namespace parus {
         s.is_static = is_static;
         s.name = name;
         s.type = type_id;
+        s.type_node = type_node;
         s.init = init;
         s.var_has_acts_binding = var_has_acts_binding;
         s.var_acts_is_default = var_acts_is_default;
         s.var_acts_target_type = var_acts_target_type;
+        s.var_acts_target_type_node = var_acts_target_type_node;
         s.var_acts_set_path_begin = var_acts_set_path_begin;
         s.var_acts_set_path_count = var_acts_set_path_count;
         s.var_acts_set_name = var_acts_set_name;

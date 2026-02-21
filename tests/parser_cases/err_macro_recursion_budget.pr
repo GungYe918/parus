@@ -1,0 +1,11 @@
+macro recur -> {
+    with expr {
+        (x: expr) => expr {
+            $recur($0)
+        };
+    }
+}
+
+def main() -> i32 {
+    return $recur(1i32);
+}

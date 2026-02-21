@@ -10,6 +10,10 @@ add_library(parus_frontend STATIC
     src/lex/lexer.cpp
 
     ${PARUS_PARSE_SOURCES}
+    src/macro/expander.cpp
+    src/macro/matcher_typed.cpp
+    src/macro/hygiene.cpp
+    src/type/type_resolve.cpp
 
     src/passes/check_pipe_hole.cpp
     src/passes/check_place_expr.cpp

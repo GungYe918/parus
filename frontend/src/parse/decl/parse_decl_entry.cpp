@@ -15,7 +15,8 @@ namespace parus {
             || k == K::kKwActs
             || k == K::kKwUse
             || k == K::kKwImport
-            || k == K::kKwNest;
+            || k == K::kKwNest
+            || is_macro_decl_start();
     }
 
     // decl 엔트리.
@@ -23,6 +24,11 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token& t = cursor_.peek();
+
+        if (is_macro_decl_start()) {
+            (void)parse_decl_macro();
+            return ast::k_invalid_stmt;
+        }
 
         // ---- use is treated as a top-level decl (policy) ----
         if (t.kind == K::kKwUse) {

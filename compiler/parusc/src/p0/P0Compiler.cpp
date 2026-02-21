@@ -11,6 +11,7 @@
 #include <parus/oir/Builder.hpp>
 #include <parus/oir/Passes.hpp>
 #include <parus/oir/Verify.hpp>
+#include <parus/macro/Expander.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/passes/Passes.hpp>
 #include <parus/sir/Builder.hpp>
@@ -18,6 +19,7 @@
 #include <parus/sir/MutAnalysis.hpp>
 #include <parus/sir/Verify.hpp>
 #include <parus/text/SourceManager.hpp>
+#include <parus/type/TypeResolve.hpp>
 #include <parus/ty/TypePool.hpp>
 #include <parus/tyck/TypeCheck.hpp>
 
@@ -302,7 +304,9 @@ namespace parusc::p0 {
 
         parus::ast::AstArena ast;
         parus::ty::TypePool types;
-        parus::Parser parser(tokens, ast, types, &bag, opt.max_errors);
+        parus::ParserFeatureFlags parser_flags{};
+        parser_flags.macro_with_token = opt.internal.macro_token_experimental;
+        parus::Parser parser(tokens, ast, types, &bag, opt.max_errors, parser_flags);
         auto root = parser.parse_program();
 
         if (opt.has_xparus && opt.internal.ast_dump) {
@@ -318,6 +322,18 @@ namespace parusc::p0 {
             return (diag_rc != 0) ? 1 : 0;
         }
 
+        const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, opt.macro_budget);
+        if (bag.has_error() || !macro_ok) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0 || !macro_ok) ? 1 : 0;
+        }
+
+        auto type_resolve = parus::type::resolve_program_types(ast, types, root, bag);
+        if (bag.has_error() || !type_resolve.ok) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0 || !type_resolve.ok) ? 1 : 0;
+        }
+
         auto pres = parus::passes::run_on_program(ast, root, bag, opt.pass_opt);
         if (bag.has_error()) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
@@ -326,7 +342,7 @@ namespace parusc::p0 {
 
         parus::tyck::TyckResult tyck_res;
         {
-            parus::tyck::TypeChecker tc(ast, types, bag);
+            parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve);
             tyck_res = tc.check_program(root);
         }
         if (bag.has_error() || !tyck_res.errors.empty()) {

@@ -1,0 +1,29 @@
+macro make_double -> {
+    with item {
+        () => item {
+            def dbl(x: i32) -> i32 {
+                return x + x;
+            }
+        };
+    }
+}
+
+macro assign_value -> {
+    with stmt {
+        (dst: ident, value: expr) => stmt {
+            do {
+                let tmp: i32 = $1;
+                $0 = tmp;
+            }
+        };
+    }
+}
+
+$make_double();
+
+def main() -> i32 {
+    let seed: i32 = 21i32;
+    set mut out = 0i32;
+    $assign_value(out, dbl(seed));
+    return out;
+}

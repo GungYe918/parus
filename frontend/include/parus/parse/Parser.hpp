@@ -8,9 +8,14 @@
 #include <vector>
 #include <utility>
 #include <unordered_set>
+#include <string_view>
 
 
 namespace parus {
+
+    struct ParserFeatureFlags {
+        bool macro_with_token = false;
+    };
 
     class Parser {
     public:
@@ -18,8 +23,9 @@ namespace parus {
                ast::AstArena& ast,
                ty::TypePool& types,
                diag::Bag* diags = nullptr,
-               uint32_t max_errors = 64)
-            : cursor_(tokens), ast_(ast), types_(types), diags_(diags), max_errors_(max_errors) {
+               uint32_t max_errors = 64,
+               ParserFeatureFlags feature_flags = {})
+            : cursor_(tokens), ast_(ast), types_(types), diags_(diags), max_errors_(max_errors), parser_features_(feature_flags) {
 
             // Lexer 단계에서 UTF-8 fatal이 발생한 경우, 파싱은 즉시 중단 상태로 취급
             if (diags_ && diags_->has_code(diag::Code::kInvalidUtf8)) {
@@ -32,12 +38,16 @@ namespace parus {
         ast::ExprId parse_expr();
         // 표현식 1개를 파싱하고 입력의 끝까지 소비되지 않으면 error expr를 반환
         ast::ExprId parse_expr_full();
+        // macro/type expander 전용: 타입 1개를 파싱하고 입력 끝까지 확인한다.
+        ast::TypeNodeId parse_type_full_for_macro(ty::TypeId* out_type = nullptr);
 
         // stmt/decl 혼용 문장 1개를 파싱
         ast::StmtId parse_stmt();
 
         // EOF까지 stmt/decl을 반복 파싱하여 프로그램(Block) 노드 생성
         ast::StmtId parse_program();
+
+        const ParserFeatureFlags& feature_flags() const { return parser_features_; }
 
     private:
 
@@ -66,6 +76,8 @@ namespace parus {
 
         //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, def, field, acts)
         bool is_decl_start(syntax::TokenKind k) const;
+        bool is_context_keyword(const Token& t, std::string_view kw) const;
+        bool is_macro_decl_start() const;
 
         bool is_unambiguous_stmt_start(syntax::TokenKind k) const;
 
@@ -114,6 +126,7 @@ namespace parus {
         // --------------------
 
         struct ParsedType {
+            ast::TypeNodeId node = ast::k_invalid_type_node;
             ty::TypeId id = ty::kInvalidType;
             Span span{};
         };
@@ -132,7 +145,7 @@ namespace parus {
         ast::StmtId parse_stmt_expr();
 
         //  '{ ... }' 블록 파싱
-        ast::StmtId parse_stmt_block();
+        ast::StmtId parse_stmt_block(bool allow_macro_decl = false);
 
         //  let/set 변수 선언 파싱
         ast::StmtId parse_stmt_var();
@@ -188,6 +201,7 @@ namespace parus {
         ast::StmtId parse_decl_use();
         ast::StmtId parse_decl_import();
         ast::StmtId parse_decl_nest();
+        bool parse_decl_macro();
 
         //  '@attr' 리스트를 파싱하여 arena에 저장
         std::pair<uint32_t, uint32_t> parse_decl_fn_attr_list();
@@ -208,6 +222,9 @@ namespace parus {
 
         //  일반 인자(positional or labeled)를 파싱
         ast::Arg parse_call_arg(int ternary_depth);
+        ast::ExprId parse_macro_call_expr();
+        bool parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
+        std::pair<uint32_t, uint32_t> parse_macro_call_arg_tokens();
 
         // --------------------
         // recovery & misc
@@ -244,6 +261,8 @@ namespace parus {
         bool aborted_ = false;
         bool too_many_errors_emitted_ = false;
         bool seen_file_nest_directive_ = false;
+        uint32_t macro_scope_depth_ = 0;
+        ParserFeatureFlags parser_features_{};
     };
 
 } // namespace parus

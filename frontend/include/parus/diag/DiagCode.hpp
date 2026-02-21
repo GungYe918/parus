@@ -28,6 +28,13 @@ namespace parus::diag {
         kAmbiguousAmpPrefixChain,      // ambiguous '&' prefix chain (e.g. &&&x)
         kArraySizeExpectedIntLiteral,  // array suffix requires integer literal (T[N])
         kArraySizeInvalidLiteral,      // array size literal is malformed/out of range
+        kMacroNoMatch,                 // macro arm/group matching failed
+        kMacroAmbiguous,               // multiple macro arms matched ambiguously
+        kMacroRepeatEmpty,             // repetition body can match empty
+        kMacroRecursionBudget,         // expansion recursion/steps budget exceeded
+        kMacroReparseFail,             // expanded output failed to reparse for OutKind
+        kMacroTokenExperimentalRequired, // with token requires explicit experimental flag
+        kMacroTokenUnimplemented,      // with token expansion path is not implemented yet
 
         // pipe + hole rules
         kPipeRhsMustBeCall,

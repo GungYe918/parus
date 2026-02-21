@@ -1,6 +1,7 @@
 #include <parus/backend/aot/AOTBackend.hpp>
 #include <parus/backend/aot/LLVMIRLowering.hpp>
 #include <parus/lex/Lexer.hpp>
+#include <parus/macro/Expander.hpp>
 #include <parus/oir/Builder.hpp>
 #include <parus/oir/Passes.hpp>
 #include <parus/oir/Verify.hpp>
@@ -8,6 +9,7 @@
 #include <parus/passes/Passes.hpp>
 #include <parus/sir/Builder.hpp>
 #include <parus/sir/CapabilityAnalysis.hpp>
+#include <parus/type/TypeResolve.hpp>
 #include <parus/tyck/TypeCheck.hpp>
 
 #include <algorithm>
@@ -25,6 +27,9 @@ namespace {
         parus::ty::TypePool types;
         parus::diag::Bag bag;
         parus::ast::StmtId root = parus::ast::k_invalid_stmt;
+        parus::type::TypeResolveResult type_resolve{};
+        bool macro_type_ready = false;
+        bool macro_type_ok = false;
     };
 
     struct OirPipeline {
@@ -52,14 +57,29 @@ namespace {
         return p;
     }
 
+    static bool run_macro_and_type_(ParsedProgram& p) {
+        if (p.macro_type_ready) return p.macro_type_ok;
+        p.macro_type_ready = true;
+
+        const bool macro_ok = parus::macro::expand_program(p.ast, p.types, p.root, p.bag);
+        if (p.bag.has_error() || !macro_ok) {
+            p.macro_type_ok = false;
+            return false;
+        }
+        p.type_resolve = parus::type::resolve_program_types(p.ast, p.types, p.root, p.bag);
+        p.macro_type_ok = (!p.bag.has_error() && p.type_resolve.ok);
+        return p.macro_type_ok;
+    }
+
     static std::optional<OirPipeline> build_oir_pipeline_(const std::string& src) {
         OirPipeline out{};
         out.prog = parse_program_(src);
+        if (!run_macro_and_type_(out.prog)) return std::nullopt;
 
         parus::passes::PassOptions popt{};
         out.pres = parus::passes::run_on_program(out.prog.ast, out.prog.root, out.prog.bag, popt);
 
-        parus::tyck::TypeChecker tc(out.prog.ast, out.prog.types, out.prog.bag);
+        parus::tyck::TypeChecker tc(out.prog.ast, out.prog.types, out.prog.bag, &out.prog.type_resolve);
         out.ty = tc.check_program(out.prog.root);
 
         parus::sir::BuildOptions bopt{};

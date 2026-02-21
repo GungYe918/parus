@@ -467,6 +467,7 @@ namespace parus {
                 s.use_kind = ast::UseKind::kTypeAlias;
                 s.use_name = lhs;
                 s.type = ty.id;
+                s.type_node = ty.node;
 
                 Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
                 s.span = span_join(use_kw.span, end);

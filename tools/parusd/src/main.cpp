@@ -2,10 +2,12 @@
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
+#include <parus/macro/Expander.hpp>
 #include <parus/parse/IncrementalParse.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/passes/Passes.hpp>
 #include <parus/text/SourceManager.hpp>
+#include <parus/type/TypeResolve.hpp>
 #include <parus/ty/TypePool.hpp>
 #include <parus/tyck/TypeCheck.hpp>
 
@@ -328,6 +330,11 @@ namespace {
         return static_cast<int64_t>(v->number_v);
     }
 
+    std::optional<bool> as_bool_(const JsonValue* v) {
+        if (v == nullptr || v->kind != JsonValue::Kind::kBool) return std::nullopt;
+        return v->bool_v;
+    }
+
     std::string trim_(std::string_view s) {
         size_t b = 0;
         while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) ++b;
@@ -551,6 +558,12 @@ namespace {
         } analysis{};
     };
 
+    struct ServerMacroConfig {
+        parus::macro::ExpansionBudget budget = parus::macro::default_budget_jit();
+        parus::ParserFeatureFlags parser_features{};
+        std::vector<std::string> warnings{};
+    };
+
     bool decode_utf8_code_point_(std::string_view text, size_t off, uint32_t& cp, size_t& len) {
         if (off >= text.size()) return false;
 
@@ -666,6 +679,72 @@ namespace {
             out.range = r;
         }
         return true;
+    }
+
+    ServerMacroConfig parse_macro_config_from_initialize_(const JsonValue* params) {
+        ServerMacroConfig cfg{};
+        if (params == nullptr || params->kind != JsonValue::Kind::kObject) return cfg;
+
+        const auto* init_opts = obj_get_(*params, "initializationOptions");
+        if (init_opts == nullptr || init_opts->kind != JsonValue::Kind::kObject) return cfg;
+
+        const JsonValue* root = init_opts;
+        if (const auto* parus_cfg = obj_get_(*init_opts, "parus");
+            parus_cfg != nullptr && parus_cfg->kind == JsonValue::Kind::kObject) {
+            root = parus_cfg;
+        }
+
+        if (const auto* budget_cfg = obj_get_(*root, "macroBudget");
+            budget_cfg != nullptr && budget_cfg->kind == JsonValue::Kind::kObject) {
+            const auto set_budget_field = [&](const char* key, uint32_t& out_field) {
+                const auto v = as_i64_(obj_get_(*budget_cfg, key));
+                if (!v.has_value()) return;
+                if (*v <= 0) {
+                    out_field = 0;
+                    return;
+                }
+                if (static_cast<uint64_t>(*v) > std::numeric_limits<uint32_t>::max()) {
+                    out_field = std::numeric_limits<uint32_t>::max();
+                    return;
+                }
+                out_field = static_cast<uint32_t>(*v);
+            };
+            set_budget_field("maxDepth", cfg.budget.max_depth);
+            set_budget_field("maxSteps", cfg.budget.max_steps);
+            set_budget_field("maxOutputTokens", cfg.budget.max_output_tokens);
+        }
+
+        if (const auto* exp_cfg = obj_get_(*root, "experimental");
+            exp_cfg != nullptr && exp_cfg->kind == JsonValue::Kind::kObject) {
+            if (const auto v = as_bool_(obj_get_(*exp_cfg, "macroWithToken")); v.has_value()) {
+                cfg.parser_features.macro_with_token = *v;
+            }
+        }
+
+        const auto before = cfg.budget;
+        const auto clamped = parus::macro::clamp_budget(cfg.budget);
+        if (clamped.depth) {
+            cfg.warnings.push_back(
+                "macro budget clamped: maxDepth "
+                + std::to_string(before.max_depth)
+                + " -> "
+                + std::to_string(cfg.budget.max_depth));
+        }
+        if (clamped.steps) {
+            cfg.warnings.push_back(
+                "macro budget clamped: maxSteps "
+                + std::to_string(before.max_steps)
+                + " -> "
+                + std::to_string(cfg.budget.max_steps));
+        }
+        if (clamped.output_tokens) {
+            cfg.warnings.push_back(
+                "macro budget clamped: maxOutputTokens "
+                + std::to_string(before.max_output_tokens)
+                + " -> "
+                + std::to_string(cfg.budget.max_output_tokens));
+        }
+        return cfg;
     }
 
     bool apply_text_change_(DocumentState& doc, const TextChange& ch) {
@@ -1035,7 +1114,11 @@ namespace {
         return out;
     }
 
-    AnalysisResult analyze_document_(std::string_view uri, DocumentState& doc) {
+    AnalysisResult analyze_document_(
+        std::string_view uri,
+        DocumentState& doc,
+        const parus::macro::ExpansionBudget& macro_budget
+    ) {
         AnalysisResult out;
 
         parus::SourceManager sm;
@@ -1067,16 +1150,22 @@ namespace {
 
         std::unordered_map<uint64_t, SemClass> resolved_map;
         if (!bag.has_error()) {
-            parus::passes::PassOptions popt{};
-            const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
-            resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
+            const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, macro_budget);
+            if (!bag.has_error() && macro_ok) {
+                auto type_resolve = parus::type::resolve_program_types(ast, types, root, bag);
+                if (!bag.has_error() && type_resolve.ok) {
+                    parus::passes::PassOptions popt{};
+                    const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+                    resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
 
-            if (!bag.has_error()) {
-                parus::tyck::TypeChecker tc(ast, types, bag);
-                const auto ty = tc.check_program(root);
+                    if (!bag.has_error()) {
+                        parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve);
+                        const auto ty = tc.check_program(root);
 
-                if (!bag.has_error() && ty.errors.empty()) {
-                    (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
+                        if (!bag.has_error() && ty.errors.empty()) {
+                            (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
+                        }
+                    }
                 }
             }
         }
@@ -1289,6 +1378,15 @@ namespace {
         return json;
     }
 
+    std::string build_window_log_message_(int severity, std::string_view message) {
+        std::string json;
+        json += "{\"jsonrpc\":\"2.0\",\"method\":\"window/logMessage\",\"params\":{";
+        json += "\"type\":" + std::to_string(severity) + ",";
+        json += "\"message\":\"" + json_escape_(message) + "\"";
+        json += "}}";
+        return json;
+    }
+
     std::string build_response_result_(const JsonValue* id, std::string_view result_json) {
         if (id == nullptr) return {};
         std::string out = "{\"jsonrpc\":\"2.0\",\"id\":" + json_value_to_text_(*id)
@@ -1329,9 +1427,16 @@ namespace {
 
                 const auto params = obj_get_(msg, "params");
                 if (*method == "initialize") {
+                    const auto macro_cfg = parse_macro_config_from_initialize_(params);
+                    macro_budget_ = macro_cfg.budget;
+                    parser_features_ = macro_cfg.parser_features;
+
                     const std::string result = build_initialize_result_();
                     const auto response = build_response_result_(id, result);
                     if (!response.empty()) write_lsp_message_(std::cout, response);
+                    for (const auto& w : macro_cfg.warnings) {
+                        notify_log_message_(/*warning=*/2, w);
+                    }
                     continue;
                 }
 
@@ -1383,12 +1488,18 @@ namespace {
             write_lsp_message_(std::cout, msg);
         }
 
+        void notify_log_message_(int severity, std::string_view text) {
+            const auto msg = build_window_log_message_(severity, text);
+            write_lsp_message_(std::cout, msg);
+        }
+
         void ensure_analysis_cache_(std::string_view uri, DocumentState& st) {
             if (st.analysis.valid && st.analysis.revision == st.revision) {
                 return;
             }
 
-            auto analyzed = analyze_document_(uri, st);
+            st.parse_session.set_feature_flags(parser_features_);
+            auto analyzed = analyze_document_(uri, st, macro_budget_);
             st.analysis.revision = st.revision;
             st.analysis.valid = true;
             st.analysis.diagnostics = std::move(analyzed.diagnostics);
@@ -1415,6 +1526,7 @@ namespace {
             st.text = std::string(*text);
             st.version = as_i64_(obj_get_(*td, "version")).value_or(0);
             st.revision = ++revision_seq_;
+            st.parse_session.set_feature_flags(parser_features_);
 
             auto it = documents_.insert_or_assign(std::string(*uri), std::move(st)).first;
             ensure_analysis_cache_(*uri, it->second);
@@ -1523,6 +1635,8 @@ namespace {
         bool shutdown_requested_ = false;
         uint64_t revision_seq_ = 0;
         bool trace_incremental_ = (std::getenv("PARUSD_TRACE_INCREMENTAL") != nullptr);
+        parus::macro::ExpansionBudget macro_budget_ = parus::macro::default_budget_jit();
+        parus::ParserFeatureFlags parser_features_{};
     };
 
     void print_usage_() {

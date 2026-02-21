@@ -37,6 +37,7 @@
 1. `spec/26.md` - 14. 구현 체크리스트 (v0)
 1. `spec/27.md` - 15. 종합 예시 (여러 기능 한 번에)
 1. `spec/28.md` - 16. EBNF 테이블 (v0 전체 문서 반영, 파서 제작 가능 수준)
+1. `spec/29.md` - 17. Macro System (Draft, Phase1.5)
 
 ## EBNF
 

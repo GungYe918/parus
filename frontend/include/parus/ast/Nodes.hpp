@@ -2,6 +2,7 @@
 #pragma once
 #include <parus/text/Span.hpp>
 #include <parus/syntax/TokenKind.hpp>
+#include <parus/lex/Token.hpp>
 #include <parus/ty/Type.hpp>
 
 #include <cstdint>
@@ -21,6 +22,9 @@ namespace parus::ast {
 
     using StmtId = uint32_t;
     inline constexpr StmtId k_invalid_stmt = 0xFFFF'FFFFu;
+
+    using TypeNodeId = uint32_t;
+    inline constexpr TypeNodeId k_invalid_type_node = 0xFFFF'FFFFu;
 
     // NOTE:
     // - TypeId/Type struct/TypeKind are owned by parus::ty.
@@ -57,6 +61,7 @@ namespace parus::ast {
         // postfix
         kCall,
         kIndex,
+        kMacroCall,
 
         // loop
         kLoop,
@@ -144,6 +149,7 @@ namespace parus::ast {
     struct Param {
         std::string_view name{};
         TypeId type = k_invalid_type;
+        TypeNodeId type_node = k_invalid_type_node;
 
         bool is_mut = false;
         bool is_self = false; // receiver marker
@@ -181,6 +187,7 @@ namespace parus::ast {
 
     struct FieldMember {
         TypeId type = k_invalid_type;
+        TypeNodeId type_node = k_invalid_type_node;
         std::string_view name{};
         Span span{};
     };
@@ -202,6 +209,110 @@ namespace parus::ast {
         kAs,        // expr as T
         kAsOptional,// expr as? T
         kAsForce,   // expr as! T
+    };
+
+    enum class TypeNodeKind : uint8_t {
+        kError,
+        kNamedPath,
+        kOptional,
+        kArray,
+        kBorrow,
+        kEscape,
+        kPtr,
+        kFn,
+        kMacroCall,
+    };
+
+    struct TypeNode {
+        TypeNodeKind kind = TypeNodeKind::kError;
+        Span span{};
+
+        // for named path
+        uint32_t path_begin = 0;
+        uint32_t path_count = 0;
+
+        // common child for optional/array/borrow/escape/ptr
+        TypeNodeId elem = k_invalid_type_node;
+
+        // array
+        bool array_has_size = false;
+        uint32_t array_size = 0;
+
+        // borrow/ptr
+        bool is_mut = false;
+
+        // fn type
+        TypeNodeId fn_ret = k_invalid_type_node;
+        uint32_t fn_param_begin = 0; // slice in AstArena::type_node_children_
+        uint32_t fn_param_count = 0;
+
+        // macro call
+        uint32_t macro_path_begin = 0; // slice in AstArena::path_segs_
+        uint32_t macro_path_count = 0;
+        uint32_t macro_arg_begin = 0;  // slice in AstArena::macro_tokens_
+        uint32_t macro_arg_count = 0;
+
+        // optional cache after TypeResolve
+        TypeId resolved_type = k_invalid_type;
+    };
+
+    enum class MacroMatchKind : uint8_t {
+        kExpr,
+        kStmt,
+        kItem,
+        kType,
+        kToken,
+    };
+
+    enum class MacroOutKind : uint8_t {
+        kExpr,
+        kStmt,
+        kItem,
+        kType,
+    };
+
+    enum class MacroFragKind : uint8_t {
+        kExpr,
+        kStmt,
+        kItem,
+        kType,
+        kPath,
+        kIdent,
+        kBlock,
+        kTt,
+    };
+
+    struct MacroTypedCapture {
+        std::string_view name{};
+        MacroFragKind frag = MacroFragKind::kExpr;
+        bool variadic = false;
+        Span span{};
+    };
+
+    struct MacroArm {
+        uint32_t capture_begin = 0; // slice in AstArena::macro_captures_
+        uint32_t capture_count = 0;
+        MacroOutKind out_kind = MacroOutKind::kExpr;
+        uint32_t template_token_begin = 0; // slice in AstArena::macro_tokens_
+        uint32_t template_token_count = 0;
+        bool token_pattern = false; // reserved for Phase2
+        Span span{};
+    };
+
+    struct MacroGroup {
+        MacroMatchKind match_kind = MacroMatchKind::kExpr;
+        uint32_t arm_begin = 0; // slice in AstArena::macro_arms_
+        uint32_t arm_count = 0;
+        bool phase2_token_group = false; // true when `with token` used
+        Span span{};
+    };
+
+    struct MacroDecl {
+        std::string_view name{};
+        uint32_t group_begin = 0; // slice in AstArena::macro_groups_
+        uint32_t group_count = 0;
+        uint32_t scope_depth = 0;
+        Span span{};
     };
 
     // --------------------
@@ -248,7 +359,14 @@ namespace parus::ast {
 
         // cast payload
         TypeId cast_type = k_invalid_type;
+        TypeNodeId cast_type_node = k_invalid_type_node;
         CastKind cast_kind = CastKind::kAs;
+
+        // macro call payload
+        uint32_t macro_path_begin = 0; // slice in AstArena::path_segs_
+        uint32_t macro_path_count = 0;
+        uint32_t macro_token_begin = 0; // slice in AstArena::macro_tokens_
+        uint32_t macro_token_count = 0;
 
         // -----------------------------------------
         // target/expected type (from tyck)
@@ -316,6 +434,7 @@ namespace parus::ast {
         LinkAbi link_abi = LinkAbi::kNone;
         std::string_view name{};
         TypeId type = k_invalid_type;
+        TypeNodeId type_node = k_invalid_type_node;
         ExprId init = k_invalid_expr;
 
         // ---- def decl ----
@@ -327,6 +446,7 @@ namespace parus::ast {
         FnMode fn_mode = FnMode::kNone;
 
         TypeId fn_ret = k_invalid_type;
+        TypeNodeId fn_ret_type_node = k_invalid_type_node;
 
         bool is_pure = false;         // qualifier 키워드형
         bool is_comptime = false;     // qualifier 키워드형
@@ -365,6 +485,7 @@ namespace parus::ast {
         bool acts_is_for = false;          // true: `acts for T` or `acts Name for T`
         bool acts_has_set_name = false;    // true: `acts Name for T`
         TypeId acts_target_type = k_invalid_type;
+        TypeNodeId acts_target_type_node = k_invalid_type_node;
 
         // ---- use ----
         UseKind use_kind = UseKind::kError;
@@ -385,6 +506,7 @@ namespace parus::ast {
         bool var_has_acts_binding = false;
         bool var_acts_is_default = false;
         TypeId var_acts_target_type = k_invalid_type; // typed let에서만 파싱 시점 확정
+        TypeNodeId var_acts_target_type_node = k_invalid_type_node;
         uint32_t var_acts_set_path_begin = 0;
         uint32_t var_acts_set_path_count = 0;
         std::string_view var_acts_set_name{};
@@ -406,6 +528,14 @@ namespace parus::ast {
     public:
         ExprId add_expr(const Expr& e) { exprs_.push_back(e); return static_cast<ExprId>(exprs_.size() - 1); }
         StmtId add_stmt(const Stmt& s) { stmts_.push_back(s); return static_cast<StmtId>(stmts_.size() - 1); }
+        TypeNodeId add_type_node(const TypeNode& t) {
+            type_nodes_.push_back(t);
+            return static_cast<TypeNodeId>(type_nodes_.size() - 1);
+        }
+        uint32_t add_type_node_child(TypeNodeId id) {
+            type_node_children_.push_back(id);
+            return static_cast<uint32_t>(type_node_children_.size() - 1);
+        }
 
         uint32_t add_arg(const Arg& a) { args_.push_back(a); return static_cast<uint32_t>(args_.size() - 1); }
 
@@ -440,15 +570,44 @@ namespace parus::ast {
         }
 
         uint32_t add_stmt_child(StmtId id) {  stmt_children_.push_back(id); return static_cast<uint32_t>(stmt_children_.size() - 1);  }
+        uint32_t add_macro_token(const Token& t) {
+            macro_tokens_.push_back(t);
+            return static_cast<uint32_t>(macro_tokens_.size() - 1);
+        }
+        uint32_t add_macro_capture(const MacroTypedCapture& c) {
+            macro_captures_.push_back(c);
+            return static_cast<uint32_t>(macro_captures_.size() - 1);
+        }
+        uint32_t add_macro_arm(const MacroArm& a) {
+            macro_arms_.push_back(a);
+            return static_cast<uint32_t>(macro_arms_.size() - 1);
+        }
+        uint32_t add_macro_group(const MacroGroup& g) {
+            macro_groups_.push_back(g);
+            return static_cast<uint32_t>(macro_groups_.size() - 1);
+        }
+        uint32_t add_macro_decl(const MacroDecl& d) {
+            macro_decls_.push_back(d);
+            return static_cast<uint32_t>(macro_decls_.size() - 1);
+        }
 
         // accessors
         const Expr& expr(ExprId id) const { return exprs_[id]; }
         Expr& expr_mut(ExprId id) { return exprs_[id]; }
         const std::vector<Expr>& exprs() const { return exprs_; }
+        std::vector<Expr>& exprs_mut() { return exprs_; }
 
         const Stmt& stmt(StmtId id) const { return stmts_[id]; }
         Stmt& stmt_mut(StmtId id) { return stmts_[id]; }
         const std::vector<Stmt>& stmts() const { return stmts_; }
+        std::vector<Stmt>& stmts_mut() { return stmts_; }
+
+        const TypeNode& type_node(TypeNodeId id) const { return type_nodes_[id]; }
+        TypeNode& type_node_mut(TypeNodeId id) { return type_nodes_[id]; }
+        const std::vector<TypeNode>& type_nodes() const { return type_nodes_; }
+        std::vector<TypeNode>& type_nodes_mut() { return type_nodes_; }
+        const std::vector<TypeNodeId>& type_node_children() const { return type_node_children_; }
+        std::vector<TypeNodeId>& type_node_children_mut() { return type_node_children_; }
 
         const std::vector<Arg>& args() const { return args_; }
         std::vector<Arg>& args_mut() { return args_; }
@@ -476,10 +635,22 @@ namespace parus::ast {
 
         const std::vector<StmtId>& stmt_children() const { return stmt_children_; }
         std::vector<StmtId>& stmt_children_mut() { return stmt_children_; }
+        const std::vector<Token>& macro_tokens() const { return macro_tokens_; }
+        std::vector<Token>& macro_tokens_mut() { return macro_tokens_; }
+        const std::vector<MacroTypedCapture>& macro_captures() const { return macro_captures_; }
+        std::vector<MacroTypedCapture>& macro_captures_mut() { return macro_captures_; }
+        const std::vector<MacroArm>& macro_arms() const { return macro_arms_; }
+        std::vector<MacroArm>& macro_arms_mut() { return macro_arms_; }
+        const std::vector<MacroGroup>& macro_groups() const { return macro_groups_; }
+        std::vector<MacroGroup>& macro_groups_mut() { return macro_groups_; }
+        const std::vector<MacroDecl>& macro_decls() const { return macro_decls_; }
+        std::vector<MacroDecl>& macro_decls_mut() { return macro_decls_; }
 
     private:
         std::vector<Expr> exprs_;
         std::vector<Stmt> stmts_;
+        std::vector<TypeNode> type_nodes_;
+        std::vector<TypeNodeId> type_node_children_;
         std::vector<Arg>  args_;
 
         std::vector<Attr> fn_attrs_;
@@ -493,6 +664,11 @@ namespace parus::ast {
         std::vector<std::string_view> path_segs_;
 
         std::vector<StmtId> stmt_children_;
+        std::vector<Token> macro_tokens_;
+        std::vector<MacroTypedCapture> macro_captures_;
+        std::vector<MacroArm> macro_arms_;
+        std::vector<MacroGroup> macro_groups_;
+        std::vector<MacroDecl> macro_decls_;
     };
 
 } // namespace parus::ast

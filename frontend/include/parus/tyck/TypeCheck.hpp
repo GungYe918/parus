@@ -16,6 +16,9 @@
 #include <unordered_map> 
 #include <unordered_set>
 
+namespace parus::type {
+    struct TypeResolveResult;
+}
 
 namespace parus::tyck {
 
@@ -36,11 +39,11 @@ namespace parus::tyck {
 
     class TypeChecker {
     public:
-        TypeChecker(ast::AstArena& ast, ty::TypePool& types)
-            : ast_(ast), types_(types) {}
+        TypeChecker(ast::AstArena& ast, ty::TypePool& types, const parus::type::TypeResolveResult* tr = nullptr)
+            : ast_(ast), types_(types), type_resolve_(tr) {}
 
-        TypeChecker(ast::AstArena& ast, ty::TypePool& types, diag::Bag& bag)
-            : ast_(ast), types_(types), diag_bag_(&bag) {}
+        TypeChecker(ast::AstArena& ast, ty::TypePool& types, diag::Bag& bag, const parus::type::TypeResolveResult* tr = nullptr)
+            : ast_(ast), types_(types), type_resolve_(tr), diag_bag_(&bag) {}
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
 
@@ -238,6 +241,7 @@ namespace parus::tyck {
 
         ast::AstArena& ast_;
         ty::TypePool& types_;
+        const parus::type::TypeResolveResult* type_resolve_ = nullptr;
         diag::Bag* diag_bag_ = nullptr;
 
         // ----------------------------------------

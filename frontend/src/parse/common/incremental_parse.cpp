@@ -123,7 +123,7 @@ namespace parus::parse {
 
         ast::AstArena arena{};
         ty::TypePool types{};
-        Parser parser(toks, arena, types, &bag, /*max_errors=*/256);
+        Parser parser(toks, arena, types, &bag, /*max_errors=*/256, feature_flags_);
         const auto root = parser.parse_program();
 
         ParseSnapshot next{};
@@ -183,7 +183,7 @@ namespace parus::parse {
         ast::AstArena arena = snapshot_.ast;
         ty::TypePool types = snapshot_.types;
 
-        Parser partial_parser(partial_tokens, arena, types, &local_bag, /*max_errors=*/256);
+        Parser partial_parser(partial_tokens, arena, types, &local_bag, /*max_errors=*/256, feature_flags_);
         const auto partial_root = partial_parser.parse_program();
         if (partial_root == ast::k_invalid_stmt) return false;
 

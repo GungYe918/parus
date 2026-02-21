@@ -2,6 +2,7 @@
 #pragma once
 
 #include <parus/diag/Render.hpp>
+#include <parus/macro/Expander.hpp>
 #include <parus/passes/Passes.hpp>
 
 #include <cstdint>
@@ -42,6 +43,7 @@ namespace parusc::cli {
 
         bool emit_llvm_ir = false;
         bool emit_object = false;
+        bool macro_token_experimental = false;
     };
 
     /// @brief `parusc` 최종 실행 옵션.
@@ -66,6 +68,8 @@ namespace parusc::cli {
         uint32_t context_lines = 2;
         uint32_t max_errors = 64;
         parus::passes::PassOptions pass_opt{};
+        parus::macro::ExpansionBudget macro_budget = parus::macro::default_budget_aot();
+        std::vector<std::string> warnings{};
 
         // parse-time explicit flags for conflict validation
         bool output_path_explicit = false;

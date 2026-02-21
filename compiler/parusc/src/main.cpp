@@ -31,5 +31,9 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    for (const auto& w : opt.warnings) {
+        std::cerr << "warning: " << w << "\n";
+    }
+
     return parusc::driver::run(opt, argv[0]);
 }

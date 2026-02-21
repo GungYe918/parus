@@ -15,7 +15,7 @@ namespace parus::syntax {
     };
 
     
-    inline constexpr std::array<PunctEntry, 45> k_punct_table = {{
+    inline constexpr std::array<PunctEntry, 46> k_punct_table = {{
         {"..:", TokenKind::kDotDotColon},
         {"..",  TokenKind::kDotDot},
         {".",   TokenKind::kDot},
@@ -47,6 +47,7 @@ namespace parus::syntax {
         {"%=",  TokenKind::kPercentAssign},
 
         {"@",   TokenKind::kAt},
+        {"$",   TokenKind::kDollar},
 
         {"(",   TokenKind::kLParen},
         {")",   TokenKind::kRParen},

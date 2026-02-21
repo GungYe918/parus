@@ -75,6 +75,7 @@ namespace parus {
         Token name_tok = cursor_.peek();
         Span type_span = name_tok.span;
         ast::TypeId parsed_type = ast::k_invalid_type;
+        ast::TypeNodeId parsed_type_node = ast::k_invalid_type_node;
 
         // receiver form:
         //   self | self mut | self move
@@ -151,6 +152,7 @@ namespace parus {
             // Type
             auto ty = parse_type(); // ParsedType { id, span }
             parsed_type = ty.id;
+            parsed_type_node = ty.node;
             type_span = ty.span;
         }
 
@@ -204,6 +206,7 @@ namespace parus {
         ast::Param p{};
         p.name = name;
         p.type = parsed_type;
+        p.type_node = parsed_type_node;
         p.is_mut = is_mut && !is_self;
         p.is_self = is_self;
         p.self_kind = self_kind;
@@ -521,6 +524,7 @@ namespace parus {
 
         s.type = sig_id;
         s.fn_ret = ret_ty.id;
+        s.fn_ret_type_node = ret_ty.node;
 
         s.a = body;
 

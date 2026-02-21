@@ -385,7 +385,7 @@ namespace parus {
                     Lexer nested_lexer(expr_src, t.span.file_id, nullptr);
                     const auto nested_tokens = nested_lexer.lex_all();
 
-                    Parser nested_parser(nested_tokens, ast_, types_, nullptr);
+                    Parser nested_parser(nested_tokens, ast_, types_, nullptr, 64, parser_features_);
                     const ast::ExprId inner = nested_parser.parse_expr_full();
 
                     const size_t expr_after = ast_.exprs().size();
@@ -544,6 +544,10 @@ namespace parus {
 
         if (t.kind == syntax::TokenKind::kLBracket) {
             return parse_expr_array_lit(ternary_depth);
+        }
+
+        if (t.kind == syntax::TokenKind::kDollar) {
+            return parse_macro_call_expr();
         }
 
         if (t.kind == syntax::TokenKind::kKwActs &&
@@ -1006,6 +1010,7 @@ namespace parus {
                 e.a = base;
                 e.cast_kind = ck;
                 e.cast_type = parsed_ty.id;
+                e.cast_type_node = parsed_ty.node;
 
                 Span end = parsed_ty.span.hi ? parsed_ty.span : op_span;
                 e.span = span_join(ast_.expr(base).span, end);

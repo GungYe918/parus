@@ -1,6 +1,6 @@
 # Parus Macro System Model (Design Freeze)
 
-문서 버전: `draft-0.1`  
+문서 버전: `draft-0.2`  
 상태: `Design Freeze (TODO Track)`  
 목적: 다음 대화에서 구현을 진행하기 위한 결정 완결 기준 문서
 
@@ -12,11 +12,22 @@
 1. 구현자가 추가 결정을 하지 않아도 되도록 EBNF와 수용 기준을 함께 정의한다.
 1. 본 문서는 TODO 트랙 설계 문서이며, 구현 이후 normative 문서로 승격 가능하다.
 
+## 1.1 현재 구현 기준 (Phase1.5 Delta)
+
+이 문서는 장기 목표(Phase2+ 포함)와 현재 구현 기준(Phase1.5)을 함께 기록한다.
+
+1. 현재 라운드는 `typed macro(expr/stmt/item/type)`를 실사용 기준으로 고정한다.
+1. `with token`은 기본 비활성 상태이며, 실험 플래그를 켜도 확장기는 미구현 진단으로 종료한다.
+1. 위생성은 binder 중심으로 제한한다(`let/set/def param/loop binder`).
+1. `$sizeof` 같은 표준 매크로는 빌트인 계약점/표준 라이브러리 체계 확정 이후로 이월한다.
+1. 매크로 예산은 기본값 + 사용자 조정 + 하드 상한 clamp 정책으로 동작한다.
+
 ## 2. 결정 사항 (Non-negotiable)
 
 1. 문서 범위는 전체 설계 + EBNF로 고정한다.
 1. 매크로 호출 문법은 `$foo(...)`만 허용한다.
-1. `with token`은 `macro_rules!` 코어급 표현력(반복/재귀 포함)을 제공한다.
+1. `with token`의 장기 목표는 `macro_rules!` 코어급 표현력(반복/재귀 포함)이다.
+1. Phase1.5 구현에서는 `with token`을 실험 플래그로만 노출하고 확장은 미지원으로 고정한다.
 1. 안전성 우선 정책을 적용한다. 증명 불가능한 경우 보수적으로 실패/진단한다.
 
 ## 3. 비목표
@@ -24,6 +35,7 @@
 1. 본 문서에서 실제 파서/AST 코드 구현을 수행하지 않는다.
 1. 본 문서에서 컴파일러 extension 기반 매크로 런타임을 도입하지 않는다.
 1. 기본 문법/기본 타입/핵심 런타임 API를 매크로로 대체하는 정책을 허용하지 않는다.
+1. `$sizeof`를 이번 라운드 표준 매크로로 포함하지 않는다.
 
 ## 4. 표면 문법 고정
 
@@ -69,9 +81,9 @@ MacroCall      := "$" Path "(" ArgTokenStream? ")" ;
 1. `Group`은 `(...)`, `{...}`, `[...]`로 중첩 가능한 토큰 그룹을 의미한다.
 1. `TokenLit`은 키워드/연산자/구두점 리터럴 토큰을 의미한다.
 
-## 5. `with token` 허용 범위 (코어급)
+## 5. `with token` 범위 (장기 목표 + 현재 상태)
 
-`with token`은 다음 기능을 반드시 지원한다.
+장기 목표(Phase2+)에서 `with token`은 다음 기능을 지원한다.
 
 1. `tt` 캡처
 1. typed fragment 캡처(`expr`, `type`, `path`, `ident`, `stmt`, `item`, `block`)
@@ -82,12 +94,24 @@ MacroCall      := "$" Path "(" ArgTokenStream? ")" ;
 1. variadic 포워딩(`tt...`, `$n...`)
 1. 리터럴 토큰 매칭(키워드/연산자/구두점)
 
+Phase1.5 현재 상태:
+
+1. 기본값은 비활성이다.
+1. `-Xparus -macro-token-experimental` 또는 LSP 초기화 옵션으로만 선언 파싱을 허용한다.
+1. 확장기는 token-group arm을 만나면 결정적 미구현 진단(`kMacroTokenUnimplemented`)으로 실패한다.
+
 ## 6. 위생성(Hygiene) 모델
 
-기본 위생성은 hygienic이다.
+기본 위생성은 hygienic이며, Phase1.5에서는 binder 중심으로 제한 적용한다.
 
 1. 매크로가 생성한 식별자는 gensym 기반으로 call-site와 충돌하지 않아야 한다.
 1. 패턴 캡처된 식별자는 call-site 문맥에서 해석한다.
+1. Phase1.5 자동 rename 대상 binder:
+1. `let [mut] name`
+1. `set [mut] name`
+1. `def (...)` 파라미터 이름
+1. `loop (name in ...)`
+1. 캡처 토큰은 rename 금지(call-site 의미 보존).
 1. 기본 정책에서 의도적 비위생 escape는 금지한다.
 1. 비위생 escape는 향후 reserved opt-in 설계로만 허용한다.
 
@@ -129,6 +153,14 @@ positional 규칙:
 1. empty-match 가능한 `*` 반복 본문은 금지한다.
 1. 예산 초과 시 즉시 확장을 중단하고 오류를 보고한다.
 1. 확장 실패는 침묵 fallback 없이 컴파일 오류로 처리한다.
+1. 기본값:
+1. AOT 기본값 `64 / 20000 / 200000`
+1. JIT 기본값 `32 / 8000 / 80000`
+1. 하드 상한:
+1. `max_depth <= 256`
+1. `max_steps <= 200000`
+1. `max_output_tokens <= 1000000`
+1. 사용자 입력은 clamp하며, clamp 사실은 경고로 노출한다.
 
 ## 9. 진단 모델 (오류 품질 개선 규칙)
 
@@ -182,80 +214,14 @@ positional 규칙:
 1. 예산/재귀/반복 안전 규칙은 backend 종류와 무관하게 동일해야 한다.
 1. JIT 구현 시에도 확장 실패 정책은 동일하게 "결정적 컴파일 오류"를 유지한다.
 
-## 13. 예제 (`sizeof`) 2종
+## 13. 예제 상태 (`sizeof` 보류)
 
-### 13.1 Typed 그룹 버전
+이번 라운드에서는 `$sizeof`를 구현하지 않는다.
 
-```parus
-macro __sizeof_type -> {
-    with expr {
-        (t: type) => expr {
-            __contract::type_size($0)
-        };
-    }
-}
-
-macro sizeof -> {
-    with expr {
-        (t: type) => expr {
-            $__sizeof_type($0)
-        };
-
-        (v: expr) => expr {
-            $__sizeof_type(type_of($0))
-        };
-    }
-}
-```
-
-### 13.2 `with token` 버전
-
-```parus
-macro __sizeof_type -> {
-    with expr {
-        (t: type) => expr {
-            __contract::type_size($0)
-        };
-    }
-}
-
-macro sizeof -> {
-    with token {
-        ($t:type) => expr {
-            $__sizeof_type($0)
-        };
-
-        ($t:type) => expr {
-            $__sizeof_type($0)
-        };
-
-        ($e:expr) => expr {
-            $__sizeof_type(type_of($0))
-        };
-    }
-}
-```
-
-사용 예시:
-
-```parus
-field Vec2 {
-    x: i32;
-    y: i32;
-};
-
-def main() -> i32 {
-    let s0: usize = $sizeof(i32);
-    let v: Vec2 = Vec2 { x: 1, y: 2 };
-    let s1: usize = $sizeof(v);
-    return (s0 + s1) as i32;
-}
-```
-
-설계 의도:
-
-1. `sizeof(type)`는 `__contract::type_size(type)`로 내린다.
-1. `sizeof(expr)`는 `type_of(expr)` 후 동일 계약으로 내린다.
+1. 이유:
+1. 빌트인 계약점 및 표준 라이브러리 계층이 아직 고정되지 않았다.
+1. `sizeof`는 해당 계층 확정 이후 별도 라운드로 추가한다.
+1. 현재 회귀 테스트 예시는 일반 typed 매크로(`expr/stmt/item/type`) 조합으로 유지한다.
 
 ## 14. 테스트/수용 기준
 
@@ -272,9 +238,9 @@ def main() -> i32 {
 
 `with token`:
 
-1. 반복/중첩 반복/구분자 반복
-1. 재귀 성공 케이스
-1. 예산 초과 실패 케이스
+1. 플래그 OFF에서 선언 차단 진단
+1. 플래그 ON에서 선언 파싱 허용
+1. 확장 시 미구현 진단으로 결정적 실패
 
 위생성:
 
@@ -302,6 +268,12 @@ positional:
 1. typed 그룹 확장기 추가
 1. hygiene 기본(gensym) 적용
 
+### Phase 1.5
+
+1. binder 중심 hygiene(`let/set/def param/loop binder`) 고정
+1. 예산 기본값(AOT/JIT) + 하드 상한 clamp + 경고 정책 고정
+1. `with token` 실험 플래그 게이팅 및 미구현 확장 진단 고정
+
 ### Phase 2
 
 1. `with token` 코어급 기능 추가
@@ -321,4 +293,3 @@ positional:
 1. 확장 결과 캐시 전략(incremental parsing 연계)
 1. 매크로 확장 디버그 출력 포맷(`-Xparus` 옵션 연계)
 1. JIT backend 구현 이후 동일성 검증 계획
-

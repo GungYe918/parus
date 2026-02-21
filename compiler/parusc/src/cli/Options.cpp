@@ -1,6 +1,7 @@
 // compiler/parusc/src/cli/Options.cpp
 #include <parusc/cli/Options.hpp>
 
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,10 @@ namespace parusc::cli {
             }
             if (token == "-emit-object") {
                 out.internal.emit_object = true;
+                return true;
+            }
+            if (token == "-macro-token-experimental") {
+                out.internal.macro_token_experimental = true;
                 return true;
             }
             return false;
@@ -160,6 +165,71 @@ namespace parusc::cli {
             return true;
         }
 
+        bool parse_macro_budget_opt_(Options& out, std::string_view arg) {
+            struct OptMap {
+                std::string_view prefix;
+                uint32_t* field = nullptr;
+            };
+            OptMap maps[] = {
+                {"-fmacro-max-depth=", &out.macro_budget.max_depth},
+                {"-fmacro-max-steps=", &out.macro_budget.max_steps},
+                {"-fmacro-max-output-tokens=", &out.macro_budget.max_output_tokens},
+            };
+
+            for (const auto& m : maps) {
+                if (!arg.starts_with(m.prefix)) continue;
+                const auto value_text = arg.substr(m.prefix.size());
+                if (value_text.empty()) {
+                    out.ok = false;
+                    out.error = std::string(m.prefix) + " requires a number";
+                    return true;
+                }
+                try {
+                    const long long v = std::stoll(std::string(value_text));
+                    if (v <= 0) {
+                        *m.field = 0;
+                    } else if (static_cast<unsigned long long>(v) > std::numeric_limits<uint32_t>::max()) {
+                        *m.field = std::numeric_limits<uint32_t>::max();
+                    } else {
+                        *m.field = static_cast<uint32_t>(v);
+                    }
+                } catch (...) {
+                    out.ok = false;
+                    out.error = std::string(m.prefix) + " requires a valid number";
+                }
+                return true;
+            }
+            return false;
+        }
+
+        void clamp_macro_budget_and_collect_warnings_(Options& out) {
+            const auto before = out.macro_budget;
+            const auto clamped = parus::macro::clamp_budget(out.macro_budget);
+            if (!clamped.any) return;
+
+            if (clamped.depth) {
+                out.warnings.push_back(
+                    "macro budget clamped: max_depth "
+                    + std::to_string(before.max_depth)
+                    + " -> "
+                    + std::to_string(out.macro_budget.max_depth));
+            }
+            if (clamped.steps) {
+                out.warnings.push_back(
+                    "macro budget clamped: max_steps "
+                    + std::to_string(before.max_steps)
+                    + " -> "
+                    + std::to_string(out.macro_budget.max_steps));
+            }
+            if (clamped.output_tokens) {
+                out.warnings.push_back(
+                    "macro budget clamped: max_output_tokens "
+                    + std::to_string(before.max_output_tokens)
+                    + " -> "
+                    + std::to_string(out.macro_budget.max_output_tokens));
+            }
+        }
+
     } // namespace
 
     void print_usage(std::ostream& os) {
@@ -182,6 +252,9 @@ namespace parusc::cli {
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
             << "  -fmax-errors=<N>\n"
+            << "  -fmacro-max-depth=<N>\n"
+            << "  -fmacro-max-steps=<N>\n"
+            << "  -fmacro-max-output-tokens=<N>\n"
             << "  -fuse-linker=auto|parus-lld|lld|clang\n"
             << "  --no-link-fallback   Disable linker fallback chain\n"
             << "  -Wshadow | -Werror=shadow\n"
@@ -193,6 +266,7 @@ namespace parusc::cli {
             << "  -Xparus -oir-dump\n"
             << "  -Xparus -emit-llvm-ir\n"
             << "  -Xparus -emit-object\n"
+            << "  -Xparus -macro-token-experimental\n"
             << "\n"
             << "LSP mode:\n"
             << "  parusc lsp --stdio\n";
@@ -382,6 +456,10 @@ namespace parusc::cli {
             if (parse_opt_level_(out, a)) continue;
             parse_max_errors_(out, a);
             if (a.size() >= 13 && a.substr(0, 13) == "-fmax-errors=") continue;
+            if (parse_macro_budget_opt_(out, a)) {
+                if (!out.ok) return out;
+                continue;
+            }
 
             if (!a.empty() && a[0] == '-') {
                 out.ok = false;
@@ -413,6 +491,8 @@ namespace parusc::cli {
             else if (out.internal.emit_llvm_ir) out.output_path = "a.ll";
             else out.output_path = "a.out";
         }
+
+        clamp_macro_budget_and_collect_warnings_(out);
 
         return out;
     }

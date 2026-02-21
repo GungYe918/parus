@@ -57,7 +57,7 @@ namespace parus {
         // nest foo::bar { ... }
         if (cursor_.at(K::kLBrace)) {
             s.nest_is_file_directive = false;
-            s.a = parse_stmt_block();
+            s.a = parse_stmt_block(/*allow_macro_decl=*/true);
             s.span = span_join(nest_kw.span, ast_.stmt(s.a).span);
             return ast_.add_stmt(s);
         }

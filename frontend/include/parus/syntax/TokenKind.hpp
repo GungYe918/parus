@@ -75,6 +75,7 @@ namespace parus::syntax {
 
         // punct / delimiters
         kAt,       // @
+        kDollar,   // $
         kArrow,    // ->
         kLParen,   // (
         kRParen,   // )
@@ -201,6 +202,7 @@ namespace parus::syntax {
             case TokenKind::kKwClass: return "class";
 
             case TokenKind::kAt: return "@";
+            case TokenKind::kDollar: return "$";
             case TokenKind::kArrow: return "->";
             case TokenKind::kLParen: return "(";
             case TokenKind::kRParen: return ")";

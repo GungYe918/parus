@@ -121,10 +121,13 @@ namespace parus {
         }
 
         ast::TypeId type_id = ast::k_invalid_type;
+        ast::TypeNodeId type_node = ast::k_invalid_type_node;
         if (!cursor_.eat(K::kColon)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
         } else {
-            type_id = parse_type().id;
+            auto parsed = parse_type();
+            type_id = parsed.id;
+            type_node = parsed.node;
         }
 
         ast::ExprId init = ast::k_invalid_expr;
@@ -147,8 +150,11 @@ namespace parus {
         }
 
         if (is_extern && !is_static) {
-            diag_report(diag::Code::kUnexpectedToken, start,
-                        "extern \"C\" variable declaration requires 'static'");
+            diag_report(
+                diag::Code::kAbiCGlobalMustBeStatic,
+                start,
+                name.empty() ? "<unnamed>" : name
+            );
         }
 
         const Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
@@ -158,6 +164,7 @@ namespace parus {
         s.span = span_join(start, end);
         s.name = name;
         s.type = type_id;
+        s.type_node = type_node;
         s.init = init;
         s.is_set = false; // C ABI global 선언은 set/let 경로를 사용하지 않는다.
         s.is_mut = is_mut;
@@ -353,6 +360,7 @@ namespace parus {
 
             ast::FieldMember fm{};
             fm.type = parsed_ty.id;
+            fm.type_node = parsed_ty.node;
             fm.name = member_name;
             fm.span = span_join(parsed_ty.span, end_span);
             ast_.add_field_member(fm);
@@ -543,6 +551,7 @@ namespace parus {
         s.name = op_name;
         s.type = sig_id;
         s.fn_ret = ret_ty.id;
+        s.fn_ret_type_node = ret_ty.node;
         s.a = body;
 
         s.is_export = false;
@@ -597,6 +606,7 @@ namespace parus {
         bool acts_is_for = false;
         bool acts_has_set_name = false;
         ast::TypeId acts_target_type = ast::k_invalid_type;
+        ast::TypeNodeId acts_target_type_node = ast::k_invalid_type_node;
 
         const auto is_for_token = [](const Token& t) -> bool {
             return t.kind == K::kIdent && t.lexeme == "for";
@@ -609,6 +619,7 @@ namespace parus {
             cursor_.bump(); // for
             auto ty = parse_type();
             acts_target_type = ty.id;
+            acts_target_type_node = ty.node;
             if (acts_target_type == ast::k_invalid_type) {
                 diag_report(diag::Code::kActsForTypeExpected, ty.span);
             }
@@ -623,6 +634,7 @@ namespace parus {
                 cursor_.bump(); // for
                 auto ty = parse_type();
                 acts_target_type = ty.id;
+                acts_target_type_node = ty.node;
                 if (acts_target_type == ast::k_invalid_type) {
                     diag_report(diag::Code::kActsForTypeExpected, ty.span);
                 }
@@ -709,6 +721,7 @@ namespace parus {
         s.acts_is_for = acts_is_for;
         s.acts_has_set_name = acts_has_set_name;
         s.acts_target_type = acts_target_type;
+        s.acts_target_type_node = acts_target_type_node;
         return ast_.add_stmt(s);
     }
 
