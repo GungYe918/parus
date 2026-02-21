@@ -21,12 +21,20 @@ file -> module -> bundle -> project
 
 1. 각 bundle은 자신의 `config.lei` 또는 `<folder>.lei`에서 canonical bundle plan을 export한다.
 2. 상위 프로젝트는 하위 bundle plan을 import해 `&`로 명시 합성한다.
-3. 합성 결과가 상위 프로젝트의 canonical plan이 된다.
+3. task/codegen plan은 빌드 실행 단계 노드로 import/합성한다.
+4. 합성 결과가 상위 프로젝트의 canonical plan이 된다.
 
 ## 예제 1: app bundle (`/app/app.lei`)
 
 ```lei
-export plan app_bundle = bundle & {
+proto myBundleProto {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+export plan app_bundle = bundle & myBundleProto & {
   name = "app";
   kind = "bin";
   sources = ["src/main.pr", "src/cli.pr"];
@@ -45,11 +53,32 @@ export plan json_bundle = bundle & {
 };
 ```
 
-## 예제 3: 프로젝트 루트 (`/config.lei`)
+## 예제 3: task/codegen (`/tools/tools.lei`)
+
+```lei
+export plan lint = task & {
+  name = "lint";
+  run = ["parusc", "--check", "src/main.pr"];
+  inputs = ["src/main.pr"];
+  outputs = [];
+  always_run = true;
+};
+
+export plan gen_user = codegen & {
+  name = "gen_user";
+  tool = ["protoc"];
+  inputs = ["proto/user.proto"];
+  outputs = ["gen/user.pb.pr"];
+  args = ["--parus_out=gen", "proto/user.proto"];
+};
+```
+
+## 예제 4: 프로젝트 루트 (`/config.lei`)
 
 ```lei
 import app from "./app/app.lei";
 import json from "./json/json.lei";
+import tools from "./tools/tools.lei";
 
 plan project_meta {
   name = "demo";
@@ -58,6 +87,8 @@ plan project_meta {
 
 plan project_graph {
   bundles = [json::json_bundle, app::app_bundle];
+  tasks = [tools::lint];
+  codegens = [tools::gen_user];
 };
 
 plan merged_master = master & {
@@ -79,7 +110,7 @@ let first_name = project_graph.bundles[0].name;
 언어 규칙:
 
 1. LEI 자체에는 `master` 개념이 없다.
-2. LEI는 `plan`/`export plan`/`import alias`/`&`만 정의한다.
+2. LEI는 `proto`/`plan`/`export plan`/`import alias`/`&`를 정의한다.
 
 Parus 통합 프로파일 규칙:
 
@@ -87,8 +118,8 @@ Parus 통합 프로파일 규칙:
 2. `config.lei`의 `plan master` 또는 CLI 지정 plan을 엔트리로 사용한다.
 3. `master` export는 정책상 금지한다.
 4. 하위 bundle의 `master` import/재export는 정책상 금지한다.
-5. `bundle`, `master`는 Parus가 주입한 빌트인 plan 값으로 해석한다.
+5. `bundle`, `master`, `task`, `codegen`은 Parus가 주입한 빌트인 plan 값으로 해석한다.
 6. `project`는 특수 plan이 아니다.
-7. `bundle`/`master` 빌트인 plan 주입 계약은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
+7. 빌트인 plan 주입 계약은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
 
 위 규칙은 LEI 언어 문법이 아니라 Parus 빌드 시스템 정책이다.

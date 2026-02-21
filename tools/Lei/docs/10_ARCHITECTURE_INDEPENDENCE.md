@@ -8,7 +8,7 @@ LEI는 Parus 빌드 시스템과 연동될 수 있지만, 언어 자체는 독�
 
 1. LEI 언어 코어
    1. 문법/의미론/진단/예산
-   2. `plan`, `export plan`, `import alias`, `&` 규칙
+   2. `proto`, `plan`, `export plan`, `import alias`, `&` 규칙
 2. Parus 통합 프로파일
    1. `config.lei` 엔트리
    2. `master` 기본 plan 선택
@@ -21,6 +21,7 @@ LEI는 Parus 빌드 시스템과 연동될 수 있지만, 언어 자체는 독�
 2. LEI 언어 문서는 Parus 정책을 언어 키워드로 승격하지 않는다.
 3. 통합 정책은 별도 프로파일 섹션에서만 다룬다.
 4. 빌트인 plan 주입 계약은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`에서 다룬다.
+5. `proto` 템플릿 문법/제약은 `13_PROTO_TEMPLATES.md`에서 다룬다.
 
 ## 1회 복제 정책
 

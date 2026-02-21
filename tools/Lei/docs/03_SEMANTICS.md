@@ -12,7 +12,8 @@
 1. 스칼라: `int`, `float`, `string`, `bool`
 2. 컨테이너: object, array
 3. 함수 값: `def`로 선언된 블록 함수
-4. plan 값: `plan` 선언으로 생성된 명명된 플랜 값
+4. proto 값: `proto` 선언으로 생성된 템플릿/스키마 값
+5. plan 값: `plan` 선언으로 생성된 명명된 플랜 값
 
 ## 가변성
 
@@ -37,9 +38,18 @@
    예: `build.profile`, `bundles[2].deps[0]`
 7. `&`는 덮어쓰기가 아니다.
 
+## `proto` 합성 규칙
+
+1. `proto`는 plan에 합성 가능한 제약/기본값 템플릿이다.
+2. `export plan x = MyProto & { ... };`에서 `MyProto`의 필드 제약을 먼저 적용한다.
+3. `proto` 필드에 기본값이 있으면 patch에 필드가 없을 때 기본값이 채워진다.
+4. patch에 필드가 있으면 `proto` 타입 제약을 만족해야 한다.
+5. 필수 필드(기본값 없는 필드)가 최종 결과에 없으면 실패한다.
+6. `proto`와 빌트인 plan(`bundle`, `task` 등)은 동일한 `&` 연산으로 연쇄 합성 가능하다.
+
 ## 빌트인 plan과 스키마
 
-1. LEI 언어 자체는 `bundle`, `master`, `project`의 의미를 내장하지 않는다.
+1. LEI 언어 자체는 `bundle`, `master`, `task`, `codegen`, `project`의 의미를 내장하지 않는다.
 2. 호스트(예: Parus)는 빌트인 plan 값을 주입할 수 있다.
 3. 주입된 빌트인 plan과 사용자 patch를 `&`로 합성해 schema 제약을 적용할 수 있다.
 4. 어떤 plan이 특수한지는 언어가 아니라 통합 프로파일이 결정한다.

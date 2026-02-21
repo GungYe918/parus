@@ -17,18 +17,26 @@ sample-project/
   core/
     core.lei
     src/lib.pr
+  tools/
+    tools.lei
+    proto/user.proto
 ```
 
-## 2) bundle별 소스 등록
+## 2) bundle별 소스 등록 (`proto` + built-in `bundle`)
 
 ### `/json/json.lei`
 
 ```lei
-export plan json_bundle = bundle & {
+proto myBundleProto {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+export plan json_bundle = bundle & myBundleProto & {
   name = "json";
-  kind = "lib";
   sources = ["src/json.pr"];
-  deps = [];
 };
 ```
 
@@ -54,7 +62,29 @@ export plan app_bundle = bundle & {
 };
 ```
 
-## 3) 루트 config.lei에서 프로젝트 설정 + 마스터 플랜 생성
+## 3) task/codegen plan 등록
+
+### `/tools/tools.lei`
+
+```lei
+export plan lint = task & {
+  name = "lint";
+  run = ["parusc", "--check", "src/main.pr"];
+  inputs = ["src/main.pr"];
+  outputs = [];
+  always_run = true;
+};
+
+export plan gen_user = codegen & {
+  name = "gen_user";
+  tool = ["protoc"];
+  inputs = ["proto/user.proto"];
+  outputs = ["gen/user.pb.pr"];
+  args = ["--parus_out=gen", "proto/user.proto"];
+};
+```
+
+## 4) 루트 config.lei에서 프로젝트 설정 + 마스터 플랜 생성
 
 ### `/config.lei`
 
@@ -62,6 +92,7 @@ export plan app_bundle = bundle & {
 import app from "./app/app.lei";
 import core from "./core/core.lei";
 import json from "./json/json.lei";
+import tools from "./tools/tools.lei";
 
 plan defaults {
   profile = "debug";
@@ -72,6 +103,8 @@ plan workspace {
   project.name = "sample-project";
   project.version = "0.1.0";
   bundles = [json::json_bundle, core::core_bundle, app::app_bundle];
+  tasks = [tools::lint];
+  codegens = [tools::gen_user];
 };
 
 plan merged_master = master & {
@@ -86,9 +119,10 @@ plan master = merged_master;
 
 1. `project.name`, `project.version`은 루트에서 관리한다.
 2. bundle은 하위 폴더의 export plan(`json_bundle` 등)을 import해 배열로 합성한다.
-3. 루트는 Parus가 주입한 빌트인 `master` plan과 patch를 `&`로 합성해 최종 `plan master`를 생성한다.
+3. task/codegen plan은 별도 노드로 import해 master 그래프에 포함한다.
+4. 루트는 Parus가 주입한 빌트인 `master` plan과 patch를 `&`로 합성해 최종 `plan master`를 생성한다.
 
-## 4) Parus 빌드 시스템 해석 규칙
+## 5) Parus 빌드 시스템 해석 규칙
 
 1. 엔트리 파일은 `config.lei`다.
 2. 기본 엔트리 plan은 `master`다.
@@ -105,14 +139,15 @@ export plan master = master & {
 
 위 예시는 LEI 문법상 가능할 수 있지만, Parus 통합 프로파일에서는 정책 위반으로 처리한다.
 
-## 5) 배열/네임스페이스 접근 예시
+## 6) 배열/네임스페이스 접근 예시
 
 ```lei
-let first_bundle_name = bundles[0].name;
+let first_bundle_name = workspace.bundles[0].name;
 let app_name = app::app_bundle.name;
+let first_task = workspace.tasks[0].name;
 ```
 
-## 6) 합성 실패 예시 (`&` 충돌)
+## 7) 합성 실패 예시 (`&` 충돌)
 
 ```lei
 plan a {

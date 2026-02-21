@@ -14,12 +14,26 @@
 1. 프로젝트 루트의 `config.lei`를 엔트리 파일로 사용한다.
 2. `config.lei`는 프로젝트 메타데이터(이름/버전/프로필)와 최종 마스터 플랜을 정의한다.
 
+## 빌트인 plan 집합 (Parus v1)
+
+1. `bundle`
+2. `master`
+3. `task`
+4. `codegen`
+
 ## bundle config 재사용 규칙
 
 1. 각 bundle은 자신의 `config.lei` 또는 `<folder>.lei`에서 고유 이름 plan(예: `json_bundle`)을 export한다.
 2. 각 bundle plan은 Parus가 주입한 빌트인 `bundle` plan과 `&` 합성해 생성한다.
 3. 상위 프로젝트는 하위 bundle의 export plan들을 import해 명시적으로 `&` 합성한다.
 4. 합성 결과는 현재 프로젝트의 canonical plan이며, 빌드 매니저는 이 값을 기준으로 그래프를 생성한다.
+
+## task/codegen 소비 규칙
+
+1. `task` 기반 plan은 CLI 단계 작업(검증, lint, pre-step)을 표현한다.
+2. `codegen` 기반 plan은 코드 생성 단계 노드를 표현한다.
+3. `task`/`codegen` plan은 export 허용 대상이다.
+4. `master`는 `bundles`, `tasks`, `codegens`를 포함해 최종 그래프를 구성할 수 있다.
 
 ## master 선택 규칙 (Parus)
 
@@ -49,18 +63,31 @@
 
 ```lei
 // json/json.lei
-export plan json_bundle = bundle & {
+proto myBundleProto {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+export plan json_bundle = bundle & myBundleProto & {
   name = "json";
-  kind = "lib";
   sources = ["src/json.pr"];
-  deps = [];
+};
+
+// tools/tools.lei
+export plan lint = task & {
+  name = "lint";
+  run = ["parusc", "--check", "src/main.pr"];
 };
 
 // config.lei
 import json from "./json/json.lei";
+import tools from "./tools/tools.lei";
 
 plan merged_master = master & {
   bundles = [json::json_bundle];
+  tasks = [tools::lint];
 };
 
 plan master = merged_master;

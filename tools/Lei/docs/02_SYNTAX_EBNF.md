@@ -19,6 +19,7 @@ LEI는 세미콜론 기반 문법을 사용한다. 모든 import 예시는 상�
 Program          := { Item } EOF ;
 
 Item             := ImportStmt
+                 | ProtoDecl
                  | PlanDecl
                  | ExportPlanDecl
                  | ExportPlanRef
@@ -30,6 +31,10 @@ Item             := ImportStmt
                  ;
 
 ImportStmt       := "import" Ident "from" StringLit ";" ;
+
+ProtoDecl        := "proto" Ident "{" { ProtoField } "}" ";" ;
+ProtoField       := Ident ":" ProtoType [ "=" Expr ] ";" ;
+ProtoType        := ScalarType | "[" ProtoType "]" ;
 
 PlanDecl         := "plan" Ident PlanBody ";"
                  | "plan" Ident "=" PlanExpr ";"
@@ -54,7 +59,8 @@ DefDecl          := "def" Ident "(" [ParamList] ")" [ "->" Type ] Block ;
 ParamList        := Param { "," Param } [","] ;
 Param            := Ident [ ":" Type ] ;
 
-Type             := "int" | "float" | "string" | "bool" ;
+Type             := ScalarType ;
+ScalarType       := "int" | "float" | "string" | "bool" ;
 
 Block            := "{" { Stmt } "}" ;
 
@@ -121,14 +127,15 @@ BoolLit          := "true" | "false" ;
 
 ## 표면 규칙
 
-1. 권장 선언 스타일은 `export plan foo = bundle & { ... };`다.
-2. `plan foo { ... }; export plan foo;`도 허용한다.
-3. import된 심볼 접근은 `alias::symbol`만 허용한다.
-4. 객체 접근은 `.`만 사용한다.
-5. 배열 접근은 `[]`만 사용한다.
+1. `proto`는 사용자 템플릿/스키마 선언이다.
+2. 권장 선언 스타일은 `export plan foo = MyProto & { ... };` 또는 `export plan foo = bundle & { ... };`다.
+3. `plan foo { ... }; export plan foo;`도 허용한다.
+4. import된 심볼 접근은 `alias::symbol`만 허용한다.
+5. 객체 접근은 `.`만 사용한다.
+6. 배열 접근은 `[]`만 사용한다.
 
 ## 주석
 
-1. `bundle`, `master`는 문법 키워드가 아니다.
+1. `bundle`, `master`, `task`, `codegen`은 문법 키워드가 아니다.
 2. 특정 빌드 시스템(예: Parus)이 빌트인 plan으로 주입할 수 있는 일반 식별자다.
 3. `ObjectLit`(`:` 기반)과 `PlanPatchLit`(`=` 기반)은 구분해서 사용한다.

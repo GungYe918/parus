@@ -7,8 +7,9 @@ LEI intrinsic은 특정 고정 키워드를 의미하지 않는다. intrinsic은
 중요:
 
 1. intrinsic 레지스트리와 built-in plan 스키마 레지스트리는 별개다.
-2. `bundle`, `master` 같은 built-in plan은 intrinsic 함수가 아니라 plan 템플릿 주입 계약에 속한다.
-3. built-in plan 규칙은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
+2. `bundle`, `master`, `task`, `codegen`은 intrinsic 함수가 아니라 plan 템플릿 주입 계약에 속한다.
+3. `proto`는 intrinsic이 아니라 LEI 언어 문법(사용자 템플릿 선언)이다.
+4. built-in plan 규칙은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
 
 ## 기본 원칙
 
@@ -41,7 +42,8 @@ let p = profile("release", { opt: 3, debug: false });
 
 1. intrinsic: `BuiltinRegistry`(함수/값)
 2. plan 템플릿/스키마: `BuiltinPlanRegistry`(plan_template/schema)
-3. 두 레지스트리는 초기화 단계에서만 변경 가능하도록 freeze 정책을 둔다.
+3. proto 선언: 파서/타입 시스템의 언어 레벨 선언 테이블
+4. 세 레이어는 초기화 단계에서만 변경 가능하도록 freeze 정책을 둔다.
 
 ## 확장 규칙
 

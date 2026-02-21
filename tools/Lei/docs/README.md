@@ -1,6 +1,6 @@
 # LEI DSL Docs
 
-상태: `draft-0.3`
+상태: `draft-0.4`
 
 LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 언어 명세와 Parus 통합 프로파일을 분리해 기록한다.
 
@@ -28,17 +28,19 @@ LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 
 10. `10_ARCHITECTURE_INDEPENDENCE.md`
 11. `11_PARUS_BUILD_PROFILE.md`
 12. `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`
-13. `useage.md`
+13. `13_PROTO_TEMPLATES.md`
+14. `useage.md`
 
 ## 분리 원칙
 
 1. LEI 언어 규칙: 표면 문법, 의미론, 진단, 보안/예산
 2. Parus 통합 프로파일: `config.lei`, `master` 엔트리 해석, CLI override 정책
-3. `master`, `bundle`은 LEI 키워드가 아니다. Parus 빌드 시스템이 주입하는 빌트인 plan 이름이다.
+3. `bundle`, `master`, `task`, `codegen`은 LEI 키워드가 아니다. Parus 빌드 시스템이 주입하는 빌트인 plan 이름이다.
+4. `proto`는 LEI 언어 문법으로 정의되는 사용자 템플릿/스키마 선언이다.
 
 ## 핵심 문법 요약
 
-1. 선언: `plan`, `export plan`, `let`, `var`, `def`, `assert`, `import`
+1. 선언: `proto`, `plan`, `export plan`, `let`, `var`, `def`, `assert`, `import`
 2. 함수: 블록 기반 `def`
 3. 제어: `for`, `if`, `return`
 4. 접근: 객체 `.` / 배열 `[]` / import namespace `alias::symbol`
@@ -47,11 +49,21 @@ LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 
 ## 권장 빌드 DSL 작성 스타일
 
 ```lei
-export plan json = bundle & {
+proto myBundleProto {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+export plan json_bundle = bundle & myBundleProto & {
   name = "json";
-  kind = "lib";
   sources = ["src/json.pr"];
-  deps = [];
+};
+
+export plan lint = task & {
+  name = "lint";
+  run = ["parusc", "--check", "src/main.pr"];
 };
 ```
 

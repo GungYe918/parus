@@ -10,17 +10,20 @@
 ## 필수 진단 시나리오
 
 1. 파서
-   1. `export plan ...` 파싱 성공/실패
+   1. `proto`/`export plan ...` 파싱 성공/실패
    2. 제거된 구세대 문법 사용 시 실패
 2. 의미론
    1. `&` 합성 충돌 경로 진단
    2. namespace 접근 실패(`alias::missing`)
    3. 배열 인덱스 타입/범위 오류
+   4. `proto` 필수 필드 누락/타입 위반 진단
 3. 통합 프로파일
    1. `config.lei` 엔트리 해석 실패
    2. `master` 정책 위반(예: export 금지 위반)
-   3. built-in plan 템플릿 누락(`bundle`/`master` 미주입)
+   3. built-in plan 템플릿 누락(`bundle`/`master`/`task`/`codegen` 미주입)
    4. built-in plan 스키마 충돌 경로 진단
+   5. `task.v1` 필수 필드(`run`) 누락 진단
+   6. `codegen.v1` 필수 필드(`outputs`) 누락 진단
 
 ## 테스트 축
 
@@ -31,6 +34,7 @@
 5. budget 초과 테스트
 6. profile 정책 테스트(Parus 통합 계층)
 7. built-in plan registry 스냅샷 일치 테스트(LSP/AOT/JIT)
+8. proto-merge 테스트(`MyProto & { ... }`)
 
 ## 문서 검증 체크
 

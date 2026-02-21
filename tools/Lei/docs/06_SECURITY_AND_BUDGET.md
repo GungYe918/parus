@@ -22,6 +22,8 @@
 2. 호출 깊이 예산(`max_call_depth`)
 3. 루프 반복 예산(`max_loop_iters`, `max_total_loop_steps`)
 4. 노드/출력 크기 예산(`max_nodes`, `max_output_nodes`)
+5. task 계획 예산(`max_tasks`)
+6. codegen 계획 예산(`max_codegens`)
 
 정책 원칙:
 
@@ -34,6 +36,7 @@
 1. 같은 입력 + 같은 옵션이면 같은 결과를 생성한다.
 2. 시간/랜덤/환경 의존 intrinsic은 기본 제공하지 않는다.
 3. import 해석 순서는 DAG 기반으로 결정적이어야 한다.
+4. `task`/`codegen` plan 해석은 입력 plan과 옵션만으로 결정적이어야 한다.
 
 ## intrinsic 안전 계약
 
@@ -46,3 +49,4 @@
 1. built-in plan 템플릿/스키마는 평가 시작 전에 1회 주입한다.
 2. 평가 중 built-in plan 레지스트리 변경은 금지한다.
 3. LSP/AOT/JIT는 동일 스키마 스냅샷을 공유해야 한다.
+4. `task.v1`, `codegen.v1` 스키마 위반은 빌드 실행 이전 단계에서 차단한다.
