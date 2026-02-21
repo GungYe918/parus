@@ -1,44 +1,48 @@
 # 06. Security And Budget
 
-## 금지 기능
+## 보안 기본 정책
 
-1. `for`, `while`
-2. 재귀
-3. effect/IO
-4. 동적 코드 로딩/실행
+1. LEI는 결정적 평가를 기본으로 한다.
+2. 동적 코드 실행은 금지한다.
+3. 부작용 IO intrinsic은 기본 금지한다.
+4. 평가 실패는 즉시 중단한다.
 
-## 평가 예산
+## 제어문 정책
 
-`EvaluatorBudget`를 강제한다.
+1. `for`는 허용한다.
+2. 재귀 호출은 금지한다.
+3. 무제한 반복은 금지한다.
+4. `while`은 현재 지원하지 않는다.
 
-1. `max_steps`
-2. `max_call_depth`
-3. `max_nodes`
+## 예산 정책 (수치 비고정)
 
-기본값(v0):
+평가기는 아래 예산을 정책적으로 강제해야 한다.
 
-1. `max_steps = 200000`
-2. `max_call_depth = 64`
-3. `max_nodes = 200000`
+1. 전체 평가 단계 예산(`max_steps`)
+2. 호출 깊이 예산(`max_call_depth`)
+3. 루프 반복 예산(`max_loop_iters`, `max_total_loop_steps`)
+4. 노드/출력 크기 예산(`max_nodes`, `max_output_nodes`)
 
-하드 상한(v0):
+정책 원칙:
 
-1. `max_steps <= 1000000`
-2. `max_call_depth <= 256`
-3. `max_nodes <= 1000000`
+1. 예산 초과 시 결정적 진단과 함께 실패한다.
+2. 예산은 CLI/호스트 설정으로 조정 가능해야 한다.
+3. 상한 clamp 정책을 제공해야 한다.
 
-## 결정성
+## 결정성 정책
 
-1. 같은 입력/옵션은 같은 결과를 낸다.
-2. 실패는 항상 동일한 코드/위치로 보고된다.
-3. 시간/랜덤/환경 의존 내장값을 제공하지 않는다.
+1. 같은 입력 + 같은 옵션이면 같은 결과를 생성한다.
+2. 시간/랜덤/환경 의존 intrinsic은 기본 제공하지 않는다.
+3. import 해석 순서는 DAG 기반으로 결정적이어야 한다.
 
-## 공개 API (v0)
+## intrinsic 안전 계약
 
-1. `lei::parse::ParserControl`
-   1. 파서 동작 가드(예: 제거 문법 차단)를 외부에서 제어한다.
-2. `lei::eval::BuiltinRegistry`
-   1. C++ 엔진 코드에서 빌트인 값/네이티브 함수를 등록한다.
-   2. 기본 레지스트리는 `make_default_builtin_registry()`로 생성한다.
-3. `lei::graph::BuildConventions`
-   1. `module_map`, `bundles` 같은 빌드 객체 필드명을 외부에서 구성한다.
+1. intrinsic 함수는 순수/결정적이어야 한다.
+2. 입력이 같으면 출력이 같아야 한다.
+3. 내부 상태를 숨겨 변경하면 안 된다.
+
+## built-in plan 주입 안전 계약
+
+1. built-in plan 템플릿/스키마는 평가 시작 전에 1회 주입한다.
+2. 평가 중 built-in plan 레지스트리 변경은 금지한다.
+3. LSP/AOT/JIT는 동일 스키마 스냅샷을 공유해야 한다.

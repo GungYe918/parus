@@ -1,5 +1,27 @@
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.25)
+    project(lei VERSION 0.1.0 LANGUAGES CXX)
+
+    set(CMAKE_CXX_STANDARD 23)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    set(CMAKE_CXX_EXTENSIONS OFF)
+
+    option(LEI_BUILD_TESTS "Build LEI tests" ON)
+    enable_testing()
+else()
+    if(NOT DEFINED LEI_BUILD_TESTS)
+        if(DEFINED PARUS_BUILD_TESTS)
+            set(LEI_BUILD_TESTS ${PARUS_BUILD_TESTS})
+        else()
+            set(LEI_BUILD_TESTS ON)
+        endif()
+    endif()
+endif()
+
 add_library(lei_core
     src/lex/lexer.cpp
+    src/text/utf8.cpp
+    src/os/file.cpp
 )
 
 target_include_directories(lei_core
@@ -62,7 +84,6 @@ else()
     target_compile_options(lei-build PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
 endif()
 
-if (PARUS_BUILD_TESTS)
+if (LEI_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
-

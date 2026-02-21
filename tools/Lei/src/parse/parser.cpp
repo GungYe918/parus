@@ -26,8 +26,7 @@ std::string strip_underscores(std::string_view s) {
 } // namespace
 
 const syntax::Token& Parser::peek(size_t k) const {
-    const size_t idx = (pos_ + k < tokens_.size()) ? (pos_ + k) : (tokens_.size() - 1);
-    return tokens_[idx];
+    return cursor_.peek(k);
 }
 
 bool Parser::at(K k) const {
@@ -35,9 +34,7 @@ bool Parser::at(K k) const {
 }
 
 const syntax::Token& Parser::bump() {
-    const auto& t = peek();
-    if (pos_ < tokens_.size()) ++pos_;
-    return t;
+    return cursor_.bump();
 }
 
 bool Parser::eat(K k) {

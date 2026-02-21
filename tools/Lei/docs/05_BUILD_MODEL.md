@@ -1,42 +1,94 @@
 # 05. Build Model
 
-## Parus 모델 연결
-
-LEI는 Parus 빌드 단위를 그대로 기술한다.
+## 단위 모델
 
 ```text
 file -> module -> bundle -> project
 ```
 
-## 핵심 규칙
+1. file: 하나의 `.lei` 또는 `.pr` 파일
+2. module: 파일들이 구성하는 논리 심볼 경계
+3. bundle: 배포/컴파일 단위
+4. project: 여러 bundle 합성 단위
 
-1. module은 파일 시스템 관례가 아니라 명시 매핑으로 정의한다.
-2. `module_map`에서 모듈 경로와 파일 목록을 명시한다.
-3. 루트 기준 상대경로를 사용한다.
-4. `mod.rs`/폴더명 암묵 규칙을 사용하지 않는다.
-5. 빌드 객체 필드명(`module_map`, `defaults`)은 Starlark/CMake 관용어를 참고한다.
-6. Parus 단위명(`project`, `bundle`, `module`)은 그대로 유지한다.
+## 파일 관행
 
-## 권장 build 객체 형태
+1. 프로젝트 루트는 `config.lei`를 권장한다.
+2. 폴더 단위 파일은 `<folder>.lei`를 권장한다.
+3. `lei.lei` 같은 대체 파일명은 허용하되 권장하지 않는다.
+
+## canonical plan 합성 흐름
+
+1. 각 bundle은 자신의 `config.lei` 또는 `<folder>.lei`에서 canonical bundle plan을 export한다.
+2. 상위 프로젝트는 하위 bundle plan을 import해 `&`로 명시 합성한다.
+3. 합성 결과가 상위 프로젝트의 canonical plan이 된다.
+
+## 예제 1: app bundle (`/app/app.lei`)
 
 ```lei
-export build {
-  project: "workspace-name",
-  profile: "debug",
-  bundles: [
-    {
-      name: "core",
-      root: "core",
-      module_map: {
-        core::math: ["core/math/add.pr", "core/math/mul.pr"],
-      },
-      deps: [],
-    },
-  ],
-}
+export plan app_bundle = bundle & {
+  name = "app";
+  kind = "bin";
+  sources = ["src/main.pr", "src/cli.pr"];
+  deps = ["json"];
+};
 ```
 
-## bundle prepass 연동
+## 예제 2: json bundle (`/json/json.lei`)
 
-1. bundle 단위 선언 수집 prepass를 위해 module_map은 정적 평가 가능해야 한다.
-2. module_map은 런타임 입력/IO 없이 계산되어야 한다.
+```lei
+export plan json_bundle = bundle & {
+  name = "json";
+  kind = "lib";
+  sources = ["src/json.pr"];
+  deps = [];
+};
+```
+
+## 예제 3: 프로젝트 루트 (`/config.lei`)
+
+```lei
+import app from "./app/app.lei";
+import json from "./json/json.lei";
+
+plan project_meta {
+  name = "demo";
+  version = "0.1.0";
+};
+
+plan project_graph {
+  bundles = [json::json_bundle, app::app_bundle];
+};
+
+plan merged_master = master & {
+  project = project_meta;
+  build = project_graph;
+};
+
+plan master = merged_master;
+```
+
+## 배열 접근 예제
+
+```lei
+let first_name = project_graph.bundles[0].name;
+```
+
+## LEI 언어 vs Parus 통합 프로파일
+
+언어 규칙:
+
+1. LEI 자체에는 `master` 개념이 없다.
+2. LEI는 `plan`/`export plan`/`import alias`/`&`만 정의한다.
+
+Parus 통합 프로파일 규칙:
+
+1. `config.lei`를 엔트리 파일로 특별취급한다.
+2. `config.lei`의 `plan master` 또는 CLI 지정 plan을 엔트리로 사용한다.
+3. `master` export는 정책상 금지한다.
+4. 하위 bundle의 `master` import/재export는 정책상 금지한다.
+5. `bundle`, `master`는 Parus가 주입한 빌트인 plan 값으로 해석한다.
+6. `project`는 특수 plan이 아니다.
+7. `bundle`/`master` 빌트인 plan 주입 계약은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
+
+위 규칙은 LEI 언어 문법이 아니라 Parus 빌드 시스템 정책이다.

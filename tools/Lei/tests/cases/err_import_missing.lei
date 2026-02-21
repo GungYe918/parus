@@ -1,0 +1,5 @@
+import { MISSING } from "./missing_module.lei";
+
+export build {
+  bundles: [],
+};

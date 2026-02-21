@@ -2,84 +2,133 @@
 
 ## 개요
 
-LEI v0는 들여쓰기 의미를 사용하지 않는다. 문장은 `;`로 끝난다.
+LEI는 세미콜론 기반 문법을 사용한다. 모든 import 예시는 상대 경로(`./`, `../`)를 사용한다.
 
-## Lexical
+## Legacy 제거
 
-```ebnf
-Ident     := Letter (Letter | Digit | "_")* ;
-IntLit    := Digit (Digit | "_")* ;
-FloatLit  := Digit (Digit | "_" )* "." Digit (Digit | "_")* ;
-StringLit := '"' { Char | Escape } '"' ;
-BoolLit   := "true" | "false" ;
-Comment   := "//" ... EOL | "/*" ... "*/" ;
-```
+다음 형식은 제거되었다.
 
-## Program
+1. 구형 빌드 엔트리 선언
+2. 구형 화살표 본문 함수 선언
+3. 구형 기본값 오버레이 연산
+4. 구형 intrinsic import 선언
+
+## EBNF
 
 ```ebnf
-Program      := { Item } EOF ;
+Program          := { Item } EOF ;
 
-Item         := ImportStmt
-             | LetStmt
-             | ConstStmt
-             | DefStmt
-             | AssertStmt
-             | ExportStmt
-             | ";"
-             ;
+Item             := ImportStmt
+                 | PlanDecl
+                 | ExportPlanDecl
+                 | ExportPlanRef
+                 | LetDecl
+                 | VarDecl
+                 | DefDecl
+                 | AssertStmt
+                 | ";"
+                 ;
 
-ImportStmt   := "import" ImportSpec ";" ;
-ImportSpec   := "{" IdentList "}" "from" StringLit
-             ;
+ImportStmt       := "import" Ident "from" StringLit ";" ;
 
-LetStmt      := "let" Ident [ ":" PrimType ] "=" Expr ";" ;
-ConstStmt    := "const" Ident [ ":" PrimType ] "=" Expr ";" ;
-DefStmt      := [ "export" ] "def" Ident "(" [ParamList] ")" "=>" Expr ";" ;
-AssertStmt   := "assert" Expr ";" ;
-ExportStmt   := "export" "build" Expr ";" ;
+PlanDecl         := "plan" Ident PlanBody ";"
+                 | "plan" Ident "=" PlanExpr ";"
+                 ;
 
-PrimType     := "int" | "float" | "string" | "bool" ;
+ExportPlanDecl   := "export" "plan" Ident PlanBody ";"
+                 | "export" "plan" Ident "=" PlanExpr ";"
+                 ;
 
-Expr         := IfExpr | MatchExpr | AssignExpr ;
-IfExpr       := "if" Expr "then" Expr "else" Expr ;
-MatchExpr    := "match" Expr "{" MatchArm { "," MatchArm } [","] "}" ;
-MatchArm     := (Literal | "_") "=>" Expr ;
+ExportPlanRef    := "export" "plan" Ident ";" ;
 
-AssignExpr   := MergeExpr ["?=" MergeExpr] ;
-MergeExpr    := OrExpr { "&" OrExpr } ;
-OrExpr       := AndExpr { "||" AndExpr } ;
-AndExpr      := EqExpr { "&&" EqExpr } ;
-EqExpr       := AddExpr { ("==" | "!=") AddExpr } ;
-AddExpr      := MulExpr { ("+" | "-") MulExpr } ;
-MulExpr      := UnaryExpr { ("*" | "/") UnaryExpr } ;
-UnaryExpr    := ("-" | "!") UnaryExpr | PostfixExpr ;
+PlanExpr         := Expr ;
 
-PostfixExpr  := Primary { CallSuffix | MemberSuffix } ;
-CallSuffix   := "(" [ArgList] ")" ;
-MemberSuffix := "." Ident ;
+PlanBody         := "{" { PlanAssign } "}" ;
+PlanAssign       := Path "=" Expr ";" ;
+Path             := Ident { "." Ident | "[" Expr "]" } ;
 
-Primary      := Literal
-             | Ident
-             | ObjectLit
-             | ArrayLit
-             | "(" Expr ")"
-             ;
+LetDecl          := "let" Ident [ ":" Type ] "=" Expr ";" ;
+VarDecl          := "var" Ident [ ":" Type ] "=" Expr ";" ;
 
-ObjectLit    := "{" [ ObjItem { "," ObjItem } [","] ] "}" ;
-ObjItem      := (Ident | StringLit) ":" Expr ;
+DefDecl          := "def" Ident "(" [ParamList] ")" [ "->" Type ] Block ;
+ParamList        := Param { "," Param } [","] ;
+Param            := Ident [ ":" Type ] ;
 
-ArrayLit     := "[" [ ArrItem { "," ArrItem } [","] ] "]" ;
-ArrItem      := Expr | "..." Expr ;
+Type             := "int" | "float" | "string" | "bool" ;
 
-Literal      := IntLit | FloatLit | StringLit | BoolLit ;
+Block            := "{" { Stmt } "}" ;
 
-IdentList    := Ident { "," Ident } [","] ;
-ParamList    := Ident { "," Ident } [","] ;
-ArgList      := Expr { "," Expr } [","] ;
+Stmt             := LetDecl
+                 | VarDecl
+                 | AssignStmt
+                 | ForStmt
+                 | IfStmt
+                 | ReturnStmt
+                 | AssertStmt
+                 | ExprStmt
+                 | ";"
+                 ;
+
+AssignStmt       := Path "=" Expr ";" ;
+
+ForStmt          := "for" Ident "in" Expr Block ;
+IfStmt           := "if" Expr Block [ "else" Block ] ;
+ReturnStmt       := "return" Expr ";" ;
+AssertStmt       := "assert" Expr ";" ;
+ExprStmt         := Expr ";" ;
+
+Expr             := MergeExpr ;
+MergeExpr        := OrExpr { "&" OrExpr } ;
+OrExpr           := AndExpr { "||" AndExpr } ;
+AndExpr          := EqExpr { "&&" EqExpr } ;
+EqExpr           := AddExpr { ("==" | "!=") AddExpr } ;
+AddExpr          := MulExpr { ("+" | "-") MulExpr } ;
+MulExpr          := UnaryExpr { ("*" | "/") UnaryExpr } ;
+UnaryExpr        := ("-" | "!") UnaryExpr | PostfixExpr ;
+
+PostfixExpr      := Primary { MemberSuffix | IndexSuffix | CallSuffix } ;
+MemberSuffix     := "." Ident ;
+IndexSuffix      := "[" Expr "]" ;
+CallSuffix       := "(" [ArgList] ")" ;
+
+ArgList          := Expr { "," Expr } [","] ;
+
+Primary          := NamespaceRef
+                 | Ident
+                 | Literal
+                 | ObjectLit
+                 | ArrayLit
+                 | PlanPatchLit
+                 | "(" Expr ")"
+                 ;
+
+NamespaceRef     := Ident "::" Ident { "::" Ident } ;
+
+ObjectLit        := "{" [ ObjItem { "," ObjItem } [","] ] "}" ;
+ObjItem          := (Ident | StringLit) ":" Expr ;
+
+ArrayLit         := "[" [ Expr { "," Expr } [","] ] "]" ;
+PlanPatchLit     := "{" { PlanAssign } "}" ;
+
+Literal          := IntLit | FloatLit | StringLit | BoolLit ;
+
+Ident            := Letter { Letter | Digit | "_" } ;
+IntLit           := Digit { Digit | "_" } ;
+FloatLit         := Digit { Digit | "_" } "." Digit { Digit | "_" } ;
+StringLit        := '"' { Char | Escape } '"' ;
+BoolLit          := "true" | "false" ;
 ```
 
-## trailing comma
+## 표면 규칙
 
-1. 객체/배열/match arm 리스트에서 trailing comma를 허용한다.
-2. 인자 목록과 import 이름 목록에서 trailing comma를 허용한다.
+1. 권장 선언 스타일은 `export plan foo = bundle & { ... };`다.
+2. `plan foo { ... }; export plan foo;`도 허용한다.
+3. import된 심볼 접근은 `alias::symbol`만 허용한다.
+4. 객체 접근은 `.`만 사용한다.
+5. 배열 접근은 `[]`만 사용한다.
+
+## 주석
+
+1. `bundle`, `master`는 문법 키워드가 아니다.
+2. 특정 빌드 시스템(예: Parus)이 빌트인 plan으로 주입할 수 있는 일반 식별자다.
+3. `ObjectLit`(`:` 기반)과 `PlanPatchLit`(`=` 기반)은 구분해서 사용한다.

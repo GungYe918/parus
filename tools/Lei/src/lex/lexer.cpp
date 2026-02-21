@@ -1,6 +1,8 @@
 #include <lei/parse/Parser.hpp>
+#include <lei/text/Utf8.hpp>
 
 #include <cctype>
+#include <string>
 #include <unordered_map>
 
 namespace lei::parse {
@@ -50,6 +52,17 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
 
     std::vector<syntax::Token> toks;
     toks.reserve(source.size() / 2 + 1);
+
+    uint32_t bad_off = 0;
+    if (!lei::text::validate_utf8_strict(source, bad_off)) {
+        diags.add(diag::Code::C_UNEXPECTED_TOKEN,
+                  std::string(file_path),
+                  1,
+                  1,
+                  "invalid UTF-8 input at byte offset " + std::to_string(bad_off));
+        toks.push_back(syntax::Token{K::kEof, "", {1, 1}});
+        return toks;
+    }
 
     size_t i = 0;
     uint32_t line = 1;

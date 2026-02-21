@@ -1,23 +1,15 @@
 #include <lei/eval/Evaluator.hpp>
 
+#include <lei/os/File.hpp>
 #include <lei/parse/Parser.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
 
 namespace lei::eval {
 
 namespace {
-
-std::string normalize_path(const std::filesystem::path& p) {
-    std::error_code ec;
-    auto c = std::filesystem::weakly_canonical(p, ec);
-    if (ec) return p.lexically_normal().string();
-    return c.string();
-}
 
 bool numeric_promote(const Value& v, double& out) {
     if (auto p = std::get_if<int64_t>(&v.data)) {
@@ -98,23 +90,20 @@ BuiltinRegistry make_default_builtin_registry(const BuiltinLiterals& literals) {
 }
 
 Evaluator::ModulePtr Evaluator::load_module(const std::filesystem::path& path) {
-    const std::string key = normalize_path(path);
+    const std::string key = lei::os::normalize_path(path.string());
     auto it = module_cache_.find(key);
     if (it != module_cache_.end()) return it->second;
 
-    std::ifstream ifs(key);
-    if (!ifs) {
-        diags_.add(diag::Code::L_IMPORT_NOT_FOUND, key, 1, 1, "cannot open LEI module");
+    const auto read = lei::os::read_text_file(key);
+    if (!read.ok) {
+        diags_.add(diag::Code::L_IMPORT_NOT_FOUND, key, 1, 1, "cannot open LEI module: " + read.err);
         return nullptr;
     }
-
-    std::stringstream buf;
-    buf << ifs.rdbuf();
 
     auto mod = std::make_shared<ModuleContext>();
     mod->path = key;
 
-    mod->program = parse::parse_source(buf.str(), key, diags_, parser_control_);
+    mod->program = parse::parse_source(read.text, key, diags_, parser_control_);
 
     module_cache_[key] = mod;
     return mod;
@@ -153,7 +142,7 @@ Evaluator::ModulePtr Evaluator::evaluate_module(const std::filesystem::path& pat
         if (it.kind == ast::ItemKind::kDef) continue;
 
         if (it.kind == ast::ItemKind::kImportFrom) {
-            std::filesystem::path import_path = std::filesystem::path(mod->path).parent_path() / it.import_spec.from_path;
+            const std::string import_path = lei::os::resolve_relative_path(mod->path, it.import_spec.from_path);
             auto imported = evaluate_module(import_path);
             if (!imported) return nullptr;
             for (const auto& sym : it.import_spec.names) {

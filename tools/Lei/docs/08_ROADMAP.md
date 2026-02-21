@@ -1,26 +1,29 @@
 # 08. Roadmap
 
-## v0 (현재)
+## v0.2 (문서 고정 단계)
 
-1. 최소 문법 + 비튜링 정책
-2. named import/export
-3. intrinsic `base` 자동 제공
-4. build 객체 -> ninja lowering
+1. 구세대 문법 제거 완료
+2. `plan`/`export plan` 중심 명세 고정
+3. `&` 엄격 합성 규칙 고정
+4. LEI 언어 규칙과 Parus 통합 프로파일 규칙 분리
 
-## v1
+## 다음 구현 단계
 
-1. 제한적 표준 라이브러리 도입 검토
-2. schema/validate 재도입
-3. richer build profile/target matrix
+1. 파서/AST를 신문법(`plan`, `var`, 블록 `def`, `for`, `return`)에 맞게 갱신
+2. 평가기에서 `for` 예산 정책 구현
+3. `&` 충돌 경로 진단 고도화
+4. import namespace(`alias::symbol`) 경로 진단 강화
+5. built-in plan 스키마 주입 API(`BuiltinPlanRegistry`) 구현
 
-## v2
+## Parus 통합 단계
 
-1. 제한된 effect capability(명시 opt-in)
-2. lockfile/registry 지원
-3. incremental evaluation cache
+1. `config.lei` 엔트리 규약 반영
+2. `master` 기본 엔트리 + `--plan` override 반영
+3. `master` 정책 위반 진단(`P_*`) 추가
+4. `bundle`/`master` built-in plan 주입 + 스키마 검증 경로 반영
 
-## 확장 원칙
+## 장기 단계
 
-1. 결정성/보안 규칙을 먼저 만족해야 한다.
-2. 표현력 확장은 opt-in으로 추가한다.
-3. 기존 v0 문법과 호환 가능한 방향을 우선한다.
+1. LEI 별도 저장소 분리
+2. LSP/툴링 강화
+3. lockfile/registry 정책 검토

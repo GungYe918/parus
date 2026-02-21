@@ -1,8 +1,10 @@
 #include <lei/diag/DiagCode.hpp>
 #include <lei/eval/Evaluator.hpp>
 #include <lei/graph/BuildGraph.hpp>
+#include <lei/parse/Parser.hpp>
 
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -92,6 +94,60 @@ bool run_builtin_api_case(const std::filesystem::path& path) {
     return true;
 }
 
+bool run_invalid_utf8_case() {
+    std::string source = "export build \"";
+    source.push_back(static_cast<char>(0xFF));
+    source += "\";";
+
+    lei::diag::Bag bag;
+    lei::parse::ParserControl parser_control{};
+    (void)lei::parse::parse_source(source, "<invalid-utf8>", bag, parser_control);
+
+    if (!bag.has_error()) {
+        std::cerr << "expected invalid utf8 parse failure but got success\n";
+        return false;
+    }
+    if (!has_code(bag, lei::diag::Code::C_UNEXPECTED_TOKEN)) {
+        std::cerr << "invalid utf8 case did not emit expected diagnostic code\n";
+        std::cerr << bag.render_text();
+        return false;
+    }
+    return true;
+}
+
+bool is_code_file(const std::filesystem::path& p) {
+    const auto ext = p.extension().string();
+    return ext == ".h" || ext == ".hpp" || ext == ".hh" ||
+           ext == ".c" || ext == ".cc" || ext == ".cpp" || ext == ".cxx" ||
+           ext == ".ipp" || ext == ".inl";
+}
+
+bool run_no_parus_include_rule() {
+    const std::filesystem::path project_dir = LEI_PROJECT_DIR;
+    const std::filesystem::path include_dir = project_dir / "include";
+    const std::filesystem::path src_dir = project_dir / "src";
+
+    for (const auto& root : {include_dir, src_dir}) {
+        for (const auto& ent : std::filesystem::recursive_directory_iterator(root)) {
+            if (!ent.is_regular_file()) continue;
+            const auto& p = ent.path();
+            if (!is_code_file(p)) continue;
+
+            std::ifstream ifs(p, std::ios::binary);
+            if (!ifs) continue;
+            const std::string text((std::istreambuf_iterator<char>(ifs)),
+                                   std::istreambuf_iterator<char>());
+
+            if (text.find("#include <parus/") != std::string::npos) {
+                std::cerr << "forbidden include found in LEI source: " << p << "\n";
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -101,9 +157,12 @@ int main() {
     const bool err1 = run_err_case(cases / "err_cycle_a.lei", lei::diag::Code::L_IMPORT_CYCLE);
     const bool err2 = run_err_case(cases / "err_recursion.lei", lei::diag::Code::L_RECURSION_FORBIDDEN);
     const bool err3 = run_err_case(cases / "err_intrinsic_removed.lei", lei::diag::Code::C_UNEXPECTED_TOKEN);
+    const bool err4 = run_err_case(cases / "err_import_missing.lei", lei::diag::Code::L_IMPORT_NOT_FOUND);
     const bool ok2 = run_builtin_api_case(cases / "api_builtin_fn_ok.lei");
+    const bool ok3 = run_invalid_utf8_case();
+    const bool ok4 = run_no_parus_include_rule();
 
-    if (!ok1 || !ok2 || !err1 || !err2 || !err3) {
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !err1 || !err2 || !err3 || !err4) {
         return 1;
     }
 

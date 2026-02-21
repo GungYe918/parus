@@ -2,6 +2,7 @@
 
 #include <lei/ast/Nodes.hpp>
 #include <lei/diag/DiagCode.hpp>
+#include <lei/parse/Cursor.hpp>
 #include <lei/syntax/TokenKind.hpp>
 
 #include <string>
@@ -27,7 +28,8 @@ public:
         : tokens_(std::move(tokens)),
           file_path_(std::move(file_path)),
           diags_(diags),
-          control_(control) {}
+          control_(control),
+          cursor_(tokens_) {}
 
     ast::Program parse_program();
 
@@ -75,7 +77,7 @@ private:
     std::string file_path_;
     diag::Bag& diags_;
     ParserControl control_{};
-    size_t pos_ = 0;
+    Cursor cursor_;
 };
 
 ast::Program parse_source(std::string_view source,
