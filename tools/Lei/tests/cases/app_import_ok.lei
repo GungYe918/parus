@@ -1,0 +1,27 @@
+import intrinsic { base };
+import { TOOL, add1 } from "./lib.lei";
+
+let bundle_core = {
+  name: "core",
+  module_map: {
+    core::math: ["core/math/add.pr", "core/math/mul.pr"],
+  },
+};
+
+let bundle_app = {
+  name: "app",
+  module_map: {
+    app::main: ["app/main.pr"],
+  },
+};
+
+let merged = base ?= {
+  defaults: { opt: add1(1) },
+};
+
+assert TOOL == "clang";
+
+export build merged & {
+  project: "sample",
+  bundles: [bundle_core, bundle_app],
+};
