@@ -99,9 +99,16 @@ plan defaults {
   opt = 0;
 };
 
+proto ProjectMeta {
+  name: string;
+  version: string;
+};
+
 plan workspace {
-  project.name = "sample-project";
-  project.version = "0.1.0";
+  project = ProjectMeta & {
+    name = "sample-project";
+    version = "0.1.0";
+  };
   bundles = [json::json_bundle, core::core_bundle, app::app_bundle];
   tasks = [tools::lint];
   codegens = [tools::gen_user];
@@ -117,7 +124,7 @@ plan master = merged_master;
 
 설명:
 
-1. `project.name`, `project.version`은 루트에서 관리한다.
+1. `project`는 `ProjectMeta` proto를 합성해 타입/필수 필드를 고정한다.
 2. bundle은 하위 폴더의 export plan(`json_bundle` 등)을 import해 배열로 합성한다.
 3. task/codegen plan은 별도 노드로 import해 master 그래프에 포함한다.
 4. 루트는 Parus가 주입한 빌트인 `master` plan과 patch를 `&`로 합성해 최종 `plan master`를 생성한다.
@@ -147,7 +154,19 @@ let app_name = app::app_bundle.name;
 let first_task = workspace.tasks[0].name;
 ```
 
-## 7) 합성 실패 예시 (`&` 충돌)
+## 7) 단일 필드 변경 패턴
+
+```lei
+plan workspace2 = workspace & {
+  project = workspace.project & {
+    name = "sample-project-renamed";
+  };
+};
+```
+
+`foo.name & bar.name`은 값 변경이 아니라 동일성 제약이므로, 업데이트 용도로는 위처럼 객체 patch를 사용한다.
+
+## 8) 합성 실패 예시 (`&` 충돌)
 
 ```lei
 plan a {

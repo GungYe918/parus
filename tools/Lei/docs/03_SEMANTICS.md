@@ -37,6 +37,9 @@
 6. 충돌 진단은 경로를 포함해야 한다.
    예: `build.profile`, `bundles[2].deps[0]`
 7. `&`는 덮어쓰기가 아니다.
+8. scalar-scalar 합성(예: `foo.name & bar.name`)은 동일값 제약이며, 값 변경 용도가 아니다.
+9. 단일 필드 변경은 객체 patch로 수행한다.
+   예: `project = project & { name = \"new-name\"; };`
 
 ## `proto` 합성 규칙
 
@@ -46,6 +49,7 @@
 4. patch에 필드가 있으면 `proto` 타입 제약을 만족해야 한다.
 5. 필수 필드(기본값 없는 필드)가 최종 결과에 없으면 실패한다.
 6. `proto`와 빌트인 plan(`bundle`, `task` 등)은 동일한 `&` 연산으로 연쇄 합성 가능하다.
+7. 프로젝트 메타 필드(`project`)는 proto를 통해 타입/필수 필드를 고정하는 방식을 권장한다.
 
 ## 빌트인 plan과 스키마
 

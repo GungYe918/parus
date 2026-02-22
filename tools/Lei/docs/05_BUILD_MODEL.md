@@ -80,19 +80,22 @@ import app from "./app/app.lei";
 import json from "./json/json.lei";
 import tools from "./tools/tools.lei";
 
-plan project_meta {
-  name = "demo";
-  version = "0.1.0";
+proto ProjectMeta {
+  name: string;
+  version: string;
 };
 
 plan project_graph {
+  project = ProjectMeta & {
+    name = "demo";
+    version = "0.1.0";
+  };
   bundles = [json::json_bundle, app::app_bundle];
   tasks = [tools::lint];
   codegens = [tools::gen_user];
 };
 
 plan merged_master = master & {
-  project = project_meta;
   build = project_graph;
 };
 
@@ -103,6 +106,16 @@ plan master = merged_master;
 
 ```lei
 let first_name = project_graph.bundles[0].name;
+```
+
+## 단일 필드 변경 예제
+
+```lei
+plan project_graph2 = project_graph & {
+  project = project_graph.project & {
+    name = "demo-renamed";
+  };
+};
 ```
 
 ## LEI 언어 vs Parus 통합 프로파일

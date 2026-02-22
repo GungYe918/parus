@@ -37,6 +37,8 @@ export plan foo = MyProto & {
 2. patch에서 지정한 값은 타입 제약을 만족해야 한다.
 3. patch에 없는 필드는 기본값으로 채워진다.
 4. 필수 필드가 최종 결과에 없으면 오류다.
+5. scalar-scalar 합성(예: `foo.name & bar.name`)은 동일성 제약이며 값 덮어쓰기가 아니다.
+6. 단일 필드 업데이트는 객체 patch를 사용한다.
 
 ## 빌트인 plan과 연쇄 합성
 
@@ -68,6 +70,14 @@ proto myProto {
 
 export plan foo = myProto & {
   a = "aaa";
+};
+```
+
+단일 필드 변경 예시:
+
+```lei
+plan foo2 = foo & {
+  a = "bbb";
 };
 ```
 
