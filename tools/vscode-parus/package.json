@@ -37,6 +37,21 @@
           "light": "./assets/parus_logo_icon.png",
           "dark": "./assets/parus_logo_icon.png"
         }
+      },
+      {
+        "id": "lei",
+        "aliases": [
+          "LEI",
+          "lei"
+        ],
+        "extensions": [
+          ".lei"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./assets/lei_logo_icon.png",
+          "dark": "./assets/lei_logo_icon.png"
+        }
       }
     ],
     "commands": [

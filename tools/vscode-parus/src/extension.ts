@@ -54,13 +54,52 @@ interface PathPickItem extends vscode.QuickPickItem {
   action: PathPickAction;
 }
 
-const LANGUAGE_ID = "parus";
+const SUPPORTED_LANGUAGE_IDS = new Set(["parus", "lei"]);
 const SETTINGS_SECTION = "parus";
 const COMMAND_RESTART = "parus.restartLanguageServer";
 const COMMAND_SHOW_LOGS = "parus.showLanguageServerLogs";
 const COMMAND_CONFIGURE_SERVER_PATH = "parus.configureServerPath";
 const STATUSBAR_PROBLEMS_COMMAND = "workbench.actions.view.problems";
 const START_TIMEOUT_MS = 10_000;
+const LEI_KEYWORDS = [
+  "import",
+  "from",
+  "export",
+  "proto",
+  "plan",
+  "let",
+  "var",
+  "def",
+  "assert",
+  "if",
+  "else",
+  "true",
+  "false",
+  "int",
+  "float",
+  "string",
+  "bool",
+  "return",
+  "for",
+  "in",
+] as const;
+const LEI_NAME_DIAGNOSTIC_CODES = new Set([
+  "L_UNKNOWN_IDENTIFIER",
+  "L_IMPORT_NOT_FOUND",
+  "L_IMPORT_SYMBOL_NOT_FOUND",
+  "L_IMPORT_CYCLE",
+  "L_PLAN_NOT_FOUND",
+  "L_EXPORT_PLAN_NOT_FOUND",
+]);
+const LEI_TYPE_DIAGNOSTIC_CODES = new Set([
+  "L_TYPE_MISMATCH",
+  "L_PROTO_TYPE_MISMATCH",
+  "L_BUILTIN_PLAN_SCHEMA_VIOLATION",
+]);
+
+function isSupportedLanguageId(languageId: string): boolean {
+  return SUPPORTED_LANGUAGE_IDS.has(languageId);
+}
 
 let client: LanguageClient | undefined;
 let outputChannel: vscode.OutputChannel | undefined;
@@ -72,6 +111,55 @@ let idleStopController: IdleStopController | undefined;
 let suppressConfigRestart = false;
 const parusDiagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
 let lifecycleQueue: Promise<void> = Promise.resolve();
+
+interface LeiSnippetSpec {
+  label: string;
+  detail: string;
+  body: string;
+}
+
+const LEI_SNIPPETS: LeiSnippetSpec[] = [
+  {
+    label: "import/from",
+    detail: "LEI import alias snippet",
+    body: 'import ${1:alias} from "${2:./module.lei}";',
+  },
+  {
+    label: "proto",
+    detail: "LEI proto declaration snippet",
+    body: "proto ${1:BuildConfig} {\n\t${2:name}: string;\n\t${3:jobs}: int = ${4:8};\n}",
+  },
+  {
+    label: "plan",
+    detail: "LEI plan declaration snippet",
+    body: "plan ${1:master} {\n\t${2:key} = ${3:value};\n};",
+  },
+  {
+    label: "def",
+    detail: "LEI function declaration snippet",
+    body: "def ${1:name}(${2:param}: ${3:string}) -> ${4:bool} {\n\t${5:return true;}\n}",
+  },
+  {
+    label: "for",
+    detail: "LEI for-in loop snippet",
+    body: "for ${1:item} in ${2:items} {\n\t${3:// todo}\n}",
+  },
+  {
+    label: "if/else",
+    detail: "LEI if/else snippet",
+    body: "if (${1:cond}) {\n\t${2:// then}\n} else {\n\t${3:// else}\n}",
+  },
+  {
+    label: "assert",
+    detail: "LEI assert snippet",
+    body: "assert ${1:expr};",
+  },
+  {
+    label: "export plan",
+    detail: "LEI export plan snippet",
+    body: "export plan ${1:release};",
+  },
+];
 
 class ChangeDebouncer {
   private readonly buckets = new Map<string, PendingChangeBucket>();
@@ -316,17 +404,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       refreshLintStatusBar();
-      if (editor?.document.languageId === LANGUAGE_ID) {
+      if (editor?.document && isSupportedLanguageId(editor.document.languageId)) {
         void onParusActivity("active-editor");
       }
     }),
     vscode.workspace.onDidOpenTextDocument((doc) => {
-      if (doc.languageId === LANGUAGE_ID) {
+      if (isSupportedLanguageId(doc.languageId)) {
         void onParusActivity("did-open");
       }
     }),
     vscode.workspace.onDidChangeTextDocument((event) => {
-      if (event.document.languageId === LANGUAGE_ID) {
+      if (isSupportedLanguageId(event.document.languageId)) {
         void onParusActivity("did-change");
       }
     }),
@@ -351,6 +439,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   lintStatusBarItem.show();
   context.subscriptions.push(lintStatusBarItem);
+  context.subscriptions.push(registerLeiCompletionProvider());
 
   updateServerPathStatusBar(readConfig());
   refreshLintStatusBar();
@@ -358,7 +447,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   if (hasParusDocumentContext()) {
     void enqueueLifecycle(() => startLanguageClient("activate"), "초기 시작");
   } else {
-    log("Parus 문서가 열릴 때까지 서버 시작을 지연합니다.");
+    log("Parus/LEI 문서가 열릴 때까지 서버 시작을 지연합니다.");
   }
 }
 
@@ -550,10 +639,13 @@ function getConfigTarget(): vscode.ConfigurationTarget {
 }
 
 function hasParusDocumentContext(): boolean {
-  if (vscode.window.activeTextEditor?.document.languageId === LANGUAGE_ID) {
+  if (
+    vscode.window.activeTextEditor?.document &&
+    isSupportedLanguageId(vscode.window.activeTextEditor.document.languageId)
+  ) {
     return true;
   }
-  return vscode.workspace.textDocuments.some((doc) => doc.languageId === LANGUAGE_ID);
+  return vscode.workspace.textDocuments.some((doc) => isSupportedLanguageId(doc.languageId));
 }
 
 async function onParusActivity(reason: string): Promise<void> {
@@ -563,7 +655,7 @@ async function onParusActivity(reason: string): Promise<void> {
   }
 
   const log = getLogger();
-  log(`Parus 문서 활동 감지로 서버 시작을 시도합니다. (reason=${reason})`);
+  log(`Parus/LEI 문서 활동 감지로 서버 시작을 시도합니다. (reason=${reason})`);
   await enqueueLifecycle(() => startLanguageClient(`activity:${reason}`), "활동 기반 시작");
 }
 
@@ -611,7 +703,10 @@ async function startLanguageClient(reason: string): Promise<void> {
   changeDebouncer = new ChangeDebouncer(() => readConfig().diagnosticsDebounceMs, log);
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: LANGUAGE_ID }],
+    documentSelector: Array.from(SUPPORTED_LANGUAGE_IDS).map((language) => ({
+      scheme: "file" as const,
+      language,
+    })),
     outputChannel,
     traceOutputChannel: traceChannel,
     revealOutputChannelOn: RevealOutputChannelOn.Error,
@@ -963,6 +1058,41 @@ function createErrorHandler(log: (line: string) => void): ErrorHandler {
   };
 }
 
+function registerLeiCompletionProvider(): vscode.Disposable {
+  return vscode.languages.registerCompletionItemProvider(
+    [{ language: "lei", scheme: "file" }],
+    {
+      provideCompletionItems(document, position) {
+        const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+        const items: vscode.CompletionItem[] = [];
+
+        for (const keyword of LEI_KEYWORDS) {
+          const item = new vscode.CompletionItem(keyword, vscode.CompletionItemKind.Keyword);
+          item.detail = "LEI keyword";
+          item.sortText = `0_${keyword}`;
+          if (range) {
+            item.range = range;
+          }
+          items.push(item);
+        }
+
+        for (const spec of LEI_SNIPPETS) {
+          const item = new vscode.CompletionItem(spec.label, vscode.CompletionItemKind.Snippet);
+          item.detail = spec.detail;
+          item.insertText = new vscode.SnippetString(spec.body);
+          item.sortText = `1_${spec.label}`;
+          items.push(item);
+        }
+
+        return items;
+      },
+    },
+    ".",
+    ":",
+    "{"
+  );
+}
+
 function enhanceDiagnostics(
   uri: vscode.Uri,
   diagnostics: readonly vscode.Diagnostic[]
@@ -1044,18 +1174,32 @@ function inferDiagnosticCategory(code: string | undefined): string | undefined {
     return undefined;
   }
 
-  if (/(Capability|Cap|Borrow|Immutable|Mut|Move|Escape)/i.test(code)) {
-    return "cap";
+  const normalized = code.trim();
+  if (normalized.startsWith("C_")) {
+    return "syntax";
   }
-  if (/(Type|Tyck|Cast|Return|Param|Infer|Mismatch)/i.test(code)) {
+  if (LEI_NAME_DIAGNOSTIC_CODES.has(normalized)) {
+    return "name";
+  }
+  if (LEI_TYPE_DIAGNOSTIC_CODES.has(normalized)) {
     return "type";
   }
-  if (/(Name|Resolve|Shadow|Duplicate|Decl|Scope|Symbol)/i.test(code)) {
+  if (normalized.startsWith("L_") || normalized.startsWith("B_")) {
+    return "lint";
+  }
+
+  if (/(Capability|Cap|Borrow|Immutable|Mut|Move|Escape)/i.test(normalized)) {
+    return "cap";
+  }
+  if (/(Type|Tyck|Cast|Return|Param|Infer|Mismatch)/i.test(normalized)) {
+    return "type";
+  }
+  if (/(Name|Resolve|Shadow|Duplicate|Decl|Scope|Symbol)/i.test(normalized)) {
     return "name";
   }
   if (
     /(Expected|Unexpected|Token|Eof|Parse|Semicolon|Bracket|Paren|Header|Body|Expr|Stmt|Recovery)/i.test(
-      code
+      normalized
     )
   ) {
     return "syntax";
@@ -1080,7 +1224,7 @@ function refreshLintStatusBar(): void {
   }
 
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== LANGUAGE_ID) {
+  if (!editor || !isSupportedLanguageId(editor.document.languageId)) {
     lintStatusBarItem.hide();
     return;
   }
@@ -1111,8 +1255,8 @@ function refreshLintStatusBar(): void {
   }
 
   if (diagnostics.length === 0) {
-    lintStatusBarItem.text = "$(check) Parus Lint: clean";
-    lintStatusBarItem.tooltip = "Parus: 현재 파일 진단 없음";
+    lintStatusBarItem.text = "$(check) Parus/LEI Lint: clean";
+    lintStatusBarItem.tooltip = "Parus/LEI: 현재 파일 진단 없음";
     lintStatusBarItem.show();
     return;
   }
@@ -1125,8 +1269,8 @@ function refreshLintStatusBar(): void {
     parts.push(`$(light-bulb) ${hints}`);
   }
 
-  lintStatusBarItem.text = `Parus Lint ${parts.join(" ")}`;
-  lintStatusBarItem.tooltip = "Parus: Problems 보기 열기";
+  lintStatusBarItem.text = `Parus/LEI Lint ${parts.join(" ")}`;
+  lintStatusBarItem.tooltip = "Parus/LEI: Problems 보기 열기";
   lintStatusBarItem.show();
 }
 

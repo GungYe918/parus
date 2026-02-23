@@ -454,14 +454,24 @@ Evaluator::ModulePtr Evaluator::load_module(const std::filesystem::path& path) {
     auto it = module_cache_.find(key);
     if (it != module_cache_.end()) return it->second;
 
+    auto mod = std::make_shared<ModuleContext>();
+    mod->path = key;
+
+    if (options_.source_overlay) {
+        auto overlaid = options_.source_overlay(key);
+        if (overlaid.has_value()) {
+            mod->program = parse::parse_source(*overlaid, key, diags_, parser_control_);
+            module_cache_[key] = mod;
+            return mod;
+        }
+    }
+
     const auto read = lei::os::read_text_file(key);
     if (!read.ok) {
         diags_.add(diag::Code::L_IMPORT_NOT_FOUND, key, 1, 1, "cannot open LEI module: " + read.err);
         return nullptr;
     }
 
-    auto mod = std::make_shared<ModuleContext>();
-    mod->path = key;
     mod->program = parse::parse_source(read.text, key, diags_, parser_control_);
 
     module_cache_[key] = mod;

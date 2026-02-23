@@ -1,6 +1,6 @@
 # parusd Docs
 
-`parusd`는 Parus standalone language server다.
+`parusd`는 Parus/LEI를 함께 처리하는 standalone language server다.
 
 ## 실행
 
@@ -12,6 +12,11 @@ parusd --stdio
 
 1. `STDIO_PROTOCOL.md`: stdio LSP framing과 처리 메서드
 2. `DIAGNOSTIC_SCHEMA.md`: publishDiagnostics payload 규약
+
+## 언어 지원 범위
+
+1. `*.pr`, `*.parus`: 기존 Parus 파이프라인(증분 파싱 + semantic tokens)
+2. `*.lei`: LEI parse + evaluator lint + semantic tokens
 
 ## 코드 근거
 

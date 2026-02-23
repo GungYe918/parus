@@ -11,12 +11,19 @@
 #include <parus/ty/TypePool.hpp>
 #include <parus/tyck/TypeCheck.hpp>
 
+#if defined(PARUSD_ENABLE_LEI) && PARUSD_ENABLE_LEI
+#include <lei/diag/DiagCode.hpp>
+#include <lei/eval/Evaluator.hpp>
+#include <lei/parse/Parser.hpp>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <optional>
@@ -27,6 +34,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+
+#ifndef PARUSD_ENABLE_LEI
+#define PARUSD_ENABLE_LEI 0
+#endif
 
 namespace {
 
@@ -465,6 +476,12 @@ namespace {
         std::string message{};
     };
 
+    enum class DocLang : uint8_t {
+        kParus,
+        kLei,
+        kUnknown,
+    };
+
     enum class SemTokenType : uint32_t {
         kNamespace = 0,
         kType,
@@ -544,6 +561,7 @@ namespace {
         std::string text{};
         int64_t version = 0;
         uint64_t revision = 0;
+        DocLang lang = DocLang::kUnknown;
 
         std::vector<parus::parse::EditWindow> pending_edits{};
 
@@ -563,6 +581,93 @@ namespace {
         parus::ParserFeatureFlags parser_features{};
         std::vector<std::string> warnings{};
     };
+
+    std::string lower_ascii_(std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return s;
+    }
+
+    bool ends_with_(std::string_view text, std::string_view suffix) {
+        if (suffix.size() > text.size()) return false;
+        return text.substr(text.size() - suffix.size()) == suffix;
+    }
+
+    DocLang doc_lang_from_uri_(std::string_view uri) {
+        std::string u(uri);
+        if (const auto pos = u.find_first_of("?#"); pos != std::string::npos) {
+            u.resize(pos);
+        }
+        u = lower_ascii_(std::move(u));
+        if (ends_with_(u, ".pr") || ends_with_(u, ".parus")) return DocLang::kParus;
+        if (ends_with_(u, ".lei")) return DocLang::kLei;
+        return DocLang::kUnknown;
+    }
+
+    int hex_nibble_(char ch) {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+        if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+        return -1;
+    }
+
+    bool percent_decode_(std::string_view input, std::string& out) {
+        out.clear();
+        out.reserve(input.size());
+        for (size_t i = 0; i < input.size(); ++i) {
+            const char ch = input[i];
+            if (ch != '%') {
+                out.push_back(ch);
+                continue;
+            }
+            if (i + 2 >= input.size()) return false;
+            const int hi = hex_nibble_(input[i + 1]);
+            const int lo = hex_nibble_(input[i + 2]);
+            if (hi < 0 || lo < 0) return false;
+            out.push_back(static_cast<char>((hi << 4) | lo));
+            i += 2;
+        }
+        return true;
+    }
+
+    std::optional<std::string> uri_to_file_path_(std::string_view uri) {
+        if (!uri.starts_with("file://")) return std::nullopt;
+
+        std::string rest(uri.substr(7));
+        if (rest.empty()) return std::nullopt;
+
+        if (rest[0] != '/') {
+            const auto slash = rest.find('/');
+            if (slash == std::string::npos) return std::nullopt;
+            const std::string_view host(rest.data(), slash);
+            if (!host.empty() && host != "localhost") return std::nullopt;
+            rest.erase(0, slash);
+        }
+
+        std::string decoded{};
+        if (!percent_decode_(rest, decoded)) return std::nullopt;
+
+#if defined(_WIN32)
+        if (decoded.size() >= 3
+            && decoded[0] == '/'
+            && std::isalpha(static_cast<unsigned char>(decoded[1]))
+            && decoded[2] == ':') {
+            decoded.erase(decoded.begin());
+        }
+        std::replace(decoded.begin(), decoded.end(), '/', '\\');
+#endif
+        return decoded;
+    }
+
+    std::string normalize_host_path_(std::string_view raw_path) {
+        namespace fs = std::filesystem;
+        const fs::path p(raw_path);
+        std::error_code ec{};
+        const fs::path canonical = fs::weakly_canonical(p, ec);
+        if (!ec) return canonical.string();
+        return p.lexically_normal().string();
+    }
 
     bool decode_utf8_code_point_(std::string_view text, size_t off, uint32_t& cp, size_t& len) {
         if (off >= text.size()) return false;
@@ -1114,7 +1219,7 @@ namespace {
         return out;
     }
 
-    AnalysisResult analyze_document_(
+    AnalysisResult analyze_parus_document_(
         std::string_view uri,
         DocumentState& doc,
         const parus::macro::ExpansionBudget& macro_budget
@@ -1262,6 +1367,392 @@ namespace {
         }
 
         return out;
+    }
+
+#if PARUSD_ENABLE_LEI
+    bool is_lei_keyword_token_kind_(lei::syntax::TokenKind kind) {
+        using K = lei::syntax::TokenKind;
+        switch (kind) {
+            case K::kKwImport:
+            case K::kKwFrom:
+            case K::kKwExport:
+            case K::kKwProto:
+            case K::kKwPlan:
+            case K::kKwLet:
+            case K::kKwVar:
+            case K::kKwDef:
+            case K::kKwAssert:
+            case K::kKwIf:
+            case K::kKwElse:
+            case K::kKwTrue:
+            case K::kKwFalse:
+            case K::kKwInt:
+            case K::kKwFloat:
+            case K::kKwString:
+            case K::kKwBool:
+            case K::kKwReturn:
+            case K::kKwFor:
+            case K::kKwIn:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool is_lei_operator_token_kind_(lei::syntax::TokenKind kind) {
+        using K = lei::syntax::TokenKind;
+        switch (kind) {
+            case K::kLParen:
+            case K::kRParen:
+            case K::kLBrace:
+            case K::kRBrace:
+            case K::kLBracket:
+            case K::kRBracket:
+            case K::kComma:
+            case K::kColon:
+            case K::kSemicolon:
+            case K::kDot:
+            case K::kAssign:
+            case K::kArrow:
+            case K::kPlus:
+            case K::kMinus:
+            case K::kStar:
+            case K::kSlash:
+            case K::kAndAnd:
+            case K::kOrOr:
+            case K::kAmp:
+            case K::kEqEq:
+            case K::kBangEq:
+            case K::kBang:
+            case K::kColonColon:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    uint32_t lei_token_length_(const lei::syntax::Token& tok) {
+        if (tok.kind == lei::syntax::TokenKind::kStringLit) {
+            if (tok.lexeme.find('\n') != std::string::npos || tok.lexeme.find('\r') != std::string::npos) {
+                return 1;
+            }
+            const uint32_t body_len = static_cast<uint32_t>(tok.lexeme.size());
+            return std::max(1u, body_len + 2u);
+        }
+
+        if (!tok.lexeme.empty()) {
+            return std::max(1u, static_cast<uint32_t>(tok.lexeme.size()));
+        }
+
+        const auto token_name = lei::syntax::token_kind_name(tok.kind);
+        if (token_name.empty() || token_name == "unknown") return 1;
+        return std::max(1u, static_cast<uint32_t>(token_name.size()));
+    }
+
+    bool sem_token_from_lei_token_(
+        const lei::syntax::Token& tok,
+        const SemClass& sem_class,
+        SemToken& out
+    ) {
+        if (tok.loc.line == 0 || tok.loc.column == 0) return false;
+        SemToken next{};
+        next.line = tok.loc.line - 1;
+        next.start_character = tok.loc.column - 1;
+        next.length = lei_token_length_(tok);
+        next.token_type = sem_class.token_type;
+        next.token_modifiers = sem_class.token_modifiers;
+        out = next;
+        return true;
+    }
+
+    std::vector<bool> collect_lei_parameter_declarations_(
+        const std::vector<lei::syntax::Token>& toks
+    ) {
+        using K = lei::syntax::TokenKind;
+        std::vector<bool> out(toks.size(), false);
+
+        for (size_t i = 0; i < toks.size(); ++i) {
+            if (toks[i].kind != K::kKwDef) continue;
+
+            size_t lparen_idx = i + 1;
+            while (lparen_idx < toks.size()) {
+                const auto kind = toks[lparen_idx].kind;
+                if (kind == K::kLParen) break;
+                if (kind == K::kLBrace || kind == K::kSemicolon || kind == K::kEof) break;
+                ++lparen_idx;
+            }
+            if (lparen_idx >= toks.size() || toks[lparen_idx].kind != K::kLParen) continue;
+
+            uint32_t depth = 0;
+            for (size_t j = lparen_idx; j < toks.size(); ++j) {
+                const auto kind = toks[j].kind;
+                if (kind == K::kLParen) {
+                    ++depth;
+                    continue;
+                }
+                if (kind == K::kRParen) {
+                    if (depth == 0) break;
+                    --depth;
+                    if (depth == 0) break;
+                    continue;
+                }
+                if (depth != 1) continue;
+                if (kind != K::kIdent) continue;
+                if (j + 1 < toks.size() && toks[j + 1].kind == K::kColon) {
+                    out[j] = true;
+                }
+            }
+        }
+        return out;
+    }
+
+    std::vector<SemToken> semantic_tokens_for_lei_document_(
+        std::string_view source,
+        std::string_view file_path
+    ) {
+        std::vector<SemToken> out{};
+        lei::diag::Bag lex_bag;
+        const auto toks = lei::parse::lex(source, file_path, lex_bag);
+        (void)lex_bag;
+        if (toks.empty()) return out;
+
+        const auto parameter_decl = collect_lei_parameter_declarations_(toks);
+        out.reserve(toks.size());
+
+        using K = lei::syntax::TokenKind;
+        for (size_t i = 0; i < toks.size(); ++i) {
+            const auto& tok = toks[i];
+            if (tok.kind == K::kEof || tok.kind == K::kError) continue;
+
+            const auto prev_kind = (i > 0) ? toks[i - 1].kind : K::kError;
+            const auto next_kind = (i + 1 < toks.size()) ? toks[i + 1].kind : K::kError;
+
+            SemClass sem_class{};
+            bool has_sem_class = false;
+
+            if (tok.kind == K::kIdent) {
+                if (prev_kind == K::kKwDef) {
+                    sem_class = SemClass{
+                        static_cast<uint32_t>(SemTokenType::kFunction),
+                        kSemModDeclaration,
+                    };
+                    has_sem_class = true;
+                } else if (parameter_decl[i]) {
+                    sem_class = SemClass{
+                        static_cast<uint32_t>(SemTokenType::kParameter),
+                        kSemModDeclaration,
+                    };
+                    has_sem_class = true;
+                } else if (prev_kind == K::kKwLet || prev_kind == K::kKwVar || prev_kind == K::kKwFor) {
+                    sem_class = SemClass{
+                        static_cast<uint32_t>(SemTokenType::kVariable),
+                        kSemModDeclaration,
+                    };
+                    has_sem_class = true;
+                } else if (next_kind == K::kLParen) {
+                    sem_class = SemClass{
+                        static_cast<uint32_t>(SemTokenType::kFunction),
+                        0,
+                    };
+                    has_sem_class = true;
+                } else {
+                    sem_class = SemClass{
+                        static_cast<uint32_t>(SemTokenType::kVariable),
+                        0,
+                    };
+                    has_sem_class = true;
+                }
+            } else if (tok.kind == K::kIntLit || tok.kind == K::kFloatLit) {
+                sem_class = SemClass{
+                    static_cast<uint32_t>(SemTokenType::kNumber),
+                    0,
+                };
+                has_sem_class = true;
+            } else if (tok.kind == K::kStringLit) {
+                sem_class = SemClass{
+                    static_cast<uint32_t>(SemTokenType::kString),
+                    0,
+                };
+                has_sem_class = true;
+            } else if (is_lei_keyword_token_kind_(tok.kind)) {
+                sem_class = SemClass{
+                    static_cast<uint32_t>(SemTokenType::kKeyword),
+                    0,
+                };
+                has_sem_class = true;
+            } else if (is_lei_operator_token_kind_(tok.kind)) {
+                sem_class = SemClass{
+                    static_cast<uint32_t>(SemTokenType::kOperator),
+                    0,
+                };
+                has_sem_class = true;
+            }
+
+            if (!has_sem_class) continue;
+
+            SemToken sem_tok{};
+            if (sem_token_from_lei_token_(tok, sem_class, sem_tok)) {
+                out.push_back(sem_tok);
+            }
+        }
+
+        return out;
+    }
+
+    std::string lei_diagnostic_dedupe_key_(const lei::diag::Diagnostic& d) {
+        return std::string(lei::diag::code_name(d.code))
+            + "|"
+            + std::to_string(d.line)
+            + "|"
+            + std::to_string(d.column)
+            + "|"
+            + d.message;
+    }
+
+    bool lei_diagnostic_matches_current_file_(
+        const lei::diag::Diagnostic& d,
+        std::string_view normalized_current_file
+    ) {
+        if (normalized_current_file.empty()) return true;
+        if (d.file.empty()) return false;
+
+        std::string normalized_file = d.file;
+        if (normalized_file.starts_with("file://")) {
+            const auto decoded = uri_to_file_path_(normalized_file);
+            if (!decoded.has_value()) return false;
+            normalized_file = *decoded;
+        }
+        normalized_file = normalize_host_path_(normalized_file);
+        return normalized_file == normalized_current_file;
+    }
+
+    void append_lei_diagnostic_(
+        std::vector<LspDiag>& out,
+        std::unordered_set<std::string>& dedupe,
+        const lei::diag::Diagnostic& d
+    ) {
+        const std::string key = lei_diagnostic_dedupe_key_(d);
+        if (!dedupe.insert(key).second) return;
+
+        LspDiag ld{};
+        ld.start_line = (d.line > 0) ? (d.line - 1) : 0;
+        ld.start_character = (d.column > 0) ? (d.column - 1) : 0;
+        ld.end_line = ld.start_line;
+        ld.end_character = ld.start_character + 1;
+        ld.severity = 1;
+        ld.code = lei::diag::code_name(d.code);
+        ld.message = d.message;
+        out.push_back(std::move(ld));
+    }
+#endif
+
+    AnalysisResult analyze_lei_document_(
+        std::string_view uri,
+        DocumentState& doc,
+        const std::unordered_map<std::string, std::string>& overlays
+    ) {
+        AnalysisResult out;
+#if PARUSD_ENABLE_LEI
+        std::string parsed_file = std::string(uri);
+        std::string normalized_current_file{};
+        if (const auto fs_path = uri_to_file_path_(uri); fs_path.has_value()) {
+            normalized_current_file = normalize_host_path_(*fs_path);
+            parsed_file = normalized_current_file;
+        }
+
+        std::unordered_set<std::string> dedupe{};
+
+        lei::diag::Bag parse_bag;
+        (void)lei::parse::parse_source(doc.text, parsed_file, parse_bag);
+        out.diagnostics.reserve(parse_bag.all().size());
+        for (const auto& d : parse_bag.all()) {
+            append_lei_diagnostic_(out.diagnostics, dedupe, d);
+        }
+
+        out.semantic_tokens = semantic_tokens_for_lei_document_(doc.text, parsed_file);
+
+        if (!normalized_current_file.empty()) {
+            lei::diag::Bag eval_bag;
+            lei::eval::EvaluatorBudget budget{};
+            auto builtins = lei::eval::make_default_builtin_registry();
+            auto builtin_plans = lei::eval::make_default_builtin_plan_registry();
+            lei::parse::ParserControl parser_control{};
+            lei::eval::Evaluator evaluator(
+                budget,
+                eval_bag,
+                std::move(builtins),
+                std::move(builtin_plans),
+                parser_control
+            );
+
+            lei::eval::EvaluateOptions eval_options{};
+            eval_options.entry_plan = "master";
+            eval_options.source_overlay = [&overlays](std::string_view normalized_path) -> std::optional<std::string> {
+                const auto it = overlays.find(std::string(normalized_path));
+                if (it == overlays.end()) return std::nullopt;
+                return it->second;
+            };
+
+            (void)evaluator.evaluate_entry(std::filesystem::path(normalized_current_file), eval_options);
+            for (const auto& d : eval_bag.all()) {
+                if (!lei_diagnostic_matches_current_file_(d, normalized_current_file)) {
+                    continue;
+                }
+                append_lei_diagnostic_(out.diagnostics, dedupe, d);
+            }
+        }
+#else
+        (void)doc;
+        (void)uri;
+        (void)overlays;
+        LspDiag ld{};
+        ld.start_line = 0;
+        ld.start_character = 0;
+        ld.end_line = 0;
+        ld.end_character = 1;
+        ld.severity = 1;
+        ld.code = "LSP_LEI_NOT_BUILT";
+        ld.message = "LEI support is not built in this parusd binary (PARUS_BUILD_LEI=OFF)";
+        out.diagnostics.push_back(std::move(ld));
+#endif
+        return out;
+    }
+
+    std::unordered_map<std::string, std::string> build_lei_overlay_map_(
+        const std::unordered_map<std::string, DocumentState>& documents
+    ) {
+        std::unordered_map<std::string, std::string> out{};
+        out.reserve(documents.size());
+        for (const auto& [doc_uri, state] : documents) {
+            if (state.lang != DocLang::kLei) continue;
+            const auto fs_path = uri_to_file_path_(doc_uri);
+            if (!fs_path.has_value()) continue;
+            out.insert_or_assign(normalize_host_path_(*fs_path), state.text);
+        }
+        return out;
+    }
+
+    AnalysisResult analyze_document_(
+        std::string_view uri,
+        DocumentState& doc,
+        const parus::macro::ExpansionBudget& macro_budget,
+        const std::unordered_map<std::string, std::string>* lei_overlays
+    ) {
+        switch (doc.lang) {
+            case DocLang::kParus:
+                return analyze_parus_document_(uri, doc, macro_budget);
+            case DocLang::kLei: {
+                static const std::unordered_map<std::string, std::string> kEmptyOverlays{};
+                return analyze_lei_document_(
+                    uri,
+                    doc,
+                    (lei_overlays != nullptr) ? *lei_overlays : kEmptyOverlays
+                );
+            }
+            case DocLang::kUnknown:
+            default:
+                return AnalysisResult{};
+        }
     }
 
     const char* reparse_mode_name_(parus::parse::ReparseMode mode) {
@@ -1498,15 +1989,29 @@ namespace {
                 return;
             }
 
-            st.parse_session.set_feature_flags(parser_features_);
-            auto analyzed = analyze_document_(uri, st, macro_budget_);
+            if (st.lang == DocLang::kParus) {
+                st.parse_session.set_feature_flags(parser_features_);
+            }
+
+            std::unordered_map<std::string, std::string> lei_overlays{};
+            const std::unordered_map<std::string, std::string>* lei_overlays_ptr = nullptr;
+            if (st.lang == DocLang::kLei) {
+                lei_overlays = build_lei_overlay_map_(documents_);
+                lei_overlays_ptr = &lei_overlays;
+            }
+
+            auto analyzed = analyze_document_(uri, st, macro_budget_, lei_overlays_ptr);
             st.analysis.revision = st.revision;
             st.analysis.valid = true;
             st.analysis.diagnostics = std::move(analyzed.diagnostics);
             st.analysis.semantic_tokens = std::move(analyzed.semantic_tokens);
 
             if (trace_incremental_) {
+                const char* lang_name = "unknown";
+                if (st.lang == DocLang::kParus) lang_name = "parus";
+                if (st.lang == DocLang::kLei) lang_name = "lei";
                 std::cerr << "[parusd] uri=" << uri
+                          << " lang=" << lang_name
                           << " revision=" << st.revision
                           << " parse=" << reparse_mode_name_(analyzed.parse_mode)
                           << "\n";
@@ -1526,7 +2031,10 @@ namespace {
             st.text = std::string(*text);
             st.version = as_i64_(obj_get_(*td, "version")).value_or(0);
             st.revision = ++revision_seq_;
-            st.parse_session.set_feature_flags(parser_features_);
+            st.lang = doc_lang_from_uri_(*uri);
+            if (st.lang == DocLang::kParus) {
+                st.parse_session.set_feature_flags(parser_features_);
+            }
 
             auto it = documents_.insert_or_assign(std::string(*uri), std::move(st)).first;
             ensure_analysis_cache_(*uri, it->second);

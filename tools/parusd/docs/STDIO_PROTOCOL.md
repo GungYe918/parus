@@ -26,13 +26,21 @@
 
 1. URI별 `DocumentState` 유지
 2. change 이벤트마다 텍스트 패치 적용
-3. 변경 후 즉시 parse/pass/tyck/cap 실행 후 진단 publish
+3. 문서 확장자별 라우팅:
+   - `*.pr`, `*.parus`: Parus 파이프라인 실행
+   - `*.lei`: LEI parse + evaluator lint 실행 (열린 LEI 문서는 메모리 오버레이로 반영)
+4. 변경 후 진단 publish
 
 ## initialize 응답 capabilities
 
 1. `textDocumentSync` (`openClose=true`, `change=2`)
 2. `positionEncoding = utf-16`
 3. `semanticTokensProvider` (`full=true`, `range=false`)
+
+## semanticTokens 동작
+
+1. Parus 문서: 토큰 분류 결과 반환
+2. LEI 문서: keyword/function/parameter/variable/string/number/operator 분류 반환
 
 ## 코드 근거
 

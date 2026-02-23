@@ -27,8 +27,11 @@ struct EvaluatorBudget {
     uint32_t max_codegens = 10000;
 };
 
+using SourceOverlayLookup = std::function<std::optional<std::string>(std::string_view normalized_path)>;
+
 struct EvaluateOptions {
     std::string entry_plan = "master";
+    SourceOverlayLookup source_overlay{};
 };
 
 struct FunctionValue {

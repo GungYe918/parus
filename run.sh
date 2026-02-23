@@ -138,6 +138,18 @@ cmake --build "${BUILD_DIR}" --target parus_stage2 -j16
 cmake --build "${BUILD_DIR}" --target parus_parser_tests parus_oir_tests parus_cli_tests parus_config_tests parus_oir_llvm_tests parus_ffi_tests parus_parlib_tests -j16
 
 echo ""
+echo "vscode-parus npm validation"
+if ! command -v npm >/dev/null 2>&1; then
+  echo "npm is required for vscode-parus validation but was not found in PATH."
+  exit 1
+fi
+(
+  cd "${ROOT_DIR}/tools/vscode-parus"
+  npm run check
+  npm run compile
+)
+
+echo ""
 echo "Built successfully (stage1 + stage2 + tests)."
 echo "LLVM lane            : ${LLVM_LANE}"
 echo "llvm-config          : ${LLVM_CONFIG_BIN}"
