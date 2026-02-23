@@ -14,6 +14,7 @@
 #include <parus/macro/Expander.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/passes/Passes.hpp>
+#include <parus/os/File.hpp>
 #include <parus/sir/Builder.hpp>
 #include <parus/sir/CapabilityAnalysis.hpp>
 #include <parus/sir/MutAnalysis.hpp>
@@ -29,10 +30,14 @@
 #endif
 
 #include <filesystem>
+#include <cctype>
+#include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -146,6 +151,583 @@ namespace parusc::p0 {
         ) {
             parus::Lexer lex(sm.content(file_id), file_id, bag);
             return lex.lex_all();
+        }
+
+        struct ExportSurfaceEntry {
+            parus::sema::SymbolKind kind = parus::sema::SymbolKind::kVar;
+            std::string kind_text{};
+            std::string path{};
+            std::string type_repr{};
+            std::string decl_file{};
+            uint32_t decl_line = 1;
+            uint32_t decl_col = 1;
+            std::string decl_bundle{};
+            bool is_export = false;
+        };
+
+        std::string json_escape_text_(std::string_view s) {
+            std::string out;
+            out.reserve(s.size() + 8);
+            for (const char ch : s) {
+                switch (ch) {
+                    case '\"': out += "\\\""; break;
+                    case '\\': out += "\\\\"; break;
+                    case '\b': out += "\\b"; break;
+                    case '\f': out += "\\f"; break;
+                    case '\n': out += "\\n"; break;
+                    case '\r': out += "\\r"; break;
+                    case '\t': out += "\\t"; break;
+                    default:
+                        if (static_cast<unsigned char>(ch) < 0x20) {
+                            std::ostringstream oss;
+                            oss << "\\u" << std::hex << std::uppercase
+                                << std::setw(4) << std::setfill('0')
+                                << static_cast<int>(static_cast<unsigned char>(ch));
+                            out += oss.str();
+                        } else {
+                            out.push_back(ch);
+                        }
+                        break;
+                }
+            }
+            return out;
+        }
+
+        bool json_unescape_text_(std::string_view in, std::string& out) {
+            out.clear();
+            out.reserve(in.size());
+            for (size_t i = 0; i < in.size(); ++i) {
+                const char c = in[i];
+                if (c != '\\') {
+                    out.push_back(c);
+                    continue;
+                }
+                if (i + 1 >= in.size()) return false;
+                const char n = in[++i];
+                switch (n) {
+                    case '\"': out.push_back('\"'); break;
+                    case '\\': out.push_back('\\'); break;
+                    case '/': out.push_back('/'); break;
+                    case 'b': out.push_back('\b'); break;
+                    case 'f': out.push_back('\f'); break;
+                    case 'n': out.push_back('\n'); break;
+                    case 'r': out.push_back('\r'); break;
+                    case 't': out.push_back('\t'); break;
+                    case 'u':
+                        if (i + 4 >= in.size()) return false;
+                        // v1 index uses ASCII only, so ignore escaped unicode codepoint.
+                        i += 4;
+                        out.push_back('?');
+                        break;
+                    default:
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        std::string symbol_kind_to_text_(parus::sema::SymbolKind kind) {
+            using K = parus::sema::SymbolKind;
+            switch (kind) {
+                case K::kFn: return "fn";
+                case K::kVar: return "var";
+                case K::kField: return "field";
+                case K::kAct: return "act";
+                case K::kType: return "type";
+                default: return "var";
+            }
+        }
+
+        std::optional<parus::sema::SymbolKind> symbol_kind_from_text_(std::string_view s) {
+            using K = parus::sema::SymbolKind;
+            if (s == "fn") return K::kFn;
+            if (s == "var") return K::kVar;
+            if (s == "field") return K::kField;
+            if (s == "act") return K::kAct;
+            if (s == "type") return K::kType;
+            return std::nullopt;
+        }
+
+        std::string qualify_name_(const std::vector<std::string>& ns, std::string_view base) {
+            if (base.empty()) return {};
+            if (ns.empty()) return std::string(base);
+            std::string out{};
+            for (size_t i = 0; i < ns.size(); ++i) {
+                if (i) out += "::";
+                out += ns[i];
+            }
+            out += "::";
+            out += std::string(base);
+            return out;
+        }
+
+        void collect_exports_stmt_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId sid,
+            const parus::ty::TypePool& types,
+            const parus::SourceManager& sm,
+            const std::string& decl_file,
+            const std::string& bundle_name,
+            std::vector<std::string>& ns,
+            std::vector<ExportSurfaceEntry>& out
+        ) {
+            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
+            const auto& s = ast.stmt(sid);
+
+            if (s.kind == parus::ast::StmtKind::kBlock) {
+                const auto& kids = ast.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        collect_exports_stmt_(ast, kids[s.stmt_begin + i], types, sm, decl_file, bundle_name, ns, out);
+                    }
+                }
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kNestDecl) {
+                if (!s.nest_is_file_directive) {
+                    const auto& segs = ast.path_segs();
+                    const uint64_t begin = s.nest_path_begin;
+                    const uint64_t end = begin + s.nest_path_count;
+                    uint32_t pushed = 0;
+                    if (begin <= segs.size() && end <= segs.size()) {
+                        for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                            ns.push_back(std::string(segs[s.nest_path_begin + i]));
+                            ++pushed;
+                        }
+                    }
+                    collect_exports_stmt_(ast, s.a, types, sm, decl_file, bundle_name, ns, out);
+                    while (pushed > 0) {
+                        ns.pop_back();
+                        --pushed;
+                    }
+                }
+                return;
+            }
+
+            auto push_export = [&](parus::sema::SymbolKind kind,
+                                   std::string qname,
+                                   parus::ty::TypeId tid,
+                                   bool is_export,
+                                   parus::Span span) {
+                if (qname.empty()) return;
+                ExportSurfaceEntry e{};
+                e.kind = kind;
+                e.kind_text = symbol_kind_to_text_(kind);
+                e.path = std::move(qname);
+                if (tid != parus::ty::kInvalidType) {
+                    e.type_repr = types.to_export_string(tid);
+                }
+                e.decl_file = decl_file;
+                const auto lc = sm.line_col(span.file_id, span.lo);
+                e.decl_line = lc.line;
+                e.decl_col = lc.col;
+                e.decl_bundle = bundle_name;
+                e.is_export = is_export;
+                out.push_back(std::move(e));
+            };
+
+            if (s.kind == parus::ast::StmtKind::kFnDecl && !s.name.empty()) {
+                push_export(parus::sema::SymbolKind::kFn, qualify_name_(ns, s.name), s.type, s.is_export, s.span);
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kVar && !s.name.empty()) {
+                const bool is_global =
+                    s.is_static || s.is_extern || s.is_export || (s.link_abi == parus::ast::LinkAbi::kC);
+                if (is_global) {
+                    push_export(parus::sema::SymbolKind::kVar, qualify_name_(ns, s.name), s.type, s.is_export, s.span);
+                }
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kFieldDecl && !s.name.empty()) {
+                push_export(parus::sema::SymbolKind::kField, qualify_name_(ns, s.name), s.type, s.is_export, s.span);
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kActsDecl && !s.name.empty()) {
+                const std::string acts_qname = qualify_name_(ns, s.name);
+                push_export(parus::sema::SymbolKind::kAct, acts_qname, s.acts_target_type, s.is_export, s.span);
+
+                if (!s.acts_is_for) {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            const auto msid = kids[s.stmt_begin + i];
+                            if (msid == parus::ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast.stmts().size()) continue;
+                            const auto& ms = ast.stmt(msid);
+                            if (ms.kind != parus::ast::StmtKind::kFnDecl || ms.name.empty()) continue;
+                            if (ms.fn_is_operator) continue;
+                            std::string member_qname = acts_qname;
+                            member_qname += "::";
+                            member_qname += std::string(ms.name);
+                            push_export(parus::sema::SymbolKind::kFn, member_qname, ms.type, s.is_export, ms.span);
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
+        bool collect_file_namespace_(const parus::ast::AstArena& ast, parus::ast::StmtId root, std::vector<std::string>& ns) {
+            if (root == parus::ast::k_invalid_stmt || static_cast<size_t>(root) >= ast.stmts().size()) return false;
+            const auto& rs = ast.stmt(root);
+            if (rs.kind != parus::ast::StmtKind::kBlock) return false;
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = rs.stmt_begin;
+            const uint64_t end = begin + rs.stmt_count;
+            if (!(begin <= kids.size() && end <= kids.size())) return false;
+            const auto& segs = ast.path_segs();
+            for (uint32_t i = 0; i < rs.stmt_count; ++i) {
+                const auto sid = kids[rs.stmt_begin + i];
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+                const auto& s = ast.stmt(sid);
+                if (s.kind == parus::ast::StmtKind::kNestDecl &&
+                    s.nest_is_file_directive &&
+                    s.nest_path_count > 0) {
+                    const uint64_t pbegin = s.nest_path_begin;
+                    const uint64_t pend = pbegin + s.nest_path_count;
+                    if (!(pbegin <= segs.size() && pend <= segs.size())) return false;
+                    for (uint32_t j = 0; j < s.nest_path_count; ++j) {
+                        ns.push_back(std::string(segs[s.nest_path_begin + j]));
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool collect_bundle_export_surface_(
+            const std::vector<std::string>& bundle_sources,
+            const std::string& bundle_name,
+            std::vector<ExportSurfaceEntry>& out,
+            std::string& out_err
+        ) {
+            out.clear();
+            out_err.clear();
+            if (bundle_sources.empty()) return true;
+
+            for (const auto& src_path : bundle_sources) {
+                std::string src{};
+                std::string io_err{};
+                if (!parus::open_file(src_path, src, io_err)) {
+                    out_err = "failed to open bundle source '" + src_path + "': " + io_err;
+                    return false;
+                }
+
+                parus::SourceManager local_sm{};
+                const uint32_t local_fid = local_sm.add(parus::normalize_path(src_path), std::move(src));
+                parus::diag::Bag local_bag{};
+                auto local_tokens = lex_with_sm_(local_sm, local_fid, &local_bag);
+                if (local_bag.has_error()) {
+                    out_err = "failed to lex bundle source '" + src_path + "'";
+                    return false;
+                }
+
+                parus::ast::AstArena local_ast{};
+                parus::ty::TypePool local_types{};
+                parus::ParserFeatureFlags flags{};
+                parus::Parser local_parser(local_tokens, local_ast, local_types, &local_bag, /*max_errors=*/128, flags);
+                const auto local_root = local_parser.parse_program();
+                if (local_bag.has_error()) {
+                    out_err = "failed to parse bundle source '" + src_path + "'";
+                    return false;
+                }
+
+                std::vector<std::string> ns{};
+                (void)collect_file_namespace_(local_ast, local_root, ns);
+                collect_exports_stmt_(local_ast,
+                                      local_root,
+                                      local_types,
+                                      local_sm,
+                                      parus::normalize_path(src_path),
+                                      bundle_name,
+                                      ns,
+                                      out);
+            }
+
+            std::sort(out.begin(), out.end(), [](const ExportSurfaceEntry& a, const ExportSurfaceEntry& b) {
+                if (a.path != b.path) return a.path < b.path;
+                if (a.kind_text != b.kind_text) return a.kind_text < b.kind_text;
+                return a.decl_file < b.decl_file;
+            });
+            return true;
+        }
+
+        bool write_export_index_(
+            const std::string& out_path,
+            const std::string& bundle_name,
+            const std::vector<ExportSurfaceEntry>& entries,
+            std::string& out_err
+        ) {
+            namespace fs = std::filesystem;
+            out_err.clear();
+            std::error_code ec{};
+            const fs::path p(out_path);
+            const auto dir = p.parent_path();
+            if (!dir.empty()) {
+                fs::create_directories(dir, ec);
+                if (ec) {
+                    out_err = "failed to create export-index directory: " + dir.string();
+                    return false;
+                }
+            }
+
+            std::ofstream ofs(out_path, std::ios::binary | std::ios::trunc);
+            if (!ofs.is_open()) {
+                out_err = "failed to open export-index output: " + out_path;
+                return false;
+            }
+
+            ofs << "{\n";
+            ofs << "  \"version\": 1,\n";
+            ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
+            ofs << "  \"exports\": [\n";
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const auto& e = entries[i];
+                ofs << "    {\"kind\":\"" << json_escape_text_(e.kind_text)
+                    << "\",\"path\":\"" << json_escape_text_(e.path)
+                    << "\",\"type_repr\":\"" << json_escape_text_(e.type_repr)
+                    << "\",\"decl_span\":{\"file\":\"" << json_escape_text_(e.decl_file)
+                    << "\",\"line\":" << e.decl_line
+                    << ",\"col\":" << e.decl_col
+                    << "},\"is_export\":" << (e.is_export ? "true" : "false")
+                    << "}";
+                if (i + 1 != entries.size()) ofs << ",";
+                ofs << "\n";
+            }
+            ofs << "  ]\n";
+            ofs << "}\n";
+
+            if (!ofs.good()) {
+                out_err = "failed to write export-index output: " + out_path;
+                return false;
+            }
+            return true;
+        }
+
+        bool find_json_key_pos_(std::string_view text, std::string_view key, size_t& out_pos) {
+            const std::string needle = "\"" + std::string(key) + "\"";
+            const size_t at = text.find(needle);
+            if (at == std::string_view::npos) return false;
+            out_pos = at + needle.size();
+            return true;
+        }
+
+        bool parse_json_string_field_(std::string_view text, std::string_view key, std::string& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find(':', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+            while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+            if (pos >= text.size() || text[pos] != '"') return false;
+            ++pos;
+            std::string raw{};
+            bool escaped = false;
+            for (; pos < text.size(); ++pos) {
+                const char c = text[pos];
+                if (escaped) {
+                    raw.push_back(c);
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\') {
+                    raw.push_back(c);
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') break;
+                raw.push_back(c);
+            }
+            if (pos >= text.size() || text[pos] != '"') return false;
+            return json_unescape_text_(raw, out);
+        }
+
+        bool parse_json_uint_field_(std::string_view text, std::string_view key, uint32_t& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find(':', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+            while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+            size_t end = pos;
+            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
+            if (end == pos) return false;
+            try {
+                out = static_cast<uint32_t>(std::stoul(std::string(text.substr(pos, end - pos))));
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+
+        bool parse_json_bool_field_(std::string_view text, std::string_view key, bool& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find(':', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+            while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+            if (text.substr(pos, 4) == "true") {
+                out = true;
+                return true;
+            }
+            if (text.substr(pos, 5) == "false") {
+                out = false;
+                return true;
+            }
+            return false;
+        }
+
+        bool parse_json_array_object_slices_(std::string_view text, std::string_view key, std::vector<std::string>& out) {
+            out.clear();
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find('[', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+
+            int depth = 0;
+            bool in_string = false;
+            bool escaped = false;
+            size_t obj_begin = std::string_view::npos;
+
+            for (size_t i = pos; i < text.size(); ++i) {
+                const char c = text[i];
+                if (in_string) {
+                    if (escaped) {
+                        escaped = false;
+                    } else if (c == '\\') {
+                        escaped = true;
+                    } else if (c == '"') {
+                        in_string = false;
+                    }
+                    continue;
+                }
+
+                if (c == '"') {
+                    in_string = true;
+                    continue;
+                }
+
+                if (c == '{') {
+                    if (depth == 0) obj_begin = i;
+                    ++depth;
+                    continue;
+                }
+                if (c == '}') {
+                    --depth;
+                    if (depth == 0 && obj_begin != std::string_view::npos) {
+                        out.emplace_back(text.substr(obj_begin, i - obj_begin + 1));
+                        obj_begin = std::string_view::npos;
+                    }
+                    continue;
+                }
+                if (c == ']' && depth == 0) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        bool load_export_index_(
+            const std::string& path,
+            std::string& bundle_name,
+            std::vector<ExportSurfaceEntry>& out,
+            std::string& out_err
+        ) {
+            out.clear();
+            out_err.clear();
+
+            std::string text{};
+            std::string io_err{};
+            if (!parus::open_file(path, text, io_err)) {
+                out_err = "missing export-index file: " + path;
+                return false;
+            }
+
+            uint32_t version = 0;
+            if (!parse_json_uint_field_(text, "version", version) || version != 1) {
+                out_err = "unsupported export-index version in: " + path;
+                return false;
+            }
+            if (!parse_json_string_field_(text, "bundle", bundle_name) || bundle_name.empty()) {
+                out_err = "invalid export-index bundle name in: " + path;
+                return false;
+            }
+
+            std::vector<std::string> objects{};
+            if (!parse_json_array_object_slices_(text, "exports", objects)) {
+                out_err = "invalid export-index exports array in: " + path;
+                return false;
+            }
+
+            for (const auto& obj : objects) {
+                std::string kind_s{};
+                std::string path_s{};
+                std::string type_repr{};
+                std::string decl_file{};
+                uint32_t decl_line = 1;
+                uint32_t decl_col = 1;
+                bool is_export = false;
+
+                if (!parse_json_string_field_(obj, "kind", kind_s) ||
+                    !parse_json_string_field_(obj, "path", path_s) ||
+                    !parse_json_string_field_(obj, "type_repr", type_repr) ||
+                    !parse_json_string_field_(obj, "file", decl_file) ||
+                    !parse_json_uint_field_(obj, "line", decl_line) ||
+                    !parse_json_uint_field_(obj, "col", decl_col) ||
+                    !parse_json_bool_field_(obj, "is_export", is_export)) {
+                    out_err = "invalid export-index entry schema in: " + path;
+                    return false;
+                }
+
+                const auto kind = symbol_kind_from_text_(kind_s);
+                if (!kind.has_value()) {
+                    out_err = "unknown export-index kind '" + kind_s + "' in: " + path;
+                    return false;
+                }
+
+                ExportSurfaceEntry e{};
+                e.kind = *kind;
+                e.kind_text = kind_s;
+                e.path = std::move(path_s);
+                e.type_repr = std::move(type_repr);
+                e.decl_file = std::move(decl_file);
+                e.decl_line = decl_line;
+                e.decl_col = decl_col;
+                e.decl_bundle = bundle_name;
+                e.is_export = is_export;
+                out.push_back(std::move(e));
+            }
+            return true;
+        }
+
+        parus::ty::TypeId parse_type_repr_into_(
+            std::string_view type_repr,
+            parus::ty::TypePool& types
+        ) {
+            if (type_repr.empty()) return parus::ty::kInvalidType;
+
+            parus::SourceManager sm{};
+            parus::diag::Bag bag{};
+            const uint32_t fid = sm.add("<export-index:type>", std::string(type_repr));
+            auto toks = lex_with_sm_(sm, fid, &bag);
+            if (bag.has_error()) return parus::ty::kInvalidType;
+
+            parus::ast::AstArena ast{};
+            parus::ParserFeatureFlags flags{};
+            parus::Parser p(toks, ast, types, &bag, /*max_errors=*/16, flags);
+            parus::ty::TypeId out = parus::ty::kInvalidType;
+            (void)p.parse_type_full_for_macro(&out);
+            if (bag.has_error()) return parus::ty::kInvalidType;
+            return out;
         }
 
 #if PARUSC_HAS_AOT_BACKEND
@@ -291,9 +873,11 @@ namespace parusc::p0 {
             return 1;
         }
         const auto& opt = *inv.options;
+        const std::string current_norm = parus::normalize_path(inv.normalized_input_path);
 
         parus::SourceManager sm;
         const uint32_t file_id = sm.add(inv.normalized_input_path, inv.source_text);
+        const parus::Span root_span{file_id, 0, 0};
 
         parus::diag::Bag bag;
         auto tokens = lex_with_sm_(sm, file_id, &bag);
@@ -334,7 +918,98 @@ namespace parusc::p0 {
             return (diag_rc != 0 || !type_resolve.ok) ? 1 : 0;
         }
 
-        auto pres = parus::passes::run_on_program(ast, root, bag, opt.pass_opt);
+        std::vector<ExportSurfaceEntry> bundle_surface{};
+        if (opt.bundle.enabled || !opt.bundle.emit_export_index_path.empty() || !inv.load_export_index_paths.empty()) {
+            std::vector<std::string> sources = inv.bundle_sources;
+            if (sources.empty()) {
+                sources.push_back(current_norm);
+            }
+            for (auto& s : sources) s = parus::normalize_path(s);
+            if (std::find(sources.begin(), sources.end(), current_norm) == sources.end()) {
+                sources.push_back(current_norm);
+            }
+
+            std::string collect_err{};
+            if (!collect_bundle_export_surface_(sources, opt.bundle.bundle_name, bundle_surface, collect_err)) {
+                parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kExportIndexSchema, root_span);
+                d.add_arg(collect_err);
+                bag.add(std::move(d));
+            }
+            if (bag.has_error()) {
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
+        }
+
+        if (!opt.bundle.emit_export_index_path.empty()) {
+            std::string write_err{};
+            if (!write_export_index_(opt.bundle.emit_export_index_path, opt.bundle.bundle_name, bundle_surface, write_err)) {
+                parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kExportIndexSchema, root_span);
+                d.add_arg(write_err);
+                bag.add(std::move(d));
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
+            return 0;
+        }
+
+        auto pass_opt = opt.pass_opt;
+        pass_opt.name_resolve.current_file_id = file_id;
+        pass_opt.name_resolve.current_bundle_name = opt.bundle.bundle_name;
+        pass_opt.name_resolve.allowed_import_heads.clear();
+        if (opt.bundle.enabled) {
+            for (const auto& dep : inv.bundle_deps) {
+                if (!dep.empty()) pass_opt.name_resolve.allowed_import_heads.insert(dep);
+            }
+        }
+
+        std::set<std::pair<std::string, std::string>> external_seen{};
+        auto add_external = [&](const ExportSurfaceEntry& e) {
+            const auto key = std::make_pair(e.kind_text, e.path);
+            if (!external_seen.insert(key).second) return;
+
+            parus::passes::NameResolveOptions::ExternalExport x{};
+            x.kind = e.kind;
+            x.path = e.path;
+            x.declared_type = parse_type_repr_into_(e.type_repr, types);
+            x.decl_span = root_span;
+            x.decl_bundle_name = e.decl_bundle;
+            x.is_export = e.is_export;
+            pass_opt.name_resolve.external_exports.push_back(std::move(x));
+        };
+
+        if (opt.bundle.enabled) {
+            for (const auto& e : bundle_surface) {
+                if (e.decl_file == current_norm) continue;
+                add_external(e);
+            }
+        }
+
+        for (const auto& idx_path : inv.load_export_index_paths) {
+            std::string dep_bundle{};
+            std::vector<ExportSurfaceEntry> dep_entries{};
+            std::string load_err{};
+            if (!load_export_index_(idx_path, dep_bundle, dep_entries, load_err)) {
+                const parus::diag::Code code = load_err.starts_with("missing export-index file")
+                    ? parus::diag::Code::kExportIndexMissing
+                    : parus::diag::Code::kExportIndexSchema;
+                parus::diag::Diagnostic d(parus::diag::Severity::kError, code, root_span);
+                d.add_arg(load_err);
+                bag.add(std::move(d));
+                continue;
+            }
+            for (auto& e : dep_entries) {
+                if (e.decl_bundle.empty()) e.decl_bundle = dep_bundle;
+                add_external(e);
+            }
+        }
+
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        auto pres = parus::passes::run_on_program(ast, root, bag, pass_opt);
         if (bag.has_error()) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0) ? 1 : 0;

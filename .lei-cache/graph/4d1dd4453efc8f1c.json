@@ -1,0 +1,15 @@
+{
+  "project": {
+    "name": "closure-demo",
+    "version": "0.1.0"
+  },
+  "bundles": [
+    {"name": "util", "kind": "lib", "sources": ["src/util.pr"], "deps": []},
+    {"name": "core", "kind": "lib", "sources": ["src/core.pr"], "deps": ["util"]},
+    {"name": "app", "kind": "bin", "sources": ["src/main.pr"], "deps": ["core"]}
+  ],
+  "tasks": [
+  ],
+  "codegens": [
+  ]
+}

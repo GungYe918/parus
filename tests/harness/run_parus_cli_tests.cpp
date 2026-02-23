@@ -167,6 +167,263 @@ bool test_tool_passthrough() {
     return true;
 }
 
+bool test_bundle_strict_export_violation() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-bundle-strict";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto a = temp_root / "a.pr";
+    const auto b = temp_root / "b.pr";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string a_src =
+        "nest pkg;\n"
+        "def hidden() -> i32 {\n"
+        "  return 1i32;\n"
+        "}\n";
+
+    const std::string b_src =
+        "nest pkg;\n"
+        "def use_hidden() -> i32 {\n"
+        "  return hidden();\n"
+        "}\n";
+
+    const std::string lei_src =
+        "plan pkg_bundle = bundle & {\n"
+        "  name = \"pkg\";\n"
+        "  kind = \"lib\";\n"
+        "  sources = [\"a.pr\", \"b.pr\"];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"strict-bundle\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [pkg_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(a, a_src) || !write_text(b, b_src) || !write_text(lei, lei_src)) {
+        std::cerr << "failed to write strict bundle project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + lei.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "strict bundle visibility expected failure but passed\n" << out;
+        return false;
+    }
+    if (!contains(out, "SymbolNotExportedFileScope")) {
+        std::cerr << "strict bundle failure did not report SymbolNotExportedFileScope\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_build_strict_export_violation() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-bundle-build-strict";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto a = temp_root / "a.pr";
+    const auto b = temp_root / "b.pr";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string a_src =
+        "nest pkg;\n"
+        "def hidden() -> i32 {\n"
+        "  return 1i32;\n"
+        "}\n";
+
+    const std::string b_src =
+        "nest pkg;\n"
+        "def main() -> i32 {\n"
+        "  return hidden();\n"
+        "}\n";
+
+    const std::string lei_src =
+        "plan pkg_bundle = bundle & {\n"
+        "  name = \"pkg\";\n"
+        "  kind = \"bin\";\n"
+        "  sources = [\"a.pr\", \"b.pr\"];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"strict-bundle-build\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [pkg_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(a, a_src) || !write_text(b, b_src) || !write_text(lei, lei_src)) {
+        std::cerr << "failed to write strict build project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd = "cd \"" + temp_root.string() + "\" && \"" + bin + "\" build config.lei";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "strict build visibility expected failure but passed\n" << out;
+        return false;
+    }
+    if (!contains(out, "SymbolNotExportedFileScope")) {
+        std::cerr << "strict build failure did not report SymbolNotExportedFileScope\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_dep_import_not_declared() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-dep-import";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto pr = temp_root / "main.pr";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string pr_src =
+        "import math as m;\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    const std::string lei_src =
+        "plan app_bundle = bundle & {\n"
+        "  name = \"app\";\n"
+        "  kind = \"bin\";\n"
+        "  sources = [\"main.pr\"];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"dep-import\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [app_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(pr, pr_src) || !write_text(lei, lei_src)) {
+        std::cerr << "failed to write dep import project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + lei.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "deps import expected failure but passed\n" << out;
+        return false;
+    }
+    if (!contains(out, "ImportDepNotDeclared")) {
+        std::cerr << "deps import failure did not report ImportDepNotDeclared\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_cross_bundle_non_export_violation() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cross-bundle-export";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto lib = temp_root / "lib.pr";
+    const auto app = temp_root / "main.pr";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string lib_src =
+        "nest math::arith;\n"
+        "def hidden(a: i32, b: i32) -> i32 {\n"
+        "  return a + b;\n"
+        "}\n";
+
+    const std::string app_src =
+        "import math as m;\n"
+        "def main() -> i32 {\n"
+        "  return m::arith::hidden(a: 1i32, b: 2i32);\n"
+        "}\n";
+
+    const std::string lei_src =
+        "plan math_bundle = bundle & {\n"
+        "  name = \"math\";\n"
+        "  kind = \"lib\";\n"
+        "  sources = [\"lib.pr\"];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan app_bundle = bundle & {\n"
+        "  name = \"app\";\n"
+        "  kind = \"bin\";\n"
+        "  sources = [\"main.pr\"];\n"
+        "  deps = [\"math\"];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"cross-bundle-export\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [math_bundle, app_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(lib, lib_src) || !write_text(app, app_src) || !write_text(lei, lei_src)) {
+        std::cerr << "failed to write cross bundle project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + lei.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "cross bundle non-export expected failure but passed\n" << out;
+        return false;
+    }
+    if (!contains(out, "SymbolNotExportedBundleScope")) {
+        std::cerr << "cross bundle failure did not report SymbolNotExportedBundleScope\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -176,8 +433,12 @@ int main() {
     const bool ok4 = test_check_lei_project();
     const bool ok5 = test_doctor_json_and_global_json_reject();
     const bool ok6 = test_tool_passthrough();
+    const bool ok7 = test_bundle_strict_export_violation();
+    const bool ok8 = test_bundle_build_strict_export_violation();
+    const bool ok9 = test_bundle_dep_import_not_declared();
+    const bool ok10 = test_cross_bundle_non_export_violation();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6) {
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10) {
         return 1;
     }
 

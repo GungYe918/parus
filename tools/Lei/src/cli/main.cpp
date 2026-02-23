@@ -7,8 +7,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <algorithm>
 #include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -20,7 +22,7 @@ void print_usage() {
     std::cerr << "  lei --version\n";
     std::cerr << "  lei <config.lei> --out <build.ninja> [--plan <name>]\n";
     std::cerr << "  lei --check <config.lei> [--plan <name>]\n";
-    std::cerr << "  lei <config.lei> --list_sources [--plan <name>]\n";
+    std::cerr << "  lei <config.lei> --list_sources [--format <text|json>] [--plan <name>]\n";
     std::cerr << "  lei <config.lei> --view_graph [--format <json|text|dot>] [--plan <name>]\n";
     std::cerr << "  lei <config.lei> --build [--out <build.ninja>] [--jobs <N>] [--verbose] [--plan <name>]\n";
 }
@@ -167,8 +169,10 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (list_sources && format_set) {
-        std::cerr << "error: --format requires --view_graph\n";
-        return 1;
+        if (view_format != "text" && view_format != "json") {
+            std::cerr << "error: --list_sources --format supports only text|json\n";
+            return 1;
+        }
     }
     if (check_only && build_now) {
         std::cerr << "error: --check and --build cannot be used together\n";
@@ -182,7 +186,7 @@ int main(int argc, char** argv) {
         std::cerr << "error: --view_graph and --out cannot be used together\n";
         return 1;
     }
-    if (!view_graph && format_set) {
+    if (!view_graph && !list_sources && format_set) {
         std::cerr << "error: --format requires --view_graph\n";
         return 1;
     }
@@ -239,10 +243,73 @@ int main(int argc, char** argv) {
         for (const auto& b : graph->bundles) {
             for (const auto& s : b.sources) srcs.insert(s);
         }
-        for (const auto& s : srcs) {
-            std::cout << s << "\n";
+        if (!format_set || view_format == "text") {
+            for (const auto& s : srcs) {
+                std::cout << s << "\n";
+            }
+            return 0;
         }
-        return 0;
+
+        if (view_format == "json") {
+            auto json_escape = [](std::string_view s) -> std::string {
+                std::string out;
+                out.reserve(s.size() + 8);
+                for (const char c : s) {
+                    switch (c) {
+                        case '"': out += "\\\""; break;
+                        case '\\': out += "\\\\"; break;
+                        case '\n': out += "\\n"; break;
+                        case '\r': out += "\\r"; break;
+                        case '\t': out += "\\t"; break;
+                        default: out.push_back(c); break;
+                    }
+                }
+                return out;
+            };
+
+            struct Unit {
+                std::string bundle{};
+                std::string source{};
+                std::vector<std::string> deps{};
+            };
+            std::vector<Unit> units{};
+            for (const auto& b : graph->bundles) {
+                for (const auto& s : b.sources) {
+                    units.push_back(Unit{b.name, s, b.deps});
+                }
+            }
+            std::sort(units.begin(), units.end(), [](const Unit& a, const Unit& b) {
+                return std::tie(a.bundle, a.source) < std::tie(b.bundle, b.source);
+            });
+
+            std::cout << "{\n";
+            std::cout << "  \"units\": [\n";
+            for (size_t i = 0; i < units.size(); ++i) {
+                const auto& u = units[i];
+                std::cout << "    {\"bundle\":\"" << json_escape(u.bundle) << "\","
+                          << "\"source\":\"" << json_escape(u.source) << "\","
+                          << "\"deps\":[";
+                for (size_t j = 0; j < u.deps.size(); ++j) {
+                    if (j) std::cout << ",";
+                    std::cout << "\"" << json_escape(u.deps[j]) << "\"";
+                }
+                std::cout << "]}";
+                if (i + 1 != units.size()) std::cout << ",";
+                std::cout << "\n";
+            }
+            std::cout << "  ],\n";
+            std::cout << "  \"sources\": [";
+            size_t k = 0;
+            for (const auto& s : srcs) {
+                if (k++) std::cout << ", ";
+                std::cout << "\"" << json_escape(s) << "\"";
+            }
+            std::cout << "]\n";
+            std::cout << "}\n";
+            return 0;
+        }
+        std::cerr << "error: unsupported --list_sources --format: " << view_format << "\n";
+        return 1;
     }
 
     if (view_graph) {

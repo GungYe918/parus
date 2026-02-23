@@ -24,6 +24,15 @@ file -> module -> bundle -> project
 3. task/codegen plan은 빌드 실행 단계 노드로 import/합성한다.
 4. 합성 결과가 상위 프로젝트의 canonical plan이 된다.
 
+## Parus interop 계약 (bundle import/export)
+
+1. `bundle.deps`는 Parus의 `import <head>` 검증에 직접 사용된다.
+2. Parus는 bundle 단위 prepass로 export index를 생성하고 의존 bundle index를 로드한다.
+3. 같은 bundle 내부라도 **다른 파일 선언 참조**는 `export`된 선언만 허용된다.
+4. 다른 bundle 선언 참조도 `export`된 선언만 허용된다.
+5. `import <head>`의 `<head>`가 현재 bundle `deps`에 없으면 컴파일 오류다.
+6. `nest` 경로가 최종 심볼 경로 정본으로 사용된다.
+
 ## 예제 1: app bundle (`/app/app.lei`)
 
 ```lei

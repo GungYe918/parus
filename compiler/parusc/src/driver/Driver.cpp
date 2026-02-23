@@ -46,6 +46,9 @@ namespace parusc::driver {
             out_inv.input_path = input;
             out_inv.normalized_input_path = parus::normalize_path(input);
             out_inv.source_text = std::move(src);
+            out_inv.bundle_sources = opt.bundle.bundle_sources;
+            out_inv.bundle_deps = opt.bundle.bundle_deps;
+            out_inv.load_export_index_paths = opt.bundle.load_export_index_paths;
             if (argv0 != nullptr) {
                 out_inv.driver_executable_path = parus::normalize_path(argv0);
             }

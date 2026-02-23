@@ -214,6 +214,63 @@ namespace parus::passes {
         return out;
     }
 
+    static std::string import_head_of_path_(std::string_view path) {
+        if (path.empty()) return {};
+        const size_t pos = path.find("::");
+        if (pos == std::string_view::npos) return std::string(path);
+        return std::string(path.substr(0, pos));
+    }
+
+    static bool is_allowed_import_head_(
+        std::string_view head,
+        const NameResolveOptions& opt
+    ) {
+        if (head.empty()) return false;
+        if (opt.allowed_import_heads.empty()) {
+            // In bundle-aware mode we enforce strict deps.
+            return opt.current_bundle_name.empty();
+        }
+        return opt.allowed_import_heads.find(std::string(head)) != opt.allowed_import_heads.end();
+    }
+
+    static void validate_import_dep_(
+        diag::Bag& bag,
+        const NameResolveOptions& opt,
+        Span span,
+        std::string_view full_path
+    ) {
+        const std::string head = import_head_of_path_(full_path);
+        if (head.empty()) return;
+        if (!is_allowed_import_head_(head, opt)) {
+            report(bag, diag::Severity::kError, diag::Code::kImportDepNotDeclared, span, head);
+        }
+    }
+
+    static bool is_symbol_visible_from_use_site_(
+        const sema::Symbol& symobj,
+        const NameResolveOptions& opt
+    ) {
+        if (symobj.is_external) {
+            return symobj.is_export;
+        }
+
+        if (opt.current_file_id != 0 &&
+            symobj.decl_file_id != 0 &&
+            symobj.decl_file_id != opt.current_file_id &&
+            !symobj.is_export) {
+            return false;
+        }
+
+        if (!opt.current_bundle_name.empty() &&
+            !symobj.decl_bundle_name.empty() &&
+            symobj.decl_bundle_name != opt.current_bundle_name &&
+            !symobj.is_export) {
+            return false;
+        }
+
+        return true;
+    }
+
     static void add_namespace_prefixes_of_symbol_path_(
         std::string_view symbol_path,
         std::unordered_set<std::string>& known_namespace_paths
@@ -392,7 +449,6 @@ namespace parus::passes {
         std::unordered_map<std::string, std::string>& import_aliases,
         const std::unordered_set<std::string>& known_namespace_paths
     ) {
-        (void)opt;
         if (root == ast::k_invalid_expr) return;
 
         ensure_result_sized_(r, out);
@@ -428,6 +484,18 @@ namespace parus::passes {
                     if (!sid) {
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
                     } else {
+                        const auto& symobj = sym.symbol(*sid);
+                        if (!is_symbol_visible_from_use_site_(symobj, opt)) {
+                            if (!opt.current_bundle_name.empty() &&
+                                !symobj.decl_bundle_name.empty() &&
+                                symobj.decl_bundle_name != opt.current_bundle_name) {
+                                report(bag, diag::Severity::kError, diag::Code::kSymbolNotExportedBundleScope, e.span, e.text);
+                            } else {
+                                report(bag, diag::Severity::kError, diag::Code::kSymbolNotExportedFileScope, e.span, e.text);
+                            }
+                            break;
+                        }
+
                         // BindingKind 결정:
                         // - v0에서는 "param인지"가 중요하므로, pass 내부에서 param symbol id set을 유지한다.
                         BindingKind bk = BindingKind::kLocalVar;
@@ -435,7 +503,6 @@ namespace parus::passes {
                             bk = BindingKind::kParam;
                         } else {
                             // fallback by SymbolKind (확장 대비)
-                            const auto& symobj = sym.symbol(*sid);
                             if (symobj.kind == sema::SymbolKind::kFn) bk = BindingKind::kFn;
                             else if (symobj.kind == sema::SymbolKind::kType) bk = BindingKind::kType;
                             else bk = BindingKind::kLocalVar;
@@ -829,6 +896,7 @@ namespace parus::passes {
                 if (s.use_kind == ast::UseKind::kImport && file_scope && s.use_path_count > 0) {
                     const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
                     if (!path.empty()) {
+                        validate_import_dep_(bag, opt, s.span, path);
                         std::string alias = std::string(s.use_rhs_ident);
                         if (alias.empty()) {
                             const auto& segs = ast.path_segs();
@@ -906,7 +974,9 @@ namespace parus::passes {
         const IdRanges& r,
         ast::StmtId root,
         std::vector<std::string>& namespace_stack,
-        std::unordered_map<std::string, std::string>& import_aliases
+        std::unordered_map<std::string, std::string>& import_aliases,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
     ) {
         if (!is_valid_stmt_id_(r, root)) return;
         const auto& root_stmt = ast.stmt(root);
@@ -947,6 +1017,7 @@ namespace parus::passes {
             {
                 const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
                 if (path.empty()) continue;
+                validate_import_dep_(bag, opt, s.span, path);
 
                 std::string alias = std::string(s.use_rhs_ident);
                 if (alias.empty()) {
@@ -1009,7 +1080,14 @@ namespace parus::passes {
         if (s.kind == ast::StmtKind::kFnDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
-                (void)declare_(sema::SymbolKind::kFn, qname, s.type, s.span, sym, bag, opt);
+                auto ins = declare_(sema::SymbolKind::kFn, qname, s.type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
             }
             return;
         }
@@ -1017,7 +1095,14 @@ namespace parus::passes {
         if (s.kind == ast::StmtKind::kFieldDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
-                (void)declare_(sema::SymbolKind::kField, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                auto ins = declare_(sema::SymbolKind::kField, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
             }
             return;
         }
@@ -1029,7 +1114,14 @@ namespace parus::passes {
 
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
-                (void)declare_(sema::SymbolKind::kVar, qname, s.type, s.span, sym, bag, opt);
+                auto ins = declare_(sema::SymbolKind::kVar, qname, s.type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
             }
             return;
         }
@@ -1037,7 +1129,14 @@ namespace parus::passes {
         if (s.kind == ast::StmtKind::kActsDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
-                (void)declare_(sema::SymbolKind::kAct, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                auto ins = declare_(sema::SymbolKind::kAct, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
             }
 
             const auto& kids = ast.stmt_children();
@@ -1059,11 +1158,53 @@ namespace parus::passes {
                     if (!mqname.empty()) mqname += "::";
                     mqname += std::string(ms.name);
                     if (!sym.lookup(mqname)) {
-                        (void)declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
+                        auto ins = declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
+                        if (ins.ok && !ins.is_duplicate) {
+                            auto& se = sym.symbol_mut(ins.symbol_id);
+                            se.decl_file_id = ms.span.file_id;
+                            se.decl_bundle_name = opt.current_bundle_name;
+                            se.is_export = s.is_export;
+                            se.is_external = false;
+                        }
                     }
                 }
             }
             return;
+        }
+    }
+
+    static void register_external_exports_(
+        sema::SymbolTable& sym,
+        diag::Bag& bag,
+        const NameResolveOptions& opt
+    ) {
+        for (const auto& ex : opt.external_exports) {
+            if (ex.path.empty()) continue;
+
+            if (auto existing = sym.lookup(ex.path)) {
+                const auto& old = sym.symbol(*existing);
+                if (old.kind != ex.kind) {
+                    report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, ex.path);
+                }
+                continue;
+            }
+
+            auto ins = declare_(
+                ex.kind,
+                ex.path,
+                ex.declared_type,
+                ex.decl_span,
+                sym,
+                bag,
+                opt
+            );
+            if (!ins.ok || ins.is_duplicate) continue;
+
+            auto& se = sym.symbol_mut(ins.symbol_id);
+            se.decl_file_id = ex.decl_span.file_id;
+            se.decl_bundle_name = ex.decl_bundle_name;
+            se.is_export = ex.is_export;
+            se.is_external = true;
         }
     }
 
@@ -1089,7 +1230,7 @@ namespace parus::passes {
         namespace_stack.reserve(8);
         std::unordered_map<std::string, std::string> import_aliases;
         import_aliases.reserve(32);
-        init_file_context_(ast, r, root, namespace_stack, import_aliases);
+        init_file_context_(ast, r, root, namespace_stack, import_aliases, bag, opt);
 
         std::unordered_set<std::string> known_namespace_paths;
         known_namespace_paths.reserve(64);
@@ -1097,7 +1238,11 @@ namespace parus::passes {
             std::vector<std::string> collect_ns = namespace_stack;
             collect_known_namespace_paths_stmt_(ast, r, root, collect_ns, known_namespace_paths);
         }
+        for (const auto& ex : opt.external_exports) {
+            add_namespace_prefixes_of_symbol_path_(ex.path, known_namespace_paths);
+        }
 
+        register_external_exports_(sym, bag, opt);
         std::vector<std::string> predeclare_ns = namespace_stack;
         predeclare_namespace_decls_(ast, r, root, sym, bag, opt, predeclare_ns);
 

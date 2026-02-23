@@ -1,0 +1,7 @@
+schema_version=v1
+entry_file=/Users/gungye/workspace/Lang/gaupel/tools/Lei/tests/cases/ok_bundle_bin_with_lib_closure.lei
+entry_plan=master
+builtin_fingerprint=lei-builtins-v1
+graph_json_hash=deb932d4fbef28fa
+ninja_hash=ee3a150d5a339afc
+module=/Users/gungye/workspace/Lang/gaupel/tools/Lei/tests/cases/ok_bundle_bin_with_lib_closure.lei	0e0914fdd8ddf0a6

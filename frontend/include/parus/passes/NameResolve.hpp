@@ -2,6 +2,8 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include <string>
+#include <unordered_set>
 
 #include <parus/ast/Nodes.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -21,6 +23,19 @@ namespace parus::passes {
 
     struct NameResolveOptions {
         ShadowingMode shadowing = ShadowingMode::kAllow;
+        uint32_t current_file_id = 0;
+        std::string current_bundle_name{};
+        std::unordered_set<std::string> allowed_import_heads{};
+
+        struct ExternalExport {
+            sema::SymbolKind kind = sema::SymbolKind::kVar;
+            std::string path{};
+            ty::TypeId declared_type = ty::kInvalidType;
+            Span decl_span{};
+            std::string decl_bundle_name{};
+            bool is_export = true;
+        };
+        std::vector<ExternalExport> external_exports{};
     };
 
     // -----------------------------------------------------------------------------

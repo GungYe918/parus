@@ -26,6 +26,12 @@
    6. `task.v1` 필수 필드(`run`) 누락 진단
    7. `codegen.v1` 필수 필드(`outputs`) 누락 진단
    8. `--view_graph` CLI 모드 충돌/포맷 오류 진단
+4. Parus interop 정책
+   1. `import` head가 `bundle.deps`에 없으면 `ImportDepNotDeclared`
+   2. 같은 bundle 다른 파일 non-export 참조 시 `SymbolNotExportedFileScope`
+   3. 다른 bundle non-export 참조 시 `SymbolNotExportedBundleScope`
+   4. 의존 export index 누락 시 `ExportIndexMissing`
+   5. 의존 export index 스키마 오류 시 `ExportIndexSchema`
 
 ## 테스트 축
 
@@ -37,6 +43,7 @@
 6. 엔진 정책 테스트(`master export 금지`, 예약 식별자 규칙)
 7. built-in plan registry 스냅샷 일치 테스트(LSP/AOT/JIT)
 8. proto-merge 테스트(`MyProto & { ... }`)
+9. Parus interop 테스트(`deps/import/export` 가시성 규칙)
 
 ## 문서-구현 정합 검증
 

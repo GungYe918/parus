@@ -169,6 +169,11 @@ namespace parus::diag {
         kDuplicateDecl,         // 같은 스코프 중복 선언
         kShadowing,             // shadowing 발생(경고용)
         kShadowingNotAllowed,   // shadowing을 에러로 승격
+        kImportDepNotDeclared,  // import head is not listed in bundle deps
+        kSymbolNotExportedFileScope, // cross-file reference requires export
+        kSymbolNotExportedBundleScope, // cross-bundle reference requires export
+        kExportIndexMissing,    // export index file missing
+        kExportIndexSchema,     // export index parse/schema mismatch
         
         // ---- use parsing ----
         kUseTextSubstExprExpected,     // use NAME ;  (값 누락)

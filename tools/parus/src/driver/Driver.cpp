@@ -6,6 +6,7 @@
 #include <parus_tool/toolchain/Resolver.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -14,6 +15,7 @@
 #include <optional>
 #include <sstream>
 #include <string_view>
+#include <unordered_map>
 
 #if defined(_WIN32)
 #include <io.h>
@@ -92,18 +94,140 @@ bool is_pr_entry(const std::string& entry) {
     return ext == ".pr";
 }
 
-std::vector<std::string> parse_sources(const std::string& text) {
-    std::vector<std::string> out{};
+struct BundleSourceUnit {
+    std::string bundle{};
+    std::string source{};
+    std::vector<std::string> deps{};
+};
+
+bool unescape_json_string(std::string_view in, std::string& out) {
+    out.clear();
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        const char c = in[i];
+        if (c != '\\') {
+            out.push_back(c);
+            continue;
+        }
+        if (i + 1 >= in.size()) return false;
+        const char n = in[++i];
+        switch (n) {
+            case '"': out.push_back('"'); break;
+            case '\\': out.push_back('\\'); break;
+            case '/': out.push_back('/'); break;
+            case 'b': out.push_back('\b'); break;
+            case 'f': out.push_back('\f'); break;
+            case 'n': out.push_back('\n'); break;
+            case 'r': out.push_back('\r'); break;
+            case 't': out.push_back('\t'); break;
+            case 'u':
+                if (i + 4 >= in.size()) return false;
+                i += 4;
+                out.push_back('?');
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
+bool parse_json_string_field_line(const std::string& line, std::string_view key, std::string& out) {
+    const std::string needle = "\"" + std::string(key) + "\":\"";
+    const size_t pos = line.find(needle);
+    if (pos == std::string::npos) return false;
+    size_t i = pos + needle.size();
+    std::string raw{};
+    bool escaped = false;
+    for (; i < line.size(); ++i) {
+        const char c = line[i];
+        if (escaped) {
+            raw.push_back(c);
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            raw.push_back(c);
+            escaped = true;
+            continue;
+        }
+        if (c == '"') break;
+        raw.push_back(c);
+    }
+    if (i >= line.size() || line[i] != '"') return false;
+    return unescape_json_string(raw, out);
+}
+
+bool parse_json_string_array_field_line(const std::string& line, std::string_view key, std::vector<std::string>& out) {
+    out.clear();
+    const std::string needle = "\"" + std::string(key) + "\":[";
+    size_t pos = line.find(needle);
+    if (pos == std::string::npos) return false;
+    pos += needle.size();
+
+    while (pos < line.size()) {
+        while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+        if (pos >= line.size()) return false;
+        if (line[pos] == ']') return true;
+        if (line[pos] != '"') return false;
+        ++pos;
+        std::string raw{};
+        bool escaped = false;
+        for (; pos < line.size(); ++pos) {
+            const char c = line[pos];
+            if (escaped) {
+                raw.push_back(c);
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                raw.push_back(c);
+                escaped = true;
+                continue;
+            }
+            if (c == '"') break;
+            raw.push_back(c);
+        }
+        if (pos >= line.size() || line[pos] != '"') return false;
+        std::string decoded{};
+        if (!unescape_json_string(raw, decoded)) return false;
+        out.push_back(std::move(decoded));
+        ++pos;
+        while (pos < line.size() && std::isspace(static_cast<unsigned char>(line[pos]))) ++pos;
+        if (pos < line.size() && line[pos] == ',') {
+            ++pos;
+            continue;
+        }
+        if (pos < line.size() && line[pos] == ']') return true;
+    }
+    return false;
+}
+
+std::vector<BundleSourceUnit> parse_bundle_units_json(const std::string& text, std::string& out_err) {
+    out_err.clear();
+    std::vector<BundleSourceUnit> units{};
     std::istringstream iss(text);
-    std::string line;
+    std::string line{};
     while (std::getline(iss, line)) {
         line = trim(std::move(line));
-        if (line.empty()) continue;
-        out.push_back(std::move(line));
+        if (line.find("\"bundle\"") == std::string::npos ||
+            line.find("\"source\"") == std::string::npos ||
+            line.find("\"deps\"") == std::string::npos) {
+            continue;
+        }
+
+        BundleSourceUnit u{};
+        if (!parse_json_string_field_line(line, "bundle", u.bundle) ||
+            !parse_json_string_field_line(line, "source", u.source) ||
+            !parse_json_string_array_field_line(line, "deps", u.deps)) {
+            out_err = "failed to parse LEI --list_sources JSON payload";
+            return {};
+        }
+        if (!u.bundle.empty() && !u.source.empty()) {
+            units.push_back(std::move(u));
+        }
     }
-    std::sort(out.begin(), out.end());
-    out.erase(std::unique(out.begin(), out.end()), out.end());
-    return out;
+    return units;
 }
 
 config::Scope to_cfg_scope(cli::ConfigScope s) {
@@ -412,7 +536,8 @@ int run_check_one_pr(const std::string& parusc,
                      const std::string& diag_format,
                      const std::string& lang,
                      const std::string& context,
-                     const std::vector<std::string>& macro_budget_flags) {
+                     const std::vector<std::string>& macro_budget_flags,
+                     const std::vector<std::string>& extra_flags = {}) {
     std::vector<std::string> argv{parusc, "-fsyntax-only", source_path};
     if (!diag_format.empty()) {
         argv.push_back("--diag-format");
@@ -427,6 +552,9 @@ int run_check_one_pr(const std::string& parusc,
         argv.push_back(context);
     }
     for (const auto& f : macro_budget_flags) {
+        argv.push_back(f);
+    }
+    for (const auto& f : extra_flags) {
         argv.push_back(f);
     }
     return proc::run_argv(argv);
@@ -493,7 +621,9 @@ int run_check(const cli::Options& opt,
     std::string sources_out;
     int list_rc = 1;
     {
-        std::vector<std::string> lei_list{lei, opt.check.entry, "--list_sources", "--plan", opt.check.plan};
+        std::vector<std::string> lei_list{
+            lei, opt.check.entry, "--list_sources", "--format", "json", "--plan", opt.check.plan
+        };
         emit_progress(progress, settings.diag_color, 45, "Collecting source files");
         if (!proc::run_argv_capture_stdout(lei_list, sources_out, list_rc)) {
             emit_fail(settings.diag_color, "Failed to run 'lei --list_sources'");
@@ -514,28 +644,127 @@ int run_check(const cli::Options& opt,
     const auto entry_abs = std::filesystem::weakly_canonical(std::filesystem::path(opt.check.entry), ec);
     const auto entry_base = (ec ? std::filesystem::path(opt.check.entry) : entry_abs).parent_path();
 
-    const auto sources = parse_sources(sources_out);
-    if (sources.empty()) {
-        emit_warn(settings.diag_color, "No Parus source files were listed by LEI.");
+    std::string units_err{};
+    auto units = parse_bundle_units_json(sources_out, units_err);
+    if (!units_err.empty()) {
+        emit_fail(settings.diag_color, units_err);
+        return 1;
     }
-    const size_t total = sources.size();
-    for (size_t idx = 0; idx < sources.size(); ++idx) {
-        const auto& src = sources[idx];
-        std::filesystem::path source_path(src);
-        if (source_path.is_relative()) {
-            source_path = entry_base / source_path;
+    if (units.empty()) {
+        emit_warn(settings.diag_color, "No Parus source files were listed by LEI.");
+        emit_progress(progress, settings.diag_color, 100, "Check completed");
+        return 0;
+    }
+
+    struct BundleInfo {
+        std::vector<std::string> sources{};
+        std::vector<std::string> deps{};
+    };
+    std::unordered_map<std::string, BundleInfo> bundles{};
+    std::vector<std::string> bundle_order{};
+    for (const auto& u : units) {
+        auto it = bundles.find(u.bundle);
+        if (it == bundles.end()) {
+            bundle_order.push_back(u.bundle);
+            it = bundles.emplace(u.bundle, BundleInfo{}).first;
         }
-        const int pct = static_cast<int>(50 + ((idx + 1) * 45) / (total == 0 ? 1 : total));
-        emit_progress(progress, settings.diag_color, pct, "Syntax checking " + source_path.string());
+        auto source_path = std::filesystem::path(u.source);
+        if (source_path.is_relative()) source_path = entry_base / source_path;
+        it->second.sources.push_back(source_path.lexically_normal().string());
+        if (it->second.deps.empty()) {
+            it->second.deps = u.deps;
+        }
+    }
+    for (auto& [name, info] : bundles) {
+        std::sort(info.sources.begin(), info.sources.end());
+        info.sources.erase(std::unique(info.sources.begin(), info.sources.end()), info.sources.end());
+        std::sort(info.deps.begin(), info.deps.end());
+        info.deps.erase(std::unique(info.deps.begin(), info.deps.end()), info.deps.end());
+    }
+
+    const auto index_dir = (entry_base / ".lei-cache" / "index").lexically_normal();
+    ec.clear();
+    std::filesystem::create_directories(index_dir, ec);
+    if (ec) {
+        emit_fail(settings.diag_color, "Failed to create index dir: " + index_dir.string());
+        return 1;
+    }
+
+    std::unordered_map<std::string, std::string> bundle_index_paths{};
+    for (const auto& bname : bundle_order) {
+        const auto bit = bundles.find(bname);
+        if (bit == bundles.end() || bit->second.sources.empty()) continue;
+        const auto idx_path = (index_dir / (bname + ".exports.json")).string();
+        bundle_index_paths[bname] = idx_path;
+
+        std::vector<std::string> extra{};
+        extra.push_back("--bundle-name");
+        extra.push_back(bname);
+        extra.push_back("--emit-export-index");
+        extra.push_back(idx_path);
+        for (const auto& src : bit->second.sources) {
+            extra.push_back("--bundle-source");
+            extra.push_back(src);
+        }
+        for (const auto& dep : bit->second.deps) {
+            extra.push_back("--bundle-dep");
+            extra.push_back(dep);
+        }
+
+        emit_progress(progress, settings.diag_color, 52, "Prepass export index for bundle " + bname);
         const int rc = run_check_one_pr(parusc,
-                                        source_path.string(),
+                                        bit->second.sources.front(),
                                         diag_format,
                                         lang,
                                         context,
-                                        macro_budget_flags);
+                                        macro_budget_flags,
+                                        extra);
         if (rc != 0) {
-            emit_fail(settings.diag_color, "Syntax check failed for " + source_path.string() + " (exit=" + std::to_string(rc) + ")");
+            emit_fail(settings.diag_color, "Bundle prepass failed for " + bname + " (exit=" + std::to_string(rc) + ")");
             return rc;
+        }
+    }
+
+    size_t total_sources = 0;
+    for (const auto& [_, info] : bundles) total_sources += info.sources.size();
+    size_t visited = 0;
+    for (const auto& bname : bundle_order) {
+        const auto bit = bundles.find(bname);
+        if (bit == bundles.end()) continue;
+        const auto& info = bit->second;
+        for (const auto& src : info.sources) {
+            std::vector<std::string> extra{};
+            extra.push_back("--bundle-name");
+            extra.push_back(bname);
+            for (const auto& all_src : info.sources) {
+                extra.push_back("--bundle-source");
+                extra.push_back(all_src);
+            }
+            for (const auto& dep : info.deps) {
+                extra.push_back("--bundle-dep");
+                extra.push_back(dep);
+                std::string dep_idx = (index_dir / (dep + ".exports.json")).string();
+                if (auto it = bundle_index_paths.find(dep); it != bundle_index_paths.end()) {
+                    dep_idx = it->second;
+                }
+                extra.push_back("--load-export-index");
+                extra.push_back(dep_idx);
+            }
+
+            ++visited;
+            const int pct = static_cast<int>(55 + (visited * 45) / (total_sources == 0 ? 1 : total_sources));
+            emit_progress(progress, settings.diag_color, pct, "Syntax checking " + src);
+            const int rc = run_check_one_pr(parusc,
+                                            src,
+                                            diag_format,
+                                            lang,
+                                            context,
+                                            macro_budget_flags,
+                                            extra);
+            if (rc != 0) {
+                emit_fail(settings.diag_color, "Syntax check failed for " + src + " (exit=" + std::to_string(rc) + ")");
+                return rc;
+            }
         }
     }
 

@@ -46,6 +46,16 @@ namespace parusc::cli {
         bool macro_token_experimental = false;
     };
 
+    /// @brief bundle-aware compile context for LEI orchestration.
+    struct BundleCompileOptions {
+        bool enabled = false;
+        std::string bundle_name{};
+        std::vector<std::string> bundle_sources{};
+        std::vector<std::string> bundle_deps{};
+        std::string emit_export_index_path{};
+        std::vector<std::string> load_export_index_paths{};
+    };
+
     /// @brief `parusc` 최종 실행 옵션.
     struct Options {
         Mode mode = Mode::kUsage;
@@ -71,6 +81,7 @@ namespace parusc::cli {
         parus::passes::PassOptions pass_opt{};
         parus::macro::ExpansionBudget macro_budget = parus::macro::default_budget_aot();
         std::vector<std::string> warnings{};
+        BundleCompileOptions bundle{};
 
         // parse-time explicit flags for conflict validation
         bool output_path_explicit = false;

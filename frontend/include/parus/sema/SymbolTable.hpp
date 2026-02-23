@@ -31,6 +31,10 @@ namespace parus::sema {
 
         Span decl_span{}; // 선언 지점
         uint32_t owner_scope = 0; // 소속 스코프 id (디버그/정책용)
+        uint32_t decl_file_id = 0; // source file id where symbol was declared
+        std::string decl_bundle_name{}; // owning bundle (if known)
+        bool is_export = false; // whether declaration is export-surface symbol
+        bool is_external = false; // whether symbol came from external export index
     };
 
     // shadowing 기록(경고/에러 정책을 옵션으로 나중에 결정)
@@ -113,7 +117,14 @@ namespace parus::sema {
             uint32_t shadowed_symbol_id = 0;
         };
 
-        InsertResult insert(SymbolKind kind, std::string_view name, ty::TypeId declared_type, Span decl_span) {
+        InsertResult insert(SymbolKind kind,
+                            std::string_view name,
+                            ty::TypeId declared_type,
+                            Span decl_span,
+                            uint32_t decl_file_id = 0,
+                            std::string_view decl_bundle_name = {},
+                            bool is_export = false,
+                            bool is_external = false) {
             InsertResult r{};
 
             // duplicate (same scope)
@@ -136,6 +147,10 @@ namespace parus::sema {
             sym.declared_type = declared_type;
             sym.decl_span = decl_span;
             sym.owner_scope = current_scope();
+            sym.decl_file_id = decl_file_id;
+            sym.decl_bundle_name = std::string(decl_bundle_name);
+            sym.is_export = is_export;
+            sym.is_external = is_external;
 
             symbols_.push_back(sym);
             uint32_t sid = (uint32_t)symbols_.size() - 1;

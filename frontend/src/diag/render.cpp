@@ -148,6 +148,11 @@ namespace parus::diag {
             case Code::kDuplicateDecl: return "DuplicateDecl";
             case Code::kShadowing: return "Shadowing";
             case Code::kShadowingNotAllowed: return "ShadowingNotAllowed";
+            case Code::kImportDepNotDeclared: return "ImportDepNotDeclared";
+            case Code::kSymbolNotExportedFileScope: return "SymbolNotExportedFileScope";
+            case Code::kSymbolNotExportedBundleScope: return "SymbolNotExportedBundleScope";
+            case Code::kExportIndexMissing: return "ExportIndexMissing";
+            case Code::kExportIndexSchema: return "ExportIndexSchema";
 
             case Code::kUseTextSubstExprExpected:   return "UseTextSubstExprExpected";
             case Code::kUseTextSubstTrailingTokens: return "UseTextSubstTrailingTokens";
@@ -352,6 +357,11 @@ namespace parus::diag {
             case Code::kDuplicateDecl: return "duplicate declaration '{0}' in the same scope";
             case Code::kShadowing: return "declaration '{0}' shadows an outer declaration";
             case Code::kShadowingNotAllowed: return "shadowing is not allowed: '{0}'";
+            case Code::kImportDepNotDeclared: return "import head '{0}' is not declared in current bundle deps";
+            case Code::kSymbolNotExportedFileScope: return "symbol '{0}' is declared in another file and must be exported";
+            case Code::kSymbolNotExportedBundleScope: return "symbol '{0}' from another bundle must be exported";
+            case Code::kExportIndexMissing: return "export index file is missing: '{0}'";
+            case Code::kExportIndexSchema: return "invalid export index schema: '{0}'";
 
             case Code::kUseTextSubstExprExpected: return "use substitution requires an expression (e.g., use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "unexpected tokens after use substitution expression; expected ';'";
@@ -563,6 +573,11 @@ namespace parus::diag {
             case Code::kDuplicateDecl: return "같은 스코프에서 '{0}'이(가) 중복 선언되었습니다";
             case Code::kShadowing: return "'{0}'이(가) 바깥 선언을 가립니다(shadowing)";
             case Code::kShadowingNotAllowed: return "shadowing이 금지되었습니다: '{0}'";
+            case Code::kImportDepNotDeclared: return "import head '{0}'가 현재 bundle deps에 선언되어 있지 않습니다";
+            case Code::kSymbolNotExportedFileScope: return "다른 파일의 심볼 '{0}'을(를) 참조하려면 export가 필요합니다";
+            case Code::kSymbolNotExportedBundleScope: return "다른 bundle의 심볼 '{0}'은(는) export되어야 합니다";
+            case Code::kExportIndexMissing: return "export index 파일을 찾을 수 없습니다: '{0}'";
+            case Code::kExportIndexSchema: return "export index 형식이 올바르지 않습니다: '{0}'";
 
             case Code::kUseTextSubstExprExpected: return "use 치환에는 식이 필요합니다 (예: use NAME 123;)";
             case Code::kUseTextSubstTrailingTokens: return "use 치환 식 뒤에 예상치 못한 토큰이 있습니다. ';'가 필요합니다";

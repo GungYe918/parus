@@ -352,6 +352,15 @@ namespace parus::ty {
             return out;
         }
 
+        // Export-index canonical format:
+        // - stable and parser-friendly
+        // - function types do not include parameter labels/default markers
+        std::string to_export_string(TypeId id) const {
+            std::string out;
+            render_into_export_(out, id);
+            return out;
+        }
+
         void dump(std::ostream& os) const {
             os << "TYPE_POOL (count=" << types_.size() << ")\n";
             for (TypeId id = 0; id < (TypeId)types_.size(); ++id) {
@@ -425,6 +434,116 @@ namespace parus::ty {
 
         static bool needs_parens_for_prefix_(Kind k) {
             return k == Kind::kFn;
+        }
+
+        void render_into_export_(std::string& out, TypeId id) const {
+            if (id == kInvalidType) { out += "<invalid-type>"; return; }
+            if (id >= types_.size()) { out += "<bad-type-id>"; return; }
+
+            const Type& t = types_[id];
+            switch (t.kind) {
+                case Kind::kError:
+                    out += "<error>";
+                    return;
+
+                case Kind::kBuiltin:
+                    out += builtin_name(t.builtin);
+                    return;
+
+                case Kind::kNamedUser: {
+                    if (t.path_count == 0) { out += "<user-type?>"; return; }
+                    for (uint32_t k = 0; k < t.path_count; ++k) {
+                        if (k) out += "::";
+                        const auto seg = user_path_segs_[t.path_begin + k];
+                        out.append(seg.data(), seg.size());
+                    }
+                    return;
+                }
+
+                case Kind::kOptional: {
+                    if (t.elem == kInvalidType) { out += "<invalid-elem>?"; return; }
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    if (needs_parens_for_suffix_(ek)) out += "(";
+                    render_into_export_(out, t.elem);
+                    if (needs_parens_for_suffix_(ek)) out += ")";
+                    out += "?";
+                    return;
+                }
+
+                case Kind::kArray: {
+                    if (t.elem == kInvalidType) { out += "<invalid-elem>[]"; return; }
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    const bool paren = needs_parens_for_suffix_(ek) || ek == Kind::kOptional;
+                    if (paren) out += "(";
+                    render_into_export_(out, t.elem);
+                    if (paren) out += ")";
+                    if (t.array_has_size) {
+                        out += "[";
+                        out += std::to_string(t.array_size);
+                        out += "]";
+                    } else {
+                        out += "[]";
+                    }
+                    return;
+                }
+
+                case Kind::kBorrow: {
+                    if (t.elem == kInvalidType) { out += (t.borrow_is_mut ? "&mut <invalid>" : "&<invalid>"); return; }
+
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    if (ek == Kind::kArray) {
+                        const auto& arr = types_[t.elem];
+                        if (!arr.array_has_size) {
+                            out += "&";
+                            if (t.borrow_is_mut) out += "mut ";
+                            out += "[";
+                            render_into_export_(out, arr.elem);
+                            out += "]";
+                            return;
+                        }
+                    }
+
+                    out += "&";
+                    if (t.borrow_is_mut) out += "mut ";
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_export_(out, t.elem);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
+                    return;
+                }
+
+                case Kind::kEscape: {
+                    if (t.elem == kInvalidType) { out += "&&<invalid>"; return; }
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    out += "&&";
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_export_(out, t.elem);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
+                    return;
+                }
+
+                case Kind::kPtr: {
+                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "ptr mut <invalid>" : "ptr <invalid>"); return; }
+                    const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
+                    out += "ptr ";
+                    if (t.ptr_is_mut) out += "mut ";
+                    if (needs_parens_for_prefix_(ek)) out += "(";
+                    render_into_export_(out, t.elem);
+                    if (needs_parens_for_prefix_(ek)) out += ")";
+                    return;
+                }
+
+                case Kind::kFn: {
+                    out += "def(";
+                    for (uint32_t i = 0; i < t.param_count; ++i) {
+                        if (i) out += ", ";
+                        const TypeId pid = fn_params_[t.param_begin + i];
+                        render_into_export_(out, pid);
+                    }
+                    out += ") -> ";
+                    render_into_export_(out, t.ret);
+                    return;
+                }
+            }
         }
 
         void render_into_(std::string& out, TypeId id, RenderCtx /*parent_ctx*/) const {

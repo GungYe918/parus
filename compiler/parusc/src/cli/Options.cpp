@@ -202,6 +202,91 @@ namespace parusc::cli {
             return false;
         }
 
+        bool parse_bundle_value_opt_(
+            const std::vector<std::string_view>& args,
+            size_t& i,
+            std::string_view arg,
+            std::string_view name,
+            std::string& out_value,
+            Options& out
+        ) {
+            const std::string opt = std::string("--") + std::string(name);
+            const std::string opt_eq = opt + "=";
+            if (arg == opt) {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = opt + " requires a value";
+                    return true;
+                }
+                out_value = std::string(*v);
+                out.bundle.enabled = true;
+                return true;
+            }
+            if (arg.starts_with(opt_eq)) {
+                const auto v = arg.substr(opt_eq.size());
+                if (v.empty()) {
+                    out.ok = false;
+                    out.error = opt + " requires a value";
+                    return true;
+                }
+                out_value = std::string(v);
+                out.bundle.enabled = true;
+                return true;
+            }
+            return false;
+        }
+
+        bool parse_bundle_repeat_opt_(
+            const std::vector<std::string_view>& args,
+            size_t& i,
+            std::string_view arg,
+            std::string_view name,
+            std::vector<std::string>& out_values,
+            Options& out
+        ) {
+            const std::string opt = std::string("--") + std::string(name);
+            const std::string opt_eq = opt + "=";
+            if (arg == opt) {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = opt + " requires a value";
+                    return true;
+                }
+                out_values.emplace_back(*v);
+                out.bundle.enabled = true;
+                return true;
+            }
+            if (arg.starts_with(opt_eq)) {
+                const auto v = arg.substr(opt_eq.size());
+                if (v.empty()) {
+                    out.ok = false;
+                    out.error = opt + " requires a value";
+                    return true;
+                }
+                out_values.emplace_back(v);
+                out.bundle.enabled = true;
+                return true;
+            }
+            return false;
+        }
+
+        bool validate_bundle_opts_(Options& out) {
+            if (!out.bundle.enabled) return true;
+            if (out.bundle.bundle_name.empty()) {
+                out.ok = false;
+                out.error = "bundle mode requires --bundle-name <name>";
+                return false;
+            }
+            if (out.bundle.bundle_sources.empty()) {
+                out.ok = false;
+                out.error = "bundle mode requires at least one --bundle-source <path>";
+                return false;
+            }
+            return true;
+        }
+
         void clamp_macro_budget_and_collect_warnings_(Options& out) {
             const auto before = out.macro_budget;
             const auto clamped = parus::macro::clamp_budget(out.macro_budget);
@@ -258,6 +343,11 @@ namespace parusc::cli {
             << "  -fmacro-max-output-tokens=<N>\n"
             << "  -fuse-linker=auto|parus-lld|lld|clang\n"
             << "  --no-link-fallback   Disable linker fallback chain\n"
+            << "  --bundle-name <name>\n"
+            << "  --bundle-source <path>  (repeatable)\n"
+            << "  --bundle-dep <name>     (repeatable)\n"
+            << "  --emit-export-index <path>\n"
+            << "  --load-export-index <path>  (repeatable)\n"
             << "  -Wshadow | -Werror=shadow\n"
             << "\n"
             << "Developer-only options (must be passed through -Xparus):\n"
@@ -454,6 +544,27 @@ namespace parusc::cli {
                 continue;
             }
 
+            if (parse_bundle_value_opt_(args, i, a, "bundle-name", out.bundle.bundle_name, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_value_opt_(args, i, a, "emit-export-index", out.bundle.emit_export_index_path, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_repeat_opt_(args, i, a, "bundle-source", out.bundle.bundle_sources, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_repeat_opt_(args, i, a, "bundle-dep", out.bundle.bundle_deps, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_repeat_opt_(args, i, a, "load-export-index", out.bundle.load_export_index_paths, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+
             if (parse_linker_mode_(out, a)) {
                 if (!out.ok) return out;
                 continue;
@@ -489,6 +600,9 @@ namespace parusc::cli {
         }
 
         if (!validate_syntax_only_conflicts_(out)) {
+            return out;
+        }
+        if (!validate_bundle_opts_(out)) {
             return out;
         }
 

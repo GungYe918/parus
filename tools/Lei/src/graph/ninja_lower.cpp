@@ -240,6 +240,9 @@ struct LowerCtx {
 
     std::unordered_map<std::string, std::string> bundle_action_by_name{};
     std::unordered_map<std::string, std::string> bundle_stamp_or_bin_by_name{};
+    std::unordered_map<std::string, std::string> bundle_prepass_action_by_name{};
+    std::unordered_map<std::string, std::string> bundle_index_path_by_name{};
+    std::unordered_map<std::string, std::vector<std::string>> bundle_compile_actions_by_name{};
 
     std::unordered_map<std::string, std::string> task_action_by_name{};
     std::unordered_map<std::string, std::string> task_stamp_by_name{};
@@ -504,6 +507,38 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
         std::vector<std::string> obj_paths{};
         obj_paths.reserve(b.sources.size());
 
+        const std::string index_path = ".lei-cache/index/" + sanitize(b.name) + ".exports.json";
+        ctx.bundle_index_path_by_name[b.name] = index_path;
+        add_artifact(ctx, index_path, ArtifactKind::kGeneratedFile);
+
+        std::vector<std::string> prepass_cmd = {
+            "parusc",
+            b.sources.front(),
+            "-fsyntax-only",
+            "--bundle-name",
+            b.name,
+            "--emit-export-index",
+            index_path,
+        };
+        for (const auto& src : b.sources) {
+            prepass_cmd.push_back("--bundle-source");
+            prepass_cmd.push_back(src);
+        }
+        for (const auto& dep : b.deps) {
+            prepass_cmd.push_back("--bundle-dep");
+            prepass_cmd.push_back(dep);
+        }
+        const std::string prepass_action = add_action(ctx,
+                                                      BuildActionKind::kCodegen,
+                                                      "bundle-prepass:" + b.name,
+                                                      ".",
+                                                      std::move(prepass_cmd),
+                                                      b.sources,
+                                                      {index_path},
+                                                      false);
+        ctx.bundle_prepass_action_by_name[b.name] = prepass_action;
+        ctx.bundle_compile_actions_by_name[b.name] = {};
+
         for (const auto& src : b.sources) {
             const std::string obj = obj_path_for(b.name, src);
             obj_paths.push_back(obj);
@@ -516,6 +551,19 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
                 "-o",
                 obj,
             };
+            cmd.push_back("--bundle-name");
+            cmd.push_back(b.name);
+            for (const auto& all_src : b.sources) {
+                cmd.push_back("--bundle-source");
+                cmd.push_back(all_src);
+            }
+            for (const auto& dep : b.deps) {
+                cmd.push_back("--bundle-dep");
+                cmd.push_back(dep);
+                const std::string dep_index = ".lei-cache/index/" + sanitize(dep) + ".exports.json";
+                cmd.push_back("--load-export-index");
+                cmd.push_back(dep_index);
+            }
 
             const std::string compile_action = add_action(ctx,
                                                           BuildActionKind::kCompile,
@@ -525,6 +573,9 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
                                                           {src},
                                                           {obj},
                                                           false);
+            ctx.bundle_compile_actions_by_name[b.name].push_back(compile_action);
+
+            add_edge(ctx, prepass_action, compile_action, EdgeKind::kHard);
 
             auto gen_it = ctx.output_file_codegen_action.find(src);
             if (gen_it != ctx.output_file_codegen_action.end()) {
@@ -659,18 +710,32 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
         auto self_it = ctx.bundle_action_by_name.find(b.name);
         if (self_it == ctx.bundle_action_by_name.end()) continue;
         const std::string self = self_it->second;
+        auto self_prepass = ctx.bundle_prepass_action_by_name.find(b.name);
+        if (self_prepass != ctx.bundle_prepass_action_by_name.end()) {
+            add_edge(ctx, self_prepass->second, self, EdgeKind::kHard);
+        }
         for (const auto& dep : b.deps) {
             auto itb = ctx.bundle_action_by_name.find(dep);
             if (itb != ctx.bundle_action_by_name.end()) {
                 add_edge(ctx, itb->second, self, EdgeKind::kHard);
-                continue;
+            } else {
+                diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+                          "<entry>",
+                          1,
+                          1,
+                          "unknown bundle dependency: " + b.name + " -> " + dep);
+                return std::nullopt;
             }
-            diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
-                      "<entry>",
-                      1,
-                      1,
-                      "unknown bundle dependency: " + b.name + " -> " + dep);
-            return std::nullopt;
+
+            auto dep_prepass = ctx.bundle_prepass_action_by_name.find(dep);
+            if (dep_prepass != ctx.bundle_prepass_action_by_name.end()) {
+                auto itc = ctx.bundle_compile_actions_by_name.find(b.name);
+                if (itc != ctx.bundle_compile_actions_by_name.end()) {
+                    for (const auto& ca : itc->second) {
+                        add_edge(ctx, dep_prepass->second, ca, EdgeKind::kHard);
+                    }
+                }
+            }
         }
     }
 
