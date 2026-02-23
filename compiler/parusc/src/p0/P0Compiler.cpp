@@ -430,7 +430,7 @@ namespace parusc::p0 {
         backend_opt.aot_engine = parus::backend::AOTEngine::kLlvm;
         backend_opt.target_triple = opt.target_triple;
 
-        const bool emit_object = (opt.has_xparus && opt.internal.emit_object);
+        const bool emit_object = opt.emit_object || (opt.has_xparus && opt.internal.emit_object);
         const bool emit_llvm_ir = (opt.has_xparus && opt.internal.emit_llvm_ir);
         const bool emit_executable = (!emit_object && !emit_llvm_ir);
 

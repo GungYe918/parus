@@ -11,7 +11,7 @@ Usage: ./install.sh [--build-type <Debug|Release>] [--prefix <path>]
 
 This script performs:
   1) ./run.sh (build + tests)
-  2) install parusc/parus-lld + toolchain sysroot into PREFIX
+  2) install parus/parusc/parus-lld/parusd/lei into PREFIX
 
 Defaults:
   --build-type Debug
@@ -61,6 +61,20 @@ BUILD_DIR="${ROOT_DIR}/build"
 PARUSC_BIN="${BUILD_DIR}/compiler/parusc/parusc"
 PARUS_LLD_BIN="${BUILD_DIR}/compiler/parusc/parus-lld"
 PARUSD_BIN="${BUILD_DIR}/compiler/parusc/parusd"
+PARUS_BIN="${BUILD_DIR}/compiler/parusc/parus"
+LEI_BIN=""
+
+echo "[install] ensure lei tool is built"
+if [ ! -x "${BUILD_DIR}/tools/Lei/lei" ]; then
+  if ! cmake --build "${BUILD_DIR}" --target lei -j16; then
+    echo "install.sh: failed to build lei target" >&2
+    exit 1
+  fi
+fi
+
+if [ -x "${BUILD_DIR}/tools/Lei/lei" ]; then
+  LEI_BIN="${BUILD_DIR}/tools/Lei/lei"
+fi
 
 if [ ! -x "${PARUSC_BIN}" ]; then
   echo "install.sh: missing built parusc binary: ${PARUSC_BIN}" >&2
@@ -72,6 +86,10 @@ if [ ! -x "${PARUS_LLD_BIN}" ]; then
 fi
 if [ ! -x "${PARUSD_BIN}" ]; then
   echo "install.sh: missing built parusd binary: ${PARUSD_BIN}" >&2
+  exit 1
+fi
+if [ ! -x "${PARUS_BIN}" ]; then
+  echo "install.sh: missing built parus binary: ${PARUS_BIN}" >&2
   exit 1
 fi
 
@@ -160,7 +178,15 @@ mkdir -p "${BIN_DIR}" "${TOOLCHAINS_DIR}"
 cp -f "${PARUSC_BIN}" "${TOOLCHAIN_ROOT}/bin/parusc"
 cp -f "${PARUS_LLD_BIN}" "${TOOLCHAIN_ROOT}/bin/parus-lld"
 cp -f "${PARUSD_BIN}" "${TOOLCHAIN_ROOT}/bin/parusd"
-chmod +x "${TOOLCHAIN_ROOT}/bin/parusc" "${TOOLCHAIN_ROOT}/bin/parus-lld" "${TOOLCHAIN_ROOT}/bin/parusd"
+cp -f "${PARUS_BIN}" "${TOOLCHAIN_ROOT}/bin/parus"
+chmod +x "${TOOLCHAIN_ROOT}/bin/parusc" "${TOOLCHAIN_ROOT}/bin/parus-lld" "${TOOLCHAIN_ROOT}/bin/parusd" "${TOOLCHAIN_ROOT}/bin/parus"
+
+if [ -z "${LEI_BIN}" ] || [ ! -x "${LEI_BIN}" ]; then
+  echo "install.sh: missing built lei binary: ${BUILD_DIR}/tools/Lei/lei" >&2
+  exit 1
+fi
+cp -f "${LEI_BIN}" "${TOOLCHAIN_ROOT}/bin/lei"
+chmod +x "${TOOLCHAIN_ROOT}/bin/lei"
 
 if [ -n "${LLVM_CONFIG_BIN}" ]; then
   LLVM_PREFIX="$("${LLVM_CONFIG_BIN}" --prefix)"
@@ -274,6 +300,24 @@ export PARUSD="\${PARUSD:-\${TOOLCHAIN_ROOT}/bin/parusd}"
 exec "\${TOOLCHAIN_ROOT}/bin/parusc" "\$@"
 EOF
 
+cat > "${BIN_DIR}/parus" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+PARUS_PREFIX="${PREFIX}"
+PARUS_HOME="\${PARUS_HOME:-\${PARUS_PREFIX}/share/parus}"
+ACTIVE="\${PARUS_HOME}/active-toolchain"
+if [ ! -e "\${ACTIVE}" ]; then
+  echo "parus launcher: active-toolchain not found: \${ACTIVE}" >&2
+  exit 1
+fi
+TOOLCHAIN_ROOT="\$(cd "\${ACTIVE}" && pwd -P)"
+export PARUS_TOOLCHAIN_ROOT="\${PARUS_TOOLCHAIN_ROOT:-\${TOOLCHAIN_ROOT}}"
+export PARUS_SYSROOT="\${PARUS_SYSROOT:-\${TOOLCHAIN_ROOT}/sysroot}"
+export PARUS_LLD="\${PARUS_LLD:-\${TOOLCHAIN_ROOT}/bin/parus-lld}"
+export PARUSD="\${PARUSD:-\${TOOLCHAIN_ROOT}/bin/parusd}"
+exec "\${TOOLCHAIN_ROOT}/bin/parus" "\$@"
+EOF
+
 cat > "${BIN_DIR}/parus-lld" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -306,7 +350,22 @@ export PARUS_SYSROOT="\${PARUS_SYSROOT:-\${TOOLCHAIN_ROOT}/sysroot}"
 exec "\${TOOLCHAIN_ROOT}/bin/parusd" "\$@"
 EOF
 
-chmod +x "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd"
+cat > "${BIN_DIR}/lei" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+PARUS_PREFIX="${PREFIX}"
+PARUS_HOME="\${PARUS_HOME:-\${PARUS_PREFIX}/share/parus}"
+ACTIVE="\${PARUS_HOME}/active-toolchain"
+if [ ! -e "\${ACTIVE}" ]; then
+  echo "lei launcher: active-toolchain not found: \${ACTIVE}" >&2
+  exit 1
+fi
+TOOLCHAIN_ROOT="\$(cd "\${ACTIVE}" && pwd -P)"
+exec "\${TOOLCHAIN_ROOT}/bin/lei" "\$@"
+EOF
+chmod +x "${BIN_DIR}/lei"
+
+chmod +x "${BIN_DIR}/parus" "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd"
 
 ZSHRC="${HOME}/.zshrc"
 mkdir -p "$(dirname "${ZSHRC}")"
@@ -327,13 +386,15 @@ else
 fi
 
 echo "[install] done"
+echo "  parus launcher  : ${BIN_DIR}/parus"
 echo "  parusc launcher : ${BIN_DIR}/parusc"
 echo "  parus-lld       : ${BIN_DIR}/parus-lld"
 echo "  parusd          : ${BIN_DIR}/parusd"
+echo "  lei             : ${BIN_DIR}/lei"
 echo "  sysroot         : ${SYSROOT_DIR}"
 echo "  toolchain hash  : ${TOOLCHAIN_HASH}"
 echo "  target hash     : ${TARGET_HASH}"
 echo ""
 echo "Open a new shell or run:"
 echo "  export PATH=\"${PREFIX}/bin:\$PATH\""
-echo "  parusc --version"
+echo "  parus --version"

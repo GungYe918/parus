@@ -1,0 +1,23 @@
+plan a_bundle = bundle & {
+  name = "a";
+  kind = "lib";
+  sources = ["src/a.pr"];
+  deps = ["b"];
+};
+
+plan b_bundle = bundle & {
+  name = "b";
+  kind = "lib";
+  sources = ["src/b.pr"];
+  deps = ["a"];
+};
+
+plan master = master & {
+  project = {
+    name: "cycle",
+    version: "0.1.0",
+  };
+  bundles = [a_bundle, b_bundle];
+  tasks = [];
+  codegens = [];
+};

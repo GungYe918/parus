@@ -1,3 +1,4 @@
+#include <lei/cache/GraphCache.hpp>
 #include <lei/diag/DiagCode.hpp>
 #include <lei/eval/Evaluator.hpp>
 #include <lei/graph/BuildGraph.hpp>
@@ -42,7 +43,13 @@ bool run_ok_case(const std::filesystem::path& path, std::string entry_plan = "ma
         return false;
     }
 
-    auto ninja = lei::graph::emit_ninja(*graph, bag);
+    auto exec_graph = lei::graph::lower_exec_graph(*graph, bag);
+    if (!exec_graph || bag.has_error()) {
+        std::cerr << "exec graph failure:\n" << bag.render_text();
+        return false;
+    }
+
+    auto ninja = lei::graph::emit_ninja(*exec_graph, bag);
     if (!ninja || bag.has_error()) {
         std::cerr << "ninja emit failure:\n" << bag.render_text();
         return false;
@@ -78,6 +85,40 @@ bool run_err_case(const std::filesystem::path& path,
 
     if (!has_code(bag, expected)) {
         std::cerr << "expected diagnostic code not found: " << lei::diag::code_name(expected) << "\n";
+        std::cerr << bag.render_text();
+        return false;
+    }
+
+    return true;
+}
+
+bool run_graph_err_case(const std::filesystem::path& path,
+                        lei::diag::Code expected,
+                        std::string entry_plan = "master") {
+    lei::diag::Bag bag;
+    auto builtins = lei::eval::make_default_builtin_registry();
+    auto builtin_plans = lei::eval::make_default_builtin_plan_registry();
+    lei::parse::ParserControl parser_control{};
+    lei::eval::Evaluator evaluator({}, bag, std::move(builtins), std::move(builtin_plans), parser_control);
+
+    lei::eval::EvaluateOptions opts{};
+    opts.entry_plan = std::move(entry_plan);
+
+    auto v = evaluator.evaluate_entry(path, opts);
+    if (!v || bag.has_error()) {
+        std::cerr << "expected graph-stage failure but evaluation failed first:\n";
+        std::cerr << bag.render_text();
+        return false;
+    }
+
+    (void)lei::graph::from_entry_plan_value(*v, bag, opts.entry_plan);
+    if (!bag.has_error()) {
+        std::cerr << "expected graph failure but got success: " << path << "\n";
+        return false;
+    }
+
+    if (!has_code(bag, expected)) {
+        std::cerr << "expected graph diagnostic code not found: " << lei::diag::code_name(expected) << "\n";
         std::cerr << bag.render_text();
         return false;
     }
@@ -225,6 +266,95 @@ bool run_cli_view_graph_cases(const std::filesystem::path& path) {
     return true;
 }
 
+bool run_cli_build_smoke(const std::filesystem::path& path) {
+    const std::string bin = LEI_BUILD_BIN;
+    const std::string src = path.string();
+
+    auto [rc_build, out_build] = run_cli_capture("\"" + bin + "\" \"" + src + "\" --build");
+    if (rc_build != 0) {
+        std::cerr << "cli --build failed\n" << out_build;
+        return false;
+    }
+
+    const std::string out_ninja = "/tmp/lei_build_smoke.ninja";
+    auto [rc_build_out, out_build_out] =
+        run_cli_capture("\"" + bin + "\" \"" + src + "\" --build --out " + out_ninja);
+    if (rc_build_out != 0) {
+        std::cerr << "cli --build --out failed\n" << out_build_out;
+        return false;
+    }
+    if (!std::filesystem::exists(out_ninja)) {
+        std::cerr << "cli --build --out did not create ninja file\n";
+        return false;
+    }
+    return true;
+}
+
+bool run_cli_list_sources_case(const std::filesystem::path& path) {
+    const std::string bin = LEI_BUILD_BIN;
+    const std::string src = path.string();
+
+    auto [rc_ls, out_ls] = run_cli_capture("\"" + bin + "\" \"" + src + "\" --list_sources");
+    if (rc_ls != 0 || out_ls.find("src/main.pr") == std::string::npos) {
+        std::cerr << "cli --list_sources failed\n" << out_ls;
+        return false;
+    }
+
+    auto [rc_conflict, out_conflict] =
+        run_cli_capture("\"" + bin + "\" \"" + src + "\" --list_sources --view_graph");
+    if (rc_conflict == 0 || out_conflict.find("--list_sources and --view_graph") == std::string::npos) {
+        std::cerr << "cli conflict (--list_sources/--view_graph) should fail\n" << out_conflict;
+        return false;
+    }
+
+    auto [rc_ver, out_ver] = run_cli_capture("\"" + bin + "\" --version");
+    if (rc_ver != 0 || out_ver.find("lei") == std::string::npos) {
+        std::cerr << "cli --version failed\n" << out_ver;
+        return false;
+    }
+
+    auto [rc_help, out_help] = run_cli_capture("\"" + bin + "\" --help");
+    if (rc_help != 0 || out_help.find("usage:") == std::string::npos) {
+        std::cerr << "cli --help failed\n" << out_help;
+        return false;
+    }
+
+    return true;
+}
+
+bool run_cli_cache_smoke(const std::filesystem::path& path) {
+    const std::string bin = LEI_BUILD_BIN;
+    const std::string src = path.string();
+
+    auto [rc1, out1] = run_cli_capture("\"" + bin + "\" \"" + src + "\" --out /tmp/lei_cache_smoke.ninja");
+    if (rc1 != 0) {
+        std::cerr << "first cache warmup failed\n" << out1;
+        return false;
+    }
+    auto [rc2, out2] = run_cli_capture("\"" + bin + "\" \"" + src + "\" --out /tmp/lei_cache_smoke_2.ninja");
+    if (rc2 != 0) {
+        std::cerr << "second cache run failed\n" << out2;
+        return false;
+    }
+
+    std::error_code ec{};
+    const auto abs = std::filesystem::weakly_canonical(path, ec);
+    const std::string entry = ec ? path.string() : abs.string();
+    const std::string key = lei::cache::make_cache_key(entry, "master");
+    const auto graph_meta = lei::cache::graph_cache_dir() / (key + ".meta.json");
+    const auto graph_json = lei::cache::graph_cache_dir() / (key + ".json");
+    const auto ninja = lei::cache::ninja_cache_dir() / (key + ".ninja");
+
+    if (!std::filesystem::exists(graph_meta) ||
+        !std::filesystem::exists(graph_json) ||
+        !std::filesystem::exists(ninja)) {
+        std::cerr << "cache artifacts were not created for key: " << key << "\n";
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -235,6 +365,13 @@ int main() {
     const bool ok3 = run_ok_case(cases / "ok_task_codegen.lei");
     const bool ok4 = run_ok_case(cases / "ok_plan_export_ref.lei");
     const bool ok5 = run_ok_case(cases / "ok_plan_master_allowed.lei");
+    const bool ok6 = run_ok_case(cases / "ok_builtin_constants_namespaces.lei");
+    const bool ok7 = run_ok_case(cases / "ok_builtin_str_arr_obj.lei");
+    const bool ok8 = run_ok_case(cases / "ok_builtin_path_fs_glob.lei");
+    const bool ok9 = run_ok_case(cases / "ok_builtin_semver_subset.lei");
+    const bool ok10 = run_ok_case(cases / "ok_builtin_parus_helpers.lei");
+    const bool ok11 = run_ok_case(cases / "ok_bundle_bin_with_lib_closure.lei");
+    const bool ok12 = run_ok_case(cases / "ok_codegen_then_compile.lei");
 
     const bool err1 = run_err_case(cases / "err_legacy_export_build.lei", lei::diag::Code::C_LEGACY_SYNTAX_REMOVED);
     const bool err2 = run_err_case(cases / "err_legacy_fatarrow.lei", lei::diag::Code::C_LEGACY_SYNTAX_REMOVED);
@@ -248,15 +385,20 @@ int main() {
     const bool err10 = run_err_case(cases / "err_reserved_ident_import_task.lei", lei::diag::Code::C_RESERVED_IDENTIFIER);
     const bool err11 = run_err_case(cases / "err_legacy_explicit_graph_removed.lei",
                                     lei::diag::Code::L_LEGACY_EXPLICIT_GRAPH_REMOVED);
+    const bool err12 = run_err_case(cases / "err_builtin_bad_args.lei", lei::diag::Code::L_TYPE_MISMATCH);
+    const bool err13 = run_graph_err_case(cases / "err_bundle_dep_cycle.lei", lei::diag::Code::B_INVALID_BUILD_SHAPE);
 
     const bool ok_builtin = run_builtin_api_case(cases / "ok_builtin_fn_in_master.lei");
     const bool ok_cli = run_cli_view_graph_cases(cases / "ok_master_graph.lei");
+    const bool ok_list_sources = run_cli_list_sources_case(cases / "ok_task_codegen.lei");
+    const bool ok_build = run_cli_build_smoke(cases / "ok_build_task_true.lei");
+    const bool ok_cache = run_cli_cache_smoke(cases / "ok_build_empty.lei");
     const bool ok_utf8 = run_invalid_utf8_case();
     const bool ok_boundary = run_no_parus_include_rule();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 ||
-        !err1 || !err2 || !err3 || !err4 || !err5 || !err6 || !err7 || !err8 || !err9 || !err10 || !err11 ||
-        !ok_builtin || !ok_cli || !ok_utf8 || !ok_boundary) {
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 ||
+        !err1 || !err2 || !err3 || !err4 || !err5 || !err6 || !err7 || !err8 || !err9 || !err10 || !err11 || !err12 || !err13 ||
+        !ok_builtin || !ok_cli || !ok_list_sources || !ok_build || !ok_cache || !ok_utf8 || !ok_boundary) {
         return 1;
     }
 

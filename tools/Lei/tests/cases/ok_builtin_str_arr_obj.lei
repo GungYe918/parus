@@ -1,0 +1,25 @@
+let xs = ["b", "a", "b"];
+let sorted = arr.sorted(xs);
+let uniq = arr.uniq(xs);
+let m = { x: 1, y: 2 };
+
+assert(str.len("abc") == 3);
+assert(str.contains("abc", "b") == true);
+assert(str.starts_with("abc", "a") == true);
+assert(str.ends_with("abc", "c") == true);
+assert(str.join(["a", "b"], "-") == "a-b");
+assert(sorted[0] == "a");
+assert(arr.contains(uniq, "a") == true);
+assert(arr.len(arr.concat(["x"], ["y"])) == 2);
+assert(obj.has(m, "x") == true);
+assert(obj.get(m, "z", 7) == 7);
+
+plan master = master & {
+  project = {
+    name: "builtin-str-arr-obj",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

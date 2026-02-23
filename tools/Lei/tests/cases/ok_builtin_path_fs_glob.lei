@@ -1,0 +1,19 @@
+let n = path.normalize("./a/../b");
+let g = fs.glob(["*"]);
+let gu = fs.glob_under(".", ["**/*.lei"]);
+
+assert(str.contains(path.to_slash(n), "b") == true);
+assert(fs.exists(".") == true);
+assert(fs.is_dir(".") == true);
+assert(type_name(g) == "array");
+assert(type_name(gu) == "array");
+
+plan master = master & {
+  project = {
+    name: "builtin-path-fs",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

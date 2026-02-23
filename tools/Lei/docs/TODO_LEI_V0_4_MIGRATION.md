@@ -17,7 +17,7 @@
 
 ## Done Criteria
 
-1. `lei-build`가 기본 엔트리 `master`를 사용해 entry plan 루트 그래프 기반 Ninja를 생성한다.
+1. `lei`가 기본 엔트리 `master`를 사용해 entry plan 루트 그래프 기반 Ninja를 생성한다.
 2. `--plan <name>`로 엔트리 plan override가 동작한다.
 3. 구세대 문법(`export build`, `=>`, `?=`, named import)은 호환 없이 실패한다.
 4. 빌트인 plan `bundle/master/task/codegen` 스키마 검증이 동작한다.
@@ -25,7 +25,7 @@
 
 ## Verification Command
 
-1. `cmake --build build -j8 --target lei-build lei_tests`
+1. `cmake --build build -j8 --target lei lei_tests`
 2. `ctest --test-dir build -R lei_tests --output-on-failure`
 
 ## Progress Log

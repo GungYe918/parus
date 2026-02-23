@@ -41,6 +41,7 @@ struct FunctionValue {
 struct BuiltinFunction;
 struct TemplateSpec;
 struct PatchValue;
+struct DynamicObject;
 
 struct Value {
     using Object = std::map<std::string, Value>;
@@ -49,8 +50,9 @@ struct Value {
     using NativeFunction = std::shared_ptr<BuiltinFunction>;
     using Template = std::shared_ptr<TemplateSpec>;
     using Patch = std::shared_ptr<PatchValue>;
+    using Dynamic = std::shared_ptr<DynamicObject>;
 
-    std::variant<int64_t, double, std::string, bool, Object, Array, Function, NativeFunction, Template, Patch> data;
+    std::variant<int64_t, double, std::string, bool, Object, Array, Function, NativeFunction, Template, Patch, Dynamic> data;
 
     bool is_int() const { return std::holds_alternative<int64_t>(data); }
     bool is_float() const { return std::holds_alternative<double>(data); }
@@ -62,11 +64,28 @@ struct Value {
     bool is_native_function() const { return std::holds_alternative<NativeFunction>(data); }
     bool is_template() const { return std::holds_alternative<Template>(data); }
     bool is_patch() const { return std::holds_alternative<Patch>(data); }
+    bool is_dynamic_object() const { return std::holds_alternative<Dynamic>(data); }
 
     const Object* as_object() const { return std::get_if<Object>(&data); }
     Object* as_object() { return std::get_if<Object>(&data); }
     const Array* as_array() const { return std::get_if<Array>(&data); }
     Array* as_array() { return std::get_if<Array>(&data); }
+    const DynamicObject* as_dynamic_object() const {
+        auto p = std::get_if<Dynamic>(&data);
+        if (!p) return nullptr;
+        return p->get();
+    }
+};
+
+struct DynamicObject {
+    using MemberResolver = std::function<std::optional<Value>(std::string_view key,
+                                                              const ast::Span& span,
+                                                              diag::Bag& diags)>;
+    using KeysProvider = std::function<std::vector<std::string>()>;
+
+    std::string name{};
+    MemberResolver resolve{};
+    KeysProvider keys{};
 };
 
 struct BuiltinFunction {
@@ -166,6 +185,8 @@ public:
 
     std::optional<Value> evaluate_entry(const std::filesystem::path& entry_path,
                                         EvaluateOptions options = {});
+
+    std::vector<std::string> loaded_module_paths() const;
 
 private:
     struct Variable {

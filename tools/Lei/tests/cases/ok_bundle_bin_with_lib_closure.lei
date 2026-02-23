@@ -1,0 +1,30 @@
+plan util_bundle = bundle & {
+  name = "util";
+  kind = "lib";
+  sources = ["src/util.pr"];
+  deps = [];
+};
+
+plan core_bundle = bundle & {
+  name = "core";
+  kind = "lib";
+  sources = ["src/core.pr"];
+  deps = ["util"];
+};
+
+plan app_bundle = bundle & {
+  name = "app";
+  kind = "bin";
+  sources = ["src/main.pr"];
+  deps = ["core"];
+};
+
+plan master = master & {
+  project = {
+    name: "closure-demo",
+    version: "0.1.0",
+  };
+  bundles = [util_bundle, core_bundle, app_bundle];
+  tasks = [];
+  codegens = [];
+};

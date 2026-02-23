@@ -59,6 +59,7 @@ namespace parusc::cli {
         LinkerMode linker_mode = LinkerMode::kAuto;
         bool allow_link_fallback = true;
         bool syntax_only = false;
+        bool emit_object = false;
         DiagFormat diag_format = DiagFormat::kText;
 
         bool has_xparus = false;

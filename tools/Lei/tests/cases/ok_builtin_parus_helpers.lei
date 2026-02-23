@@ -1,0 +1,24 @@
+let cmd = parus.make_parusc_cmd(["--version"]);
+let link_cmd = parus.make_link_cmd(["-o", "a.out"]);
+let lane = parus.llvm_lane_selected();
+
+assert(type_name(parus.default_target()) == "string");
+assert(type_name(parus.host_target()) == "string");
+assert(type_name(parus.tool_path("parusc")) == "string");
+assert(parus.backend_enabled("aot") == true || parus.backend_enabled("aot") == false);
+assert(parus.aot_engine_enabled("llvm") == true || parus.aot_engine_enabled("llvm") == false);
+assert(parus.llvm_lane_supported(lane) == true);
+assert(cmd[0] == parus.tools.parusc);
+assert(link_cmd[0] == parus.tools.parus_lld);
+assert(parus.normalize_bundle_name("JSON.Parser!") == "json_parser");
+assert(type_name(parus.macro_budget.default_aot.depth) == "int");
+
+plan master = master & {
+  project = {
+    name: "builtin-parus-helpers",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

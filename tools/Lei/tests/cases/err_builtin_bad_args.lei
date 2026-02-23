@@ -1,0 +1,11 @@
+assert(str.len(1) == 1);
+
+plan master = master & {
+  project = {
+    name: "err-builtin-bad-args",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

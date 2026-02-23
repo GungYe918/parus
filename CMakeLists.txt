@@ -17,6 +17,7 @@ endif()
 option(PARUS_BUILD_TESTS "Build Parus tests" ON)
 option(PARUS_BUILD_PARUSD "Build Parus standalone LSP server (parusd)" ON)
 option(PARUS_BUILD_LEI "Build LEI standalone DSL project under tools/Lei" ON)
+option(PARUS_BUILD_ORCHESTRATOR "Build Parus orchestrator CLI (parus)" ON)
 
 # Backend module switches
 option(PARUS_ENABLE_BACKEND "Build Parus backend modules" ON)
@@ -78,6 +79,9 @@ if(TARGET parus-lld)
 endif()
 if(TARGET parusd)
     add_dependencies(parus_stage2 parusd)
+endif()
+if(TARGET parus)
+    add_dependencies(parus_stage2 parus)
 endif()
 
 if(PARUS_BUILD_TESTS)

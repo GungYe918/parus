@@ -151,7 +151,7 @@ namespace parusc::cli {
                 out.error = "-fsyntax-only cannot be combined with -o";
                 return false;
             }
-            if (out.internal.emit_object || out.internal.emit_llvm_ir) {
+            if (out.emit_object || out.internal.emit_object || out.internal.emit_llvm_ir) {
                 out.ok = false;
                 out.error = "-fsyntax-only cannot be combined with -Xparus emit options";
                 return false;
@@ -243,6 +243,7 @@ namespace parusc::cli {
             << "  -h, --help\n"
             << "  --version\n"
             << "  -fsyntax-only        Run frontend checks only (no SIR/OIR/backend/link)\n"
+            << "  --emit-object        Emit object file (stable alias of -Xparus -emit-object)\n"
             << "  --diag-format text|json\n"
             << "  -o <path>             Output path (default: a.out)\n"
             << "  --target <triple>     Override backend target triple\n"
@@ -337,6 +338,11 @@ namespace parusc::cli {
                 }
                 out.output_path = std::string(*v);
                 out.output_path_explicit = true;
+                continue;
+            }
+
+            if (a == "--emit-object") {
+                out.emit_object = true;
                 continue;
             }
 

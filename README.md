@@ -5,7 +5,7 @@ Parus is a systems programming language focused on explicit control flow, data-o
 ## Status
 
 - Development stage: pre-alpha
-- Compiler entrypoint: `parusc`
+- CLI entrypoint: `parus`
 - ABI baseline: `c-v0`
 
 ## Documentation
@@ -33,6 +33,7 @@ Internal hub index:
 - `frontend/`: parser, name resolution, type checker, SIR/OIR handoff
 - `backend/`: OIR/backend integration, LLVM lowering, linker integration
 - `compiler/parusc/`: compiler driver
+- `tools/parus/`: orchestrator CLI (`parus`)
 - `tools/parusd/`: standalone LSP server
 - `backend/tools/parus-lld/`: linker driver
 - `docs/`: reference and hub documentation

@@ -1,0 +1,24 @@
+plan gen_cfg = codegen & {
+  name = "gen_cfg";
+  tool = ["protoc"];
+  inputs = ["proto/cfg.proto"];
+  outputs = ["gen/cfg.pr"];
+  args = ["--parus_out=gen", "proto/cfg.proto"];
+};
+
+plan app_bundle = bundle & {
+  name = "app";
+  kind = "bin";
+  sources = ["gen/cfg.pr", "src/main.pr"];
+  deps = [];
+};
+
+plan master = master & {
+  project = {
+    name: "codegen-compile",
+    version: "0.1.0",
+  };
+  bundles = [app_bundle];
+  tasks = [];
+  codegens = [gen_cfg];
+};

@@ -60,7 +60,7 @@ TOOLCHAINS_DIR="${PARUS_HOME}/toolchains"
 
 if [ "${REMOVE_ALL}" -eq 1 ]; then
   rm -rf "${PARUS_HOME}"
-  rm -f "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd"
+  rm -f "${BIN_DIR}/parus" "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd" "${BIN_DIR}/lei" "${BIN_DIR}/lei-build"
   echo "[uninstall] removed all parus artifacts under ${PREFIX}"
   exit 0
 fi
@@ -92,7 +92,7 @@ if [ -L "${ACTIVE_LINK}" ] && [ ! -e "${ACTIVE_LINK}" ]; then
 fi
 
 if [ ! -e "${ACTIVE_LINK}" ]; then
-  rm -f "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd"
+  rm -f "${BIN_DIR}/parus" "${BIN_DIR}/parusc" "${BIN_DIR}/parus-lld" "${BIN_DIR}/parusd" "${BIN_DIR}/lei" "${BIN_DIR}/lei-build"
   echo "[uninstall] removed launchers (no active toolchain)"
 fi
 

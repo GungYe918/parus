@@ -12,15 +12,48 @@ add_executable(parusc_cli_option_tests
     ${CMAKE_SOURCE_DIR}/compiler/parusc/src/cli/Options.cpp
 )
 
+if (TARGET parus)
+    add_executable(parus_cli_tests
+        harness/run_parus_cli_tests.cpp
+    )
+    add_executable(parus_config_tests
+        harness/run_parus_config_tests.cpp
+    )
+endif()
+
 target_link_libraries(parus_parser_tests PRIVATE parus_compiler)
 target_link_libraries(parus_oir_tests PRIVATE parus_compiler)
 target_link_libraries(parusc_cli_option_tests PRIVATE parus_compiler)
+if (TARGET parus_cli_tests)
+    target_link_libraries(parus_cli_tests PRIVATE parus_compiler)
+endif()
+if (TARGET parus_config_tests)
+    target_link_libraries(parus_config_tests PRIVATE parus_compiler)
+endif()
 target_compile_features(parus_parser_tests PRIVATE cxx_std_23)
 target_compile_features(parus_oir_tests PRIVATE cxx_std_23)
 target_compile_features(parusc_cli_option_tests PRIVATE cxx_std_23)
+if (TARGET parus_cli_tests)
+    target_compile_features(parus_cli_tests PRIVATE cxx_std_23)
+endif()
+if (TARGET parus_config_tests)
+    target_compile_features(parus_config_tests PRIVATE cxx_std_23)
+endif()
 target_include_directories(parusc_cli_option_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/compiler/parusc/include
 )
+if (TARGET parus_cli_tests)
+    target_compile_definitions(parus_cli_tests PRIVATE
+        PARUS_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parus"
+        PARUS_MAIN_PR="${CMAKE_SOURCE_DIR}/main.pr"
+        PARUS_LEI_CASE_DIR="${CMAKE_SOURCE_DIR}/tools/Lei/tests/cases"
+    )
+endif()
+if (TARGET parus_config_tests)
+    target_compile_definitions(parus_config_tests PRIVATE
+        PARUS_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parus"
+    )
+endif()
 target_compile_definitions(parus_parser_tests PRIVATE
     PARUS_TEST_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_cases"
 )
@@ -28,10 +61,22 @@ if (MSVC)
     target_compile_options(parus_parser_tests PRIVATE /W4 /permissive-)
     target_compile_options(parus_oir_tests PRIVATE /W4 /permissive-)
     target_compile_options(parusc_cli_option_tests PRIVATE /W4 /permissive-)
+    if (TARGET parus_cli_tests)
+        target_compile_options(parus_cli_tests PRIVATE /W4 /permissive-)
+    endif()
+    if (TARGET parus_config_tests)
+        target_compile_options(parus_config_tests PRIVATE /W4 /permissive-)
+    endif()
 else()
     target_compile_options(parus_parser_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parus_oir_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parusc_cli_option_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    if (TARGET parus_cli_tests)
+        target_compile_options(parus_cli_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    endif()
+    if (TARGET parus_config_tests)
+        target_compile_options(parus_config_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    endif()
 endif()
 
 if (TARGET parus_backend_aot)
@@ -84,6 +129,12 @@ enable_testing()
 add_test(NAME parus_parser_tests COMMAND parus_parser_tests)
 add_test(NAME parus_oir_tests COMMAND parus_oir_tests)
 add_test(NAME parusc_cli_option_tests COMMAND parusc_cli_option_tests)
+if (TARGET parus_cli_tests)
+    add_test(NAME parus_cli_tests COMMAND parus_cli_tests)
+endif()
+if (TARGET parus_config_tests)
+    add_test(NAME parus_config_tests COMMAND parus_config_tests)
+endif()
 if (TARGET parus_oir_llvm_tests)
     add_test(NAME parus_oir_llvm_tests COMMAND parus_oir_llvm_tests)
 endif()

@@ -1,0 +1,18 @@
+assert(type_name(lei.version) == "string");
+assert(type_name(lei.view_formats) == "array");
+assert(type_name(host.os) == "string");
+assert(type_name(host.arch) == "string");
+assert(type_name(toolchain.generator_default) == "string");
+assert(type_name(parus.version_string) == "string");
+assert(type_name(parus.version_major) == "int");
+assert(type_name(parus.tools.parusc) == "string");
+
+plan master = master & {
+  project = {
+    name: "builtin-constants",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

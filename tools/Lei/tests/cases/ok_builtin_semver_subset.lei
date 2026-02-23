@@ -1,0 +1,19 @@
+assert(semver.compare("1.2.3", "1.2.3") == 0);
+assert(semver.satisfies("1.2.3", "^1.0.0") == true);
+assert(semver.satisfies("1.2.3", "~1.2.0") == true);
+assert(semver.satisfies("1.2.3", ">=1.2.0") == true);
+assert(semver.satisfies("1.2.3", ">1.2.0") == true);
+assert(semver.satisfies("1.2.3", "<2.0.0") == true);
+assert(semver.satisfies("1.2.3", "<=1.2.3") == true);
+assert(semver.satisfies("1.2.3", "=1.2.3") == true);
+assert(semver.bump("1.2.3", "minor") == "1.3.0");
+
+plan master = master & {
+  project = {
+    name: "builtin-semver",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

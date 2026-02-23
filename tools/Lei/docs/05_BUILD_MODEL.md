@@ -136,6 +136,6 @@ LEI Engine Policy 규칙:
 6. `project`는 특수 plan이 아니다.
 7. 엔트리 plan 루트(`project/bundles/tasks/codegens`)를 엔진이 canonical graph로 해석한다.
 8. `build = { graph: ... }` 직접 명시는 금지된다.
-9. 그래프 조회는 `lei-build --view_graph [--format json|text|dot]`로 수행한다.
+9. 그래프 조회는 `lei --view_graph [--format json|text|dot]`로 수행한다.
 
 위 규칙은 LEI Core 문법이 아니라 엔진 정책이다.

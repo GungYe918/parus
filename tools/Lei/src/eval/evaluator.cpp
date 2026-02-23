@@ -1,5 +1,6 @@
 #include <lei/eval/Evaluator.hpp>
 
+#include <lei/builtins/Register.hpp>
 #include <lei/os/File.hpp>
 #include <lei/parse/Parser.hpp>
 
@@ -143,6 +144,53 @@ bool value_equal_strict(const Value& a, const Value& b) {
     }
 
     return false;
+}
+
+std::optional<Value> resolve_object_member(const Value& base,
+                                           std::string_view key,
+                                           const ast::Span& span,
+                                           diag::Bag& diags) {
+    if (const auto* obj = base.as_object()) {
+        auto it = obj->find(std::string(key));
+        if (it == obj->end()) {
+            diags.add(diag::Code::L_UNKNOWN_IDENTIFIER,
+                      span.file,
+                      span.line,
+                      span.column,
+                      "unknown object key: " + std::string(key));
+            return std::nullopt;
+        }
+        return it->second;
+    }
+
+    if (const auto* dyn = base.as_dynamic_object()) {
+        if (!dyn->resolve) {
+            diags.add(diag::Code::L_TYPE_MISMATCH,
+                      span.file,
+                      span.line,
+                      span.column,
+                      "dynamic object has no member resolver");
+            return std::nullopt;
+        }
+
+        const auto before = diags.all().size();
+        auto resolved = dyn->resolve(key, span, diags);
+        if (!resolved && diags.all().size() == before) {
+            diags.add(diag::Code::L_UNKNOWN_IDENTIFIER,
+                      span.file,
+                      span.line,
+                      span.column,
+                      "unknown dynamic object key: " + std::string(key));
+        }
+        return resolved;
+    }
+
+    diags.add(diag::Code::L_TYPE_MISMATCH,
+              span.file,
+              span.line,
+              span.column,
+              "member access requires object");
+    return std::nullopt;
 }
 
 Value default_container_for_next(const RuntimePathSegment* next) {
@@ -371,6 +419,8 @@ bool BuiltinRegistry::has_symbol(std::string_view name) const {
 
 BuiltinRegistry make_default_builtin_registry() {
     BuiltinRegistry reg;
+    builtins::register_builtin_constants(reg);
+    builtins::register_builtin_functions(reg);
     return reg;
 }
 
@@ -617,6 +667,14 @@ std::optional<Value> Evaluator::evaluate_entry(const std::filesystem::path& entr
     }
 
     return it->second.value;
+}
+
+std::vector<std::string> Evaluator::loaded_module_paths() const {
+    std::vector<std::string> out{};
+    out.reserve(module_cache_.size());
+    for (const auto& [path, _] : module_cache_) out.push_back(path);
+    std::sort(out.begin(), out.end());
+    return out;
 }
 
 void Evaluator::step_or_budget_error(const ast::Span& span) {
@@ -1329,21 +1387,9 @@ std::optional<Value> Evaluator::eval_expr(ModulePtr mod,
 
             Value out = sit->second;
             for (size_t i = 2; i < expr->ns_parts.size(); ++i) {
-                auto* obj = out.as_object();
-                if (!obj) {
-                    add_diag(diag::Code::L_TYPE_MISMATCH,
-                             expr->span,
-                             "namespace tail access requires object value");
-                    return std::nullopt;
-                }
-                auto it = obj->find(expr->ns_parts[i]);
-                if (it == obj->end()) {
-                    add_diag(diag::Code::L_UNKNOWN_IDENTIFIER,
-                             expr->span,
-                             "unknown object key: " + expr->ns_parts[i]);
-                    return std::nullopt;
-                }
-                out = it->second;
+                auto member = resolve_object_member(out, expr->ns_parts[i], expr->span, diags_);
+                if (!member) return std::nullopt;
+                out = *member;
             }
 
             return out;
@@ -1422,17 +1468,7 @@ std::optional<Value> Evaluator::eval_expr(ModulePtr mod,
         case ast::ExprKind::kMember: {
             auto base = eval_expr(mod, expr->lhs.get(), st, call_depth);
             if (!base) return std::nullopt;
-            auto obj = base->as_object();
-            if (!obj) {
-                add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "member access requires object");
-                return std::nullopt;
-            }
-            auto it = obj->find(expr->text);
-            if (it == obj->end()) {
-                add_diag(diag::Code::L_UNKNOWN_IDENTIFIER, expr->span, "unknown object key: " + expr->text);
-                return std::nullopt;
-            }
-            return it->second;
+            return resolve_object_member(*base, expr->text, expr->span, diags_);
         }
 
         case ast::ExprKind::kIndex: {
@@ -1594,6 +1630,10 @@ std::string to_string(const Value& v) {
     if (auto p = std::get_if<Value::Template>(&v.data)) {
         if (*p) return "<template " + (*p)->name + ">";
         return "<template>";
+    }
+    if (auto p = std::get_if<Value::Dynamic>(&v.data)) {
+        if (*p && !(*p)->name.empty()) return "<dynamic " + (*p)->name + ">";
+        return "<dynamic>";
     }
     if (std::holds_alternative<Value::Patch>(v.data)) {
         return "<patch>";

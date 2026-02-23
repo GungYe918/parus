@@ -1,0 +1,18 @@
+plan smoke_task = task & {
+  name = "smoke_task";
+  run = ["/usr/bin/env", "true"];
+  deps = [];
+  inputs = [];
+  outputs = [];
+  always_run = true;
+};
+
+plan master = master & {
+  project = {
+    name: "build-smoke",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [smoke_task];
+  codegens = [];
+};

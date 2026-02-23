@@ -124,7 +124,7 @@ plan master = master & {
 3. CLI `--plan <name>`으로 엔트리 plan override가 가능하다.
 4. canonical graph source는 엔트리 plan 루트(`project/bundles/tasks/codegens`)다.
 5. `master`는 export하지 않는다.
-6. 그래프 조회는 `lei-build config.lei --view_graph [--format json|text|dot]`로 수행한다.
+6. 그래프 조회는 `lei config.lei --view_graph [--format json|text|dot]`로 수행한다.
 
 ### 금지 예시
 

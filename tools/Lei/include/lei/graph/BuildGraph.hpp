@@ -3,6 +3,7 @@
 #include <lei/diag/DiagCode.hpp>
 #include <lei/eval/Evaluator.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -45,11 +46,63 @@ struct BuildGraph {
     std::vector<CodegenNode> codegens{};
 };
 
+enum class BuildActionKind : uint8_t {
+    kCodegen,
+    kCompile,
+    kLink,
+    kTask,
+    kPhony,
+};
+
+enum class ArtifactKind : uint8_t {
+    kGeneratedFile,
+    kObjectFile,
+    kBinaryFile,
+    kStampFile,
+};
+
+enum class EdgeKind : uint8_t {
+    kHard,
+    kOrderOnly,
+};
+
+struct ArtifactNode {
+    std::string id{};
+    std::string path{};
+    ArtifactKind kind = ArtifactKind::kGeneratedFile;
+};
+
+struct ExecNode {
+    std::string id{};
+    BuildActionKind kind = BuildActionKind::kPhony;
+    std::string name{};
+    std::string cwd{"."};
+    std::vector<std::string> command{};
+    std::vector<std::string> inputs{};
+    std::vector<std::string> outputs{};
+    bool always_run = false;
+};
+
+struct ExecEdge {
+    std::string from{};
+    std::string to{};
+    EdgeKind kind = EdgeKind::kHard;
+};
+
+struct ExecGraph {
+    std::string project_name{};
+    std::string project_version{};
+    std::vector<ArtifactNode> artifacts{};
+    std::vector<ExecNode> actions{};
+    std::vector<ExecEdge> edges{};
+};
+
 std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_plan,
                                                 lei::diag::Bag& diags,
                                                 const std::string& entry_name = "master");
 
-std::optional<std::string> emit_ninja(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<std::string> emit_ninja(const ExecGraph& graph, lei::diag::Bag& diags);
 std::optional<std::string> emit_graph_json(const BuildGraph& graph, lei::diag::Bag& diags);
 std::optional<std::string> emit_graph_text(const BuildGraph& graph, lei::diag::Bag& diags);
 std::optional<std::string> emit_graph_dot(const BuildGraph& graph, lei::diag::Bag& diags);
