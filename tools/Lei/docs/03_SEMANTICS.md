@@ -5,7 +5,7 @@
 1. 모듈은 선언과 실행 컨텍스트를 가진다.
 2. import는 DAG 순서로 해석된다.
 3. 같은 입력/옵션이면 동일한 출력을 생성해야 한다.
-4. LEI 언어는 `master` 개념을 갖지 않는다.
+4. LEI Core는 엔트리 이름(`master` 등)을 하드코딩하지 않는다.
 
 ## 값 모델
 
@@ -35,11 +35,13 @@
 4. array-array는 길이가 같아야 하며, 각 인덱스를 재귀 합성한다.
 5. 타입 불일치 또는 값 충돌은 실패다.
 6. 충돌 진단은 경로를 포함해야 한다.
-   예: `build.profile`, `bundles[2].deps[0]`
+   예: `project.name`, `bundles[2].deps[0]`
 7. `&`는 덮어쓰기가 아니다.
 8. scalar-scalar 합성(예: `foo.name & bar.name`)은 동일값 제약이며, 값 변경 용도가 아니다.
 9. 단일 필드 변경은 객체 patch로 수행한다.
-   예: `project = project & { name = \"new-name\"; };`
+   예: `project = project & { name = "new-name"; };`
+
+`&`는 LEI 시스템 전체의 결정성 보장을 위한 핵심 연산이다.
 
 ## `proto` 합성 규칙
 
@@ -51,12 +53,12 @@
 6. `proto`와 빌트인 plan(`bundle`, `task` 등)은 동일한 `&` 연산으로 연쇄 합성 가능하다.
 7. 프로젝트 메타 필드(`project`)는 proto를 통해 타입/필수 필드를 고정하는 방식을 권장한다.
 
-## 빌트인 plan과 스키마
+## Built-in plan과 스키마 의미 부여
 
-1. LEI 언어 자체는 `bundle`, `master`, `task`, `codegen`, `project`의 의미를 내장하지 않는다.
-2. 호스트(예: Parus)는 빌트인 plan 값을 주입할 수 있다.
-3. 주입된 빌트인 plan과 사용자 patch를 `&`로 합성해 schema 제약을 적용할 수 있다.
-4. 어떤 plan이 특수한지는 언어가 아니라 통합 프로파일이 결정한다.
+1. LEI Core 자체는 `bundle`, `master`, `task`, `codegen`, `project`의 의미를 내장하지 않는다.
+2. LEI Build API는 빌트인 plan 템플릿/스키마 주입 지점을 제공한다.
+3. Host Profile(예: parus)은 Build API를 사용해 특수 plan 의미를 부여한다.
+4. 어떤 plan이 특수한지는 Core가 아니라 Profile이 결정한다.
 
 ## 함수 의미
 

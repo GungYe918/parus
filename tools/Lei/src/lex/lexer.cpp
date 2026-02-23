@@ -23,21 +23,23 @@ syntax::TokenKind keyword_or_ident(std::string_view s) {
         {"import", K::kKwImport},
         {"from", K::kKwFrom},
         {"export", K::kKwExport},
-        {"build", K::kKwBuild},
+        {"proto", K::kKwProto},
+        {"plan", K::kKwPlan},
         {"let", K::kKwLet},
-        {"const", K::kKwConst},
+        {"var", K::kKwVar},
         {"def", K::kKwDef},
         {"assert", K::kKwAssert},
         {"if", K::kKwIf},
-        {"then", K::kKwThen},
         {"else", K::kKwElse},
-        {"match", K::kKwMatch},
         {"true", K::kKwTrue},
         {"false", K::kKwFalse},
         {"int", K::kKwInt},
         {"float", K::kKwFloat},
         {"string", K::kKwString},
         {"bool", K::kKwBool},
+        {"return", K::kKwReturn},
+        {"for", K::kKwFor},
+        {"in", K::kKwIn},
     };
 
     auto it = kMap.find(s);
@@ -92,19 +94,16 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
     while (i < source.size()) {
         char c = at(0);
 
-        // whitespace
         if (std::isspace(static_cast<unsigned char>(c))) {
             advance();
             continue;
         }
 
-        // line comment
         if (c == '/' && at(1) == '/') {
             while (i < source.size() && at(0) != '\n') advance();
             continue;
         }
 
-        // block comment
         if (c == '/' && at(1) == '*') {
             advance();
             advance();
@@ -122,45 +121,40 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
         const uint32_t tok_line = line;
         const uint32_t tok_col = col;
 
-        // punctuation + operators (longest first)
-        if (c == '.' && at(1) == '.' && at(2) == '.') {
-            push(K::kEllipsis, "...", tok_line, tok_col);
-            advance(); advance(); advance();
-            continue;
-        }
         if (c == ':' && at(1) == ':') {
             push(K::kColonColon, "::", tok_line, tok_col);
-            advance(); advance();
+            advance();
+            advance();
             continue;
         }
-        if (c == '?' && at(1) == '=') {
-            push(K::kDefaultOverlay, "?=", tok_line, tok_col);
-            advance(); advance();
-            continue;
-        }
-        if (c == '=' && at(1) == '>') {
-            push(K::kFatArrow, "=>", tok_line, tok_col);
-            advance(); advance();
+        if (c == '-' && at(1) == '>') {
+            push(K::kArrow, "->", tok_line, tok_col);
+            advance();
+            advance();
             continue;
         }
         if (c == '=' && at(1) == '=') {
             push(K::kEqEq, "==", tok_line, tok_col);
-            advance(); advance();
+            advance();
+            advance();
             continue;
         }
         if (c == '!' && at(1) == '=') {
             push(K::kBangEq, "!=", tok_line, tok_col);
-            advance(); advance();
+            advance();
+            advance();
             continue;
         }
         if (c == '&' && at(1) == '&') {
             push(K::kAndAnd, "&&", tok_line, tok_col);
-            advance(); advance();
+            advance();
+            advance();
             continue;
         }
         if (c == '|' && at(1) == '|') {
             push(K::kOrOr, "||", tok_line, tok_col);
-            advance(); advance();
+            advance();
+            advance();
             continue;
         }
 
@@ -182,11 +176,9 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
             case '/': push(K::kSlash, "/", tok_line, tok_col); advance(); continue;
             case '&': push(K::kAmp, "&", tok_line, tok_col); advance(); continue;
             case '!': push(K::kBang, "!", tok_line, tok_col); advance(); continue;
-            case '_': push(K::kUnderscore, "_", tok_line, tok_col); advance(); continue;
             default: break;
         }
 
-        // string
         if (c == '"') {
             advance();
             std::string out;
@@ -224,7 +216,6 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
             continue;
         }
 
-        // number
         if (std::isdigit(static_cast<unsigned char>(c))) {
             std::string text;
             bool saw_dot = false;
@@ -247,7 +238,6 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
             continue;
         }
 
-        // ident / keyword
         if (is_ident_start(c)) {
             std::string ident;
             ident.push_back(c);
@@ -260,7 +250,6 @@ std::vector<syntax::Token> lex(std::string_view source, std::string_view file_pa
             continue;
         }
 
-        // unknown char
         std::string bad(1, c);
         diags.add(diag::Code::C_UNEXPECTED_TOKEN, std::string(file_path), tok_line, tok_col,
                   "unknown character '" + bad + "'");

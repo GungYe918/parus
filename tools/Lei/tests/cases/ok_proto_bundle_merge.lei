@@ -1,0 +1,21 @@
+proto MyBundle {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+export plan core_bundle = bundle & MyBundle & {
+  name = "core";
+  sources = ["src/lib.pr"];
+};
+
+plan master = master & {
+  project = {
+    name: "demo",
+    version: "0.1.0",
+  };
+  bundles = [core_bundle];
+  tasks = [];
+  codegens = [];
+};

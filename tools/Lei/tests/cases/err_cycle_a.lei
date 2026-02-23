@@ -1,3 +1,0 @@
-import { B } from "./err_cycle_b.lei";
-export const A = 1;
-export build { bundles: [] };

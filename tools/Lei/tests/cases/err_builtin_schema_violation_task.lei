@@ -1,0 +1,14 @@
+plan bad_task = task & {
+  name = "lint";
+  run = [];
+};
+
+plan master = master & {
+  project = {
+    name: "bad-task",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [bad_task];
+  codegens = [];
+};

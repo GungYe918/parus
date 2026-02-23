@@ -1,2 +1,0 @@
-import intrinsic { base };
-export build { bundles: [] };

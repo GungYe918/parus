@@ -1,12 +1,12 @@
 # 13. Proto Templates
 
-이 문서는 LEI의 `proto` 문법을 사용해 plan 템플릿/스키마를 정의하는 규칙을 고정한다.
+이 문서는 LEI Core의 `proto` 문법을 사용해 plan 템플릿/스키마를 정의하는 규칙을 고정한다.
 
 ## 목적
 
 1. 사용자 정의 스키마를 반복 사용 가능한 템플릿으로 선언한다.
 2. `export plan x = MyProto & { ... };` 패턴을 표준화한다.
-3. 빌트인 plan(`bundle/master/task/codegen`)과 `proto`의 역할을 분리한다.
+3. built-in plan(`bundle/master/task/codegen`)과 `proto`의 역할을 분리한다.
 
 ## 문법
 
@@ -40,7 +40,7 @@ export plan foo = MyProto & {
 5. scalar-scalar 합성(예: `foo.name & bar.name`)은 동일성 제약이며 값 덮어쓰기가 아니다.
 6. 단일 필드 업데이트는 객체 patch를 사용한다.
 
-## 빌트인 plan과 연쇄 합성
+## profile-aware 결합 예시
 
 ```lei
 proto myBundleProto {
@@ -56,8 +56,8 @@ export plan core_bundle = bundle & myBundleProto & {
 };
 ```
 
-1. `bundle`은 Parus가 주입한 빌트인 plan이다.
-2. `myBundleProto`는 사용자 제약/기본값 템플릿이다.
+1. `bundle`은 LEI Build API를 통해 profile이 주입한 빌트인 plan이다.
+2. `myBundleProto`는 Core 문법으로 작성한 사용자 템플릿이다.
 3. 마지막 patch는 프로젝트별 실제 값을 제공한다.
 
 ## 요구 예시
@@ -90,6 +90,6 @@ plan foo2 = foo & {
 
 ## 경계
 
-1. `proto`는 LEI 언어 코어 기능이다.
-2. `bundle/master/task/codegen` 의미는 Parus 통합 프로파일이 부여한다.
-3. 이 문서는 언어 규칙이며, 엔트리/마스터 선택 규칙은 `11_PARUS_BUILD_PROFILE.md`를 따른다.
+1. `proto`는 LEI Core 기능이다.
+2. `bundle/master/task/codegen` 의미는 Host Profile이 부여한다.
+3. 엔트리/마스터 선택 규칙은 `11_PARUS_BUILD_PROFILE.md`를 따른다.

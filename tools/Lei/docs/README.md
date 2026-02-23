@@ -1,8 +1,8 @@
-# LEI DSL Docs
+# LEI Build System Docs
 
 상태: `draft-0.4`
 
-LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 언어 명세와 Parus 통합 프로파일을 분리해 기록한다.
+LEI는 범용 빌드 시스템이다. 문법/평가 엔진은 LEI 시스템의 코어(`LEI Core`)이며, 실제 제품 동작은 Build API와 엔진 정책 계층에서 확장된다.
 
 ## 구세대 문법 폐기 선언
 
@@ -16,27 +16,45 @@ LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 
 
 ## 문서 인덱스
 
+### Core
+
 1. `01_GOALS_AND_NON_GOALS.md`
 2. `02_SYNTAX_EBNF.md`
 3. `03_SEMANTICS.md`
 4. `04_IMPORT_EXPORT_INTRINSIC.md`
-5. `05_BUILD_MODEL.md`
-6. `06_SECURITY_AND_BUDGET.md`
-7. `07_DIAGNOSTICS_AND_TESTING.md`
-8. `08_ROADMAP.md`
-9. `09_INTRINSICS.md`
-10. `10_ARCHITECTURE_INDEPENDENCE.md`
-11. `11_PARUS_BUILD_PROFILE.md`
-12. `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`
-13. `13_PROTO_TEMPLATES.md`
-14. `useage.md`
+5. `13_PROTO_TEMPLATES.md`
 
-## 분리 원칙
+### Build API
 
-1. LEI 언어 규칙: 표면 문법, 의미론, 진단, 보안/예산
-2. Parus 통합 프로파일: `config.lei`, `master` 엔트리 해석, CLI override 정책
-3. `bundle`, `master`, `task`, `codegen`은 LEI 키워드가 아니다. Parus 빌드 시스템이 주입하는 빌트인 plan 이름이다.
-4. `proto`는 LEI 언어 문법으로 정의되는 사용자 템플릿/스키마 선언이다.
+1. `06_SECURITY_AND_BUDGET.md`
+2. `07_DIAGNOSTICS_AND_TESTING.md`
+3. `09_INTRINSICS.md`
+4. `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`
+5. `15_BUILTIN_CONSTANTS_AND_FUNCTIONS.md`
+
+### Engine Policy
+
+1. `05_BUILD_MODEL.md`
+2. `10_ARCHITECTURE_INDEPENDENCE.md`
+3. `11_PARUS_BUILD_PROFILE.md`
+4. `14_LEI_PRODUCT_AND_PROFILE_MODEL.md`
+5. `useage.md`
+
+### Progress
+
+1. `08_ROADMAP.md`
+2. `TODO_LEI_V0_4_MIGRATION.md`
+
+## 제품 모델 요약
+
+1. `LEI Core`: parser/evaluator/merge semantics
+2. `LEI Build API`: builtin function/plan/schema registry, graph extraction contract
+3. `LEI Engine Policy`: 엔트리 정책, 예약 plan, 운영 정책 진단
+
+## 빌트인 카탈로그 정본
+
+1. 빌트인 상수/함수의 단일 정본 문서는 `15_BUILTIN_CONSTANTS_AND_FUNCTIONS.md`다.
+2. 개념 문서(`09`)와 정책 문서(`14`)는 목록을 중복 정의하지 않고 `15`를 참조한다.
 
 ## 핵심 문법 요약
 
@@ -46,7 +64,7 @@ LEI는 빌드 플랜 합성을 위한 독립 DSL이다. 이 디렉터리는 LEI 
 4. 접근: 객체 `.` / 배열 `[]` / import namespace `alias::symbol`
 5. 합성: `&`는 엄격 합성(unification)
 
-## 권장 빌드 DSL 작성 스타일
+## 권장 작성 스타일
 
 ```lei
 proto myBundleProto {
@@ -67,7 +85,8 @@ export plan lint = task & {
 };
 ```
 
-## 구현 범위 (이번 라운드)
+## 현재 라운드 범위
 
-1. 문서만 개정한다.
-2. 코드/테스트 구현 변경은 다음 라운드에서 진행한다.
+1. 문서 계약 정합화
+2. 제품 정체성 전환(빌드 시스템 중심)
+3. 엔트리 plan 루트 그래프 계약 통일(`project/bundles/tasks/codegens`)

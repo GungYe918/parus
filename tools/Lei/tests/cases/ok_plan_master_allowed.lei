@@ -1,0 +1,9 @@
+plan master = master & {
+  project = {
+    name: "master-allowed",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

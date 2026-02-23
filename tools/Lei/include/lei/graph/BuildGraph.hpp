@@ -9,26 +9,49 @@
 
 namespace lei::graph {
 
-struct BuildConventions {
-    std::string bundles_field = "bundles";
-    std::string bundle_name_field = "name";
-    std::string module_map_field = "module_map";
-    std::string defaults_field = "defaults";
+struct BundleNode {
+    std::string name{};
+    std::string kind{};
+    std::vector<std::string> sources{};
+    std::vector<std::string> deps{};
 };
 
-BuildConventions make_default_build_conventions();
+struct TaskNode {
+    std::string name{};
+    std::vector<std::string> run{};
+    std::vector<std::string> deps{};
+    std::string cwd{"."};
+    std::vector<std::string> inputs{};
+    std::vector<std::string> outputs{};
+    bool always_run = false;
+};
+
+struct CodegenNode {
+    std::string name{};
+    std::vector<std::string> tool{};
+    std::vector<std::string> inputs{};
+    std::vector<std::string> outputs{};
+    std::vector<std::string> args{};
+    std::vector<std::string> deps{};
+    std::string cwd{"."};
+    bool deterministic = true;
+};
 
 struct BuildGraph {
-    std::vector<std::string> bundle_names{};
-    std::vector<std::string> module_files{};
+    std::string project_name{};
+    std::string project_version{};
+    std::vector<BundleNode> bundles{};
+    std::vector<TaskNode> tasks{};
+    std::vector<CodegenNode> codegens{};
 };
 
-std::optional<BuildGraph> from_build_value(const lei::eval::Value& v,
-                                           lei::diag::Bag& diags,
-                                           const BuildConventions& conventions);
-inline std::optional<BuildGraph> from_build_value(const lei::eval::Value& v, lei::diag::Bag& diags) {
-    return from_build_value(v, diags, make_default_build_conventions());
-}
+std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_plan,
+                                                lei::diag::Bag& diags,
+                                                const std::string& entry_name = "master");
+
 std::optional<std::string> emit_ninja(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<std::string> emit_graph_json(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<std::string> emit_graph_text(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<std::string> emit_graph_dot(const BuildGraph& graph, lei::diag::Bag& diags);
 
 } // namespace lei::graph

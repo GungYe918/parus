@@ -1,0 +1,16 @@
+plan local_graph {
+  project = {
+    name: "forbidden-master-export",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};
+
+export plan master = master & {
+  project = local_graph.project;
+  bundles = local_graph.bundles;
+  tasks = local_graph.tasks;
+  codegens = local_graph.codegens;
+};

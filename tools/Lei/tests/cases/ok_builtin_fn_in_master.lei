@@ -1,0 +1,10 @@
+plan master = master & {
+  project = {
+    name: "builtin-fn",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+  profile = make_profile();
+};

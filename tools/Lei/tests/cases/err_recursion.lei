@@ -1,5 +1,0 @@
-def loop(x) => loop(x);
-export build {
-  bundles: [],
-  x: loop(1),
-};

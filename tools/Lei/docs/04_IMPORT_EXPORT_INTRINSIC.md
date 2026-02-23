@@ -58,6 +58,7 @@ export plan json_bundle;
 1. intrinsic은 언어 공용 빌트인 함수/값 레지스트리 개념이다.
 2. 특정 단일 고정 객체를 언어가 특수 취급하지 않는다.
 3. 상세 정책은 `09_INTRINSICS.md`를 따른다.
+4. intrinsic 상세 목록(상수/함수 카탈로그)은 `15_BUILTIN_CONSTANTS_AND_FUNCTIONS.md`를 따른다.
 
 ## cycle 정책
 

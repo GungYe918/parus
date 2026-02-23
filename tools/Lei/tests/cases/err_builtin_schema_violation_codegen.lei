@@ -1,0 +1,16 @@
+plan bad_codegen = codegen & {
+  name = "gen_bad";
+  tool = ["protoc"];
+  inputs = ["proto/user.proto"];
+  outputs = [];
+};
+
+plan master = master & {
+  project = {
+    name: "bad-codegen",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [bad_codegen];
+};

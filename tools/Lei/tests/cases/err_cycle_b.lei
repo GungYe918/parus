@@ -1,2 +1,0 @@
-import { A } from "./err_cycle_a.lei";
-export const B = A;

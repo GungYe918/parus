@@ -1,0 +1,29 @@
+plan app_bundle = bundle & {
+  name = "app";
+  kind = "bin";
+  sources = ["src/main.pr"];
+  deps = [];
+};
+
+export plan lint = task & {
+  name = "lint";
+  run = ["parusc", "--check", "src/main.pr"];
+};
+
+export plan gen_user = codegen & {
+  name = "gen_user";
+  tool = ["protoc"];
+  inputs = ["proto/user.proto"];
+  outputs = ["gen/user.pb.pr"];
+  args = ["--parus_out=gen", "proto/user.proto"];
+};
+
+plan master = master & {
+  project = {
+    name: "task-codegen",
+    version: "0.1.0",
+  };
+  bundles = [app_bundle];
+  tasks = [lint];
+  codegens = [gen_user];
+};

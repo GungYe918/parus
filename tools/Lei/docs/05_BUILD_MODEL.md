@@ -85,7 +85,7 @@ proto ProjectMeta {
   version: string;
 };
 
-plan project_graph {
+plan workspace {
   project = ProjectMeta & {
     name = "demo";
     version = "0.1.0";
@@ -95,44 +95,47 @@ plan project_graph {
   codegens = [tools::gen_user];
 };
 
-plan merged_master = master & {
-  build = project_graph;
+plan master = master & {
+  project = workspace.project;
+  bundles = workspace.bundles;
+  tasks = workspace.tasks;
+  codegens = workspace.codegens;
 };
-
-plan master = merged_master;
 ```
 
 ## 배열 접근 예제
 
 ```lei
-let first_name = project_graph.bundles[0].name;
+let first_name = workspace.bundles[0].name;
 ```
 
 ## 단일 필드 변경 예제
 
 ```lei
-plan project_graph2 = project_graph & {
-  project = project_graph.project & {
+plan workspace2 = workspace & {
+  project = workspace.project & {
     name = "demo-renamed";
   };
 };
 ```
 
-## LEI 언어 vs Parus 통합 프로파일
+## LEI Core vs LEI Engine Policy
 
-언어 규칙:
+LEI Core 규칙:
 
-1. LEI 자체에는 `master` 개념이 없다.
-2. LEI는 `proto`/`plan`/`export plan`/`import alias`/`&`를 정의한다.
+1. Core는 `proto`/`plan`/`export plan`/`import alias`/`&`를 정의한다.
+2. Core는 `master` 같은 엔트리 이름을 예약어로 갖지 않는다.
 
-Parus 통합 프로파일 규칙:
+LEI Engine Policy 규칙:
 
 1. `config.lei`를 엔트리 파일로 특별취급한다.
 2. `config.lei`의 `plan master` 또는 CLI 지정 plan을 엔트리로 사용한다.
 3. `master` export는 정책상 금지한다.
 4. 하위 bundle의 `master` import/재export는 정책상 금지한다.
-5. `bundle`, `master`, `task`, `codegen`은 Parus가 주입한 빌트인 plan 값으로 해석한다.
+5. `bundle`, `master`, `task`, `codegen`은 엔진이 주입한 빌트인 plan 값으로 해석한다.
 6. `project`는 특수 plan이 아니다.
-7. 빌트인 plan 주입 계약은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
+7. 엔트리 plan 루트(`project/bundles/tasks/codegens`)를 엔진이 canonical graph로 해석한다.
+8. `build = { graph: ... }` 직접 명시는 금지된다.
+9. 그래프 조회는 `lei-build --view_graph [--format json|text|dot]`로 수행한다.
 
-위 규칙은 LEI 언어 문법이 아니라 Parus 빌드 시스템 정책이다.
+위 규칙은 LEI Core 문법이 아니라 엔진 정책이다.

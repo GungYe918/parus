@@ -1,2 +1,0 @@
-export const TOOL = "clang";
-export def add1(x) => x + 1;

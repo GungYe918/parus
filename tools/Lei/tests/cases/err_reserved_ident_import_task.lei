@@ -1,0 +1,11 @@
+import task from "./ok_master_graph.lei";
+
+plan master = master & {
+  project = {
+    name: "reserved-import-alias",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

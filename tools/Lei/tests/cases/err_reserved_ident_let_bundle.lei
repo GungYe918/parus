@@ -1,0 +1,11 @@
+let bundle = 1;
+
+plan master = master & {
+  project = {
+    name: "reserved-let",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

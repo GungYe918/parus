@@ -18,21 +18,23 @@ enum class TokenKind : uint16_t {
     kKwImport,
     kKwFrom,
     kKwExport,
-    kKwBuild,
+    kKwProto,
+    kKwPlan,
     kKwLet,
-    kKwConst,
+    kKwVar,
     kKwDef,
     kKwAssert,
     kKwIf,
-    kKwThen,
     kKwElse,
-    kKwMatch,
     kKwTrue,
     kKwFalse,
     kKwInt,
     kKwFloat,
     kKwString,
     kKwBool,
+    kKwReturn,
+    kKwFor,
+    kKwIn,
 
     kLParen,
     kRParen,
@@ -46,8 +48,7 @@ enum class TokenKind : uint16_t {
     kDot,
 
     kAssign,
-    kDefaultOverlay, // ?=
-    kFatArrow,       // =>
+    kArrow, // ->
     kPlus,
     kMinus,
     kStar,
@@ -58,8 +59,6 @@ enum class TokenKind : uint16_t {
     kEqEq,
     kBangEq,
     kBang,
-    kEllipsis,
-    kUnderscore,
     kColonColon,
 };
 
@@ -85,21 +84,23 @@ constexpr std::string_view token_kind_name(TokenKind k) {
         case TokenKind::kKwImport: return "import";
         case TokenKind::kKwFrom: return "from";
         case TokenKind::kKwExport: return "export";
-        case TokenKind::kKwBuild: return "build";
+        case TokenKind::kKwProto: return "proto";
+        case TokenKind::kKwPlan: return "plan";
         case TokenKind::kKwLet: return "let";
-        case TokenKind::kKwConst: return "const";
+        case TokenKind::kKwVar: return "var";
         case TokenKind::kKwDef: return "def";
         case TokenKind::kKwAssert: return "assert";
         case TokenKind::kKwIf: return "if";
-        case TokenKind::kKwThen: return "then";
         case TokenKind::kKwElse: return "else";
-        case TokenKind::kKwMatch: return "match";
         case TokenKind::kKwTrue: return "true";
         case TokenKind::kKwFalse: return "false";
         case TokenKind::kKwInt: return "int";
         case TokenKind::kKwFloat: return "float";
         case TokenKind::kKwString: return "string";
         case TokenKind::kKwBool: return "bool";
+        case TokenKind::kKwReturn: return "return";
+        case TokenKind::kKwFor: return "for";
+        case TokenKind::kKwIn: return "in";
         case TokenKind::kLParen: return "(";
         case TokenKind::kRParen: return ")";
         case TokenKind::kLBrace: return "{";
@@ -111,8 +112,7 @@ constexpr std::string_view token_kind_name(TokenKind k) {
         case TokenKind::kSemicolon: return ";";
         case TokenKind::kDot: return ".";
         case TokenKind::kAssign: return "=";
-        case TokenKind::kDefaultOverlay: return "?=";
-        case TokenKind::kFatArrow: return "=>";
+        case TokenKind::kArrow: return "->";
         case TokenKind::kPlus: return "+";
         case TokenKind::kMinus: return "-";
         case TokenKind::kStar: return "*";
@@ -123,8 +123,6 @@ constexpr std::string_view token_kind_name(TokenKind k) {
         case TokenKind::kEqEq: return "==";
         case TokenKind::kBangEq: return "!=";
         case TokenKind::kBang: return "!";
-        case TokenKind::kEllipsis: return "...";
-        case TokenKind::kUnderscore: return "_";
         case TokenKind::kColonColon: return "::";
     }
     return "unknown";

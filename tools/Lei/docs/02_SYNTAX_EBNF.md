@@ -2,7 +2,7 @@
 
 ## 개요
 
-LEI는 세미콜론 기반 문법을 사용한다. 모든 import 예시는 상대 경로(`./`, `../`)를 사용한다.
+LEI Core Syntax는 세미콜론 기반 문법을 사용한다. 모든 import 예시는 상대 경로(`./`, `../`)를 사용한다.
 
 ## Legacy 제거
 
@@ -59,7 +59,7 @@ DefDecl          := "def" Ident "(" [ParamList] ")" [ "->" Type ] Block ;
 ParamList        := Param { "," Param } [","] ;
 Param            := Ident [ ":" Type ] ;
 
-Type             := ScalarType ;
+Type             := ScalarType | "[" Type "]" ;
 ScalarType       := "int" | "float" | "string" | "bool" ;
 
 Block            := "{" { Stmt } "}" ;
@@ -134,8 +134,13 @@ BoolLit          := "true" | "false" ;
 5. 객체 접근은 `.`만 사용한다.
 6. 배열 접근은 `[]`만 사용한다.
 
+## 파서 판정 규칙
+
+1. `{ ... }`에서 `path = expr;` 형태가 나오면 `PlanPatchLit`으로 판정한다.
+2. `{ key: expr, ... }` 형태면 `ObjectLit`으로 판정한다.
+3. 구현 기준에서 빈 `{}`는 patch 문맥으로 판정되므로, 객체 리터럴은 명시적으로 키-값을 포함하는 형태를 권장한다.
+
 ## 주석
 
 1. `bundle`, `master`, `task`, `codegen`은 문법 키워드가 아니다.
-2. 특정 빌드 시스템(예: Parus)이 빌트인 plan으로 주입할 수 있는 일반 식별자다.
-3. `ObjectLit`(`:` 기반)과 `PlanPatchLit`(`=` 기반)은 구분해서 사용한다.
+2. 빌드 시스템 profile(예: parus)이 Build API를 통해 주입하는 일반 식별자다.

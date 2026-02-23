@@ -1,0 +1,20 @@
+proto BundleReq {
+  name: string;
+  kind: string = "lib";
+  sources: [string];
+  deps: [string] = [];
+};
+
+plan bad_bundle = bundle & BundleReq & {
+  sources = ["src/lib.pr"];
+};
+
+plan master = master & {
+  project = {
+    name: "proto-required-missing",
+    version: "0.1.0",
+  };
+  bundles = [bad_bundle];
+  tasks = [];
+  codegens = [];
+};

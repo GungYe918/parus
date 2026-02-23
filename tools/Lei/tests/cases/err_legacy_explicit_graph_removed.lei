@@ -1,0 +1,16 @@
+plan workspace {
+  project = {
+    name: "legacy-explicit-graph",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};
+
+plan master = master & {
+  project = workspace.project;
+  build = {
+    graph: workspace,
+  };
+};

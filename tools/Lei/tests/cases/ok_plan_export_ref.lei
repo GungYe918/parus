@@ -1,0 +1,18 @@
+plan helper_bundle = bundle & {
+  name = "helper";
+  kind = "lib";
+  sources = ["src/helper.pr"];
+  deps = [];
+};
+
+export plan helper_bundle;
+
+plan master = master & {
+  project = {
+    name: "export-ref",
+    version: "0.1.0",
+  };
+  bundles = [helper_bundle];
+  tasks = [];
+  codegens = [];
+};

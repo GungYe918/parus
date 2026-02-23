@@ -1,0 +1,13 @@
+proto codegen {
+  name: string;
+};
+
+plan master = master & {
+  project = {
+    name: "reserved-proto",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};
