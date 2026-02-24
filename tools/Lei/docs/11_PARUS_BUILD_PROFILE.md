@@ -10,8 +10,8 @@
 ## Module-First 계약
 
 1. `bundle`은 `modules` 필드를 필수로 가진다.
-2. 각 module은 `head/sources/imports`를 가진다.
-3. Parus import gate는 `module.imports`를 정본으로 사용한다.
+2. 각 module은 `sources/imports`를 가진다(`head`는 자동 계산).
+3. Parus import gate는 `module.imports`를 정본으로 사용하고 내부적으로 top-head canonicalization한다.
 4. cross-bundle import는 대상 bundle이 `bundle.deps`에도 있어야 한다.
 5. `bundle.sources`는 지원하지 않는다.
 

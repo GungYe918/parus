@@ -303,10 +303,6 @@ std::optional<std::string> validate_bundle(const Value::Object& obj) {
 }
 
 std::optional<std::string> validate_module(const Value::Object& obj) {
-    auto head_it = obj.find("head");
-    if (head_it == obj.end() || !head_it->second.is_string()) {
-        return std::string("module.head must be string");
-    }
     auto src_it = obj.find("sources");
     if (src_it == obj.end() || !src_it->second.is_array()) {
         return std::string("module.sources must be [string]");
@@ -391,7 +387,6 @@ std::shared_ptr<TemplateSpec> make_module_template() {
     auto spec = std::make_shared<TemplateSpec>();
     spec->name = "module";
 
-    spec->fields["head"] = TemplateField{make_scalar_schema(SchemaType::Kind::kString), true, std::nullopt};
     spec->fields["sources"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::nullopt};
     spec->fields["imports"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), false, std::optional<Value>{make_array({})}};
     spec->validator = validate_module;
@@ -1323,26 +1318,64 @@ std::optional<Value> Evaluator::eval_binary(ModulePtr mod,
                                             const ast::Expr* expr,
                                             ExecState& st,
                                             uint32_t call_depth) {
-    auto lv = eval_expr(mod, expr->lhs.get(), st, call_depth);
-    auto rv = eval_expr(mod, expr->rhs.get(), st, call_depth);
-    if (!lv || !rv) return std::nullopt;
-
     const std::string& op = expr->text;
 
-    if (op == "&") {
-        return merge_values(*lv, *rv, expr->span, "");
-    }
-
-    if (op == "&&" || op == "||") {
-        if (!lv->is_bool() || !rv->is_bool()) {
+    if (op == "&&") {
+        auto lv = eval_expr(mod, expr->lhs.get(), st, call_depth);
+        if (!lv) return std::nullopt;
+        if (!lv->is_bool()) {
             add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "logical operators require bool");
             return std::nullopt;
         }
         const bool a = std::get<bool>(lv->data);
+        if (!a) {
+            Value out{};
+            out.data = false;
+            return out;
+        }
+        auto rv = eval_expr(mod, expr->rhs.get(), st, call_depth);
+        if (!rv) return std::nullopt;
+        if (!rv->is_bool()) {
+            add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "logical operators require bool");
+            return std::nullopt;
+        }
         const bool b = std::get<bool>(rv->data);
         Value out{};
-        out.data = (op == "&&") ? (a && b) : (a || b);
+        out.data = a && b;
         return out;
+    }
+
+    if (op == "||") {
+        auto lv = eval_expr(mod, expr->lhs.get(), st, call_depth);
+        if (!lv) return std::nullopt;
+        if (!lv->is_bool()) {
+            add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "logical operators require bool");
+            return std::nullopt;
+        }
+        const bool a = std::get<bool>(lv->data);
+        if (a) {
+            Value out{};
+            out.data = true;
+            return out;
+        }
+        auto rv = eval_expr(mod, expr->rhs.get(), st, call_depth);
+        if (!rv) return std::nullopt;
+        if (!rv->is_bool()) {
+            add_diag(diag::Code::L_TYPE_MISMATCH, expr->span, "logical operators require bool");
+            return std::nullopt;
+        }
+        const bool b = std::get<bool>(rv->data);
+        Value out{};
+        out.data = a || b;
+        return out;
+    }
+
+    auto lv = eval_expr(mod, expr->lhs.get(), st, call_depth);
+    auto rv = eval_expr(mod, expr->rhs.get(), st, call_depth);
+    if (!lv || !rv) return std::nullopt;
+
+    if (op == "&") {
+        return merge_values(*lv, *rv, expr->span, "");
     }
 
     if (op == "==" || op == "!=") {

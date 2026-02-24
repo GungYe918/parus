@@ -211,6 +211,8 @@ namespace parus::oir {
                         apply(x.slot);
                         apply(x.value);
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                         std::is_same_v<T, InstConstFloat> ||
+                                         std::is_same_v<T, InstConstChar> ||
                                          std::is_same_v<T, InstConstBool> ||
                                          std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
@@ -349,6 +351,8 @@ namespace parus::oir {
                         add(x.slot);
                         add(x.value);
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                         std::is_same_v<T, InstConstFloat> ||
+                                         std::is_same_v<T, InstConstChar> ||
                                          std::is_same_v<T, InstConstBool> ||
                                          std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
@@ -419,6 +423,8 @@ namespace parus::oir {
                     def(x.slot);
                     def(x.value);
                 } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                     std::is_same_v<T, InstConstFloat> ||
+                                     std::is_same_v<T, InstConstChar> ||
                                      std::is_same_v<T, InstConstBool> ||
                                      std::is_same_v<T, InstConstText> ||
                                      std::is_same_v<T, InstConstNull> ||
@@ -1365,6 +1371,8 @@ namespace parus::oir {
                     } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
                         return false;
                     } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                         std::is_same_v<T, InstConstFloat> ||
+                                         std::is_same_v<T, InstConstChar> ||
                                          std::is_same_v<T, InstConstBool> ||
                                          std::is_same_v<T, InstConstText> ||
                                          std::is_same_v<T, InstConstNull> ||
@@ -1853,6 +1861,12 @@ namespace parus::oir {
                 if constexpr (std::is_same_v<T, InstConstInt>) {
                     // 타입 정보를 키에 포함해 i32 1 과 i64 1 같은 값이 섞여 CSE 되지 않게 한다.
                     oss << "ci:" << result_ty << ":" << x.text;
+                    return oss.str();
+                } else if constexpr (std::is_same_v<T, InstConstFloat>) {
+                    oss << "cf:" << result_ty << ":" << x.text;
+                    return oss.str();
+                } else if constexpr (std::is_same_v<T, InstConstChar>) {
+                    oss << "cc:" << result_ty << ":" << x.value;
                     return oss.str();
                 } else if constexpr (std::is_same_v<T, InstConstBool>) {
                     oss << "cb:" << result_ty << ":" << (x.value ? "1" : "0");

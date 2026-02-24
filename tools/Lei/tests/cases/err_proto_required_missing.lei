@@ -7,7 +7,6 @@ proto BundleReq {
 plan bad_bundle = bundle & BundleReq & {
   modules = [
     module & {
-      head = "bad";
       sources = ["src/lib.pr"];
       imports = [];
     },

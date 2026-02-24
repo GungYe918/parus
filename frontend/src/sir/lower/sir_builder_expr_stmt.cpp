@@ -191,22 +191,17 @@ namespace parus::sir::detail {
                 // cond is always ExprId in v0.
                 v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
 
-                // then / else may be ExprId or StmtId (legacy quirk)
-                v.b = lower_expr_or_stmt_as_value_(m, out_has_any_write, ast, sym, nres, tyck, e.b, e.span, v.type);
-                v.c = lower_expr_or_stmt_as_value_(m, out_has_any_write, ast, sym, nres, tyck, e.c, e.span, v.type);
+                v.b = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.c);
                 break;
             }
 
             case parus::ast::ExprKind::kBlockExpr: {
-                // IMPORTANT (current parser):
-                // - e.a : StmtId (block stmt), stored in ExprId slot by convention
-                // - e.b : tail ExprId (or invalid)
-                // - e.c : reserved
-                const parus::ast::StmtId blk = (parus::ast::StmtId)e.a;
+                const parus::ast::StmtId blk = e.block_stmt;
                 if (is_valid_stmt_id_(ast, blk)) {
                     // create dedicated kBlockExpr node, return it directly (no extra wrapper)
                     return lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck,
-                                            blk, e.b, e.span, v.type);
+                                            blk, e.block_tail, e.span, v.type);
                 }
                 v.kind = ValueKind::kError;
                 break;

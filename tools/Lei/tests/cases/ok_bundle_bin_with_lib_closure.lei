@@ -3,7 +3,6 @@ plan util_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      head = "util";
       sources = ["src/util.pr"];
       imports = [];
     },
@@ -16,7 +15,6 @@ plan core_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      head = "core";
       sources = ["src/core.pr"];
       imports = ["util"];
     },
@@ -29,7 +27,6 @@ plan app_bundle = bundle & {
   kind = "bin";
   modules = [
     module & {
-      head = "app";
       sources = ["src/main.pr"];
       imports = ["core"];
     },

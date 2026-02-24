@@ -54,7 +54,6 @@ export plan core_bundle = bundle & myBundleProto & {
   name = "core";
   modules = [
     module & {
-      head = "core";
       sources = ["core/src/lib.pr"];
       imports = [];
     },

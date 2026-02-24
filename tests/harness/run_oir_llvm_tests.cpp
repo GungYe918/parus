@@ -265,6 +265,60 @@ namespace {
         return ok;
     }
 
+    /// @brief float/char 리터럴이 OIR/LLVM 경로에서 ConstNull로 대체되지 않고 정상 lowering되는지 검사한다.
+    static bool test_float_char_literal_lowering_() {
+        const std::string src = R"(
+            def sinkf(v: f64) -> i32 {
+                if (v > 0.5f64) {
+                    return 1i32;
+                }
+                return 0i32;
+            }
+
+            def sinkc(v: char) -> i32 {
+                if (v == 'A') {
+                    return 1i32;
+                }
+                return 0i32;
+            }
+
+            def main() -> i32 {
+                return sinkf(v: 1.25f64) + sinkc(v: 'A');
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "float/char literal source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool saw_float = false;
+        bool saw_char = false;
+        bool saw_null = false;
+        for (const auto& inst : p->oir.mod.insts) {
+            if (std::holds_alternative<parus::oir::InstConstFloat>(inst.data)) saw_float = true;
+            if (std::holds_alternative<parus::oir::InstConstChar>(inst.data)) saw_char = true;
+            if (std::holds_alternative<parus::oir::InstConstNull>(inst.data)) saw_null = true;
+        }
+        ok &= require_(saw_float, "OIR must contain InstConstFloat for float literal");
+        ok &= require_(saw_char, "OIR must contain InstConstChar for char literal");
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for float/char literal case must succeed");
+        ok &= require_(lowered.llvm_ir.find("fcmp") != std::string::npos,
+                       "LLVM IR must include float comparison path");
+        ok &= require_(lowered.llvm_ir.find("icmp eq i32") != std::string::npos,
+                       "LLVM IR must include char comparison path");
+        ok &= require_(!(saw_null && !saw_float && !saw_char),
+                       "float/char literals must not silently degrade into ConstNull");
+        return ok;
+    }
+
     /// @brief 수동 OIR field 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
     static bool test_manual_field_lowering_memory_model() {
         parus::ty::TypePool types;
@@ -903,6 +957,7 @@ int main() {
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},
+        {"float_char_literal_lowering", test_float_char_literal_lowering_},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},

@@ -1944,11 +1944,8 @@ namespace parus::tyck {
             }
 
             case ast::ExprKind::kBlockExpr: {
-                // mapping assumption in your code:
-                // - e.a: StmtId of block
-                // - e.b: tail ExprId (optional)
-                if (e.b != ast::k_invalid_expr) {
-                    bool ok_tail = resolve_infer_int_in_context_(e.b, expected);
+                if (e.block_tail != ast::k_invalid_expr) {
+                    bool ok_tail = resolve_infer_int_in_context_(e.block_tail, expected);
                     if (ok_tail) {
                         mark_resolved_here(/*has_value=*/false, num::BigInt{});
                         return true;

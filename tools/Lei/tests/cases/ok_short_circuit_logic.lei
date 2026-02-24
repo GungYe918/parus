@@ -1,0 +1,12 @@
+assert((false && missing_rhs) == false);
+assert((true || missing_rhs2) == true);
+
+plan master = master & {
+  project = {
+    name: "short-circuit-logic",
+    version: "0.1.0",
+  };
+  bundles = [];
+  tasks = [];
+  codegens = [];
+};

@@ -68,6 +68,7 @@ endif()
 if (TARGET parusd_lsp_tests)
     target_compile_definitions(parusd_lsp_tests PRIVATE
         PARUSD_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parusd"
+        PARUSC_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parusc"
     )
 endif()
 target_compile_definitions(parus_parser_tests PRIVATE

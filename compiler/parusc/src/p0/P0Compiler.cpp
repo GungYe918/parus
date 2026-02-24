@@ -197,6 +197,40 @@ namespace parusc::p0 {
         }
 
         bool json_unescape_text_(std::string_view in, std::string& out) {
+            auto hex_value_ = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+                if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+                return -1;
+            };
+            auto parse_hex4_ = [&](size_t pos, uint16_t& value) -> bool {
+                if (pos + 4 > in.size()) return false;
+                int h0 = hex_value_(in[pos + 0]);
+                int h1 = hex_value_(in[pos + 1]);
+                int h2 = hex_value_(in[pos + 2]);
+                int h3 = hex_value_(in[pos + 3]);
+                if (h0 < 0 || h1 < 0 || h2 < 0 || h3 < 0) return false;
+                value = static_cast<uint16_t>((h0 << 12) | (h1 << 8) | (h2 << 4) | h3);
+                return true;
+            };
+            auto append_utf8_ = [](std::string& dst, uint32_t cp) {
+                if (cp <= 0x7F) {
+                    dst.push_back(static_cast<char>(cp));
+                } else if (cp <= 0x7FF) {
+                    dst.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+                    dst.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                } else if (cp <= 0xFFFF) {
+                    dst.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+                    dst.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                    dst.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                } else {
+                    dst.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+                    dst.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+                    dst.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+                    dst.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+                }
+            };
+
             out.clear();
             out.reserve(in.size());
             for (size_t i = 0; i < in.size(); ++i) {
@@ -216,12 +250,27 @@ namespace parusc::p0 {
                     case 'n': out.push_back('\n'); break;
                     case 'r': out.push_back('\r'); break;
                     case 't': out.push_back('\t'); break;
-                    case 'u':
-                        if (i + 4 >= in.size()) return false;
-                        // v1 index uses ASCII only, so ignore escaped unicode codepoint.
+                    case 'u': {
+                        uint16_t hi = 0;
+                        if (!parse_hex4_(i + 1, hi)) return false;
                         i += 4;
-                        out.push_back('?');
+
+                        uint32_t cp = hi;
+                        if (hi >= 0xD800u && hi <= 0xDBFFu) {
+                            if (i + 6 >= in.size()) return false;
+                            if (in[i + 1] != '\\' || in[i + 2] != 'u') return false;
+                            uint16_t lo = 0;
+                            if (!parse_hex4_(i + 3, lo)) return false;
+                            if (lo < 0xDC00u || lo > 0xDFFFu) return false;
+                            cp = 0x10000u + (((uint32_t)hi - 0xD800u) << 10) + ((uint32_t)lo - 0xDC00u);
+                            i += 6;
+                        } else if (hi >= 0xDC00u && hi <= 0xDFFFu) {
+                            return false;
+                        }
+
+                        append_utf8_(out, cp);
                         break;
+                    }
                     default:
                         return false;
                 }
@@ -341,6 +390,17 @@ namespace parusc::p0 {
                 out += segs[i];
             }
             return out;
+        }
+
+        std::string normalize_import_head_top_(std::string_view import_head) {
+            if (import_head.empty()) return {};
+            std::string_view s = import_head;
+            if (s.starts_with("::")) s.remove_prefix(2);
+            if (s.empty()) return {};
+            const size_t pos = s.find("::");
+            std::string_view top = (pos == std::string_view::npos) ? s : s.substr(0, pos);
+            if (top.empty() || top.find(':') != std::string_view::npos) return {};
+            return std::string(top);
         }
 
         void collect_exports_stmt_(
@@ -811,16 +871,40 @@ namespace parusc::p0 {
                 uint32_t decl_col = 1;
                 bool is_export = false;
 
-                if (!parse_json_string_field_(obj, "kind", kind_s) ||
-                    !parse_json_string_field_(obj, "path", path_s) ||
-                    !parse_json_string_field_(obj, "module_head", module_head) ||
-                    !parse_json_string_field_(obj, "decl_dir", decl_dir) ||
-                    !parse_json_string_field_(obj, "type_repr", type_repr) ||
-                    !parse_json_string_field_(obj, "file", decl_file) ||
-                    !parse_json_uint_field_(obj, "line", decl_line) ||
-                    !parse_json_uint_field_(obj, "col", decl_col) ||
-                    !parse_json_bool_field_(obj, "is_export", is_export)) {
-                    out_err = "invalid export-index entry schema in: " + path;
+                if (!parse_json_string_field_(obj, "kind", kind_s)) {
+                    out_err = "invalid export-index entry field 'kind' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_(obj, "path", path_s)) {
+                    out_err = "invalid export-index entry field 'path' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_(obj, "module_head", module_head)) {
+                    out_err = "invalid export-index entry field 'module_head' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_(obj, "decl_dir", decl_dir)) {
+                    out_err = "invalid export-index entry field 'decl_dir' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_(obj, "type_repr", type_repr)) {
+                    out_err = "invalid export-index entry field 'type_repr' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_(obj, "file", decl_file)) {
+                    out_err = "invalid export-index entry field 'file' in: " + path;
+                    return false;
+                }
+                if (!parse_json_uint_field_(obj, "line", decl_line)) {
+                    out_err = "invalid export-index entry field 'line' in: " + path;
+                    return false;
+                }
+                if (!parse_json_uint_field_(obj, "col", decl_col)) {
+                    out_err = "invalid export-index entry field 'col' in: " + path;
+                    return false;
+                }
+                if (!parse_json_bool_field_(obj, "is_export", is_export)) {
+                    out_err = "invalid export-index entry field 'is_export' in: " + path;
                     return false;
                 }
 
@@ -1104,7 +1188,8 @@ namespace parusc::p0 {
         pass_opt.name_resolve.allowed_import_heads.clear();
         if (opt.bundle.enabled) {
             for (const auto& head : inv.module_imports) {
-                if (!head.empty()) pass_opt.name_resolve.allowed_import_heads.insert(head);
+                const auto top = normalize_import_head_top_(head);
+                if (!top.empty()) pass_opt.name_resolve.allowed_import_heads.insert(top);
             }
         }
 
@@ -1129,6 +1214,7 @@ namespace parusc::p0 {
             x.kind = e.kind;
             x.path = std::move(lookup_path);
             x.declared_type = parse_type_repr_into_(e.type_repr, types);
+            x.declared_type_repr = e.type_repr;
             x.decl_span = root_span;
             x.decl_bundle_name = e.decl_bundle;
             x.module_head = e.module_head;
@@ -1220,8 +1306,12 @@ namespace parusc::p0 {
         (void)parus::sir::analyze_mut(sir_mod, types, bag);
         const auto sir_cap = parus::sir::analyze_capabilities(sir_mod, types, bag);
         if (!sir_cap.ok) {
-            std::cerr << "error: SIR capability analysis failed (" << sir_cap.error_count << ")\n";
-            return 1;
+            const bool had_diags = !bag.diags().empty();
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            if (!had_diags) {
+                std::cerr << "error: SIR capability analysis failed (" << sir_cap.error_count << ")\n";
+            }
+            return (diag_rc != 0 || !sir_cap.ok) ? 1 : 0;
         }
 
         const auto sir_handle_verrs = parus::sir::verify_escape_handles(sir_mod);

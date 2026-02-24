@@ -28,17 +28,15 @@ namespace parus::passes {
     // -----------------------------------------------------------------------------
     // Core invariants (v0 parser quirks)
     //
-    // 1) BlockExpr stores a *StmtId* inside Expr::a (casted to ExprId slot).
-    //    - parse_expr_block(): out.kind = kBlockExpr
-    //      out.a = (ExprId)block_stmt_id
-    //      out.b = tail_expr_id (or invalid)
+    // 1) BlockExpr stores dedicated ids:
+    //    - block_stmt : StmtId
+    //    - block_tail : ExprId (or invalid)
     //
     // 2) Loop expr stores:
     //    - loop_iter : ExprId
     //    - loop_body : StmtId
     //
-    // This pass MUST treat these fields with the correct id-space, otherwise
-    // "UndefinedName: x" false positives can happen due to ExprId/StmtId index aliasing.
+    // This pass MUST treat these fields with the correct id-space.
     // -----------------------------------------------------------------------------
 
     // -----------------------------------------------------------------------------
@@ -707,34 +705,17 @@ namespace parus::passes {
 
                 case ast::ExprKind::kIfExpr: {
                     if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
-
-                    // then/else: normally ExprId, but old trees might contain StmtId.
-                    if (is_valid_expr_id_(r, e.b)) {
-                        stack.push_back(e.b);
-                    } else {
-                        const ast::StmtId sb = (ast::StmtId)e.b;
-                        if (is_valid_stmt_id_(r, sb)) walk_stmt(ast, r, sb, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
-                    }
-
-                    if (is_valid_expr_id_(r, e.c)) {
-                        stack.push_back(e.c);
-                    } else {
-                        const ast::StmtId sc = (ast::StmtId)e.c;
-                        if (is_valid_stmt_id_(r, sc)) walk_stmt(ast, r, sc, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
-                    }
+                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
+                    if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
                     break;
                 }
 
                 case ast::ExprKind::kBlockExpr: {
-                    // IMPORTANT (current parser):
-                    // - e.a : StmtId (block stmt), stored in ExprId slot by convention
-                    // - e.b : tail ExprId (or invalid)
-                    const ast::StmtId blk = (ast::StmtId)e.a;
+                    const ast::StmtId blk = e.block_stmt;
                     if (is_valid_stmt_id_(r, blk)) {
                         walk_stmt(ast, r, blk, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
-                    if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);
-                    if (is_valid_expr_id_(r, e.c)) stack.push_back(e.c);
+                    if (is_valid_expr_id_(r, e.block_tail)) stack.push_back(e.block_tail);
                     break;
                 }
 

@@ -95,6 +95,8 @@ namespace parus::oir {
     // Inst payloads (v0)
     // ----------------------
     struct InstConstInt   { std::string text; };
+    struct InstConstFloat { std::string text; };
+    struct InstConstChar  { uint32_t value = 0; };
     struct InstConstBool  { bool value = false; };
     struct InstConstText  { std::string bytes; };
     struct InstConstNull  { };
@@ -120,6 +122,8 @@ namespace parus::oir {
 
     using InstData = std::variant<
         InstConstInt,
+        InstConstFloat,
+        InstConstChar,
         InstConstBool,
         InstConstText,
         InstConstNull,

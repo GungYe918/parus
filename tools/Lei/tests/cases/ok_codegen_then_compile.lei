@@ -11,8 +11,11 @@ plan app_bundle = bundle & {
   kind = "bin";
   modules = [
     module & {
-      head = "app";
-      sources = ["gen/cfg.pr", "src/main.pr"];
+      sources = ["gen/cfg.pr"];
+      imports = [];
+    },
+    module & {
+      sources = ["src/main.pr"];
       imports = [];
     },
   ];

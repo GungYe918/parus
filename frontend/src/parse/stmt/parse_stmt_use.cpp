@@ -72,22 +72,12 @@ namespace parus {
 
         return ast_.add_expr(e);
     }
-    std::pair<uint32_t, uint32_t> Parser::parse_path_segments() {
+    std::pair<uint32_t, uint32_t> Parser::parse_path_segments(bool allow_leading_coloncolon) {
         using K = syntax::TokenKind;
 
         // Path := Ident (('::' | ':' ':') Ident)*
         uint32_t begin = (uint32_t)ast_.path_segs().size();
         uint32_t count = 0;
-
-        const Token first = cursor_.peek();
-        if (first.kind != K::kIdent) {
-            diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (path segment)");
-            return { begin, count };
-        }
-
-        cursor_.bump();
-        ast_.add_path_seg(first.lexeme);
-        ++count;
 
         auto eat_coloncolon = [&]() -> bool {
             if (cursor_.at(K::kColonColon)) {
@@ -102,6 +92,20 @@ namespace parus {
             }
             return false;
         };
+
+        if (allow_leading_coloncolon) {
+            (void)eat_coloncolon();
+        }
+
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kUnexpectedToken, first.span, "identifier (path segment)");
+            return { begin, count };
+        }
+
+        cursor_.bump();
+        ast_.add_path_seg(first.lexeme);
+        ++count;
 
         while (eat_coloncolon()) {
             const Token seg = cursor_.peek();
@@ -122,6 +126,7 @@ namespace parus {
     /// 문법(v0):
     ///   import foo;
     ///   import foo::bar as fb;
+    ///   import ::foo::bar as fb;
     ///
     /// 규칙:
     /// - import는 외부 의존성 alias를 현재 스코프에 1개만 도입한다.
@@ -136,7 +141,7 @@ namespace parus {
         s.use_kind = ast::UseKind::kImport;
         s.span = import_kw.span;
 
-        auto [pb, pc] = parse_path_segments();
+        auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
         s.use_path_begin = pb;
         s.use_path_count = pc;
 

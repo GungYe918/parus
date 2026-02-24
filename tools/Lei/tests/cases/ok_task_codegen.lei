@@ -3,7 +3,6 @@ plan app_bundle = bundle & {
   kind = "bin";
   modules = [
     module & {
-      head = "app";
       sources = ["src/main.pr"];
       imports = [];
     },

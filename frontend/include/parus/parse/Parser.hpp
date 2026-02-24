@@ -83,7 +83,7 @@ namespace parus {
 
         static bool is_expr_with_block_kind(ast::ExprKind k);
 
-        std::pair<uint32_t, uint32_t> parse_path_segments(); // returns (begin,count) in arena.path_segs
+        std::pair<uint32_t, uint32_t> parse_path_segments(bool allow_leading_coloncolon = false); // returns (begin,count) in arena.path_segs
         
         // --------------------
         // expr

@@ -1,0 +1,18 @@
+plan bad_bundle = bundle & {
+  name = "bad";
+  kind = "lib";
+  modules = [
+    module & {
+      sources = ["bad/src/lib.pr"];
+      imports = ["::", "foo"];
+    },
+  ];
+  deps = [];
+};
+
+plan master = master & {
+  project = { name: "bad", version: "0.1.0" };
+  bundles = [bad_bundle];
+  tasks = [];
+  codegens = [];
+};

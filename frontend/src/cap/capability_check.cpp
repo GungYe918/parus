@@ -546,22 +546,14 @@ namespace parus::cap {
 
                     case ast::ExprKind::kIfExpr:
                         walk_expr_(e.a, ExprUse::kValue);
-                        if (is_valid_expr_id_(e.b)) {
-                            walk_expr_(e.b, ExprUse::kValue);
-                        } else {
-                            walk_stmt_((ast::StmtId)e.b);
-                        }
-                        if (is_valid_expr_id_(e.c)) {
-                            walk_expr_(e.c, ExprUse::kValue);
-                        } else {
-                            walk_stmt_((ast::StmtId)e.c);
-                        }
+                        if (is_valid_expr_id_(e.b)) walk_expr_(e.b, ExprUse::kValue);
+                        if (is_valid_expr_id_(e.c)) walk_expr_(e.c, ExprUse::kValue);
                         return;
 
                     case ast::ExprKind::kBlockExpr: {
-                        const ast::StmtId bs = (ast::StmtId)e.a;
+                        const ast::StmtId bs = e.block_stmt;
                         walk_stmt_(bs);
-                        if (is_valid_expr_id_(e.b)) walk_expr_(e.b, ExprUse::kValue);
+                        if (is_valid_expr_id_(e.block_tail)) walk_expr_(e.block_tail, ExprUse::kValue);
                         return;
                     }
 

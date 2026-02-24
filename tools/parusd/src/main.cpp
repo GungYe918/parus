@@ -14,6 +14,7 @@
 #if defined(PARUSD_ENABLE_LEI) && PARUSD_ENABLE_LEI
 #include <lei/diag/DiagCode.hpp>
 #include <lei/eval/Evaluator.hpp>
+#include <lei/graph/BuildGraph.hpp>
 #include <lei/parse/Parser.hpp>
 #endif
 
@@ -1223,8 +1224,10 @@ namespace {
 #if PARUSD_ENABLE_LEI
     struct BundleUnitMeta {
         std::string bundle_name{};
-        std::vector<std::string> deps{};
+        std::vector<std::string> bundle_deps{};
         std::vector<std::string> normalized_sources{};
+        std::unordered_map<std::string, std::string> module_head_by_source{};
+        std::unordered_map<std::string, std::vector<std::string>> module_imports_by_source{};
     };
 
     struct ParusBundleLintContext {
@@ -1234,6 +1237,22 @@ namespace {
         std::unordered_set<std::string> allowed_import_heads{};
         std::vector<parus::passes::NameResolveOptions::ExternalExport> external_exports{};
     };
+
+    struct BundleUnitsSnapshotCache {
+        std::filesystem::path config_lei{};
+        std::string cache_key{};
+        std::vector<std::string> loaded_module_paths{};
+        std::vector<BundleUnitMeta> units{};
+    };
+
+    struct LintContextCacheEntry {
+        std::filesystem::path config_lei{};
+        std::string cache_key{};
+        ParusBundleLintContext ctx{};
+    };
+
+    std::unordered_map<std::string, BundleUnitsSnapshotCache> g_bundle_units_cache_{};
+    std::unordered_map<std::string, LintContextCacheEntry> g_lint_context_cache_{};
 
     std::string parent_dir_norm_(std::string_view path) {
         namespace fs = std::filesystem;
@@ -1309,6 +1328,77 @@ namespace {
             out += segs[i];
         }
         return out;
+    }
+
+    std::string normalize_import_head_(std::string_view import_head) {
+        if (import_head.empty()) return {};
+        std::string_view s = import_head;
+        if (s.starts_with("::")) s.remove_prefix(2);
+        if (s.empty() || s.ends_with("::")) return {};
+        const size_t pos = s.find("::");
+        std::string_view top = (pos == std::string_view::npos) ? s : s.substr(0, pos);
+        if (top.empty() || top.find(':') != std::string_view::npos) return {};
+        return std::string(top);
+    }
+
+    uint64_t file_mtime_tick_(const std::filesystem::path& p) {
+        std::error_code ec{};
+        const auto t = std::filesystem::last_write_time(p, ec);
+        if (ec) return 0;
+        return static_cast<uint64_t>(t.time_since_epoch().count());
+    }
+
+    std::string make_bundle_units_cache_key_(
+        const std::filesystem::path& config_lei,
+        const std::vector<std::string>& loaded_modules
+    ) {
+        std::vector<std::string> mods = loaded_modules;
+        std::sort(mods.begin(), mods.end());
+        mods.erase(std::unique(mods.begin(), mods.end()), mods.end());
+
+        std::string key = normalize_host_path_(config_lei.string());
+        key += "|cfg_m=" + std::to_string(file_mtime_tick_(config_lei));
+        for (const auto& m : mods) {
+            key += "|m=" + normalize_host_path_(m);
+            key += "@";
+            key += std::to_string(file_mtime_tick_(std::filesystem::path(m)));
+        }
+        return key;
+    }
+
+    bool same_file_path_(const std::filesystem::path& a, const std::filesystem::path& b) {
+        const auto an = normalize_host_path_(a.string());
+        const auto bn = normalize_host_path_(b.string());
+        return an == bn;
+    }
+
+    bool is_under_root_(const std::filesystem::path& path, const std::filesystem::path& root) {
+        const auto p = normalize_host_path_(path.string());
+        const auto r = normalize_host_path_(root.string());
+        if (r.empty()) return false;
+        if (p == r) return true;
+        if (p.size() < r.size()) return false;
+        if (!p.starts_with(r)) return false;
+        if (p.size() == r.size()) return false;
+        const char next = p[r.size()];
+        return next == '/' || next == '\\';
+    }
+
+    void invalidate_lint_caches_for_root_(const std::filesystem::path& root) {
+        for (auto it = g_bundle_units_cache_.begin(); it != g_bundle_units_cache_.end();) {
+            if (is_under_root_(it->second.config_lei.parent_path(), root)) {
+                it = g_bundle_units_cache_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+        for (auto it = g_lint_context_cache_.begin(); it != g_lint_context_cache_.end();) {
+            if (is_under_root_(it->second.config_lei.parent_path(), root)) {
+                it = g_lint_context_cache_.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     std::string shell_quote_(std::string_view s) {
@@ -1391,11 +1481,24 @@ namespace {
             "--emit-export-index",
             out_index_path.string(),
         };
+        if (auto it = unit.module_head_by_source.find(unit.normalized_sources.front());
+            it != unit.module_head_by_source.end() && !it->second.empty()) {
+            argv.push_back("--module-head");
+            argv.push_back(it->second);
+        }
+        if (auto it = unit.module_imports_by_source.find(unit.normalized_sources.front());
+            it != unit.module_imports_by_source.end()) {
+            for (const auto& import_head : it->second) {
+                if (import_head.empty()) continue;
+                argv.push_back("--module-import");
+                argv.push_back(normalize_import_head_(import_head));
+            }
+        }
         for (const auto& src : unit.normalized_sources) {
             argv.push_back("--bundle-source");
             argv.push_back(src);
         }
-        for (const auto& dep : unit.deps) {
+        for (const auto& dep : unit.bundle_deps) {
             argv.push_back("--bundle-dep");
             argv.push_back(dep);
         }
@@ -1427,21 +1530,11 @@ namespace {
         return std::nullopt;
     }
 
-    const lei::eval::Value::Object* as_lei_object_(const lei::eval::Value& v) {
-        return std::get_if<lei::eval::Value::Object>(&v.data);
-    }
-
-    const lei::eval::Value::Array* as_lei_array_(const lei::eval::Value& v) {
-        return std::get_if<lei::eval::Value::Array>(&v.data);
-    }
-
-    const std::string* as_lei_string_(const lei::eval::Value& v) {
-        return std::get_if<std::string>(&v.data);
-    }
-
     bool collect_bundle_units_from_master_(
         const std::filesystem::path& config_lei,
-        std::vector<BundleUnitMeta>& out_units
+        std::vector<BundleUnitMeta>& out_units,
+        std::vector<std::string>* out_loaded_modules = nullptr,
+        const std::unordered_map<std::string, std::string>* overlays = nullptr
     ) {
         lei::diag::Bag eval_bag;
         lei::eval::EvaluatorBudget budget{};
@@ -1458,55 +1551,75 @@ namespace {
 
         lei::eval::EvaluateOptions eval_options{};
         eval_options.entry_plan = "master";
+        if (overlays != nullptr) {
+            eval_options.source_overlay =
+                [overlays](std::string_view normalized_path) -> std::optional<std::string> {
+                    const auto it = overlays->find(std::string(normalized_path));
+                    if (it == overlays->end()) return std::nullopt;
+                    return it->second;
+                };
+        }
         const auto entry = evaluator.evaluate_entry(config_lei, eval_options);
         if (!entry.has_value()) return false;
+        if (eval_bag.has_error()) return false;
 
-        const auto* root_obj = as_lei_object_(*entry);
-        if (root_obj == nullptr) return false;
-        const auto bundles_it = root_obj->find("bundles");
-        if (bundles_it == root_obj->end()) return false;
-        const auto* bundles = as_lei_array_(bundles_it->second);
-        if (bundles == nullptr) return false;
+        auto graph = lei::graph::from_entry_plan_value(*entry, eval_bag, "master");
+        if (!graph.has_value() || eval_bag.has_error()) return false;
+
+        if (out_loaded_modules != nullptr) {
+            *out_loaded_modules = evaluator.loaded_module_paths();
+            for (auto& p : *out_loaded_modules) p = normalize_host_path_(p);
+            std::sort(out_loaded_modules->begin(), out_loaded_modules->end());
+            out_loaded_modules->erase(
+                std::unique(out_loaded_modules->begin(), out_loaded_modules->end()),
+                out_loaded_modules->end()
+            );
+        }
 
         const auto config_dir = config_lei.parent_path();
         out_units.clear();
-        out_units.reserve(bundles->size());
-        for (const auto& bv : *bundles) {
-            const auto* bo = as_lei_object_(bv);
-            if (bo == nullptr) continue;
+        out_units.reserve(graph->bundles.size());
 
-            const auto name_it = bo->find("name");
-            const auto srcs_it = bo->find("sources");
-            if (name_it == bo->end() || srcs_it == bo->end()) continue;
-
-            const auto* bundle_name = as_lei_string_(name_it->second);
-            const auto* source_arr = as_lei_array_(srcs_it->second);
-            if (bundle_name == nullptr || source_arr == nullptr || bundle_name->empty()) continue;
-
+        std::unordered_map<std::string, size_t> unit_by_bundle{};
+        for (const auto& b : graph->bundles) {
             BundleUnitMeta unit{};
-            unit.bundle_name = *bundle_name;
+            unit.bundle_name = b.name;
+            unit.bundle_deps = b.deps;
+            std::sort(unit.bundle_deps.begin(), unit.bundle_deps.end());
+            unit.bundle_deps.erase(std::unique(unit.bundle_deps.begin(), unit.bundle_deps.end()), unit.bundle_deps.end());
+            unit_by_bundle[b.name] = out_units.size();
+            out_units.push_back(std::move(unit));
+        }
 
-            if (const auto deps_it = bo->find("deps"); deps_it != bo->end()) {
-                if (const auto* deps_arr = as_lei_array_(deps_it->second); deps_arr != nullptr) {
-                    for (const auto& dep_v : *deps_arr) {
-                        if (const auto* dep = as_lei_string_(dep_v); dep != nullptr && !dep->empty()) {
-                            unit.deps.push_back(*dep);
-                        }
-                    }
+        for (const auto& m : graph->modules) {
+            const auto bit = unit_by_bundle.find(m.bundle);
+            if (bit == unit_by_bundle.end()) continue;
+            auto& unit = out_units[bit->second];
+            for (const auto& src : m.sources) {
+                const auto abs_src = normalize_host_path_((config_dir / src).string());
+                unit.normalized_sources.push_back(abs_src);
+                unit.module_head_by_source[abs_src] = m.head;
+                auto& imports = unit.module_imports_by_source[abs_src];
+                for (const auto& import_head : m.imports) {
+                    const auto top_head = normalize_import_head_(import_head);
+                    if (top_head.empty()) continue;
+                    imports.push_back(top_head);
                 }
             }
+        }
 
-            for (const auto& src_v : *source_arr) {
-                const auto* src = as_lei_string_(src_v);
-                if (src == nullptr || src->empty()) continue;
-                const auto abs_src = normalize_host_path_((config_dir / *src).string());
-                unit.normalized_sources.push_back(abs_src);
-            }
-
-            if (!unit.normalized_sources.empty()) {
-                out_units.push_back(std::move(unit));
+        for (auto& unit : out_units) {
+            std::sort(unit.normalized_sources.begin(), unit.normalized_sources.end());
+            unit.normalized_sources.erase(
+                std::unique(unit.normalized_sources.begin(), unit.normalized_sources.end()),
+                unit.normalized_sources.end()
+            );
+            for (auto& [src, imports] : unit.module_imports_by_source) {
+                std::sort(imports.begin(), imports.end());
+                imports.erase(std::unique(imports.begin(), imports.end()), imports.end());
             }
         }
+
         return !out_units.empty();
     }
 
@@ -1516,6 +1629,26 @@ namespace {
         if (kind == "field") return parus::sema::SymbolKind::kField;
         if (kind == "act") return parus::sema::SymbolKind::kAct;
         return std::nullopt;
+    }
+
+    parus::ty::TypeId parse_type_repr_for_lint_(
+        std::string_view type_repr,
+        parus::ty::TypePool& types
+    ) {
+        if (type_repr.empty()) return parus::ty::kInvalidType;
+
+        parus::diag::Bag bag{};
+        parus::Lexer lexer(type_repr, /*file_id=*/1u, &bag);
+        auto toks = lexer.lex_all();
+        if (bag.has_error()) return parus::ty::kInvalidType;
+
+        parus::ast::AstArena ast{};
+        parus::ParserFeatureFlags flags{};
+        parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/16, flags);
+        parus::ty::TypeId out = parus::ty::kInvalidType;
+        (void)parser.parse_type_full_for_macro(&out);
+        if (bag.has_error()) return parus::ty::kInvalidType;
+        return out;
     }
 
     bool load_export_index_for_lint_(
@@ -1539,7 +1672,7 @@ namespace {
         }
 
         const auto version = as_i64_(obj_get_(root, "version"));
-        if (!version.has_value() || (*version != 1 && *version != 2)) return false;
+        if (!version.has_value() || *version != 3) return false;
 
         const auto* exports_node = obj_get_(root, "exports");
         if (exports_node == nullptr || exports_node->kind != JsonValue::Kind::kArray) return false;
@@ -1549,30 +1682,29 @@ namespace {
 
             const auto kind_s = as_string_(obj_get_(ev, "kind"));
             const auto path_s = as_string_(obj_get_(ev, "path"));
-            if (!kind_s.has_value() || !path_s.has_value() || path_s->empty()) continue;
-
-            bool is_export = true;
-            if (const auto is_exp = as_bool_(obj_get_(ev, "is_export")); is_exp.has_value()) {
-                is_export = *is_exp;
+            const auto module_head_s = as_string_(obj_get_(ev, "module_head"));
+            const auto decl_dir_s = as_string_(obj_get_(ev, "decl_dir"));
+            const auto type_repr_s = as_string_(obj_get_(ev, "type_repr"));
+            const auto is_export_s = as_bool_(obj_get_(ev, "is_export"));
+            if (!kind_s.has_value() ||
+                !path_s.has_value() ||
+                path_s->empty() ||
+                !module_head_s.has_value() ||
+                module_head_s->empty() ||
+                !decl_dir_s.has_value() ||
+                !type_repr_s.has_value() ||
+                !is_export_s.has_value()) {
+                return false;
             }
+
+            const bool is_export = *is_export_s;
             if (!is_export) continue;
 
             const auto mapped_kind = export_kind_from_string_(*kind_s);
             if (!mapped_kind.has_value()) continue;
 
-            std::string module_head = bundle_name;
-            if (const auto m = as_string_(obj_get_(ev, "module_head")); m.has_value() && !m->empty()) {
-                module_head = std::string(*m);
-            }
-
-            std::string decl_source_dir{};
-            if (const auto d = as_string_(obj_get_(ev, "decl_dir")); d.has_value() && !d->empty()) {
-                decl_source_dir = std::string(*d);
-            } else if (const auto decl_span = obj_get_(ev, "decl_span"); decl_span != nullptr) {
-                if (const auto file_s = as_string_(obj_get_(*decl_span, "file")); file_s.has_value() && !file_s->empty()) {
-                    decl_source_dir = parent_dir_norm_(*file_s);
-                }
-            }
+            std::string module_head = std::string(*module_head_s);
+            std::string decl_source_dir = std::string(*decl_dir_s);
 
             std::string lookup_path = std::string(*path_s);
             if (!module_head.empty()) {
@@ -1589,6 +1721,7 @@ namespace {
             parus::passes::NameResolveOptions::ExternalExport ex{};
             ex.kind = *mapped_kind;
             ex.path = std::move(lookup_path);
+            ex.declared_type_repr = std::string(*type_repr_s);
             ex.decl_bundle_name = bundle_name;
             ex.module_head = std::move(module_head);
             ex.decl_source_dir_norm = std::move(decl_source_dir);
@@ -1598,8 +1731,49 @@ namespace {
         return true;
     }
 
+    bool get_bundle_units_for_config_(
+        const std::filesystem::path& config_lei,
+        std::vector<BundleUnitMeta>& out_units,
+        std::string& out_cache_key,
+        const std::unordered_map<std::string, std::string>* overlays = nullptr
+    ) {
+        const bool use_overlay = (overlays != nullptr && !overlays->empty());
+        const std::string config_key = normalize_host_path_(config_lei.string());
+        if (!use_overlay) {
+            if (auto it = g_bundle_units_cache_.find(config_key); it != g_bundle_units_cache_.end()) {
+                const std::string key_now = make_bundle_units_cache_key_(config_lei, it->second.loaded_module_paths);
+                if (key_now == it->second.cache_key) {
+                    out_units = it->second.units;
+                    out_cache_key = key_now;
+                    return true;
+                }
+            }
+        }
+
+        std::vector<BundleUnitMeta> units{};
+        std::vector<std::string> loaded_modules{};
+        if (!collect_bundle_units_from_master_(config_lei, units, &loaded_modules, overlays)) {
+            return false;
+        }
+        const std::string key_now = make_bundle_units_cache_key_(config_lei, loaded_modules);
+
+        if (!use_overlay) {
+            BundleUnitsSnapshotCache snap{};
+            snap.config_lei = config_lei;
+            snap.cache_key = key_now;
+            snap.loaded_module_paths = std::move(loaded_modules);
+            snap.units = units;
+            g_bundle_units_cache_[config_key] = std::move(snap);
+        }
+
+        out_units = std::move(units);
+        out_cache_key = key_now;
+        return true;
+    }
+
     std::optional<ParusBundleLintContext> build_parus_bundle_lint_context_(
-        std::string_view uri_or_path
+        std::string_view uri_or_path,
+        const std::unordered_map<std::string, std::string>* overlays = nullptr
     ) {
         std::string current_file = std::string(uri_or_path);
         if (const auto fs_path = uri_to_file_path_(uri_or_path); fs_path.has_value()) {
@@ -1610,7 +1784,20 @@ namespace {
         if (!config_lei.has_value()) return std::nullopt;
 
         std::vector<BundleUnitMeta> units{};
-        if (!collect_bundle_units_from_master_(*config_lei, units)) return std::nullopt;
+        std::string units_cache_key{};
+        if (!get_bundle_units_for_config_(*config_lei, units, units_cache_key, overlays)) {
+            return std::nullopt;
+        }
+
+        const bool use_overlay = (overlays != nullptr && !overlays->empty());
+        if (!use_overlay) {
+            if (auto it = g_lint_context_cache_.find(normalized_current); it != g_lint_context_cache_.end()) {
+                if (same_file_path_(it->second.config_lei, *config_lei) &&
+                    it->second.cache_key == units_cache_key) {
+                    return it->second.ctx;
+                }
+            }
+        }
 
         const BundleUnitMeta* current_unit = nullptr;
         for (const auto& u : units) {
@@ -1624,14 +1811,24 @@ namespace {
 
         ParusBundleLintContext ctx{};
         ctx.bundle_name = current_unit->bundle_name;
-        ctx.current_module_head =
-            compute_module_head_(config_lei->parent_path().string(), normalized_current, current_unit->bundle_name);
+        if (auto mh = current_unit->module_head_by_source.find(normalized_current);
+            mh != current_unit->module_head_by_source.end() && !mh->second.empty()) {
+            ctx.current_module_head = mh->second;
+        } else {
+            ctx.current_module_head =
+                compute_module_head_(config_lei->parent_path().string(), normalized_current, current_unit->bundle_name);
+        }
         ctx.current_source_dir_norm = parent_dir_norm_(normalized_current);
+
         if (!current_unit->bundle_name.empty()) {
             ctx.allowed_import_heads.insert(current_unit->bundle_name);
         }
-        for (const auto& dep : current_unit->deps) {
-            if (!dep.empty()) ctx.allowed_import_heads.insert(dep);
+        if (auto mi = current_unit->module_imports_by_source.find(normalized_current);
+            mi != current_unit->module_imports_by_source.end()) {
+            for (const auto& import_head : mi->second) {
+                const auto top_head = normalize_import_head_(import_head);
+                if (!top_head.empty()) ctx.allowed_import_heads.insert(top_head);
+            }
         }
 
         std::unordered_map<std::string, const BundleUnitMeta*> units_by_name{};
@@ -1656,7 +1853,8 @@ namespace {
                     ctx.external_exports)) {
                 return;
             }
-            // schema mismatch or stale cache edge: retry once after forced regeneration.
+
+            // stale cache/schema mismatch: one forced regeneration retry.
             std::error_code ec{};
             std::filesystem::remove(idx_path, ec);
             if (!ensure_bundle_export_index_(config_dir, *it->second, idx_path)) {
@@ -1672,10 +1870,17 @@ namespace {
         };
 
         load_one_bundle(current_unit->bundle_name, /*same_bundle=*/true);
-        for (const auto& dep : current_unit->deps) {
+        for (const auto& dep : current_unit->bundle_deps) {
             load_one_bundle(dep, /*same_bundle=*/false);
         }
 
+        if (!use_overlay) {
+            g_lint_context_cache_[normalized_current] = LintContextCacheEntry{
+                *config_lei,
+                units_cache_key,
+                ctx,
+            };
+        }
         return ctx;
     }
 #endif
@@ -1683,7 +1888,8 @@ namespace {
     AnalysisResult analyze_parus_document_(
         std::string_view uri,
         DocumentState& doc,
-        const parus::macro::ExpansionBudget& macro_budget
+        const parus::macro::ExpansionBudget& macro_budget,
+        const std::unordered_map<std::string, std::string>* lei_overlays
     ) {
         AnalysisResult out;
 
@@ -1723,12 +1929,26 @@ namespace {
                     parus::passes::PassOptions popt{};
                     popt.name_resolve.current_file_id = file_id;
 #if PARUSD_ENABLE_LEI
-                    if (const auto lint_ctx = build_parus_bundle_lint_context_(uri); lint_ctx.has_value()) {
+                    if (const auto lint_ctx = build_parus_bundle_lint_context_(uri, lei_overlays); lint_ctx.has_value()) {
                         popt.name_resolve.current_bundle_name = lint_ctx->bundle_name;
                         popt.name_resolve.current_module_head = lint_ctx->current_module_head;
                         popt.name_resolve.current_source_dir_norm = lint_ctx->current_source_dir_norm;
                         popt.name_resolve.allowed_import_heads = lint_ctx->allowed_import_heads;
                         popt.name_resolve.external_exports = lint_ctx->external_exports;
+                        for (auto& ex : popt.name_resolve.external_exports) {
+                            if (ex.declared_type == parus::ty::kInvalidType) {
+                                if (!ex.declared_type_repr.empty()) {
+                                    ex.declared_type = parse_type_repr_for_lint_(ex.declared_type_repr, types);
+                                }
+                                if (ex.declared_type == parus::ty::kInvalidType) {
+                                    if (ex.kind == parus::sema::SymbolKind::kFn) {
+                                        ex.declared_type = types.make_fn(types.error(), nullptr, 0);
+                                    } else {
+                                        ex.declared_type = types.error();
+                                    }
+                                }
+                            }
+                        }
                     }
 #endif
                     const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
@@ -2216,7 +2436,7 @@ namespace {
     ) {
         switch (doc.lang) {
             case DocLang::kParus:
-                return analyze_parus_document_(uri, doc, macro_budget);
+                return analyze_parus_document_(uri, doc, macro_budget, lei_overlays);
             case DocLang::kLei: {
                 static const std::unordered_map<std::string, std::string> kEmptyOverlays{};
                 return analyze_lei_document_(
@@ -2437,6 +2657,11 @@ namespace {
                     continue;
                 }
 
+                if (*method == "workspace/didChangeWatchedFiles") {
+                    handle_did_change_watched_files_(params);
+                    continue;
+                }
+
                 if (*method == "textDocument/semanticTokens/full") {
                     handle_semantic_tokens_full_(id, params);
                     continue;
@@ -2460,6 +2685,69 @@ namespace {
             write_lsp_message_(std::cout, msg);
         }
 
+        std::optional<std::filesystem::path> config_lei_for_uri_(std::string_view uri) const {
+            const auto fs_path = uri_to_file_path_(uri);
+            if (!fs_path.has_value()) return std::nullopt;
+            return find_config_lei_for_file_(std::filesystem::path(*fs_path));
+        }
+
+        bool root_list_contains_(const std::vector<std::filesystem::path>& roots,
+                                 const std::filesystem::path& root) const {
+            for (const auto& r : roots) {
+                if (same_file_path_(r, root)) return true;
+            }
+            return false;
+        }
+
+        void refresh_open_documents_for_project_roots_(
+            const std::vector<std::filesystem::path>& roots,
+            std::optional<std::string_view> skip_uri = std::nullopt
+        ) {
+            if (roots.empty()) return;
+            for (auto& [doc_uri, state] : documents_) {
+                if (skip_uri.has_value() && doc_uri == *skip_uri) continue;
+                if (state.lang != DocLang::kParus && state.lang != DocLang::kLei) continue;
+
+                const auto cfg = config_lei_for_uri_(doc_uri);
+                if (!cfg.has_value()) continue;
+                const auto root = cfg->parent_path();
+                if (!root_list_contains_(roots, root)) continue;
+
+                state.analysis.valid = false;
+                state.revision = ++revision_seq_;
+                ensure_analysis_cache_(doc_uri, state);
+                publish_diagnostics_(doc_uri, state.version, state.analysis.diagnostics);
+                state.pending_edits.clear();
+            }
+        }
+
+        void handle_did_change_watched_files_(const JsonValue* params) {
+            if (params == nullptr || params->kind != JsonValue::Kind::kObject) return;
+            const auto* changes = obj_get_(*params, "changes");
+            if (changes == nullptr || changes->kind != JsonValue::Kind::kArray) return;
+
+            std::vector<std::filesystem::path> roots{};
+            for (const auto& c : changes->array_v) {
+                if (c.kind != JsonValue::Kind::kObject) continue;
+                const auto uri = as_string_(obj_get_(c, "uri"));
+                if (!uri.has_value() || uri->empty()) continue;
+                const auto fs_path = uri_to_file_path_(*uri);
+                if (!fs_path.has_value()) continue;
+                std::filesystem::path changed(*fs_path);
+                if (changed.extension() != ".lei") continue;
+                const auto cfg = find_config_lei_for_file_(changed);
+                if (!cfg.has_value()) continue;
+                const auto root = cfg->parent_path();
+                if (!root_list_contains_(roots, root)) roots.push_back(root);
+            }
+
+            if (roots.empty()) return;
+            for (const auto& root : roots) {
+                invalidate_lint_caches_for_root_(root);
+            }
+            refresh_open_documents_for_project_roots_(roots);
+        }
+
         void ensure_analysis_cache_(std::string_view uri, DocumentState& st) {
             if (st.analysis.valid && st.analysis.revision == st.revision) {
                 return;
@@ -2471,10 +2759,10 @@ namespace {
 
             std::unordered_map<std::string, std::string> lei_overlays{};
             const std::unordered_map<std::string, std::string>* lei_overlays_ptr = nullptr;
-            if (st.lang == DocLang::kLei) {
-                lei_overlays = build_lei_overlay_map_(documents_);
-                lei_overlays_ptr = &lei_overlays;
-            }
+#if PARUSD_ENABLE_LEI
+            lei_overlays = build_lei_overlay_map_(documents_);
+            lei_overlays_ptr = &lei_overlays;
+#endif
 
             auto analyzed = analyze_document_(uri, st, macro_budget_, lei_overlays_ptr);
             st.analysis.revision = st.revision;
@@ -2515,6 +2803,14 @@ namespace {
             auto it = documents_.insert_or_assign(std::string(*uri), std::move(st)).first;
             ensure_analysis_cache_(*uri, it->second);
             publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
+
+            if (it->second.lang == DocLang::kLei) {
+                if (const auto cfg = config_lei_for_uri_(*uri); cfg.has_value()) {
+                    const std::vector<std::filesystem::path> roots{cfg->parent_path()};
+                    invalidate_lint_caches_for_root_(cfg->parent_path());
+                    refresh_open_documents_for_project_roots_(roots, *uri);
+                }
+            }
         }
 
         void handle_did_change_(const JsonValue* params) {
@@ -2555,6 +2851,13 @@ namespace {
                 ensure_analysis_cache_(*uri, it->second);
                 publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
                 it->second.pending_edits.clear();
+                if (it->second.lang == DocLang::kLei) {
+                    if (const auto cfg = config_lei_for_uri_(*uri); cfg.has_value()) {
+                        const std::vector<std::filesystem::path> roots{cfg->parent_path()};
+                        invalidate_lint_caches_for_root_(cfg->parent_path());
+                        refresh_open_documents_for_project_roots_(roots, *uri);
+                    }
+                }
                 return;
             }
 
@@ -2565,6 +2868,13 @@ namespace {
             ensure_analysis_cache_(*uri, it->second);
             publish_diagnostics_(*uri, it->second.version, it->second.analysis.diagnostics);
             it->second.pending_edits.clear();
+            if (it->second.lang == DocLang::kLei) {
+                if (const auto cfg = config_lei_for_uri_(*uri); cfg.has_value()) {
+                    const std::vector<std::filesystem::path> roots{cfg->parent_path()};
+                    invalidate_lint_caches_for_root_(cfg->parent_path());
+                    refresh_open_documents_for_project_roots_(roots, *uri);
+                }
+            }
         }
 
         void handle_did_close_(const JsonValue* params) {
@@ -2575,8 +2885,20 @@ namespace {
             const auto uri = as_string_(obj_get_(*td, "uri"));
             if (!uri.has_value()) return;
 
+            const auto it = documents_.find(std::string(*uri));
+            DocLang closing_lang = DocLang::kUnknown;
+            if (it != documents_.end()) closing_lang = it->second.lang;
+
             documents_.erase(std::string(*uri));
             publish_diagnostics_(*uri, /*version=*/0, {});
+
+            if (closing_lang == DocLang::kLei) {
+                if (const auto cfg = config_lei_for_uri_(*uri); cfg.has_value()) {
+                    const std::vector<std::filesystem::path> roots{cfg->parent_path()};
+                    invalidate_lint_caches_for_root_(cfg->parent_path());
+                    refresh_open_documents_for_project_roots_(roots);
+                }
+            }
         }
 
         void handle_semantic_tokens_full_(const JsonValue* id, const JsonValue* params) {

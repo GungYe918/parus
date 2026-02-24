@@ -3,11 +3,11 @@ plan a_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      sources = ["src/a.pr"];
-      imports = ["b"];
+      sources = ["net/api/src/a.pr"];
+      imports = [];
     },
   ];
-  deps = ["b"];
+  deps = [];
 };
 
 plan b_bundle = bundle & {
@@ -15,18 +15,15 @@ plan b_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      sources = ["src/b.pr"];
-      imports = ["a"];
+      sources = ["net/process/src/b.pr"];
+      imports = [];
     },
   ];
-  deps = ["a"];
+  deps = [];
 };
 
 plan master = master & {
-  project = {
-    name: "cycle",
-    version: "0.1.0",
-  };
+  project = { name: "collision", version: "0.1.0" };
   bundles = [a_bundle, b_bundle];
   tasks = [];
   codegens = [];

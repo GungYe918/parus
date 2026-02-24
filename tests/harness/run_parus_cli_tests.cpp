@@ -76,9 +76,27 @@ bool test_build_and_graph() {
 
 bool test_check_pr() {
     const std::string bin = PARUS_BUILD_BIN;
-    const std::string pr = PARUS_MAIN_PR;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-check-pr";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
 
-    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + pr + "\"");
+    const auto pr_path = temp_root / "main.pr";
+    const std::string pr_src =
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(pr_path, pr_src)) {
+        std::cerr << "failed to write temp .pr file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + pr_path.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
     if (rc != 0) {
         std::cerr << "check .pr failed\n" << out;
         return false;
@@ -111,7 +129,6 @@ bool test_check_lei_project() {
         "  kind = \"bin\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"app\";\n"
         "      sources = [\"main.pr\"];\n"
         "      imports = [];\n"
         "    },\n"
@@ -206,7 +223,6 @@ bool test_bundle_strict_export_violation() {
         "  kind = \"lib\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"pkg\";\n"
         "      sources = [\"a.pr\", \"b.pr\"];\n"
         "      imports = [];\n"
         "    },\n"
@@ -276,7 +292,6 @@ bool test_bundle_build_strict_export_violation() {
         "  kind = \"bin\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"pkg\";\n"
         "      sources = [\"a.pr\", \"b.pr\"];\n"
         "      imports = [];\n"
         "    },\n"
@@ -340,7 +355,6 @@ bool test_bundle_dep_import_not_declared() {
         "  kind = \"bin\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"app\";\n"
         "      sources = [\"main.pr\"];\n"
         "      imports = [];\n"
         "    },\n"
@@ -423,7 +437,6 @@ bool test_cross_bundle_non_export_violation() {
         "  kind = \"lib\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"math\";\n"
         "      sources = [\"math/src/lib.pr\"];\n"
         "      imports = [];\n"
         "    },\n"
@@ -437,7 +450,6 @@ bool test_cross_bundle_non_export_violation() {
         "  kind = \"bin\";\n"
         "  modules = [\n"
         "    module & {\n"
-        "      head = \"app\";\n"
         "      sources = [\"app/src/main.pr\"];\n"
         "      imports = [\"math\"];\n"
         "    },\n"
@@ -482,6 +494,43 @@ bool test_cross_bundle_non_export_violation() {
     return true;
 }
 
+bool test_check_capability_diagnostic_surface() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-capability-diag";
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto pr = temp_root / "main.pr";
+    const std::string pr_src =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 1i32;\n"
+        "  let h: &&i32 = &&x;\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(pr, pr_src)) {
+        std::cerr << "failed to write capability diagnostic seed file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" tool parusc -- \"" + pr.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "capability diagnostic seed should fail but passed (parusc)\n" << out;
+        return false;
+    }
+    if (!contains(out, "SirEscapeBoundaryViolation")) {
+        std::cerr << "capability failure did not surface detailed diagnostic\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -495,8 +544,9 @@ int main() {
     const bool ok8 = test_bundle_build_strict_export_violation();
     const bool ok9 = test_bundle_dep_import_not_declared();
     const bool ok10 = test_cross_bundle_non_export_violation();
+    const bool ok11 = test_check_capability_diagnostic_surface();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10) {
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11) {
         return 1;
     }
 

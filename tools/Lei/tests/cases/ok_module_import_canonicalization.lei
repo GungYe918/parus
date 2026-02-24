@@ -1,0 +1,30 @@
+plan util_bundle = bundle & {
+  name = "util";
+  kind = "lib";
+  modules = [
+    module & {
+      sources = ["util/src/lib.pr"];
+      imports = [];
+    },
+  ];
+  deps = [];
+};
+
+plan app_bundle = bundle & {
+  name = "app";
+  kind = "bin";
+  modules = [
+    module & {
+      sources = ["app/src/main.pr"];
+      imports = ["util", "util::api", "::util::detail"];
+    },
+  ];
+  deps = ["util"];
+};
+
+plan master = master & {
+  project = { name: "canon", version: "0.1.0" };
+  bundles = [util_bundle, app_bundle];
+  tasks = [];
+  codegens = [];
+};

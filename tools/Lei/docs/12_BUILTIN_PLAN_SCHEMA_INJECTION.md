@@ -39,7 +39,6 @@ export plan json_bundle = bundle & myBundleProto & {
   name = "json";
   modules = [
     module & {
-      head = "json";
       sources = ["json/src/json.pr"];
       imports = [];
     },
@@ -93,9 +92,10 @@ plan master = master & {
 
 ### 4.2 module.v1
 
-1. 필수: `head:string`, `sources:[string]`
+1. 필수: `sources:[string]`
 2. 선택: `imports:[string]=[]`
-3. 기본 검증: `head` 비어있음 금지, `sources` 비어있음 금지, import 중복 금지
+3. 기본 검증: `sources` 비어있음 금지, import canonicalization(top-head), import 중복 금지
+4. `head`는 엔진이 `sources`에서 자동 계산하며 사용자 입력은 금지된다.
 
 ### 4.3 master.v1
 

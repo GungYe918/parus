@@ -211,6 +211,8 @@ namespace parus::oir {
                     (void)check_value_id_(m, errs, iid, "inst(store slot)", x.slot);
                     (void)check_value_id_(m, errs, iid, "inst(store value)", x.value);
                 } else if constexpr (std::is_same_v<T, InstConstInt> ||
+                                     std::is_same_v<T, InstConstFloat> ||
+                                     std::is_same_v<T, InstConstChar> ||
                                      std::is_same_v<T, InstConstBool> ||
                                      std::is_same_v<T, InstConstText> ||
                                      std::is_same_v<T, InstConstNull> ||

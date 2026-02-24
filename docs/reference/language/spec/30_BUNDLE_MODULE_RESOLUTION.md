@@ -17,19 +17,22 @@
 2. 수집 대상 심볼은 `def/var/field/acts` 전체다.
 3. 같은 폴더 자동 공유는 `export` 심볼만 허용한다.
 4. 다른 폴더 참조는 반드시 `import <head> as <alias>;`를 사용한다.
-5. `import <head>`의 `<head>`는 현재 module `imports`에 존재해야 한다.
-6. cross-bundle import는 대상 bundle이 현재 bundle `deps`에도 존재해야 한다.
-7. 이름 해석은 `오버로딩 해소 우선`, 이후 우선순위 적용으로 고정한다.
-8. 동일 우선순위에 동일 시그니처 후보가 2개 이상 남으면 `ambiguous` 오류다.
-9. `nest`는 네임스페이스 태깅 전용이며 module/import 해석에는 관여하지 않는다.
-10. `import`는 alias 도입 문법이며 include semantics를 허용하지 않는다.
-11. 재export는 v0에서 비지원이다.
+5. `import foo::bar`와 `import ::foo::bar`를 모두 허용하며 내부 canonical은 `foo::bar`다.
+6. `import <head>`의 `<head>`는 현재 module `imports`에 존재해야 한다.
+7. cross-bundle import는 대상 bundle이 현재 bundle `deps`에도 존재해야 한다.
+8. 이름 해석은 `오버로딩 해소 우선`, 이후 우선순위 적용으로 고정한다.
+9. 동일 우선순위에 동일 시그니처 후보가 2개 이상 남으면 `ambiguous` 오류다.
+10. `nest`는 네임스페이스 태깅 전용이며 module/import 해석에는 관여하지 않는다.
+11. `import`는 alias 도입 문법이며 include semantics를 허용하지 않는다.
+12. 재export는 v0에서 비지원이다.
 
 ## 18.3 모듈 head 정본
 
-1. module head는 `config.lei` 루트 기준 논리 경로를 `::`로 정규화한 값이다.
-2. head 계산은 파일명보다 폴더 경로를 우선한다.
-3. 같은 폴더 파일은 동일 module head를 공유한다.
+1. `module.head` 사용자 입력은 금지다.
+2. module head는 `module.sources` 경로에서 자동 계산한다.
+3. 계산 규칙은 source의 parent directory에서 첫 `src` 세그먼트 제거 후 `::` 결합이다.
+4. 계산 결과가 비면 bundle 이름으로 fallback한다.
+5. 같은 폴더 파일은 동일 module head를 공유한다.
 
 예시:
 
@@ -37,6 +40,11 @@
 2. `/foo/app/src/helper.pr` -> `app`
 3. `/foo/app/src/net/http.pr` -> `app::net`
 4. `/foo/math/src/add.pr` -> `math`
+
+추가 규칙:
+
+1. 하나의 module에 여러 source가 있을 때 자동 계산된 head가 다르면 오류다.
+2. 서로 다른 bundle이 동일 top-head를 소유하면 오류다.
 
 ## 18.4 가시성 규칙
 
@@ -73,7 +81,8 @@
 1. bundle prepass는 선언을 전수 수집한 뒤 공개면/내부면 인덱스를 분리 보관한다.
 2. LEI build/check 경로는 동일 인덱스 규칙을 사용해야 한다.
 3. module import gate 정보는 LEI `module.imports`를 정본으로 사용한다.
-4. cross-bundle link/build order 정보는 LEI `bundle.deps`를 정본으로 사용한다.
+4. `module.imports`는 `foo`, `foo::bar`, `::foo::bar`를 허용하되 내부 gate는 top-head(`foo`)로 canonicalize한다.
+5. cross-bundle link/build order 정보는 LEI `bundle.deps`를 정본으로 사용한다.
 
 ## 18.7 `nest`와 `import` 경계
 

@@ -1401,7 +1401,8 @@ namespace parus::tyck {
         }
 
         // ------------------------------------------------------------
-        // TODO: logical ops, bitwise ops, pipe, etc.
+        // Remaining operators: try overload first, then fail explicitly.
+        // (No silent fallback for parser-accepted-but-unsupported operators.)
         // ------------------------------------------------------------
         {
             const ast::StmtId op_sid = resolve_binary_operator_overload_(e.op, lt, rt, forced_selection);
@@ -1413,6 +1414,13 @@ namespace parus::tyck {
                 return ast_.stmt(op_sid).fn_ret;
             }
         }
+
+        diag_(diag::Code::kTypeErrorGeneric, e.span,
+              "unsupported binary operator '" +
+                  std::string(parus::syntax::token_kind_name(e.op)) +
+                  "' for operand types '" + types_.to_string(lt) +
+                  "' and '" + types_.to_string(rt) + "'");
+        err_(e.span, "unsupported binary operator");
         return types_.error();
     }
 
@@ -1824,10 +1832,7 @@ namespace parus::tyck {
     }
 
     ty::TypeId TypeChecker::check_expr_block_(const ast::Expr& e, Slot slot) {
-        // Mapping assumption:
-        //  - e.a: StmtId of block stmt
-        //  - e.b: tail ExprId (optional)
-        const ast::StmtId block_sid = (ast::StmtId)e.a;
+        const ast::StmtId block_sid = e.block_stmt;
         if (block_sid == ast::k_invalid_stmt) {
             err_(e.span, "block-expr has no block stmt id");
             return types_.error();
@@ -1850,8 +1855,8 @@ namespace parus::tyck {
 
         // tail
         ty::TypeId out = types_.builtin(ty::Builtin::kNull);
-        if (e.b != ast::k_invalid_expr) {
-            out = check_expr_(e.b, Slot::kValue);
+        if (e.block_tail != ast::k_invalid_expr) {
+            out = check_expr_(e.block_tail, Slot::kValue);
         } else {
             // tail absent => null
             out = types_.builtin(ty::Builtin::kNull);

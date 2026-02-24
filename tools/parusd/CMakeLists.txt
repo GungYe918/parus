@@ -4,8 +4,8 @@ add_executable(parusd
 
 target_link_libraries(parusd PRIVATE parus_frontend)
 
-if (TARGET lei_parser AND TARGET lei_core AND TARGET lei_eval)
-    target_link_libraries(parusd PRIVATE lei_eval)
+if (TARGET lei_parser AND TARGET lei_core AND TARGET lei_eval AND TARGET lei_graph)
+    target_link_libraries(parusd PRIVATE lei_eval lei_graph)
     target_compile_definitions(parusd PRIVATE PARUSD_ENABLE_LEI=1)
     target_include_directories(parusd PRIVATE ${CMAKE_SOURCE_DIR}/tools/Lei/include)
 else()

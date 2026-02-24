@@ -33,6 +33,7 @@ namespace parus::passes {
             sema::SymbolKind kind = sema::SymbolKind::kVar;
             std::string path{};
             ty::TypeId declared_type = ty::kInvalidType;
+            std::string declared_type_repr{};
             Span decl_span{};
             std::string decl_bundle_name{};
             std::string module_head{};

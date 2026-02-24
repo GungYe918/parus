@@ -748,6 +748,10 @@ namespace parusc::dump {
                         using T = std::decay_t<decltype(x)>;
                         if constexpr (std::is_same_v<T, oir::InstConstInt>) {
                             std::cout << "ConstInt \"" << x.text << "\"";
+                        } else if constexpr (std::is_same_v<T, oir::InstConstFloat>) {
+                            std::cout << "ConstFloat \"" << x.text << "\"";
+                        } else if constexpr (std::is_same_v<T, oir::InstConstChar>) {
+                            std::cout << "ConstChar " << x.value;
                         } else if constexpr (std::is_same_v<T, oir::InstConstBool>) {
                             std::cout << "ConstBool " << (x.value ? "true" : "false");
                         } else if constexpr (std::is_same_v<T, oir::InstConstText>) {

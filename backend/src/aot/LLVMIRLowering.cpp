@@ -341,6 +341,8 @@ namespace parus::backend::aot {
                         as_slot(x.slot);
                         as_value(x.value);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstConstInt> ||
+                                         std::is_same_v<T, parus::oir::InstConstFloat> ||
+                                         std::is_same_v<T, parus::oir::InstConstChar> ||
                                          std::is_same_v<T, parus::oir::InstConstBool> ||
                                          std::is_same_v<T, parus::oir::InstConstText> ||
                                          std::is_same_v<T, parus::oir::InstConstNull> ||
@@ -394,6 +396,74 @@ namespace parus::backend::aot {
             }
 
             if (!saw_digit) return "0";
+            return out;
+        }
+
+        /// @brief 실수 리터럴 텍스트를 LLVM에서 안전하게 사용할 수 있는 형태로 정규화한다.
+        std::string parse_float_literal_(std::string_view text) {
+            std::string out;
+            out.reserve(text.size() + 4);
+
+            size_t i = 0;
+            if (!text.empty() && (text[0] == '+' || text[0] == '-')) {
+                out.push_back(text[0]);
+                i = 1;
+            }
+
+            bool saw_digit = false;
+            auto append_digits = [&](size_t& pos) {
+                while (pos < text.size()) {
+                    const char c = text[pos];
+                    if (std::isdigit(static_cast<unsigned char>(c))) {
+                        out.push_back(c);
+                        saw_digit = true;
+                        ++pos;
+                        continue;
+                    }
+                    if (c == '_') {
+                        ++pos;
+                        continue;
+                    }
+                    break;
+                }
+            };
+
+            append_digits(i);
+
+            bool has_dot = false;
+            if (i < text.size() && text[i] == '.') {
+                has_dot = true;
+                out.push_back('.');
+                ++i;
+                append_digits(i);
+            }
+
+            bool has_exp = false;
+            if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+                has_exp = true;
+                out.push_back(text[i++]);
+                if (i < text.size() && (text[i] == '+' || text[i] == '-')) {
+                    out.push_back(text[i++]);
+                }
+                size_t exp_begin = out.size();
+                while (i < text.size()) {
+                    const char c = text[i];
+                    if (std::isdigit(static_cast<unsigned char>(c))) {
+                        out.push_back(c);
+                        ++i;
+                        continue;
+                    }
+                    if (c == '_') {
+                        ++i;
+                        continue;
+                    }
+                    break;
+                }
+                if (out.size() == exp_begin) return "0.0";
+            }
+
+            if (!saw_digit) return "0.0";
+            if (!has_dot && !has_exp) out += ".0";
             return out;
         }
 
@@ -1168,6 +1238,34 @@ namespace parus::backend::aot {
                                 os << "  " << vref_(inst.result) << " = add " << rty << " 0, " << lit << "\n";
                             } else if (is_float_ty_(rty)) {
                                 os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << lit << ".0\n";
+                            } else if (rty == "ptr") {
+                                os << "  " << vref_(inst.result) << " = inttoptr i64 " << lit << " to ptr\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = add i64 0, " << lit << "\n";
+                            }
+                        } else if constexpr (std::is_same_v<T, InstConstFloat>) {
+                            if (inst.result == kInvalidId) return;
+                            const auto rty = value_ty_(inst.result);
+                            const auto lit = parse_float_literal_(x.text);
+                            if (is_float_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = fadd " << rty
+                                   << " " << zero_literal_(rty) << ", " << lit << "\n";
+                            } else if (is_int_ty_(rty)) {
+                                const std::string tmp = next_tmp_();
+                                os << "  " << tmp << " = fptosi double " << lit << " to " << rty << "\n";
+                                os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, tmp) << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = fadd double 0.0, " << lit << "\n";
+                            }
+                        } else if constexpr (std::is_same_v<T, InstConstChar>) {
+                            if (inst.result == kInvalidId) return;
+                            const auto rty = value_ty_(inst.result);
+                            const auto lit = std::to_string(x.value);
+                            if (is_int_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = add " << rty << " 0, " << lit << "\n";
+                            } else if (is_float_ty_(rty)) {
+                                os << "  " << vref_(inst.result) << " = fadd " << rty
+                                   << " " << zero_literal_(rty) << ", " << lit << ".0\n";
                             } else if (rty == "ptr") {
                                 os << "  " << vref_(inst.result) << " = inttoptr i64 " << lit << " to ptr\n";
                             } else {

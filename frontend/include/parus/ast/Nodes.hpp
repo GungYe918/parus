@@ -351,6 +351,10 @@ namespace parus::ast {
         uint32_t field_init_begin = 0;
         uint32_t field_init_count = 0;
 
+        // block expression payload
+        StmtId block_stmt = k_invalid_stmt; // '{ ... }' block stmt id
+        ExprId block_tail = k_invalid_expr; // optional tail expression
+
         // Loop expr
         bool loop_has_header = false;      // loop (v in xs) { ... }
         std::string_view loop_var{};       // v

@@ -69,6 +69,45 @@ std::string trim(std::string s) {
     return s;
 }
 
+std::optional<std::string> canonical_top_head(std::string_view raw) {
+    std::string_view s = raw;
+    if (s.empty()) return std::nullopt;
+    if (s.starts_with("::")) s.remove_prefix(2);
+    if (s.empty() || s.ends_with("::")) return std::nullopt;
+
+    size_t begin = 0;
+    std::string top{};
+    while (begin < s.size()) {
+        const size_t pos = s.find("::", begin);
+        const size_t end = (pos == std::string_view::npos) ? s.size() : pos;
+        if (end == begin) return std::nullopt;
+        const std::string_view seg = s.substr(begin, end - begin);
+        if (seg.find(':') != std::string_view::npos) return std::nullopt;
+        if (top.empty()) top = std::string(seg);
+        if (pos == std::string_view::npos) break;
+        begin = pos + 2;
+    }
+    if (top.empty()) return std::nullopt;
+    return top;
+}
+
+bool canonicalize_import_heads(std::vector<std::string>& heads, std::string& out_err) {
+    std::vector<std::string> normalized{};
+    normalized.reserve(heads.size());
+    for (const auto& h : heads) {
+        auto top = canonical_top_head(h);
+        if (!top.has_value()) {
+            out_err = "invalid module_imports entry from LEI: '" + h + "'";
+            return false;
+        }
+        normalized.push_back(*top);
+    }
+    std::sort(normalized.begin(), normalized.end());
+    normalized.erase(std::unique(normalized.begin(), normalized.end()), normalized.end());
+    heads = std::move(normalized);
+    return true;
+}
+
 void emit_progress(bool enabled, std::string_view color_mode, int pct, std::string_view message) {
     if (!enabled) return;
     std::ostringstream oss;
@@ -227,6 +266,9 @@ std::vector<BundleSourceUnit> parse_bundle_units_json(const std::string& text, s
             !parse_json_string_array_field_line(line, "module_imports", u.module_imports) ||
             !parse_json_string_array_field_line(line, "bundle_deps", u.bundle_deps)) {
             out_err = "failed to parse LEI --list_sources JSON payload";
+            return {};
+        }
+        if (!canonicalize_import_heads(u.module_imports, out_err)) {
             return {};
         }
         if (!u.bundle.empty() && !u.module.empty() && !u.source.empty()) {

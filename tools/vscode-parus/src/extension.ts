@@ -707,6 +707,12 @@ async function startLanguageClient(reason: string): Promise<void> {
       scheme: "file" as const,
       language,
     })),
+    synchronize: {
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher("**/*.lei"),
+        vscode.workspace.createFileSystemWatcher("**/config.lei"),
+      ],
+    },
     outputChannel,
     traceOutputChannel: traceChannel,
     revealOutputChannelOn: RevealOutputChannelOn.Error,

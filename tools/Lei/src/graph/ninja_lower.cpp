@@ -33,6 +33,88 @@ std::string sanitize(std::string s) {
     return s;
 }
 
+std::string top_head_of(std::string_view head) {
+    if (head.empty()) return {};
+    const size_t pos = head.find("::");
+    if (pos == std::string_view::npos) return std::string(head);
+    return std::string(head.substr(0, pos));
+}
+
+std::optional<std::string> canonical_import_top_head(std::string_view raw, std::string& why) {
+    why.clear();
+    std::string_view s = raw;
+    if (s.empty()) {
+        why = "module.imports entry must not be empty";
+        return std::nullopt;
+    }
+    if (s.starts_with("::")) {
+        s.remove_prefix(2);
+    }
+    if (s.empty()) {
+        why = "module.imports entry must contain at least one segment";
+        return std::nullopt;
+    }
+    if (s.ends_with("::")) {
+        why = "module.imports entry must not end with '::'";
+        return std::nullopt;
+    }
+
+    size_t begin = 0;
+    std::string top{};
+    while (begin < s.size()) {
+        const size_t pos = s.find("::", begin);
+        const size_t end = (pos == std::string_view::npos) ? s.size() : pos;
+        if (end == begin) {
+            why = "module.imports entry has empty path segment";
+            return std::nullopt;
+        }
+        const std::string_view seg = s.substr(begin, end - begin);
+        if (seg.find(':') != std::string_view::npos) {
+            why = "module.imports entry uses invalid ':' separator";
+            return std::nullopt;
+        }
+        if (top.empty()) {
+            top = std::string(seg);
+        }
+        if (pos == std::string_view::npos) break;
+        begin = pos + 2;
+    }
+
+    if (top.empty()) {
+        why = "module.imports entry must not be empty";
+        return std::nullopt;
+    }
+    return top;
+}
+
+std::string compute_module_head_from_source(std::string_view source, std::string_view bundle_name) {
+    namespace fs = std::filesystem;
+    fs::path p{std::string(source)};
+    p = p.lexically_normal();
+    fs::path dir = p.parent_path();
+
+    std::vector<std::string> segs{};
+    bool stripped_src = false;
+    for (const auto& seg : dir) {
+        const std::string s = seg.string();
+        if (s.empty() || s == ".") continue;
+        if (!stripped_src && s == "src") {
+            stripped_src = true;
+            continue;
+        }
+        segs.push_back(s);
+    }
+
+    if (segs.empty()) return std::string(bundle_name);
+
+    std::string out{};
+    for (size_t i = 0; i < segs.size(); ++i) {
+        if (i) out += "::";
+        out += segs[i];
+    }
+    return out;
+}
+
 bool expect_string_field(const lei::eval::Value::Object& obj,
                          const std::string& field,
                          std::string& out,
@@ -334,6 +416,7 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
 
     std::unordered_map<std::string, size_t> bundle_index_by_name{};
     std::unordered_map<std::string, std::string> module_owner_by_head{};
+    std::unordered_map<std::string, std::string> module_owner_by_top_head{};
     if (const auto* bundles_v = find_key(graph_obj, "bundles")) {
         auto arr = std::get_if<lei::eval::Value::Array>(&bundles_v->data);
         if (!arr) {
@@ -416,18 +499,19 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                 ModuleNode module{};
                 module.bundle = bundle.name;
 
-                if (!expect_string_field(*mobj, "head", module.head, diags, "module")) return std::nullopt;
                 if (!read_string_array_field(*mobj, "sources", module.sources, diags, "module", true)) return std::nullopt;
-                if (!read_string_array_field(*mobj, "imports", module.imports, diags, "module", false)) return std::nullopt;
+                std::vector<std::string> raw_imports{};
+                if (!read_string_array_field(*mobj, "imports", raw_imports, diags, "module", false)) return std::nullopt;
 
-                if (module.head.empty()) {
-                    diags.add(lei::diag::Code::B_MODULE_SCHEMA_INVALID,
+                if (mobj->find("head") != mobj->end()) {
+                    diags.add(lei::diag::Code::B_MODULE_HEAD_REMOVED,
                               "<entry>",
                               1,
                               1,
-                              "module.head must not be empty");
+                              "module.head is removed; module head is auto-computed from module.sources");
                     return std::nullopt;
                 }
+
                 if (module.sources.empty()) {
                     diags.add(lei::diag::Code::B_MODULE_SCHEMA_INVALID,
                               "<entry>",
@@ -437,6 +521,38 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                     return std::nullopt;
                 }
 
+                std::string computed_head{};
+                for (const auto& src : module.sources) {
+                    const std::string h = compute_module_head_from_source(src, bundle.name);
+                    if (computed_head.empty()) {
+                        computed_head = h;
+                    } else if (computed_head != h) {
+                        diags.add(lei::diag::Code::B_MODULE_AUTO_HEAD_CONFLICT,
+                                  "<entry>",
+                                  1,
+                                  1,
+                                  "module.sources derive conflicting heads: '" + computed_head + "' vs '" + h + "'");
+                        return std::nullopt;
+                    }
+                }
+                module.head = computed_head;
+
+                for (const auto& import_raw : raw_imports) {
+                    std::string why{};
+                    auto canonical = canonical_import_top_head(import_raw, why);
+                    if (!canonical.has_value()) {
+                        diags.add(lei::diag::Code::B_MODULE_IMPORT_INVALID,
+                                  "<entry>",
+                                  1,
+                                  1,
+                                  "invalid module.imports entry '" + import_raw + "': " + why);
+                        return std::nullopt;
+                    }
+                    module.imports.push_back(*canonical);
+                }
+                std::sort(module.imports.begin(), module.imports.end());
+                module.imports.erase(std::unique(module.imports.begin(), module.imports.end()), module.imports.end());
+
                 auto [it, inserted] = module_owner_by_head.emplace(module.head, bundle.name);
                 if (!inserted) {
                     diags.add(lei::diag::Code::B_MODULE_HEAD_COLLISION,
@@ -445,6 +561,21 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                               1,
                               "duplicate module head: " + module.head);
                     return std::nullopt;
+                }
+                const std::string top_head = top_head_of(module.head);
+                if (!top_head.empty()) {
+                    auto top_it = module_owner_by_top_head.find(top_head);
+                    if (top_it == module_owner_by_top_head.end()) {
+                        module_owner_by_top_head.emplace(top_head, bundle.name);
+                    } else if (top_it->second != bundle.name) {
+                        diags.add(lei::diag::Code::B_MODULE_TOP_HEAD_COLLISION,
+                                  "<entry>",
+                                  1,
+                                  1,
+                                  "top-head collision '" + top_head + "' between bundles '" + top_it->second
+                                    + "' and '" + bundle.name + "'");
+                        return std::nullopt;
+                    }
                 }
 
                 bundle.modules.push_back(module.head);
@@ -568,8 +699,13 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
         const std::unordered_set<std::string> dep_set(owner_bundle.deps.begin(), owner_bundle.deps.end());
 
         for (const auto& import_head : module.imports) {
-            auto target_it = module_owner_by_head.find(import_head);
-            if (target_it == module_owner_by_head.end()) {
+            std::string target_bundle{};
+            if (auto top_it = module_owner_by_top_head.find(import_head);
+                top_it != module_owner_by_top_head.end()) {
+                target_bundle = top_it->second;
+            }
+
+            if (target_bundle.empty()) {
                 diags.add(lei::diag::Code::B_IMPORT_MODULE_NOT_DECLARED,
                           "<entry>",
                           1,
@@ -577,7 +713,6 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                           "module '" + module.head + "' imports unknown module '" + import_head + "'");
                 return std::nullopt;
             }
-            const std::string& target_bundle = target_it->second;
             if (target_bundle != module.bundle && dep_set.find(target_bundle) == dep_set.end()) {
                 diags.add(lei::diag::Code::B_BUNDLE_DEP_NOT_DECLARED,
                           "<entry>",

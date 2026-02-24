@@ -22,7 +22,6 @@ project/
 
 ```lei
 export plan math_module = module & {
-  head = "math";
   sources = ["math/src/add.pr"];
   imports = [];
 };
@@ -39,9 +38,8 @@ export plan math_bundle = bundle & {
 
 ```lei
 export plan app_module = module & {
-  head = "app";
   sources = ["app/src/main.pr", "app/src/helper.pr"];
-  imports = ["math"];
+  imports = ["::math"];
 };
 
 export plan app_bundle = bundle & {
@@ -77,7 +75,6 @@ bundle이 최종 1개인 경우에만 `config.lei` inline 선언을 허용한다
 
 ```lei
 plan app_module = module & {
-  head = "app";
   sources = ["src/main.pr"];
   imports = [];
 };
@@ -108,7 +105,7 @@ parus graph --format dot
 ## 규칙 요약
 
 1. `bundle.sources`는 제거되었고 `bundle.modules`를 사용한다.
-2. module import gate는 `module.imports`다.
+2. module import gate는 `module.imports`다(`foo`, `foo::bar`, `::foo::bar` 입력을 내부에서 top-head로 canonicalize).
 3. build/link 순서는 `bundle.deps`다.
 4. 동일 module auto-share는 `export`만 허용한다.
-5. 다른 module 참조는 `import <head> as <alias>;`가 필요하다.
+5. 다른 module 참조는 `import <head> as <alias>;`가 필요하고, `import ::foo::bar as x;`도 허용한다.

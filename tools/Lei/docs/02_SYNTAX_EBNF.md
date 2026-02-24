@@ -133,6 +133,7 @@ BoolLit          := "true" | "false" ;
 4. import된 심볼 접근은 `alias::symbol`만 허용한다.
 5. 객체 접근은 `.`만 사용한다.
 6. 배열 접근은 `[]`만 사용한다.
+7. 빌트인 `module` plan은 `sources/imports`만 입력하며 `head` 필드는 제거되었다.
 
 ## 파서 판정 규칙
 

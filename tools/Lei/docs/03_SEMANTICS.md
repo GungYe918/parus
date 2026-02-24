@@ -15,6 +15,13 @@
 4. proto 값: `proto` 선언으로 생성된 템플릿/스키마 값
 5. plan 값: `plan` 선언으로 생성된 명명된 플랜 값
 
+## Module-First 규약
+
+1. `module.head`는 사용자 입력이 아니며 `module.sources`에서 자동 계산한다.
+2. 하나의 module에 여러 source가 있을 때 자동 계산된 head가 다르면 실패한다.
+3. `module.imports`는 `foo`, `foo::bar`, `::foo::bar`를 모두 허용한다.
+4. 엔진 내부 import gate는 top-head(`foo`)로 canonicalize한다.
+
 ## 가변성
 
 1. `let`은 재대입 불가다.
@@ -72,6 +79,13 @@
 1. `if`는 조건 블록 분기다.
 2. `for`는 예산 제한 하에서만 실행된다.
 3. 예산 초과는 즉시 실패한다.
+
+## 논리 연산 의미
+
+1. `&&`와 `||`는 short-circuit로 평가한다.
+2. `&&`는 좌변이 `false`면 우변을 평가하지 않는다.
+3. `||`는 좌변이 `true`면 우변을 평가하지 않는다.
+4. short-circuit로 생략된 우변의 오류/부작용은 발생하지 않는다.
 
 ## 오류 규칙
 

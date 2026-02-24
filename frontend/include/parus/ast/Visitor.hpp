@@ -187,12 +187,10 @@ namespace parus::ast {
                     break;
 
                 case ExprKind::kBlockExpr:
-                    // e.a stores block stmt id by parser convention.
-                    if (e.a != k_invalid_expr) {
-                        const auto block_stmt = static_cast<StmtId>(e.a);
-                        if (block_stmt != k_invalid_stmt) visit_stmt_inner(ast, block_stmt, v);
+                    if (e.block_stmt != k_invalid_stmt) {
+                        visit_stmt_inner(ast, e.block_stmt, v);
                     }
-                    visit_expr_child_if_(ast, id, e, ExprChildRole::kBlockExprTail, e.b, v);
+                    visit_expr_child_if_(ast, id, e, ExprChildRole::kBlockExprTail, e.block_tail, v);
                     break;
 
                 case ExprKind::kFieldInit:

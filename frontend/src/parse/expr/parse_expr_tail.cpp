@@ -452,17 +452,13 @@ namespace parus {
         }
 
         // -----------------------------
-        // 4) build BlockExpr node with:
-        //    e.a = block_stmt_id, e.b = tail_expr_id
+        // 4) build BlockExpr node with dedicated payload fields
         // -----------------------------
         ast::Expr out{};
         out.kind = ast::ExprKind::kBlockExpr;
         out.span = span_join(lb.span, rb.span);
-
-        // IMPORTANT:
-        // Expr::a is ExprId, but we store StmtId here by convention.
-        out.a = (ast::ExprId)block_sid;     // e.a = block_stmt_id
-        out.b = tail_expr;                 // e.b = tail_expr_id (or invalid)
+        out.block_stmt = block_sid;
+        out.block_tail = tail_expr;
 
         return ast_.add_expr(out);
     }

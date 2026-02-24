@@ -372,6 +372,8 @@ int main() {
     const bool ok10 = run_ok_case(cases / "ok_builtin_parus_helpers.lei");
     const bool ok11 = run_ok_case(cases / "ok_bundle_bin_with_lib_closure.lei");
     const bool ok12 = run_ok_case(cases / "ok_codegen_then_compile.lei");
+    const bool ok13 = run_ok_case(cases / "ok_module_import_canonicalization.lei");
+    const bool ok14 = run_ok_case(cases / "ok_short_circuit_logic.lei");
 
     const bool err1 = run_err_case(cases / "err_legacy_export_build.lei", lei::diag::Code::C_LEGACY_SYNTAX_REMOVED);
     const bool err2 = run_err_case(cases / "err_legacy_fatarrow.lei", lei::diag::Code::C_LEGACY_SYNTAX_REMOVED);
@@ -387,6 +389,12 @@ int main() {
                                     lei::diag::Code::L_LEGACY_EXPLICIT_GRAPH_REMOVED);
     const bool err12 = run_err_case(cases / "err_builtin_bad_args.lei", lei::diag::Code::L_TYPE_MISMATCH);
     const bool err13 = run_graph_err_case(cases / "err_bundle_dep_cycle.lei", lei::diag::Code::B_INVALID_BUILD_SHAPE);
+    const bool err14 = run_graph_err_case(cases / "err_module_head_removed.lei",
+                                          lei::diag::Code::B_MODULE_HEAD_REMOVED);
+    const bool err15 = run_graph_err_case(cases / "err_module_import_invalid.lei",
+                                          lei::diag::Code::B_MODULE_IMPORT_INVALID);
+    const bool err16 = run_graph_err_case(cases / "err_module_top_head_collision.lei",
+                                          lei::diag::Code::B_MODULE_TOP_HEAD_COLLISION);
 
     const bool ok_builtin = run_builtin_api_case(cases / "ok_builtin_fn_in_master.lei");
     const bool ok_cli = run_cli_view_graph_cases(cases / "ok_master_graph.lei");
@@ -396,8 +404,8 @@ int main() {
     const bool ok_utf8 = run_invalid_utf8_case();
     const bool ok_boundary = run_no_parus_include_rule();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 ||
-        !err1 || !err2 || !err3 || !err4 || !err5 || !err6 || !err7 || !err8 || !err9 || !err10 || !err11 || !err12 || !err13 ||
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 || !ok13 || !ok14 ||
+        !err1 || !err2 || !err3 || !err4 || !err5 || !err6 || !err7 || !err8 || !err9 || !err10 || !err11 || !err12 || !err13 || !err14 || !err15 || !err16 ||
         !ok_builtin || !ok_cli || !ok_list_sources || !ok_build || !ok_cache || !ok_utf8 || !ok_boundary) {
         return 1;
     }

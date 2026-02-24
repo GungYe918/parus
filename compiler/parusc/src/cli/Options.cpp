@@ -1,6 +1,7 @@
 // compiler/parusc/src/cli/Options.cpp
 #include <parusc/cli/Options.hpp>
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -245,6 +246,42 @@ namespace parusc::cli {
             std::vector<std::string>& out_values,
             Options& out
         ) {
+            auto normalize_module_import_head = [](std::string_view raw) -> std::optional<std::string> {
+                std::string_view s = raw;
+                if (s.empty()) return std::nullopt;
+                if (s.starts_with("::")) s.remove_prefix(2);
+                if (s.empty() || s.ends_with("::")) return std::nullopt;
+                size_t begin = 0;
+                std::string top{};
+                while (begin < s.size()) {
+                    const size_t pos = s.find("::", begin);
+                    const size_t end = (pos == std::string_view::npos) ? s.size() : pos;
+                    if (end == begin) return std::nullopt;
+                    const std::string_view seg = s.substr(begin, end - begin);
+                    if (seg.find(':') != std::string_view::npos) return std::nullopt;
+                    if (top.empty()) top = std::string(seg);
+                    if (pos == std::string_view::npos) break;
+                    begin = pos + 2;
+                }
+                if (top.empty()) return std::nullopt;
+                return top;
+            };
+
+            auto push_value = [&](std::string_view raw) -> bool {
+                if (name == "module-import") {
+                    auto top = normalize_module_import_head(raw);
+                    if (!top.has_value()) {
+                        out.ok = false;
+                        out.error = "--module-import requires head in form 'foo', 'foo::bar', or '::foo::bar'";
+                        return false;
+                    }
+                    out_values.emplace_back(*top);
+                    return true;
+                }
+                out_values.emplace_back(raw);
+                return true;
+            };
+
             const std::string opt = std::string("--") + std::string(name);
             const std::string opt_eq = opt + "=";
             if (arg == opt) {
@@ -254,7 +291,7 @@ namespace parusc::cli {
                     out.error = opt + " requires a value";
                     return true;
                 }
-                out_values.emplace_back(*v);
+                if (!push_value(*v)) return true;
                 out.bundle.enabled = true;
                 return true;
             }
@@ -265,7 +302,7 @@ namespace parusc::cli {
                     out.error = opt + " requires a value";
                     return true;
                 }
-                out_values.emplace_back(v);
+                if (!push_value(v)) return true;
                 out.bundle.enabled = true;
                 return true;
             }
@@ -289,6 +326,11 @@ namespace parusc::cli {
                 out.error = "bundle mode requires at least one --bundle-source <path>";
                 return false;
             }
+            std::sort(out.bundle.module_imports.begin(), out.bundle.module_imports.end());
+            out.bundle.module_imports.erase(
+                std::unique(out.bundle.module_imports.begin(), out.bundle.module_imports.end()),
+                out.bundle.module_imports.end()
+            );
             return true;
         }
 

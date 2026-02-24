@@ -78,7 +78,6 @@ export plan json_bundle = bundle & myBundleProto & {
   name = "json";
   modules = [
     module & {
-      head = "json";
       sources = ["json/src/json.pr"];
       imports = [];
     },

@@ -37,7 +37,6 @@ export plan json_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      head = "json";
       sources = ["json/src/json.pr"];
       imports = [];
     },
@@ -54,7 +53,6 @@ plan json_bundle = bundle & {
   kind = "lib";
   modules = [
     module & {
-      head = "json";
       sources = ["json/src/json.pr"];
       imports = [];
     },

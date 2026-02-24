@@ -28,6 +28,7 @@ namespace parus::oir {
             const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
+            std::vector<parus::sir::VerifyError>* build_errors = nullptr;
 
             Function* def = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -116,6 +117,26 @@ namespace parus::oir {
                 ValueId r = make_value(ty, Effect::Pure);
                 Inst inst{};
                 inst.data = InstConstInt{std::move(text)};
+                inst.eff = Effect::Pure;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
+            ValueId emit_const_float(TypeId ty, std::string text) {
+                ValueId r = make_value(ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstConstFloat{std::move(text)};
+                inst.eff = Effect::Pure;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
+            ValueId emit_const_char(TypeId ty, uint32_t value) {
+                ValueId r = make_value(ty, Effect::Pure);
+                Inst inst{};
+                inst.data = InstConstChar{value};
                 inst.eff = Effect::Pure;
                 inst.result = r;
                 emit_inst(inst);
@@ -386,37 +407,113 @@ namespace parus::oir {
 
                 return src;
             }
+
+            void report_lowering_error(std::string message) {
+                if (build_errors == nullptr) return;
+                build_errors->push_back(parus::sir::VerifyError{std::move(message)});
+            }
         };
 
-        static BinOp map_binop(parus::syntax::TokenKind k) {
+        static std::optional<BinOp> map_binop(parus::syntax::TokenKind k) {
             using TK = parus::syntax::TokenKind;
             switch (k) {
-                case TK::kPlus:              return BinOp::Add;
-                case TK::kMinus:             return BinOp::Sub;
-                case TK::kStar:              return BinOp::Mul;
-                case TK::kSlash:             return BinOp::Div;
-                case TK::kPercent:           return BinOp::Rem;
-                case TK::kLt:                return BinOp::Lt;
-                case TK::kLtEq:              return BinOp::Le;
-                case TK::kGt:                return BinOp::Gt;
-                case TK::kGtEq:              return BinOp::Ge;
-                case TK::kEqEq:              return BinOp::Eq;
-                case TK::kBangEq:            return BinOp::Ne;
-                case TK::kQuestionQuestion:  return BinOp::NullCoalesce;
-                default:                     return BinOp::Add; // v0 fallback
+                case TK::kPlus:              return std::optional<BinOp>{BinOp::Add};
+                case TK::kMinus:             return std::optional<BinOp>{BinOp::Sub};
+                case TK::kStar:              return std::optional<BinOp>{BinOp::Mul};
+                case TK::kSlash:             return std::optional<BinOp>{BinOp::Div};
+                case TK::kPercent:           return std::optional<BinOp>{BinOp::Rem};
+                case TK::kLt:                return std::optional<BinOp>{BinOp::Lt};
+                case TK::kLtEq:              return std::optional<BinOp>{BinOp::Le};
+                case TK::kGt:                return std::optional<BinOp>{BinOp::Gt};
+                case TK::kGtEq:              return std::optional<BinOp>{BinOp::Ge};
+                case TK::kEqEq:              return std::optional<BinOp>{BinOp::Eq};
+                case TK::kBangEq:            return std::optional<BinOp>{BinOp::Ne};
+                case TK::kQuestionQuestion:  return std::optional<BinOp>{BinOp::NullCoalesce};
+                default:                     return std::nullopt;
             }
         }
 
-        static UnOp map_unary(parus::syntax::TokenKind k) {
+        static std::optional<UnOp> map_unary(parus::syntax::TokenKind k) {
             using TK = parus::syntax::TokenKind;
             switch (k) {
-                case TK::kPlus:  return UnOp::Plus;
-                case TK::kMinus: return UnOp::Neg;
+                case TK::kPlus:  return std::optional<UnOp>{UnOp::Plus};
+                case TK::kMinus: return std::optional<UnOp>{UnOp::Neg};
                 case TK::kBang:
-                case TK::kKwNot: return UnOp::Not;
-                case TK::kCaret: return UnOp::BitNot;
-                default:         return UnOp::Plus;
+                case TK::kKwNot: return std::optional<UnOp>{UnOp::Not};
+                case TK::kCaret: return std::optional<UnOp>{UnOp::BitNot};
+                default:         return std::nullopt;
             }
+        }
+
+        std::optional<std::string> parse_float_literal_text_(std::string_view text) {
+            std::string out;
+            out.reserve(text.size());
+
+            size_t i = 0;
+            if (!text.empty() && (text[0] == '+' || text[0] == '-')) {
+                out.push_back(text[0]);
+                i = 1;
+            }
+
+            bool saw_digit = false;
+            auto append_digits = [&](size_t& pos) {
+                while (pos < text.size()) {
+                    const char c = text[pos];
+                    if (c >= '0' && c <= '9') {
+                        out.push_back(c);
+                        saw_digit = true;
+                        ++pos;
+                        continue;
+                    }
+                    if (c == '_') {
+                        ++pos;
+                        continue;
+                    }
+                    break;
+                }
+            };
+
+            append_digits(i);
+
+            bool has_dot = false;
+            if (i < text.size() && text[i] == '.') {
+                has_dot = true;
+                out.push_back('.');
+                ++i;
+                append_digits(i);
+            }
+
+            bool has_exp = false;
+            if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
+                has_exp = true;
+                out.push_back(text[i++]);
+                if (i < text.size() && (text[i] == '+' || text[i] == '-')) {
+                    out.push_back(text[i++]);
+                }
+                size_t exp_digits_begin = out.size();
+                while (i < text.size()) {
+                    const char c = text[i];
+                    if (c >= '0' && c <= '9') {
+                        out.push_back(c);
+                        ++i;
+                        continue;
+                    }
+                    if (c == '_') {
+                        ++i;
+                        continue;
+                    }
+                    break;
+                }
+                if (out.size() == exp_digits_begin) return std::nullopt;
+            }
+
+            if (!saw_digit || (!has_dot && !has_exp)) return std::nullopt;
+
+            const std::string_view suffix = text.substr(i);
+            if (!(suffix.empty() || suffix == "f" || suffix == "f32" || suffix == "lf" || suffix == "f64" || suffix == "f128")) {
+                return std::nullopt;
+            }
+            return out;
         }
 
         std::string parse_int_literal_text_(std::string_view text) {
@@ -707,6 +804,28 @@ namespace parus::oir {
             case parus::sir::ValueKind::kIntLit:
                 return emit_const_int(v.type, std::string(v.text));
 
+            case parus::sir::ValueKind::kFloatLit: {
+                const auto lit = parse_float_literal_text_(v.text);
+                if (!lit.has_value()) {
+                    report_lowering_error(
+                        std::string("unsupported or invalid float literal during OIR lowering: '") +
+                        std::string(v.text) + "'");
+                    return emit_const_null(v.type);
+                }
+                return emit_const_float(v.type, *lit);
+            }
+
+            case parus::sir::ValueKind::kCharLit: {
+                const auto code = parse_char_literal_code_(v.text);
+                if (!code.has_value()) {
+                    report_lowering_error(
+                        std::string("unsupported or invalid char literal during OIR lowering: '") +
+                        std::string(v.text) + "'");
+                    return emit_const_null(v.type);
+                }
+                return emit_const_char(v.type, *code);
+            }
+
             case parus::sir::ValueKind::kBoolLit:
                 return emit_const_bool(v.type, v.text == "true");
 
@@ -810,8 +929,14 @@ namespace parus::oir {
             case parus::sir::ValueKind::kUnary: {
                 ValueId src = lower_value(v.a);
                 auto tk = static_cast<parus::syntax::TokenKind>(v.op);
-                UnOp op = map_unary(tk);
-                return emit_unary(v.type, Effect::Pure, op, src);
+                auto op = map_unary(tk);
+                if (!op.has_value()) {
+                    report_lowering_error(
+                        std::string("unsupported unary operator in OIR lowering: ") +
+                        std::string(parus::syntax::token_kind_name(tk)));
+                    return emit_const_null(v.type);
+                }
+                return emit_unary(v.type, Effect::Pure, *op, src);
             }
 
             case parus::sir::ValueKind::kBinary: {
@@ -819,10 +944,16 @@ namespace parus::oir {
                 ValueId rhs = lower_value(v.b);
 
                 auto tk = static_cast<parus::syntax::TokenKind>(v.op);
-                BinOp op = map_binop(tk);
+                auto op = map_binop(tk);
+                if (!op.has_value()) {
+                    report_lowering_error(
+                        std::string("unsupported binary operator in OIR lowering: ") +
+                        std::string(parus::syntax::token_kind_name(tk)));
+                    return emit_const_null(v.type);
+                }
 
                 // v0: 대부분 pure로 둔다. (??/비교도 pure)
-                return emit_binop(v.type, Effect::Pure, op, lhs, rhs);
+                return emit_binop(v.type, Effect::Pure, *op, lhs, rhs);
             }
 
             case parus::sir::ValueKind::kCast: {
@@ -1607,6 +1738,7 @@ namespace parus::oir {
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
+            fb.build_errors = &out.gate_errors;
             fb.def = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
@@ -1644,6 +1776,10 @@ namespace parus::oir {
                 ValueId rv = fb.emit_const_null((TypeId)sf.ret);
                 fb.ret(rv);
             }
+        }
+
+        if (!out.gate_errors.empty()) {
+            out.gate_passed = false;
         }
 
         // SIR escape-handle 메타를 OIR 힌트로 연결한다.
