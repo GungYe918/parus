@@ -4,5 +4,5 @@ docs/memo/*
 .ccache/
 tests/out/*
 foo/
-tmp.txt
-main.pr
+.lei/
+.lei-cache/
