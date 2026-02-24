@@ -46,8 +46,25 @@ namespace parusc::driver {
             out_inv.input_path = input;
             out_inv.normalized_input_path = parus::normalize_path(input);
             out_inv.source_text = std::move(src);
+            out_inv.bundle_root = opt.bundle.bundle_root;
+            if (out_inv.bundle_root.empty()) {
+                std::error_code ec{};
+                const auto input_parent = std::filesystem::weakly_canonical(
+                    std::filesystem::path(out_inv.normalized_input_path).parent_path(),
+                    ec
+                );
+                if (!ec) {
+                    out_inv.bundle_root = input_parent.string();
+                } else {
+                    out_inv.bundle_root = std::filesystem::path(out_inv.normalized_input_path).parent_path().string();
+                }
+            } else {
+                out_inv.bundle_root = parus::normalize_path(out_inv.bundle_root);
+            }
             out_inv.bundle_sources = opt.bundle.bundle_sources;
             out_inv.bundle_deps = opt.bundle.bundle_deps;
+            out_inv.module_head = opt.bundle.module_head;
+            out_inv.module_imports = opt.bundle.module_imports;
             out_inv.load_export_index_paths = opt.bundle.load_export_index_paths;
             if (argv0 != nullptr) {
                 out_inv.driver_executable_path = parus::normalize_path(argv0);

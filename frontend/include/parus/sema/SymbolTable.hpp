@@ -33,6 +33,8 @@ namespace parus::sema {
         uint32_t owner_scope = 0; // 소속 스코프 id (디버그/정책용)
         uint32_t decl_file_id = 0; // source file id where symbol was declared
         std::string decl_bundle_name{}; // owning bundle (if known)
+        std::string decl_module_head{}; // logical module head (bundle-root relative)
+        std::string decl_source_dir_norm{}; // normalized source directory
         bool is_export = false; // whether declaration is export-surface symbol
         bool is_external = false; // whether symbol came from external export index
     };
@@ -124,7 +126,9 @@ namespace parus::sema {
                             uint32_t decl_file_id = 0,
                             std::string_view decl_bundle_name = {},
                             bool is_export = false,
-                            bool is_external = false) {
+                            bool is_external = false,
+                            std::string_view decl_module_head = {},
+                            std::string_view decl_source_dir_norm = {}) {
             InsertResult r{};
 
             // duplicate (same scope)
@@ -149,6 +153,8 @@ namespace parus::sema {
             sym.owner_scope = current_scope();
             sym.decl_file_id = decl_file_id;
             sym.decl_bundle_name = std::string(decl_bundle_name);
+            sym.decl_module_head = std::string(decl_module_head);
+            sym.decl_source_dir_norm = std::string(decl_source_dir_norm);
             sym.is_export = is_export;
             sym.is_external = is_external;
 

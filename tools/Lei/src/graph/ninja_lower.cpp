@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <set>
@@ -151,6 +152,29 @@ std::string hex64(uint64_t v) {
 std::string obj_path_for(const std::string& bundle_name, const std::string& source) {
     const auto h = hex64(fnv1a64(source));
     return ".lei/out/obj/" + sanitize(bundle_name) + "/" + h + ".o";
+}
+
+std::string tool_from_env(const char* key, std::string_view fallback) {
+    if (key != nullptr) {
+        if (const char* v = std::getenv(key); v != nullptr && *v != '\0') {
+            return std::string(v);
+        }
+    }
+    return std::string(fallback);
+}
+
+std::string resolve_source_path(const std::string& bundle_root, const std::string& source) {
+    namespace fs = std::filesystem;
+    std::error_code ec{};
+    fs::path p(source);
+    if (p.is_relative()) {
+        p = fs::path(bundle_root) / p;
+    }
+    fs::path canon = fs::weakly_canonical(p, ec);
+    if (!ec && !canon.empty()) {
+        return canon.lexically_normal().string();
+    }
+    return p.lexically_normal().string();
 }
 
 std::string join_shell_command(const std::vector<std::string>& argv) {
@@ -308,6 +332,8 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
         }
     }
 
+    std::unordered_map<std::string, size_t> bundle_index_by_name{};
+    std::unordered_map<std::string, std::string> module_owner_by_head{};
     if (const auto* bundles_v = find_key(graph_obj, "bundles")) {
         auto arr = std::get_if<lei::eval::Value::Array>(&bundles_v->data);
         if (!arr) {
@@ -326,28 +352,107 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                 return std::nullopt;
             }
 
-            BundleNode node{};
-            if (!expect_string_field(*bobj, "name", node.name, diags, "bundle")) return std::nullopt;
-            if (!expect_string_field(*bobj, "kind", node.kind, diags, "bundle")) return std::nullopt;
-            if (!read_string_array_field(*bobj, "sources", node.sources, diags, "bundle", true)) return std::nullopt;
-            if (!read_string_array_field(*bobj, "deps", node.deps, diags, "bundle", true)) return std::nullopt;
-            if (node.sources.empty()) {
+            if (bobj->find("sources") != bobj->end()) {
+                diags.add(lei::diag::Code::B_LEGACY_BUNDLE_SOURCES_REMOVED,
+                          "<entry>",
+                          1,
+                          1,
+                          "bundle.sources is removed; use bundle.modules + module.sources");
+                return std::nullopt;
+            }
+
+            BundleNode bundle{};
+            if (!expect_string_field(*bobj, "name", bundle.name, diags, "bundle")) return std::nullopt;
+            if (!expect_string_field(*bobj, "kind", bundle.kind, diags, "bundle")) return std::nullopt;
+            if (!read_string_array_field(*bobj, "deps", bundle.deps, diags, "bundle", false)) return std::nullopt;
+
+            if (bundle.kind != "bin" && bundle.kind != "lib") {
                 diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
                           "<entry>",
                           1,
                           1,
-                          "bundle.sources must not be empty");
+                          "bundle.kind must be 'bin' or 'lib' in v1: " + bundle.kind);
                 return std::nullopt;
             }
-            if (node.kind != "bin" && node.kind != "lib") {
-                diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+
+            auto it_modules = bobj->find("modules");
+            if (it_modules == bobj->end()) {
+                diags.add(lei::diag::Code::B_BUNDLE_MODULES_REQUIRED,
                           "<entry>",
                           1,
                           1,
-                          "bundle.kind must be 'bin' or 'lib' in v1: " + node.kind);
+                          "bundle.modules is required");
                 return std::nullopt;
             }
-            g.bundles.push_back(std::move(node));
+            auto mod_arr = std::get_if<lei::eval::Value::Array>(&it_modules->second.data);
+            if (!mod_arr) {
+                diags.add(lei::diag::Code::B_BUNDLE_MODULES_REQUIRED,
+                          "<entry>",
+                          1,
+                          1,
+                          "bundle.modules must be array");
+                return std::nullopt;
+            }
+            if (mod_arr->empty()) {
+                diags.add(lei::diag::Code::B_BUNDLE_MODULES_REQUIRED,
+                          "<entry>",
+                          1,
+                          1,
+                          "bundle.modules must not be empty");
+                return std::nullopt;
+            }
+
+            for (const auto& mv : *mod_arr) {
+                auto mobj = mv.as_object();
+                if (!mobj) {
+                    diags.add(lei::diag::Code::B_MODULE_SCHEMA_INVALID,
+                              "<entry>",
+                              1,
+                              1,
+                              "module entry must be object");
+                    return std::nullopt;
+                }
+
+                ModuleNode module{};
+                module.bundle = bundle.name;
+
+                if (!expect_string_field(*mobj, "head", module.head, diags, "module")) return std::nullopt;
+                if (!read_string_array_field(*mobj, "sources", module.sources, diags, "module", true)) return std::nullopt;
+                if (!read_string_array_field(*mobj, "imports", module.imports, diags, "module", false)) return std::nullopt;
+
+                if (module.head.empty()) {
+                    diags.add(lei::diag::Code::B_MODULE_SCHEMA_INVALID,
+                              "<entry>",
+                              1,
+                              1,
+                              "module.head must not be empty");
+                    return std::nullopt;
+                }
+                if (module.sources.empty()) {
+                    diags.add(lei::diag::Code::B_MODULE_SCHEMA_INVALID,
+                              "<entry>",
+                              1,
+                              1,
+                              "module.sources must not be empty");
+                    return std::nullopt;
+                }
+
+                auto [it, inserted] = module_owner_by_head.emplace(module.head, bundle.name);
+                if (!inserted) {
+                    diags.add(lei::diag::Code::B_MODULE_HEAD_COLLISION,
+                              "<entry>",
+                              1,
+                              1,
+                              "duplicate module head: " + module.head);
+                    return std::nullopt;
+                }
+
+                bundle.modules.push_back(module.head);
+                g.modules.push_back(std::move(module));
+            }
+
+            bundle_index_by_name[bundle.name] = g.bundles.size();
+            g.bundles.push_back(std::move(bundle));
         }
     }
 
@@ -456,15 +561,49 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
         }
     }
 
+    for (const auto& module : g.modules) {
+        auto owner_it = bundle_index_by_name.find(module.bundle);
+        if (owner_it == bundle_index_by_name.end()) continue;
+        const auto& owner_bundle = g.bundles[owner_it->second];
+        const std::unordered_set<std::string> dep_set(owner_bundle.deps.begin(), owner_bundle.deps.end());
+
+        for (const auto& import_head : module.imports) {
+            auto target_it = module_owner_by_head.find(import_head);
+            if (target_it == module_owner_by_head.end()) {
+                diags.add(lei::diag::Code::B_IMPORT_MODULE_NOT_DECLARED,
+                          "<entry>",
+                          1,
+                          1,
+                          "module '" + module.head + "' imports unknown module '" + import_head + "'");
+                return std::nullopt;
+            }
+            const std::string& target_bundle = target_it->second;
+            if (target_bundle != module.bundle && dep_set.find(target_bundle) == dep_set.end()) {
+                diags.add(lei::diag::Code::B_BUNDLE_DEP_NOT_DECLARED,
+                          "<entry>",
+                          1,
+                          1,
+                          "module '" + module.head + "' imports '" + import_head
+                            + "' from bundle '" + target_bundle
+                            + "' but bundle.deps does not declare it");
+                return std::nullopt;
+            }
+        }
+    }
+
     if (!detect_bundle_cycle(g, diags)) return std::nullopt;
 
     return g;
 }
 
-std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Bag& diags) {
+std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
+                                          const std::string& bundle_root,
+                                          lei::diag::Bag& diags) {
     LowerCtx ctx{};
     ctx.g.project_name = graph.project_name;
     ctx.g.project_version = graph.project_version;
+    const std::string parusc_cmd = tool_from_env("PARUSC", "parusc");
+    const std::string parus_lld_cmd = tool_from_env("PARUS_LLD", "parus-lld");
 
     std::unordered_set<std::string> names{};
     for (const auto& b : graph.bundles) {
@@ -472,6 +611,11 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
             diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE, "<entry>", 1, 1, "duplicate bundle name: " + b.name);
             return std::nullopt;
         }
+    }
+
+    std::unordered_map<std::string, const ModuleNode*> module_by_head{};
+    for (const auto& m : graph.modules) {
+        module_by_head[m.head] = &m;
     }
 
     for (const auto& c : graph.codegens) {
@@ -504,23 +648,75 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
     }
 
     for (const auto& b : graph.bundles) {
+        std::vector<std::string> resolved_sources{};
+        std::unordered_map<std::string, std::string> source_module_head{};
+        std::unordered_map<std::string, std::vector<std::string>> source_module_imports{};
+
+        for (const auto& mod_head : b.modules) {
+            auto mit = module_by_head.find(mod_head);
+            if (mit == module_by_head.end() || mit->second == nullptr) {
+                diags.add(lei::diag::Code::B_IMPORT_MODULE_NOT_DECLARED,
+                          "<entry>",
+                          1,
+                          1,
+                          "bundle '" + b.name + "' references unknown module '" + mod_head + "'");
+                return std::nullopt;
+            }
+            const auto* m = mit->second;
+            if (m->bundle != b.name) {
+                diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+                          "<entry>",
+                          1,
+                          1,
+                          "bundle '" + b.name + "' cannot include module '" + mod_head
+                            + "' owned by bundle '" + m->bundle + "'");
+                return std::nullopt;
+            }
+            for (const auto& src : m->sources) {
+                const std::string resolved = resolve_source_path(bundle_root, src);
+                resolved_sources.push_back(resolved);
+                source_module_head[resolved] = m->head;
+                source_module_imports[resolved] = m->imports;
+            }
+        }
+        std::sort(resolved_sources.begin(), resolved_sources.end());
+        resolved_sources.erase(std::unique(resolved_sources.begin(), resolved_sources.end()), resolved_sources.end());
+        if (resolved_sources.empty()) {
+            diags.add(lei::diag::Code::B_BUNDLE_MODULES_REQUIRED,
+                      "<entry>",
+                      1,
+                      1,
+                      "bundle '" + b.name + "' resolved to zero source files");
+            return std::nullopt;
+        }
+
         std::vector<std::string> obj_paths{};
-        obj_paths.reserve(b.sources.size());
+        obj_paths.reserve(resolved_sources.size());
 
         const std::string index_path = ".lei-cache/index/" + sanitize(b.name) + ".exports.json";
         ctx.bundle_index_path_by_name[b.name] = index_path;
         add_artifact(ctx, index_path, ArtifactKind::kGeneratedFile);
 
         std::vector<std::string> prepass_cmd = {
-            "parusc",
-            b.sources.front(),
+            parusc_cmd,
+            resolved_sources.front(),
             "-fsyntax-only",
             "--bundle-name",
             b.name,
+            "--bundle-root",
+            bundle_root,
+            "--module-head",
+            source_module_head[resolved_sources.front()],
             "--emit-export-index",
             index_path,
         };
-        for (const auto& src : b.sources) {
+        if (auto it = source_module_imports.find(resolved_sources.front()); it != source_module_imports.end()) {
+            for (const auto& im : it->second) {
+                prepass_cmd.push_back("--module-import");
+                prepass_cmd.push_back(im);
+            }
+        }
+        for (const auto& src : resolved_sources) {
             prepass_cmd.push_back("--bundle-source");
             prepass_cmd.push_back(src);
         }
@@ -533,19 +729,25 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
                                                       "bundle-prepass:" + b.name,
                                                       ".",
                                                       std::move(prepass_cmd),
-                                                      b.sources,
+                                                      resolved_sources,
                                                       {index_path},
                                                       false);
         ctx.bundle_prepass_action_by_name[b.name] = prepass_action;
         ctx.bundle_compile_actions_by_name[b.name] = {};
 
-        for (const auto& src : b.sources) {
+        for (const auto& src : resolved_sources) {
             const std::string obj = obj_path_for(b.name, src);
             obj_paths.push_back(obj);
             add_artifact(ctx, obj, ArtifactKind::kObjectFile);
 
+            std::string module_head = b.name;
+            auto mhit = source_module_head.find(src);
+            if (mhit != source_module_head.end()) {
+                module_head = mhit->second;
+            }
+
             std::vector<std::string> cmd = {
-                "parusc",
+                parusc_cmd,
                 src,
                 "--emit-object",
                 "-o",
@@ -553,7 +755,18 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
             };
             cmd.push_back("--bundle-name");
             cmd.push_back(b.name);
-            for (const auto& all_src : b.sources) {
+            cmd.push_back("--bundle-root");
+            cmd.push_back(bundle_root);
+            cmd.push_back("--module-head");
+            cmd.push_back(module_head);
+            auto miit = source_module_imports.find(src);
+            if (miit != source_module_imports.end()) {
+                for (const auto& im : miit->second) {
+                    cmd.push_back("--module-import");
+                    cmd.push_back(im);
+                }
+            }
+            for (const auto& all_src : resolved_sources) {
                 cmd.push_back("--bundle-source");
                 cmd.push_back(all_src);
             }
@@ -641,7 +854,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Ba
         add_artifact(ctx, bin_out, ArtifactKind::kBinaryFile);
         add_artifact(ctx, bin_stamp, ArtifactKind::kStampFile);
 
-        std::vector<std::string> cmd = {"parus-lld", "-o", bin_out};
+        std::vector<std::string> cmd = {parus_lld_cmd, "-o", bin_out};
         cmd.insert(cmd.end(), all_objs.begin(), all_objs.end());
 
         std::vector<std::string> outs = {bin_out, bin_stamp};
@@ -840,12 +1053,25 @@ std::optional<std::string> emit_graph_json(const BuildGraph& graph, lei::diag::B
     oss << "\"\n";
     oss << "  },\n";
 
+    oss << "  \"modules\": [\n";
+    for (size_t i = 0; i < graph.modules.size(); ++i) {
+        const auto& m = graph.modules[i];
+        oss << "    {\"head\": \""; append_json_escaped(oss, m.head);
+        oss << "\", \"bundle\": \""; append_json_escaped(oss, m.bundle);
+        oss << "\", \"sources\": "; append_string_array_json(oss, m.sources);
+        oss << ", \"imports\": "; append_string_array_json(oss, m.imports);
+        oss << "}";
+        if (i + 1 != graph.modules.size()) oss << ",";
+        oss << "\n";
+    }
+    oss << "  ],\n";
+
     oss << "  \"bundles\": [\n";
     for (size_t i = 0; i < graph.bundles.size(); ++i) {
         const auto& b = graph.bundles[i];
         oss << "    {\"name\": \""; append_json_escaped(oss, b.name);
         oss << "\", \"kind\": \""; append_json_escaped(oss, b.kind);
-        oss << "\", \"sources\": "; append_string_array_json(oss, b.sources);
+        oss << "\", \"modules\": "; append_string_array_json(oss, b.modules);
         oss << ", \"deps\": "; append_string_array_json(oss, b.deps);
         oss << "}";
         if (i + 1 != graph.bundles.size()) oss << ",";
@@ -896,9 +1122,15 @@ std::optional<std::string> emit_graph_text(const BuildGraph& graph, lei::diag::B
     std::ostringstream oss;
     oss << "project.name=" << graph.project_name << "\n";
     oss << "project.version=" << graph.project_version << "\n";
+    oss << "modules=" << graph.modules.size() << "\n";
+    for (const auto& m : graph.modules) {
+        oss << "  module " << m.head << " bundle=" << m.bundle
+            << " srcs=" << m.sources.size()
+            << " imports=" << m.imports.size() << "\n";
+    }
     oss << "bundles=" << graph.bundles.size() << "\n";
     for (const auto& b : graph.bundles) {
-        oss << "  bundle " << b.name << " kind=" << b.kind << " srcs=" << b.sources.size()
+        oss << "  bundle " << b.name << " kind=" << b.kind << " modules=" << b.modules.size()
             << " deps=" << b.deps.size() << "\n";
     }
     oss << "tasks=" << graph.tasks.size() << "\n";
@@ -921,6 +1153,9 @@ std::optional<std::string> emit_graph_dot(const BuildGraph& graph, lei::diag::Ba
     oss << "digraph lei_build {\n";
     oss << "  rankdir=LR;\n";
 
+    for (const auto& m : graph.modules) {
+        oss << "  \"module:" << sanitize(m.head) << "\" [label=\"module:" << m.head << "\"];\n";
+    }
     for (const auto& b : graph.bundles) {
         oss << "  \"bundle:" << sanitize(b.name) << "\" [label=\"bundle:" << b.name << "\"];\n";
     }
@@ -931,6 +1166,16 @@ std::optional<std::string> emit_graph_dot(const BuildGraph& graph, lei::diag::Ba
         oss << "  \"codegen:" << sanitize(c.name) << "\" [label=\"codegen:" << c.name << "\"];\n";
     }
 
+    for (const auto& b : graph.bundles) {
+        for (const auto& m : b.modules) {
+            oss << "  \"module:" << sanitize(m) << "\" -> \"bundle:" << sanitize(b.name) << "\";\n";
+        }
+    }
+    for (const auto& m : graph.modules) {
+        for (const auto& dep : m.imports) {
+            oss << "  \"module:" << sanitize(dep) << "\" -> \"module:" << sanitize(m.head) << "\";\n";
+        }
+    }
     for (const auto& b : graph.bundles) {
         for (const auto& dep : b.deps) {
             oss << "  \"bundle:" << sanitize(dep) << "\" -> \"bundle:" << sanitize(b.name) << "\";\n";

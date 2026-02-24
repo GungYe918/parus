@@ -34,11 +34,6 @@ std::string resolve_tool(std::string_view tool_name, const ResolveOptions& opt) 
         append_candidate(candidates, fs::path(opt.toolchain_root) / "bin" / std::string(tool_name));
     }
 
-    const std::string env_root = getenv_string("PARUS_TOOLCHAIN_ROOT");
-    if (!env_root.empty()) {
-        append_candidate(candidates, fs::path(env_root) / "bin" / std::string(tool_name));
-    }
-
     if (opt.argv0 != nullptr) {
         std::error_code ec{};
         fs::path argv_path(opt.argv0);
@@ -54,6 +49,11 @@ std::string resolve_tool(std::string_view tool_name, const ResolveOptions& opt) 
         if (tool_name == "lei") {
             append_candidate(candidates, exe_dir.parent_path().parent_path() / "tools" / "Lei" / "lei");
         }
+    }
+
+    const std::string env_root = getenv_string("PARUS_TOOLCHAIN_ROOT");
+    if (!env_root.empty()) {
+        append_candidate(candidates, fs::path(env_root) / "bin" / std::string(tool_name));
     }
 
     for (const auto& c : candidates) {

@@ -69,7 +69,7 @@ void Parser::diag_reserved_identifier(const syntax::Token& t, std::string_view w
 }
 
 bool Parser::is_reserved_name(std::string_view name) const {
-    return name == "bundle" || name == "master" || name == "task" || name == "codegen";
+    return name == "bundle" || name == "module" || name == "master" || name == "task" || name == "codegen";
 }
 
 bool Parser::validate_decl_name(const syntax::Token& t,

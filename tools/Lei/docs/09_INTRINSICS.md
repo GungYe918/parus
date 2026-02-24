@@ -7,7 +7,7 @@ LEI intrinsic은 특정 고정 키워드를 의미하지 않는다. intrinsic은
 중요:
 
 1. intrinsic 레지스트리와 built-in plan 스키마 레지스트리는 별개다.
-2. `bundle`, `master`, `task`, `codegen`은 intrinsic 함수가 아니라 plan 템플릿 주입 계약에 속한다.
+2. `bundle`, `module`, `master`, `task`, `codegen`은 intrinsic 함수가 아니라 plan 템플릿 주입 계약에 속한다.
 3. `proto`는 intrinsic이 아니라 LEI Core 문법(사용자 템플릿 선언)이다.
 4. built-in plan 규칙은 `12_BUILTIN_PLAN_SCHEMA_INJECTION.md`를 따른다.
 5. 실제 빌트인 상수/함수 목록 정본은 `15_BUILTIN_CONSTANTS_AND_FUNCTIONS.md`를 따른다.

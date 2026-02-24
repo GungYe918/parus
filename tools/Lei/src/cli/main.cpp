@@ -11,6 +11,7 @@
 #include <set>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -194,6 +195,7 @@ int main(int argc, char** argv) {
     std::error_code ec{};
     const std::string entry_abs = std::filesystem::weakly_canonical(std::filesystem::path(entry), ec).string();
     const std::string entry_norm = ec ? entry : entry_abs;
+    const std::string entry_root = (std::filesystem::path(entry_norm).parent_path()).lexically_normal().string();
 
     lei::diag::Bag diags;
 
@@ -234,18 +236,31 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    const auto loaded_modules = evaluator.loaded_module_paths();
+    if (graph->bundles.size() > 1 && loaded_modules.size() <= 1) {
+        diags.add(lei::diag::Code::B_INLINE_BUNDLE_MULTI_FORBIDDEN,
+                  entry_norm,
+                  1,
+                  1,
+                  "multiple inline bundles in config.lei are forbidden; declare bundles in per-bundle .lei files");
+        std::cerr << diags.render_text();
+        return 1;
+    }
+
     if (check_only) {
         return 0;
     }
 
     if (list_sources) {
         std::set<std::string> srcs{};
-        for (const auto& b : graph->bundles) {
-            for (const auto& s : b.sources) srcs.insert(s);
+        for (const auto& m : graph->modules) {
+            for (const auto& s : m.sources) srcs.insert(s);
         }
         if (!format_set || view_format == "text") {
-            for (const auto& s : srcs) {
-                std::cout << s << "\n";
+            for (const auto& m : graph->modules) {
+                for (const auto& s : m.sources) {
+                    std::cout << m.bundle << "\t" << m.head << "\t" << s << "\n";
+                }
             }
             return 0;
         }
@@ -269,17 +284,29 @@ int main(int argc, char** argv) {
 
             struct Unit {
                 std::string bundle{};
+                std::string module{};
                 std::string source{};
-                std::vector<std::string> deps{};
+                std::vector<std::string> module_imports{};
+                std::vector<std::string> bundle_deps{};
             };
             std::vector<Unit> units{};
+            std::unordered_map<std::string, std::vector<std::string>> bundle_deps{};
             for (const auto& b : graph->bundles) {
-                for (const auto& s : b.sources) {
-                    units.push_back(Unit{b.name, s, b.deps});
+                bundle_deps[b.name] = b.deps;
+            }
+            for (const auto& m : graph->modules) {
+                for (const auto& s : m.sources) {
+                    units.push_back(Unit{
+                        m.bundle,
+                        m.head,
+                        s,
+                        m.imports,
+                        bundle_deps[m.bundle],
+                    });
                 }
             }
             std::sort(units.begin(), units.end(), [](const Unit& a, const Unit& b) {
-                return std::tie(a.bundle, a.source) < std::tie(b.bundle, b.source);
+                return std::tie(a.bundle, a.module, a.source) < std::tie(b.bundle, b.module, b.source);
             });
 
             std::cout << "{\n";
@@ -287,11 +314,17 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < units.size(); ++i) {
                 const auto& u = units[i];
                 std::cout << "    {\"bundle\":\"" << json_escape(u.bundle) << "\","
+                          << "\"module\":\"" << json_escape(u.module) << "\","
                           << "\"source\":\"" << json_escape(u.source) << "\","
-                          << "\"deps\":[";
-                for (size_t j = 0; j < u.deps.size(); ++j) {
+                          << "\"module_imports\":[";
+                for (size_t j = 0; j < u.module_imports.size(); ++j) {
                     if (j) std::cout << ",";
-                    std::cout << "\"" << json_escape(u.deps[j]) << "\"";
+                    std::cout << "\"" << json_escape(u.module_imports[j]) << "\"";
+                }
+                std::cout << "],\"bundle_deps\":[";
+                for (size_t j = 0; j < u.bundle_deps.size(); ++j) {
+                    if (j) std::cout << ",";
+                    std::cout << "\"" << json_escape(u.bundle_deps[j]) << "\"";
                 }
                 std::cout << "]}";
                 if (i + 1 != units.size()) std::cout << ",";
@@ -335,7 +368,7 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    auto exec_graph = lei::graph::lower_exec_graph(*graph, diags);
+    auto exec_graph = lei::graph::lower_exec_graph(*graph, entry_root, diags);
     if (!exec_graph || diags.has_error()) {
         std::cerr << diags.render_text();
         return 1;
@@ -352,7 +385,7 @@ int main(int argc, char** argv) {
     cache_meta.entry_file = entry_norm;
     cache_meta.entry_plan = entry_plan;
     cache_meta.builtin_fingerprint = "lei-builtins-v1";
-    for (const auto& path : evaluator.loaded_module_paths()) {
+    for (const auto& path : loaded_modules) {
         lei::cache::ModuleHash m{};
         m.path = path;
         m.hash = lei::cache::hash_file(path);

@@ -43,7 +43,7 @@ bool run_ok_case(const std::filesystem::path& path, std::string entry_plan = "ma
         return false;
     }
 
-    auto exec_graph = lei::graph::lower_exec_graph(*graph, bag);
+    auto exec_graph = lei::graph::lower_exec_graph(*graph, path.parent_path().lexically_normal().string(), bag);
     if (!exec_graph || bag.has_error()) {
         std::cerr << "exec graph failure:\n" << bag.render_text();
         return false;

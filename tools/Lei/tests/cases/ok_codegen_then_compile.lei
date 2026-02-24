@@ -9,7 +9,13 @@ plan gen_cfg = codegen & {
 plan app_bundle = bundle & {
   name = "app";
   kind = "bin";
-  sources = ["gen/cfg.pr", "src/main.pr"];
+  modules = [
+    module & {
+      head = "app";
+      sources = ["gen/cfg.pr", "src/main.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 

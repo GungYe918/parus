@@ -1,7 +1,13 @@
 plan app_bundle = bundle & {
   name = "app";
   kind = "bin";
-  sources = ["src/main.pr"];
+  modules = [
+    module & {
+      head = "app";
+      sources = ["src/main.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 

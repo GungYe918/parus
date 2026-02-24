@@ -673,29 +673,6 @@ namespace parus::tyck {
             return fallback_ret;
         }
 
-        auto format_candidate = [&](const Candidate& c) -> std::string {
-            std::ostringstream oss;
-            oss << callee_name << "(";
-            bool first = true;
-            for (const auto& p : c.positional) {
-                if (!first) oss << ", ";
-                first = false;
-                oss << p.name << ":" << types_.to_string(p.type);
-            }
-            if (!c.named.empty()) {
-                if (!first) oss << ", ";
-                oss << "{";
-                for (size_t i = 0; i < c.named.size(); ++i) {
-                    if (i) oss << ", ";
-                    oss << c.named[i].name << ":" << types_.to_string(c.named[i].type);
-                    if (c.named[i].has_default) oss << "=?";
-                }
-                oss << "}";
-            }
-            oss << ") -> " << types_.to_string(c.ret);
-            return oss.str();
-        };
-
         std::vector<size_t> filtered;
         filtered.reserve(candidates.size());
         for (size_t i = 0; i < candidates.size(); ++i) {
@@ -809,12 +786,7 @@ namespace parus::tyck {
 
         if (final_matches.size() > 1) {
             std::string msg = "ambiguous overloaded call '" + callee_name + "'";
-            std::string candidate_list;
-            for (size_t i = 0; i < final_matches.size(); ++i) {
-                if (i) candidate_list += ", ";
-                candidate_list += format_candidate(candidates[final_matches[i]]);
-            }
-            diag_(diag::Code::kOverloadAmbiguousCall, e.span, callee_name, candidate_list);
+            diag_(diag::Code::kSymbolAmbiguousOverload, e.span, callee_name);
             err_(e.span, msg);
             check_all_arg_exprs_only();
             return fallback_ret;

@@ -6,7 +6,7 @@
 
 1. 사용자 정의 스키마를 반복 사용 가능한 템플릿으로 선언한다.
 2. `export plan x = MyProto & { ... };` 패턴을 표준화한다.
-3. built-in plan(`bundle/master/task/codegen`)과 `proto`의 역할을 분리한다.
+3. built-in plan(`bundle/module/master/task/codegen`)과 `proto`의 역할을 분리한다.
 
 ## 문법
 
@@ -46,17 +46,23 @@ export plan foo = MyProto & {
 proto myBundleProto {
   name: string;
   kind: string = "lib";
-  sources: [string];
+  modules: [object];
   deps: [string] = [];
 };
 
 export plan core_bundle = bundle & myBundleProto & {
   name = "core";
-  sources = ["src/lib.pr"];
+  modules = [
+    module & {
+      head = "core";
+      sources = ["core/src/lib.pr"];
+      imports = [];
+    },
+  ];
 };
 ```
 
-1. `bundle`은 LEI Build API를 통해 profile이 주입한 빌트인 plan이다.
+1. `bundle`/`module`은 LEI Build API를 통해 profile이 주입한 빌트인 plan이다.
 2. `myBundleProto`는 Core 문법으로 작성한 사용자 템플릿이다.
 3. 마지막 patch는 프로젝트별 실제 값을 제공한다.
 
@@ -91,5 +97,5 @@ plan foo2 = foo & {
 ## 경계
 
 1. `proto`는 LEI Core 기능이다.
-2. `bundle/master/task/codegen` 의미는 Host Profile이 부여한다.
+2. `bundle/module/master/task/codegen` 의미는 Host Profile이 부여한다.
 3. 엔트리/마스터 선택 규칙은 `11_PARUS_BUILD_PROFILE.md`를 따른다.

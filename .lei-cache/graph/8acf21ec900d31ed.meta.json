@@ -1,7 +1,0 @@
-schema_version=v1
-entry_file=/private/tmp/parus-build-strict-XgPmJG/config.lei
-entry_plan=master
-builtin_fingerprint=lei-builtins-v1
-graph_json_hash=3d018b77ad42e958
-ninja_hash=6ab4c4706ed6bcd9
-module=/private/tmp/parus-build-strict-XgPmJG/config.lei	8665b8cd1803bcce

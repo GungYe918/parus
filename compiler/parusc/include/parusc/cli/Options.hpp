@@ -50,6 +50,9 @@ namespace parusc::cli {
     struct BundleCompileOptions {
         bool enabled = false;
         std::string bundle_name{};
+        std::string bundle_root{};
+        std::string module_head{};
+        std::vector<std::string> module_imports{};
         std::vector<std::string> bundle_sources{};
         std::vector<std::string> bundle_deps{};
         std::string emit_export_index_path{};

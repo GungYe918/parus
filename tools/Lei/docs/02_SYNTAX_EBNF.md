@@ -142,5 +142,5 @@ BoolLit          := "true" | "false" ;
 
 ## 주석
 
-1. `bundle`, `master`, `task`, `codegen`은 문법 키워드가 아니다.
+1. `bundle`, `module`, `master`, `task`, `codegen`은 문법 키워드가 아니다.
 2. 빌드 시스템 profile(예: parus)이 Build API를 통해 주입하는 일반 식별자다.

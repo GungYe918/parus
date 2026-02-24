@@ -4,6 +4,7 @@
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/syntax/TokenKind.hpp>
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -152,7 +153,18 @@ namespace parus::passes {
         diag::Bag& bag,
         const NameResolveOptions& opt
     ) {
-        auto ins = sym.insert(kind, name, ty, span);
+        auto ins = sym.insert(
+            kind,
+            name,
+            ty,
+            span,
+            opt.current_file_id,
+            opt.current_bundle_name,
+            /*is_export=*/false,
+            /*is_external=*/false,
+            opt.current_module_head,
+            opt.current_source_dir_norm
+        );
 
         // 함수는 오버로딩을 허용한다.
         // SymbolTable은 이름당 1개 엔트리만 보관하므로,
@@ -420,6 +432,82 @@ namespace parus::passes {
         return std::nullopt;
     }
 
+    static std::optional<uint32_t> lookup_external_export_fallback_(
+        sema::SymbolTable& sym,
+        std::string_view raw_name,
+        const std::unordered_map<std::string, std::string>& import_aliases,
+        const NameResolveOptions& opt
+    ) {
+        if (raw_name.empty() || opt.external_exports.empty()) return std::nullopt;
+
+        std::string name(raw_name);
+        if (auto rewritten = rewrite_imported_path_(name, import_aliases)) {
+            name = *rewritten;
+        }
+
+        auto candidate_names_for_external_ = [&](const NameResolveOptions::ExternalExport& ex) {
+            std::vector<std::string> names{};
+            names.reserve(3);
+            if (!ex.path.empty()) names.push_back(ex.path);
+
+            if (!ex.module_head.empty()) {
+                const std::string prefix = ex.module_head + "::";
+                if (!(ex.path == ex.module_head || ex.path.starts_with(prefix))) {
+                    names.push_back(prefix + ex.path);
+                }
+
+                if (!opt.current_module_head.empty() && opt.current_module_head == ex.module_head) {
+                    std::string local = ex.path;
+                    if (local.starts_with(prefix)) {
+                        local.erase(0, prefix.size());
+                    }
+                    if (!local.empty()) names.push_back(std::move(local));
+                }
+            }
+
+            std::sort(names.begin(), names.end());
+            names.erase(std::unique(names.begin(), names.end()), names.end());
+            return names;
+        };
+
+        auto try_match = [&](std::string_view candidate) -> std::optional<uint32_t> {
+            if (candidate.empty()) return std::nullopt;
+
+            for (const auto& ex : opt.external_exports) {
+                const auto names = candidate_names_for_external_(ex);
+                for (const auto& nm : names) {
+                    if (nm != candidate) continue;
+
+                    if (auto existing = sym.lookup(nm)) {
+                        return *existing;
+                    }
+
+                    auto ins = sym.insert(
+                        ex.kind,
+                        nm,
+                        ex.declared_type,
+                        ex.decl_span,
+                        ex.decl_span.file_id,
+                        ex.decl_bundle_name,
+                        ex.is_export,
+                        /*is_external=*/true,
+                        ex.module_head,
+                        ex.decl_source_dir_norm
+                    );
+                    if (ins.ok || ins.is_duplicate) {
+                        return ins.symbol_id;
+                    }
+                }
+            }
+            return std::nullopt;
+        };
+
+        if (auto sid = try_match(name)) {
+            return sid;
+        }
+        return std::nullopt;
+    }
+
     static bool is_explicit_acts_path_expr_(std::string_view text) {
         constexpr std::string_view marker = "::acts(";
         const size_t marker_pos = text.find(marker);
@@ -481,6 +569,9 @@ namespace parus::passes {
                     }
 
                     auto sid = lookup_symbol_(sym, e.text, namespace_stack, import_aliases);
+                    if (!sid) {
+                        sid = lookup_external_export_fallback_(sym, e.text, import_aliases, opt);
+                    }
                     if (!sid) {
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
                     } else {
@@ -1007,6 +1098,11 @@ namespace parus::passes {
                         namespace_stack.push_back(std::string(segs[s.nest_path_begin + j]));
                     }
                     file_namespace_set = true;
+                    report(bag,
+                           diag::Severity::kWarning,
+                           diag::Code::kNestNotUsedForModuleResolution,
+                           s.span,
+                           path_join_(ast, s.nest_path_begin, s.nest_path_count));
                 }
                 continue;
             }
@@ -1085,6 +1181,8 @@ namespace parus::passes {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;
                     se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
                     se.is_export = s.is_export;
                     se.is_external = false;
                 }
@@ -1100,6 +1198,8 @@ namespace parus::passes {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;
                     se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
                     se.is_export = s.is_export;
                     se.is_external = false;
                 }
@@ -1119,6 +1219,8 @@ namespace parus::passes {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;
                     se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
                     se.is_export = s.is_export;
                     se.is_external = false;
                 }
@@ -1134,6 +1236,8 @@ namespace parus::passes {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;
                     se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
                     se.is_export = s.is_export;
                     se.is_external = false;
                 }
@@ -1163,6 +1267,8 @@ namespace parus::passes {
                             auto& se = sym.symbol_mut(ins.symbol_id);
                             se.decl_file_id = ms.span.file_id;
                             se.decl_bundle_name = opt.current_bundle_name;
+                            se.decl_module_head = opt.current_module_head;
+                            se.decl_source_dir_norm = opt.current_source_dir_norm;
                             se.is_export = s.is_export;
                             se.is_external = false;
                         }
@@ -1178,33 +1284,64 @@ namespace parus::passes {
         diag::Bag& bag,
         const NameResolveOptions& opt
     ) {
+        auto candidate_names_for_external_ = [&](const NameResolveOptions::ExternalExport& ex) {
+            std::vector<std::string> names{};
+            names.reserve(3);
+            if (!ex.path.empty()) names.push_back(ex.path);
+
+            if (!ex.module_head.empty()) {
+                const std::string prefix = ex.module_head + "::";
+                if (!(ex.path == ex.module_head || ex.path.starts_with(prefix))) {
+                    names.push_back(prefix + ex.path);
+                }
+                if (!opt.current_module_head.empty() && opt.current_module_head == ex.module_head) {
+                    std::string local = ex.path;
+                    if (local.starts_with(prefix)) {
+                        local.erase(0, prefix.size());
+                    }
+                    if (!local.empty()) names.push_back(std::move(local));
+                }
+            }
+
+            std::sort(names.begin(), names.end());
+            names.erase(std::unique(names.begin(), names.end()), names.end());
+            return names;
+        };
+
         for (const auto& ex : opt.external_exports) {
             if (ex.path.empty()) continue;
 
-            if (auto existing = sym.lookup(ex.path)) {
-                const auto& old = sym.symbol(*existing);
-                if (old.kind != ex.kind) {
-                    report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, ex.path);
+            const auto names = candidate_names_for_external_(ex);
+            for (const auto& nm : names) {
+                if (nm.empty()) continue;
+
+                if (auto existing = sym.lookup(nm)) {
+                    const auto& old = sym.symbol(*existing);
+                    if (old.kind != ex.kind) {
+                        report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, nm);
+                    }
+                    continue;
                 }
-                continue;
+
+                auto ins = declare_(
+                    ex.kind,
+                    nm,
+                    ex.declared_type,
+                    ex.decl_span,
+                    sym,
+                    bag,
+                    opt
+                );
+                if (!ins.ok || ins.is_duplicate) continue;
+
+                auto& se = sym.symbol_mut(ins.symbol_id);
+                se.decl_file_id = ex.decl_span.file_id;
+                se.decl_bundle_name = ex.decl_bundle_name;
+                se.decl_module_head = ex.module_head;
+                se.decl_source_dir_norm = ex.decl_source_dir_norm;
+                se.is_export = ex.is_export;
+                se.is_external = true;
             }
-
-            auto ins = declare_(
-                ex.kind,
-                ex.path,
-                ex.declared_type,
-                ex.decl_span,
-                sym,
-                bag,
-                opt
-            );
-            if (!ins.ok || ins.is_duplicate) continue;
-
-            auto& se = sym.symbol_mut(ins.symbol_id);
-            se.decl_file_id = ex.decl_span.file_id;
-            se.decl_bundle_name = ex.decl_bundle_name;
-            se.is_export = ex.is_export;
-            se.is_external = true;
         }
     }
 

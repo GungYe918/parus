@@ -46,6 +46,7 @@ namespace parus::tyck {
             : ast_(ast), types_(types), type_resolve_(tr), diag_bag_(&bag) {}
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
+        void set_seed_symbol_table(const sema::SymbolTable* seed) { seed_sym_ = seed; }
 
         // program(StmtId) 하나를 타입체크
         TyckResult check_program(ast::StmtId program_stmt);
@@ -226,6 +227,7 @@ namespace parus::tyck {
 
         // 심볼 테이블
         sema::SymbolTable sym_;
+        const sema::SymbolTable* seed_sym_ = nullptr;
 
         // 결과 저장소
         TyckResult result_{};

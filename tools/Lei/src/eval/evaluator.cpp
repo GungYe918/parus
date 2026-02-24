@@ -26,7 +26,7 @@ bool numeric_promote(const Value& v, double& out) {
 }
 
 bool is_builtin_template_name(std::string_view n) {
-    return n == "bundle" || n == "master" || n == "task" || n == "codegen";
+    return n == "bundle" || n == "module" || n == "master" || n == "task" || n == "codegen";
 }
 
 SchemaType make_scalar_schema(SchemaType::Kind k) {
@@ -282,13 +282,55 @@ bool apply_runtime_path(Value& root,
 }
 
 std::optional<std::string> validate_bundle(const Value::Object& obj) {
-    auto it = obj.find("sources");
+    auto it = obj.find("modules");
     if (it == obj.end() || !it->second.is_array()) {
-        return std::string("bundle.sources must be [string]");
+        return std::string("bundle.modules must be [object]");
     }
     const auto& arr = std::get<Value::Array>(it->second.data);
     if (arr.empty()) {
-        return std::string("bundle.sources must not be empty");
+        return std::string("bundle.modules must not be empty");
+    }
+    for (const auto& v : arr) {
+        if (!v.is_object()) {
+            return std::string("bundle.modules must contain only object");
+        }
+    }
+    auto legacy_it = obj.find("sources");
+    if (legacy_it != obj.end()) {
+        return std::string("bundle.sources is removed; use bundle.modules");
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> validate_module(const Value::Object& obj) {
+    auto head_it = obj.find("head");
+    if (head_it == obj.end() || !head_it->second.is_string()) {
+        return std::string("module.head must be string");
+    }
+    auto src_it = obj.find("sources");
+    if (src_it == obj.end() || !src_it->second.is_array()) {
+        return std::string("module.sources must be [string]");
+    }
+    const auto& srcs = std::get<Value::Array>(src_it->second.data);
+    if (srcs.empty()) {
+        return std::string("module.sources must not be empty");
+    }
+    for (const auto& v : srcs) {
+        if (!v.is_string()) {
+            return std::string("module.sources must contain only string");
+        }
+    }
+    auto imp_it = obj.find("imports");
+    if (imp_it != obj.end()) {
+        if (!imp_it->second.is_array()) {
+            return std::string("module.imports must be [string]");
+        }
+        const auto& imps = std::get<Value::Array>(imp_it->second.data);
+        for (const auto& v : imps) {
+            if (!v.is_string()) {
+                return std::string("module.imports must contain only string");
+            }
+        }
     }
     return std::nullopt;
 }
@@ -339,9 +381,20 @@ std::shared_ptr<TemplateSpec> make_bundle_template() {
 
     spec->fields["name"] = TemplateField{make_scalar_schema(SchemaType::Kind::kString), true, std::nullopt};
     spec->fields["kind"] = TemplateField{make_scalar_schema(SchemaType::Kind::kString), true, std::nullopt};
-    spec->fields["sources"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::nullopt};
+    spec->fields["modules"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kObject)), true, std::nullopt};
     spec->fields["deps"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::optional<Value>{make_array({})}};
     spec->validator = validate_bundle;
+    return spec;
+}
+
+std::shared_ptr<TemplateSpec> make_module_template() {
+    auto spec = std::make_shared<TemplateSpec>();
+    spec->name = "module";
+
+    spec->fields["head"] = TemplateField{make_scalar_schema(SchemaType::Kind::kString), true, std::nullopt};
+    spec->fields["sources"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::nullopt};
+    spec->fields["imports"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), false, std::optional<Value>{make_array({})}};
+    spec->validator = validate_module;
     return spec;
 }
 
@@ -443,6 +496,7 @@ bool BuiltinPlanRegistry::has_plan(std::string_view name) const {
 BuiltinPlanRegistry make_default_builtin_plan_registry() {
     BuiltinPlanRegistry reg;
     reg.register_plan("bundle", make_bundle_template);
+    reg.register_plan("module", make_module_template);
     reg.register_plan("master", make_master_template);
     reg.register_plan("task", make_task_template);
     reg.register_plan("codegen", make_codegen_template);

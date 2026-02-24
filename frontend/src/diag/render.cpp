@@ -151,6 +151,9 @@ namespace parus::diag {
             case Code::kImportDepNotDeclared: return "ImportDepNotDeclared";
             case Code::kSymbolNotExportedFileScope: return "SymbolNotExportedFileScope";
             case Code::kSymbolNotExportedBundleScope: return "SymbolNotExportedBundleScope";
+            case Code::kSymbolAmbiguousOverload: return "SymbolAmbiguousOverload";
+            case Code::kExportCollisionSameFolder: return "ExportCollisionSameFolder";
+            case Code::kNestNotUsedForModuleResolution: return "NestNotUsedForModuleResolution";
             case Code::kExportIndexMissing: return "ExportIndexMissing";
             case Code::kExportIndexSchema: return "ExportIndexSchema";
 
@@ -360,6 +363,9 @@ namespace parus::diag {
             case Code::kImportDepNotDeclared: return "import head '{0}' is not declared in current bundle deps";
             case Code::kSymbolNotExportedFileScope: return "symbol '{0}' is declared in another file and must be exported";
             case Code::kSymbolNotExportedBundleScope: return "symbol '{0}' from another bundle must be exported";
+            case Code::kSymbolAmbiguousOverload: return "symbol '{0}' is ambiguous after overload/visibility resolution";
+            case Code::kExportCollisionSameFolder: return "export collision in same module folder for '{0}'";
+            case Code::kNestNotUsedForModuleResolution: return "'nest' affects namespace only; module resolution ignores it";
             case Code::kExportIndexMissing: return "export index file is missing: '{0}'";
             case Code::kExportIndexSchema: return "invalid export index schema: '{0}'";
 
@@ -576,6 +582,9 @@ namespace parus::diag {
             case Code::kImportDepNotDeclared: return "import head '{0}'가 현재 bundle deps에 선언되어 있지 않습니다";
             case Code::kSymbolNotExportedFileScope: return "다른 파일의 심볼 '{0}'을(를) 참조하려면 export가 필요합니다";
             case Code::kSymbolNotExportedBundleScope: return "다른 bundle의 심볼 '{0}'은(는) export되어야 합니다";
+            case Code::kSymbolAmbiguousOverload: return "오버로드/가시성 해소 후에도 심볼 '{0}'이(가) 모호합니다";
+            case Code::kExportCollisionSameFolder: return "같은 모듈 폴더에서 export 충돌이 발생했습니다: '{0}'";
+            case Code::kNestNotUsedForModuleResolution: return "'nest'는 네임스페이스 태깅 전용이며 모듈 해석에는 사용되지 않습니다";
             case Code::kExportIndexMissing: return "export index 파일을 찾을 수 없습니다: '{0}'";
             case Code::kExportIndexSchema: return "export index 형식이 올바르지 않습니다: '{0}'";
 

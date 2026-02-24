@@ -35,7 +35,13 @@ let bundles = [app::app_bundle, json::json_bundle];
 export plan json_bundle = bundle & {
   name = "json";
   kind = "lib";
-  sources = ["src/json.pr"];
+  modules = [
+    module & {
+      head = "json";
+      sources = ["json/src/json.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 ```
@@ -46,7 +52,13 @@ export plan json_bundle = bundle & {
 plan json_bundle = bundle & {
   name = "json";
   kind = "lib";
-  sources = ["src/json.pr"];
+  modules = [
+    module & {
+      head = "json";
+      sources = ["json/src/json.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 

@@ -172,6 +172,9 @@ namespace parus::diag {
         kImportDepNotDeclared,  // import head is not listed in bundle deps
         kSymbolNotExportedFileScope, // cross-file reference requires export
         kSymbolNotExportedBundleScope, // cross-bundle reference requires export
+        kSymbolAmbiguousOverload, // overload candidates remain ambiguous after visibility ranking
+        kExportCollisionSameFolder, // same-folder export symbol collision with identical signature
+        kNestNotUsedForModuleResolution, // nest is namespace-only and not used for module-head resolution
         kExportIndexMissing,    // export index file missing
         kExportIndexSchema,     // export index parse/schema mismatch
         

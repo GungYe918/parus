@@ -10,10 +10,17 @@
 
 namespace lei::graph {
 
+struct ModuleNode {
+    std::string head{};
+    std::string bundle{};
+    std::vector<std::string> sources{};
+    std::vector<std::string> imports{};
+};
+
 struct BundleNode {
     std::string name{};
     std::string kind{};
-    std::vector<std::string> sources{};
+    std::vector<std::string> modules{};
     std::vector<std::string> deps{};
 };
 
@@ -41,6 +48,7 @@ struct CodegenNode {
 struct BuildGraph {
     std::string project_name{};
     std::string project_version{};
+    std::vector<ModuleNode> modules{};
     std::vector<BundleNode> bundles{};
     std::vector<TaskNode> tasks{};
     std::vector<CodegenNode> codegens{};
@@ -101,7 +109,9 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                                                 lei::diag::Bag& diags,
                                                 const std::string& entry_name = "master");
 
-std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph, lei::diag::Bag& diags);
+std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
+                                          const std::string& bundle_root,
+                                          lei::diag::Bag& diags);
 std::optional<std::string> emit_ninja(const ExecGraph& graph, lei::diag::Bag& diags);
 std::optional<std::string> emit_graph_json(const BuildGraph& graph, lei::diag::Bag& diags);
 std::optional<std::string> emit_graph_text(const BuildGraph& graph, lei::diag::Bag& diags);

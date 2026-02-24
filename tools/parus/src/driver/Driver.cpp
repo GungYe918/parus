@@ -96,8 +96,10 @@ bool is_pr_entry(const std::string& entry) {
 
 struct BundleSourceUnit {
     std::string bundle{};
+    std::string module{};
     std::string source{};
-    std::vector<std::string> deps{};
+    std::vector<std::string> module_imports{};
+    std::vector<std::string> bundle_deps{};
 };
 
 bool unescape_json_string(std::string_view in, std::string& out) {
@@ -211,19 +213,23 @@ std::vector<BundleSourceUnit> parse_bundle_units_json(const std::string& text, s
     while (std::getline(iss, line)) {
         line = trim(std::move(line));
         if (line.find("\"bundle\"") == std::string::npos ||
+            line.find("\"module\"") == std::string::npos ||
             line.find("\"source\"") == std::string::npos ||
-            line.find("\"deps\"") == std::string::npos) {
+            line.find("\"module_imports\"") == std::string::npos ||
+            line.find("\"bundle_deps\"") == std::string::npos) {
             continue;
         }
 
         BundleSourceUnit u{};
         if (!parse_json_string_field_line(line, "bundle", u.bundle) ||
+            !parse_json_string_field_line(line, "module", u.module) ||
             !parse_json_string_field_line(line, "source", u.source) ||
-            !parse_json_string_array_field_line(line, "deps", u.deps)) {
+            !parse_json_string_array_field_line(line, "module_imports", u.module_imports) ||
+            !parse_json_string_array_field_line(line, "bundle_deps", u.bundle_deps)) {
             out_err = "failed to parse LEI --list_sources JSON payload";
             return {};
         }
-        if (!u.bundle.empty() && !u.source.empty()) {
+        if (!u.bundle.empty() && !u.module.empty() && !u.source.empty()) {
             units.push_back(std::move(u));
         }
     }
@@ -469,6 +475,16 @@ int run_build(const cli::Options& opt,
     const bool progress = settings.ui_progress;
     emit_progress(progress, settings.diag_color, 10, "Resolving LEI tool");
     const auto lei = resolve_tool_with_config("lei", opt, settings, argv0);
+    const auto parusc = resolve_tool_with_config("parusc", opt, settings, argv0);
+    const auto parus_lld = resolve_tool_with_config("parus-lld", opt, settings, argv0);
+
+#if defined(_WIN32)
+    _putenv_s("PARUSC", parusc.c_str());
+    _putenv_s("PARUS_LLD", parus_lld.c_str());
+#else
+    setenv("PARUSC", parusc.c_str(), 1);
+    setenv("PARUS_LLD", parus_lld.c_str(), 1);
+#endif
 
     std::vector<std::string> argv{lei, opt.build.entry, "--build", "--plan", opt.build.plan};
     if (opt.build.jobs.has_value()) {
@@ -643,6 +659,7 @@ int run_check(const cli::Options& opt,
     std::error_code ec{};
     const auto entry_abs = std::filesystem::weakly_canonical(std::filesystem::path(opt.check.entry), ec);
     const auto entry_base = (ec ? std::filesystem::path(opt.check.entry) : entry_abs).parent_path();
+    const auto bundle_root = entry_base.lexically_normal().string();
 
     std::string units_err{};
     auto units = parse_bundle_units_json(sources_out, units_err);
@@ -659,6 +676,8 @@ int run_check(const cli::Options& opt,
     struct BundleInfo {
         std::vector<std::string> sources{};
         std::vector<std::string> deps{};
+        std::unordered_map<std::string, std::string> module_head_by_source{};
+        std::unordered_map<std::string, std::vector<std::string>> module_imports_by_source{};
     };
     std::unordered_map<std::string, BundleInfo> bundles{};
     std::vector<std::string> bundle_order{};
@@ -670,9 +689,12 @@ int run_check(const cli::Options& opt,
         }
         auto source_path = std::filesystem::path(u.source);
         if (source_path.is_relative()) source_path = entry_base / source_path;
-        it->second.sources.push_back(source_path.lexically_normal().string());
+        const auto source_norm = source_path.lexically_normal().string();
+        it->second.sources.push_back(source_norm);
+        it->second.module_head_by_source[source_norm] = u.module;
+        it->second.module_imports_by_source[source_norm] = u.module_imports;
         if (it->second.deps.empty()) {
-            it->second.deps = u.deps;
+            it->second.deps = u.bundle_deps;
         }
     }
     for (auto& [name, info] : bundles) {
@@ -700,6 +722,20 @@ int run_check(const cli::Options& opt,
         std::vector<std::string> extra{};
         extra.push_back("--bundle-name");
         extra.push_back(bname);
+        extra.push_back("--bundle-root");
+        extra.push_back(bundle_root);
+        auto first_head = bit->second.module_head_by_source.find(bit->second.sources.front());
+        if (first_head != bit->second.module_head_by_source.end()) {
+            extra.push_back("--module-head");
+            extra.push_back(first_head->second);
+        }
+        auto first_imports = bit->second.module_imports_by_source.find(bit->second.sources.front());
+        if (first_imports != bit->second.module_imports_by_source.end()) {
+            for (const auto& mh : first_imports->second) {
+                extra.push_back("--module-import");
+                extra.push_back(mh);
+            }
+        }
         extra.push_back("--emit-export-index");
         extra.push_back(idx_path);
         for (const auto& src : bit->second.sources) {
@@ -736,6 +772,20 @@ int run_check(const cli::Options& opt,
             std::vector<std::string> extra{};
             extra.push_back("--bundle-name");
             extra.push_back(bname);
+            extra.push_back("--bundle-root");
+            extra.push_back(bundle_root);
+            auto mhit = info.module_head_by_source.find(src);
+            if (mhit != info.module_head_by_source.end()) {
+                extra.push_back("--module-head");
+                extra.push_back(mhit->second);
+            }
+            auto miit = info.module_imports_by_source.find(src);
+            if (miit != info.module_imports_by_source.end()) {
+                for (const auto& mh : miit->second) {
+                    extra.push_back("--module-import");
+                    extra.push_back(mh);
+                }
+            }
             for (const auto& all_src : info.sources) {
                 extra.push_back("--bundle-source");
                 extra.push_back(all_src);

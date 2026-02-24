@@ -14,6 +14,9 @@ namespace parusc::p0 {
         std::string normalized_input_path{};
         std::string source_text{};
         std::string driver_executable_path{};
+        std::string bundle_root{};
+        std::string module_head{};
+        std::vector<std::string> module_imports{};
         std::vector<std::string> bundle_sources{};
         std::vector<std::string> bundle_deps{};
         std::vector<std::string> load_export_index_paths{};

@@ -1,13 +1,18 @@
 proto MyBundle {
   name: string;
   kind: string = "lib";
-  sources: [string];
   deps: [string] = [];
 };
 
 export plan core_bundle = bundle & MyBundle & {
   name = "core";
-  sources = ["src/lib.pr"];
+  modules = [
+    module & {
+      head = "core";
+      sources = ["src/lib.pr"];
+      imports = [];
+    },
+  ];
 };
 
 plan master = master & {

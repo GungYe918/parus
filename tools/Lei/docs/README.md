@@ -70,13 +70,19 @@ LEI는 범용 빌드 시스템이다. 문법/평가 엔진은 LEI 시스템의 �
 proto myBundleProto {
   name: string;
   kind: string = "lib";
-  sources: [string];
+  modules: [object];
   deps: [string] = [];
 };
 
 export plan json_bundle = bundle & myBundleProto & {
   name = "json";
-  sources = ["src/json.pr"];
+  modules = [
+    module & {
+      head = "json";
+      sources = ["json/src/json.pr"];
+      imports = [];
+    },
+  ];
 };
 
 export plan lint = task & {

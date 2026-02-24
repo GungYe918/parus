@@ -1,12 +1,17 @@
 proto BundleReq {
   name: string;
   kind: string = "lib";
-  sources: [string];
   deps: [string] = [];
 };
 
 plan bad_bundle = bundle & BundleReq & {
-  sources = ["src/lib.pr"];
+  modules = [
+    module & {
+      head = "bad";
+      sources = ["src/lib.pr"];
+      imports = [];
+    },
+  ];
 };
 
 plan master = master & {

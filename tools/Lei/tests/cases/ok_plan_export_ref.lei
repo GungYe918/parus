@@ -1,7 +1,13 @@
 plan helper_bundle = bundle & {
   name = "helper";
   kind = "lib";
-  sources = ["src/helper.pr"];
+  modules = [
+    module & {
+      head = "helper";
+      sources = ["src/helper.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 

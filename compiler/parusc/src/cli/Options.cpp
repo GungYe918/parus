@@ -279,6 +279,11 @@ namespace parusc::cli {
                 out.error = "bundle mode requires --bundle-name <name>";
                 return false;
             }
+            if (out.bundle.module_head.empty()) {
+                out.ok = false;
+                out.error = "bundle mode requires --module-head <head>";
+                return false;
+            }
             if (out.bundle.bundle_sources.empty()) {
                 out.ok = false;
                 out.error = "bundle mode requires at least one --bundle-source <path>";
@@ -344,6 +349,9 @@ namespace parusc::cli {
             << "  -fuse-linker=auto|parus-lld|lld|clang\n"
             << "  --no-link-fallback   Disable linker fallback chain\n"
             << "  --bundle-name <name>\n"
+            << "  --bundle-root <path>\n"
+            << "  --module-head <head>\n"
+            << "  --module-import <head>   (repeatable)\n"
             << "  --bundle-source <path>  (repeatable)\n"
             << "  --bundle-dep <name>     (repeatable)\n"
             << "  --emit-export-index <path>\n"
@@ -548,7 +556,19 @@ namespace parusc::cli {
                 if (!out.ok) return out;
                 continue;
             }
+            if (parse_bundle_value_opt_(args, i, a, "bundle-root", out.bundle.bundle_root, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_value_opt_(args, i, a, "module-head", out.bundle.module_head, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
             if (parse_bundle_value_opt_(args, i, a, "emit-export-index", out.bundle.emit_export_index_path, out)) {
+                if (!out.ok) return out;
+                continue;
+            }
+            if (parse_bundle_repeat_opt_(args, i, a, "module-import", out.bundle.module_imports, out)) {
                 if (!out.ok) return out;
                 continue;
             }

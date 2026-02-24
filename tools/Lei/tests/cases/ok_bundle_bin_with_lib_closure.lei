@@ -1,21 +1,39 @@
 plan util_bundle = bundle & {
   name = "util";
   kind = "lib";
-  sources = ["src/util.pr"];
+  modules = [
+    module & {
+      head = "util";
+      sources = ["src/util.pr"];
+      imports = [];
+    },
+  ];
   deps = [];
 };
 
 plan core_bundle = bundle & {
   name = "core";
   kind = "lib";
-  sources = ["src/core.pr"];
+  modules = [
+    module & {
+      head = "core";
+      sources = ["src/core.pr"];
+      imports = ["util"];
+    },
+  ];
   deps = ["util"];
 };
 
 plan app_bundle = bundle & {
   name = "app";
   kind = "bin";
-  sources = ["src/main.pr"];
+  modules = [
+    module & {
+      head = "app";
+      sources = ["src/main.pr"];
+      imports = ["core"];
+    },
+  ];
   deps = ["core"];
 };
 

@@ -44,9 +44,14 @@ namespace parus::tyck {
         import_alias_scope_stack_.clear();
         block_depth_ = 0;
 
-        // sym_ “완전 초기화”
-        // (기존에 clear() API가 없으니 재생성하는 게 가장 안전)
-        sym_ = sema::SymbolTable{};
+        // sym_ 초기화:
+        // - bundle/module prepass 심볼이 있으면 시드 심볼테이블을 그대로 사용한다.
+        // - 없으면 빈 심볼테이블로 시작한다.
+        if (seed_sym_ != nullptr) {
+            sym_ = *seed_sym_;
+        } else {
+            sym_ = sema::SymbolTable{};
+        }
 
         // expr type cache: AST exprs 크기에 맞춰 리셋
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
@@ -85,7 +90,9 @@ namespace parus::tyck {
         //   거의 모든 TypeNotCallable 증상의 원인이었으므로 제거하고,
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
-        first_pass_collect_top_level_(program_stmt);
+        if (seed_sym_ == nullptr) {
+            first_pass_collect_top_level_(program_stmt);
+        }
 
         // ---------------------------------------------------------
         // PASS 2: 실제 타입체크

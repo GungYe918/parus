@@ -1,0 +1,9 @@
+schema_version=v1
+entry_file=/Users/gungye/workspace/Lang/gaupel/foo/config.lei
+entry_plan=master
+builtin_fingerprint=lei-builtins-v1
+graph_json_hash=cd1d7b7cc227cc54
+ninja_hash=2c9163832280e695
+module=/Users/gungye/workspace/Lang/gaupel/foo/app/app.lei	5c553ec97f6f739a
+module=/Users/gungye/workspace/Lang/gaupel/foo/config.lei	ad297def0d4a9e13
+module=/Users/gungye/workspace/Lang/gaupel/foo/math/math.lei	2249b020290c235e

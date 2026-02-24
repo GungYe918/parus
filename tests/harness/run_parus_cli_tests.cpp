@@ -109,7 +109,13 @@ bool test_check_lei_project() {
         "plan app_bundle = bundle & {\n"
         "  name = \"app\";\n"
         "  kind = \"bin\";\n"
-        "  sources = [\"main.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"app\";\n"
+        "      sources = [\"main.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [];\n"
         "};\n"
         "\n"
@@ -198,7 +204,13 @@ bool test_bundle_strict_export_violation() {
         "plan pkg_bundle = bundle & {\n"
         "  name = \"pkg\";\n"
         "  kind = \"lib\";\n"
-        "  sources = [\"a.pr\", \"b.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"pkg\";\n"
+        "      sources = [\"a.pr\", \"b.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [];\n"
         "};\n"
         "\n"
@@ -262,7 +274,13 @@ bool test_bundle_build_strict_export_violation() {
         "plan pkg_bundle = bundle & {\n"
         "  name = \"pkg\";\n"
         "  kind = \"bin\";\n"
-        "  sources = [\"a.pr\", \"b.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"pkg\";\n"
+        "      sources = [\"a.pr\", \"b.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [];\n"
         "};\n"
         "\n"
@@ -320,7 +338,13 @@ bool test_bundle_dep_import_not_declared() {
         "plan app_bundle = bundle & {\n"
         "  name = \"app\";\n"
         "  kind = \"bin\";\n"
-        "  sources = [\"main.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"app\";\n"
+        "      sources = [\"main.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [];\n"
         "};\n"
         "\n"
@@ -364,8 +388,21 @@ bool test_cross_bundle_non_export_violation() {
         return false;
     }
 
-    const auto lib = temp_root / "lib.pr";
-    const auto app = temp_root / "main.pr";
+    const auto math_dir = temp_root / "math";
+    const auto app_dir = temp_root / "app";
+    const auto math_src_dir = math_dir / "src";
+    const auto app_src_dir = app_dir / "src";
+    std::filesystem::create_directories(math_src_dir, ec);
+    std::filesystem::create_directories(app_src_dir, ec);
+    if (ec) {
+        std::cerr << "temp subdir create failed\n";
+        return false;
+    }
+
+    const auto lib = math_src_dir / "lib.pr";
+    const auto app = app_src_dir / "main.pr";
+    const auto math_lei = math_dir / "math.lei";
+    const auto app_lei = app_dir / "app.lei";
     const auto lei = temp_root / "config.lei";
 
     const std::string lib_src =
@@ -380,32 +417,53 @@ bool test_cross_bundle_non_export_violation() {
         "  return m::arith::hidden(a: 1i32, b: 2i32);\n"
         "}\n";
 
-    const std::string lei_src =
-        "plan math_bundle = bundle & {\n"
+    const std::string math_lei_src =
+        "export plan math_bundle = bundle & {\n"
         "  name = \"math\";\n"
         "  kind = \"lib\";\n"
-        "  sources = [\"lib.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"math\";\n"
+        "      sources = [\"math/src/lib.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [];\n"
-        "};\n"
-        "\n"
-        "plan app_bundle = bundle & {\n"
+        "};\n";
+
+    const std::string app_lei_src =
+        "export plan app_bundle = bundle & {\n"
         "  name = \"app\";\n"
         "  kind = \"bin\";\n"
-        "  sources = [\"main.pr\"];\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      head = \"app\";\n"
+        "      sources = [\"app/src/main.pr\"];\n"
+        "      imports = [\"math\"];\n"
+        "    },\n"
+        "  ];\n"
         "  deps = [\"math\"];\n"
-        "};\n"
+        "};\n";
+
+    const std::string lei_src =
+        "import math from \"./math/math.lei\";\n"
+        "import app from \"./app/app.lei\";\n"
         "\n"
         "plan master = master & {\n"
         "  project = {\n"
         "    name: \"cross-bundle-export\",\n"
         "    version: \"0.1.0\",\n"
         "  };\n"
-        "  bundles = [math_bundle, app_bundle];\n"
+        "  bundles = [math::math_bundle, app::app_bundle];\n"
         "  tasks = [];\n"
         "  codegens = [];\n"
         "};\n";
 
-    if (!write_text(lib, lib_src) || !write_text(app, app_src) || !write_text(lei, lei_src)) {
+    if (!write_text(lib, lib_src) ||
+        !write_text(app, app_src) ||
+        !write_text(math_lei, math_lei_src) ||
+        !write_text(app_lei, app_lei_src) ||
+        !write_text(lei, lei_src)) {
         std::cerr << "failed to write cross bundle project files\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;

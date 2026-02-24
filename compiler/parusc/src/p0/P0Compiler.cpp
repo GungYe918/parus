@@ -40,6 +40,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace parusc::p0 {
@@ -157,6 +158,8 @@ namespace parusc::p0 {
             parus::sema::SymbolKind kind = parus::sema::SymbolKind::kVar;
             std::string kind_text{};
             std::string path{};
+            std::string module_head{};
+            std::string decl_dir{};
             std::string type_repr{};
             std::string decl_file{};
             uint32_t decl_line = 1;
@@ -261,6 +264,85 @@ namespace parusc::p0 {
             return out;
         }
 
+        std::string parent_dir_norm_(std::string_view path) {
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+            fs::path p(path);
+            if (p.is_relative()) p = fs::absolute(p, ec);
+            if (ec) {
+                ec.clear();
+                p = fs::path(path);
+            }
+            fs::path dir = p.parent_path();
+            fs::path canon = fs::weakly_canonical(dir, ec);
+            if (!ec && !canon.empty()) {
+                return parus::normalize_path(canon.string());
+            }
+            return parus::normalize_path(dir.string());
+        }
+
+        std::string compute_module_head_(
+            std::string_view bundle_root,
+            std::string_view source_path,
+            std::string_view bundle_name
+        ) {
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+            fs::path root(bundle_root);
+            if (root.is_relative()) root = fs::absolute(root, ec);
+            if (ec) {
+                ec.clear();
+                root = fs::path(bundle_root);
+            }
+            fs::path root_norm = fs::weakly_canonical(root, ec);
+            if (ec || root_norm.empty()) {
+                ec.clear();
+                root_norm = root.lexically_normal();
+            }
+
+            fs::path src(source_path);
+            if (src.is_relative()) src = fs::absolute(src, ec);
+            if (ec) {
+                ec.clear();
+                src = fs::path(source_path);
+            }
+            fs::path src_norm = fs::weakly_canonical(src, ec);
+            if (ec || src_norm.empty()) {
+                ec.clear();
+                src_norm = src.lexically_normal();
+            }
+
+            fs::path rel = src_norm.lexically_relative(root_norm);
+            const std::string rel_s = rel.generic_string();
+            if (rel.empty() || rel_s.empty() || rel_s == "." || rel_s.starts_with("..")) {
+                rel = src_norm.filename();
+            }
+
+            fs::path dir = rel.parent_path();
+            std::vector<std::string> segs{};
+            bool stripped_src = false;
+            for (const auto& seg : dir) {
+                const std::string s = seg.string();
+                if (s.empty() || s == ".") continue;
+                if (!stripped_src && s == "src") {
+                    stripped_src = true;
+                    continue;
+                }
+                segs.push_back(s);
+            }
+
+            if (segs.empty()) {
+                return std::string(bundle_name);
+            }
+
+            std::string out{};
+            for (size_t i = 0; i < segs.size(); ++i) {
+                if (i) out += "::";
+                out += segs[i];
+            }
+            return out;
+        }
+
         void collect_exports_stmt_(
             const parus::ast::AstArena& ast,
             parus::ast::StmtId sid,
@@ -268,6 +350,8 @@ namespace parusc::p0 {
             const parus::SourceManager& sm,
             const std::string& decl_file,
             const std::string& bundle_name,
+            const std::string& module_head,
+            const std::string& decl_dir,
             std::vector<std::string>& ns,
             std::vector<ExportSurfaceEntry>& out
         ) {
@@ -280,7 +364,16 @@ namespace parusc::p0 {
                 const uint64_t end = begin + s.stmt_count;
                 if (begin <= kids.size() && end <= kids.size()) {
                     for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                        collect_exports_stmt_(ast, kids[s.stmt_begin + i], types, sm, decl_file, bundle_name, ns, out);
+                        collect_exports_stmt_(ast,
+                                              kids[s.stmt_begin + i],
+                                              types,
+                                              sm,
+                                              decl_file,
+                                              bundle_name,
+                                              module_head,
+                                              decl_dir,
+                                              ns,
+                                              out);
                     }
                 }
                 return;
@@ -298,7 +391,16 @@ namespace parusc::p0 {
                             ++pushed;
                         }
                     }
-                    collect_exports_stmt_(ast, s.a, types, sm, decl_file, bundle_name, ns, out);
+                    collect_exports_stmt_(ast,
+                                          s.a,
+                                          types,
+                                          sm,
+                                          decl_file,
+                                          bundle_name,
+                                          module_head,
+                                          decl_dir,
+                                          ns,
+                                          out);
                     while (pushed > 0) {
                         ns.pop_back();
                         --pushed;
@@ -317,6 +419,8 @@ namespace parusc::p0 {
                 e.kind = kind;
                 e.kind_text = symbol_kind_to_text_(kind);
                 e.path = std::move(qname);
+                e.module_head = module_head;
+                e.decl_dir = decl_dir;
                 if (tid != parus::ty::kInvalidType) {
                     e.type_repr = types.to_export_string(tid);
                 }
@@ -404,6 +508,7 @@ namespace parusc::p0 {
 
         bool collect_bundle_export_surface_(
             const std::vector<std::string>& bundle_sources,
+            std::string_view bundle_root,
             const std::string& bundle_name,
             std::vector<ExportSurfaceEntry>& out,
             std::string& out_err
@@ -441,12 +546,17 @@ namespace parusc::p0 {
 
                 std::vector<std::string> ns{};
                 (void)collect_file_namespace_(local_ast, local_root, ns);
+                const std::string decl_file = parus::normalize_path(src_path);
+                const std::string module_head = compute_module_head_(bundle_root, decl_file, bundle_name);
+                const std::string decl_dir = parent_dir_norm_(decl_file);
                 collect_exports_stmt_(local_ast,
                                       local_root,
                                       local_types,
                                       local_sm,
-                                      parus::normalize_path(src_path),
+                                      decl_file,
                                       bundle_name,
+                                      module_head,
+                                      decl_dir,
                                       ns,
                                       out);
             }
@@ -457,6 +567,26 @@ namespace parusc::p0 {
                 return a.decl_file < b.decl_file;
             });
             return true;
+        }
+
+        void validate_same_folder_export_collisions_(
+            const std::vector<ExportSurfaceEntry>& entries,
+            parus::diag::Bag& bag,
+            const parus::Span& span
+        ) {
+            std::set<std::tuple<std::string, std::string, std::string, std::string>> seen{};
+            for (const auto& e : entries) {
+                if (!e.is_export) continue;
+                const auto key = std::make_tuple(e.module_head, e.path, e.kind_text, e.type_repr);
+                if (seen.insert(key).second) continue;
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kExportCollisionSameFolder,
+                    span
+                );
+                d.add_arg(e.module_head.empty() ? e.path : (e.module_head + "::" + e.path));
+                bag.add(std::move(d));
+            }
         }
 
         bool write_export_index_(
@@ -485,13 +615,15 @@ namespace parusc::p0 {
             }
 
             ofs << "{\n";
-            ofs << "  \"version\": 1,\n";
+            ofs << "  \"version\": 3,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"exports\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
                 const auto& e = entries[i];
                 ofs << "    {\"kind\":\"" << json_escape_text_(e.kind_text)
                     << "\",\"path\":\"" << json_escape_text_(e.path)
+                    << "\",\"module_head\":\"" << json_escape_text_(e.module_head)
+                    << "\",\"decl_dir\":\"" << json_escape_text_(e.decl_dir)
                     << "\",\"type_repr\":\"" << json_escape_text_(e.type_repr)
                     << "\",\"decl_span\":{\"file\":\"" << json_escape_text_(e.decl_file)
                     << "\",\"line\":" << e.decl_line
@@ -653,7 +785,7 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || version != 1) {
+            if (!parse_json_uint_field_(text, "version", version) || version != 3) {
                 out_err = "unsupported export-index version in: " + path;
                 return false;
             }
@@ -671,6 +803,8 @@ namespace parusc::p0 {
             for (const auto& obj : objects) {
                 std::string kind_s{};
                 std::string path_s{};
+                std::string module_head{};
+                std::string decl_dir{};
                 std::string type_repr{};
                 std::string decl_file{};
                 uint32_t decl_line = 1;
@@ -679,6 +813,8 @@ namespace parusc::p0 {
 
                 if (!parse_json_string_field_(obj, "kind", kind_s) ||
                     !parse_json_string_field_(obj, "path", path_s) ||
+                    !parse_json_string_field_(obj, "module_head", module_head) ||
+                    !parse_json_string_field_(obj, "decl_dir", decl_dir) ||
                     !parse_json_string_field_(obj, "type_repr", type_repr) ||
                     !parse_json_string_field_(obj, "file", decl_file) ||
                     !parse_json_uint_field_(obj, "line", decl_line) ||
@@ -698,6 +834,8 @@ namespace parusc::p0 {
                 e.kind = *kind;
                 e.kind_text = kind_s;
                 e.path = std::move(path_s);
+                e.module_head = std::move(module_head);
+                e.decl_dir = std::move(decl_dir);
                 e.type_repr = std::move(type_repr);
                 e.decl_file = std::move(decl_file);
                 e.decl_line = decl_line;
@@ -930,10 +1068,13 @@ namespace parusc::p0 {
             }
 
             std::string collect_err{};
-            if (!collect_bundle_export_surface_(sources, opt.bundle.bundle_name, bundle_surface, collect_err)) {
+            if (!collect_bundle_export_surface_(sources, inv.bundle_root, opt.bundle.bundle_name, bundle_surface, collect_err)) {
                 parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kExportIndexSchema, root_span);
                 d.add_arg(collect_err);
                 bag.add(std::move(d));
+            }
+            if (!bag.has_error()) {
+                validate_same_folder_export_collisions_(bundle_surface, bag, root_span);
             }
             if (bag.has_error()) {
                 const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
@@ -956,24 +1097,42 @@ namespace parusc::p0 {
         auto pass_opt = opt.pass_opt;
         pass_opt.name_resolve.current_file_id = file_id;
         pass_opt.name_resolve.current_bundle_name = opt.bundle.bundle_name;
+        pass_opt.name_resolve.current_module_head = !inv.module_head.empty()
+            ? inv.module_head
+            : compute_module_head_(inv.bundle_root, current_norm, opt.bundle.bundle_name);
+        pass_opt.name_resolve.current_source_dir_norm = parent_dir_norm_(current_norm);
         pass_opt.name_resolve.allowed_import_heads.clear();
         if (opt.bundle.enabled) {
-            for (const auto& dep : inv.bundle_deps) {
-                if (!dep.empty()) pass_opt.name_resolve.allowed_import_heads.insert(dep);
+            for (const auto& head : inv.module_imports) {
+                if (!head.empty()) pass_opt.name_resolve.allowed_import_heads.insert(head);
             }
         }
 
         std::set<std::pair<std::string, std::string>> external_seen{};
-        auto add_external = [&](const ExportSurfaceEntry& e) {
-            const auto key = std::make_pair(e.kind_text, e.path);
+        auto add_external = [&](const ExportSurfaceEntry& e, bool same_bundle) {
+            std::string lookup_path = e.path;
+            if (!e.module_head.empty()) {
+                const std::string prefix = e.module_head + "::";
+                const bool already_prefixed =
+                    lookup_path == e.module_head ||
+                    lookup_path.starts_with(prefix);
+                const bool same_module = same_bundle && e.module_head == pass_opt.name_resolve.current_module_head;
+                if (!same_module && !already_prefixed) {
+                    lookup_path = prefix + lookup_path;
+                }
+            }
+
+            const auto key = std::make_pair(e.kind_text, lookup_path);
             if (!external_seen.insert(key).second) return;
 
             parus::passes::NameResolveOptions::ExternalExport x{};
             x.kind = e.kind;
-            x.path = e.path;
+            x.path = std::move(lookup_path);
             x.declared_type = parse_type_repr_into_(e.type_repr, types);
             x.decl_span = root_span;
             x.decl_bundle_name = e.decl_bundle;
+            x.module_head = e.module_head;
+            x.decl_source_dir_norm = e.decl_dir;
             x.is_export = e.is_export;
             pass_opt.name_resolve.external_exports.push_back(std::move(x));
         };
@@ -981,7 +1140,7 @@ namespace parusc::p0 {
         if (opt.bundle.enabled) {
             for (const auto& e : bundle_surface) {
                 if (e.decl_file == current_norm) continue;
-                add_external(e);
+                add_external(e, /*same_bundle=*/true);
             }
         }
 
@@ -1000,7 +1159,7 @@ namespace parusc::p0 {
             }
             for (auto& e : dep_entries) {
                 if (e.decl_bundle.empty()) e.decl_bundle = dep_bundle;
-                add_external(e);
+                add_external(e, /*same_bundle=*/false);
             }
         }
 
@@ -1018,6 +1177,9 @@ namespace parusc::p0 {
         parus::tyck::TyckResult tyck_res;
         {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve);
+            if (opt.bundle.enabled || !inv.load_export_index_paths.empty() || !inv.bundle_sources.empty()) {
+                tc.set_seed_symbol_table(&pres.sym);
+            }
             tyck_res = tc.check_program(root);
         }
         if (bag.has_error() || !tyck_res.errors.empty()) {

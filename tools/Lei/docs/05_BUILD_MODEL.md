@@ -6,145 +6,83 @@
 file -> module -> bundle -> project
 ```
 
-1. file: 하나의 `.lei` 또는 `.pr` 파일
-2. module: 파일들이 구성하는 논리 심볼 경계
-3. bundle: 배포/컴파일 단위
-4. project: 여러 bundle 합성 단위
+1. `file`: 하나의 `.pr` 또는 `.lei` 파일
+2. `module`: 하나의 폴더가 가지는 논리 심볼 경계
+3. `bundle`: 여러 module을 묶는 컴파일/링크 단위
+4. `project`: 여러 bundle을 묶는 최상위 단위
 
-## 파일 관행
+## 모델 고정 규칙 (v0.4)
 
-1. 프로젝트 루트는 `config.lei`를 권장한다.
-2. 폴더 단위 파일은 `<folder>.lei`를 권장한다.
-3. `lei.lei` 같은 대체 파일명은 허용하되 권장하지 않는다.
+1. module은 `export plan module = module & { ... };` 형태로 선언한다.
+2. bundle은 `export plan <name> = bundle & { modules = [...], deps = [...] };` 형태로 선언한다.
+3. `bundle.sources`는 제거되었다. 반드시 `bundle.modules`를 사용한다.
+4. module별 소스는 `module.sources`에 선언한다.
+5. module별 import gate는 `module.imports`로 선언한다.
+6. bundle 간 빌드/링크 순서는 `bundle.deps`로 선언한다.
+7. `config.lei`에서 inline bundle 선언은 최종 bundle이 1개일 때만 허용한다.
+8. 최종 bundle이 2개 이상이면 각 bundle 폴더의 `<bundle>.lei`에서 선언해야 한다.
 
-## canonical plan 합성 흐름
+## Parus interop 계약
 
-1. 각 bundle은 자신의 `config.lei` 또는 `<folder>.lei`에서 canonical bundle plan을 export한다.
-2. 상위 프로젝트는 하위 bundle plan을 import해 `&`로 명시 합성한다.
-3. task/codegen plan은 빌드 실행 단계 노드로 import/합성한다.
-4. 합성 결과가 상위 프로젝트의 canonical plan이 된다.
+1. 같은 module(같은 폴더) 내부 auto-share는 `export` 선언만 허용한다.
+2. 다른 module 참조는 `import <head> as <alias>;`가 필요하다.
+3. `import <head>`의 `<head>`는 현재 module의 `module.imports`에 있어야 한다.
+4. cross-bundle import가 발생하면 대상 bundle은 `bundle.deps`에도 있어야 한다.
+5. `nest`는 네임스페이스 태깅 전용이며 module/import head 계산에 관여하지 않는다.
 
-## Parus interop 계약 (bundle import/export)
-
-1. `bundle.deps`는 Parus의 `import <head>` 검증에 직접 사용된다.
-2. Parus는 bundle 단위 prepass로 export index를 생성하고 의존 bundle index를 로드한다.
-3. 같은 bundle 내부라도 **다른 파일 선언 참조**는 `export`된 선언만 허용된다.
-4. 다른 bundle 선언 참조도 `export`된 선언만 허용된다.
-5. `import <head>`의 `<head>`가 현재 bundle `deps`에 없으면 컴파일 오류다.
-6. `nest` 경로가 최종 심볼 경로 정본으로 사용된다.
-
-## 예제 1: app bundle (`/app/app.lei`)
+## 예제 1: bundle 선언 (`/app/app.lei`)
 
 ```lei
-proto myBundleProto {
-  name: string;
-  kind: string = "lib";
-  sources: [string];
-  deps: [string] = [];
+export plan app_main_module = module & {
+  head = "app";
+  sources = ["app/src/main.pr", "app/src/helper.pr"];
+  imports = ["math"];
 };
 
-export plan app_bundle = bundle & myBundleProto & {
+export plan app_bundle = bundle & {
   name = "app";
   kind = "bin";
-  sources = ["src/main.pr", "src/cli.pr"];
-  deps = ["json"];
+  modules = [app_main_module];
+  deps = ["math"];
 };
 ```
 
-## 예제 2: json bundle (`/json/json.lei`)
+## 예제 2: 의존 bundle (`/math/math.lei`)
 
 ```lei
-export plan json_bundle = bundle & {
-  name = "json";
+export plan math_module = module & {
+  head = "math";
+  sources = ["math/src/add.pr"];
+  imports = [];
+};
+
+export plan math_bundle = bundle & {
+  name = "math";
   kind = "lib";
-  sources = ["src/json.pr"];
+  modules = [math_module];
   deps = [];
 };
 ```
 
-## 예제 3: task/codegen (`/tools/tools.lei`)
-
-```lei
-export plan lint = task & {
-  name = "lint";
-  run = ["parusc", "--check", "src/main.pr"];
-  inputs = ["src/main.pr"];
-  outputs = [];
-  always_run = true;
-};
-
-export plan gen_user = codegen & {
-  name = "gen_user";
-  tool = ["protoc"];
-  inputs = ["proto/user.proto"];
-  outputs = ["gen/user.pb.pr"];
-  args = ["--parus_out=gen", "proto/user.proto"];
-};
-```
-
-## 예제 4: 프로젝트 루트 (`/config.lei`)
+## 예제 3: 프로젝트 루트 (`/config.lei`)
 
 ```lei
 import app from "./app/app.lei";
-import json from "./json/json.lei";
-import tools from "./tools/tools.lei";
-
-proto ProjectMeta {
-  name: string;
-  version: string;
-};
-
-plan workspace {
-  project = ProjectMeta & {
-    name = "demo";
-    version = "0.1.0";
-  };
-  bundles = [json::json_bundle, app::app_bundle];
-  tasks = [tools::lint];
-  codegens = [tools::gen_user];
-};
+import math from "./math/math.lei";
 
 plan master = master & {
-  project = workspace.project;
-  bundles = workspace.bundles;
-  tasks = workspace.tasks;
-  codegens = workspace.codegens;
-};
-```
-
-## 배열 접근 예제
-
-```lei
-let first_name = workspace.bundles[0].name;
-```
-
-## 단일 필드 변경 예제
-
-```lei
-plan workspace2 = workspace & {
-  project = workspace.project & {
-    name = "demo-renamed";
+  project = {
+    name: "demo",
+    version: "0.1.0",
   };
+  bundles = [math::math_bundle, app::app_bundle];
+  tasks = [];
+  codegens = [];
 };
 ```
 
-## LEI Core vs LEI Engine Policy
+## 정책 경계
 
-LEI Core 규칙:
-
-1. Core는 `proto`/`plan`/`export plan`/`import alias`/`&`를 정의한다.
-2. Core는 `master` 같은 엔트리 이름을 예약어로 갖지 않는다.
-
-LEI Engine Policy 규칙:
-
-1. `config.lei`를 엔트리 파일로 특별취급한다.
-2. `config.lei`의 `plan master` 또는 CLI 지정 plan을 엔트리로 사용한다.
-3. `master` export는 정책상 금지한다.
-4. 하위 bundle의 `master` import/재export는 정책상 금지한다.
-5. `bundle`, `master`, `task`, `codegen`은 엔진이 주입한 빌트인 plan 값으로 해석한다.
-6. `project`는 특수 plan이 아니다.
-7. 엔트리 plan 루트(`project/bundles/tasks/codegens`)를 엔진이 canonical graph로 해석한다.
-8. `build = { graph: ... }` 직접 명시는 금지된다.
-9. 그래프 조회는 `lei --view_graph [--format json|text|dot]`로 수행한다.
-
-위 규칙은 LEI Core 문법이 아니라 엔진 정책이다.
+1. LEI Core는 문법/평가(`proto`, `plan`, `import`, `&`)를 정의한다.
+2. LEI Engine Policy는 엔트리/그래프/reserved plan(`bundle`, `module`, `master`, `task`, `codegen`)을 정의한다.
+3. `master` export 금지는 엔진 상시 정책이다.

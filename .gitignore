@@ -3,5 +3,6 @@ build_dbg/
 docs/memo/*
 .ccache/
 tests/out/*
+foo/
 tmp.txt
 main.pr

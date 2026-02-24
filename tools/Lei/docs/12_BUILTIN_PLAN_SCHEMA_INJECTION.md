@@ -10,12 +10,13 @@
 
 ## 2) engine default set
 
-엔진은 다음 4개를 기본 빌트인 plan으로 주입한다.
+엔진은 다음 5개를 기본 빌트인 plan으로 주입한다.
 
 1. `bundle`
-2. `master`
-3. `task`
-4. `codegen`
+2. `module`
+3. `master`
+4. `task`
+5. `codegen`
 
 주의:
 
@@ -30,13 +31,19 @@ bundle 정의:
 proto myBundleProto {
   name: string;
   kind: string = "lib";
-  sources: [string];
+  modules: [object];
   deps: [string] = [];
 };
 
 export plan json_bundle = bundle & myBundleProto & {
   name = "json";
-  sources = ["src/json.pr"];
+  modules = [
+    module & {
+      head = "json";
+      sources = ["json/src/json.pr"];
+      imports = [];
+    },
+  ];
 };
 ```
 
@@ -81,23 +88,29 @@ plan master = master & {
 
 ### 4.1 bundle.v1
 
-1. 필수: `name:string`, `kind:string`, `sources:[string]`, `deps:[string]`
-2. 기본 검증: `sources` 비어있음 금지, dep cycle 금지
+1. 필수: `name:string`, `kind:string`, `modules:[object]`, `deps:[string]`
+2. 기본 검증: `modules` 비어있음 금지, dep cycle 금지
 
-### 4.2 master.v1
+### 4.2 module.v1
+
+1. 필수: `head:string`, `sources:[string]`
+2. 선택: `imports:[string]=[]`
+3. 기본 검증: `head` 비어있음 금지, `sources` 비어있음 금지, import 중복 금지
+
+### 4.3 master.v1
 
 1. 필수: `project`
 2. 선택: `bundles`, `tasks`, `codegens`
 3. 기본 검증: 엔트리 plan 결정성, 그래프 연결성
 4. canonical graph source: `entry_plan` 루트 필드(`project/bundles/tasks/codegens`)
 
-### 4.3 task.v1
+### 4.4 task.v1
 
 1. 필수: `name:string`, `run:[string]`
 2. 선택: `deps:[string]=[]`, `cwd:string="."`, `inputs:[string]=[]`, `outputs:[string]=[]`, `always_run:bool=false`
 3. 기본 검증: `run` 비어있음 금지, dep cycle 금지
 
-### 4.4 codegen.v1
+### 4.5 codegen.v1
 
 1. 필수: `name:string`, `tool:[string]`, `inputs:[string]`, `outputs:[string]`
 2. 선택: `args:[string]=[]`, `deps:[string]=[]`, `cwd:string="."`, `deterministic:bool=true`

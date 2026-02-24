@@ -40,7 +40,7 @@
 2. CLI `--plan <name>`으로 override 가능하다.
 3. canonical graph source는 `entry_plan` 루트(`project/bundles/tasks/codegens`)다.
 4. `export plan master`는 엔진 정책 위반이다.
-5. 예약 식별자 `bundle/master/task/codegen`은 선언 위치에서 금지된다.
+5. 예약 식별자 `bundle/module/master/task/codegen`은 선언 위치에서 금지된다.
 6. 예외로 `plan master ...` 선언만 허용된다.
 
 ## 공개 전략

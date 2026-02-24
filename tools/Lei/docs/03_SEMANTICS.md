@@ -50,12 +50,12 @@
 3. `proto` 필드에 기본값이 있으면 patch에 필드가 없을 때 기본값이 채워진다.
 4. patch에 필드가 있으면 `proto` 타입 제약을 만족해야 한다.
 5. 필수 필드(기본값 없는 필드)가 최종 결과에 없으면 실패한다.
-6. `proto`와 빌트인 plan(`bundle`, `task` 등)은 동일한 `&` 연산으로 연쇄 합성 가능하다.
+6. `proto`와 빌트인 plan(`bundle`, `module`, `task` 등)은 동일한 `&` 연산으로 연쇄 합성 가능하다.
 7. 프로젝트 메타 필드(`project`)는 proto를 통해 타입/필수 필드를 고정하는 방식을 권장한다.
 
 ## Built-in plan과 스키마 의미 부여
 
-1. LEI Core 자체는 `bundle`, `master`, `task`, `codegen`, `project`의 의미를 내장하지 않는다.
+1. LEI Core 자체는 `bundle`, `module`, `master`, `task`, `codegen`의 의미를 내장하지 않는다.
 2. LEI Build API는 빌트인 plan 템플릿/스키마 주입 지점을 제공한다.
 3. Host Profile(예: parus)은 Build API를 사용해 특수 plan 의미를 부여한다.
 4. 어떤 plan이 특수한지는 Core가 아니라 Profile이 결정한다.

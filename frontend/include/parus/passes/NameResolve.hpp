@@ -25,6 +25,8 @@ namespace parus::passes {
         ShadowingMode shadowing = ShadowingMode::kAllow;
         uint32_t current_file_id = 0;
         std::string current_bundle_name{};
+        std::string current_module_head{};
+        std::string current_source_dir_norm{};
         std::unordered_set<std::string> allowed_import_heads{};
 
         struct ExternalExport {
@@ -33,6 +35,8 @@ namespace parus::passes {
             ty::TypeId declared_type = ty::kInvalidType;
             Span decl_span{};
             std::string decl_bundle_name{};
+            std::string module_head{};
+            std::string decl_source_dir_norm{};
             bool is_export = true;
         };
         std::vector<ExternalExport> external_exports{};

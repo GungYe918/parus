@@ -1,0 +1,7 @@
+{
+  "version": 2,
+  "bundle": "helper",
+  "exports": [
+    {"kind":"fn","path":"twice","module_head":"app","decl_dir":"/Users/gungye/workspace/Lang/gaupel/foo/app/src","type_repr":"def(i32) -> i32","decl_span":{"file":"/Users/gungye/workspace/Lang/gaupel/foo/app/src/helper.pr","line":1,"col":1},"is_export":true}
+  ]
+}
