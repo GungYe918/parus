@@ -359,6 +359,8 @@ namespace parus::passes {
 
         if ((s.kind == ast::StmtKind::kFnDecl ||
              s.kind == ast::StmtKind::kFieldDecl ||
+             s.kind == ast::StmtKind::kProtoDecl ||
+             s.kind == ast::StmtKind::kTabletDecl ||
              s.kind == ast::StmtKind::kActsDecl) &&
             !s.name.empty()) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
@@ -922,6 +924,72 @@ namespace parus::passes {
                 return;
             }
 
+            case ast::StmtKind::kProtoDecl: {
+                const std::string qname = qualify_name_(namespace_stack, s.name);
+                uint32_t proto_sym = sema::SymbolTable::kNoScope;
+                if (auto sid = sym.lookup(qname)) {
+                    proto_sym = *sid;
+                } else {
+                    auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                    proto_sym = ins.symbol_id;
+                }
+                if (proto_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, proto_sym, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+
+                // proto member signatures: default args and constraint exprs are still expressions.
+                const auto& kids = ast.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    ScopeGuard g(sym);
+                    AliasScopeGuard ag(import_aliases);
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        walk_stmt(ast, r, kids[s.stmt_begin + i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                    }
+                }
+                if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
+                    walk_expr(ast, r, s.proto_require_expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                }
+                return;
+            }
+
+            case ast::StmtKind::kTabletDecl: {
+                const std::string qname = qualify_name_(namespace_stack, s.name);
+                uint32_t tablet_sym = sema::SymbolTable::kNoScope;
+                if (auto sid = sym.lookup(qname)) {
+                    tablet_sym = *sid;
+                } else {
+                    auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                    tablet_sym = ins.symbol_id;
+                }
+                if (tablet_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, tablet_sym, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+
+                ScopeGuard g(sym);
+                AliasScopeGuard ag(import_aliases);
+                const auto& kids = ast.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    // predeclare tablet member functions for same-tablet forward references.
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (!is_valid_stmt_id_(r, msid)) continue;
+                        const auto& ms = ast.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl || ms.name.empty()) continue;
+                        (void)declare_(sema::SymbolKind::kFn, ms.name, ms.type, ms.span, sym, bag, opt);
+                    }
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        walk_stmt(ast, r, kids[s.stmt_begin + i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                    }
+                }
+                return;
+            }
+
             case ast::StmtKind::kActsDecl: {
                 const std::string qname = qualify_name_(namespace_stack, s.name);
                 uint32_t acts_sym = sema::SymbolTable::kNoScope;
@@ -1175,6 +1243,40 @@ namespace parus::passes {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kField, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
+            }
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kProtoDecl) {
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (!sym.lookup(qname)) {
+                auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
+            }
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kTabletDecl) {
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (!sym.lookup(qname)) {
+                auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;

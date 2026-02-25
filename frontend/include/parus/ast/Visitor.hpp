@@ -287,6 +287,28 @@ namespace parus::ast {
                     break;
                 }
 
+                case StmtKind::kProtoDecl: {
+                    if (s.proto_has_require && s.proto_require_expr != k_invalid_expr) {
+                        visit_expr_inner(ast, s.proto_require_expr, v);
+                    }
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            visit_stmt_child_if_(
+                                ast,
+                                id,
+                                s,
+                                StmtChildRole::kBlockChild,
+                                kids[s.stmt_begin + i],
+                                v
+                            );
+                        }
+                    }
+                    break;
+                }
+
                 case StmtKind::kActsDecl:
                 case StmtKind::kBlock: {
                     const auto& kids = ast.stmt_children();
@@ -299,6 +321,25 @@ namespace parus::ast {
                                 id,
                                 s,
                                 s.kind == StmtKind::kActsDecl ? StmtChildRole::kActsMember : StmtChildRole::kBlockChild,
+                                kids[s.stmt_begin + i],
+                                v
+                            );
+                        }
+                    }
+                    break;
+                }
+
+                case StmtKind::kTabletDecl: {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            visit_stmt_child_if_(
+                                ast,
+                                id,
+                                s,
+                                StmtChildRole::kBlockChild,
                                 kids[s.stmt_begin + i],
                                 v
                             );

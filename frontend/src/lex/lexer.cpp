@@ -391,12 +391,16 @@ namespace parus {
         if (t.lexeme == "module")   { t.kind = syntax::TokenKind::kKwModule;    return t; }        
         if (t.lexeme == "as")       { t.kind = syntax::TokenKind::kKwAs;        return t; }
         if (t.lexeme == "nest")     { t.kind = syntax::TokenKind::kKwNest;      return t; }
+        if (t.lexeme == "with")     { t.kind = syntax::TokenKind::kKwWith;      return t; }
+        if (t.lexeme == "require")  { t.kind = syntax::TokenKind::kKwRequire;   return t; }
 
         if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }
 
         if (t.lexeme == "def")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
         if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
+        if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
+        if (t.lexeme == "tablet")   { t.kind = syntax::TokenKind::kKwTablet;   return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
         if (t.lexeme == "extern")   { t.kind = syntax::TokenKind::kKwExtern;   return t; }

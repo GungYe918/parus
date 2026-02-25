@@ -281,6 +281,31 @@ namespace parus {
             diag_report(diag::Code::kFieldNameExpected, name_tok.span);
         }
 
+        const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
+        uint32_t impl_count = 0;
+        if (cursor_.eat(K::kColon)) {
+            while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const Token pstart = cursor_.peek();
+                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+                if (pc == 0) {
+                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                    recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                ast::PathRef pr{};
+                pr.path_begin = pb;
+                pr.path_count = pc;
+                pr.span = span_join(pstart.span, cursor_.prev().span);
+                ast_.add_path_ref(pr);
+                ++impl_count;
+
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+        }
+
         if (!cursor_.eat(K::kLBrace)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
             recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
@@ -388,6 +413,349 @@ namespace parus {
         s.field_align = field_align;
         s.field_member_begin = field_member_begin;
         s.field_member_count = field_member_count;
+        s.decl_path_ref_begin = impl_begin;
+        s.decl_path_ref_count = impl_count;
+        return ast_.add_stmt(s);
+    }
+
+    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } with require(expr);`
+    ast::StmtId Parser::parse_decl_proto() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+
+        bool is_export = false;
+        if (cursor_.at(K::kKwExport)) {
+            is_export = true;
+            start = cursor_.bump().span;
+        }
+
+        if (cursor_.at(K::kKwExtern)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "'extern' is not allowed on proto declarations");
+            cursor_.bump();
+        }
+
+        if (!cursor_.eat(K::kKwProto)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "proto");
+            stmt_sync_to_boundary();
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
+        }
+
+        const uint32_t inherit_begin = static_cast<uint32_t>(ast_.path_refs().size());
+        uint32_t inherit_count = 0;
+        if (cursor_.eat(K::kColon)) {
+            while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const Token pstart = cursor_.peek();
+                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+                if (pc == 0) {
+                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                    recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+                ast::PathRef pr{};
+                pr.path_begin = pb;
+                pr.path_count = pc;
+                pr.span = span_join(pstart.span, cursor_.prev().span);
+                ast_.add_path_ref(pr);
+                ++inherit_count;
+
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+        }
+
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        std::vector<ast::StmtId> members;
+        members.reserve(8);
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            if (cursor_.eat(K::kSemicolon)) continue;
+
+            if (cursor_.at(K::kKwFn)) {
+                const ast::StmtId msid = parse_decl_proto_member_sig();
+                if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                continue;
+            }
+
+            if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "operator") {
+                diag_report(diag::Code::kProtoOperatorNotAllowed, cursor_.peek().span);
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+                continue;
+            }
+
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "proto member signature");
+            recover_to_delim(K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kSemicolon);
+        }
+
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+
+        bool has_require = false;
+        ast::ExprId require_expr = ast::k_invalid_expr;
+        const bool has_with =
+            cursor_.at(K::kKwWith) ||
+            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
+        if (has_with) {
+            cursor_.bump(); // with
+            if (!(cursor_.at(K::kKwRequire) ||
+                  (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "require"))) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "require");
+            } else {
+                cursor_.bump(); // require
+                if (!cursor_.eat(K::kLParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                }
+                if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+                    require_expr = parse_expr();
+                    has_require = true;
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "bool expression");
+                }
+                if (!cursor_.eat(K::kRParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kRParen);
+                }
+            }
+        } else {
+            diag_report(diag::Code::kProtoRequireMissing, cursor_.peek().span);
+        }
+
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+
+        const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (const auto sid : members) {
+            ast_.add_stmt_child(sid);
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kProtoDecl;
+        s.span = span_join(start, end_sp);
+        s.name = name;
+        s.is_export = is_export;
+        s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
+        s.stmt_begin = member_begin;
+        s.stmt_count = static_cast<uint32_t>(members.size());
+        s.decl_path_ref_begin = inherit_begin;
+        s.decl_path_ref_count = inherit_count;
+        s.proto_has_require = has_require;
+        s.proto_require_expr = require_expr;
+        return ast_.add_stmt(s);
+    }
+
+    /// @brief `tablet Name [: ProtoA, ...] { let ...; def ... }`
+    ast::StmtId Parser::parse_decl_tablet() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+
+        bool is_export = false;
+        if (cursor_.at(K::kKwExport)) {
+            is_export = true;
+            start = cursor_.bump().span;
+        }
+
+        if (cursor_.at(K::kKwExtern)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "'extern' is not allowed on tablet declarations");
+            cursor_.bump();
+        }
+
+        if (!cursor_.eat(K::kKwTablet)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "tablet");
+            stmt_sync_to_boundary();
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
+        }
+
+        const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
+        uint32_t impl_count = 0;
+        if (cursor_.eat(K::kColon)) {
+            while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const Token pstart = cursor_.peek();
+                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+                if (pc == 0) {
+                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                    recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+                ast::PathRef pr{};
+                pr.path_begin = pb;
+                pr.path_count = pc;
+                pr.span = span_join(pstart.span, cursor_.prev().span);
+                ast_.add_path_ref(pr);
+                ++impl_count;
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+        }
+
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        std::vector<ast::StmtId> members;
+        members.reserve(16);
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            if (cursor_.eat(K::kSemicolon)) continue;
+
+            const auto k = cursor_.peek().kind;
+            const bool fn_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
+            if (fn_start) {
+                ast::StmtId mid = parse_decl_fn();
+                auto& ms = ast_.stmt_mut(mid);
+                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_export) {
+                    diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                "tablet member must not be declared with export");
+                    ms.is_export = false;
+                }
+                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_extern) {
+                    diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                "tablet member must not be declared with extern");
+                    ms.is_extern = false;
+                    ms.link_abi = ast::LinkAbi::kNone;
+                }
+                members.push_back(mid);
+                continue;
+            }
+
+            const bool var_member_start =
+                k == K::kKwLet || k == K::kKwSet || k == K::kKwMut;
+            if (var_member_start) {
+                const Token member_start = cursor_.peek();
+                bool mut_prefix_invalid = false;
+                if (cursor_.at(K::kKwMut)) {
+                    mut_prefix_invalid = true;
+                    diag_report(diag::Code::kVarMutMustFollowKw, cursor_.peek().span);
+                    cursor_.bump();
+                }
+
+                bool is_set = false;
+                bool is_mut = false;
+                if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet)) {
+                    is_set = cursor_.at(K::kKwSet);
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "let/set");
+                }
+
+                if (cursor_.at(K::kKwMut)) {
+                    is_mut = true;
+                    cursor_.bump();
+                } else if (mut_prefix_invalid) {
+                    is_mut = true;
+                }
+
+                std::string_view member_name{};
+                const Token mn = cursor_.peek();
+                if (mn.kind == K::kIdent) {
+                    member_name = mn.lexeme;
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kVarDeclNameExpected, mn.span);
+                }
+
+                ast::TypeId type_id = ast::k_invalid_type;
+                ast::TypeNodeId type_node = ast::k_invalid_type_node;
+                if (!cursor_.eat(K::kColon)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                } else {
+                    auto parsed = parse_type();
+                    type_id = parsed.id;
+                    type_node = parsed.node;
+                }
+
+                ast::ExprId init = ast::k_invalid_expr;
+                if (cursor_.eat(K::kAssign)) {
+                    init = parse_expr();
+                }
+                Span mend = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+
+                ast::Stmt ms{};
+                ms.kind = ast::StmtKind::kVar;
+                ms.span = span_join(member_start.span, mend);
+                ms.is_set = is_set;
+                ms.is_mut = is_mut;
+                ms.name = member_name;
+                ms.type = type_id;
+                ms.type_node = type_node;
+                ms.init = init;
+                members.push_back(ast_.add_stmt(ms));
+                continue;
+            }
+
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "tablet member declaration");
+            recover_to_delim(K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kSemicolon);
+        }
+
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+        Span end_sp = cursor_.prev().span;
+        if (cursor_.at(K::kSemicolon)) {
+            end_sp = cursor_.bump().span;
+        }
+
+        const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (const auto sid : members) {
+            ast_.add_stmt_child(sid);
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kTabletDecl;
+        s.span = span_join(start, end_sp);
+        s.name = name;
+        s.is_export = is_export;
+        s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
+        s.stmt_begin = member_begin;
+        s.stmt_count = static_cast<uint32_t>(members.size());
+        s.decl_path_ref_begin = impl_begin;
+        s.decl_path_ref_count = impl_count;
         return ast_.add_stmt(s);
     }
 

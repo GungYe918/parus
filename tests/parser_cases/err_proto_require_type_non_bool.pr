@@ -1,0 +1,7 @@
+proto Equatable {
+  def eq(self, rhs: &Self) -> bool;
+} with require(1i32);
+
+def main() -> i32 {
+  return 0i32;
+}

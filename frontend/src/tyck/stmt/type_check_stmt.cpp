@@ -107,6 +107,14 @@ namespace parus::tyck {
                 check_stmt_field_decl_(sid);
                 return;
 
+            case ast::StmtKind::kProtoDecl:
+                check_stmt_proto_decl_(sid);
+                return;
+
+            case ast::StmtKind::kTabletDecl:
+                check_stmt_tablet_decl_(sid);
+                return;
+
             case ast::StmtKind::kActsDecl:
                 check_stmt_acts_decl_(s);
                 return;
@@ -608,6 +616,46 @@ namespace parus::tyck {
         }
 
         // ----------------------------
+        // 0.5) generic proto constraints (declaration-time validation)
+        // ----------------------------
+        std::unordered_set<std::string> generic_params;
+        for (uint32_t gi = 0; gi < s.fn_generic_param_count; ++gi) {
+            const uint32_t idx = s.fn_generic_param_begin + gi;
+            if (idx >= ast_.generic_param_decls().size()) break;
+            generic_params.insert(std::string(ast_.generic_param_decls()[idx].name));
+        }
+        for (uint32_t ci = 0; ci < s.fn_constraint_count; ++ci) {
+            const uint32_t idx = s.fn_constraint_begin + ci;
+            if (idx >= ast_.fn_constraint_decls().size()) break;
+            const auto& c = ast_.fn_constraint_decls()[idx];
+
+            if (generic_params.find(std::string(c.type_param)) == generic_params.end()) {
+                std::string msg = "constraint uses unknown type parameter: " + std::string(c.type_param);
+                diag_(diag::Code::kProtoConstraintUnsatisfied, c.span, msg);
+                err_(c.span, msg);
+            }
+
+            const std::string proto_path = path_join_(c.proto_path_begin, c.proto_path_count);
+            bool proto_ok = false;
+            if (!proto_path.empty()) {
+                std::string key = proto_path;
+                if (auto rewritten = rewrite_imported_path_(key)) {
+                    key = *rewritten;
+                }
+                if (proto_decl_by_name_.find(key) != proto_decl_by_name_.end()) {
+                    proto_ok = true;
+                } else if (auto sid = lookup_symbol_(key)) {
+                    const auto& ss = sym_.symbol(*sid);
+                    proto_ok = (proto_decl_by_name_.find(ss.name) != proto_decl_by_name_.end());
+                }
+            }
+            if (!proto_ok) {
+                diag_(diag::Code::kProtoImplTargetNotSupported, c.span, proto_path);
+                err_(c.span, "unknown proto in constraint: " + proto_path);
+            }
+        }
+
+        // ----------------------------
         // 1) 함수 스코프 진입 + def ctx 설정
         // ----------------------------
         sym_.push_scope();
@@ -753,6 +801,286 @@ namespace parus::tyck {
         sym_.pop_scope();
     }
 
+    void TypeChecker::check_stmt_proto_decl_(ast::StmtId sid) {
+        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
+        const ast::Stmt& s = ast_.stmt(sid);
+        if (s.kind != ast::StmtKind::kProtoDecl) return;
+
+        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t mb = s.stmt_begin;
+        const uint32_t me = s.stmt_begin + s.stmt_count;
+        if (mb <= kids.size() && me <= kids.size()) {
+            for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                const ast::StmtId msid = kids[s.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) {
+                    diag_(diag::Code::kUnexpectedToken, m.span, "proto member signature");
+                    err_(m.span, "proto body allows only function signatures");
+                    continue;
+                }
+                if (m.a != ast::k_invalid_stmt) {
+                    diag_(diag::Code::kProtoMemberBodyNotAllowed, m.span);
+                    err_(m.span, "proto member declaration must not have a body");
+                }
+                if (m.fn_is_operator) {
+                    diag_(diag::Code::kProtoOperatorNotAllowed, m.span);
+                    err_(m.span, "operator declarations are not allowed in proto");
+                }
+            }
+        }
+
+        if (!s.proto_has_require || s.proto_require_expr == ast::k_invalid_expr) {
+            diag_(diag::Code::kProtoRequireMissing, s.span);
+            err_(s.span, "proto declaration requires 'with require(<bool-expr>)'");
+        } else {
+            const ty::TypeId rt = check_expr_(s.proto_require_expr, Slot::kValue);
+            if (rt != types_.builtin(ty::Builtin::kBool)) {
+                diag_(diag::Code::kProtoRequireTypeNotBool, ast_.expr(s.proto_require_expr).span);
+                err_(ast_.expr(s.proto_require_expr).span, "require(...) expression must be bool");
+            } else {
+                auto eval_simple_bool = [&](auto&& self, ast::ExprId eid) -> std::optional<bool> {
+                    if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) return std::nullopt;
+                    const auto& e = ast_.expr(eid);
+                    switch (e.kind) {
+                        case ast::ExprKind::kBoolLit:
+                            return e.text == "true";
+                        case ast::ExprKind::kUnary: {
+                            if (e.op != K::kBang) return std::nullopt;
+                            auto v = self(self, e.a);
+                            if (!v.has_value()) return std::nullopt;
+                            return !(*v);
+                        }
+                        case ast::ExprKind::kBinary: {
+                            if (e.op != K::kAmpAmp && e.op != K::kPipePipe) return std::nullopt;
+                            auto lv = self(self, e.a);
+                            auto rv = self(self, e.b);
+                            if (!lv.has_value() || !rv.has_value()) return std::nullopt;
+                            if (e.op == K::kAmpAmp) return (*lv) && (*rv);
+                            return (*lv) || (*rv);
+                        }
+                        default:
+                            return std::nullopt;
+                    }
+                };
+
+                auto v = eval_simple_bool(eval_simple_bool, s.proto_require_expr);
+                if (!v.has_value()) {
+                    diag_(diag::Code::kProtoRequireExprTooComplex, ast_.expr(s.proto_require_expr).span);
+                    err_(ast_.expr(s.proto_require_expr).span,
+                         "require(...) supports only true/false/!/&&/|| in v1");
+                } else if (!(*v)) {
+                    diag_(diag::Code::kProtoConstraintUnsatisfied, ast_.expr(s.proto_require_expr).span,
+                          std::string(s.name));
+                    err_(ast_.expr(s.proto_require_expr).span, "proto require(...) evaluated to false");
+                }
+            }
+        }
+
+        const auto& refs = ast_.path_refs();
+        const uint32_t ib = s.decl_path_ref_begin;
+        const uint32_t ie = s.decl_path_ref_begin + s.decl_path_ref_count;
+        if (ib <= refs.size() && ie <= refs.size()) {
+            for (uint32_t i = ib; i < ie; ++i) {
+                const auto& pr = refs[i];
+                const std::string path = path_join_(pr.path_begin, pr.path_count);
+                if (path.empty()) continue;
+                if (!resolve_proto_sid(path).has_value()) {
+                    diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, path);
+                    err_(pr.span, "unknown base proto: " + path);
+                }
+            }
+        }
+    }
+
+    void TypeChecker::check_stmt_tablet_decl_(ast::StmtId sid) {
+        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
+        const ast::Stmt& s = ast_.stmt(sid);
+        if (s.kind != ast::StmtKind::kTabletDecl) return;
+
+        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        const ty::TypeId self_ty = (s.type == ty::kInvalidType)
+            ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
+            : s.type;
+
+        auto normalize_self = [&](ty::TypeId t) -> ty::TypeId {
+            if (t == ty::kInvalidType) return t;
+            const auto& tt = types_.get(t);
+            if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+                return self_ty;
+            }
+            if (tt.kind == ty::Kind::kBorrow) {
+                const auto& et = types_.get(tt.elem);
+                if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                    return types_.make_borrow(self_ty, tt.borrow_is_mut);
+                }
+            }
+            return t;
+        };
+
+        auto fn_sig_matches = [&](const ast::Stmt& req, const ast::Stmt& impl) -> bool {
+            if (req.kind != ast::StmtKind::kFnDecl || impl.kind != ast::StmtKind::kFnDecl) return false;
+            if (req.name != impl.name) return false;
+            if (req.param_count != impl.param_count) return false;
+            if (req.positional_param_count != impl.positional_param_count) return false;
+            if (normalize_self(req.fn_ret) != normalize_self(impl.fn_ret)) return false;
+            for (uint32_t i = 0; i < req.param_count; ++i) {
+                const auto& rp = ast_.params()[req.param_begin + i];
+                const auto& ip = ast_.params()[impl.param_begin + i];
+                if (normalize_self(rp.type) != normalize_self(ip.type)) return false;
+                if (rp.is_self != ip.is_self) return false;
+                if (rp.self_kind != ip.self_kind) return false;
+            }
+            return true;
+        };
+
+        auto collect_required = [&](auto&& self,
+                                    ast::StmtId proto_sid,
+                                    std::vector<ast::StmtId>& out,
+                                    std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    const std::string p = path_join_(pr.path_begin, pr.path_count);
+                    if (auto base_sid = resolve_proto_sid(p)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl) out.push_back(msid);
+                }
+            }
+        };
+
+        std::unordered_map<std::string, std::vector<ast::StmtId>> impl_methods;
+
+        sym_.push_scope();
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = s.stmt_begin;
+        const uint32_t end = s.stmt_begin + s.stmt_count;
+        if (begin <= kids.size() && end <= kids.size()) {
+            // predeclare member symbols
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind == ast::StmtKind::kFnDecl) {
+                    (void)sym_.insert(sema::SymbolKind::kFn, m.name, m.type, m.span);
+                    impl_methods[std::string(m.name)].push_back(msid);
+                } else if (m.kind == ast::StmtKind::kVar) {
+                    ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
+                    auto ins = sym_.insert(sema::SymbolKind::kVar, m.name, vt, m.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        diag_(diag::Code::kDuplicateDecl, m.span, m.name);
+                        err_(m.span, "duplicate tablet member name");
+                    }
+                }
+            }
+
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind == ast::StmtKind::kFnDecl) {
+                    check_stmt_fn_decl_(m);
+                } else if (m.kind == ast::StmtKind::kVar) {
+                    if (m.init != ast::k_invalid_expr) {
+                        (void)check_expr_(m.init, Slot::kValue);
+                    }
+                }
+            }
+        }
+        sym_.pop_scope();
+
+        // Implements validation: tablet : ProtoA, ProtoB
+        const auto& refs = ast_.path_refs();
+        const uint32_t pb = s.decl_path_ref_begin;
+        const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+        if (pb <= refs.size() && pe <= refs.size()) {
+            for (uint32_t i = pb; i < pe; ++i) {
+                const auto& pr = refs[i];
+                const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
+                const auto proto_sid = resolve_proto_sid(proto_path);
+                if (!proto_sid.has_value()) {
+                    diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
+                    err_(pr.span, "unknown proto target: " + proto_path);
+                    continue;
+                }
+
+                std::vector<ast::StmtId> required;
+                std::unordered_set<ast::StmtId> visiting;
+                collect_required(collect_required, *proto_sid, required, visiting);
+                for (const ast::StmtId req_sid : required) {
+                    if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
+                    const auto& req = ast_.stmt(req_sid);
+                    auto mit = impl_methods.find(std::string(req.name));
+                    bool matched = false;
+                    if (mit != impl_methods.end()) {
+                        for (const auto cand_sid : mit->second) {
+                            if (cand_sid == ast::k_invalid_stmt || (size_t)cand_sid >= ast_.stmts().size()) continue;
+                            if (fn_sig_matches(req, ast_.stmt(cand_sid))) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!matched) {
+                        diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                        err_(req.span, "missing proto member implementation: " + std::string(req.name));
+                    }
+                }
+            }
+        }
+    }
+
     /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.
     void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
@@ -824,6 +1152,84 @@ namespace parus::tyck {
             meta.align = s.field_align;
             field_abi_meta_by_type_[self_ty] = meta;
         }
+
+        // Implements validation for `field Name : ProtoA, ProtoB`
+        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        auto collect_required = [&](auto&& self,
+                                    ast::StmtId proto_sid,
+                                    std::vector<ast::StmtId>& out,
+                                    std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    const std::string p = path_join_(pr.path_begin, pr.path_count);
+                    if (auto base_sid = resolve_proto_sid(p)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl) out.push_back(msid);
+                }
+            }
+        };
+
+        const auto& refs = ast_.path_refs();
+        const uint32_t pb = s.decl_path_ref_begin;
+        const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+        if (pb <= refs.size() && pe <= refs.size()) {
+            for (uint32_t i = pb; i < pe; ++i) {
+                const auto& pr = refs[i];
+                const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
+                const auto proto_sid = resolve_proto_sid(proto_path);
+                if (!proto_sid.has_value()) {
+                    diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
+                    err_(pr.span, "unknown proto target: " + proto_path);
+                    continue;
+                }
+
+                std::vector<ast::StmtId> required;
+                std::unordered_set<ast::StmtId> visiting;
+                collect_required(collect_required, *proto_sid, required, visiting);
+                for (const ast::StmtId req_sid : required) {
+                    if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
+                    const auto& req = ast_.stmt(req_sid);
+                    diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                    err_(req.span, "field does not provide proto member: " + std::string(req.name));
+                }
+            }
+        }
     }
 
     /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
@@ -842,7 +1248,8 @@ namespace parus::tyck {
                         // v0 fixed policy:
                         // - acts-for attachment is allowed on field/tablet
                         // - current implementation tracks concrete value records as kField
-                        owner_ok = (ss.kind == sema::SymbolKind::kField);
+                        owner_ok = (ss.kind == sema::SymbolKind::kField ||
+                                    ss.kind == sema::SymbolKind::kType);
                     }
                 }
             }

@@ -53,6 +53,8 @@ namespace parus::syntax {
         kKwAlign,
         kKwFn,
         kKwField,
+        kKwProto,
+        kKwTablet,
         kKwActs,
         kKwClass,
         kKwSwitch,
@@ -72,6 +74,8 @@ namespace parus::syntax {
         kKwModule,
         kKwAs,
         kKwNest,
+        kKwWith,
+        kKwRequire,
 
         // punct / delimiters
         kAt,       // @
@@ -166,6 +170,8 @@ namespace parus::syntax {
             case TokenKind::kKwLayout: return "layout";
             case TokenKind::kKwAlign: return "align";
             case TokenKind::kKwField: return "field";
+            case TokenKind::kKwProto: return "proto";
+            case TokenKind::kKwTablet: return "tablet";
             case TokenKind::kKwActs: return "acts";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
@@ -193,6 +199,8 @@ namespace parus::syntax {
             case TokenKind::kKwModule: return "module";
             case TokenKind::kKwAs: return "as";
             case TokenKind::kKwNest: return "nest";
+            case TokenKind::kKwWith: return "with";
+            case TokenKind::kKwRequire: return "require";
 
             case TokenKind::kKwPub: return "pub";
             case TokenKind::kKwSub: return "sub";

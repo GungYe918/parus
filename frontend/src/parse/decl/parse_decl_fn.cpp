@@ -355,6 +355,235 @@ namespace parus {
         }
     }
 
+    bool Parser::parse_decl_fn_constraint_clause(uint32_t& out_begin, uint32_t& out_count) {
+        using K = syntax::TokenKind;
+        out_begin = static_cast<uint32_t>(ast_.fn_constraint_decls().size());
+        out_count = 0;
+
+        const bool has_with =
+            cursor_.at(K::kKwWith) ||
+            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
+        if (!has_with) return false;
+
+        cursor_.bump(); // with
+
+        if (!cursor_.eat(K::kLBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "[");
+            recover_to_delim(K::kRBracket, K::kArrow, K::kLBrace);
+            cursor_.eat(K::kRBracket);
+            return true;
+        }
+
+        if (cursor_.at(K::kRBracket)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "constraint list");
+            cursor_.bump();
+            return true;
+        }
+
+        while (!cursor_.at(K::kRBracket) && !cursor_.at(K::kEof) && !is_aborted()) {
+            const Token tparam = cursor_.peek();
+            std::string_view type_param{};
+            if (tparam.kind == K::kIdent) {
+                type_param = tparam.lexeme;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kUnexpectedToken, tparam.span, "type parameter identifier");
+                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+
+            if (!cursor_.eat(K::kColon)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+
+            const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+            if (pc == 0) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "proto path");
+                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+
+            ast::FnConstraintDecl c{};
+            c.type_param = type_param;
+            c.proto_path_begin = pb;
+            c.proto_path_count = pc;
+            c.span = span_join(tparam.span, cursor_.prev().span);
+            ast_.add_fn_constraint_decl(c);
+            ++out_count;
+
+            if (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kRBracket)) break;
+                continue;
+            }
+            break;
+        }
+
+        if (!cursor_.eat(K::kRBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
+            recover_to_delim(K::kRBracket, K::kArrow, K::kLBrace);
+            cursor_.eat(K::kRBracket);
+        }
+        return true;
+    }
+
+    ast::StmtId Parser::parse_decl_proto_member_sig() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+
+        if (!cursor_.eat(K::kKwFn)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "def");
+        }
+
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFnNameExpected, name_tok.span);
+        }
+
+        bool is_throwing = false;
+        if (cursor_.at(K::kQuestion)) {
+            is_throwing = true;
+            cursor_.bump();
+        }
+
+        // optional generic clause
+        uint32_t generic_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        uint32_t generic_count = 0;
+        if (cursor_.eat(K::kLt)) {
+            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const Token gp = cursor_.peek();
+                if (gp.kind == K::kIdent) {
+                    cursor_.bump();
+                    ast::GenericParamDecl g{};
+                    g.name = gp.lexeme;
+                    g.span = gp.span;
+                    ast_.add_generic_param_decl(g);
+                    ++generic_count;
+                } else {
+                    diag_report(diag::Code::kTypeParamTypeRequired, gp.span, "type parameter");
+                    recover_to_delim(K::kComma, K::kGt, K::kLParen);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kGt)) break;
+                    continue;
+                }
+                break;
+            }
+
+            if (!cursor_.eat(K::kGt)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                recover_to_delim(K::kGt, K::kLParen, K::kArrow);
+                cursor_.eat(K::kGt);
+            }
+        }
+
+        uint32_t param_begin = 0;
+        uint32_t param_count = 0;
+        uint32_t positional_count = 0;
+        bool has_named_group = false;
+        parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+        uint32_t constraint_begin = 0;
+        uint32_t constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(constraint_begin, constraint_count);
+
+        if (!cursor_.at(K::kArrow)) {
+            if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
+                cursor_.bump();
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
+                recover_to_delim(K::kArrow, K::kSemicolon, K::kLBrace);
+                cursor_.eat(K::kArrow);
+            }
+        } else {
+            cursor_.bump();
+        }
+
+        auto ret_ty = parse_type();
+
+        ast::StmtId body = ast::k_invalid_stmt;
+        Span end_sp = ret_ty.span.hi ? ret_ty.span : cursor_.prev().span;
+        if (cursor_.at(K::kLBrace)) {
+            diag_report(diag::Code::kProtoMemberBodyNotAllowed, cursor_.peek().span);
+            body = parse_stmt_required_block("proto member");
+            end_sp = ast_.stmt(body).span;
+        }
+
+        end_sp = stmt_consume_semicolon_or_recover(end_sp);
+
+        ty::TypeId sig_id = ty::kInvalidType;
+        {
+            std::vector<ty::TypeId> pts;
+            std::vector<std::string_view> labels;
+            std::vector<uint8_t> has_default_flags;
+            pts.reserve(param_count);
+            labels.reserve(param_count);
+            has_default_flags.reserve(param_count);
+
+            for (uint32_t i = 0; i < param_count; ++i) {
+                const auto& p = ast_.params()[param_begin + i];
+                pts.push_back(p.type);
+                labels.push_back(p.name);
+                has_default_flags.push_back(p.has_default ? 1u : 0u);
+            }
+
+            sig_id = types_.make_fn(
+                ret_ty.id,
+                pts.empty() ? nullptr : pts.data(),
+                (uint32_t)pts.size(),
+                positional_count,
+                labels.empty() ? nullptr : labels.data(),
+                has_default_flags.empty() ? nullptr : has_default_flags.data()
+            );
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kFnDecl;
+        s.span = span_join(start, end_sp);
+        s.name = name;
+        s.type = sig_id;
+        s.fn_ret = ret_ty.id;
+        s.fn_ret_type_node = ret_ty.node;
+        s.a = ast::k_invalid_stmt;
+
+        s.is_export = false;
+        s.is_extern = false;
+        s.link_abi = ast::LinkAbi::kNone;
+        s.fn_mode = ast::FnMode::kNone;
+        s.is_throwing = is_throwing;
+        s.is_pure = false;
+        s.is_comptime = false;
+        s.is_commit = false;
+        s.is_recast = false;
+        s.attr_begin = 0;
+        s.attr_count = 0;
+
+        s.param_begin = param_begin;
+        s.param_count = param_count;
+        s.positional_param_count = positional_count;
+        s.has_named_group = has_named_group;
+        s.fn_is_proto_sig = true;
+        s.fn_generic_param_begin = generic_begin;
+        s.fn_generic_param_count = generic_count;
+        s.fn_constraint_begin = constraint_begin;
+        s.fn_constraint_count = constraint_count;
+        return ast_.add_stmt(s);
+    }
+
     // 함수 선언(스펙 6.1)을 파싱한다.
     // - qualifier 순서 유연화(가능 범위 내에서 전진하며 수집)
     ast::StmtId Parser::parse_decl_fn() {
@@ -442,10 +671,49 @@ namespace parus {
             cursor_.bump();
         }
 
+        // 6.5) optional generic clause: <T, U, ...>
+        uint32_t generic_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        uint32_t generic_count = 0;
+        if (cursor_.eat(K::kLt)) {
+            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const Token gp = cursor_.peek();
+                if (gp.kind == K::kIdent) {
+                    cursor_.bump();
+                    ast::GenericParamDecl g{};
+                    g.name = gp.lexeme;
+                    g.span = gp.span;
+                    ast_.add_generic_param_decl(g);
+                    ++generic_count;
+                } else {
+                    diag_report(diag::Code::kTypeParamTypeRequired, gp.span, "type parameter");
+                    recover_to_delim(K::kComma, K::kGt, K::kLParen);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kGt)) break;
+                    continue;
+                }
+                break;
+            }
+
+            if (!cursor_.eat(K::kGt)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                recover_to_delim(K::kGt, K::kLParen, K::kArrow);
+                cursor_.eat(K::kGt);
+            }
+        }
+
         // 7) params
         uint32_t param_begin = 0, param_count = 0, positional_count = 0;
         bool has_named_group = false;
         parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+        // 7.5) optional constraint clause: with [T: Proto, ...]
+        uint32_t constraint_begin = 0;
+        uint32_t constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(constraint_begin, constraint_count);
 
         // 8) '->' ReturnType
         if (!cursor_.at(K::kArrow)) {
@@ -546,6 +814,10 @@ namespace parus {
         s.param_count = param_count;                 // total params (positional + named-group)
         s.positional_param_count = positional_count; // positional only
         s.has_named_group = has_named_group;
+        s.fn_generic_param_begin = generic_begin;
+        s.fn_generic_param_count = generic_count;
+        s.fn_constraint_begin = constraint_begin;
+        s.fn_constraint_count = constraint_count;
 
         return ast_.add_stmt(s);
     }

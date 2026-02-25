@@ -95,7 +95,10 @@ namespace parus {
 
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             const Token with_kw = cursor_.peek();
-            if (!is_context_keyword(with_kw, "with")) {
+            const bool is_with_kw =
+                with_kw.kind == K::kKwWith ||
+                is_context_keyword(with_kw, "with");
+            if (!is_with_kw) {
                 diag_report(diag::Code::kUnexpectedToken, with_kw.span, "with");
                 recover_to_delim(K::kRBrace, K::kSemicolon);
                 if (cursor_.eat(K::kSemicolon)) continue;

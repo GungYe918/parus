@@ -331,7 +331,7 @@ namespace parus {
         // 2-A) acts selection: use T with acts(NameOrDefault);
         // ------------------------------------------------------------
         const auto is_with_token = [](const Token& t) -> bool {
-            return t.kind == K::kIdent && t.lexeme == "with";
+            return t.kind == K::kKwWith || (t.kind == K::kIdent && t.lexeme == "with");
         };
         if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
             auto join_path = [&](uint32_t begin, uint32_t count) -> std::string {

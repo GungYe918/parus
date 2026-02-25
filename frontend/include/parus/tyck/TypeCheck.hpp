@@ -139,6 +139,8 @@ namespace parus::tyck {
         void check_stmt_return_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
         void check_stmt_fn_decl_(const ast::Stmt& s);
+        void check_stmt_proto_decl_(ast::StmtId sid);
+        void check_stmt_tablet_decl_(ast::StmtId sid);
         void check_stmt_field_decl_(ast::StmtId sid);
         void check_stmt_acts_decl_(const ast::Stmt& s);
 
@@ -295,6 +297,8 @@ namespace parus::tyck {
         //   향후 AST arena의 내부 저장 방식이 바뀌면 위험해질 수 있음.
         std::unordered_map<std::string, std::vector<ast::StmtId>> fn_decl_by_name_;
         std::unordered_map<ast::StmtId, std::string> fn_qualified_name_by_stmt_;
+        std::unordered_map<std::string, ast::StmtId> proto_decl_by_name_;
+        std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
         std::vector<std::string> namespace_stack_;
         std::unordered_map<std::string, std::string> import_alias_to_path_;
         std::unordered_set<std::string> known_namespace_paths_;

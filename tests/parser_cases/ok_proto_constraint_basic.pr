@@ -1,0 +1,19 @@
+proto Equatable {
+  def eq(self, rhs: &Self) -> bool;
+} with require(true);
+
+tablet UserId : Equatable {
+  let value: i32;
+
+  def eq(self, rhs: &Self) -> bool {
+    return true;
+  }
+}
+
+def same<T>(a: &T, b: &T) with [T: Equatable] -> bool {
+  return true;
+}
+
+def main() -> i32 {
+  return 0i32;
+}

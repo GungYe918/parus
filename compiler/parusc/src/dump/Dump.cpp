@@ -222,6 +222,8 @@ namespace parusc::dump {
             case K::kContinue: return "Continue";
             case K::kFnDecl: return "FnDecl";
             case K::kFieldDecl: return "FieldDecl";
+            case K::kProtoDecl: return "ProtoDecl";
+            case K::kTabletDecl: return "TabletDecl";
             case K::kActsDecl: return "ActsDecl";
             case K::kSwitch: return "Switch";
             case K::kError: return "Error";

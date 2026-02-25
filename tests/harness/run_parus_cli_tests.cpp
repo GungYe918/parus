@@ -276,14 +276,14 @@ bool test_bundle_build_strict_export_violation() {
 
     const std::string a_src =
         "nest pkg;\n"
-        "def hidden() -> i32 {\n"
-        "  return 1i32;\n"
+        "def main() -> i32 {\n"
+        "  return hidden();\n"
         "}\n";
 
     const std::string b_src =
         "nest pkg;\n"
-        "def main() -> i32 {\n"
-        "  return hidden();\n"
+        "def hidden() -> i32 {\n"
+        "  return 1i32;\n"
         "}\n";
 
     const std::string lei_src =

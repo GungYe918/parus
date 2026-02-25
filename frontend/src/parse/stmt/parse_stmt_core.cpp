@@ -418,7 +418,7 @@ namespace parus {
         std::string_view var_acts_set_name{};
 
         const auto is_with_token = [](const Token& tok) -> bool {
-            return tok.kind == K::kIdent && tok.lexeme == "with";
+            return tok.kind == K::kKwWith || (tok.kind == K::kIdent && tok.lexeme == "with");
         };
         const auto parse_with_acts_clause = [&](bool record_binding, bool allow_assign_recovery) {
             if (!(is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs)) return false;

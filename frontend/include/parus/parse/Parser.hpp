@@ -192,6 +192,8 @@ namespace parus {
 
         //  field 선언 파싱
         ast::StmtId parse_decl_field();
+        ast::StmtId parse_decl_proto();
+        ast::StmtId parse_decl_tablet();
 
         //  acts 선언 파싱 (v0: acts A, acts for T, acts Name for T)
         ast::StmtId parse_decl_acts();
@@ -215,6 +217,8 @@ namespace parus {
         //  파라미터 1개(Ident ':' Type ['=' Expr])를 파싱
         //  반환값: 성공 여부(이름/타입까지 정상 파싱되었는지)
         bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self = nullptr);
+        bool parse_decl_fn_constraint_clause(uint32_t& out_begin, uint32_t& out_count);
+        ast::StmtId parse_decl_proto_member_sig();
 
         // --------------------
         // call args

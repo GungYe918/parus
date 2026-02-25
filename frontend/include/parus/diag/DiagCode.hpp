@@ -78,7 +78,15 @@ namespace parus::diag {
         kOperatorDeclOnlyInActsFor,       // operator(...) is only allowed in acts-for forms
         kOperatorKeyExpected,             // operator(<key>) key is missing/invalid
         kOperatorSelfFirstParamRequired,  // operator(...) first parameter must be `self`
-        
+        kProtoMemberBodyNotAllowed,       // proto member must be declaration-only (no body)
+        kProtoOperatorNotAllowed,         // operator declaration is forbidden inside proto
+        kProtoRequireMissing,             // proto must have tail `with require(...)`
+        kProtoRequireTypeNotBool,         // require(expr) must evaluate to bool
+        kProtoRequireExprTooComplex,      // require(expr) supports simple boolean expression only (v1)
+        kProtoImplTargetNotSupported,     // implements target is not a known proto
+        kProtoImplMissingMember,          // implementation type misses required proto member
+        kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied
+
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
 

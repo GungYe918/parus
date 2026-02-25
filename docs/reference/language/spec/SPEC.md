@@ -9,3 +9,4 @@
 최근 추가 챕터:
 
 1. `30_BUNDLE_MODULE_RESOLUTION.md` - Bundle/Module 이름 해석과 가시성 규칙
+1. `31_PROTO_CONSTRAINTS.md` - Proto 제약 전용 규칙 (v1)

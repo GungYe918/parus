@@ -98,6 +98,8 @@ namespace parus::ast {
         // decl-like
         kFnDecl,
         kFieldDecl,
+        kProtoDecl,
+        kTabletDecl,
         kActsDecl,
 
         // use
@@ -195,6 +197,24 @@ namespace parus::ast {
     struct FieldInitEntry {
         std::string_view name{};
         ExprId expr = k_invalid_expr;
+        Span span{};
+    };
+
+    struct PathRef {
+        uint32_t path_begin = 0;
+        uint32_t path_count = 0;
+        Span span{};
+    };
+
+    struct GenericParamDecl {
+        std::string_view name{};
+        Span span{};
+    };
+
+    struct FnConstraintDecl {
+        std::string_view type_param{};
+        uint32_t proto_path_begin = 0;
+        uint32_t proto_path_count = 0;
         Span span{};
     };
 
@@ -468,6 +488,11 @@ namespace parus::ast {
         // 나머지: named-group
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
+        bool fn_is_proto_sig = false; // true when parsed from proto member signature (body-less)
+        uint32_t fn_generic_param_begin = 0;
+        uint32_t fn_generic_param_count = 0;
+        uint32_t fn_constraint_begin = 0;
+        uint32_t fn_constraint_count = 0;
 
         // def/operator
         bool fn_is_operator = false; // true when declared as `operator(...)`
@@ -484,6 +509,10 @@ namespace parus::ast {
         uint32_t field_align = 0; // 0 means unspecified
         uint32_t field_member_begin = 0;
         uint32_t field_member_count = 0;
+        uint32_t decl_path_ref_begin = 0; // proto inherit / field/tablet implements path refs
+        uint32_t decl_path_ref_count = 0;
+        bool proto_has_require = false;
+        ExprId proto_require_expr = k_invalid_expr;
 
         // ---- acts decl ----
         bool acts_is_for = false;          // true: `acts for T` or `acts Name for T`
@@ -556,6 +585,18 @@ namespace parus::ast {
         uint32_t add_field_init_entry(const FieldInitEntry& f) {
             field_init_entries_.push_back(f);
             return (uint32_t)field_init_entries_.size() - 1;
+        }
+        uint32_t add_path_ref(const PathRef& p) {
+            path_refs_.push_back(p);
+            return static_cast<uint32_t>(path_refs_.size() - 1);
+        }
+        uint32_t add_generic_param_decl(const GenericParamDecl& p) {
+            generic_param_decls_.push_back(p);
+            return static_cast<uint32_t>(generic_param_decls_.size() - 1);
+        }
+        uint32_t add_fn_constraint_decl(const FnConstraintDecl& c) {
+            fn_constraint_decls_.push_back(c);
+            return static_cast<uint32_t>(fn_constraint_decls_.size() - 1);
         }
 
         uint32_t add_fstring_part(const FStringPart& p) {
@@ -630,6 +671,12 @@ namespace parus::ast {
 
         const std::vector<FieldInitEntry>& field_init_entries() const { return field_init_entries_; }
         std::vector<FieldInitEntry>& field_init_entries_mut() { return field_init_entries_; }
+        const std::vector<PathRef>& path_refs() const { return path_refs_; }
+        std::vector<PathRef>& path_refs_mut() { return path_refs_; }
+        const std::vector<GenericParamDecl>& generic_param_decls() const { return generic_param_decls_; }
+        std::vector<GenericParamDecl>& generic_param_decls_mut() { return generic_param_decls_; }
+        const std::vector<FnConstraintDecl>& fn_constraint_decls() const { return fn_constraint_decls_; }
+        std::vector<FnConstraintDecl>& fn_constraint_decls_mut() { return fn_constraint_decls_; }
 
         const std::vector<FStringPart>& fstring_parts() const { return fstring_parts_; }
         std::vector<FStringPart>& fstring_parts_mut() { return fstring_parts_; }
@@ -663,6 +710,9 @@ namespace parus::ast {
         std::vector<SwitchCase> switch_cases_;
         std::vector<FieldMember> field_members_;
         std::vector<FieldInitEntry> field_init_entries_;
+        std::vector<PathRef> path_refs_;
+        std::vector<GenericParamDecl> generic_param_decls_;
+        std::vector<FnConstraintDecl> fn_constraint_decls_;
         std::vector<FStringPart> fstring_parts_;
         std::deque<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;

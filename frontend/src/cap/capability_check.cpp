@@ -373,10 +373,19 @@ namespace parus::cap {
                     }
 
                     case ast::StmtKind::kFieldDecl:
+                    case ast::StmtKind::kProtoDecl:
                     case ast::StmtKind::kUse:
                     case ast::StmtKind::kNestDecl:
                     case ast::StmtKind::kError:
                         return;
+
+                    case ast::StmtKind::kTabletDecl: {
+                        const auto& kids = ast_.stmt_children();
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            walk_stmt_(kids[s.stmt_begin + i]);
+                        }
+                        return;
+                    }
                 }
             }
 

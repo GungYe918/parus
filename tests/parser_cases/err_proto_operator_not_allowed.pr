@@ -1,0 +1,7 @@
+proto Equatable {
+  operator(==)(self, rhs: &Self) -> bool;
+} with require(true);
+
+def main() -> i32 {
+  return 0i32;
+}

@@ -448,7 +448,8 @@ namespace parus::tyck {
 
         if (auto sid = lookup_symbol_(types_.to_string(owner_type))) {
             const auto& ss = sym_.symbol(*sid);
-            if (ss.kind == sema::SymbolKind::kField && ss.declared_type != ty::kInvalidType) {
+            if ((ss.kind == sema::SymbolKind::kField || ss.kind == sema::SymbolKind::kType) &&
+                ss.declared_type != ty::kInvalidType) {
                 return ss.declared_type;
             }
         }
@@ -583,6 +584,8 @@ namespace parus::tyck {
 
             if ((s.kind == ast::StmtKind::kFnDecl ||
                  s.kind == ast::StmtKind::kFieldDecl ||
+                 s.kind == ast::StmtKind::kProtoDecl ||
+                 s.kind == ast::StmtKind::kTabletDecl ||
                  s.kind == ast::StmtKind::kActsDecl) &&
                 !s.name.empty()) {
                 const std::string qname = qualify_with_ns_stack(s.name);
@@ -616,6 +619,8 @@ namespace parus::tyck {
 
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
+        proto_decl_by_name_.clear();
+        proto_qualified_name_by_stmt_.clear();
         import_alias_to_path_.clear();
         acts_named_decl_by_owner_and_name_.clear();
 
@@ -817,6 +822,41 @@ namespace parus::tyck {
                     meta.layout = s.field_layout;
                     meta.align = s.field_align;
                     field_abi_meta_by_type_[field_ty] = meta;
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kProtoDecl) {
+                const std::string qname = qualify_decl_name_(s.name);
+                proto_qualified_name_by_stmt_[sid] = qname;
+                proto_decl_by_name_[qname] = sid;
+
+                ty::TypeId proto_ty = s.type;
+                if (proto_ty == ty::kInvalidType && !qname.empty()) {
+                    proto_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = proto_ty;
+                }
+
+                auto ins = sym_.insert(sema::SymbolKind::kType, qname, proto_ty, s.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    err_(s.span, "duplicate symbol (proto): " + qname);
+                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kTabletDecl) {
+                const std::string qname = qualify_decl_name_(s.name);
+                ty::TypeId tablet_ty = s.type;
+                if (tablet_ty == ty::kInvalidType && !qname.empty()) {
+                    tablet_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = tablet_ty;
+                }
+
+                auto ins = sym_.insert(sema::SymbolKind::kType, qname, tablet_ty, s.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    err_(s.span, "duplicate symbol (tablet): " + qname);
+                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
                 return;
             }

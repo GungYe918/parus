@@ -39,6 +39,7 @@
 1. `spec/28.md` - 16. EBNF 테이블 (v0 전체 문서 반영, 파서 제작 가능 수준)
 1. `spec/29.md` - 17. Macro System (Draft, Phase1.5)
 1. `spec/30_BUNDLE_MODULE_RESOLUTION.md` - 18. Bundle/Module 이름 해석과 가시성 규칙 (Normative)
+1. `spec/31_PROTO_CONSTRAINTS.md` - 19. Proto 제약 규칙 (Constraint-only, v1)
 
 ## EBNF
 
