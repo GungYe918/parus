@@ -41,7 +41,7 @@ proto ProtoName [: BaseProto, ...] {
 
 ## 19.4 적용 대상
 
-1. `tablet`은 `tablet Name : ProtoA, ...`로 구현 선언 가능.
+1. `class`은 `class Name : ProtoA, ...`로 구현 선언 가능.
 2. `field`는 `field Name : ProtoA, ...` 문법을 허용한다.
 3. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
 

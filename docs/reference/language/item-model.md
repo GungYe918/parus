@@ -40,8 +40,8 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 2. `field`
 3. `acts`
 4. (미래) `proto`
-5. (미래) `tablet`
-6. (미래) `class`
+5. (미래) `class`
+6. (미래) `actor`
 
 #### 3.1.2 simple declaration item (`;` 필수)
 

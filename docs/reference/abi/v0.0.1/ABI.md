@@ -133,7 +133,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 ### 7.2 금지 타입
 
 1. borrow/escape 관련 타입 (`&`, `&mut`, `&&`)
-2. optional, class, tablet 직접 값 전달
+2. optional, actor, class 직접 값 전달
 3. 구현 의존 내부 타입
 4. 표준 라이브러리 `String` 직접 값 전달 (`Utf8Span`/`Utf8Buf`로 변환해야 함)
 
@@ -188,7 +188,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `docs/reference/abi/v0.0.1/STORAGE_POLICY.md`
 3. nullable(`T?`) 의미 규칙/승격 정책/하강 정합성:
    - `docs/reference/abi/v0.0.1/NULLABLE_MODEL.md`
-4. OOP 역할 분리/`self`-`Self`/`acts`-`proto`-`tablet`-`class` 규칙:
+4. OOP 역할 분리/`self`-`Self`/`acts`-`proto`-`class`-`actor` 규칙:
    - `docs/reference/abi/v0.0.1/OOP_MODEL.md`
 5. 제네릭/제약 표기(`with [ ... ]`) 및 proto 결합 방향:
    - `docs/reference/abi/v0.0.1/GENERICS_MODEL.md`
@@ -205,8 +205,8 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `T -> T?`는 대입 경계에서만 허용한다.
    - `T <: T?` 전역 승격은 허용하지 않는다.
 7. OOP 모델은 역할 분리를 고정한다.
-   - `acts for` 부착 대상: `field`, `tablet`
-   - `class`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
+   - `acts for` 부착 대상: `field`, `class`
+   - `actor`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
    - `proto`는 계약 전용이며 연산자 재정의를 담당하지 않는다
    - `acts for` 계열 함수는 `self`/`self mut` 리시버를 첫 파라미터로 강제한다 (`self move`는 v0 보류)
    - acts 선택은 `use T with acts(...)` 및 바인딩 sugar(`let/set ... = expr with acts(...)`)를 따른다

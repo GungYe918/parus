@@ -14,8 +14,8 @@ OOP 관련 사항에서 `docs/reference/language/SPEC.md` 또는 다른 안내 �
 Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 
 1. 정적 디스패치 기반의 예측 가능한 성능
-2. `field`/`acts`/`proto`/`tablet`/`class` 역할 분리
-3. 멀티스레딩 핵심 모델(`class`, `commit`, `recast`)의 불변식 보호
+2. `field`/`acts`/`proto`/`class`/`actor` 역할 분리
+3. 멀티스레딩 핵심 모델(`actor`, `commit`, `recast`)의 불변식 보호
 4. v1+ 제네릭 확장 시 문법 복잡도(`<>` 과밀) 최소화
 
 ---
@@ -26,7 +26,7 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 2. `dyn` 기반 런타임 동적 디스패치는 v0 범위 밖이다.
 3. `acts`는 상속/다형성 수단이 아니라 "행동/연산자 정책 부착" 수단이다.
 4. `proto`는 인터페이스 계약의 중심이며, 연산자 재정의를 담당하지 않는다.
-5. `class`는 상태머신(`draft/pub/sub/commit/recast`)이므로 외부 행동 주입을 제한한다.
+5. `actor`는 상태머신(`draft/pub/sub/commit/recast`)이므로 외부 행동 주입을 제한한다.
 
 ---
 
@@ -51,13 +51,13 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 3. 다른 `proto`를 상속(확장)할 수 있다.
 4. v1+에서 제네릭 제약의 중심으로 확장한다.
 
-### 3.4 `tablet`
+### 3.4 `class`
 
 1. 구현체 타입이다.
 2. `proto`를 구현한다.
 3. 생성/소멸 수명주기(`init`/`deinit`)를 갖는다.
 
-### 3.5 `class`
+### 3.5 `actor`
 
 1. 멀티스레딩 공유 상태 모델의 중심이다.
 2. `draft/pub/sub/commit/recast` 불변식을 유지해야 한다.
@@ -92,11 +92,11 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 1. `Self`는 타입 위치에서만 쓰는 contextual 타입 이름이다.
 2. `Self`는 일반 전역 키워드가 아니라 아래 문맥에서만 특별 해석한다.
    - `proto` 본문
-   - `tablet` 본문
+   - `class` 본문
    - `acts for T` / `acts Name for T` 본문
 3. `Self`는 현재 소유 타입으로 치환된다.
    - `proto Drawable` 내부: `Self`는 구현체 타입 자리
-   - `tablet Sprite` 내부: `Self == Sprite`
+   - `class Sprite` 내부: `Self == Sprite`
    - `acts for Vec2` 내부: `Self == Vec2`
 
 ### 5.3 왜 둘 다 필요한가
@@ -129,10 +129,10 @@ acts for Vec2 {
 
 ### 6.2 부착 대상 제한
 
-1. 허용: `field`, `tablet`
-2. 금지: `class`, `proto`
+1. 허용: `field`, `class`
+2. 금지: `actor`, `proto`
 3. 이유:
-   - `class`: commit/recast 상태머신 불변식 보호
+   - `actor`: commit/recast 상태머신 불변식 보호
    - `proto`: 계약과 행동 정책의 역할 분리 유지
 
 ### 6.3 선택 문법 (`with`)
@@ -183,7 +183,7 @@ dot/연산자 해소 순서:
 
 1. 연산자 선언은 `operator(...)` 문법만 허용
 2. 연산자는 `acts for T`/`acts Name for T`에서만 선언
-3. `proto`/`class`에 연산자 재정의 금지
+3. `proto`/`actor`에 연산자 재정의 금지
 
 ### 6.6 상속/다형성 금지
 
@@ -202,7 +202,7 @@ dot/연산자 해소 순서:
 3. 연산자 선언 금지
 4. 저장 필드 선언 금지(v0 단순화; 접근 계약은 함수로 표현)
 5. `proto` 상속 허용 (`proto B : A { ... }`)
-6. 구현 권한은 v0에서 `tablet`에 한정한다.
+6. 구현 권한은 v0에서 `class`에 한정한다.
 7. `dyn` 미도입 상태에서는 정적 검증/정적 해소를 우선한다.
 
 예시:
@@ -251,7 +251,7 @@ def render<T>(x: &T) with [T: Drawable] -> void {
 
 ---
 
-## 8. `tablet` 모델 (구현체 + 생명주기)
+## 8. `class` 모델 (구현체 + 생명주기)
 
 ### 8.1 역할
 
@@ -274,7 +274,7 @@ def render<T>(x: &T) with [T: Drawable] -> void {
 예시:
 
 ```parus
-tablet Sprite : Drawable {
+class Sprite : Drawable {
   def init(tex: Handle<Texture>, pos: Vec2) -> void { ... }
   def deinit() -> void { ... }
   def draw(self, ctx: &mut RenderCtx) -> void { ... }
@@ -283,14 +283,14 @@ tablet Sprite : Drawable {
 
 ### 8.3 상속 규칙
 
-1. v0에서 `tablet`은 `proto` 구현만 허용한다.
-2. `tablet` 간 레이아웃 상속은 v1+ 보류.
+1. v0에서 `class`은 `proto` 구현만 허용한다.
+2. `class` 간 레이아웃 상속은 v1+ 보류.
 
 ---
 
-## 9. `class` 모델 (상태머신 보호)
+## 9. `actor` 모델 (상태머신 보호)
 
-1. `class`는 대규모 공유 상태/동시성 제어의 핵심이다.
+1. `actor`는 대규모 공유 상태/동시성 제어의 핵심이다.
 2. 행동은 inherent method(`pub`/`sub`)로만 제공한다.
 3. `acts for ClassType`는 금지한다.
 4. 이유: 외부 행동 주입이 `commit`/`recast` 불변식을 손상시킬 수 있기 때문.
@@ -298,7 +298,7 @@ tablet Sprite : Drawable {
 예시:
 
 ```parus
-class Scene {
+actor Scene {
   pub def tick(dt: f32) -> void {
     // draft update
     commit;
@@ -316,13 +316,13 @@ class Scene {
 ## 10. 포함(Composition) 규칙
 
 1. `field` 안에 `field` 포함: 허용
-2. `tablet` 안에 `field` 포함: 허용
-3. `class` draft에 `field` 포함: 허용(기존 draft 규칙 준수)
+2. `class` 안에 `field` 포함: 허용
+3. `actor` draft에 `field` 포함: 허용(기존 draft 규칙 준수)
 4. `proto` 안의 저장 필드: v0 금지 (함수 계약으로 대체)
 
 권장:
 
-1. `class` draft는 복잡 객체 값 대신 handle 중심으로 구성
+1. `actor` draft는 복잡 객체 값 대신 handle 중심으로 구성
 2. 공유 상태 경계에서는 단순 레코드 + handle 패턴 유지
 
 ---
@@ -388,7 +388,7 @@ proto Drawable {
   def draw(self, ctx: &mut RenderCtx) -> void;
 }
 
-tablet Sprite : Drawable {
+class Sprite : Drawable {
   def init(pos: Vec2) -> void { ... }
   def deinit() -> void { ... }
   def draw(self, ctx: &mut RenderCtx) -> void { ... }
@@ -398,7 +398,7 @@ tablet Sprite : Drawable {
 ### 13.3 공유 상태 오케스트레이션
 
 ```parus
-class Scene {
+actor Scene {
   pub def add_sprite(h: Handle<Sprite>) -> void {
     // draft에 handle 저장
     commit;
@@ -417,14 +417,14 @@ class Scene {
 
 다음을 통과해야 본 OOP 모델 준수로 본다.
 
-1. `acts for` 부착 대상 제한(`field`/`tablet`)이 강제된다.
-2. `class`에 `acts for`를 시도하면 컴파일 에러가 난다.
+1. `acts for` 부착 대상 제한(`field`/`class`)이 강제된다.
+2. `actor`에 `acts for`를 시도하면 컴파일 에러가 난다.
 3. `proto`에서 연산자 선언이 금지된다.
 4. `proto` 상속과 구현 요구사항 closure 검사가 일관 동작한다.
 5. `self`/`Self` 규칙이 타입체커에서 일관 강제된다.
 6. `use T with acts(...)` lexical scope 선택이 일관 동작한다.
 7. dot/연산자 해석에서 모호성이 런타임이 아닌 컴파일 단계에서 제거된다.
-8. `tablet` 생명주기 표면 규칙(`init`/`deinit`)이 문서와 구현 계획에서 일치한다.
+8. `class` 생명주기 표면 규칙(`init`/`deinit`)이 문서와 구현 계획에서 일치한다.
 
 ---
 
@@ -432,7 +432,7 @@ class Scene {
 
 ### v0.0.1
 
-1. OOP 역할 분리(`field`/`acts`/`proto`/`tablet`/`class`) 정본 고정
+1. OOP 역할 분리(`field`/`acts`/`proto`/`class`/`actor`) 정본 고정
 2. `acts` 최소 모델(v0) + `proto` 중심 확장(v1+) 로드맵 고정
 3. `self`와 `Self`의 문맥 의미를 정식 규칙으로 고정
 4. `with`의 v0(acts 선택) / v1+(제약) 사용 원칙 고정
