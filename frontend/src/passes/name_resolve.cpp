@@ -360,7 +360,7 @@ namespace parus::passes {
         if ((s.kind == ast::StmtKind::kFnDecl ||
              s.kind == ast::StmtKind::kFieldDecl ||
              s.kind == ast::StmtKind::kProtoDecl ||
-             s.kind == ast::StmtKind::kTabletDecl ||
+             s.kind == ast::StmtKind::kClassDecl ||
              s.kind == ast::StmtKind::kActsDecl) &&
             !s.name.empty()) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
@@ -955,17 +955,17 @@ namespace parus::passes {
                 return;
             }
 
-            case ast::StmtKind::kTabletDecl: {
+            case ast::StmtKind::kClassDecl: {
                 const std::string qname = qualify_name_(namespace_stack, s.name);
-                uint32_t tablet_sym = sema::SymbolTable::kNoScope;
+                uint32_t class_sym = sema::SymbolTable::kNoScope;
                 if (auto sid = sym.lookup(qname)) {
-                    tablet_sym = *sid;
+                    class_sym = *sid;
                 } else {
                     auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
-                    tablet_sym = ins.symbol_id;
+                    class_sym = ins.symbol_id;
                 }
-                if (tablet_sym != sema::SymbolTable::kNoScope) {
-                    const auto rid = add_resolved_(out, BindingKind::kType, tablet_sym, s.span);
+                if (class_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, class_sym, s.span);
                     out.stmt_to_resolved[(uint32_t)id] = rid;
                 }
 
@@ -975,7 +975,7 @@ namespace parus::passes {
                 const uint64_t begin = s.stmt_begin;
                 const uint64_t end = begin + s.stmt_count;
                 if (begin <= kids.size() && end <= kids.size()) {
-                    // predeclare tablet member functions for same-tablet forward references.
+                    // predeclare class member functions for same-class forward references.
                     for (uint32_t i = 0; i < s.stmt_count; ++i) {
                         const ast::StmtId msid = kids[s.stmt_begin + i];
                         if (!is_valid_stmt_id_(r, msid)) continue;
@@ -1273,7 +1273,7 @@ namespace parus::passes {
             return;
         }
 
-        if (s.kind == ast::StmtKind::kTabletDecl) {
+        if (s.kind == ast::StmtKind::kClassDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);

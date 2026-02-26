@@ -54,9 +54,8 @@ namespace parus::syntax {
         kKwFn,
         kKwField,
         kKwProto,
-        kKwTablet,
-        kKwActs,
         kKwClass,
+        kKwActs,
         kKwSwitch,
         kKwCase,
         kKwDefault,
@@ -171,7 +170,6 @@ namespace parus::syntax {
             case TokenKind::kKwAlign: return "align";
             case TokenKind::kKwField: return "field";
             case TokenKind::kKwProto: return "proto";
-            case TokenKind::kKwTablet: return "tablet";
             case TokenKind::kKwActs: return "acts";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";

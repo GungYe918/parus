@@ -99,7 +99,7 @@ namespace parus::ast {
         kFnDecl,
         kFieldDecl,
         kProtoDecl,
-        kTabletDecl,
+        kClassDecl,
         kActsDecl,
 
         // use
@@ -509,7 +509,7 @@ namespace parus::ast {
         uint32_t field_align = 0; // 0 means unspecified
         uint32_t field_member_begin = 0;
         uint32_t field_member_count = 0;
-        uint32_t decl_path_ref_begin = 0; // proto inherit / field/tablet implements path refs
+        uint32_t decl_path_ref_begin = 0; // proto inherit / field/class implements path refs
         uint32_t decl_path_ref_count = 0;
         bool proto_has_require = false;
         ExprId proto_require_expr = k_invalid_expr;

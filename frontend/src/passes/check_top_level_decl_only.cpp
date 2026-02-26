@@ -29,7 +29,7 @@ namespace parus::passes {
             case ast::StmtKind::kFnDecl:
             case ast::StmtKind::kFieldDecl:
             case ast::StmtKind::kProtoDecl:
-            case ast::StmtKind::kTabletDecl:
+            case ast::StmtKind::kClassDecl:
             case ast::StmtKind::kActsDecl:
             case ast::StmtKind::kNestDecl:
             case ast::StmtKind::kUse:

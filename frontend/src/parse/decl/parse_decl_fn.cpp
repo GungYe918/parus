@@ -518,12 +518,15 @@ namespace parus {
         ast::StmtId body = ast::k_invalid_stmt;
         Span end_sp = ret_ty.span.hi ? ret_ty.span : cursor_.prev().span;
         if (cursor_.at(K::kLBrace)) {
-            diag_report(diag::Code::kProtoMemberBodyNotAllowed, cursor_.peek().span);
             body = parse_stmt_required_block("proto member");
             end_sp = ast_.stmt(body).span;
         }
 
-        end_sp = stmt_consume_semicolon_or_recover(end_sp);
+        if (body == ast::k_invalid_stmt) {
+            end_sp = stmt_consume_semicolon_or_recover(end_sp);
+        } else if (cursor_.at(K::kSemicolon)) {
+            end_sp = cursor_.bump().span;
+        }
 
         ty::TypeId sig_id = ty::kInvalidType;
         {
@@ -558,7 +561,7 @@ namespace parus {
         s.type = sig_id;
         s.fn_ret = ret_ty.id;
         s.fn_ret_type_node = ret_ty.node;
-        s.a = ast::k_invalid_stmt;
+        s.a = body;
 
         s.is_export = false;
         s.is_extern = false;

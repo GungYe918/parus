@@ -62,7 +62,7 @@ SelfRecv       := "self" ["mut" | "move"] ;
 
 ## 제약/비범위 (v0)
 
-1. field/proto/tablet/class 완전 통합 문법은 진행 중
+1. field/proto/class 완전 통합 문법은 진행 중
 2. field member default value 문법 없음
 3. acts inheritance/polymorphism 없음
 

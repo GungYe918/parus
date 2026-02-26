@@ -887,6 +887,46 @@ namespace {
         return ok;
     }
 
+    /// @brief class/proto(default body) 멤버가 LLVM IR 함수로 출력되는지 검사한다.
+    static bool test_class_proto_default_member_llvm_symbols_() {
+        const std::string src = R"(
+            proto WidgetProto {
+                def id(self) -> i32 {
+                    return 11i32;
+                }
+            };
+
+            class Button : WidgetProto {
+                let value: i32;
+
+                def tap(self) -> i32 {
+                    return 3i32;
+                }
+            }
+
+            def main() -> i32 {
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "class/proto default member source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for class/proto member source must succeed");
+        ok &= require_(lowered.llvm_ir.find("$WidgetProto$id$") != std::string::npos,
+                       "LLVM IR must include proto default member symbol fragment");
+        ok &= require_(lowered.llvm_ir.find("$Button$tap$") != std::string::npos,
+                       "LLVM IR must include class member symbol fragment");
+        return ok;
+    }
+
     /// @brief `tests/oir_cases`의 케이스를 순회하며 OIR->LLVM lowering 경로를 일괄 검증한다.
     static bool test_oir_case_directory() {
 #ifndef PARUS_OIR_CASE_DIR
@@ -968,6 +1008,7 @@ int main() {
         {"field_literal_lowering", test_field_literal_lowering_},
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
+        {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

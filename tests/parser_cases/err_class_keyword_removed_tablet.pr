@@ -1,9 +1,13 @@
 proto Equatable {
   def eq(self, rhs: &Self) -> bool;
-} with require(true);
+};
 
-class UserId : Equatable {
+tablet UserId : Equatable {
   let value: i32;
+
+  def eq(self, rhs: &Self) -> bool {
+    return true;
+  }
 }
 
 def main() -> i32 {

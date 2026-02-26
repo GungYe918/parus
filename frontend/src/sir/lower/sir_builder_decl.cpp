@@ -222,6 +222,46 @@ namespace parus::sir {
                 return;
             }
 
+            if (s.kind == ast::StmtKind::kProtoDecl) {
+                const uint32_t begin = s.stmt_begin;
+                const uint32_t end = s.stmt_begin + s.stmt_count;
+                const auto& kids = ast.stmt_children();
+                if (begin < kids.size() && end <= kids.size()) {
+                    for (uint32_t i = begin; i < end; ++i) {
+                        const auto member_sid = kids[i];
+                        if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
+                        const auto& member = ast.stmt(member_sid);
+                        if (member.kind != ast::StmtKind::kFnDecl) continue;
+                        if (member.a == ast::k_invalid_stmt) continue; // signature-only proto member
+                        (void)lower_func_decl_(
+                            m, ast, sym, nres, tyck, member_sid,
+                            /*is_acts_member=*/false, k_invalid_acts
+                        );
+                    }
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kClassDecl) {
+                const uint32_t begin = s.stmt_begin;
+                const uint32_t end = s.stmt_begin + s.stmt_count;
+                const auto& kids = ast.stmt_children();
+                if (begin < kids.size() && end <= kids.size()) {
+                    for (uint32_t i = begin; i < end; ++i) {
+                        const auto member_sid = kids[i];
+                        if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
+                        const auto& member = ast.stmt(member_sid);
+                        if (member.kind != ast::StmtKind::kFnDecl) continue;
+                        if (member.a == ast::k_invalid_stmt) continue; // declaration-only member is not lowered
+                        (void)lower_func_decl_(
+                            m, ast, sym, nres, tyck, member_sid,
+                            /*is_acts_member=*/false, k_invalid_acts
+                        );
+                    }
+                }
+                return;
+            }
+
             if (s.kind == ast::StmtKind::kActsDecl) {
                 ActsDecl a{};
                 a.span = s.span;

@@ -2,7 +2,7 @@ proto Equatable {
   def eq(self, rhs: &Self) -> bool;
 } with require(true);
 
-tablet UserId : Equatable {
+class UserId : Equatable {
   let value: i32;
 
   def eq(self, rhs: &Self) -> bool {

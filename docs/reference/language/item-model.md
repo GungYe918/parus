@@ -72,7 +72,7 @@ BracedDeclItem  := NormalFuncDecl
                  | CAbiFuncDef
                  | FieldDecl
                  | ProtoDecl
-                 | TabletDecl
+                 | ClassValueDecl
                  | ActsDecl
                  | ClassDecl ;
 SimpleDeclItem  := CAbiFuncDecl | GlobalVarDecl ;

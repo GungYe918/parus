@@ -400,7 +400,7 @@ namespace parus {
         if (t.lexeme == "def")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
         if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
-        if (t.lexeme == "tablet")   { t.kind = syntax::TokenKind::kKwTablet;   return t; }
+        if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
         if (t.lexeme == "extern")   { t.kind = syntax::TokenKind::kKwExtern;   return t; }

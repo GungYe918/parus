@@ -224,7 +224,7 @@ namespace parus::tyck {
                     ty::TypeId owner_t = canonicalize_acts_owner_type_(owner_sym.declared_type);
                     if (owner_t == ty::kInvalidType) {
                         std::ostringstream oss;
-                        oss << "acts path owner must resolve to a field/tablet type in v0, got '"
+                        oss << "acts path owner must resolve to a field/class type in v0, got '"
                             << owner_sym.name << "'";
                         diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
                         err_(callee_expr.span, oss.str());

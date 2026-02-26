@@ -140,7 +140,7 @@ namespace parus::tyck {
         void check_stmt_switch_(const ast::Stmt& s);
         void check_stmt_fn_decl_(const ast::Stmt& s);
         void check_stmt_proto_decl_(ast::StmtId sid);
-        void check_stmt_tablet_decl_(ast::StmtId sid);
+        void check_stmt_class_decl_(ast::StmtId sid);
         void check_stmt_field_decl_(ast::StmtId sid);
         void check_stmt_acts_decl_(const ast::Stmt& s);
 

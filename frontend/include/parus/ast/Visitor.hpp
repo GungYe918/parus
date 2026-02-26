@@ -329,7 +329,7 @@ namespace parus::ast {
                     break;
                 }
 
-                case StmtKind::kTabletDecl: {
+                case StmtKind::kClassDecl: {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
                     const uint64_t end = begin + s.stmt_count;

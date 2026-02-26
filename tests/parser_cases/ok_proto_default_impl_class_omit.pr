@@ -1,9 +1,12 @@
 proto Widget {
-  def draw(self) -> i32;
   def id(self) -> i32 {
     return 1i32;
   }
 } with require(true);
+
+class Button : Widget {
+  let value: i32;
+}
 
 def main() -> i32 {
   return 0i32;

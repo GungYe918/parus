@@ -257,7 +257,7 @@ def render<T>(x: &T) with [T: Drawable] -> void {
 
 1. `proto` 구현의 기본 구현체 타입
 2. 상태/메서드/수명주기 보유
-3. 필요한 경우 `acts for TabletType` 부착 가능
+3. 필요한 경우 `acts for ClassType` 부착 가능
 
 ### 8.2 `init`/`deinit` 규칙
 

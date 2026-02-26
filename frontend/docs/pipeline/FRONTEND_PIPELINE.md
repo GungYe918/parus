@@ -37,7 +37,7 @@ Parus frontend의 실행 순서와 단계별 계약을 고정한다.
 
 1. frontend-only 독립 바이너리는 `parusd`가 담당 (`parusc`는 `-fsyntax-only` 제공)
 2. dyn 기반 런타임 다형성은 v0 비범위
-3. proto/tablet/class 전체 의미 완성은 단계적 진행 중
+3. proto/class 정적 의미와 lowering은 구현 중이며 dyn ABI는 후속 라운드에서 고정한다
 
 ## 미래 설계 (v1+)
 

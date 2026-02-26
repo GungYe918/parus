@@ -111,8 +111,8 @@ namespace parus::tyck {
                 check_stmt_proto_decl_(sid);
                 return;
 
-            case ast::StmtKind::kTabletDecl:
-                check_stmt_tablet_decl_(sid);
+            case ast::StmtKind::kClassDecl:
+                check_stmt_class_decl_(sid);
                 return;
 
             case ast::StmtKind::kActsDecl:
@@ -825,6 +825,9 @@ namespace parus::tyck {
         const auto& kids = ast_.stmt_children();
         const uint32_t mb = s.stmt_begin;
         const uint32_t me = s.stmt_begin + s.stmt_count;
+        uint32_t proto_member_with_body = 0;
+        uint32_t proto_member_sig_only = 0;
+        std::vector<ast::StmtId> proto_default_members;
         if (mb <= kids.size() && me <= kids.size()) {
             for (uint32_t i = 0; i < s.stmt_count; ++i) {
                 const ast::StmtId msid = kids[s.stmt_begin + i];
@@ -835,21 +838,31 @@ namespace parus::tyck {
                     err_(m.span, "proto body allows only function signatures");
                     continue;
                 }
-                if (m.a != ast::k_invalid_stmt) {
-                    diag_(diag::Code::kProtoMemberBodyNotAllowed, m.span);
-                    err_(m.span, "proto member declaration must not have a body");
-                }
                 if (m.fn_is_operator) {
                     diag_(diag::Code::kProtoOperatorNotAllowed, m.span);
                     err_(m.span, "operator declarations are not allowed in proto");
                 }
+
+                if (m.a != ast::k_invalid_stmt) {
+                    ++proto_member_with_body;
+                    proto_default_members.push_back(msid);
+                } else {
+                    ++proto_member_sig_only;
+                }
             }
         }
 
-        if (!s.proto_has_require || s.proto_require_expr == ast::k_invalid_expr) {
-            diag_(diag::Code::kProtoRequireMissing, s.span);
-            err_(s.span, "proto declaration requires 'with require(<bool-expr>)'");
-        } else {
+        if (proto_member_with_body > 0 && proto_member_sig_only > 0) {
+            diag_(diag::Code::kProtoMemberBodyMixNotAllowed, s.span);
+            err_(s.span, "proto members must be all signature-only or all default-body");
+        }
+
+        for (const ast::StmtId msid : proto_default_members) {
+            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+            check_stmt_fn_decl_(ast_.stmt(msid));
+        }
+
+        if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
             const ty::TypeId rt = check_expr_(s.proto_require_expr, Slot::kValue);
             if (rt != types_.builtin(ty::Builtin::kBool)) {
                 diag_(diag::Code::kProtoRequireTypeNotBool, ast_.expr(s.proto_require_expr).span);
@@ -862,17 +875,17 @@ namespace parus::tyck {
                         case ast::ExprKind::kBoolLit:
                             return e.text == "true";
                         case ast::ExprKind::kUnary: {
-                            if (e.op != K::kBang) return std::nullopt;
+                            if (e.op != K::kBang && e.op != K::kKwNot) return std::nullopt;
                             auto v = self(self, e.a);
                             if (!v.has_value()) return std::nullopt;
                             return !(*v);
                         }
                         case ast::ExprKind::kBinary: {
-                            if (e.op != K::kAmpAmp && e.op != K::kPipePipe) return std::nullopt;
+                            if (e.op != K::kKwAnd && e.op != K::kKwOr) return std::nullopt;
                             auto lv = self(self, e.a);
                             auto rv = self(self, e.b);
                             if (!lv.has_value() || !rv.has_value()) return std::nullopt;
-                            if (e.op == K::kAmpAmp) return (*lv) && (*rv);
+                            if (e.op == K::kKwAnd) return (*lv) && (*rv);
                             return (*lv) || (*rv);
                         }
                         default:
@@ -884,7 +897,7 @@ namespace parus::tyck {
                 if (!v.has_value()) {
                     diag_(diag::Code::kProtoRequireExprTooComplex, ast_.expr(s.proto_require_expr).span);
                     err_(ast_.expr(s.proto_require_expr).span,
-                         "require(...) supports only true/false/!/&&/|| in v1");
+                         "require(...) supports only true/false/not/and/or in v1");
                 } else if (!(*v)) {
                     diag_(diag::Code::kProtoConstraintUnsatisfied, ast_.expr(s.proto_require_expr).span,
                           std::string(s.name));
@@ -909,10 +922,10 @@ namespace parus::tyck {
         }
     }
 
-    void TypeChecker::check_stmt_tablet_decl_(ast::StmtId sid) {
+    void TypeChecker::check_stmt_class_decl_(ast::StmtId sid) {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
-        if (s.kind != ast::StmtKind::kTabletDecl) return;
+        if (s.kind != ast::StmtKind::kClassDecl) return;
 
         auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
             if (raw.empty()) return std::nullopt;
@@ -995,7 +1008,7 @@ namespace parus::tyck {
                     const ast::StmtId msid = kids[i];
                     if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                     const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kFnDecl) out.push_back(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl && m.a == ast::k_invalid_stmt) out.push_back(msid);
                 }
             }
         };
@@ -1020,7 +1033,7 @@ namespace parus::tyck {
                     auto ins = sym_.insert(sema::SymbolKind::kVar, m.name, vt, m.span);
                     if (!ins.ok && ins.is_duplicate) {
                         diag_(diag::Code::kDuplicateDecl, m.span, m.name);
-                        err_(m.span, "duplicate tablet member name");
+                        err_(m.span, "duplicate class member name");
                     }
                 }
             }
@@ -1040,7 +1053,7 @@ namespace parus::tyck {
         }
         sym_.pop_scope();
 
-        // Implements validation: tablet : ProtoA, ProtoB
+        // Implements validation: class : ProtoA, ProtoB
         const auto& refs = ast_.path_refs();
         const uint32_t pb = s.decl_path_ref_begin;
         const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
@@ -1200,7 +1213,7 @@ namespace parus::tyck {
                     const ast::StmtId msid = kids[i];
                     if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                     const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kFnDecl) out.push_back(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl && m.a == ast::k_invalid_stmt) out.push_back(msid);
                 }
             }
         };
@@ -1246,7 +1259,7 @@ namespace parus::tyck {
                     if (auto owner_sym = lookup_symbol_(owner_name)) {
                         const auto& ss = sym_.symbol(*owner_sym);
                         // v0 fixed policy:
-                        // - acts-for attachment is allowed on field/tablet
+                        // - acts-for attachment is allowed on field/class
                         // - current implementation tracks concrete value records as kField
                         owner_ok = (ss.kind == sema::SymbolKind::kField ||
                                     ss.kind == sema::SymbolKind::kType);
@@ -1256,7 +1269,7 @@ namespace parus::tyck {
 
             if (!owner_ok) {
                 std::ostringstream oss;
-                oss << "acts-for target must be a field/tablet type in v0, got "
+                oss << "acts-for target must be a field/class type in v0, got "
                     << types_.to_string(owner_type);
                 diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
                 err_(s.span, oss.str());

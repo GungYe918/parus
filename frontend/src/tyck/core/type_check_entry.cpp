@@ -585,7 +585,7 @@ namespace parus::tyck {
             if ((s.kind == ast::StmtKind::kFnDecl ||
                  s.kind == ast::StmtKind::kFieldDecl ||
                  s.kind == ast::StmtKind::kProtoDecl ||
-                 s.kind == ast::StmtKind::kTabletDecl ||
+                 s.kind == ast::StmtKind::kClassDecl ||
                  s.kind == ast::StmtKind::kActsDecl) &&
                 !s.name.empty()) {
                 const std::string qname = qualify_with_ns_stack(s.name);
@@ -842,21 +842,101 @@ namespace parus::tyck {
                     err_(s.span, "duplicate symbol (proto): " + qname);
                     diag_(diag::Code::kDuplicateDecl, s.span, qname);
                 }
+
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                        const auto& ms = ast_.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl) continue;
+
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(ms.name);
+                        fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+                    }
+                }
                 return;
             }
 
-            if (s.kind == ast::StmtKind::kTabletDecl) {
+            if (s.kind == ast::StmtKind::kClassDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
-                ty::TypeId tablet_ty = s.type;
-                if (tablet_ty == ty::kInvalidType && !qname.empty()) {
-                    tablet_ty = types_.intern_ident(qname);
-                    ast_.stmt_mut(sid).type = tablet_ty;
+                ty::TypeId class_ty = s.type;
+                if (class_ty == ty::kInvalidType && !qname.empty()) {
+                    class_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = class_ty;
                 }
 
-                auto ins = sym_.insert(sema::SymbolKind::kType, qname, tablet_ty, s.span);
+                auto ins = sym_.insert(sema::SymbolKind::kType, qname, class_ty, s.span);
                 if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (tablet): " + qname);
+                    err_(s.span, "duplicate symbol (class): " + qname);
                     diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                }
+
+                auto normalize_self_type = [&](ty::TypeId t) -> ty::TypeId {
+                    if (t == ty::kInvalidType || class_ty == ty::kInvalidType) return t;
+                    const auto& tt = types_.get(t);
+                    if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+                        return class_ty;
+                    }
+                    if (tt.kind == ty::Kind::kBorrow) {
+                        const auto& et = types_.get(tt.elem);
+                        if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                            return types_.make_borrow(class_ty, tt.borrow_is_mut);
+                        }
+                    }
+                    return t;
+                };
+
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                        const auto& ms = ast_.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl) continue;
+
+                        for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
+                            auto& p = ast_.params_mut()[ms.param_begin + pi];
+                            p.type = normalize_self_type(p.type);
+                        }
+
+                        auto& mm = ast_.stmt_mut(msid);
+                        mm.fn_ret = normalize_self_type(mm.fn_ret);
+
+                        std::vector<ty::TypeId> params;
+                        std::vector<std::string_view> labels;
+                        std::vector<uint8_t> has_default_flags;
+                        params.reserve(mm.param_count);
+                        labels.reserve(mm.param_count);
+                        has_default_flags.reserve(mm.param_count);
+                        for (uint32_t pi = 0; pi < mm.param_count; ++pi) {
+                            const auto& p = ast_.params()[mm.param_begin + pi];
+                            params.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                            labels.push_back(p.name);
+                            has_default_flags.push_back(p.has_default ? 1u : 0u);
+                        }
+                        ty::TypeId ret = mm.fn_ret;
+                        if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+                        mm.type = types_.make_fn(
+                            ret,
+                            params.empty() ? nullptr : params.data(),
+                            static_cast<uint32_t>(params.size()),
+                            mm.positional_param_count,
+                            labels.empty() ? nullptr : labels.data(),
+                            has_default_flags.empty() ? nullptr : has_default_flags.data()
+                        );
+
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(mm.name);
+                        fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+                    }
                 }
                 return;
             }

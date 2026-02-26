@@ -418,7 +418,7 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } with require(expr);`
+    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } [with require(expr)];`
     ast::StmtId Parser::parse_decl_proto() {
         using K = syntax::TokenKind;
 
@@ -516,8 +516,17 @@ namespace parus {
             cursor_.eat(K::kRBrace);
         }
 
-        bool has_require = false;
-        ast::ExprId require_expr = ast::k_invalid_expr;
+        auto make_bool_lit = [&](std::string_view text, Span sp) -> ast::ExprId {
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kBoolLit;
+            e.span = sp;
+            e.text = text;
+            return ast_.add_expr(e);
+        };
+
+        const Span default_require_span = cursor_.prev().span.hi ? cursor_.prev().span : start;
+        bool has_require = true;
+        ast::ExprId require_expr = make_bool_lit("true", default_require_span);
         const bool has_with =
             cursor_.at(K::kKwWith) ||
             (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
@@ -533,7 +542,6 @@ namespace parus {
                 }
                 if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
                     require_expr = parse_expr();
-                    has_require = true;
                 } else {
                     diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "bool expression");
                 }
@@ -543,8 +551,6 @@ namespace parus {
                     cursor_.eat(K::kRParen);
                 }
             }
-        } else {
-            diag_report(diag::Code::kProtoRequireMissing, cursor_.peek().span);
         }
 
         const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
@@ -569,8 +575,8 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `tablet Name [: ProtoA, ...] { let ...; def ... }`
-    ast::StmtId Parser::parse_decl_tablet() {
+    /// @brief `class Name [: ProtoA, ...] { let ...; def ... }`
+    ast::StmtId Parser::parse_decl_class() {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
@@ -584,12 +590,12 @@ namespace parus {
 
         if (cursor_.at(K::kKwExtern)) {
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "'extern' is not allowed on tablet declarations");
+                        "'extern' is not allowed on class declarations");
             cursor_.bump();
         }
 
-        if (!cursor_.eat(K::kKwTablet)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "tablet");
+        if (!cursor_.eat(K::kKwClass)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "class");
             stmt_sync_to_boundary();
             ast::Stmt s{};
             s.kind = ast::StmtKind::kError;
@@ -647,12 +653,12 @@ namespace parus {
                 auto& ms = ast_.stmt_mut(mid);
                 if (ms.kind == ast::StmtKind::kFnDecl && ms.is_export) {
                     diag_report(diag::Code::kUnexpectedToken, ms.span,
-                                "tablet member must not be declared with export");
+                                "class member must not be declared with export");
                     ms.is_export = false;
                 }
                 if (ms.kind == ast::StmtKind::kFnDecl && ms.is_extern) {
                     diag_report(diag::Code::kUnexpectedToken, ms.span,
-                                "tablet member must not be declared with extern");
+                                "class member must not be declared with extern");
                     ms.is_extern = false;
                     ms.link_abi = ast::LinkAbi::kNone;
                 }
@@ -726,7 +732,7 @@ namespace parus {
             }
 
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "tablet member declaration");
+                        "class member declaration");
             recover_to_delim(K::kSemicolon, K::kRBrace);
             cursor_.eat(K::kSemicolon);
         }
@@ -747,7 +753,7 @@ namespace parus {
         }
 
         ast::Stmt s{};
-        s.kind = ast::StmtKind::kTabletDecl;
+        s.kind = ast::StmtKind::kClassDecl;
         s.span = span_join(start, end_sp);
         s.name = name;
         s.is_export = is_export;

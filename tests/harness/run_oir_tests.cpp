@@ -614,6 +614,57 @@ namespace {
         return ok;
     }
 
+    /// @brief class/proto(default body) 멤버가 SIR->OIR 함수로 lowering되는지 검사한다.
+    static bool test_class_and_proto_default_member_lowering_ok() {
+        const std::string src = R"(
+            proto WidgetProto {
+                def id(self) -> i32 {
+                    return 7i32;
+                }
+            };
+
+            class Button : WidgetProto {
+                let value: i32;
+
+                def tap(self) -> i32 {
+                    return 3i32;
+                }
+            }
+
+            def main() -> i32 {
+                return 0i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "class/proto lowering seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "class/proto lowering seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "class/proto lowering seed must pass SIR capability");
+        if (!ok) return false;
+
+        bool has_proto_default = false;
+        bool has_class_member = false;
+        for (const auto& f : p.sir_mod.funcs) {
+            const std::string n(f.name);
+            if (n.find("WidgetProto::id") != std::string::npos) has_proto_default = true;
+            if (n.find("Button::tap") != std::string::npos) has_class_member = true;
+        }
+        ok &= require_(has_proto_default, "SIR must contain proto default member function");
+        ok &= require_(has_class_member, "SIR must contain class member function");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for class/proto member lowering");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for class/proto member lowering");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -632,6 +683,7 @@ int main() {
         {"oir_escape_handle_opt", test_oir_escape_handle_opt},
         {"oir_gvn_cse_ok", test_oir_gvn_cse_ok},
         {"oir_loop_canonical_and_licm_ok", test_oir_loop_canonical_and_licm_ok},
+        {"class_and_proto_default_member_lowering_ok", test_class_and_proto_default_member_lowering_ok},
     };
 
     int failed = 0;
