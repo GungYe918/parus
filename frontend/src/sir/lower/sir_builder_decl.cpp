@@ -178,6 +178,108 @@ namespace parus::sir::detail {
         return m.add_field(f);
     }
 
+    /// @brief AST class 선언의 인스턴스 필드 메타를 SIR field 메타로 lower한다.
+    FieldId lower_class_field_decl_(
+        Module& m,
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        parus::ast::StmtId sid
+    ) {
+        const auto& s = ast.stmt(sid);
+        if (s.kind != ast::StmtKind::kClassDecl) {
+            return k_invalid_field;
+        }
+        if (s.field_member_count == 0) {
+            return k_invalid_field;
+        }
+
+        FieldDecl f{};
+        f.span = s.span;
+        f.is_export = s.is_export;
+        f.sym = resolve_symbol_from_stmt(nres, sid);
+        if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+            f.name = sym.symbol(f.sym).name;
+        } else {
+            f.name = s.name;
+        }
+        f.layout = FieldLayout::kNone;
+        f.align = 0;
+        f.self_type = s.type;
+
+        f.member_begin = (uint32_t)m.field_members.size();
+        f.member_count = 0;
+
+        const uint32_t begin = s.field_member_begin;
+        const uint32_t end = s.field_member_begin + s.field_member_count;
+        if (begin <= ast.field_members().size() && end <= ast.field_members().size()) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const auto& am = ast.field_members()[i];
+                FieldMember sm{};
+                sm.name = am.name;
+                sm.type = am.type;
+                sm.span = am.span;
+                m.add_field_member(sm);
+                f.member_count++;
+            }
+        }
+
+        if (f.member_count == 0) {
+            return k_invalid_field;
+        }
+        return m.add_field(f);
+    }
+
+    /// @brief AST var 선언 1개를 SIR global 메타로 lower한다.
+    void lower_global_var_decl_(
+        Module& m,
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        parus::ast::StmtId sid,
+        std::string_view forced_name = {},
+        SymbolId forced_sym = k_invalid_symbol
+    ) {
+        const auto& s = ast.stmt(sid);
+        if (s.kind != ast::StmtKind::kVar) return;
+
+        GlobalVarDecl g{};
+        g.span = s.span;
+        g.sym = (forced_sym != k_invalid_symbol) ? forced_sym : resolve_symbol_from_stmt(nres, sid);
+        g.is_set = s.is_set;
+        g.is_mut = s.is_mut;
+        g.is_static = s.is_static;
+        g.is_export = s.is_export;
+        g.is_extern = s.is_extern;
+        g.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
+
+        if (g.abi == FuncAbi::kC) {
+            g.name = s.name;
+        } else if (!forced_name.empty()) {
+            g.name = forced_name;
+        } else if (g.sym != k_invalid_symbol && (size_t)g.sym < sym.symbols().size()) {
+            g.name = sym.symbol(g.sym).name;
+        } else {
+            g.name = s.name;
+        }
+
+        g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
+        if (g.declared_type == k_invalid_type) {
+            g.declared_type = s.type;
+        }
+        if (g.declared_type == k_invalid_type && s.init != ast::k_invalid_expr) {
+            g.declared_type = type_of_ast_expr(tyck, s.init);
+        }
+        if (g.declared_type == k_invalid_type &&
+            g.sym != k_invalid_symbol &&
+            (size_t)g.sym < sym.symbols().size()) {
+            g.declared_type = sym.symbol(g.sym).declared_type;
+        }
+
+        (void)m.add_global(g);
+    }
+
 } // namespace parus::sir::detail
 
 namespace parus::sir {
@@ -243,6 +345,14 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kClassDecl) {
+                (void)lower_class_field_decl_(m, ast, sym, nres, sid);
+
+                std::string class_qname = std::string(s.name);
+                if (auto class_sym = resolve_symbol_from_stmt(nres, sid);
+                    class_sym != k_invalid_symbol && (size_t)class_sym < sym.symbols().size()) {
+                    class_qname = sym.symbol(class_sym).name;
+                }
+
                 const uint32_t begin = s.stmt_begin;
                 const uint32_t end = s.stmt_begin + s.stmt_count;
                 const auto& kids = ast.stmt_children();
@@ -251,12 +361,27 @@ namespace parus::sir {
                         const auto member_sid = kids[i];
                         if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
                         const auto& member = ast.stmt(member_sid);
-                        if (member.kind != ast::StmtKind::kFnDecl) continue;
-                        if (member.a == ast::k_invalid_stmt) continue; // declaration-only member is not lowered
-                        (void)lower_func_decl_(
-                            m, ast, sym, nres, tyck, member_sid,
-                            /*is_acts_member=*/false, k_invalid_acts
-                        );
+                        if (member.kind == ast::StmtKind::kFnDecl) {
+                            if (member.a == ast::k_invalid_stmt) continue; // declaration-only member is not lowered
+                            (void)lower_func_decl_(
+                                m, ast, sym, nres, tyck, member_sid,
+                                /*is_acts_member=*/false, k_invalid_acts
+                            );
+                            continue;
+                        }
+
+                        if (member.kind == ast::StmtKind::kVar) {
+                            std::string vqname = class_qname;
+                            if (!vqname.empty()) vqname += "::";
+                            vqname += std::string(member.name);
+
+                            SymbolId v_sym = k_invalid_symbol;
+                            if (auto sid_sym = sym.lookup(vqname)) {
+                                v_sym = *sid_sym;
+                            }
+                            lower_global_var_decl_(m, ast, sym, nres, tyck, member_sid, vqname, v_sym);
+                            continue;
+                        }
                     }
                 }
                 return;
@@ -302,38 +427,7 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kVar) {
-                GlobalVarDecl g{};
-                g.span = s.span;
-                g.sym = resolve_symbol_from_stmt(nres, sid);
-                g.is_set = s.is_set;
-                g.is_mut = s.is_mut;
-                g.is_static = s.is_static;
-                g.is_export = s.is_export;
-                g.is_extern = s.is_extern;
-                g.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
-
-                if (g.abi == FuncAbi::kC) {
-                    g.name = s.name;
-                } else if (g.sym != k_invalid_symbol && (size_t)g.sym < sym.symbols().size()) {
-                    g.name = sym.symbol(g.sym).name;
-                } else {
-                    g.name = s.name;
-                }
-
-                g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
-                if (g.declared_type == k_invalid_type) {
-                    g.declared_type = s.type;
-                }
-                if (g.declared_type == k_invalid_type && s.init != ast::k_invalid_expr) {
-                    g.declared_type = type_of_ast_expr(tyck, s.init);
-                }
-                if (g.declared_type == k_invalid_type &&
-                    g.sym != k_invalid_symbol &&
-                    (size_t)g.sym < sym.symbols().size()) {
-                    g.declared_type = sym.symbol(g.sym).declared_type;
-                }
-
-                (void)m.add_global(g);
+                lower_global_var_decl_(m, ast, sym, nres, tyck, sid);
                 return;
             }
 

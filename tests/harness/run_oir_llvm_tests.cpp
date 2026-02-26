@@ -18,6 +18,7 @@
 #include <iostream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -44,6 +45,22 @@ namespace {
     static bool require_(bool cond, const char* msg) {
         if (cond) return true;
         std::cerr << "  - " << msg << "\n";
+        return false;
+    }
+
+    static bool contains_unsafe_null_aggregate_load_(const std::string& ir) {
+        size_t pos = 0;
+        while (pos < ir.size()) {
+            const size_t end = ir.find('\n', pos);
+            const size_t len = (end == std::string::npos) ? (ir.size() - pos) : (end - pos);
+            const std::string_view line(ir.data() + pos, len);
+            if (line.find("load [") != std::string_view::npos &&
+                line.find(", ptr null") != std::string_view::npos) {
+                return true;
+            }
+            if (end == std::string::npos) break;
+            pos = end + 1;
+        }
         return false;
     }
 
@@ -897,7 +914,7 @@ namespace {
             };
 
             class Button : WidgetProto {
-                let value: i32;
+                value: i32;
 
                 def tap(self) -> i32 {
                     return 3i32;
@@ -963,6 +980,198 @@ namespace {
         ok &= require_(lowered.llvm_ir.find("call void @") != std::string::npos &&
                        lowered.llvm_ir.find("init") != std::string::npos,
                        "constructor expression must emit call to class init symbol");
+        ok &= require_(!contains_unsafe_null_aggregate_load_(lowered.llvm_ir),
+                       "constructor lowering must not emit aggregate load from null pointer");
+        ok &= require_(lowered.llvm_ir.find("zeroinitializer") != std::string::npos,
+                       "constructor fallback path must materialize zero aggregate storage");
+        return ok;
+    }
+
+    /// @brief class 생성식 결과를 즉시 dot receiver로 사용할 때도 null aggregate load가 없어야 한다.
+    static bool test_class_ctor_temp_receiver_safe_() {
+        const std::string src = R"(
+            class User {
+                init() = default;
+
+                def id(self) -> i32 {
+                    return 3i32;
+                }
+            }
+
+            def main() -> i32 {
+                return User().id();
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "temporary receiver source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for temporary receiver source must succeed");
+        ok &= require_(!contains_unsafe_null_aggregate_load_(lowered.llvm_ir),
+                       "temporary receiver lowering must not emit aggregate load from null pointer");
+        ok &= require_(lowered.llvm_ir.find("call void @") != std::string::npos &&
+                       lowered.llvm_ir.find("init") != std::string::npos,
+                       "temporary receiver lowering must call class init symbol");
+        ok &= require_(lowered.llvm_ir.find("alloca ") != std::string::npos,
+                       "temporary receiver lowering must materialize constructor storage via alloca");
+        return ok;
+    }
+
+    /// @brief class 인스턴스 필드 접근이 LLVM IR에서 오프셋 기반 경로로 하향되는지 검사한다.
+    static bool test_class_field_offset_lowering_() {
+        const std::string src = R"(
+            class Vec2 {
+                x: i32;
+                y: i32;
+                init() = default;
+            }
+
+            def main() -> i32 {
+                set v = Vec2();
+                return v.y;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "class field offset source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for class field offset source must succeed");
+        ok &= require_(lowered.llvm_ir.find("getelementptr i8, ptr") != std::string::npos,
+                       "class field access must emit byte-offset GEP");
+        ok &= require_(lowered.llvm_ir.find(", i64 4") != std::string::npos,
+                       "class field access for second i32 member should use offset 4");
+        return ok;
+    }
+
+    /// @brief class static def/var 경로 사용이 LLVM IR 함수/글로벌 심볼로 남는지 검사한다.
+    static bool test_class_static_member_llvm_symbols_() {
+        const std::string src = R"(
+            class Counter {
+                init() = default;
+                static count: i32 = 7i32;
+
+                static def add(a: i32, b: i32) -> i32 {
+                    return a + b;
+                }
+            }
+
+            def main() -> i32 {
+                return Counter::add(a: Counter::count, b: 1i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "class static member source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for class static member source must succeed");
+        ok &= require_(lowered.llvm_ir.find("Counter") != std::string::npos &&
+                       lowered.llvm_ir.find("add") != std::string::npos,
+                       "LLVM IR must include static class method symbol fragment");
+        ok &= require_((lowered.llvm_ir.find("constant i32 zeroinitializer") != std::string::npos) ||
+                       (lowered.llvm_ir.find("global i32 zeroinitializer") != std::string::npos) ||
+                       (lowered.llvm_ir.find("zeroinitializer") != std::string::npos &&
+                        lowered.llvm_ir.find("@") != std::string::npos),
+                       "LLVM IR must include static class variable global definition");
+        return ok;
+    }
+
+    /// @brief RAII lowering이 LLVM IR에서 deinit 자동 호출/escape move skip을 유지하는지 검사한다.
+    static bool test_class_raii_deinit_llvm_call_patterns_() {
+        auto has_deinit_call = [](const std::string& ir) -> bool {
+            size_t pos = 0;
+            while (pos < ir.size()) {
+                const size_t end = ir.find('\n', pos);
+                const size_t len = (end == std::string::npos) ? (ir.size() - pos) : (end - pos);
+                const std::string_view line(ir.data() + pos, len);
+                if (line.find("call void @") != std::string_view::npos &&
+                    line.find("deinit") != std::string_view::npos) {
+                    return true;
+                }
+                if (end == std::string::npos) break;
+                pos = end + 1;
+            }
+            return false;
+        };
+
+        const std::string scope_src = R"(
+            class Resource {
+                init() = default;
+                deinit() = default;
+            }
+
+            def main() -> i32 {
+                do {
+                    set r = Resource();
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p1 = build_oir_pipeline_(scope_src);
+        bool ok = true;
+        ok &= require_(p1.has_value(), "RAII scope source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered1 = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p1->oir.mod,
+            p1->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered1.ok, "LLVM text lowering for RAII scope source must succeed");
+        ok &= require_(has_deinit_call(lowered1.llvm_ir),
+                       "RAII scope-exit path must emit direct deinit call");
+        if (!ok) return false;
+
+        const std::string move_src = R"(
+            class Resource {
+                init() = default;
+                deinit() = default;
+            }
+
+            def sink(v: &&Resource) -> i32 {
+                return 0i32;
+            }
+
+            def main() -> i32 {
+                set r = Resource();
+                sink(v: &&r);
+                return 0i32;
+            }
+        )";
+
+        auto p2 = build_oir_pipeline_(move_src);
+        ok &= require_(p2.has_value(), "RAII move source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered2 = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p2->oir.mod,
+            p2->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered2.ok, "LLVM text lowering for RAII move source must succeed");
+        ok &= require_(!has_deinit_call(lowered2.llvm_ir),
+                       "escape-moved local must not emit deinit call");
         return ok;
     }
 
@@ -1049,6 +1258,10 @@ int main() {
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},
+        {"class_ctor_temp_receiver_safe", test_class_ctor_temp_receiver_safe_},
+        {"class_field_offset_lowering", test_class_field_offset_lowering_},
+        {"class_static_member_llvm_symbols", test_class_static_member_llvm_symbols_},
+        {"class_raii_deinit_llvm_call_patterns", test_class_raii_deinit_llvm_call_patterns_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

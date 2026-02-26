@@ -948,6 +948,14 @@ namespace parus::tyck {
             ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
             : s.type;
 
+        if (self_ty != ty::kInvalidType) {
+            FieldAbiMeta meta{};
+            meta.sid = sid;
+            meta.layout = ast::FieldLayout::kNone;
+            meta.align = 0;
+            field_abi_meta_by_type_[self_ty] = meta;
+        }
+
         auto normalize_self = [&](ty::TypeId t) -> ty::TypeId {
             if (t == ty::kInvalidType) return t;
             const auto& tt = types_.get(t);
@@ -1052,6 +1060,45 @@ namespace parus::tyck {
         std::unordered_map<std::string, std::vector<ast::StmtId>> impl_methods;
         std::unordered_map<std::string, std::vector<ast::StmtId>> local_overload_sets;
         std::vector<ast::StmtId> active_default_members;
+        std::unordered_set<std::string> class_member_names;
+        std::unordered_set<std::string> class_method_names;
+
+        auto contains_deinit_target_class = [&](auto&& self, ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType) return false;
+            if (class_deinit_target_types_.find(t) != class_deinit_target_types_.end()) return true;
+            const auto& tt = types_.get(t);
+            switch (tt.kind) {
+                case ty::Kind::kOptional:
+                case ty::Kind::kArray:
+                    return self(self, tt.elem);
+                default:
+                    return false;
+            }
+        };
+
+        {
+            const uint64_t fmb = s.field_member_begin;
+            const uint64_t fme = fmb + s.field_member_count;
+            if (fmb <= ast_.field_members().size() && fme <= ast_.field_members().size()) {
+                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                    const auto& fm = ast_.field_members()[i];
+                    const std::string key(fm.name);
+                    if (!class_member_names.insert(key).second) {
+                        diag_(diag::Code::kDuplicateDecl, fm.span, fm.name);
+                        err_(fm.span, "duplicate class member name");
+                        continue;
+                    }
+
+                    if (contains_deinit_target_class(contains_deinit_target_class, fm.type)) {
+                        diag_(diag::Code::kClassNestedDropNotSupported, fm.span, fm.name, types_.to_string(fm.type));
+                        err_(fm.span, "nested class drop is not supported in v0");
+                    }
+                }
+            } else {
+                diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);
+                err_(s.span, "invalid class field member range");
+            }
+        }
 
         const auto& kids = ast_.stmt_children();
         const uint32_t begin = s.stmt_begin;
@@ -1062,7 +1109,22 @@ namespace parus::tyck {
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
+                    const std::string key(m.name);
+                    if (class_member_names.find(key) != class_member_names.end()) {
+                        diag_(diag::Code::kDuplicateDecl, m.span, m.name);
+                        err_(m.span, "duplicate class member name");
+                    }
+                    class_method_names.insert(key);
                     impl_methods[std::string(m.name)].push_back(msid);
+                } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
+                    const std::string key(m.name);
+                    if (class_member_names.find(key) != class_member_names.end() ||
+                        class_method_names.find(key) != class_method_names.end()) {
+                        diag_(diag::Code::kDuplicateDecl, m.span, m.name);
+                        err_(m.span, "duplicate class member name");
+                    } else {
+                        class_member_names.insert(key);
+                    }
                 }
             }
         }
@@ -1202,7 +1264,7 @@ namespace parus::tyck {
                 const auto& m = ast_.stmt(msid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
                     (void)sym_.insert(sema::SymbolKind::kFn, m.name, m.type, m.span);
-                } else if (m.kind == ast::StmtKind::kVar) {
+                } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
                     ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
                     auto ins = sym_.insert(sema::SymbolKind::kVar, m.name, vt, m.span);
                     if (!ins.ok && ins.is_duplicate) {
@@ -1228,9 +1290,19 @@ namespace parus::tyck {
                 const auto& m = ast_.stmt(msid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
                     check_stmt_fn_decl_(m);
-                } else if (m.kind == ast::StmtKind::kVar) {
-                    if (m.init != ast::k_invalid_expr) {
-                        (void)check_expr_(m.init, Slot::kValue);
+                } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
+                    if (m.init == ast::k_invalid_expr) {
+                        diag_(diag::Code::kClassStaticVarRequiresInitializer, m.span);
+                        err_(m.span, "class static variable requires initializer");
+                    } else {
+                        const CoercionPlan init_plan = classify_assign_with_coercion_(
+                            AssignSite::LetInit, m.type, m.init, m.span);
+                        const ty::TypeId init_t = init_plan.src_after;
+                        if (m.type != ty::kInvalidType && !init_plan.ok) {
+                            diag_(diag::Code::kTypeLetInitMismatch, m.span,
+                                  m.name, types_.to_string(m.type), type_for_user_diag_(init_t, m.init));
+                            err_(m.span, "class static init mismatch");
+                        }
                     }
                 }
             }
@@ -1260,14 +1332,35 @@ namespace parus::tyck {
         const auto& refs = ast_.path_refs();
         const uint32_t pb = s.decl_path_ref_begin;
         const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+        auto is_non_proto_base = [&](std::string_view raw) -> bool {
+            if (raw.empty()) return false;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            if (proto_decl_by_name_.find(key) != proto_decl_by_name_.end()) return false;
+            if (auto sid2 = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sid2);
+                if (ss.kind == sema::SymbolKind::kType &&
+                    proto_decl_by_name_.find(ss.name) == proto_decl_by_name_.end()) {
+                    return true;
+                }
+            }
+            return false;
+        };
         if (pb <= refs.size() && pe <= refs.size()) {
             for (uint32_t i = pb; i < pe; ++i) {
                 const auto& pr = refs[i];
                 const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
                 const auto proto_sid = resolve_proto_sid(proto_path);
                 if (!proto_sid.has_value()) {
-                    diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
-                    err_(pr.span, "unknown proto target: " + proto_path);
+                    if (is_non_proto_base(proto_path)) {
+                        diag_(diag::Code::kClassInheritanceNotAllowed, pr.span, proto_path);
+                        err_(pr.span, "class inheritance is not allowed: " + proto_path);
+                    } else {
+                        diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
+                        err_(pr.span, "unknown proto target: " + proto_path);
+                    }
                     continue;
                 }
 

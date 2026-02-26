@@ -232,6 +232,13 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
+                if ((size_t)eid < tyck.expr_ctor_owner_type.size()) {
+                    const auto owner_ty = tyck.expr_ctor_owner_type[eid];
+                    if (owner_ty != parus::ty::kInvalidType) {
+                        v.call_is_ctor = true;
+                        v.ctor_owner_type = owner_ty;
+                    }
+                }
                 bool inject_implicit_receiver = false;
                 parus::ast::ExprId receiver_eid = parus::ast::k_invalid_expr;
                 if (overload_sid != ast::k_invalid_stmt) {

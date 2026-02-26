@@ -1110,8 +1110,8 @@ namespace parus::tyck {
 
             if (meta_it == field_abi_meta_by_type_.end()) {
                 diag_(diag::Code::kTypeErrorGeneric, e.span,
-                    std::string("member access is only available on field values in v0, got ") + types_.to_string(base_t));
-                err_(e.span, "member access on non-field value");
+                    std::string("member access is only available on field/class values in v0, got ") + types_.to_string(base_t));
+                err_(e.span, "member access on non field/class value");
                 return types_.error();
             }
 

@@ -25,6 +25,10 @@ namespace parus::tyck {
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_ctor_owner_type_cache_.size()) {
+            expr_ctor_owner_type_cache_[current_expr_id_] = ty::kInvalidType;
+        }
 
         auto check_all_arg_exprs_only = [&]() {
             for (uint32_t i = 0; i < e.arg_count; ++i) {
@@ -173,6 +177,14 @@ namespace parus::tyck {
             }
         };
 
+        auto is_class_lifecycle_decl = [&](ast::StmtId sid) -> bool {
+            if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return false;
+            if (class_member_fn_sid_set_.find(sid) == class_member_fn_sid_set_.end()) return false;
+            const auto& m = ast_.stmt(sid);
+            if (m.kind != ast::StmtKind::kFnDecl) return false;
+            return m.name == "init" || m.name == "deinit";
+        };
+
         // ------------------------------------------------------------
         // 1) method call fast-path: `value.ident(...)`
         // ------------------------------------------------------------
@@ -184,6 +196,23 @@ namespace parus::tyck {
                 callee_expr.b != ast::k_invalid_expr) {
                 const ast::Expr& rhs = ast_.expr(callee_expr.b);
                 if (rhs.kind == ast::ExprKind::kIdent) {
+                    const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
+                    if (recv_expr.kind == ast::ExprKind::kIdent) {
+                        std::string recv_lookup = std::string(recv_expr.text);
+                        if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
+                            recv_lookup = *rewritten;
+                        }
+                        if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                            const auto& recv_sym = sym_.symbol(*recv_sid);
+                            if (recv_sym.kind == sema::SymbolKind::kType) {
+                                diag_(diag::Code::kDotReceiverMustBeValue, recv_expr.span, recv_expr.text);
+                                err_(recv_expr.span, "dot call receiver must be a value, not a type name");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                        }
+                    }
+
                     ty::TypeId owner_t = check_expr_(callee_expr.a);
                     if (owner_t != ty::kInvalidType) {
                         const auto& ot = types_.get(owner_t);
@@ -474,19 +503,46 @@ namespace parus::tyck {
                 callee_expr.kind == ast::ExprKind::kIdent &&
                 std::string_view(callee_expr.text).find("::") != std::string_view::npos &&
                 !overload_decl_ids.empty()) {
-                bool has_removed_target = false;
+                bool dropped_removed_target = false;
+                bool dropped_lifecycle_target = false;
+                std::vector<ast::StmtId> filtered;
+                filtered.reserve(overload_decl_ids.size());
                 for (const auto sid : overload_decl_ids) {
-                    if (class_member_fn_sid_set_.find(sid) != class_member_fn_sid_set_.end() ||
-                        proto_member_fn_sid_set_.find(sid) != proto_member_fn_sid_set_.end()) {
-                        has_removed_target = true;
-                        break;
+                    if (proto_member_fn_sid_set_.find(sid) != proto_member_fn_sid_set_.end()) {
+                        dropped_removed_target = true;
+                        continue;
                     }
+                    if (class_member_fn_sid_set_.find(sid) != class_member_fn_sid_set_.end()) {
+                        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) {
+                            dropped_removed_target = true;
+                            continue;
+                        }
+                        const auto& ms = ast_.stmt(sid);
+                        if (ms.name == "init" || ms.name == "deinit") {
+                            dropped_removed_target = true;
+                            dropped_lifecycle_target = true;
+                            continue;
+                        }
+                        if (!ms.is_static) {
+                            dropped_removed_target = true;
+                            continue;
+                        }
+                    }
+                    filtered.push_back(sid);
                 }
-                if (has_removed_target) {
-                    diag_(diag::Code::kClassProtoPathCallRemoved, callee_expr.span, callee_expr.text);
-                    err_(callee_expr.span, "class/proto path member call is removed");
+                if (dropped_removed_target && filtered.empty()) {
+                    if (dropped_lifecycle_target) {
+                        diag_(diag::Code::kClassLifecycleDirectCallForbidden, callee_expr.span, callee_expr.text);
+                        err_(callee_expr.span, "class lifecycle direct call is forbidden");
+                    } else {
+                        diag_(diag::Code::kClassProtoPathCallRemoved, callee_expr.span, callee_expr.text);
+                        err_(callee_expr.span, "class/proto path member call is removed");
+                    }
                     check_all_arg_exprs_only();
                     return types_.error();
+                }
+                if (dropped_removed_target) {
+                    overload_decl_ids = std::move(filtered);
                 }
             }
         }
@@ -810,6 +866,10 @@ namespace parus::tyck {
 
             for (uint32_t i = start_idx; i < def.param_count; ++i) {
                 const auto& p = ast_.params()[def.param_begin + i];
+                if (is_ctor_call && p.is_self) {
+                    // ctor user-call shape excludes hidden lifecycle receiver
+                    continue;
+                }
                 ParamInfo info{};
                 info.decl_index = i;
                 info.name = std::string(p.name);
@@ -964,6 +1024,17 @@ namespace parus::tyck {
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = selected.decl_id;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_ctor_owner_type_cache_.size()) {
+            expr_ctor_owner_type_cache_[current_expr_id_] = is_ctor_call ? ctor_owner_type : ty::kInvalidType;
+        }
+
+        if (!is_ctor_call && is_class_lifecycle_decl(selected.decl_id)) {
+            diag_(diag::Code::kClassLifecycleDirectCallForbidden, e.span, callee_name);
+            err_(e.span, "class lifecycle direct call is forbidden");
+            check_all_arg_exprs_only();
+            return types_.error();
         }
 
         const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {

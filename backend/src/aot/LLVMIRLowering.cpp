@@ -827,6 +827,36 @@ namespace parus::backend::aot {
                 return coerce_value_(os, slot, "ptr");
             }
 
+            /// @brief aggregate 타입의 zero-init slot을 생성하고 ptr SSA를 반환한다.
+            std::string emit_zero_aggregate_slot_(
+                std::ostringstream& os,
+                const std::string& agg_ty
+            ) {
+                const std::string slot = next_tmp_();
+                os << "  " << slot << " = alloca " << agg_ty << "\n";
+                os << "  store " << agg_ty << " zeroinitializer, ptr " << slot << "\n";
+                return slot;
+            }
+
+            /// @brief ptr에서 aggregate를 안전하게 load한다(null이면 zero-init slot을 사용).
+            std::string safe_load_aggregate_from_ptr_(
+                std::ostringstream& os,
+                const std::string& agg_ty,
+                const std::string& ptr_ref
+            ) {
+                const std::string non_null = next_tmp_();
+                os << "  " << non_null << " = icmp ne ptr " << ptr_ref << ", null\n";
+                const std::string zero_slot = emit_zero_aggregate_slot_(os, agg_ty);
+                const std::string chosen_ptr = next_tmp_();
+                os << "  " << chosen_ptr
+                   << " = select i1 " << non_null
+                   << ", ptr " << ptr_ref
+                   << ", ptr " << zero_slot << "\n";
+                const std::string loaded = next_tmp_();
+                os << "  " << loaded << " = load " << agg_ty << ", ptr " << chosen_ptr << "\n";
+                return loaded;
+            }
+
             /// @brief field 오프셋(바이트)을 type+field 조합 기준으로 결정한다.
             uint64_t field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
                 parus::ty::TypeId lookup_ty = base_ty;
@@ -884,14 +914,11 @@ namespace parus::backend::aot {
                     return tmp;
                 }
                 if (want_is_agg && cur == "ptr") {
-                    os << "  " << tmp << " = load " << want << ", ptr " << ref << "\n";
-                    return tmp;
+                    return safe_load_aggregate_from_ptr_(os, want, ref);
                 }
                 if (want_is_agg) {
                     // 보수적 fallback: 원하는 aggregate zero-init value를 생성한다.
-                    const std::string agg_slot = next_tmp_();
-                    os << "  " << agg_slot << " = alloca " << want << "\n";
-                    os << "  store " << want << " zeroinitializer, ptr " << agg_slot << "\n";
+                    const std::string agg_slot = emit_zero_aggregate_slot_(os, want);
                     os << "  " << tmp << " = load " << want << ", ptr " << agg_slot << "\n";
                     return tmp;
                 }
@@ -1281,12 +1308,9 @@ namespace parus::backend::aot {
 
                             const auto tid = value_type_id_(inst.result);
                             if (tid != parus::ty::kInvalidType) {
-                                const auto& tt = types_.get(tid);
-                                if (tt.kind == parus::ty::Kind::kOptional) {
-                                    const std::string agg_ty = map_type_(types_, tid, &named_layouts_);
-                                    const std::string slot = next_tmp_();
-                                    os << "  " << slot << " = alloca " << agg_ty << "\n";
-                                    os << "  store " << agg_ty << " zeroinitializer, ptr " << slot << "\n";
+                                const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                if (is_aggregate_llvm_ty_(full_ty)) {
+                                    const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
                                     address_ref_by_value_[inst.result] = slot;
 
                                     const auto rty = value_ty_(inst.result);
@@ -1442,8 +1466,8 @@ namespace parus::backend::aot {
                                         if (src_tt.kind == parus::ty::Kind::kOptional) {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.src);
                                             const std::string src_agg_ty = map_type_(types_, src_tid, &named_layouts_);
-                                            const std::string src_loaded = next_tmp_();
-                                            os << "  " << src_loaded << " = load " << src_agg_ty << ", ptr " << src_ptr << "\n";
+                                            const std::string src_loaded =
+                                                safe_load_aggregate_from_ptr_(os, src_agg_ty, src_ptr);
                                             std::string copied = src_loaded;
                                             if (src_agg_ty != opt_ty) {
                                                 copied = coerce_ref_(os, src_loaded, src_agg_ty, opt_ty);
@@ -1537,7 +1561,19 @@ namespace parus::backend::aot {
                                 const auto rty = value_ty_(inst.result);
                                 if (is_int_ty_(rty)) os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
                                 else if (is_float_ty_(rty)) os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
-                                else if (rty == "ptr") os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
+                                else if (rty == "ptr") {
+                                    const auto tid = value_type_id_(inst.result);
+                                    if (tid != parus::ty::kInvalidType) {
+                                        const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                        if (is_aggregate_llvm_ty_(full_ty)) {
+                                            const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
+                                            address_ref_by_value_[inst.result] = slot;
+                                            os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                                            return;
+                                        }
+                                    }
+                                    os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
+                                }
                                 else os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                             };
 
@@ -1624,8 +1660,7 @@ namespace parus::backend::aot {
                             if (tid != parus::ty::kInvalidType) {
                                 const std::string full_ty = map_type_(types_, tid, &named_layouts_);
                                 if (is_aggregate_llvm_ty_(full_ty) && rty == "ptr") {
-                                    const std::string val = next_tmp_();
-                                    os << "  " << val << " = load " << full_ty << ", ptr " << ptr << "\n";
+                                    const std::string val = safe_load_aggregate_from_ptr_(os, full_ty, ptr);
                                     const std::string tmp_slot = next_tmp_();
                                     os << "  " << tmp_slot << " = alloca " << full_ty << "\n";
                                     os << "  store " << full_ty << " " << val << ", ptr " << tmp_slot << "\n";
@@ -1648,8 +1683,8 @@ namespace parus::backend::aot {
                                         const std::string value_full_ty = map_type_(types_, value_tid, &named_layouts_);
                                         if (is_aggregate_llvm_ty_(value_full_ty) && value_ty_(x.value) == "ptr") {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.value);
-                                            const std::string loaded = next_tmp_();
-                                            os << "  " << loaded << " = load " << value_full_ty << ", ptr " << src_ptr << "\n";
+                                            const std::string loaded =
+                                                safe_load_aggregate_from_ptr_(os, value_full_ty, src_ptr);
                                             std::string copied = loaded;
                                             if (value_full_ty != slot_full_ty) {
                                                 copied = coerce_ref_(os, loaded, value_full_ty, slot_full_ty);

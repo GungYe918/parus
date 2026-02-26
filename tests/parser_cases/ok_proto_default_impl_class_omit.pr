@@ -5,7 +5,7 @@ proto Widget {
 } with require(true);
 
 class Button : Widget {
-  let value: i32;
+  value: i32;
 }
 
 def main() -> i32 {

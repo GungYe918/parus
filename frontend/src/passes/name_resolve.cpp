@@ -1083,7 +1083,25 @@ namespace parus::passes {
                     }
 
                     for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                        walk_stmt(ast, r, kids[s.stmt_begin + i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (!is_valid_stmt_id_(r, msid)) continue;
+                        const auto& ms = ast.stmt(msid);
+                        if (ms.kind == ast::StmtKind::kVar && ms.is_static) {
+                            if (ms.init != ast::k_invalid_expr) {
+                                walk_expr(ast, r, ms.init, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                            }
+
+                            std::string qvar = qname;
+                            if (!qvar.empty()) qvar += "::";
+                            qvar += std::string(ms.name);
+                            if (auto v_sid = sym.lookup(qvar)) {
+                                const auto rid = add_resolved_(out, BindingKind::kLocalVar, *v_sid, ms.span);
+                                out.stmt_to_resolved[(uint32_t)msid] = rid;
+                            }
+                            continue;
+                        }
+
+                        walk_stmt(ast, r, msid, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                 }
                 return;
@@ -1424,21 +1442,40 @@ namespace parus::passes {
                     const ast::StmtId msid = kids[s.stmt_begin + i];
                     if (!is_valid_stmt_id_(r, msid)) continue;
                     const auto& ms = ast.stmt(msid);
-                    if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                    if (ms.kind == ast::StmtKind::kFnDecl) {
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(ms.name);
+                        if (!sym.lookup(mqname)) {
+                            auto ins = declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
+                            if (ins.ok && !ins.is_duplicate) {
+                                auto& se = sym.symbol_mut(ins.symbol_id);
+                                se.decl_file_id = ms.span.file_id;
+                                se.decl_bundle_name = opt.current_bundle_name;
+                                se.decl_module_head = opt.current_module_head;
+                                se.decl_source_dir_norm = opt.current_source_dir_norm;
+                                se.is_export = s.is_export;
+                                se.is_external = false;
+                            }
+                        }
+                        continue;
+                    }
 
-                    std::string mqname = qname;
-                    if (!mqname.empty()) mqname += "::";
-                    mqname += std::string(ms.name);
-                    if (!sym.lookup(mqname)) {
-                        auto ins = declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
-                        if (ins.ok && !ins.is_duplicate) {
-                            auto& se = sym.symbol_mut(ins.symbol_id);
-                            se.decl_file_id = ms.span.file_id;
-                            se.decl_bundle_name = opt.current_bundle_name;
-                            se.decl_module_head = opt.current_module_head;
-                            se.decl_source_dir_norm = opt.current_source_dir_norm;
-                            se.is_export = s.is_export;
-                            se.is_external = false;
+                    if (ms.kind == ast::StmtKind::kVar && ms.is_static) {
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(ms.name);
+                        if (!sym.lookup(mqname)) {
+                            auto ins = declare_(sema::SymbolKind::kVar, mqname, ms.type, ms.span, sym, bag, opt);
+                            if (ins.ok && !ins.is_duplicate) {
+                                auto& se = sym.symbol_mut(ins.symbol_id);
+                                se.decl_file_id = ms.span.file_id;
+                                se.decl_bundle_name = opt.current_bundle_name;
+                                se.decl_module_head = opt.current_module_head;
+                                se.decl_source_dir_norm = opt.current_source_dir_norm;
+                                se.is_export = s.is_export;
+                                se.is_external = false;
+                            }
                         }
                     }
                 }

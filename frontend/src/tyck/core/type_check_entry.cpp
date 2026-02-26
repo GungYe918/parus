@@ -45,6 +45,7 @@ namespace parus::tyck {
         import_alias_scope_stack_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
+        class_deinit_target_types_.clear();
         class_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
         block_depth_ = 0;
@@ -61,8 +62,10 @@ namespace parus::tyck {
         // expr type cache: AST exprs 크기에 맞춰 리셋
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_overload_target_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
+        expr_ctor_owner_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
+        result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
 
         // string literal은 builtin text 타입으로 고정한다.
         if (string_type_ == ty::kInvalidType) {
@@ -155,6 +158,7 @@ namespace parus::tyck {
         // 결과 반영
         result_.expr_types = expr_type_cache_;
         result_.expr_overload_target = expr_overload_target_cache_;
+        result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
         return result_;
     }
@@ -626,6 +630,7 @@ namespace parus::tyck {
         proto_qualified_name_by_stmt_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
+        class_deinit_target_types_.clear();
         class_effective_method_map_.clear();
         class_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
@@ -923,6 +928,12 @@ namespace parus::tyck {
                 class_decl_by_name_[qname] = sid;
                 if (class_ty != ty::kInvalidType) {
                     class_decl_by_type_[class_ty] = sid;
+
+                    FieldAbiMeta meta{};
+                    meta.sid = sid;
+                    meta.layout = ast::FieldLayout::kNone;
+                    meta.align = 0;
+                    field_abi_meta_by_type_[class_ty] = meta;
                 }
 
                 if (auto existing = sym_.lookup_in_current(qname)) {
@@ -964,8 +975,38 @@ namespace parus::tyck {
                         const ast::StmtId msid = kids[s.stmt_begin + i];
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
+                        if (ms.kind == ast::StmtKind::kVar) {
+                            if (!ms.is_static) continue;
+                            std::string vqname = qname;
+                            if (!vqname.empty()) vqname += "::";
+                            vqname += std::string(ms.name);
+
+                            ty::TypeId vt = ms.type;
+                            if (vt == ty::kInvalidType) vt = types_.error();
+
+                            if (auto existing = sym_.lookup_in_current(vqname)) {
+                                const auto& existing_sym = sym_.symbol(*existing);
+                                if (existing_sym.kind != sema::SymbolKind::kVar) {
+                                    err_(ms.span, "duplicate symbol (class static variable): " + vqname);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, vqname);
+                                } else {
+                                    (void)sym_.update_declared_type(*existing, vt);
+                                }
+                            } else {
+                                auto vins = sym_.insert(sema::SymbolKind::kVar, vqname, vt, ms.span);
+                                if (!vins.ok && vins.is_duplicate) {
+                                    err_(ms.span, "duplicate symbol (class static variable): " + vqname);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, vqname);
+                                }
+                            }
+                            continue;
+                        }
+
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
                         class_member_fn_sid_set_.insert(msid);
+                        if (class_ty != ty::kInvalidType && ms.name == "deinit") {
+                            class_deinit_target_types_.insert(class_ty);
+                        }
 
                         for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
                             auto& p = ast_.params_mut()[ms.param_begin + pi];

@@ -141,6 +141,8 @@ namespace parus::sir {
         // direct callee symbol (for kCall)
         SymbolId callee_sym = k_invalid_symbol;
         uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
+        bool call_is_ctor = false; // true when this call is lowered from `Class(...)` ctor expression
+        TypeId ctor_owner_type = k_invalid_type; // owner class type for ctor call, invalid when call_is_ctor=false
 
         // root symbol for capability expressions (kBorrow/kEscape)
         SymbolId origin_sym = k_invalid_symbol;

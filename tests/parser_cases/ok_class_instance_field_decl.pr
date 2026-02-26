@@ -1,0 +1,14 @@
+class Vec2 {
+  x: i32;
+  y: i32;
+  init() = default;
+
+  def sum(self) -> i32 {
+    return self.x + self.y;
+  }
+}
+
+def main() -> i32 {
+  set v = Vec2();
+  return v.x;
+}

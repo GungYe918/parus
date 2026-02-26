@@ -1,0 +1,14 @@
+proto EqProto {
+  def eq(self, rhs: i32) -> bool {
+    return true;
+  }
+};
+
+class A : EqProto {
+  init() = default;
+}
+
+def main() -> i32 {
+  A.eq(10);
+  return 0i32;
+}

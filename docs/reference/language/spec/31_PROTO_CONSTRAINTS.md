@@ -64,6 +64,7 @@ proto Identifiable {
 };
 
 class User : Identifiable {
+  id_value: i32;
   init() = default;
 }
 

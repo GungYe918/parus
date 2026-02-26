@@ -1,0 +1,10 @@
+class A {
+  init() = default;
+  deinit() = default;
+}
+
+def main() -> i32 {
+  set a = A();
+  a.deinit();
+  return 0i32;
+}

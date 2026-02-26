@@ -28,6 +28,7 @@ namespace parus::oir {
             const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
+            const std::unordered_map<TypeId, FuncId>* class_deinit_map = nullptr;
             std::vector<parus::sir::VerifyError>* build_errors = nullptr;
 
             Function* def = nullptr;
@@ -38,6 +39,7 @@ namespace parus::oir {
                 bool is_slot = false;
                 bool is_direct_address = false; // true for symbol that is already an address (e.g. globals)
                 ValueId v = kInvalidId; // if is_slot: slot value id, else: SSA value id
+                uint32_t cleanup_id = kInvalidId; // cleanup item index for RAII-managed class values
             };
 
             std::unordered_map<parus::sir::SymbolId, Binding> env;
@@ -47,29 +49,115 @@ namespace parus::oir {
                 BlockId continue_bb = kInvalidId;
                 bool expects_break_value = false;
                 TypeId break_ty = kInvalidId;
+                size_t scope_depth_base = 0; // number of active scopes to keep on break/continue
             };
 
             std::vector<LoopContext> loop_stack;
 
-            // scope stack for env restoration
-            std::vector<std::vector<std::pair<parus::sir::SymbolId, Binding>>> env_stack;
+            struct CleanupItem {
+                parus::sir::SymbolId sym = parus::sir::k_invalid_symbol;
+                ValueId slot = kInvalidId;
+                TypeId owner_ty = kInvalidId;
+                FuncId deinit = kInvalidId;
+                bool moved = false;
+            };
+
+            struct ScopeFrame {
+                std::vector<std::pair<parus::sir::SymbolId, Binding>> undo{};
+                std::vector<uint32_t> cleanup_items{};
+                bool cleaned = false;
+            };
+
+            std::vector<ScopeFrame> env_stack;
+            std::vector<CleanupItem> cleanup_items;
+
+            bool lookup_deinit_for_type(TypeId t, FuncId& out_fid) const {
+                if (class_deinit_map == nullptr || t == kInvalidId) return false;
+                auto it = class_deinit_map->find(t);
+                if (it == class_deinit_map->end() || it->second == kInvalidId) return false;
+                out_fid = it->second;
+                return true;
+            }
+
+            void emit_cleanup_item(uint32_t cleanup_id) {
+                if (cleanup_id == kInvalidId || cleanup_id >= cleanup_items.size()) return;
+                auto& item = cleanup_items[cleanup_id];
+                if (item.moved || item.deinit == kInvalidId || item.slot == kInvalidId) return;
+
+                const TypeId unit_ty =
+                    (types != nullptr)
+                        ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
+                        : kInvalidId;
+                std::vector<ValueId> args{};
+                args.push_back(item.slot);
+                (void)emit_call(unit_ty, kInvalidId, std::move(args), item.deinit);
+                item.moved = true;
+            }
+
+            void emit_cleanups_to_depth(size_t keep_depth) {
+                if (keep_depth > env_stack.size()) keep_depth = env_stack.size();
+                for (size_t i = env_stack.size(); i > keep_depth; --i) {
+                    auto& frame = env_stack[i - 1];
+                    if (frame.cleaned) continue;
+                    for (auto it = frame.cleanup_items.rbegin(); it != frame.cleanup_items.rend(); ++it) {
+                        emit_cleanup_item(*it);
+                    }
+                    frame.cleaned = true;
+                }
+            }
 
             void push_scope() { env_stack.emplace_back(); }
             void pop_scope() {
                 if (env_stack.empty()) return;
-                auto& undo = env_stack.back();
-                for (auto it = undo.rbegin(); it != undo.rend(); ++it) {
+                auto& frame = env_stack.back();
+                if (!frame.cleaned && !has_term()) {
+                    for (auto it = frame.cleanup_items.rbegin(); it != frame.cleanup_items.rend(); ++it) {
+                        emit_cleanup_item(*it);
+                    }
+                    frame.cleaned = true;
+                }
+                for (auto it = frame.undo.rbegin(); it != frame.undo.rend(); ++it) {
                     env[it->first] = it->second;
                 }
                 env_stack.pop_back();
+            }
+
+            uint32_t register_cleanup(parus::sir::SymbolId sym, ValueId slot, TypeId owner_ty, FuncId deinit_fid) {
+                CleanupItem ci{};
+                ci.sym = sym;
+                ci.slot = slot;
+                ci.owner_ty = owner_ty;
+                ci.deinit = deinit_fid;
+                ci.moved = false;
+                const uint32_t id = static_cast<uint32_t>(cleanup_items.size());
+                cleanup_items.push_back(ci);
+                if (!env_stack.empty()) {
+                    env_stack.back().cleanup_items.push_back(id);
+                }
+                return id;
+            }
+
+            void mark_symbol_moved(parus::sir::SymbolId sym, bool moved = true) {
+                auto it = env.find(sym);
+                if (it == env.end()) return;
+                if (it->second.cleanup_id == kInvalidId || it->second.cleanup_id >= cleanup_items.size()) return;
+                cleanup_items[it->second.cleanup_id].moved = moved;
+            }
+
+            void drop_symbol_before_overwrite(parus::sir::SymbolId sym) {
+                auto it = env.find(sym);
+                if (it == env.end()) return;
+                const uint32_t cid = it->second.cleanup_id;
+                if (cid == kInvalidId || cid >= cleanup_items.size()) return;
+                emit_cleanup_item(cid);
             }
 
             void bind(parus::sir::SymbolId sym, Binding b) {
                 // record previous for undo
                 if (!env_stack.empty()) {
                     auto it = env.find(sym);
-                    if (it != env.end()) env_stack.back().push_back({sym, it->second});
-                    else env_stack.back().push_back({sym, Binding{false, false, kInvalidId}});
+                    if (it != env.end()) env_stack.back().undo.push_back({sym, it->second});
+                    else env_stack.back().undo.push_back({sym, Binding{false, false, kInvalidId, kInvalidId}});
                 }
                 env[sym] = b;
             }
@@ -370,6 +458,9 @@ namespace parus::oir {
                 auto it = env.find(sym);
                 if (it != env.end() && it->second.is_slot) return it->second.v;
 
+                uint32_t cleanup_id = kInvalidId;
+                if (it != env.end()) cleanup_id = it->second.cleanup_id;
+
                 // create a new slot
                 ValueId slot = emit_alloca(slot_ty);
 
@@ -378,7 +469,7 @@ namespace parus::oir {
                     emit_store(slot, it->second.v);
                 }
 
-                bind(sym, Binding{true, false, slot});
+                bind(sym, Binding{true, false, slot, cleanup_id});
                 return slot;
             }
 
@@ -925,6 +1016,10 @@ namespace parus::oir {
                     if (v.kind == parus::sir::ValueKind::kEscape && escape_value_map != nullptr) {
                         (*escape_value_map)[vid] = lowered;
                     }
+                    if (v.kind == parus::sir::ValueKind::kEscape &&
+                        v.origin_sym != parus::sir::k_invalid_symbol) {
+                        mark_symbol_moved(v.origin_sym, /*moved=*/true);
+                    }
                     return lowered;
                 }
 
@@ -993,6 +1088,17 @@ namespace parus::oir {
                         args.push_back(lower_value(a.value));
                     }
                     ++i;
+                }
+
+                const bool ctor_call =
+                    v.call_is_ctor &&
+                    v.ctor_owner_type != parus::sir::k_invalid_type;
+                ValueId ctor_tmp_slot = kInvalidId;
+                if (ctor_call) {
+                    const TypeId owner_ty = (TypeId)v.ctor_owner_type;
+                    ctor_tmp_slot = emit_alloca(owner_ty);
+                    // lifecycle hidden self is appended as the last runtime argument.
+                    args.push_back(ctor_tmp_slot);
                 }
 
                 ValueId callee = kInvalidId;
@@ -1075,6 +1181,16 @@ namespace parus::oir {
                     }
                 }
 
+                if (ctor_call) {
+                    const TypeId unit_ty =
+                        (types != nullptr)
+                            ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
+                            : kInvalidId;
+                    (void)emit_call(unit_ty, callee, std::move(args), direct_callee);
+                    if (ctor_tmp_slot != kInvalidId) return ctor_tmp_slot;
+                    return emit_const_null(v.type);
+                }
+
                 return emit_call(v.type, callee, std::move(args), direct_callee);
             }
 
@@ -1115,8 +1231,10 @@ namespace parus::oir {
                     }
 
                     ValueId slot = ensure_slot(place.sym, slot_elem_ty);
+                    drop_symbol_before_overwrite(place.sym);
                     rhs = coerce_value_for_target(slot_elem_ty, rhs);
                     emit_store(slot, rhs);
+                    mark_symbol_moved(place.sym, /*moved=*/false);
                     return rhs; // assign expr result
                 }
 
@@ -1180,11 +1298,13 @@ namespace parus::oir {
 
                 def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
+                const size_t loop_scope_base = env_stack.size();
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
                     .continue_bb = body_bb,
                     .expects_break_value = has_value,
-                    .break_ty = (TypeId)v.type
+                    .break_ty = (TypeId)v.type,
+                    .scope_depth_base = loop_scope_base
                 });
                 push_scope();
                 lower_block((parus::sir::BlockId)v.b);
@@ -1217,14 +1337,25 @@ namespace parus::oir {
                                                                     : emit_const_null(declared);
                 init = coerce_value_for_target(declared, init);
 
+                FuncId deinit_fid = kInvalidId;
+                const bool needs_cleanup = lookup_deinit_for_type(declared, deinit_fid);
+
+                if (needs_cleanup) {
+                    ValueId slot = emit_alloca(declared);
+                    emit_store(slot, init);
+                    const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared, deinit_fid);
+                    bind(s.sym, Binding{true, false, slot, cleanup_id});
+                    return;
+                }
+
                 // if set or mut => slot
                 if (s.is_set || s.is_mut) {
                     ValueId slot = emit_alloca(declared);
                     emit_store(slot, init);
-                    bind(s.sym, Binding{true, false, slot});
+                    bind(s.sym, Binding{true, false, slot, kInvalidId});
                 } else {
                     // immutable let => SSA binding
-                    bind(s.sym, Binding{false, false, init});
+                    bind(s.sym, Binding{false, false, init, kInvalidId});
                 }
                 return;
             }
@@ -1239,8 +1370,10 @@ namespace parus::oir {
                     if (def != nullptr && def->ret_ty != kInvalidId) {
                         rv = coerce_value_for_target(def->ret_ty, rv);
                     }
+                    emit_cleanups_to_depth(/*keep_depth=*/0);
                     ret(rv);
                 } else {
+                    emit_cleanups_to_depth(/*keep_depth=*/0);
                     ret_void();
                 }
                 return;
@@ -1263,11 +1396,13 @@ namespace parus::oir {
                 // body
                 def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
+                const size_t loop_scope_base = env_stack.size();
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
                     .continue_bb = cond_bb,
                     .expects_break_value = false,
-                    .break_ty = kInvalidId
+                    .break_ty = kInvalidId,
+                    .scope_depth_base = loop_scope_base
                 });
                 push_scope();
                 lower_block(s.a);
@@ -1300,11 +1435,13 @@ namespace parus::oir {
                 // body
                 def->blocks.push_back(body_bb);
                 cur_bb = body_bb;
+                const size_t loop_scope_base = env_stack.size();
                 loop_stack.push_back(LoopContext{
                     .break_bb = exit_bb,
                     .continue_bb = cond_bb,
                     .expects_break_value = false,
-                    .break_ty = kInvalidId
+                    .break_ty = kInvalidId,
+                    .scope_depth_base = loop_scope_base
                 });
                 push_scope();
                 lower_block(s.a);
@@ -1461,8 +1598,10 @@ namespace parus::oir {
                     ValueId bv = (s.expr != parus::sir::k_invalid_value)
                                ? lower_value(s.expr)
                                : emit_const_null(lc.break_ty);
+                    emit_cleanups_to_depth(lc.scope_depth_base);
                     br(lc.break_bb, {bv});
                 } else {
+                    emit_cleanups_to_depth(lc.scope_depth_base);
                     br(lc.break_bb, {});
                 }
                 return;
@@ -1470,7 +1609,9 @@ namespace parus::oir {
 
             case parus::sir::StmtKind::kContinue: {
                 if (loop_stack.empty()) return;
-                br(loop_stack.back().continue_bb, {});
+                const auto& lc = loop_stack.back();
+                emit_cleanups_to_depth(lc.scope_depth_base);
+                br(lc.continue_bb, {});
                 return;
             }
 
@@ -1723,6 +1864,33 @@ namespace parus::oir {
             }
         }
 
+        std::unordered_map<TypeId, FuncId> class_deinit_map;
+        auto has_suffix_ = [](std::string_view s, std::string_view suffix) -> bool {
+            return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
+        };
+        for (size_t i = 0; i < sir_.funcs.size(); ++i) {
+            if (i >= sir_to_oir_func.size()) continue;
+            const auto& sf = sir_.funcs[i];
+            if (!has_suffix_(sf.name, "::deinit")) continue;
+            const FuncId fid = sir_to_oir_func[i];
+            if (fid == kInvalidId) continue;
+
+            const uint64_t pb = sf.param_begin;
+            const uint64_t pe = pb + sf.param_count;
+            if (pb > sir_.params.size() || pe > sir_.params.size()) continue;
+
+            for (uint32_t pi = 0; pi < sf.param_count; ++pi) {
+                const auto& sp = sir_.params[sf.param_begin + pi];
+                const auto& pt = ty_.get(sp.type);
+                if (pt.kind != parus::ty::Kind::kBorrow) continue;
+                if (pt.elem == parus::ty::kInvalidType) continue;
+                const auto& et = ty_.get(pt.elem);
+                if (et.kind != parus::ty::Kind::kNamedUser) continue;
+                class_deinit_map[(TypeId)pt.elem] = fid;
+                break;
+            }
+        }
+
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
             const FuncId fid = sir_to_oir_func[i];
@@ -1740,6 +1908,7 @@ namespace parus::oir {
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
+            fb.class_deinit_map = &class_deinit_map;
             fb.build_errors = &out.gate_errors;
             fb.def = &out.mod.funcs[fid];
             fb.cur_bb = entry;
@@ -1749,9 +1918,10 @@ namespace parus::oir {
                 if ((size_t)gid >= out.mod.globals.size()) continue;
                 const auto& g = out.mod.globals[gid];
                 ValueId gref = fb.emit_global_ref(gid, g.name);
-                fb.bind(kv.first, FuncBuild::Binding{true, true, gref});
+                fb.bind(kv.first, FuncBuild::Binding{true, true, gref, kInvalidId});
             }
 
+            fb.push_scope();
             // 함수 파라미터를 entry block parameter로 시드하고 심볼 바인딩을 연결한다.
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
             if (pend <= (uint64_t)sir_.params.size()) {
@@ -1760,17 +1930,23 @@ namespace parus::oir {
                     ValueId pv = fb.add_block_param(entry, (TypeId)sp.type);
                     if (sp.sym == parus::sir::k_invalid_symbol) continue;
 
-                    if (sp.is_mut) {
+                    FuncId deinit_fid = kInvalidId;
+                    const bool needs_cleanup = fb.lookup_deinit_for_type((TypeId)sp.type, deinit_fid);
+                    if (needs_cleanup) {
                         ValueId slot = fb.emit_alloca((TypeId)sp.type);
                         fb.emit_store(slot, pv);
-                        fb.bind(sp.sym, FuncBuild::Binding{true, false, slot});
+                        const uint32_t cleanup_id = fb.register_cleanup(sp.sym, slot, (TypeId)sp.type, deinit_fid);
+                        fb.bind(sp.sym, FuncBuild::Binding{true, false, slot, cleanup_id});
+                    } else if (sp.is_mut) {
+                        ValueId slot = fb.emit_alloca((TypeId)sp.type);
+                        fb.emit_store(slot, pv);
+                        fb.bind(sp.sym, FuncBuild::Binding{true, false, slot, kInvalidId});
                     } else {
-                        fb.bind(sp.sym, FuncBuild::Binding{false, false, pv});
+                        fb.bind(sp.sym, FuncBuild::Binding{false, false, pv, kInvalidId});
                     }
                 }
             }
 
-            fb.push_scope();
             fb.lower_block(sf.entry);
             fb.pop_scope();
 

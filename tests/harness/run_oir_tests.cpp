@@ -624,7 +624,7 @@ namespace {
             };
 
             class Button : WidgetProto {
-                let value: i32;
+                value: i32;
 
                 def tap(self) -> i32 {
                     return 3i32;
@@ -718,6 +718,236 @@ namespace {
         return ok;
     }
 
+    /// @brief class 인스턴스 필드가 SIR/OIR 레이아웃 메타로 내려가는지 검사한다.
+    static bool test_class_field_layout_lowering_ok() {
+        const std::string src = R"(
+            class Vec2 {
+                x: i32;
+                y: i32;
+                init() = default;
+
+                def sum(self) -> i32 {
+                    return self.x + self.y;
+                }
+            }
+
+            def main() -> i32 {
+                set v = Vec2();
+                return v.x;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "class field layout seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "class field layout seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "class field layout seed must pass SIR capability");
+        if (!ok) return false;
+
+        bool has_class_layout = false;
+        for (const auto& f : p.sir_mod.fields) {
+            const std::string n(f.name);
+            if (n.find("Vec2") == std::string::npos) continue;
+            if (f.member_count == 2) {
+                has_class_layout = true;
+                break;
+            }
+        }
+        ok &= require_(has_class_layout, "SIR must contain class field layout metadata for Vec2");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for class field layout source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for class field layout source");
+        if (!ok) return false;
+
+        bool has_vec2_layout = false;
+        for (const auto& f : oir.mod.fields) {
+            if (f.name.find("Vec2") == std::string::npos) continue;
+            if (f.members.size() == 2) {
+                has_vec2_layout = true;
+                break;
+            }
+        }
+        ok &= require_(has_vec2_layout, "OIR must contain class field layout metadata for Vec2");
+        return ok;
+    }
+
+    /// @brief class static def/var가 OIR 함수/글로벌로 하향되는지 검사한다.
+    static bool test_class_static_members_lowering_ok() {
+        const std::string src = R"(
+            class Counter {
+                init() = default;
+                static count: i32 = 7i32;
+
+                static def add(a: i32, b: i32) -> i32 {
+                    return a + b;
+                }
+            }
+
+            def main() -> i32 {
+                return Counter::add(a: Counter::count, b: 1i32);
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "class static member seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "class static member seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "class static member seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for class static member source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for class static member source");
+        if (!ok) return false;
+
+        bool has_static_fn_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee != parus::oir::kInvalidId) {
+                has_static_fn_call = true;
+                break;
+            }
+        }
+        ok &= require_(has_static_fn_call, "OIR must contain direct call lowered from static class method path call");
+
+        const bool has_static_global = !oir.mod.globals.empty();
+        ok &= require_(has_static_global, "OIR must contain static class variable global symbol");
+        return ok;
+    }
+
+    /// @brief class 로컬 값은 스코프 종료 시 deinit direct call이 삽입되어야 한다.
+    static bool test_class_raii_scope_exit_deinit_call_ok() {
+        const std::string src = R"(
+            class Resource {
+                init() = default;
+                deinit() = default;
+            }
+
+            def main() -> i32 {
+                do {
+                    set r = Resource();
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "raii scope-exit seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "raii scope-exit seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "raii scope-exit seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for raii scope-exit source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for raii scope-exit source");
+        if (!ok) return false;
+
+        bool has_deinit_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& f = oir.mod.funcs[c.direct_callee];
+            if (f.source_name.find("deinit") != std::string::npos ||
+                f.name.find("deinit") != std::string::npos) {
+                has_deinit_call = true;
+                break;
+            }
+        }
+        ok &= require_(has_deinit_call, "scope-exit path must include direct deinit call");
+        return ok;
+    }
+
+    /// @brief `&&`로 이동된 class 로컬은 스코프 종료 deinit 대상에서 제외되어야 한다.
+    static bool test_class_raii_escape_move_skips_deinit_call_ok() {
+        const std::string src = R"(
+            class Resource {
+                init() = default;
+                deinit() = default;
+            }
+
+            def sink(v: &&Resource) -> i32 {
+                return 0i32;
+            }
+
+            def main() -> i32 {
+                set r = Resource();
+                sink(v: &&r);
+                return 0i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "raii escape-move seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "raii escape-move seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "raii escape-move seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for raii escape-move source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for raii escape-move source");
+        if (!ok) return false;
+
+        uint32_t main_fid = parus::oir::kInvalidId;
+        for (uint32_t i = 0; i < oir.mod.funcs.size(); ++i) {
+            if (oir.mod.funcs[i].source_name == "main") {
+                main_fid = i;
+                break;
+            }
+        }
+        ok &= require_(main_fid != parus::oir::kInvalidId, "main function must exist in OIR module");
+        if (!ok) return false;
+
+        bool has_main_deinit_call = false;
+        const auto& mf = oir.mod.funcs[main_fid];
+        for (const auto bb : mf.blocks) {
+            if (bb == parus::oir::kInvalidId || bb >= oir.mod.blocks.size()) continue;
+            const auto& block = oir.mod.blocks[bb];
+            for (const auto iid : block.insts) {
+                if (iid == parus::oir::kInvalidId || iid >= oir.mod.insts.size()) continue;
+                const auto& inst = oir.mod.insts[iid];
+                if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+                const auto& c = std::get<parus::oir::InstCall>(inst.data);
+                if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+                const auto& f = oir.mod.funcs[c.direct_callee];
+                if (f.source_name.find("deinit") != std::string::npos ||
+                    f.name.find("deinit") != std::string::npos) {
+                    has_main_deinit_call = true;
+                    break;
+                }
+            }
+            if (has_main_deinit_call) break;
+        }
+
+        ok &= require_(!has_main_deinit_call, "moved local must not emit deinit call on scope exit");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -738,6 +968,10 @@ int main() {
         {"oir_loop_canonical_and_licm_ok", test_oir_loop_canonical_and_licm_ok},
         {"class_and_proto_default_member_lowering_ok", test_class_and_proto_default_member_lowering_ok},
         {"class_ctor_call_lowers_to_init_call_ok", test_class_ctor_call_lowers_to_init_call_ok},
+        {"class_field_layout_lowering_ok", test_class_field_layout_lowering_ok},
+        {"class_static_members_lowering_ok", test_class_static_members_lowering_ok},
+        {"class_raii_scope_exit_deinit_call_ok", test_class_raii_scope_exit_deinit_call_ok},
+        {"class_raii_escape_move_skips_deinit_call_ok", test_class_raii_escape_move_skips_deinit_call_ok},
     };
 
     int failed = 0;

@@ -94,6 +94,13 @@ namespace parus::diag {
             case Code::kProtoConstraintUnsatisfied: return "ProtoConstraintUnsatisfied";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "ClassLifecycleDefaultParamNotAllowed";
             case Code::kClassLifecycleSelfNotAllowed: return "ClassLifecycleSelfNotAllowed";
+            case Code::kClassLifecycleDirectCallForbidden: return "ClassLifecycleDirectCallForbidden";
+            case Code::kClassMemberLetSetRemoved: return "ClassMemberLetSetRemoved";
+            case Code::kClassMemberFieldInitNotAllowed: return "ClassMemberFieldInitNotAllowed";
+            case Code::kClassStaticMutNotAllowed: return "ClassStaticMutNotAllowed";
+            case Code::kClassStaticVarRequiresInitializer: return "ClassStaticVarRequiresInitializer";
+            case Code::kClassInheritanceNotAllowed: return "ClassInheritanceNotAllowed";
+            case Code::kClassNestedDropNotSupported: return "ClassNestedDropNotSupported";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
             case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
             case Code::kTypeNameExpected: return "TypeNameExpected";
@@ -244,6 +251,7 @@ namespace parus::diag {
             case Code::kFieldInitNonOptionalNull: return "FieldInitNonOptionalNull";
             case Code::kFieldInitEmptyNotAllowed: return "FieldInitEmptyNotAllowed";
             case Code::kDotMethodSelfRequired: return "DotMethodSelfRequired";
+            case Code::kDotReceiverMustBeValue: return "DotReceiverMustBeValue";
             case Code::kClassCtorMissingInit: return "ClassCtorMissingInit";
             case Code::kClassProtoPathCallRemoved: return "ClassProtoPathCallRemoved";
 
@@ -317,6 +325,13 @@ namespace parus::diag {
             case Code::kProtoConstraintUnsatisfied: return "proto constraint is not satisfied";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
+            case Code::kClassLifecycleDirectCallForbidden: return "init/deinit cannot be called directly; lifecycle is compiler-managed";
+            case Code::kClassMemberLetSetRemoved: return "class member let/set syntax is removed; use 'name: Type;' for instance fields";
+            case Code::kClassMemberFieldInitNotAllowed: return "class instance field declaration must not include an initializer";
+            case Code::kClassStaticMutNotAllowed: return "class static mut members are not supported in v0";
+            case Code::kClassStaticVarRequiresInitializer: return "class static variable requires an initializer";
+            case Code::kClassInheritanceNotAllowed: return "class-to-class inheritance is not allowed; class can only implement proto constraints";
+            case Code::kClassNestedDropNotSupported: return "class field cannot contain deinit-target class type in v0 (nested drop is not supported yet)";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
             case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
@@ -474,6 +489,7 @@ namespace parus::diag {
             case Code::kFieldInitNonOptionalNull: return "field member '{0}' of type '{1}' is non-optional and cannot be initialized with null";
             case Code::kFieldInitEmptyNotAllowed: return "empty field initializer is not allowed for non-empty field type '{0}'";
             case Code::kDotMethodSelfRequired: return "dot method call requires the first parameter to be a 'self' receiver";
+            case Code::kDotReceiverMustBeValue: return "dot method call receiver must be a value; type names are not allowed";
             case Code::kClassCtorMissingInit: return "class constructor call '{0}(...)' requires at least one init(...) overload";
             case Code::kClassProtoPathCallRemoved: return "path call '{0}' is removed for class/proto members; use value dot call instead";
 
@@ -546,6 +562,13 @@ namespace parus::diag {
             case Code::kProtoConstraintUnsatisfied: return "proto 제약을 만족하지 못했습니다";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle 멤버에는 self 리시버를 선언할 수 없습니다";
+            case Code::kClassLifecycleDirectCallForbidden: return "init/deinit 는 직접 호출할 수 없습니다. lifecycle 호출은 컴파일러가 관리합니다";
+            case Code::kClassMemberLetSetRemoved: return "class 멤버 let/set 문법은 제거되었습니다. 인스턴스 필드는 'name: Type;'을 사용하세요";
+            case Code::kClassMemberFieldInitNotAllowed: return "class 인스턴스 필드 선언에는 초기화식을 둘 수 없습니다";
+            case Code::kClassStaticMutNotAllowed: return "class static mut 멤버는 v0에서 지원하지 않습니다";
+            case Code::kClassStaticVarRequiresInitializer: return "class static 변수는 초기화식이 반드시 필요합니다";
+            case Code::kClassInheritanceNotAllowed: return "class 간 상속은 허용되지 않습니다. class는 proto 제약만 구현할 수 있습니다";
+            case Code::kClassNestedDropNotSupported: return "v0에서는 deinit 대상 class를 class 인스턴스 필드로 포함할 수 없습니다 (nested drop 미지원)";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
@@ -709,6 +732,7 @@ namespace parus::diag {
             case Code::kFieldInitNonOptionalNull: return "멤버 '{0}' 타입 '{1}'는 non-optional이므로 null로 초기화할 수 없습니다";
             case Code::kFieldInitEmptyNotAllowed: return "멤버가 있는 field 타입 '{0}'에는 빈 초기화 '{}'를 사용할 수 없습니다";
             case Code::kDotMethodSelfRequired: return "dot 메서드 호출은 첫 번째 파라미터가 'self' 리시버여야 합니다";
+            case Code::kDotReceiverMustBeValue: return "dot 메서드 호출의 receiver는 값이어야 하며 타입 이름은 허용되지 않습니다";
             case Code::kClassCtorMissingInit: return "class 생성 호출 '{0}(...)'에는 최소 1개의 init(...) 오버로드가 필요합니다";
             case Code::kClassProtoPathCallRemoved: return "class/proto 멤버 경로 호출 '{0}'은 제거되었습니다. 값 dot 호출을 사용하세요";
 

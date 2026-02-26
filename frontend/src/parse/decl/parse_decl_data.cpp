@@ -602,7 +602,13 @@ namespace parus {
         bool has_named_group = false;
         parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
 
-        for (uint32_t i = 0; i < param_count; ++i) {
+        const uint32_t user_param_count = param_count;
+        if (has_named_group) {
+            diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                        "init()/deinit() does not support named-group parameters in v0");
+        }
+
+        for (uint32_t i = 0; i < user_param_count; ++i) {
             const auto& p = ast_.params()[param_begin + i];
             if (p.is_self) {
                 diag_report(diag::Code::kClassLifecycleSelfNotAllowed, p.span);
@@ -616,10 +622,27 @@ namespace parus {
             (void)parse_type(); // recovery
         }
 
-        if (is_deinit && param_count != 0) {
+        if (is_deinit && user_param_count != 0) {
             diag_report(diag::Code::kUnexpectedToken, start_tok.span,
                         "deinit() must not declare parameters in v0");
         }
+
+        // lifecycle ABI rule(v0):
+        // - source syntax: init(...), deinit()
+        // - internal ABI: hidden self receiver `self: &mut Self` is appended
+        ast::Param hidden_self{};
+        hidden_self.name = std::string_view("self");
+        hidden_self.type = types_.make_borrow(types_.intern_ident("Self"), /*is_mut=*/true);
+        hidden_self.type_node = ast::k_invalid_type_node;
+        hidden_self.is_mut = false;
+        hidden_self.is_self = true;
+        hidden_self.self_kind = ast::SelfReceiverKind::kMut;
+        hidden_self.is_named_group = false;
+        hidden_self.has_default = false;
+        hidden_self.default_expr = ast::k_invalid_expr;
+        hidden_self.span = start_tok.span;
+        ast_.add_param(hidden_self);
+        ++param_count;
 
         // call-shape metadata는 일반 함수와 동일하게 유지한다.
         std::vector<ty::TypeId> pts;
@@ -658,7 +681,7 @@ namespace parus {
                 }
             }
 
-            if (param_count != 0) {
+            if (user_param_count != 0) {
                 diag_report(diag::Code::kClassLifecycleDefaultParamNotAllowed, start_tok.span);
             }
 
@@ -678,7 +701,7 @@ namespace parus {
             }
         }
 
-        if (is_defaulted && is_deinit && param_count != 0) {
+        if (is_defaulted && is_deinit && user_param_count != 0) {
             diag_report(diag::Code::kUnexpectedToken, start_tok.span,
                         "deinit() = default must not declare parameters");
         }
@@ -716,7 +739,7 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `class Name [: ProtoA, ...] { let ...; def ... }`
+    /// @brief `class Name [: ProtoA, ...] { x: T; static y: T = v; static def ...; ... }`
     ast::StmtId Parser::parse_decl_class() {
         using K = syntax::TokenKind;
 
@@ -784,6 +807,8 @@ namespace parus {
 
         std::vector<ast::StmtId> members;
         members.reserve(16);
+        const uint32_t class_field_member_begin = static_cast<uint32_t>(ast_.field_members().size());
+        uint32_t class_field_member_count = 0;
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             if (cursor_.eat(K::kSemicolon)) continue;
 
@@ -796,50 +821,43 @@ namespace parus {
                 continue;
             }
 
-            const bool fn_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
-            if (fn_start) {
-                ast::StmtId mid = parse_decl_fn();
-                auto& ms = ast_.stmt_mut(mid);
-                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_export) {
-                    diag_report(diag::Code::kUnexpectedToken, ms.span,
-                                "class member must not be declared with export");
-                    ms.is_export = false;
-                }
-                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_extern) {
-                    diag_report(diag::Code::kUnexpectedToken, ms.span,
-                                "class member must not be declared with extern");
-                    ms.is_extern = false;
-                    ms.link_abi = ast::LinkAbi::kNone;
-                }
-                members.push_back(mid);
-                continue;
-            }
-
-            const bool var_member_start =
-                k == K::kKwLet || k == K::kKwSet || k == K::kKwMut;
-            if (var_member_start) {
-                const Token member_start = cursor_.peek();
-                bool mut_prefix_invalid = false;
-                if (cursor_.at(K::kKwMut)) {
-                    mut_prefix_invalid = true;
-                    diag_report(diag::Code::kVarMutMustFollowKw, cursor_.peek().span);
-                    cursor_.bump();
-                }
-
-                bool is_set = false;
-                bool is_mut = false;
-                if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet)) {
-                    is_set = cursor_.at(K::kKwSet);
-                    cursor_.bump();
-                } else {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "let/set");
-                }
+            if (k == K::kKwStatic) {
+                const Token static_tok = cursor_.bump(); // static
 
                 if (cursor_.at(K::kKwMut)) {
-                    is_mut = true;
+                    diag_report(diag::Code::kClassStaticMutNotAllowed, cursor_.peek().span);
                     cursor_.bump();
-                } else if (mut_prefix_invalid) {
-                    is_mut = true;
+                }
+
+                if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet) || cursor_.at(K::kKwMut)) {
+                    diag_report(diag::Code::kClassMemberLetSetRemoved, cursor_.peek().span);
+                    recover_to_delim(K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kSemicolon);
+                    continue;
+                }
+
+                const auto sk = cursor_.peek().kind;
+                const bool static_fn_start =
+                    (sk == K::kAt || sk == K::kKwFn || sk == K::kKwExport || sk == K::kKwExtern);
+                if (static_fn_start) {
+                    ast::StmtId mid = parse_decl_fn();
+                    auto& ms = ast_.stmt_mut(mid);
+                    if (ms.kind == ast::StmtKind::kFnDecl) {
+                        ms.is_static = true;
+                        if (ms.is_export) {
+                            diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                        "class member must not be declared with export");
+                            ms.is_export = false;
+                        }
+                        if (ms.is_extern) {
+                            diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                        "class member must not be declared with extern");
+                            ms.is_extern = false;
+                            ms.link_abi = ast::LinkAbi::kNone;
+                        }
+                    }
+                    members.push_back(mid);
+                    continue;
                 }
 
                 std::string_view member_name{};
@@ -862,21 +880,87 @@ namespace parus {
                 }
 
                 ast::ExprId init = ast::k_invalid_expr;
-                if (cursor_.eat(K::kAssign)) {
-                    init = parse_expr();
+                if (!cursor_.eat(K::kAssign)) {
+                    diag_report(diag::Code::kClassStaticVarRequiresInitializer, static_tok.span);
+                } else {
+                    if (!(cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof))) {
+                        init = parse_expr();
+                    } else {
+                        diag_report(diag::Code::kVarDeclInitializerExpected, cursor_.peek().span);
+                    }
                 }
+
                 Span mend = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
                 ast::Stmt ms{};
                 ms.kind = ast::StmtKind::kVar;
-                ms.span = span_join(member_start.span, mend);
-                ms.is_set = is_set;
-                ms.is_mut = is_mut;
+                ms.span = span_join(static_tok.span, mend);
+                ms.is_set = false;
+                ms.is_mut = false;
+                ms.is_static = true;
                 ms.name = member_name;
                 ms.type = type_id;
                 ms.type_node = type_node;
                 ms.init = init;
                 members.push_back(ast_.add_stmt(ms));
+                continue;
+            }
+
+            if (k == K::kKwLet || k == K::kKwSet || k == K::kKwMut) {
+                diag_report(diag::Code::kClassMemberLetSetRemoved, cursor_.peek().span);
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+                continue;
+            }
+
+            const bool fn_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
+            if (fn_start) {
+                ast::StmtId mid = parse_decl_fn();
+                auto& ms = ast_.stmt_mut(mid);
+                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_export) {
+                    diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                "class member must not be declared with export");
+                    ms.is_export = false;
+                }
+                if (ms.kind == ast::StmtKind::kFnDecl && ms.is_extern) {
+                    diag_report(diag::Code::kUnexpectedToken, ms.span,
+                                "class member must not be declared with extern");
+                    ms.is_extern = false;
+                    ms.link_abi = ast::LinkAbi::kNone;
+                }
+                members.push_back(mid);
+                continue;
+            }
+
+            if (k == K::kIdent && cursor_.peek(1).kind == K::kColon) {
+                const Token name_tok2 = cursor_.peek();
+                const std::string_view member_name = name_tok2.lexeme;
+                cursor_.bump(); // ident
+                cursor_.bump(); // :
+
+                auto parsed_ty = parse_type();
+                if (parsed_ty.id == ty::kInvalidType) {
+                    recover_to_delim(K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kSemicolon);
+                    continue;
+                }
+
+                if (cursor_.eat(K::kAssign)) {
+                    diag_report(diag::Code::kClassMemberFieldInitNotAllowed, cursor_.prev().span);
+                    if (!(cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof))) {
+                        (void)parse_expr();
+                    }
+                }
+
+                Span end_span = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+
+                ast::FieldMember fm{};
+                fm.type = parsed_ty.id;
+                fm.type_node = parsed_ty.node;
+                fm.name = member_name;
+                fm.span = span_join(name_tok2.span, end_span);
+                ast_.add_field_member(fm);
+                ++class_field_member_count;
                 continue;
             }
 
@@ -909,6 +993,8 @@ namespace parus {
         s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
         s.stmt_begin = member_begin;
         s.stmt_count = static_cast<uint32_t>(members.size());
+        s.field_member_begin = class_field_member_begin;
+        s.field_member_count = class_field_member_count;
         s.decl_path_ref_begin = impl_begin;
         s.decl_path_ref_count = impl_count;
         return ast_.add_stmt(s);

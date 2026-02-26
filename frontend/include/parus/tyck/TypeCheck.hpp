@@ -33,6 +33,7 @@ namespace parus::tyck {
         bool ok = true;
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
         std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
+        std::vector<ty::TypeId> expr_ctor_owner_type; // expr index -> class ctor owner type, invalid if not ctor-call expr
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
         std::vector<TyError> errors;
     };
@@ -237,6 +238,7 @@ namespace parus::tyck {
         // expr_types 캐시
         std::vector<ty::TypeId> expr_type_cache_;
         std::vector<ast::StmtId> expr_overload_target_cache_;
+        std::vector<ty::TypeId> expr_ctor_owner_type_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
         // builtin text type for string literals
@@ -301,6 +303,7 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> class_decl_by_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;
+        std::unordered_set<ty::TypeId> class_deinit_target_types_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> class_effective_method_map_;
         std::unordered_set<ast::StmtId> class_member_fn_sid_set_;
         std::unordered_set<ast::StmtId> proto_member_fn_sid_set_;

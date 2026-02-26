@@ -1,0 +1,8 @@
+class Counter {
+  init() = default;
+  static count: i32 = 7i32;
+}
+
+def main() -> i32 {
+  return Counter::count;
+}

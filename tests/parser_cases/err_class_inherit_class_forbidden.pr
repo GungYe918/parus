@@ -1,0 +1,11 @@
+class B {
+  init() = default;
+}
+
+class A : B {
+  init() = default;
+}
+
+def main() -> i32 {
+  return 0i32;
+}

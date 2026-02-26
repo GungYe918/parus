@@ -88,6 +88,13 @@ namespace parus::diag {
         kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied
         kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
         kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
+        kClassLifecycleDirectCallForbidden, // init/deinit direct calls are forbidden (compiler-managed lifecycle)
+        kClassMemberLetSetRemoved,        // class members no longer support let/set syntax
+        kClassMemberFieldInitNotAllowed,  // class instance field declaration must not have initializer
+        kClassStaticMutNotAllowed,        // static mut member is not supported in class
+        kClassStaticVarRequiresInitializer, // class static var requires initializer
+        kClassInheritanceNotAllowed,      // class-to-class inheritance is not allowed (proto only)
+        kClassNestedDropNotSupported,     // class field cannot contain deinit-target class type in v0
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
@@ -227,6 +234,7 @@ namespace parus::diag {
         kSetCannotInferFromNull, // set <name> = null; is not allowed
         kMissingReturn,         // return is missing
         kDotMethodSelfRequired, // dot method calls require self receiver in the first parameter
+        kDotReceiverMustBeValue, // dot method calls require value receiver (type names are not allowed)
         kClassCtorMissingInit,  // class constructor call requires init overload
         kClassProtoPathCallRemoved, // class/proto member path call removed (use dot call)
 
