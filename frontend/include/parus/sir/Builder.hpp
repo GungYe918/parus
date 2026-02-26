@@ -8,11 +8,18 @@
 #include <parus/ty/TypePool.hpp>
 #include <parus/passes/NameResolve.hpp>
 
+#include <string>
+#include <vector>
+
 
 namespace parus::sir {
 
     struct BuildOptions {
         bool preserve_spans = true;
+        bool bundle_enabled = false;
+        std::string bundle_name{};
+        std::string current_source_norm{};
+        std::vector<std::string> bundle_sources_norm{};
     };
 
     Module build_sir_module(

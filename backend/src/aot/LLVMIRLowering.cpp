@@ -8,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -49,6 +50,36 @@ namespace parus::backend::aot {
             if (out.empty()) return "anon_fn";
             if (std::isdigit(static_cast<unsigned char>(out[0]))) out.insert(out.begin(), '_');
             return out;
+        }
+
+        std::string normalize_symbol_fragment_(std::string_view in) {
+            std::string out;
+            out.reserve(in.size());
+            for (char c : in) {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (std::isalnum(u) || c == '_') out.push_back(c);
+                else out.push_back('_');
+            }
+            if (out.empty()) out = "_";
+            return out;
+        }
+
+        uint64_t fnv1a64_(std::string_view s) {
+            uint64_t h = 1469598103934665603ull;
+            for (char c : s) {
+                h ^= static_cast<unsigned char>(c);
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        std::string module_init_symbol_name_(std::string_view bundle_name, std::string_view source_norm) {
+            const std::string bundle = bundle_name.empty() ? std::string("main") : std::string(bundle_name);
+            const std::string canonical =
+                "bundle=" + bundle + "|source=" + std::string(source_norm);
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(canonical);
+            return "__parus_module_init__" + hs.str();
         }
 
         /// @brief OIR 값 참조를 LLVM SSA 이름으로 변환한다.
@@ -335,6 +366,8 @@ namespace parus::backend::aot {
                         as_value(x.index);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstField>) {
                         as_value(x.base);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstDrop>) {
+                        as_slot(x.slot);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstLoad>) {
                         as_slot(x.slot);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstStore>) {
@@ -602,7 +635,8 @@ namespace parus::backend::aot {
                 const std::vector<ValueUseInfo>& value_uses,
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
                 const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
-                const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants
+                const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants,
+                const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks
             ) : m_(m),
                 types_(types),
                 fn_(def),
@@ -610,7 +644,8 @@ namespace parus::backend::aot {
                 value_uses_(value_uses),
                 named_layouts_(named_layouts),
                 field_offsets_(field_offsets),
-                text_constants_(text_constants) {
+                text_constants_(text_constants),
+                drop_thunks_(drop_thunks) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -680,6 +715,7 @@ namespace parus::backend::aot {
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts_;
             const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
             const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
+            const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks_ = nullptr;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
@@ -1185,6 +1221,17 @@ namespace parus::backend::aot {
                 }
             }
 
+            void emit_drop_(
+                std::ostringstream& os,
+                const parus::oir::InstDrop& x
+            ) {
+                if (drop_thunks_ == nullptr) return;
+                const auto it = drop_thunks_->find(x.owner_ty);
+                if (it == drop_thunks_->end()) return;
+                const std::string slot_ptr = slot_ptr_ref_(os, x.slot);
+                os << "  call void @" << it->second << "(ptr " << slot_ptr << ")\n";
+            }
+
             /// @brief text 상수를 `{ptr,len}` 헤더 슬롯으로 물질화한다.
             void emit_const_text_(
                 std::ostringstream& os,
@@ -1645,6 +1692,8 @@ namespace parus::backend::aot {
                             emit_index_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstField>) {
                             emit_field_(os, inst, x);
+                        } else if constexpr (std::is_same_v<T, InstDrop>) {
+                            emit_drop_(os, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
                             auto slot_ty = map_type_(types_, x.slot_ty, &named_layouts_);
@@ -1866,9 +1915,229 @@ namespace parus::backend::aot {
             });
             return out;
         }
+
+        std::unordered_map<parus::ty::TypeId, std::string> user_deinit_symbol_by_type{};
+        auto has_suffix_ = [](std::string_view s, std::string_view suffix) -> bool {
+            return s.size() >= suffix.size() && s.substr(s.size() - suffix.size()) == suffix;
+        };
+        for (const auto& def : oir.funcs) {
+            const std::string_view src_name =
+                !def.source_name.empty() ? std::string_view(def.source_name) : std::string_view(def.name);
+            if (!has_suffix_(src_name, "::deinit")) continue;
+            parus::ty::TypeId owner_ty = parus::ty::kInvalidType;
+
+            if (def.entry != parus::oir::kInvalidId &&
+                static_cast<size_t>(def.entry) < oir.blocks.size()) {
+                const auto& entry = oir.blocks[def.entry];
+                if (!entry.params.empty()) {
+                    const auto p0 = entry.params[0];
+                    if (p0 != parus::oir::kInvalidId && static_cast<size_t>(p0) < oir.values.size()) {
+                        const auto pty = oir.values[p0].ty;
+                        if (pty != parus::ty::kInvalidType) {
+                            const auto& pt = types.get(pty);
+                            if (pt.kind == parus::ty::Kind::kBorrow && pt.elem != parus::ty::kInvalidType) {
+                                owner_ty = pt.elem;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (owner_ty == parus::ty::kInvalidType) {
+                const std::string owner(src_name.substr(0, src_name.size() - std::string_view("::deinit").size()));
+                for (const auto& f : oir.fields) {
+                    if (f.name != owner) continue;
+                    owner_ty = f.self_type;
+                    break;
+                }
+            }
+
+            if (owner_ty != parus::ty::kInvalidType) {
+                user_deinit_symbol_by_type[owner_ty] = sanitize_symbol_(def.name);
+            }
+        }
+
+        std::unordered_set<parus::ty::TypeId> drop_roots{};
+        for (const auto& inst : oir.insts) {
+            if (const auto* dr = std::get_if<parus::oir::InstDrop>(&inst.data)) {
+                if (dr->owner_ty != parus::ty::kInvalidType) {
+                    drop_roots.insert(dr->owner_ty);
+                }
+            }
+        }
+
+        auto find_field_decl_by_type_ = [&](parus::ty::TypeId t) -> const parus::oir::FieldLayoutDecl* {
+            for (const auto& f : oir.fields) {
+                if (f.self_type == t) return &f;
+            }
+            return nullptr;
+        };
+
+        std::set<parus::ty::TypeId> drop_types{};
+        auto collect_drop_types_ =
+            [&](auto&& self, parus::ty::TypeId t, std::unordered_set<parus::ty::TypeId>& visiting) -> bool {
+                if (t == parus::ty::kInvalidType) return false;
+                if (!visiting.insert(t).second) return false;
+
+                const auto& tt = types.get(t);
+                switch (tt.kind) {
+                    case parus::ty::Kind::kOptional: {
+                        const bool child = (tt.elem != parus::ty::kInvalidType) && self(self, tt.elem, visiting);
+                        if (child) drop_types.insert(t);
+                        return child;
+                    }
+
+                    case parus::ty::Kind::kArray: {
+                        if (!tt.array_has_size || tt.elem == parus::ty::kInvalidType) return false;
+                        const bool child = self(self, tt.elem, visiting);
+                        if (child) drop_types.insert(t);
+                        return child;
+                    }
+
+                    case parus::ty::Kind::kNamedUser: {
+                        bool needed = (user_deinit_symbol_by_type.find(t) != user_deinit_symbol_by_type.end());
+                        if (const auto* fd = find_field_decl_by_type_(t); fd != nullptr) {
+                            for (const auto& m : fd->members) {
+                                if (self(self, m.type, visiting)) needed = true;
+                            }
+                        }
+                        if (needed) drop_types.insert(t);
+                        return needed;
+                    }
+
+                    default:
+                        return false;
+                }
+            };
+
+        for (const auto t : drop_roots) {
+            std::unordered_set<parus::ty::TypeId> visiting{};
+            (void)collect_drop_types_(collect_drop_types_, t, visiting);
+        }
+
+        std::unordered_map<parus::ty::TypeId, std::string> drop_thunk_symbols{};
+        for (const auto t : drop_types) {
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(types.to_string(t));
+            drop_thunk_symbols[t] = "__parus_drop_" + hs.str();
+        }
+
+        auto emit_drop_thunks_ = [&]() {
+            auto field_offset_of_ = [&](parus::ty::TypeId owner, std::string_view name) -> std::optional<uint32_t> {
+                auto fit = field_offsets.find(owner);
+                if (fit == field_offsets.end()) return std::nullopt;
+                auto oit = fit->second.find(std::string(name));
+                if (oit == fit->second.end()) return std::nullopt;
+                return oit->second;
+            };
+
+            for (const auto t : drop_types) {
+                const auto sym_it = drop_thunk_symbols.find(t);
+                if (sym_it == drop_thunk_symbols.end()) continue;
+                const std::string& sym = sym_it->second;
+                const auto& tt = types.get(t);
+
+                os << "define internal void @" << sym << "(ptr %self) {\n";
+                os << "entry:\n";
+
+                if (tt.kind == parus::ty::Kind::kNamedUser) {
+                    if (auto uit = user_deinit_symbol_by_type.find(t); uit != user_deinit_symbol_by_type.end()) {
+                        os << "  call void @" << uit->second << "(ptr %self)\n";
+                    }
+                    if (const auto* fd = find_field_decl_by_type_(t); fd != nullptr) {
+                        uint32_t seq = 0;
+                        for (auto it = fd->members.rbegin(); it != fd->members.rend(); ++it) {
+                            auto dit = drop_thunk_symbols.find(it->type);
+                            if (dit == drop_thunk_symbols.end()) continue;
+                            auto off = field_offset_of_(t, it->name);
+                            if (!off.has_value()) continue;
+                            const std::string byte_ptr = "%fd.byte." + std::to_string(seq);
+                            const std::string field_ptr = "%fd.ptr." + std::to_string(seq);
+                            ++seq;
+                            os << "  " << byte_ptr << " = getelementptr i8, ptr %self, i64 " << *off << "\n";
+                            os << "  " << field_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
+                            os << "  call void @" << dit->second << "(ptr " << field_ptr << ")\n";
+                        }
+                    }
+                    os << "  ret void\n";
+                    os << "}\n\n";
+                    continue;
+                }
+
+                if (tt.kind == parus::ty::Kind::kOptional && tt.elem != parus::ty::kInvalidType) {
+                    auto dit = drop_thunk_symbols.find(tt.elem);
+                    if (dit != drop_thunk_symbols.end()) {
+                        const std::string opt_ty = map_type_(types, t, &named_layouts);
+                        os << "  %tag.ptr = getelementptr " << opt_ty << ", ptr %self, i32 0, i32 0\n";
+                        os << "  %tag = load i1, ptr %tag.ptr\n";
+                        os << "  br i1 %tag, label %drop_payload, label %done\n";
+                        os << "drop_payload:\n";
+                        os << "  %payload.ptr = getelementptr " << opt_ty << ", ptr %self, i32 0, i32 1\n";
+                        os << "  call void @" << dit->second << "(ptr %payload.ptr)\n";
+                        os << "  br label %done\n";
+                        os << "done:\n";
+                    }
+                    os << "  ret void\n";
+                    os << "}\n\n";
+                    continue;
+                }
+
+                if (tt.kind == parus::ty::Kind::kArray && tt.array_has_size && tt.elem != parus::ty::kInvalidType) {
+                    auto dit = drop_thunk_symbols.find(tt.elem);
+                    if (dit != drop_thunk_symbols.end()) {
+                        const std::string arr_ty = map_type_(types, t, &named_layouts);
+                        os << "  %idx.slot = alloca i64\n";
+                        os << "  store i64 " << tt.array_size << ", ptr %idx.slot\n";
+                        os << "  br label %loop.cond\n";
+                        os << "loop.cond:\n";
+                        os << "  %idx.cur = load i64, ptr %idx.slot\n";
+                        os << "  %has.next = icmp sgt i64 %idx.cur, 0\n";
+                        os << "  br i1 %has.next, label %loop.body, label %done\n";
+                        os << "loop.body:\n";
+                        os << "  %idx.next = sub i64 %idx.cur, 1\n";
+                        os << "  store i64 %idx.next, ptr %idx.slot\n";
+                        os << "  %elem.ptr = getelementptr " << arr_ty << ", ptr %self, i32 0, i64 %idx.next\n";
+                        os << "  call void @" << dit->second << "(ptr %elem.ptr)\n";
+                        os << "  br label %loop.cond\n";
+                        os << "done:\n";
+                    }
+                    os << "  ret void\n";
+                    os << "}\n\n";
+                    continue;
+                }
+
+                // unsized arrays / scalar / pointer-like cases are no-op drops.
+                os << "  ret void\n";
+                os << "}\n\n";
+            }
+        };
+
+        emit_drop_thunks_();
+
+        const std::string bundle_name =
+            oir.bundle_name.empty() ? std::string("main") : oir.bundle_name;
+        std::vector<std::string> bundle_sources = oir.bundle_sources_norm;
+        std::sort(bundle_sources.begin(), bundle_sources.end());
+        bundle_sources.erase(std::unique(bundle_sources.begin(), bundle_sources.end()), bundle_sources.end());
+        const bool bundle_mode = oir.bundle_enabled;
+        const bool is_bundle_leader =
+            bundle_mode &&
+            (bundle_sources.empty() || oir.current_source_norm == bundle_sources.front());
+
+        const std::string local_module_init_raw =
+            !oir.module_init_symbol.empty()
+                ? oir.module_init_symbol
+                : module_init_symbol_name_(bundle_name, oir.current_source_norm);
+        const std::string local_module_init_sym = sanitize_symbol_(local_module_init_raw);
+        const bool has_local_module_init = !oir.module_init_symbol.empty();
+
+        const std::string bundle_init_sym =
+            "parus_bundle_init__" + normalize_symbol_fragment_(bundle_name);
+
         bool need_call_stub = false;
         bool has_raw_main_symbol = false;
         bool has_ambiguous_main_entry = false;
+        std::unordered_set<std::string> defined_fn_symbols{};
         struct MainEntryCandidate {
             std::string symbol{};
             std::string ret_ty{};
@@ -1887,6 +2156,7 @@ namespace parus::backend::aot {
 
         for (const auto& def : oir.funcs) {
             const std::string fn_sym = sanitize_symbol_(def.name);
+            defined_fn_symbols.insert(fn_sym);
             if (fn_sym == "main") {
                 has_raw_main_symbol = true;
             }
@@ -1915,15 +2185,56 @@ namespace parus::backend::aot {
                 value_uses,
                 named_layouts,
                 field_offsets,
-                text_constants
+                text_constants,
+                &drop_thunk_symbols
             );
             os << fe.emit(need_call_stub) << "\n";
+        }
+
+        if (bundle_mode) {
+            std::unordered_set<std::string> declared_module_inits{};
+            std::vector<std::string> ordered_module_init_syms{};
+            if (!bundle_sources.empty()) {
+                ordered_module_init_syms.reserve(bundle_sources.size());
+                for (const auto& src : bundle_sources) {
+                    const std::string sym = sanitize_symbol_(module_init_symbol_name_(bundle_name, src));
+                    ordered_module_init_syms.push_back(sym);
+                }
+            } else if (has_local_module_init) {
+                ordered_module_init_syms.push_back(local_module_init_sym);
+            }
+
+            if (is_bundle_leader) {
+                for (const auto& msym : ordered_module_init_syms) {
+                    if (defined_fn_symbols.find(msym) != defined_fn_symbols.end()) continue;
+                    if (!declared_module_inits.insert(msym).second) continue;
+                    os << "declare void @" << msym << "()\n";
+                }
+                if (!ordered_module_init_syms.empty()) {
+                    os << "\n";
+                }
+
+                os << "define void @" << bundle_init_sym << "() {\n";
+                os << "entry:\n";
+                for (const auto& msym : ordered_module_init_syms) {
+                    os << "  call void @" << msym << "()\n";
+                }
+                os << "  ret void\n";
+                os << "}\n\n";
+            } else {
+                os << "declare void @" << bundle_init_sym << "()\n\n";
+            }
         }
 
         if (!has_raw_main_symbol && main_entry_candidate.has_value() && !has_ambiguous_main_entry) {
             // 실행 파일 링크를 위해 C 엔트리 심볼(main)을 자동 브릿지한다.
             os << "define i32 @main() {\n";
             os << "entry:\n";
+            if (bundle_mode) {
+                os << "  call void @" << bundle_init_sym << "()\n";
+            } else if (has_local_module_init) {
+                os << "  call void @" << local_module_init_sym << "()\n";
+            }
             if (main_entry_candidate->ret_ty == "i32") {
                 os << "  %main_ret = call i32 @" << main_entry_candidate->symbol << "()\n";
                 os << "  ret i32 %main_ret\n";

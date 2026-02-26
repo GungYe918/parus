@@ -117,6 +117,7 @@ namespace parus::oir {
     };
     struct InstIndex      { ValueId base; ValueId index; };
     struct InstField      { ValueId base; std::string field; };
+    struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
 
     struct InstAllocaLocal{ TypeId slot_ty; };
     struct InstLoad       { ValueId slot; };
@@ -137,6 +138,7 @@ namespace parus::oir {
         InstCall,
         InstIndex,
         InstField,
+        InstDrop,
         InstAllocaLocal,
         InstLoad,
         InstStore
@@ -275,6 +277,12 @@ namespace parus::oir {
     // Module container
     // ----------------------
     struct Module {
+        bool bundle_enabled = false;
+        std::string bundle_name{};
+        std::string current_source_norm{};
+        std::vector<std::string> bundle_sources_norm{};
+        std::string module_init_symbol{};
+
         std::vector<Function> funcs;
         std::vector<Block>    blocks;
         std::vector<Inst>     insts;

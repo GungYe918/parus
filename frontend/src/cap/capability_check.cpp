@@ -470,6 +470,11 @@ namespace parus::cap {
 
                             if (!is_place_expr_(e.a)) {
                                 report_(diag::Code::kEscapeOperandMustBePlace, e.span);
+                            } else {
+                                const auto& opnd = ast_.expr(e.a);
+                                if (opnd.kind != ast::ExprKind::kIdent) {
+                                    report_(diag::Code::kEscapeSubplaceMoveNotAllowed, e.span);
+                                }
                             }
 
                             if (fn_is_pure_ || fn_is_comptime_) {

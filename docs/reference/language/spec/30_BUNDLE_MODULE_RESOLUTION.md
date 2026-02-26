@@ -138,3 +138,14 @@ export def add(a: i32, b: i32) -> i32 {
 4. `deps` 없는 import head 실패.
 5. 오버로딩 해소 후 동순위 동일 시그니처 충돌 시 ambiguous 실패.
 6. `nest` 유무가 module/import 판정 결과에 영향을 주지 않음.
+
+## 18.11 결정적 초기화(ctor 배열 미사용)
+
+1. Parus는 C++ 스타일 전역 ctor 배열(`@llvm.global_ctors`)을 사용하지 않는다.
+2. 각 컴파일 모듈은 `__parus_module_init__<hash>` 형태의 module init 함수를 가진다.
+3. bundle 모드에서는 `parus_bundle_init__<bundle>` API 심볼을 사용한다.
+4. bundle 리더(정렬된 `bundle_sources_norm`의 첫 source)만 `parus_bundle_init__<bundle>`를 정의한다.
+5. 비리더 모듈은 동일 bundle init 심볼을 `declare`만 한다.
+6. bundle init 호출 순서는 `bundle_sources_norm` 정렬 순서로 고정한다.
+7. 각 module init 내부 초기화 순서는 파일 내 선언 순서로 고정하고, 정리는 역순 규칙을 따른다.
+8. 실행 엔트리 래퍼는 사용자 `main` 호출 전에 bundle init(또는 non-bundle module init)을 선호출한다.

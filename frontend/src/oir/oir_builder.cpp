@@ -7,11 +7,13 @@
 #include <parus/syntax/TokenKind.hpp>
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <string>
 #include <cctype>
 #include <optional>
 #include <sstream>
+#include <algorithm>
 
 
 namespace parus::oir {
@@ -58,7 +60,6 @@ namespace parus::oir {
                 parus::sir::SymbolId sym = parus::sir::k_invalid_symbol;
                 ValueId slot = kInvalidId;
                 TypeId owner_ty = kInvalidId;
-                FuncId deinit = kInvalidId;
                 bool moved = false;
             };
 
@@ -71,7 +72,15 @@ namespace parus::oir {
             std::vector<ScopeFrame> env_stack;
             std::vector<CleanupItem> cleanup_items;
 
-            bool lookup_deinit_for_type(TypeId t, FuncId& out_fid) const {
+            const FieldLayoutDecl* find_field_layout_(TypeId t) const {
+                if (out == nullptr) return nullptr;
+                for (const auto& f : out->fields) {
+                    if (f.self_type == t) return &f;
+                }
+                return nullptr;
+            }
+
+            bool lookup_user_deinit_for_class_(TypeId t, FuncId& out_fid) const {
                 if (class_deinit_map == nullptr || t == kInvalidId) return false;
                 auto it = class_deinit_map->find(t);
                 if (it == class_deinit_map->end() || it->second == kInvalidId) return false;
@@ -79,18 +88,55 @@ namespace parus::oir {
                 return true;
             }
 
+            bool type_needs_drop_rec_(TypeId t, std::unordered_set<TypeId>& visiting) const {
+                if (types == nullptr || t == kInvalidId) return false;
+                if (!visiting.insert(t).second) return false;
+
+                const auto& tt = types->get(t);
+                switch (tt.kind) {
+                    case parus::ty::Kind::kOptional:
+                        return (tt.elem != kInvalidId) && type_needs_drop_rec_(tt.elem, visiting);
+
+                    case parus::ty::Kind::kArray:
+                        if (!tt.array_has_size) return false; // unsized T[] is a non-owning view
+                        return (tt.elem != kInvalidId) && type_needs_drop_rec_(tt.elem, visiting);
+
+                    case parus::ty::Kind::kNamedUser: {
+                        FuncId deinit_fid = kInvalidId;
+                        const bool has_user_deinit = lookup_user_deinit_for_class_(t, deinit_fid);
+                        const FieldLayoutDecl* layout = find_field_layout_(t);
+                        if (has_user_deinit) return true;
+                        if (layout == nullptr) return false;
+                        for (const auto& m : layout->members) {
+                            if (type_needs_drop_rec_(m.type, visiting)) return true;
+                        }
+                        return false;
+                    }
+
+                    default:
+                        return false;
+                }
+            }
+
+            bool type_needs_drop_(TypeId t) const {
+                std::unordered_set<TypeId> visiting{};
+                return type_needs_drop_rec_(t, visiting);
+            }
+
+            void emit_drop(TypeId owner_ty, ValueId slot) {
+                if (slot == kInvalidId || owner_ty == kInvalidId) return;
+                Inst inst{};
+                inst.data = InstDrop{slot, owner_ty};
+                inst.eff = Effect::MayWriteMem;
+                inst.result = kInvalidId;
+                emit_inst(inst);
+            }
+
             void emit_cleanup_item(uint32_t cleanup_id) {
                 if (cleanup_id == kInvalidId || cleanup_id >= cleanup_items.size()) return;
                 auto& item = cleanup_items[cleanup_id];
-                if (item.moved || item.deinit == kInvalidId || item.slot == kInvalidId) return;
-
-                const TypeId unit_ty =
-                    (types != nullptr)
-                        ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
-                        : kInvalidId;
-                std::vector<ValueId> args{};
-                args.push_back(item.slot);
-                (void)emit_call(unit_ty, kInvalidId, std::move(args), item.deinit);
+                if (item.moved || item.slot == kInvalidId || item.owner_ty == kInvalidId) return;
+                emit_drop(item.owner_ty, item.slot);
                 item.moved = true;
             }
 
@@ -122,12 +168,11 @@ namespace parus::oir {
                 env_stack.pop_back();
             }
 
-            uint32_t register_cleanup(parus::sir::SymbolId sym, ValueId slot, TypeId owner_ty, FuncId deinit_fid) {
+            uint32_t register_cleanup(parus::sir::SymbolId sym, ValueId slot, TypeId owner_ty) {
                 CleanupItem ci{};
                 ci.sym = sym;
                 ci.slot = slot;
                 ci.owner_ty = owner_ty;
-                ci.deinit = deinit_fid;
                 ci.moved = false;
                 const uint32_t id = static_cast<uint32_t>(cleanup_items.size());
                 cleanup_items.push_back(ci);
@@ -762,7 +807,11 @@ namespace parus::oir {
         }
 
         /// @brief 함수 이름 + 시그니처를 기반으로 OIR 내부 함수명을 생성한다.
-        std::string mangle_func_name_(const parus::sir::Func& sf, const parus::ty::TypePool& types) {
+        std::string mangle_func_name_(
+            const parus::sir::Func& sf,
+            const parus::ty::TypePool& types,
+            std::string_view bundle_name
+        ) {
             std::string sig = (sf.sig != parus::ty::kInvalidType)
                 ? types.to_string(sf.sig)
                 : std::string("def(?)");
@@ -787,19 +836,32 @@ namespace parus::oir {
                 case parus::sir::FnMode::kNone: default: mode = "none"; break;
             }
 
+            const std::string bundle = bundle_name.empty() ? std::string("main") : std::string(bundle_name);
             const std::string canonical =
-                "bundle=main|path=" + path +
+                "bundle=" + bundle + "|path=" + path +
                 "|name=" + base +
                 "|mode=" + mode +
                 "|recv=none|sig=" + sig;
             std::ostringstream hs;
             hs << std::hex << fnv1a64_(canonical);
 
-            return "p$main$" +
+            return "p$" + normalize_symbol_fragment_(bundle) + "$" +
                 normalize_symbol_fragment_(path) + "$" +
                 normalize_symbol_fragment_(base) + "$M" +
                 normalize_symbol_fragment_(mode) + "$Rnone$S" +
                 normalize_symbol_fragment_(sig) + "$H" + hs.str();
+        }
+
+        std::string make_module_init_symbol_name_(
+            std::string_view bundle_name,
+            std::string_view current_source_norm
+        ) {
+            const std::string bundle = bundle_name.empty() ? std::string("main") : std::string(bundle_name);
+            const std::string canonical =
+                "bundle=" + bundle + "|source=" + std::string(current_source_norm);
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(canonical);
+            return "__parus_module_init__" + hs.str();
         }
 
         /// @brief SIR 함수 ABI를 OIR 함수 ABI로 변환한다.
@@ -1337,13 +1399,12 @@ namespace parus::oir {
                                                                     : emit_const_null(declared);
                 init = coerce_value_for_target(declared, init);
 
-                FuncId deinit_fid = kInvalidId;
-                const bool needs_cleanup = lookup_deinit_for_type(declared, deinit_fid);
+                const bool needs_cleanup = type_needs_drop_(declared);
 
                 if (needs_cleanup) {
                     ValueId slot = emit_alloca(declared);
                     emit_store(slot, init);
-                    const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared, deinit_fid);
+                    const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared);
                     bind(s.sym, Binding{true, false, slot, cleanup_id});
                     return;
                 }
@@ -1662,6 +1723,10 @@ namespace parus::oir {
     // ------------------------------------------------------------
     BuildResult Builder::build() {
         BuildResult out{};
+        out.mod.bundle_enabled = sir_.bundle_enabled;
+        out.mod.bundle_name = sir_.bundle_name;
+        out.mod.current_source_norm = sir_.current_source_norm;
+        out.mod.bundle_sources_norm = sir_.bundle_sources_norm;
 
         // OIR 진입 게이트:
         // - handle 비물질화(materialize_count==0)
@@ -1801,6 +1866,13 @@ namespace parus::oir {
         }
 
         std::unordered_map<parus::sir::SymbolId, uint32_t> global_symbol_to_global;
+        struct GlobalInitItem {
+            parus::sir::SymbolId sym = parus::sir::k_invalid_symbol;
+            uint32_t gid = kInvalidId;
+            parus::sir::ValueId init = parus::sir::k_invalid_value;
+            TypeId type = kInvalidId;
+        };
+        std::vector<GlobalInitItem> global_init_items{};
         for (const auto& sg : sir_.globals) {
             GlobalDecl g{};
             if (sg.abi == parus::sir::FuncAbi::kC || sg.is_export) {
@@ -1811,14 +1883,34 @@ namespace parus::oir {
             g.type = sg.declared_type;
             g.abi = map_func_abi_(sg.abi);
             g.is_extern = sg.is_extern;
-            g.is_mut = sg.is_mut;
+            // runtime init path(module/bundle init) uses store; keep writable in IR.
+            g.is_mut = sg.is_mut || (!sg.is_extern && sg.init != parus::sir::k_invalid_value);
             g.is_export = sg.is_export;
 
             const uint32_t gid = out.mod.add_global(g);
             if (sg.sym != parus::sir::k_invalid_symbol) {
                 global_symbol_to_global[sg.sym] = gid;
             }
+            if (!sg.is_extern && sg.init != parus::sir::k_invalid_value) {
+                global_init_items.push_back(GlobalInitItem{
+                    .sym = sg.sym,
+                    .gid = gid,
+                    .init = sg.init,
+                    .type = g.type
+                });
+            }
         }
+
+        std::vector<std::pair<parus::sir::SymbolId, uint32_t>> sorted_globals{};
+        sorted_globals.reserve(global_symbol_to_global.size());
+        for (const auto& kv : global_symbol_to_global) {
+            sorted_globals.push_back(kv);
+        }
+        std::sort(sorted_globals.begin(), sorted_globals.end(),
+                  [](const auto& a, const auto& b) {
+                      if (a.second != b.second) return a.second < b.second;
+                      return a.first < b.first;
+                  });
 
         // Build all functions in SIR module.
         // Strategy:
@@ -1839,7 +1931,7 @@ namespace parus::oir {
             // C ABI 함수는 심볼을 비맹글 기반으로 유지한다.
             f.name = (sf.abi == parus::sir::FuncAbi::kC)
                 ? std::string(sf.name)
-                : mangle_func_name_(sf, ty_);
+                : mangle_func_name_(sf, ty_, sir_.bundle_name);
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
             f.is_extern = sf.is_extern;
@@ -1913,7 +2005,7 @@ namespace parus::oir {
             fb.def = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
-            for (const auto& kv : global_symbol_to_global) {
+            for (const auto& kv : sorted_globals) {
                 const auto gid = kv.second;
                 if ((size_t)gid >= out.mod.globals.size()) continue;
                 const auto& g = out.mod.globals[gid];
@@ -1930,12 +2022,11 @@ namespace parus::oir {
                     ValueId pv = fb.add_block_param(entry, (TypeId)sp.type);
                     if (sp.sym == parus::sir::k_invalid_symbol) continue;
 
-                    FuncId deinit_fid = kInvalidId;
-                    const bool needs_cleanup = fb.lookup_deinit_for_type((TypeId)sp.type, deinit_fid);
+                    const bool needs_cleanup = fb.type_needs_drop_((TypeId)sp.type);
                     if (needs_cleanup) {
                         ValueId slot = fb.emit_alloca((TypeId)sp.type);
                         fb.emit_store(slot, pv);
-                        const uint32_t cleanup_id = fb.register_cleanup(sp.sym, slot, (TypeId)sp.type, deinit_fid);
+                        const uint32_t cleanup_id = fb.register_cleanup(sp.sym, slot, (TypeId)sp.type);
                         fb.bind(sp.sym, FuncBuild::Binding{true, false, slot, cleanup_id});
                     } else if (sp.is_mut) {
                         ValueId slot = fb.emit_alloca((TypeId)sp.type);
@@ -1952,6 +2043,73 @@ namespace parus::oir {
 
             if (!out.mod.blocks[fb.cur_bb].has_term) {
                 ValueId rv = fb.emit_const_null((TypeId)sf.ret);
+                fb.ret(rv);
+            }
+        }
+
+        // Build synthesized module init function:
+        // - non-bundle: only when there is at least one runtime global initializer
+        // - bundle: always emit (leader can call every module init deterministically)
+        const bool need_module_init = sir_.bundle_enabled || !global_init_items.empty();
+        if (need_module_init) {
+            const TypeId unit_ty = (TypeId)ty_.builtin(parus::ty::Builtin::kUnit);
+            Function init_fn{};
+            init_fn.name = make_module_init_symbol_name_(sir_.bundle_name, sir_.current_source_norm);
+            init_fn.source_name = "__parus_module_init";
+            init_fn.abi = FunctionAbi::Parus;
+            init_fn.is_extern = false;
+            init_fn.is_pure = false;
+            init_fn.is_comptime = false;
+            init_fn.ret_ty = unit_ty;
+            const BlockId init_entry = out.mod.add_block(Block{});
+            init_fn.entry = init_entry;
+            init_fn.blocks.push_back(init_entry);
+            const FuncId init_fid = out.mod.add_func(init_fn);
+            out.mod.module_init_symbol = out.mod.funcs[init_fid].name;
+
+            std::vector<GlobalInitItem> sorted_init_items = global_init_items;
+            std::sort(sorted_init_items.begin(), sorted_init_items.end(),
+                      [](const GlobalInitItem& a, const GlobalInitItem& b) {
+                          if (a.gid != b.gid) return a.gid < b.gid;
+                          return a.sym < b.sym;
+                      });
+
+            FuncBuild fb{};
+            fb.out = &out.mod;
+            fb.sir = &sir_;
+            fb.types = &ty_;
+            fb.escape_value_map = &escape_value_map;
+            fb.fn_symbol_to_func = &fn_symbol_to_func;
+            fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
+            fb.fn_decl_to_func = &fn_decl_to_func;
+            fb.global_symbol_to_global = &global_symbol_to_global;
+            fb.class_deinit_map = &class_deinit_map;
+            fb.build_errors = &out.gate_errors;
+            fb.def = &out.mod.funcs[init_fid];
+            fb.cur_bb = init_entry;
+
+            for (const auto& kv : sorted_globals) {
+                const auto gid = kv.second;
+                if ((size_t)gid >= out.mod.globals.size()) continue;
+                const auto& g = out.mod.globals[gid];
+                ValueId gref = fb.emit_global_ref(gid, g.name);
+                fb.bind(kv.first, FuncBuild::Binding{true, true, gref, kInvalidId});
+            }
+
+            fb.push_scope();
+            for (const auto& gi : sorted_init_items) {
+                if (gi.init == parus::sir::k_invalid_value) continue;
+                if (gi.gid == kInvalidId || (size_t)gi.gid >= out.mod.globals.size()) continue;
+                const auto& g = out.mod.globals[gi.gid];
+                ValueId slot = fb.emit_global_ref(gi.gid, g.name);
+                ValueId init_v = fb.lower_value(gi.init);
+                init_v = fb.coerce_value_for_target(gi.type, init_v);
+                fb.emit_store(slot, init_v);
+            }
+            fb.pop_scope();
+
+            if (!out.mod.blocks[fb.cur_bb].has_term) {
+                ValueId rv = fb.emit_const_null(unit_ty);
                 fb.ret(rv);
             }
         }

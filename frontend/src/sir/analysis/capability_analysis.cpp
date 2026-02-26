@@ -86,6 +86,20 @@ namespace parus::sir {
                 escape_meta_by_value_.clear();
                 collect_symbol_traits_();
 
+                // Global/class-static initializer expressions are outside function CFG,
+                // but they can still contain escape handles (e.g. static p = &&G).
+                // Analyze them in value context so metadata is materialized before OIR gate.
+                current_fn_is_pure_ = false;
+                current_fn_is_comptime_ = false;
+                active_borrows_.clear();
+                moved_by_escape_.clear();
+                scopes_.clear();
+                visiting_blocks_.clear();
+                for (const auto& g : m_.globals) {
+                    if (g.init == k_invalid_value) continue;
+                    analyze_value_(g.init, ValueUse::kValue);
+                }
+
                 for (uint32_t fid = 0; fid < (uint32_t)m_.funcs.size(); ++fid) {
                     analyze_func_(fid);
                 }

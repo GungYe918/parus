@@ -233,6 +233,7 @@ namespace parus::sir::detail {
     /// @brief AST var 선언 1개를 SIR global 메타로 lower한다.
     void lower_global_var_decl_(
         Module& m,
+        bool& out_has_any_write,
         const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
@@ -277,6 +278,10 @@ namespace parus::sir::detail {
             g.declared_type = sym.symbol(g.sym).declared_type;
         }
 
+        if (s.init != ast::k_invalid_expr) {
+            g.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
+        }
+
         (void)m.add_global(g);
     }
 
@@ -297,9 +302,13 @@ namespace parus::sir {
     ) {
         (void)sym;
         (void)types;
-        (void)opt;
 
         Module m{};
+        m.bundle_enabled = opt.bundle_enabled;
+        m.bundle_name = opt.bundle_name;
+        m.current_source_norm = opt.current_source_norm;
+        m.bundle_sources_norm = opt.bundle_sources_norm;
+        bool global_init_has_any_write = false;
 
         // program root must be a block
         if (program_root == ast::k_invalid_stmt || (size_t)program_root >= ast.stmts().size()) {
@@ -379,7 +388,7 @@ namespace parus::sir {
                             if (auto sid_sym = sym.lookup(vqname)) {
                                 v_sym = *sid_sym;
                             }
-                            lower_global_var_decl_(m, ast, sym, nres, tyck, member_sid, vqname, v_sym);
+                            lower_global_var_decl_(m, global_init_has_any_write, ast, sym, nres, tyck, member_sid, vqname, v_sym);
                             continue;
                         }
                     }
@@ -427,7 +436,7 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kVar) {
-                lower_global_var_decl_(m, ast, sym, nres, tyck, sid);
+                lower_global_var_decl_(m, global_init_has_any_write, ast, sym, nres, tyck, sid);
                 return;
             }
 

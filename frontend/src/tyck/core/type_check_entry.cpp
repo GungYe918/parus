@@ -45,7 +45,6 @@ namespace parus::tyck {
         import_alias_scope_stack_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
-        class_deinit_target_types_.clear();
         class_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
         block_depth_ = 0;
@@ -630,7 +629,6 @@ namespace parus::tyck {
         proto_qualified_name_by_stmt_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
-        class_deinit_target_types_.clear();
         class_effective_method_map_.clear();
         class_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
@@ -1004,9 +1002,6 @@ namespace parus::tyck {
 
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
                         class_member_fn_sid_set_.insert(msid);
-                        if (class_ty != ty::kInvalidType && ms.name == "deinit") {
-                            class_deinit_target_types_.insert(class_ty);
-                        }
 
                         for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
                             auto& p = ast_.params_mut()[ms.param_begin + pi];

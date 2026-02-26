@@ -88,7 +88,10 @@ namespace {
         return p.macro_type_ok;
     }
 
-    static std::optional<OirPipeline> build_oir_pipeline_(const std::string& src) {
+    static std::optional<OirPipeline> build_oir_pipeline_(
+        const std::string& src,
+        const std::optional<parus::sir::BuildOptions>& build_opt = std::nullopt
+    ) {
         OirPipeline out{};
         out.prog = parse_program_(src);
         if (!run_macro_and_type_(out.prog)) return std::nullopt;
@@ -100,6 +103,9 @@ namespace {
         out.ty = tc.check_program(out.prog.root);
 
         parus::sir::BuildOptions bopt{};
+        if (build_opt.has_value()) {
+            bopt = *build_opt;
+        }
         out.sir_mod = parus::sir::build_sir_module(
             out.prog.ast,
             out.prog.root,
@@ -1096,16 +1102,16 @@ namespace {
         return ok;
     }
 
-    /// @brief RAII lowering이 LLVM IR에서 deinit 자동 호출/escape move skip을 유지하는지 검사한다.
+    /// @brief RAII lowering이 LLVM IR에서 drop thunk 자동 호출/escape move skip을 유지하는지 검사한다.
     static bool test_class_raii_deinit_llvm_call_patterns_() {
-        auto has_deinit_call = [](const std::string& ir) -> bool {
+        auto has_drop_call = [](const std::string& ir) -> bool {
             size_t pos = 0;
             while (pos < ir.size()) {
                 const size_t end = ir.find('\n', pos);
                 const size_t len = (end == std::string::npos) ? (ir.size() - pos) : (end - pos);
                 const std::string_view line(ir.data() + pos, len);
                 if (line.find("call void @") != std::string_view::npos &&
-                    line.find("deinit") != std::string_view::npos) {
+                    line.find("__parus_drop_") != std::string_view::npos) {
                     return true;
                 }
                 if (end == std::string::npos) break;
@@ -1139,8 +1145,8 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
         ok &= require_(lowered1.ok, "LLVM text lowering for RAII scope source must succeed");
-        ok &= require_(has_deinit_call(lowered1.llvm_ir),
-                       "RAII scope-exit path must emit direct deinit call");
+        ok &= require_(has_drop_call(lowered1.llvm_ir),
+                       "RAII scope-exit path must emit drop thunk call");
         if (!ok) return false;
 
         const std::string move_src = R"(
@@ -1170,8 +1176,60 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
         ok &= require_(lowered2.ok, "LLVM text lowering for RAII move source must succeed");
-        ok &= require_(!has_deinit_call(lowered2.llvm_ir),
-                       "escape-moved local must not emit deinit call");
+        ok &= require_(!has_drop_call(lowered2.llvm_ir),
+                       "escape-moved local must not emit drop thunk call");
+        return ok;
+    }
+
+    /// @brief bundle 모드에서 ctor 배열 없이 번들 init 함수 + main 선호출이 생성되는지 검사한다.
+    static bool test_bundle_init_wrapper_order_() {
+        const std::string src = R"(
+            static g: i32 = 7i32;
+
+            def main() -> i32 {
+                return g;
+            }
+        )";
+
+        parus::sir::BuildOptions bopt{};
+        bopt.bundle_enabled = true;
+        bopt.bundle_name = "demo_bundle";
+        bopt.current_source_norm = "/bundle/src/a_main.pr";
+        bopt.bundle_sources_norm = {
+            "/bundle/src/a_main.pr",
+            "/bundle/src/z_other.pr",
+        };
+
+        auto p = build_oir_pipeline_(src, bopt);
+        bool ok = true;
+        ok &= require_(p.has_value(), "bundle init source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for bundle init source must succeed");
+        if (!ok) return false;
+
+        const std::string bundle_sym = "parus_bundle_init__demo_bundle";
+        ok &= require_(lowered.llvm_ir.find("define void @" + bundle_sym + "()") != std::string::npos,
+                       "bundle leader must define bundle init API symbol");
+        ok &= require_(lowered.llvm_ir.find("@llvm.global_ctors") == std::string::npos,
+                       "LLVM IR must not use global ctor array for bundle init");
+
+        const std::string main_entry = "define i32 @main() {\nentry:\n";
+        const auto main_pos = lowered.llvm_ir.find(main_entry);
+        ok &= require_(main_pos != std::string::npos, "main wrapper must be emitted");
+        if (!ok) return false;
+
+        const auto call_bundle_pos = lowered.llvm_ir.find("call void @" + bundle_sym + "()", main_pos);
+        const auto call_user_main_pos = lowered.llvm_ir.find("call i32 @", main_pos);
+        ok &= require_(call_bundle_pos != std::string::npos, "main wrapper must call bundle init");
+        ok &= require_(call_user_main_pos != std::string::npos, "main wrapper must call user main");
+        ok &= require_(call_bundle_pos < call_user_main_pos,
+                       "bundle init must run before user main call");
         return ok;
     }
 
@@ -1262,6 +1320,7 @@ int main() {
         {"class_field_offset_lowering", test_class_field_offset_lowering_},
         {"class_static_member_llvm_symbols", test_class_static_member_llvm_symbols_},
         {"class_raii_deinit_llvm_call_patterns", test_class_raii_deinit_llvm_call_patterns_},
+        {"bundle_init_wrapper_order", test_bundle_init_wrapper_order_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

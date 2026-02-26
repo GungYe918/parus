@@ -1063,19 +1063,6 @@ namespace parus::tyck {
         std::unordered_set<std::string> class_member_names;
         std::unordered_set<std::string> class_method_names;
 
-        auto contains_deinit_target_class = [&](auto&& self, ty::TypeId t) -> bool {
-            if (t == ty::kInvalidType) return false;
-            if (class_deinit_target_types_.find(t) != class_deinit_target_types_.end()) return true;
-            const auto& tt = types_.get(t);
-            switch (tt.kind) {
-                case ty::Kind::kOptional:
-                case ty::Kind::kArray:
-                    return self(self, tt.elem);
-                default:
-                    return false;
-            }
-        };
-
         {
             const uint64_t fmb = s.field_member_begin;
             const uint64_t fme = fmb + s.field_member_count;
@@ -1089,10 +1076,6 @@ namespace parus::tyck {
                         continue;
                     }
 
-                    if (contains_deinit_target_class(contains_deinit_target_class, fm.type)) {
-                        diag_(diag::Code::kClassNestedDropNotSupported, fm.span, fm.name, types_.to_string(fm.type));
-                        err_(fm.span, "nested class drop is not supported in v0");
-                    }
                 }
             } else {
                 diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);

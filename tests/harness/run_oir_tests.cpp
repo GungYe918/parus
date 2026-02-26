@@ -828,7 +828,7 @@ namespace {
         return ok;
     }
 
-    /// @brief class 로컬 값은 스코프 종료 시 deinit direct call이 삽입되어야 한다.
+    /// @brief class 로컬 값은 스코프 종료 시 InstDrop이 삽입되어야 한다.
     static bool test_class_raii_scope_exit_deinit_call_ok() {
         const std::string src = R"(
             class Resource {
@@ -861,19 +861,14 @@ namespace {
         ok &= require_(verrs.empty(), "OIR verify must pass for raii scope-exit source");
         if (!ok) return false;
 
-        bool has_deinit_call = false;
+        bool has_drop = false;
         for (const auto& inst : oir.mod.insts) {
-            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
-            const auto& c = std::get<parus::oir::InstCall>(inst.data);
-            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
-            const auto& f = oir.mod.funcs[c.direct_callee];
-            if (f.source_name.find("deinit") != std::string::npos ||
-                f.name.find("deinit") != std::string::npos) {
-                has_deinit_call = true;
+            if (std::holds_alternative<parus::oir::InstDrop>(inst.data)) {
+                has_drop = true;
                 break;
             }
         }
-        ok &= require_(has_deinit_call, "scope-exit path must include direct deinit call");
+        ok &= require_(has_drop, "scope-exit path must include InstDrop");
         return ok;
     }
 
@@ -923,7 +918,7 @@ namespace {
         ok &= require_(main_fid != parus::oir::kInvalidId, "main function must exist in OIR module");
         if (!ok) return false;
 
-        bool has_main_deinit_call = false;
+        bool has_main_drop = false;
         const auto& mf = oir.mod.funcs[main_fid];
         for (const auto bb : mf.blocks) {
             if (bb == parus::oir::kInvalidId || bb >= oir.mod.blocks.size()) continue;
@@ -931,20 +926,15 @@ namespace {
             for (const auto iid : block.insts) {
                 if (iid == parus::oir::kInvalidId || iid >= oir.mod.insts.size()) continue;
                 const auto& inst = oir.mod.insts[iid];
-                if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
-                const auto& c = std::get<parus::oir::InstCall>(inst.data);
-                if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
-                const auto& f = oir.mod.funcs[c.direct_callee];
-                if (f.source_name.find("deinit") != std::string::npos ||
-                    f.name.find("deinit") != std::string::npos) {
-                    has_main_deinit_call = true;
+                if (std::holds_alternative<parus::oir::InstDrop>(inst.data)) {
+                    has_main_drop = true;
                     break;
                 }
             }
-            if (has_main_deinit_call) break;
+            if (has_main_drop) break;
         }
 
-        ok &= require_(!has_main_deinit_call, "moved local must not emit deinit call on scope exit");
+        ok &= require_(!has_main_drop, "moved local must not emit InstDrop on scope exit");
         return ok;
     }
 

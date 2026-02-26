@@ -1,0 +1,17 @@
+class Resource {
+  init() = default;
+  deinit() = default;
+}
+
+class Holder {
+  r: Resource;
+  init() = default;
+  deinit() = default;
+}
+
+def main() -> i32 {
+  do {
+    set h = Holder();
+  }
+  return 0i32;
+}

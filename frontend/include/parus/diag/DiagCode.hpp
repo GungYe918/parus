@@ -94,7 +94,6 @@ namespace parus::diag {
         kClassStaticMutNotAllowed,        // static mut member is not supported in class
         kClassStaticVarRequiresInitializer, // class static var requires initializer
         kClassInheritanceNotAllowed,      // class-to-class inheritance is not allowed (proto only)
-        kClassNestedDropNotSupported,     // class field cannot contain deinit-target class type in v0
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
@@ -156,6 +155,7 @@ namespace parus::diag {
         // ---- &, &&관련 ----
         kBorrowOperandMustBePlace,
         kEscapeOperandMustBePlace,
+        kEscapeSubplaceMoveNotAllowed,
         kEscapeOperandMustNotBeBorrow,
         kBorrowMutRequiresMutablePlace,
         kBorrowMutConflict,

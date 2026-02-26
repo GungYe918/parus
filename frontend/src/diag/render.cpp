@@ -100,7 +100,6 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "ClassStaticMutNotAllowed";
             case Code::kClassStaticVarRequiresInitializer: return "ClassStaticVarRequiresInitializer";
             case Code::kClassInheritanceNotAllowed: return "ClassInheritanceNotAllowed";
-            case Code::kClassNestedDropNotSupported: return "ClassNestedDropNotSupported";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
             case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
             case Code::kTypeNameExpected: return "TypeNameExpected";
@@ -141,6 +140,7 @@ namespace parus::diag {
             case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
             case Code::kBorrowOperandMustBePlace: return "BorrowOperandMustBePlace";
             case Code::kEscapeOperandMustBePlace: return "EscapeOperandMustBePlace";
+            case Code::kEscapeSubplaceMoveNotAllowed: return "EscapeSubplaceMoveNotAllowed";
             case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
             case Code::kBorrowMutRequiresMutablePlace: return "BorrowMutRequiresMutablePlace";
             case Code::kBorrowMutConflict: return "BorrowMutConflict";
@@ -331,7 +331,6 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "class static mut members are not supported in v0";
             case Code::kClassStaticVarRequiresInitializer: return "class static variable requires an initializer";
             case Code::kClassInheritanceNotAllowed: return "class-to-class inheritance is not allowed; class can only implement proto constraints";
-            case Code::kClassNestedDropNotSupported: return "class field cannot contain deinit-target class type in v0 (nested drop is not supported yet)";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
             case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
@@ -374,6 +373,7 @@ namespace parus::diag {
             case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after declaration keyword (e.g., 'let mut x: T', 'set mut x = ...', 'static mut x: T = ...')";
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
             case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
+            case Code::kEscapeSubplaceMoveNotAllowed: return "&& only supports root identifier move in v0 (subplace move-out is not allowed)";
             case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
             case Code::kBorrowMutRequiresMutablePlace: return "&mut requires a mutable place";
             case Code::kBorrowMutConflict: return "cannot create borrow: an active mutable borrow already exists for this place";
@@ -568,7 +568,6 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "class static mut 멤버는 v0에서 지원하지 않습니다";
             case Code::kClassStaticVarRequiresInitializer: return "class static 변수는 초기화식이 반드시 필요합니다";
             case Code::kClassInheritanceNotAllowed: return "class 간 상속은 허용되지 않습니다. class는 proto 제약만 구현할 수 있습니다";
-            case Code::kClassNestedDropNotSupported: return "v0에서는 deinit 대상 class를 class 인스턴스 필드로 포함할 수 없습니다 (nested drop 미지원)";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
@@ -614,6 +613,7 @@ namespace parus::diag {
 
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
             case Code::kEscapeOperandMustBePlace: return "'&&'의 피연산자는 place expression이어야 합니다";
+            case Code::kEscapeSubplaceMoveNotAllowed: return "v0에서 '&&'는 루트 식별자만 이동할 수 있습니다(subplace move-out 금지)";
             case Code::kEscapeOperandMustNotBeBorrow: return "'&&'는 borrow('& ...')에 적용할 수 없습니다";
             case Code::kBorrowMutRequiresMutablePlace: return "'&mut'는 mutable place에만 적용할 수 있습니다";
             case Code::kBorrowMutConflict: return "이미 활성화된 '&mut' borrow가 있어 추가 borrow를 만들 수 없습니다";

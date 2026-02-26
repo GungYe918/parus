@@ -3,11 +3,15 @@ class Resource {
   deinit() = default;
 }
 
-class Holder {
-  r: Resource;
+class HolderOpt {
+  r: Resource?;
   init() = default;
+  deinit() = default;
 }
 
 def main() -> i32 {
+  do {
+    set h = HolderOpt();
+  }
   return 0i32;
 }

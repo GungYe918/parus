@@ -205,6 +205,8 @@ namespace parus::oir {
                         apply(x.index);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         apply(x.base);
+                    } else if constexpr (std::is_same_v<T, InstDrop>) {
+                        apply(x.slot);
                     } else if constexpr (std::is_same_v<T, InstLoad>) {
                         apply(x.slot);
                     } else if constexpr (std::is_same_v<T, InstStore>) {
@@ -291,6 +293,16 @@ namespace parus::oir {
                 } else {
                     out.read_fp = AliasFootprint::Unknown;
                 }
+            } else if (std::holds_alternative<InstDrop>(inst.data)) {
+                const auto& dr = std::get<InstDrop>(inst.data);
+                out.writes = true;
+                out.write_loc = resolve_memory_loc_from_value_(m, dr.slot);
+                if (has_memory_base_(out.write_loc)) {
+                    out.write_fp = AliasFootprint::LocalMemory;
+                    out.write_slot = out.write_loc.base_slot;
+                } else {
+                    out.write_fp = AliasFootprint::Unknown;
+                }
             } else if (std::holds_alternative<InstAllocaLocal>(inst.data)) {
                 // alloca는 slot 생성 메타 동작으로 보고, 기존 메모리 가시 상태를 클로버하지 않는다.
                 out.reads = false;
@@ -345,6 +357,8 @@ namespace parus::oir {
                         add(x.index);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         add(x.base);
+                    } else if constexpr (std::is_same_v<T, InstDrop>) {
+                        add(x.slot);
                     } else if constexpr (std::is_same_v<T, InstLoad>) {
                         add(x.slot);
                     } else if constexpr (std::is_same_v<T, InstStore>) {
@@ -417,6 +431,8 @@ namespace parus::oir {
                     def(x.index);
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     def(x.base);
+                } else if constexpr (std::is_same_v<T, InstDrop>) {
+                    def(x.slot);
                 } else if constexpr (std::is_same_v<T, InstLoad>) {
                     def(x.slot);
                 } else if constexpr (std::is_same_v<T, InstStore>) {
@@ -1369,6 +1385,8 @@ namespace parus::oir {
                         return x.base == slot || x.index == slot;
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         return x.base == slot;
+                    } else if constexpr (std::is_same_v<T, InstDrop>) {
+                        return x.slot == slot;
                     } else if constexpr (std::is_same_v<T, InstFuncRef>) {
                         return false;
                     } else if constexpr (std::is_same_v<T, InstGlobalRef>) {
@@ -1994,6 +2012,8 @@ namespace parus::oir {
                     return {x.base, x.index};
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     return {x.base};
+                } else if constexpr (std::is_same_v<T, InstDrop>) {
+                    return {x.slot};
                 } else if constexpr (std::is_same_v<T, InstLoad>) {
                     return {x.slot};
                 } else if constexpr (std::is_same_v<T, InstStore>) {

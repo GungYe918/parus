@@ -205,6 +205,13 @@ namespace parus::oir {
                     (void)check_value_id_(m, errs, iid, "inst(index idx)", x.index);
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     (void)check_value_id_(m, errs, iid, "inst(field base)", x.base);
+                } else if constexpr (std::is_same_v<T, InstDrop>) {
+                    (void)check_value_id_(m, errs, iid, "inst(drop slot)", x.slot);
+                    if (x.owner_ty == kInvalidId) {
+                        std::ostringstream oss;
+                        oss << "inst #" << iid << " has invalid drop owner type";
+                        push_error_(errs, oss.str());
+                    }
                 } else if constexpr (std::is_same_v<T, InstLoad>) {
                     (void)check_value_id_(m, errs, iid, "inst(load slot)", x.slot);
                 } else if constexpr (std::is_same_v<T, InstStore>) {

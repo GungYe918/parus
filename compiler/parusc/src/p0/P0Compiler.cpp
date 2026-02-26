@@ -1289,6 +1289,15 @@ namespace parusc::p0 {
         }
 
         parus::sir::BuildOptions bopt{};
+        bopt.bundle_enabled = opt.bundle.enabled;
+        bopt.bundle_name = opt.bundle.bundle_name;
+        bopt.current_source_norm = current_norm;
+        bopt.bundle_sources_norm = inv.bundle_sources;
+        std::sort(bopt.bundle_sources_norm.begin(), bopt.bundle_sources_norm.end());
+        bopt.bundle_sources_norm.erase(
+            std::unique(bopt.bundle_sources_norm.begin(), bopt.bundle_sources_norm.end()),
+            bopt.bundle_sources_norm.end()
+        );
         auto sir_mod = parus::sir::build_sir_module(
             ast, root, pres.sym, pres.name_resolve, tyck_res, types, bopt
         );

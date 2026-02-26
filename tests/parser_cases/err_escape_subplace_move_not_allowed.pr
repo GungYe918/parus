@@ -1,0 +1,13 @@
+field Vec2 {
+  x: i32;
+  y: i32;
+}
+
+def main() -> i32 {
+  set mut v = Vec2 {
+    x: 1i32,
+    y: 2i32,
+  };
+  set m = &&v.x;
+  return 0i32;
+}

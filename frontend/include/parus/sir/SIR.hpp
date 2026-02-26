@@ -5,6 +5,7 @@
 #include <parus/syntax/TokenKind.hpp>
 
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -407,6 +408,7 @@ namespace parus::sir {
         FuncAbi abi = FuncAbi::kParus;
 
         TypeId declared_type = k_invalid_type;
+        ValueId init = k_invalid_value; // lowered initializer expression for runtime module/bundle init
     };
 
     /// @brief `&&` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).
@@ -430,6 +432,11 @@ namespace parus::sir {
 
     class Module {
     public:
+        bool bundle_enabled = false;
+        std::string bundle_name{};
+        std::string current_source_norm{};
+        std::vector<std::string> bundle_sources_norm{};
+
         std::vector<Value> values;
         std::vector<Arg> args;
 
