@@ -1328,6 +1328,9 @@ namespace parus::oir {
                         case BinOp::Ge:  inst.data = InstConstBool{li >= ri}; break;
                         case BinOp::Eq:  inst.data = InstConstBool{li == ri}; break;
                         case BinOp::Ne:  inst.data = InstConstBool{li != ri}; break;
+                        case BinOp::LogicalAnd:
+                        case BinOp::LogicalOr:
+                            continue;
                         case BinOp::NullCoalesce: {
                             std::unordered_map<ValueId, ValueId> repl;
                             repl[inst.result] = b.lhs;
@@ -1836,6 +1839,8 @@ namespace parus::oir {
                 case BinOp::Mul:
                 case BinOp::Eq:
                 case BinOp::Ne:
+                case BinOp::LogicalAnd:
+                case BinOp::LogicalOr:
                     return true;
                 default:
                     return false;

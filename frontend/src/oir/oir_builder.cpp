@@ -428,6 +428,8 @@ namespace parus::oir {
                 case TK::kGtEq:              return std::optional<BinOp>{BinOp::Ge};
                 case TK::kEqEq:              return std::optional<BinOp>{BinOp::Eq};
                 case TK::kBangEq:            return std::optional<BinOp>{BinOp::Ne};
+                case TK::kKwAnd:             return std::optional<BinOp>{BinOp::LogicalAnd};
+                case TK::kKwOr:              return std::optional<BinOp>{BinOp::LogicalOr};
                 case TK::kQuestionQuestion:  return std::optional<BinOp>{BinOp::NullCoalesce};
                 default:                     return std::nullopt;
             }

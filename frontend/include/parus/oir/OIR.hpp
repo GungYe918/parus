@@ -59,6 +59,8 @@ namespace parus::oir {
         Ge,
         Eq,
         Ne,
+        LogicalAnd,
+        LogicalOr,
         NullCoalesce,
     };
 

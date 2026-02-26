@@ -975,6 +975,89 @@ namespace parus::passes {
                 const uint64_t begin = s.stmt_begin;
                 const uint64_t end = begin + s.stmt_count;
                 if (begin <= kids.size() && end <= kids.size()) {
+                    auto find_proto_decl_by_symbol = [&](uint32_t proto_sym) -> std::optional<ast::StmtId> {
+                        for (uint32_t psid = 0; psid < r.stmt_count; ++psid) {
+                            const auto& ps = ast.stmt((ast::StmtId)psid);
+                            if (ps.kind != ast::StmtKind::kProtoDecl) continue;
+                            if (psid >= out.stmt_to_resolved.size()) continue;
+                            const auto rid = out.stmt_to_resolved[psid];
+                            if (rid == NameResolveResult::k_invalid_resolved) continue;
+                            if (rid >= out.resolved.size()) continue;
+                            if (out.resolved[rid].sym == proto_sym) {
+                                return (ast::StmtId)psid;
+                            }
+                        }
+                        return std::nullopt;
+                    };
+
+                    auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+                        if (raw.empty()) return std::nullopt;
+
+                        if (auto proto_sym = lookup_symbol_(sym, raw, namespace_stack, import_aliases)) {
+                            if (auto psid = find_proto_decl_by_symbol(*proto_sym)) {
+                                return psid;
+                            }
+                        }
+
+                        std::string tail(raw);
+                        if (const size_t pos = tail.rfind("::"); pos != std::string::npos) {
+                            tail = tail.substr(pos + 2);
+                        }
+                        if (tail.empty()) return std::nullopt;
+
+                        ast::StmtId found = ast::k_invalid_stmt;
+                        bool ambiguous = false;
+                        for (uint32_t psid = 0; psid < r.stmt_count; ++psid) {
+                            const auto& ps = ast.stmt((ast::StmtId)psid);
+                            if (ps.kind != ast::StmtKind::kProtoDecl) continue;
+                            if (ps.name != tail) continue;
+                            if (found == ast::k_invalid_stmt) {
+                                found = (ast::StmtId)psid;
+                            } else {
+                                ambiguous = true;
+                                break;
+                            }
+                        }
+                        if (!ambiguous && found != ast::k_invalid_stmt) return found;
+                        return std::nullopt;
+                    };
+
+                    auto predeclare_proto_defaults = [&](auto&& self,
+                                                         ast::StmtId proto_sid,
+                                                         std::unordered_set<ast::StmtId>& visiting) -> void {
+                        if (!is_valid_stmt_id_(r, proto_sid)) return;
+                        if (!visiting.insert(proto_sid).second) return;
+                        const auto& ps = ast.stmt(proto_sid);
+                        if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+                        const auto& p_refs = ast.path_refs();
+                        const uint32_t ib = ps.decl_path_ref_begin;
+                        const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+                        if (ib <= p_refs.size() && ie <= p_refs.size()) {
+                            for (uint32_t i = ib; i < ie; ++i) {
+                                const auto& pr = p_refs[i];
+                                const std::string base_path = path_join_(ast, pr.path_begin, pr.path_count);
+                                if (auto base_sid = resolve_proto_sid(base_path)) {
+                                    self(self, *base_sid, visiting);
+                                }
+                            }
+                        }
+
+                        const auto& p_kids = ast.stmt_children();
+                        const uint64_t mb = ps.stmt_begin;
+                        const uint64_t me = mb + ps.stmt_count;
+                        if (mb <= p_kids.size() && me <= p_kids.size()) {
+                            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
+                                const ast::StmtId msid = p_kids[ps.stmt_begin + i];
+                                if (!is_valid_stmt_id_(r, msid)) continue;
+                                const auto& ms = ast.stmt(msid);
+                                if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                                if (ms.a == ast::k_invalid_stmt) continue; // signature-only member
+                                (void)declare_(sema::SymbolKind::kFn, ms.name, ms.type, ms.span, sym, bag, opt);
+                            }
+                        }
+                    };
+
                     // predeclare class member functions for same-class forward references.
                     for (uint32_t i = 0; i < s.stmt_count; ++i) {
                         const ast::StmtId msid = kids[s.stmt_begin + i];
@@ -983,6 +1066,22 @@ namespace parus::passes {
                         if (ms.kind != ast::StmtKind::kFnDecl || ms.name.empty()) continue;
                         (void)declare_(sema::SymbolKind::kFn, ms.name, ms.type, ms.span, sym, bag, opt);
                     }
+
+                    // predeclare proto default members so class member bodies can call them unqualified.
+                    const auto& refs = ast.path_refs();
+                    const uint32_t pb = s.decl_path_ref_begin;
+                    const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+                    if (pb <= refs.size() && pe <= refs.size()) {
+                        std::unordered_set<ast::StmtId> visiting;
+                        for (uint32_t i = pb; i < pe; ++i) {
+                            const auto& pr = refs[i];
+                            const std::string proto_path = path_join_(ast, pr.path_begin, pr.path_count);
+                            if (auto proto_sid = resolve_proto_sid(proto_path)) {
+                                predeclare_proto_defaults(predeclare_proto_defaults, *proto_sid, visiting);
+                            }
+                        }
+                    }
+
                     for (uint32_t i = 0; i < s.stmt_count; ++i) {
                         walk_stmt(ast, r, kids[s.stmt_begin + i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
@@ -1270,6 +1369,35 @@ namespace parus::passes {
                     se.is_external = false;
                 }
             }
+
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = s.stmt_begin;
+            const uint64_t end = begin + s.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                    const ast::StmtId msid = kids[s.stmt_begin + i];
+                    if (!is_valid_stmt_id_(r, msid)) continue;
+                    const auto& ms = ast.stmt(msid);
+                    if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                    if (ms.a == ast::k_invalid_stmt) continue; // signature-only proto member is not callable path symbol
+
+                    std::string mqname = qname;
+                    if (!mqname.empty()) mqname += "::";
+                    mqname += std::string(ms.name);
+                    if (!sym.lookup(mqname)) {
+                        auto ins = declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
+                        if (ins.ok && !ins.is_duplicate) {
+                            auto& se = sym.symbol_mut(ins.symbol_id);
+                            se.decl_file_id = ms.span.file_id;
+                            se.decl_bundle_name = opt.current_bundle_name;
+                            se.decl_module_head = opt.current_module_head;
+                            se.decl_source_dir_norm = opt.current_source_dir_norm;
+                            se.is_export = s.is_export;
+                            se.is_external = false;
+                        }
+                    }
+                }
+            }
             return;
         }
 
@@ -1285,6 +1413,34 @@ namespace parus::passes {
                     se.decl_source_dir_norm = opt.current_source_dir_norm;
                     se.is_export = s.is_export;
                     se.is_external = false;
+                }
+            }
+
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = s.stmt_begin;
+            const uint64_t end = begin + s.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                    const ast::StmtId msid = kids[s.stmt_begin + i];
+                    if (!is_valid_stmt_id_(r, msid)) continue;
+                    const auto& ms = ast.stmt(msid);
+                    if (ms.kind != ast::StmtKind::kFnDecl) continue;
+
+                    std::string mqname = qname;
+                    if (!mqname.empty()) mqname += "::";
+                    mqname += std::string(ms.name);
+                    if (!sym.lookup(mqname)) {
+                        auto ins = declare_(sema::SymbolKind::kFn, mqname, ms.type, ms.span, sym, bag, opt);
+                        if (ins.ok && !ins.is_duplicate) {
+                            auto& se = sym.symbol_mut(ins.symbol_id);
+                            se.decl_file_id = ms.span.file_id;
+                            se.decl_bundle_name = opt.current_bundle_name;
+                            se.decl_module_head = opt.current_module_head;
+                            se.decl_source_dir_norm = opt.current_source_dir_norm;
+                            se.is_export = s.is_export;
+                            se.is_external = false;
+                        }
+                    }
                 }
             }
             return;

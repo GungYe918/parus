@@ -665,6 +665,59 @@ namespace {
         return ok;
     }
 
+    /// @brief class 생성식 `A(...)`가 OIR에서 `A::init(...)` direct call로 lowering되는지 검사한다.
+    static bool test_class_ctor_call_lowers_to_init_call_ok() {
+        const std::string src = R"(
+            class User {
+                init() = default;
+
+                def id(self) -> i32 {
+                    return 5i32;
+                }
+            }
+
+            def main() -> i32 {
+                set u = User();
+                return u.id();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "class ctor lowering seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "class ctor lowering seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "class ctor lowering seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for class ctor call source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for class ctor call source");
+        if (!ok) return false;
+
+        bool has_init_direct_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& f = oir.mod.funcs[c.direct_callee];
+            const bool name_match =
+                (f.name.find("User::init") != std::string::npos) ||
+                (f.name.find("User") != std::string::npos && f.name.find("init") != std::string::npos);
+            const bool source_match = (f.source_name == "init");
+            if (name_match || source_match) {
+                has_init_direct_call = true;
+                break;
+            }
+        }
+        ok &= require_(has_init_direct_call, "constructor call must lower to direct User::init call");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -684,6 +737,7 @@ int main() {
         {"oir_gvn_cse_ok", test_oir_gvn_cse_ok},
         {"oir_loop_canonical_and_licm_ok", test_oir_loop_canonical_and_licm_ok},
         {"class_and_proto_default_member_lowering_ok", test_class_and_proto_default_member_lowering_ok},
+        {"class_ctor_call_lowers_to_init_call_ok", test_class_ctor_call_lowers_to_init_call_ok},
     };
 
     int failed = 0;

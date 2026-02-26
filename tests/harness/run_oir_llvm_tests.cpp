@@ -927,6 +927,45 @@ namespace {
         return ok;
     }
 
+    /// @brief class 생성식 `A(...)`가 LLVM IR에서 `A::init` 호출로 내려가는지 검사한다.
+    static bool test_class_ctor_call_llvm_init_symbol_() {
+        const std::string src = R"(
+            class User {
+                init() = default;
+
+                def id(self) -> i32 {
+                    return 1i32;
+                }
+            }
+
+            def main() -> i32 {
+                set u = User();
+                return u.id();
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "class ctor source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for class ctor source must succeed");
+        const bool has_init_symbol =
+            lowered.llvm_ir.find("$User$init$") != std::string::npos ||
+            (lowered.llvm_ir.find("User") != std::string::npos &&
+             lowered.llvm_ir.find("init") != std::string::npos);
+        ok &= require_(has_init_symbol, "LLVM IR must include class init symbol fragment");
+        ok &= require_(lowered.llvm_ir.find("call void @") != std::string::npos &&
+                       lowered.llvm_ir.find("init") != std::string::npos,
+                       "constructor expression must emit call to class init symbol");
+        return ok;
+    }
+
     /// @brief `tests/oir_cases`의 케이스를 순회하며 OIR->LLVM lowering 경로를 일괄 검증한다.
     static bool test_oir_case_directory() {
 #ifndef PARUS_OIR_CASE_DIR
@@ -1009,6 +1048,7 @@ int main() {
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
+        {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

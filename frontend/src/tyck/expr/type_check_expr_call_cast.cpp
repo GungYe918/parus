@@ -81,6 +81,10 @@ namespace parus::tyck {
         std::string callee_name;
         bool is_dot_method_call = false;
         bool is_explicit_acts_path_call = false;
+        bool is_ctor_call = false;
+        ty::TypeId ctor_owner_type = ty::kInvalidType;
+        ty::TypeId dot_owner_type = ty::kInvalidType;
+        bool dot_needs_self_normalization = false;
         std::vector<ast::StmtId> overload_decl_ids;
 
         struct ExplicitActsPath {
@@ -113,6 +117,62 @@ namespace parus::tyck {
             return true;
         };
 
+        auto normalize_self_for_owner = [&](auto&& self, ty::TypeId t, ty::TypeId owner_t) -> ty::TypeId {
+            if (t == ty::kInvalidType || owner_t == ty::kInvalidType) return t;
+            const auto& tt = types_.get(t);
+            switch (tt.kind) {
+                case ty::Kind::kNamedUser:
+                    if (types_.to_string(t) == "Self") return owner_t;
+                    return t;
+                case ty::Kind::kBorrow: {
+                    const ty::TypeId elem = self(self, tt.elem, owner_t);
+                    return types_.make_borrow(elem, tt.borrow_is_mut);
+                }
+                case ty::Kind::kPtr: {
+                    const ty::TypeId elem = self(self, tt.elem, owner_t);
+                    return types_.make_ptr(elem, tt.ptr_is_mut);
+                }
+                case ty::Kind::kEscape: {
+                    const ty::TypeId elem = self(self, tt.elem, owner_t);
+                    return types_.make_escape(elem);
+                }
+                case ty::Kind::kOptional: {
+                    const ty::TypeId elem = self(self, tt.elem, owner_t);
+                    return types_.make_optional(elem);
+                }
+                case ty::Kind::kArray: {
+                    const ty::TypeId elem = self(self, tt.elem, owner_t);
+                    return types_.make_array(elem, tt.array_has_size, tt.array_size);
+                }
+                case ty::Kind::kFn: {
+                    const uint32_t param_count = tt.param_count;
+                    std::vector<ty::TypeId> params;
+                    std::vector<std::string_view> labels;
+                    std::vector<uint8_t> has_default_flags;
+                    params.reserve(param_count);
+                    labels.reserve(param_count);
+                    has_default_flags.reserve(param_count);
+
+                    for (uint32_t pi = 0; pi < param_count; ++pi) {
+                        params.push_back(self(self, types_.fn_param_at(t, pi), owner_t));
+                        labels.push_back(types_.fn_param_label_at(t, pi));
+                        has_default_flags.push_back(types_.fn_param_has_default_at(t, pi) ? 1u : 0u);
+                    }
+                    const ty::TypeId ret = self(self, tt.ret, owner_t);
+                    return types_.make_fn(
+                        ret,
+                        params.empty() ? nullptr : params.data(),
+                        param_count,
+                        types_.fn_positional_count(t),
+                        labels.empty() ? nullptr : labels.data(),
+                        has_default_flags.empty() ? nullptr : has_default_flags.data()
+                    );
+                }
+                default:
+                    return t;
+            }
+        };
+
         // ------------------------------------------------------------
         // 1) method call fast-path: `value.ident(...)`
         // ------------------------------------------------------------
@@ -131,56 +191,111 @@ namespace parus::tyck {
                             owner_t = ot.elem;
                         }
                     }
-                    const ActiveActsSelection* bound_selection = nullptr;
-                    const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
-                    if (recv_expr.kind == ast::ExprKind::kIdent) {
-                        std::string recv_lookup = std::string(recv_expr.text);
-                        if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
-                            recv_lookup = *rewritten;
+
+                    auto resolve_class_owner_type = [&](ty::TypeId t) -> ty::TypeId {
+                        if (t == ty::kInvalidType) return t;
+                        if (class_effective_method_map_.find(t) != class_effective_method_map_.end()) {
+                            return t;
                         }
-                        if (auto recv_sid = lookup_symbol_(recv_lookup)) {
-                            bound_selection = lookup_symbol_acts_selection_(*recv_sid);
+                        const auto& tt = types_.get(t);
+                        if (tt.kind != ty::Kind::kNamedUser) return t;
+                        if (auto sid = lookup_symbol_(types_.to_string(t))) {
+                            const auto& ss = sym_.symbol(*sid);
+                            if (ss.kind == sema::SymbolKind::kType &&
+                                class_effective_method_map_.find(ss.declared_type) != class_effective_method_map_.end()) {
+                                return ss.declared_type;
+                            }
+                        }
+                        return t;
+                    };
+
+                    const ty::TypeId class_owner_t = resolve_class_owner_type(owner_t);
+                    bool class_proto_method_named = false;
+                    if (class_owner_t != ty::kInvalidType) {
+                        auto cit = class_effective_method_map_.find(class_owner_t);
+                        if (cit != class_effective_method_map_.end()) {
+                            auto mit = cit->second.find(std::string(rhs.text));
+                            if (mit != cit->second.end() && !mit->second.empty()) {
+                                class_proto_method_named = true;
+
+                                bool has_self_receiver_candidate = false;
+                                for (const auto sid : mit->second) {
+                                    if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) continue;
+                                    const auto& m = ast_.stmt(sid);
+                                    if (m.kind != ast::StmtKind::kFnDecl) continue;
+                                    if (m.param_count == 0) continue;
+                                    const auto& p0 = ast_.params()[m.param_begin + 0];
+                                    if (!p0.is_self) continue;
+                                    has_self_receiver_candidate = true;
+                                    overload_decl_ids.push_back(sid);
+                                }
+
+                                if (has_self_receiver_candidate) {
+                                    is_dot_method_call = true;
+                                    dot_owner_type = class_owner_t;
+                                    dot_needs_self_normalization = true;
+                                    callee_name = types_.to_string(class_owner_t) + "." + std::string(rhs.text);
+                                } else {
+                                    diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
+                                    err_(rhs.span, "dot call requires self receiver on class/proto method");
+                                    check_all_arg_exprs_only();
+                                    return types_.error();
+                                }
+                            }
                         }
                     }
 
-                    const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text, bound_selection);
-                    bool any_method_named = false;
-                    if (owner_t != ty::kInvalidType) {
-                        auto oit = acts_default_method_map_.find(owner_t);
-                        if (oit != acts_default_method_map_.end()) {
-                            auto mit = oit->second.find(std::string(rhs.text));
-                            any_method_named = (mit != oit->second.end() && !mit->second.empty());
+                    if (!is_dot_method_call && !class_proto_method_named) {
+                        const ActiveActsSelection* bound_selection = nullptr;
+                        const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
+                        if (recv_expr.kind == ast::ExprKind::kIdent) {
+                            std::string recv_lookup = std::string(recv_expr.text);
+                            if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
+                                recv_lookup = *rewritten;
+                            }
+                            if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                                bound_selection = lookup_symbol_acts_selection_(*recv_sid);
+                            }
                         }
-                    }
 
-                    bool has_self_receiver_candidate = false;
-                    for (const auto& md : selected_methods) {
-                        if (md.fn_sid == ast::k_invalid_stmt) continue;
-                        if (!md.receiver_is_self) continue;
-                        has_self_receiver_candidate = true;
-                        overload_decl_ids.push_back(md.fn_sid);
-                    }
+                        const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text, bound_selection);
+                        bool any_method_named = false;
+                        if (owner_t != ty::kInvalidType) {
+                            auto oit = acts_default_method_map_.find(owner_t);
+                            if (oit != acts_default_method_map_.end()) {
+                                auto mit = oit->second.find(std::string(rhs.text));
+                                any_method_named = (mit != oit->second.end() && !mit->second.empty());
+                            }
+                        }
 
-                    if (has_self_receiver_candidate) {
-                        is_dot_method_call = true;
-                        callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
-                    } else if (any_method_named && !selected_methods.empty()) {
-                        std::string msg =
-                            "dot method call is only allowed for acts members with a self receiver (use path call for non-self acts functions)";
-                        diag_(diag::Code::kTypeErrorGeneric, rhs.span, msg);
-                        err_(rhs.span, msg);
-                        check_all_arg_exprs_only();
-                        return types_.error();
-                    } else if (any_method_named && selected_methods.empty()) {
-                        std::ostringstream oss;
-                        oss << "no active acts method '" << rhs.text
-                            << "' for type " << types_.to_string(owner_t)
-                            << " (select with 'use " << types_.to_string(owner_t)
-                            << " with acts(Name);' or use default)";
-                        diag_(diag::Code::kTypeErrorGeneric, rhs.span, oss.str());
-                        err_(rhs.span, oss.str());
-                        check_all_arg_exprs_only();
-                        return types_.error();
+                        bool has_self_receiver_candidate = false;
+                        for (const auto& md : selected_methods) {
+                            if (md.fn_sid == ast::k_invalid_stmt) continue;
+                            if (!md.receiver_is_self) continue;
+                            has_self_receiver_candidate = true;
+                            overload_decl_ids.push_back(md.fn_sid);
+                        }
+
+                        if (has_self_receiver_candidate) {
+                            is_dot_method_call = true;
+                            dot_owner_type = owner_t;
+                            callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                        } else if (any_method_named && !selected_methods.empty()) {
+                            diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
+                            err_(rhs.span, "dot call requires self receiver on acts method");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        } else if (any_method_named && selected_methods.empty()) {
+                            std::ostringstream oss;
+                            oss << "no active acts method '" << rhs.text
+                                << "' for type " << types_.to_string(owner_t)
+                                << " (select with 'use " << types_.to_string(owner_t)
+                                << " with acts(Name);' or use default)";
+                            diag_(diag::Code::kTypeErrorGeneric, rhs.span, oss.str());
+                            err_(rhs.span, oss.str());
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
                     }
                 }
             }
@@ -301,35 +416,77 @@ namespace parus::tyck {
             }
 
             if (!is_explicit_acts_path_call) {
-                callee_t = check_expr_(e.a);
-                const auto& ct = types_.get(callee_t);
-                if (ct.kind != ty::Kind::kFn) {
-                    diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
-                    err_(e.span, "call target is not a function");
-                    check_all_arg_exprs_only();
-                    return types_.error();
-                }
+                if (callee_expr.kind == ast::ExprKind::kIdent) {
+                    std::string lookup_name = std::string(callee_expr.text);
+                    if (auto rewritten = rewrite_imported_path_(lookup_name)) {
+                        lookup_name = *rewritten;
+                    }
 
-                fallback_ret = ct.ret;
-                callee_param_count = ct.param_count;
-            }
+                    callee_name = lookup_name;
+                    if (auto sid = lookup_symbol_(lookup_name)) {
+                        const auto& sym = sym_.symbol(*sid);
+                        if (sym.kind == sema::SymbolKind::kType &&
+                            class_decl_by_name_.find(sym.name) != class_decl_by_name_.end()) {
+                            is_ctor_call = true;
+                            ctor_owner_type = sym.declared_type;
+                            fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
+                            callee_name = sym.name;
 
-            if (!is_explicit_acts_path_call && callee_expr.kind == ast::ExprKind::kIdent) {
-                std::string lookup_name = std::string(callee_expr.text);
-                if (auto rewritten = rewrite_imported_path_(lookup_name)) {
-                    lookup_name = *rewritten;
-                }
-
-                callee_name = lookup_name;
-                if (auto sid = lookup_symbol_(lookup_name)) {
-                    const auto& sym = sym_.symbol(*sid);
-                    if (sym.kind == sema::SymbolKind::kFn) {
-                        callee_name = sym.name;
-                        auto it = fn_decl_by_name_.find(callee_name);
-                        if (it != fn_decl_by_name_.end()) {
-                            overload_decl_ids = it->second;
+                            std::string init_qname = sym.name;
+                            init_qname += "::init";
+                            auto fit = fn_decl_by_name_.find(init_qname);
+                            if (fit != fn_decl_by_name_.end()) {
+                                overload_decl_ids = fit->second;
+                            }
+                            if (overload_decl_ids.empty()) {
+                                diag_(diag::Code::kClassCtorMissingInit, callee_expr.span, sym.name);
+                                err_(callee_expr.span, "class constructor call requires init overload");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                        } else if (sym.kind == sema::SymbolKind::kFn) {
+                            callee_name = sym.name;
+                            auto it = fn_decl_by_name_.find(callee_name);
+                            if (it != fn_decl_by_name_.end()) {
+                                overload_decl_ids = it->second;
+                            }
                         }
                     }
+                }
+
+                if (!is_ctor_call) {
+                    callee_t = check_expr_(e.a);
+                    const auto& ct = types_.get(callee_t);
+                    if (ct.kind != ty::Kind::kFn) {
+                        diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
+                        err_(e.span, "call target is not a function");
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    fallback_ret = ct.ret;
+                    callee_param_count = ct.param_count;
+                }
+            }
+
+            if (!is_explicit_acts_path_call &&
+                !is_ctor_call &&
+                callee_expr.kind == ast::ExprKind::kIdent &&
+                std::string_view(callee_expr.text).find("::") != std::string_view::npos &&
+                !overload_decl_ids.empty()) {
+                bool has_removed_target = false;
+                for (const auto sid : overload_decl_ids) {
+                    if (class_member_fn_sid_set_.find(sid) != class_member_fn_sid_set_.end() ||
+                        proto_member_fn_sid_set_.find(sid) != proto_member_fn_sid_set_.end()) {
+                        has_removed_target = true;
+                        break;
+                    }
+                }
+                if (has_removed_target) {
+                    diag_(diag::Code::kClassProtoPathCallRemoved, callee_expr.span, callee_expr.text);
+                    err_(callee_expr.span, "class/proto path member call is removed");
+                    check_all_arg_exprs_only();
+                    return types_.error();
                 }
             }
         }
@@ -619,11 +776,19 @@ namespace parus::tyck {
 
             Candidate c{};
             c.decl_id = sid;
-            c.ret = (def.fn_ret != ty::kInvalidType)
+            ty::TypeId resolved_ret = (def.fn_ret != ty::kInvalidType)
                 ? def.fn_ret
                 : ((def.type != ty::kInvalidType && types_.get(def.type).kind == ty::Kind::kFn)
                     ? types_.get(def.type).ret
                     : fallback_ret);
+            if (is_dot_method_call && dot_needs_self_normalization && dot_owner_type != ty::kInvalidType) {
+                resolved_ret = normalize_self_for_owner(normalize_self_for_owner, resolved_ret, dot_owner_type);
+            }
+            if (is_ctor_call && ctor_owner_type != ty::kInvalidType) {
+                c.ret = ctor_owner_type;
+            } else {
+                c.ret = resolved_ret;
+            }
 
             uint32_t pos_cnt = def.positional_param_count;
             if (pos_cnt > def.param_count) pos_cnt = def.param_count;
@@ -649,6 +814,9 @@ namespace parus::tyck {
                 info.decl_index = i;
                 info.name = std::string(p.name);
                 info.type = (p.type == ty::kInvalidType) ? types_.error() : p.type;
+                if (is_dot_method_call && dot_needs_self_normalization && dot_owner_type != ty::kInvalidType) {
+                    info.type = normalize_self_for_owner(normalize_self_for_owner, info.type, dot_owner_type);
+                }
                 info.has_default = p.has_default;
                 info.span = p.span;
 

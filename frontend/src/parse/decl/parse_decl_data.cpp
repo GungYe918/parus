@@ -575,6 +575,147 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
+    /// @brief class 전용 lifecycle 멤버:
+    /// - init(...) { ... }
+    /// - init() = default;
+    /// - deinit() { ... }
+    /// - deinit() = default;
+    /// 일반 def와 달리 return type(`->`)을 쓰지 않는다.
+    ast::StmtId Parser::parse_decl_class_lifecycle_member() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        const bool is_init = is_context_keyword(start_tok, "init");
+        const bool is_deinit = is_context_keyword(start_tok, "deinit");
+        if (!is_init && !is_deinit) {
+            diag_report(diag::Code::kExpectedToken, start_tok.span, "init/deinit");
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = start_tok.span;
+            return ast_.add_stmt(s);
+        }
+        cursor_.bump(); // init | deinit
+
+        uint32_t param_begin = 0;
+        uint32_t param_count = 0;
+        uint32_t positional_count = 0;
+        bool has_named_group = false;
+        parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+        for (uint32_t i = 0; i < param_count; ++i) {
+            const auto& p = ast_.params()[param_begin + i];
+            if (p.is_self) {
+                diag_report(diag::Code::kClassLifecycleSelfNotAllowed, p.span);
+            }
+        }
+
+        if (cursor_.at(K::kArrow)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "init()/deinit() must not declare return type");
+            cursor_.bump();
+            (void)parse_type(); // recovery
+        }
+
+        if (is_deinit && param_count != 0) {
+            diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                        "deinit() must not declare parameters in v0");
+        }
+
+        // call-shape metadata는 일반 함수와 동일하게 유지한다.
+        std::vector<ty::TypeId> pts;
+        std::vector<std::string_view> labels;
+        std::vector<uint8_t> has_default_flags;
+        pts.reserve(param_count);
+        labels.reserve(param_count);
+        has_default_flags.reserve(param_count);
+        for (uint32_t i = 0; i < param_count; ++i) {
+            const auto& p = ast_.params()[param_begin + i];
+            pts.push_back(p.type);
+            labels.push_back(p.name);
+            has_default_flags.push_back(p.has_default ? 1u : 0u);
+        }
+
+        const ty::TypeId unit_ty = types_.builtin(ty::Builtin::kUnit);
+        const ty::TypeId sig_id = types_.make_fn(
+            unit_ty,
+            pts.empty() ? nullptr : pts.data(),
+            static_cast<uint32_t>(pts.size()),
+            positional_count,
+            labels.empty() ? nullptr : labels.data(),
+            has_default_flags.empty() ? nullptr : has_default_flags.data()
+        );
+
+        ast::StmtId body = ast::k_invalid_stmt;
+        Span end_sp = cursor_.prev().span;
+        bool is_defaulted = false;
+        if (cursor_.eat(K::kAssign)) {
+            is_defaulted = true;
+
+            if (!cursor_.eat(K::kKwDefault)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "default");
+                if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "default") {
+                    cursor_.bump();
+                }
+            }
+
+            if (param_count != 0) {
+                diag_report(diag::Code::kClassLifecycleDefaultParamNotAllowed, start_tok.span);
+            }
+
+            ast::Stmt empty{};
+            empty.kind = ast::StmtKind::kBlock;
+            empty.span = cursor_.prev().span;
+            empty.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+            empty.stmt_count = 0;
+            body = ast_.add_stmt(empty);
+
+            end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        } else {
+            body = parse_stmt_required_block(is_init ? "init" : "deinit");
+            end_sp = ast_.stmt(body).span;
+            if (cursor_.at(K::kSemicolon)) {
+                end_sp = cursor_.bump().span;
+            }
+        }
+
+        if (is_defaulted && is_deinit && param_count != 0) {
+            diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                        "deinit() = default must not declare parameters");
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kFnDecl;
+        s.span = span_join(start_tok.span, end_sp);
+        s.name = is_init ? std::string_view("init") : std::string_view("deinit");
+        s.type = sig_id;
+        s.fn_ret = unit_ty;
+        s.fn_ret_type_node = ast::k_invalid_type_node;
+        s.a = body;
+
+        s.is_export = false;
+        s.is_extern = false;
+        s.link_abi = ast::LinkAbi::kNone;
+        s.fn_mode = ast::FnMode::kNone;
+        s.is_throwing = false;
+        s.is_pure = false;
+        s.is_comptime = false;
+        s.is_commit = false;
+        s.is_recast = false;
+        s.attr_begin = 0;
+        s.attr_count = 0;
+
+        s.param_begin = param_begin;
+        s.param_count = param_count;
+        s.positional_param_count = positional_count;
+        s.has_named_group = has_named_group;
+        s.fn_is_proto_sig = false;
+        s.fn_generic_param_begin = 0;
+        s.fn_generic_param_count = 0;
+        s.fn_constraint_begin = 0;
+        s.fn_constraint_count = 0;
+        return ast_.add_stmt(s);
+    }
+
     /// @brief `class Name [: ProtoA, ...] { let ...; def ... }`
     ast::StmtId Parser::parse_decl_class() {
         using K = syntax::TokenKind;
@@ -647,6 +788,14 @@ namespace parus {
             if (cursor_.eat(K::kSemicolon)) continue;
 
             const auto k = cursor_.peek().kind;
+            const bool lifecycle_start =
+                is_context_keyword(cursor_.peek(), "init") ||
+                is_context_keyword(cursor_.peek(), "deinit");
+            if (lifecycle_start) {
+                members.push_back(parse_decl_class_lifecycle_member());
+                continue;
+            }
+
             const bool fn_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
             if (fn_start) {
                 ast::StmtId mid = parse_decl_fn();

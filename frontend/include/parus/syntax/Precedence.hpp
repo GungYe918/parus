@@ -48,7 +48,6 @@ namespace parus::syntax {
                 return InfixInfo{20, Assoc::kLeft};
 
             // logical or
-            case TokenKind::kPipePipe:
             case TokenKind::kKwOr:
                 return InfixInfo{30, Assoc::kLeft};
 

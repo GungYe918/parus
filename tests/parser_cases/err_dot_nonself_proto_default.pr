@@ -1,0 +1,14 @@
+proto Arithmetic {
+  def add(a: i32, b: i32) -> i32 {
+    return a + b;
+  }
+};
+
+class A : Arithmetic {
+  init() = default;
+}
+
+def main() -> i32 {
+  set a = A();
+  return a.add(1i32, 2i32);
+}

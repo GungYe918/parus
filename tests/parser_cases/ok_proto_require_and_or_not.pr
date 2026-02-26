@@ -1,0 +1,13 @@
+proto BoolReq {
+  def f(self) -> i32;
+} with require(true and not false or true);
+
+class X : BoolReq {
+  def f(self) -> i32 {
+    return 1i32;
+  }
+}
+
+def main() -> i32 {
+  return 0i32;
+}

@@ -1374,6 +1374,15 @@ namespace parus::backend::aot {
                                 return;
                             }
 
+                            if (x.op == B::LogicalAnd || x.op == B::LogicalOr) {
+                                const auto lhs = coerce_value_(os, x.lhs, "i1");
+                                const auto rhs = coerce_value_(os, x.rhs, "i1");
+                                const char* op = (x.op == B::LogicalAnd) ? "and" : "or";
+                                os << "  " << vref_(inst.result) << " = " << op << " i1 "
+                                   << lhs << ", " << rhs << "\n";
+                                return;
+                            }
+
                             if (x.op == B::Lt || x.op == B::Le || x.op == B::Gt ||
                                 x.op == B::Ge || x.op == B::Eq || x.op == B::Ne) {
                                 const auto lty = value_ty_(x.lhs);

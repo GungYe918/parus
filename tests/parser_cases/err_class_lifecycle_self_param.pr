@@ -1,0 +1,9 @@
+class A {
+  init(self) {
+    return;
+  }
+}
+
+def main() -> i32 {
+  return 0i32;
+}

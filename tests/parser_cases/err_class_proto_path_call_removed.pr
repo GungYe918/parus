@@ -1,0 +1,17 @@
+proto Identifiable {
+  def id(self) -> i32 {
+    return 1i32;
+  }
+};
+
+class A : Identifiable {
+  init() = default;
+}
+
+def main() -> i32 {
+  set a = A();
+  if (Identifiable::id(self: a) == 1i32) {
+    return 0i32;
+  }
+  return 1i32;
+}

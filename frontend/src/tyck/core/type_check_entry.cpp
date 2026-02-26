@@ -38,10 +38,15 @@ namespace parus::tyck {
         acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
         fn_qualified_name_by_stmt_.clear();
+        class_effective_method_map_.clear();
         namespace_stack_.clear();
         import_alias_to_path_.clear();
         known_namespace_paths_.clear();
         import_alias_scope_stack_.clear();
+        class_decl_by_name_.clear();
+        class_decl_by_type_.clear();
+        class_member_fn_sid_set_.clear();
+        proto_member_fn_sid_set_.clear();
         block_depth_ = 0;
 
         // sym_ 초기화:
@@ -90,9 +95,7 @@ namespace parus::tyck {
         //   거의 모든 TypeNotCallable 증상의 원인이었으므로 제거하고,
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
-        if (seed_sym_ == nullptr) {
-            first_pass_collect_top_level_(program_stmt);
-        }
+        first_pass_collect_top_level_(program_stmt);
 
         // ---------------------------------------------------------
         // PASS 2: 실제 타입체크
@@ -621,6 +624,11 @@ namespace parus::tyck {
         fn_qualified_name_by_stmt_.clear();
         proto_decl_by_name_.clear();
         proto_qualified_name_by_stmt_.clear();
+        class_decl_by_name_.clear();
+        class_decl_by_type_.clear();
+        class_effective_method_map_.clear();
+        class_member_fn_sid_set_.clear();
+        proto_member_fn_sid_set_.clear();
         import_alias_to_path_.clear();
         acts_named_decl_by_owner_and_name_.clear();
 
@@ -810,10 +818,20 @@ namespace parus::tyck {
                     ast_.stmt_mut(sid).type = field_ty;
                 }
 
-                auto ins = sym_.insert(sema::SymbolKind::kField, qname, field_ty, s.span);
-                if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (field): " + qname);
-                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kField) {
+                        err_(s.span, "duplicate symbol (field): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (field_ty != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, field_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kField, qname, field_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (field): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
                 }
 
                 if (field_ty != ty::kInvalidType) {
@@ -837,10 +855,20 @@ namespace parus::tyck {
                     ast_.stmt_mut(sid).type = proto_ty;
                 }
 
-                auto ins = sym_.insert(sema::SymbolKind::kType, qname, proto_ty, s.span);
-                if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (proto): " + qname);
-                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kType) {
+                        err_(s.span, "duplicate symbol (proto): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (proto_ty != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, proto_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, proto_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (proto): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
                 }
 
                 const auto& kids = ast_.stmt_children();
@@ -852,11 +880,34 @@ namespace parus::tyck {
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        proto_member_fn_sid_set_.insert(msid);
 
                         std::string mqname = qname;
                         if (!mqname.empty()) mqname += "::";
                         mqname += std::string(ms.name);
                         fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+
+                        if (ms.a != ast::k_invalid_stmt) {
+                            const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                            if (auto existing = sym_.lookup_in_current(qfn)) {
+                                const auto& existing_sym = sym_.symbol(*existing);
+                                if (existing_sym.kind != sema::SymbolKind::kFn) {
+                                    err_(ms.span, "duplicate symbol (proto default function): " + qfn);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                } else {
+                                    (void)sym_.update_declared_type(*existing, ms.type);
+                                    fn_decl_by_name_[qfn].push_back(msid);
+                                }
+                            } else {
+                                auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, ms.type, ms.span);
+                                if (!fins.ok && fins.is_duplicate) {
+                                    err_(ms.span, "duplicate symbol (proto default function): " + qfn);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                } else {
+                                    fn_decl_by_name_[qfn].push_back(msid);
+                                }
+                            }
+                        }
                     }
                 }
                 return;
@@ -869,11 +920,25 @@ namespace parus::tyck {
                     class_ty = types_.intern_ident(qname);
                     ast_.stmt_mut(sid).type = class_ty;
                 }
+                class_decl_by_name_[qname] = sid;
+                if (class_ty != ty::kInvalidType) {
+                    class_decl_by_type_[class_ty] = sid;
+                }
 
-                auto ins = sym_.insert(sema::SymbolKind::kType, qname, class_ty, s.span);
-                if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (class): " + qname);
-                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kType) {
+                        err_(s.span, "duplicate symbol (class): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (class_ty != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, class_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, class_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (class): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
                 }
 
                 auto normalize_self_type = [&](ty::TypeId t) -> ty::TypeId {
@@ -900,6 +965,7 @@ namespace parus::tyck {
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        class_member_fn_sid_set_.insert(msid);
 
                         for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
                             auto& p = ast_.params_mut()[ms.param_begin + pi];
@@ -936,6 +1002,30 @@ namespace parus::tyck {
                         if (!mqname.empty()) mqname += "::";
                         mqname += std::string(mm.name);
                         fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+
+                        const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                        if (auto existing = sym_.lookup_in_current(qfn)) {
+                            const auto& existing_sym = sym_.symbol(*existing);
+                            if (existing_sym.kind != sema::SymbolKind::kFn) {
+                                err_(mm.span, "duplicate symbol (class member function): " + qfn);
+                                diag_(diag::Code::kDuplicateDecl, mm.span, qfn);
+                            } else {
+                                (void)sym_.update_declared_type(*existing, mm.type);
+                                fn_decl_by_name_[qfn].push_back(msid);
+                            }
+                        } else {
+                            auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, mm.type, mm.span);
+                            if (!fins.ok && fins.is_duplicate) {
+                                err_(mm.span, "duplicate symbol (class member function): " + qfn);
+                                diag_(diag::Code::kDuplicateDecl, mm.span, qfn);
+                            } else {
+                                fn_decl_by_name_[qfn].push_back(msid);
+                            }
+                        }
+
+                        if (class_ty != ty::kInvalidType) {
+                            class_effective_method_map_[class_ty][std::string(mm.name)].push_back(msid);
+                        }
                     }
                 }
                 return;
@@ -943,10 +1033,18 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kActsDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
-                auto ins = sym_.insert(sema::SymbolKind::kAct, qname, ty::kInvalidType, s.span);
-                if (!ins.ok && ins.is_duplicate) {
-                    err_(s.span, "duplicate symbol (acts): " + qname);
-                    diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kAct) {
+                        err_(s.span, "duplicate symbol (acts): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kAct, qname, ty::kInvalidType, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (acts): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
                 }
 
                 ty::TypeId owner_type = s.acts_target_type;
@@ -1022,12 +1120,23 @@ namespace parus::tyck {
                             ast_.stmt_mut(msid).type = sig;
 
                             const std::string qfn = fn_qualified_name_by_stmt_[msid];
-                            auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, sig, ms.span);
-                            if (!fins.ok && fins.is_duplicate) {
-                                err_(ms.span, "duplicate symbol (acts function): " + qfn);
-                                diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                            if (auto existing = sym_.lookup_in_current(qfn)) {
+                                const auto& existing_sym = sym_.symbol(*existing);
+                                if (existing_sym.kind != sema::SymbolKind::kFn) {
+                                    err_(ms.span, "duplicate symbol (acts function): " + qfn);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                } else {
+                                    (void)sym_.update_declared_type(*existing, sig);
+                                    fn_decl_by_name_[qfn].push_back(msid);
+                                }
                             } else {
-                                fn_decl_by_name_[qfn].push_back(msid);
+                                auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, sig, ms.span);
+                                if (!fins.ok && fins.is_duplicate) {
+                                    err_(ms.span, "duplicate symbol (acts function): " + qfn);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                } else {
+                                    fn_decl_by_name_[qfn].push_back(msid);
+                                }
                             }
                         }
                     }

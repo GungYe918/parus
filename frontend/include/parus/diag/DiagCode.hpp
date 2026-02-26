@@ -86,6 +86,8 @@ namespace parus::diag {
         kProtoImplTargetNotSupported,     // implements target is not a known proto
         kProtoImplMissingMember,          // implementation type misses required proto member
         kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied
+        kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
+        kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
@@ -224,6 +226,9 @@ namespace parus::diag {
         kTypeIndexNonArray,     // args[0]=base_type
         kSetCannotInferFromNull, // set <name> = null; is not allowed
         kMissingReturn,         // return is missing
+        kDotMethodSelfRequired, // dot method calls require self receiver in the first parameter
+        kClassCtorMissingInit,  // class constructor call requires init overload
+        kClassProtoPathCallRemoved, // class/proto member path call removed (use dot call)
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)

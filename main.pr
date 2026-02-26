@@ -1,0 +1,25 @@
+proto Equatable {
+    def eq(self, rhs: i32) -> bool {
+        return true;
+    }
+
+} with require(true);
+
+class A: Equatable {
+    init(x: i32) {
+        let y: i32 = 10;
+    }
+
+    deinit() = default;
+
+    def add(a: i32, b: i32) -> i32 {
+        return a + b;
+    }
+}
+
+def main() -> i32 {
+    set a = A(10);
+    A.eq(10);
+    
+    return 42;
+}

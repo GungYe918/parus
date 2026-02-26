@@ -92,6 +92,8 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "ProtoImplTargetNotSupported";
             case Code::kProtoImplMissingMember: return "ProtoImplMissingMember";
             case Code::kProtoConstraintUnsatisfied: return "ProtoConstraintUnsatisfied";
+            case Code::kClassLifecycleDefaultParamNotAllowed: return "ClassLifecycleDefaultParamNotAllowed";
+            case Code::kClassLifecycleSelfNotAllowed: return "ClassLifecycleSelfNotAllowed";
             case Code::kPubSubOnlyAllowedInClass: return "PubSubOnlyAllowedInClass";
             case Code::kTypeFnSignatureExpected: return "TypeFnSignatureExpected";
             case Code::kTypeNameExpected: return "TypeNameExpected";
@@ -241,6 +243,9 @@ namespace parus::diag {
             case Code::kFieldInitMissingMember: return "FieldInitMissingMember";
             case Code::kFieldInitNonOptionalNull: return "FieldInitNonOptionalNull";
             case Code::kFieldInitEmptyNotAllowed: return "FieldInitEmptyNotAllowed";
+            case Code::kDotMethodSelfRequired: return "DotMethodSelfRequired";
+            case Code::kClassCtorMissingInit: return "ClassCtorMissingInit";
+            case Code::kClassProtoPathCallRemoved: return "ClassProtoPathCallRemoved";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -310,6 +315,8 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "implementation target is not a supported proto";
             case Code::kProtoImplMissingMember: return "proto implementation is missing a required member";
             case Code::kProtoConstraintUnsatisfied: return "proto constraint is not satisfied";
+            case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
+            case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
             case Code::kPubSubOnlyAllowedInClass: return "'pub'/'sub' is only allowed inside a class;";
             case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
@@ -466,6 +473,9 @@ namespace parus::diag {
             case Code::kFieldInitMissingMember: return "field initializer for '{0}' is missing member '{1}'";
             case Code::kFieldInitNonOptionalNull: return "field member '{0}' of type '{1}' is non-optional and cannot be initialized with null";
             case Code::kFieldInitEmptyNotAllowed: return "empty field initializer is not allowed for non-empty field type '{0}'";
+            case Code::kDotMethodSelfRequired: return "dot method call requires the first parameter to be a 'self' receiver";
+            case Code::kClassCtorMissingInit: return "class constructor call '{0}(...)' requires at least one init(...) overload";
+            case Code::kClassProtoPathCallRemoved: return "path call '{0}' is removed for class/proto members; use value dot call instead";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -534,6 +544,8 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "구현 대상으로 지정한 항목이 지원되는 proto가 아닙니다";
             case Code::kProtoImplMissingMember: return "proto 구현에 필요한 멤버가 누락되었습니다";
             case Code::kProtoConstraintUnsatisfied: return "proto 제약을 만족하지 못했습니다";
+            case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";
+            case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle 멤버에는 self 리시버를 선언할 수 없습니다";
             case Code::kPubSubOnlyAllowedInClass: return "pub/sub는 class 내부에서만 사용할 수 있습니다.";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
@@ -696,6 +708,9 @@ namespace parus::diag {
             case Code::kFieldInitMissingMember: return "field '{0}' 초기화에서 멤버 '{1}'가 누락되었습니다";
             case Code::kFieldInitNonOptionalNull: return "멤버 '{0}' 타입 '{1}'는 non-optional이므로 null로 초기화할 수 없습니다";
             case Code::kFieldInitEmptyNotAllowed: return "멤버가 있는 field 타입 '{0}'에는 빈 초기화 '{}'를 사용할 수 없습니다";
+            case Code::kDotMethodSelfRequired: return "dot 메서드 호출은 첫 번째 파라미터가 'self' 리시버여야 합니다";
+            case Code::kClassCtorMissingInit: return "class 생성 호출 '{0}(...)'에는 최소 1개의 init(...) 오버로드가 필요합니다";
+            case Code::kClassProtoPathCallRemoved: return "class/proto 멤버 경로 호출 '{0}'은 제거되었습니다. 값 dot 호출을 사용하세요";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

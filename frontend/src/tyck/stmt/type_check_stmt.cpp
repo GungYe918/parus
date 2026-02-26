@@ -5,6 +5,7 @@
 #include <parus/diag/DiagCode.hpp>
 #include "../common/type_check_literals.hpp"
 
+#include <algorithm>
 #include <sstream>
 #include <unordered_map>
 
@@ -1013,21 +1014,194 @@ namespace parus::tyck {
             }
         };
 
-        std::unordered_map<std::string, std::vector<ast::StmtId>> impl_methods;
+        auto collect_default_members = [&](auto&& self,
+                                           ast::StmtId proto_sid,
+                                           std::vector<ast::StmtId>& out,
+                                           std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
 
-        sym_.push_scope();
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    const std::string p = path_join_(pr.path_begin, pr.path_count);
+                    if (auto base_sid = resolve_proto_sid(p)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl && m.a != ast::k_invalid_stmt) out.push_back(msid);
+                }
+            }
+        };
+
+        std::unordered_map<std::string, std::vector<ast::StmtId>> impl_methods;
+        std::unordered_map<std::string, std::vector<ast::StmtId>> local_overload_sets;
+        std::vector<ast::StmtId> active_default_members;
+
         const auto& kids = ast_.stmt_children();
         const uint32_t begin = s.stmt_begin;
         const uint32_t end = s.stmt_begin + s.stmt_count;
         if (begin <= kids.size() && end <= kids.size()) {
-            // predeclare member symbols
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind == ast::StmtKind::kFnDecl) {
+                    impl_methods[std::string(m.name)].push_back(msid);
+                }
+            }
+        }
+
+        local_overload_sets = impl_methods;
+        {
+            const auto& refs = ast_.path_refs();
+            const uint32_t pb = s.decl_path_ref_begin;
+            const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+            if (pb <= refs.size() && pe <= refs.size()) {
+                for (uint32_t i = pb; i < pe; ++i) {
+                    const auto& pr = refs[i];
+                    const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
+                    const auto proto_sid = resolve_proto_sid(proto_path);
+                    if (!proto_sid.has_value()) continue;
+
+                    std::vector<ast::StmtId> defaults;
+                    std::unordered_set<ast::StmtId> visiting;
+                    collect_default_members(collect_default_members, *proto_sid, defaults, visiting);
+                    for (const ast::StmtId def_sid : defaults) {
+                        if (def_sid == ast::k_invalid_stmt || (size_t)def_sid >= ast_.stmts().size()) continue;
+                        const auto& def = ast_.stmt(def_sid);
+                        if (def.kind != ast::StmtKind::kFnDecl) continue;
+
+                        bool overridden = false;
+                        auto mit = impl_methods.find(std::string(def.name));
+                        if (mit != impl_methods.end()) {
+                            for (const auto impl_sid : mit->second) {
+                                if (impl_sid == ast::k_invalid_stmt || (size_t)impl_sid >= ast_.stmts().size()) continue;
+                                if (fn_sig_matches(def, ast_.stmt(impl_sid))) {
+                                    overridden = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (overridden) continue;
+
+                        auto& slot = local_overload_sets[std::string(def.name)];
+                        bool dup_sig = false;
+                        for (const auto cur_sid : slot) {
+                            if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) continue;
+                            if (fn_sig_matches(def, ast_.stmt(cur_sid))) {
+                                dup_sig = true;
+                                break;
+                            }
+                        }
+                        if (dup_sig) continue;
+
+                        slot.push_back(def_sid);
+                        active_default_members.push_back(def_sid);
+                    }
+                }
+            }
+        }
+
+        if (self_ty != ty::kInvalidType) {
+            class_effective_method_map_[self_ty] = local_overload_sets;
+        }
+
+        struct FnOverloadBackup {
+            bool had_key = false;
+            std::vector<ast::StmtId> prev;
+        };
+        std::unordered_map<std::string, FnOverloadBackup> overload_backups;
+        overload_backups.reserve(local_overload_sets.size());
+        for (const auto& ent : local_overload_sets) {
+            FnOverloadBackup bk{};
+            auto fit = fn_decl_by_name_.find(ent.first);
+            if (fit != fn_decl_by_name_.end()) {
+                bk.had_key = true;
+                bk.prev = fit->second;
+            }
+            overload_backups.emplace(ent.first, std::move(bk));
+            fn_decl_by_name_[ent.first] = ent.second;
+        }
+
+        struct FnTypeBackup {
+            ast::StmtId sid = ast::k_invalid_stmt;
+            ty::TypeId old_ret = ty::kInvalidType;
+            ty::TypeId old_type = ty::kInvalidType;
+            std::vector<ty::TypeId> old_param_types;
+        };
+        std::vector<FnTypeBackup> default_type_backups;
+        {
+            std::unordered_set<ast::StmtId> seen;
+            seen.reserve(active_default_members.size());
+            for (const ast::StmtId sid_def : active_default_members) {
+                if (!seen.insert(sid_def).second) continue;
+                if (sid_def == ast::k_invalid_stmt || (size_t)sid_def >= ast_.stmts().size()) continue;
+                auto& def = ast_.stmt_mut(sid_def);
+                if (def.kind != ast::StmtKind::kFnDecl) continue;
+
+                FnTypeBackup bk{};
+                bk.sid = sid_def;
+                bk.old_ret = def.fn_ret;
+                bk.old_type = def.type;
+                bk.old_param_types.reserve(def.param_count);
+                for (uint32_t pi = 0; pi < def.param_count; ++pi) {
+                    auto& p = ast_.params_mut()[def.param_begin + pi];
+                    bk.old_param_types.push_back(p.type);
+                    p.type = normalize_self(p.type);
+                }
+                def.fn_ret = normalize_self(def.fn_ret);
+
+                std::vector<ty::TypeId> params;
+                std::vector<std::string_view> labels;
+                std::vector<uint8_t> has_default_flags;
+                params.reserve(def.param_count);
+                labels.reserve(def.param_count);
+                has_default_flags.reserve(def.param_count);
+                for (uint32_t pi = 0; pi < def.param_count; ++pi) {
+                    const auto& p = ast_.params()[def.param_begin + pi];
+                    params.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                    labels.push_back(p.name);
+                    has_default_flags.push_back(p.has_default ? 1u : 0u);
+                }
+                ty::TypeId ret = def.fn_ret;
+                if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+                def.type = types_.make_fn(
+                    ret,
+                    params.empty() ? nullptr : params.data(),
+                    static_cast<uint32_t>(params.size()),
+                    def.positional_param_count,
+                    labels.empty() ? nullptr : labels.data(),
+                    has_default_flags.empty() ? nullptr : has_default_flags.data()
+                );
+                default_type_backups.push_back(std::move(bk));
+            }
+        }
+
+        sym_.push_scope();
+        if (begin <= kids.size() && end <= kids.size()) {
+            // predeclare class member symbols
             for (uint32_t i = begin; i < end; ++i) {
                 const ast::StmtId msid = kids[i];
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
                     (void)sym_.insert(sema::SymbolKind::kFn, m.name, m.type, m.span);
-                    impl_methods[std::string(m.name)].push_back(msid);
                 } else if (m.kind == ast::StmtKind::kVar) {
                     ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
                     auto ins = sym_.insert(sema::SymbolKind::kVar, m.name, vt, m.span);
@@ -1036,6 +1210,16 @@ namespace parus::tyck {
                         err_(m.span, "duplicate class member name");
                     }
                 }
+            }
+
+            // predeclare proto default members (if not overridden by class members)
+            for (const auto& ent : local_overload_sets) {
+                if (ent.second.empty()) continue;
+                if (sym_.lookup_in_current(ent.first).has_value()) continue;
+                const ast::StmtId msid = ent.second.front();
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                (void)sym_.insert(sema::SymbolKind::kFn, ent.first, m.type, m.span);
             }
 
             for (uint32_t i = begin; i < end; ++i) {
@@ -1052,6 +1236,25 @@ namespace parus::tyck {
             }
         }
         sym_.pop_scope();
+
+        for (auto it = default_type_backups.rbegin(); it != default_type_backups.rend(); ++it) {
+            if (it->sid == ast::k_invalid_stmt || (size_t)it->sid >= ast_.stmts().size()) continue;
+            auto& def = ast_.stmt_mut(it->sid);
+            def.fn_ret = it->old_ret;
+            def.type = it->old_type;
+            const uint32_t n = std::min<uint32_t>(def.param_count, static_cast<uint32_t>(it->old_param_types.size()));
+            for (uint32_t pi = 0; pi < n; ++pi) {
+                ast_.params_mut()[def.param_begin + pi].type = it->old_param_types[pi];
+            }
+        }
+
+        for (auto& ent : overload_backups) {
+            if (ent.second.had_key) {
+                fn_decl_by_name_[ent.first] = std::move(ent.second.prev);
+            } else {
+                fn_decl_by_name_.erase(ent.first);
+            }
+        }
 
         // Implements validation: class : ProtoA, ProtoB
         const auto& refs = ast_.path_refs();

@@ -299,6 +299,11 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, std::string> fn_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> proto_decl_by_name_;
         std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
+        std::unordered_map<std::string, ast::StmtId> class_decl_by_name_;
+        std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> class_effective_method_map_;
+        std::unordered_set<ast::StmtId> class_member_fn_sid_set_;
+        std::unordered_set<ast::StmtId> proto_member_fn_sid_set_;
         std::vector<std::string> namespace_stack_;
         std::unordered_map<std::string, std::string> import_alias_to_path_;
         std::unordered_set<std::string> known_namespace_paths_;

@@ -150,6 +150,8 @@ namespace parusc::dump {
             case O::Ge: return "Ge";
             case O::Eq: return "Eq";
             case O::Ne: return "Ne";
+            case O::LogicalAnd: return "LogicalAnd";
+            case O::LogicalOr: return "LogicalOr";
             case O::NullCoalesce: return "NullCoalesce";
         }
         return "BinOp(?)";

@@ -1,0 +1,7 @@
+proto BadReq {
+  def f(self) -> i32;
+} with require(true || false);
+
+def main() -> i32 {
+  return 0i32;
+}

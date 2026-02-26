@@ -51,6 +51,27 @@ proto ProtoName [: BaseProto, ...] {
 2. 기본 구현이 있는 proto 멤버는 구현체가 생략할 수 있다.
 3. proto 상속이 있으면 상위 proto의 필수 시그니처까지 포함해 검사한다.
 4. 시그니처 매칭은 `Self`/`&Self`를 구현체 타입 기준으로 정규화해 비교한다.
+5. class에서 proto 기본 구현을 사용하는 dot 호출은 첫 파라미터 `self`가 있는 멤버만 허용한다.
+6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
+
+예시:
+
+```parus
+proto Identifiable {
+  def id(self) -> i32 {
+    return 7i32;
+  }
+};
+
+class User : Identifiable {
+  init() = default;
+}
+
+def main() -> i32 {
+  set u = User();
+  return u.id();
+}
+```
 
 ## 19.6 진단 코드
 

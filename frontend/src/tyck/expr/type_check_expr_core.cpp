@@ -395,12 +395,10 @@ namespace parus::tyck {
                         case K::kEqEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b == b.b); return true;
                         case K::kBangEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b != b.b); return true;
                         case K::kKwAnd:
-                        case K::kAmpAmp:
                             out.kind = FStringConstValue::Kind::kBool;
                             out.b = (a.b && b.b);
                             return true;
                         case K::kKwOr:
-                        case K::kPipePipe:
                             out.kind = FStringConstValue::Kind::kBool;
                             out.b = (a.b || b.b);
                             return true;
@@ -1009,10 +1007,10 @@ namespace parus::tyck {
         at = read_decay_borrow_(types_, at);
 
         // 기타 unary: v0에서는 최소만
-        if (e.op == K::kBang) {
+        if (e.op == K::kBang || e.op == K::kKwNot) {
             if (at != types_.builtin(ty::Builtin::kBool) && !is_error_(at)) {
                 diag_(diag::Code::kTypeUnaryBangMustBeBool, e.span, types_.to_string(at));
-                err_(e.span, "operator '!' requires bool");
+                err_(e.span, "operator 'not' requires bool");
             }
             return types_.builtin(ty::Builtin::kBool);
         }
@@ -1239,6 +1237,24 @@ namespace parus::tyck {
                 b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
                 b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
         };
+
+        // ------------------------------------------------------------
+        // Logical: and / or
+        // ------------------------------------------------------------
+        if (e.op == K::kKwAnd || e.op == K::kKwOr) {
+            const ty::TypeId bool_ty = types_.builtin(ty::Builtin::kBool);
+            if (lt != bool_ty && !is_error_(lt)) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                      "logical operator requires bool lhs, got '" + types_.to_string(lt) + "'");
+                err_(e.span, "logical operator lhs must be bool");
+            }
+            if (rt != bool_ty && !is_error_(rt)) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                      "logical operator requires bool rhs, got '" + types_.to_string(rt) + "'");
+                err_(e.span, "logical operator rhs must be bool");
+            }
+            return bool_ty;
+        }
 
         // ------------------------------------------------------------
         // Equality: == / !=

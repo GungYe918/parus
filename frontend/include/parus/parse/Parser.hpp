@@ -194,6 +194,7 @@ namespace parus {
         ast::StmtId parse_decl_field();
         ast::StmtId parse_decl_proto();
         ast::StmtId parse_decl_class();
+        ast::StmtId parse_decl_class_lifecycle_member();
 
         //  acts 선언 파싱 (v0: acts A, acts for T, acts Name for T)
         ast::StmtId parse_decl_acts();
