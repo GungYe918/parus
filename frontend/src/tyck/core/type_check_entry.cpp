@@ -46,8 +46,15 @@ namespace parus::tyck {
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
         class_member_fn_sid_set_.clear();
+        actor_decl_by_name_.clear();
+        actor_decl_by_type_.clear();
+        actor_method_map_.clear();
+        actor_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
         block_depth_ = 0;
+        in_actor_method_ = false;
+        in_actor_pub_method_ = false;
+        in_actor_sub_method_ = false;
 
         // sym_ 초기화:
         // - bundle/module prepass 심볼이 있으면 시드 심볼테이블을 그대로 사용한다.
@@ -592,6 +599,7 @@ namespace parus::tyck {
                  s.kind == ast::StmtKind::kFieldDecl ||
                  s.kind == ast::StmtKind::kProtoDecl ||
                  s.kind == ast::StmtKind::kClassDecl ||
+                 s.kind == ast::StmtKind::kActorDecl ||
                  s.kind == ast::StmtKind::kActsDecl) &&
                 !s.name.empty()) {
                 const std::string qname = qualify_with_ns_stack(s.name);
@@ -631,6 +639,10 @@ namespace parus::tyck {
         class_decl_by_type_.clear();
         class_effective_method_map_.clear();
         class_member_fn_sid_set_.clear();
+        actor_decl_by_name_.clear();
+        actor_decl_by_type_.clear();
+        actor_method_map_.clear();
+        actor_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
         import_alias_to_path_.clear();
         acts_named_decl_by_owner_and_name_.clear();
@@ -1061,6 +1073,130 @@ namespace parus::tyck {
 
                         if (class_ty != ty::kInvalidType) {
                             class_effective_method_map_[class_ty][std::string(mm.name)].push_back(msid);
+                        }
+                    }
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kActorDecl) {
+                const std::string qname = qualify_decl_name_(s.name);
+                ty::TypeId actor_ty = s.type;
+                if (actor_ty == ty::kInvalidType && !qname.empty()) {
+                    actor_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = actor_ty;
+                }
+                actor_decl_by_name_[qname] = sid;
+                if (actor_ty != ty::kInvalidType) {
+                    actor_decl_by_type_[actor_ty] = sid;
+
+                    FieldAbiMeta meta{};
+                    meta.sid = sid;
+                    meta.layout = ast::FieldLayout::kNone;
+                    meta.align = 0;
+                    field_abi_meta_by_type_[actor_ty] = meta;
+                }
+
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kType) {
+                        err_(s.span, "duplicate symbol (actor): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (actor_ty != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, actor_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, actor_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (actor): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
+                }
+
+                auto normalize_self_type = [&](ty::TypeId t) -> ty::TypeId {
+                    if (t == ty::kInvalidType || actor_ty == ty::kInvalidType) return t;
+                    const auto& tt = types_.get(t);
+                    if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+                        return actor_ty;
+                    }
+                    if (tt.kind == ty::Kind::kBorrow) {
+                        const auto& et = types_.get(tt.elem);
+                        if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                            return types_.make_borrow(actor_ty, tt.borrow_is_mut);
+                        }
+                    }
+                    return t;
+                };
+
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                        const auto& ms = ast_.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        actor_member_fn_sid_set_.insert(msid);
+
+                        for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
+                            auto& p = ast_.params_mut()[ms.param_begin + pi];
+                            p.type = normalize_self_type(p.type);
+                        }
+
+                        auto& mm = ast_.stmt_mut(msid);
+                        mm.fn_ret = normalize_self_type(mm.fn_ret);
+
+                        std::vector<ty::TypeId> params;
+                        std::vector<std::string_view> labels;
+                        std::vector<uint8_t> has_default_flags;
+                        params.reserve(mm.param_count);
+                        labels.reserve(mm.param_count);
+                        has_default_flags.reserve(mm.param_count);
+                        for (uint32_t pi = 0; pi < mm.param_count; ++pi) {
+                            const auto& p = ast_.params()[mm.param_begin + pi];
+                            params.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                            labels.push_back(p.name);
+                            has_default_flags.push_back(p.has_default ? 1u : 0u);
+                        }
+                        ty::TypeId ret = mm.fn_ret;
+                        if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+                        mm.type = types_.make_fn(
+                            ret,
+                            params.empty() ? nullptr : params.data(),
+                            static_cast<uint32_t>(params.size()),
+                            mm.positional_param_count,
+                            labels.empty() ? nullptr : labels.data(),
+                            has_default_flags.empty() ? nullptr : has_default_flags.data()
+                        );
+
+                        std::string mqname = qname;
+                        if (!mqname.empty()) mqname += "::";
+                        mqname += std::string(mm.name);
+                        fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+
+                        const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                        if (auto existing = sym_.lookup_in_current(qfn)) {
+                            const auto& existing_sym = sym_.symbol(*existing);
+                            if (existing_sym.kind != sema::SymbolKind::kFn) {
+                                err_(mm.span, "duplicate symbol (actor member function): " + qfn);
+                                diag_(diag::Code::kDuplicateDecl, mm.span, qfn);
+                            } else {
+                                (void)sym_.update_declared_type(*existing, mm.type);
+                                fn_decl_by_name_[qfn].push_back(msid);
+                            }
+                        } else {
+                            auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, mm.type, mm.span);
+                            if (!fins.ok && fins.is_duplicate) {
+                                err_(mm.span, "duplicate symbol (actor member function): " + qfn);
+                                diag_(diag::Code::kDuplicateDecl, mm.span, qfn);
+                            } else {
+                                fn_decl_by_name_[qfn].push_back(msid);
+                            }
+                        }
+
+                        if (actor_ty != ty::kInvalidType) {
+                            actor_method_map_[actor_ty][std::string(mm.name)].push_back(msid);
                         }
                     }
                 }

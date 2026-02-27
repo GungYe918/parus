@@ -74,7 +74,7 @@ namespace parus {
         //  중단 상태인지 확인
         bool is_aborted() const { return aborted_; }
 
-        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, def, field, acts)
+        //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, def, field/proto/class/actor/acts)
         bool is_decl_start(syntax::TokenKind k) const;
         bool is_context_keyword(const Token& t, std::string_view kw) const;
         bool is_macro_decl_start() const;
@@ -97,6 +97,7 @@ namespace parus {
 
         //  primary(리터럴/식별자/괄호 등) 파싱
         ast::ExprId parse_expr_primary(int ternary_depth);
+        ast::ExprId parse_expr_spawn(int ternary_depth);
 
         /// @brief 배열 리터럴(`[e0, e1, ...]`)을 파싱한다.
         ast::ExprId parse_expr_array_lit(int ternary_depth);
@@ -168,6 +169,8 @@ namespace parus {
 
         //  continue 파싱
         ast::StmtId parse_stmt_continue();
+        ast::StmtId parse_stmt_commit();
+        ast::StmtId parse_stmt_recast();
 
         // switch 파싱
         ast::StmtId parse_stmt_switch();
@@ -194,7 +197,9 @@ namespace parus {
         ast::StmtId parse_decl_field();
         ast::StmtId parse_decl_proto();
         ast::StmtId parse_decl_class();
+        ast::StmtId parse_decl_actor();
         ast::StmtId parse_decl_class_lifecycle_member();
+        ast::StmtId parse_decl_actor_init_member();
 
         //  acts 선언 파싱 (v0: acts A, acts for T, acts Name for T)
         ast::StmtId parse_decl_acts();
@@ -267,6 +272,7 @@ namespace parus {
         bool too_many_errors_emitted_ = false;
         bool seen_file_nest_directive_ = false;
         uint32_t macro_scope_depth_ = 0;
+        bool in_actor_member_context_ = false;
         ParserFeatureFlags parser_features_{};
     };
 

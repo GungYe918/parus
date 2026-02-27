@@ -938,6 +938,91 @@ namespace {
         return ok;
     }
 
+    /// @brief actor spawn/pub/sub가 OIR에 내려가고 commit/recast 마커 inst가 생성되는지 검사한다.
+    static bool test_actor_spawn_and_markers_lowering_ok() {
+        const std::string src = R"(
+            actor Counter {
+                draft {
+                    value: i32;
+                }
+
+                init(seed: i32) {
+                    draft.value = seed;
+                }
+
+                def sub get() -> i32 {
+                    recast;
+                    return draft.value;
+                }
+
+                def pub add(delta: i32) -> i32 {
+                    draft.value = draft.value + delta;
+                    commit;
+                    return draft.value;
+                }
+            }
+
+            def main() -> i32 {
+                set c = spawn Counter(seed: 1i32);
+                set x = c.get();
+                set y = c.add(delta: 2i32);
+                return x + y;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "actor seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "actor seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "actor seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for actor source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for actor source");
+        if (!ok) return false;
+
+        bool has_commit = false;
+        bool has_recast = false;
+        bool has_ctor_init_call = false;
+        bool has_pub_mode_symbol = false;
+        bool has_sub_mode_symbol = false;
+
+        for (const auto& f : oir.mod.funcs) {
+            if (f.name.find("Mpub") != std::string::npos) has_pub_mode_symbol = true;
+            if (f.name.find("Msub") != std::string::npos) has_sub_mode_symbol = true;
+        }
+
+        for (const auto& inst : oir.mod.insts) {
+            if (std::holds_alternative<parus::oir::InstActorCommit>(inst.data)) {
+                has_commit = true;
+            } else if (std::holds_alternative<parus::oir::InstActorRecast>(inst.data)) {
+                has_recast = true;
+            } else if (std::holds_alternative<parus::oir::InstCall>(inst.data)) {
+                const auto& c = std::get<parus::oir::InstCall>(inst.data);
+                if (c.direct_callee != parus::oir::kInvalidId &&
+                    c.direct_callee < oir.mod.funcs.size()) {
+                    const auto& callee = oir.mod.funcs[c.direct_callee];
+                    if (callee.source_name.find("init") != std::string::npos) {
+                        has_ctor_init_call = true;
+                    }
+                }
+            }
+        }
+
+        ok &= require_(has_commit, "actor pub must lower commit statement to InstActorCommit");
+        ok &= require_(has_recast, "actor sub must lower recast statement to InstActorRecast");
+        ok &= require_(has_ctor_init_call, "spawn must lower to direct init call");
+        ok &= require_(has_pub_mode_symbol, "actor pub function must keep mode marker in OIR symbol");
+        ok &= require_(has_sub_mode_symbol, "actor sub function must keep mode marker in OIR symbol");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -962,6 +1047,7 @@ int main() {
         {"class_static_members_lowering_ok", test_class_static_members_lowering_ok},
         {"class_raii_scope_exit_deinit_call_ok", test_class_raii_scope_exit_deinit_call_ok},
         {"class_raii_escape_move_skips_deinit_call_ok", test_class_raii_escape_move_skips_deinit_call_ok},
+        {"actor_spawn_and_markers_lowering_ok", test_actor_spawn_and_markers_lowering_ok},
     };
 
     int failed = 0;

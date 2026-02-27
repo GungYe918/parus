@@ -55,6 +55,7 @@ namespace parus::syntax {
         kKwField,
         kKwProto,
         kKwClass,
+        kKwActor,
         kKwActs,
         kKwSwitch,
         kKwCase,
@@ -206,6 +207,7 @@ namespace parus::syntax {
             case TokenKind::kKwRecast: return "recast";
 
             case TokenKind::kKwClass: return "class";
+            case TokenKind::kKwActor: return "actor";
 
             case TokenKind::kAt: return "@";
             case TokenKind::kDollar: return "$";

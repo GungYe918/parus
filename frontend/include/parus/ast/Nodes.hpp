@@ -60,6 +60,7 @@ namespace parus::ast {
 
         // postfix
         kCall,
+        kSpawn,
         kIndex,
         kMacroCall,
 
@@ -91,6 +92,8 @@ namespace parus::ast {
         kReturn,
         kBreak,
         kContinue,
+        kCommitStmt,
+        kRecastStmt,
 
         // switch
         kSwitch,
@@ -100,6 +103,7 @@ namespace parus::ast {
         kFieldDecl,
         kProtoDecl,
         kClassDecl,
+        kActorDecl,
         kActsDecl,
 
         // use

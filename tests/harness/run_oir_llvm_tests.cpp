@@ -1233,6 +1233,68 @@ namespace {
         return ok;
     }
 
+    /// @brief actor spawn/pub/sub가 LLVM-IR에서 모드 심볼과 commit/recast 마커 호출로 내려가는지 검사한다.
+    static bool test_actor_marker_calls_and_mode_symbols_() {
+        const std::string src = R"(
+            actor Counter {
+                draft {
+                    value: i32;
+                }
+
+                init(seed: i32) {
+                    draft.value = seed;
+                }
+
+                def sub get() -> i32 {
+                    recast;
+                    return draft.value;
+                }
+
+                def pub add(delta: i32) -> i32 {
+                    draft.value = draft.value + delta;
+                    commit;
+                    return draft.value;
+                }
+            }
+
+            def main() -> i32 {
+                set c = spawn Counter(seed: 5i32);
+                set x = c.get();
+                set y = c.add(delta: 3i32);
+                return x + y;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "actor marker source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for actor marker source must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("call void @__parus_actor_commit_marker()") != std::string::npos,
+                       "actor commit must lower to marker helper call");
+        ok &= require_(lowered.llvm_ir.find("call void @__parus_actor_recast_marker()") != std::string::npos,
+                       "actor recast must lower to marker helper call");
+        ok &= require_(lowered.llvm_ir.find("define internal void @__parus_actor_commit_marker()") != std::string::npos,
+                       "actor commit marker helper definition must exist");
+        ok &= require_(lowered.llvm_ir.find("define internal void @__parus_actor_recast_marker()") != std::string::npos,
+                       "actor recast marker helper definition must exist");
+        ok &= require_(lowered.llvm_ir.find("Mpub") != std::string::npos,
+                       "actor pub function symbol must include mode marker");
+        ok &= require_(lowered.llvm_ir.find("Msub") != std::string::npos,
+                       "actor sub function symbol must include mode marker");
+        ok &= require_(lowered.llvm_ir.find("init$Mnone") != std::string::npos,
+                       "spawn path must lower via actor init symbol");
+        return ok;
+    }
+
     /// @brief `tests/oir_cases`의 케이스를 순회하며 OIR->LLVM lowering 경로를 일괄 검증한다.
     static bool test_oir_case_directory() {
 #ifndef PARUS_OIR_CASE_DIR
@@ -1321,6 +1383,7 @@ int main() {
         {"class_static_member_llvm_symbols", test_class_static_member_llvm_symbols_},
         {"class_raii_deinit_llvm_call_patterns", test_class_raii_deinit_llvm_call_patterns_},
         {"bundle_init_wrapper_order", test_bundle_init_wrapper_order_},
+        {"actor_marker_calls_and_mode_symbols", test_actor_marker_calls_and_mode_symbols_},
         {"oir_case_directory", test_oir_case_directory},
     };
 

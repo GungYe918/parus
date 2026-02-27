@@ -172,6 +172,7 @@ namespace parus::ast {
                     break;
 
                 case ExprKind::kCall:
+                case ExprKind::kSpawn:
                     visit_expr_child_if_(ast, id, e, ExprChildRole::kCallCallee, e.a, v);
                     visit_call_args_inner(ast, id, e, v);
                     break;
@@ -225,6 +226,10 @@ namespace parus::ast {
 
                 case StmtKind::kReturn:
                     visit_expr_inner(ast, s.expr, v);
+                    break;
+
+                case StmtKind::kCommitStmt:
+                case StmtKind::kRecastStmt:
                     break;
 
                 case StmtKind::kIf:
@@ -330,6 +335,25 @@ namespace parus::ast {
                 }
 
                 case StmtKind::kClassDecl: {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            visit_stmt_child_if_(
+                                ast,
+                                id,
+                                s,
+                                StmtChildRole::kBlockChild,
+                                kids[s.stmt_begin + i],
+                                v
+                            );
+                        }
+                    }
+                    break;
+                }
+
+                case StmtKind::kActorDecl: {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
                     const uint64_t end = begin + s.stmt_count;

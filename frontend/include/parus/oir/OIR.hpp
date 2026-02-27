@@ -115,6 +115,8 @@ namespace parus::oir {
         // kInvalidId면 기존 callee 값 기반(함수 값/간접 호출) 경로를 사용한다.
         FuncId direct_callee = kInvalidId;
     };
+    struct InstActorCommit { };
+    struct InstActorRecast { };
     struct InstIndex      { ValueId base; ValueId index; };
     struct InstField      { ValueId base; std::string field; };
     struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
@@ -136,6 +138,8 @@ namespace parus::oir {
         InstFuncRef,
         InstGlobalRef,
         InstCall,
+        InstActorCommit,
+        InstActorRecast,
         InstIndex,
         InstField,
         InstDrop,

@@ -183,6 +183,9 @@ namespace parus::sir {
                         push_error_(errs, oss.str());
                     }
                     break;
+                case StmtKind::kCommitStmt:
+                case StmtKind::kRecastStmt:
+                    break;
                 case StmtKind::kSwitch: {
                     need_value(s.expr, "switch scrutinee");
                     const uint64_t cend = (uint64_t)s.case_begin + (uint64_t)s.case_count;

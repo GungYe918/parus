@@ -142,6 +142,7 @@ namespace parus::tyck {
         void check_stmt_fn_decl_(const ast::Stmt& s);
         void check_stmt_proto_decl_(ast::StmtId sid);
         void check_stmt_class_decl_(ast::StmtId sid);
+        void check_stmt_actor_decl_(ast::StmtId sid);
         void check_stmt_field_decl_(ast::StmtId sid);
         void check_stmt_acts_decl_(const ast::Stmt& s);
 
@@ -305,12 +306,19 @@ namespace parus::tyck {
         std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> class_effective_method_map_;
         std::unordered_set<ast::StmtId> class_member_fn_sid_set_;
+        std::unordered_map<std::string, ast::StmtId> actor_decl_by_name_;
+        std::unordered_map<ty::TypeId, ast::StmtId> actor_decl_by_type_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> actor_method_map_;
+        std::unordered_set<ast::StmtId> actor_member_fn_sid_set_;
         std::unordered_set<ast::StmtId> proto_member_fn_sid_set_;
         std::vector<std::string> namespace_stack_;
         std::unordered_map<std::string, std::string> import_alias_to_path_;
         std::unordered_set<std::string> known_namespace_paths_;
         std::vector<std::unordered_map<std::string, std::string>> import_alias_scope_stack_;
         uint32_t block_depth_ = 0;
+        bool in_actor_method_ = false;
+        bool in_actor_pub_method_ = false;
+        bool in_actor_sub_method_ = false;
 
         struct ActsOperatorDecl {
             ast::StmtId fn_sid = ast::k_invalid_stmt;

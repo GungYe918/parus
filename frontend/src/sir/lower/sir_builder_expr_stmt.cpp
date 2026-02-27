@@ -230,7 +230,8 @@ namespace parus::sir::detail {
                 break;
             }
 
-            case parus::ast::ExprKind::kCall: {
+            case parus::ast::ExprKind::kCall:
+            case parus::ast::ExprKind::kSpawn: {
                 v.kind = ValueKind::kCall;
                 if ((size_t)eid < tyck.expr_ctor_owner_type.size()) {
                     const auto owner_ty = tyck.expr_ctor_owner_type[eid];
@@ -241,6 +242,7 @@ namespace parus::sir::detail {
                 }
                 bool inject_implicit_receiver = false;
                 parus::ast::ExprId receiver_eid = parus::ast::k_invalid_expr;
+                uint32_t receiver_param_index = 0xFFFF'FFFFu;
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
@@ -255,10 +257,13 @@ namespace parus::sir::detail {
                             callee_expr.a != parus::ast::k_invalid_expr) {
                             const auto& def = ast.stmt(overload_sid);
                             if (def.kind == parus::ast::StmtKind::kFnDecl && def.param_count > 0) {
-                                const auto& p0 = ast.params()[def.param_begin + 0];
-                                if (p0.is_self) {
+                                for (uint32_t pi = 0; pi < def.param_count; ++pi) {
+                                    const auto& p = ast.params()[def.param_begin + pi];
+                                    if (!p.is_self) continue;
                                     inject_implicit_receiver = true;
                                     receiver_eid = callee_expr.a;
+                                    receiver_param_index = pi;
+                                    break;
                                 }
                             }
                         }
@@ -276,7 +281,9 @@ namespace parus::sir::detail {
                 v.arg_begin = (uint32_t)m.args.size();
                 v.arg_count = 0;
 
-                if (inject_implicit_receiver && receiver_eid != parus::ast::k_invalid_expr) {
+                if (inject_implicit_receiver &&
+                    receiver_param_index == 0 &&
+                    receiver_eid != parus::ast::k_invalid_expr) {
                     Arg recv{};
                     recv.kind = ArgKind::kPositional;
                     recv.has_label = false;
@@ -307,6 +314,19 @@ namespace parus::sir::detail {
                     m.add_arg(parent);
                     v.arg_count++;
                     continue; // IMPORTANT: keep processing remaining args
+                }
+
+                if (inject_implicit_receiver &&
+                    receiver_param_index != 0 &&
+                    receiver_eid != parus::ast::k_invalid_expr) {
+                    Arg recv{};
+                    recv.kind = ArgKind::kPositional;
+                    recv.has_label = false;
+                    recv.is_hole = false;
+                    recv.span = ast.expr(receiver_eid).span;
+                    recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
+                    m.add_arg(recv);
+                    v.arg_count++;
                 }
 
                 break;
@@ -544,6 +564,14 @@ namespace parus::sir::detail {
                 out.kind = StmtKind::kManualStmt;
                 out.manual_perm_mask = s.manual_perm_mask;
                 if (s.a != parus::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                break;
+
+            case parus::ast::StmtKind::kCommitStmt:
+                out.kind = StmtKind::kCommitStmt;
+                break;
+
+            case parus::ast::StmtKind::kRecastStmt:
+                out.kind = StmtKind::kRecastStmt;
                 break;
 
             case parus::ast::StmtKind::kReturn:

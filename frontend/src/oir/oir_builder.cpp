@@ -424,6 +424,22 @@ namespace parus::oir {
                 emit_inst(inst);
             }
 
+            void emit_actor_commit_marker() {
+                Inst inst{};
+                inst.data = InstActorCommit{};
+                inst.eff = Effect::MayWriteMem;
+                inst.result = kInvalidId;
+                emit_inst(inst);
+            }
+
+            void emit_actor_recast_marker() {
+                Inst inst{};
+                inst.data = InstActorRecast{};
+                inst.eff = Effect::MayReadMem;
+                inst.result = kInvalidId;
+                emit_inst(inst);
+            }
+
             void set_term(const Terminator& t) {
                 auto& b = out->blocks[cur_bb];
                 b.term = t;
@@ -1423,6 +1439,14 @@ namespace parus::oir {
 
             case parus::sir::StmtKind::kExprStmt:
                 if (s.expr != parus::sir::k_invalid_value) (void)lower_value(s.expr);
+                return;
+
+            case parus::sir::StmtKind::kCommitStmt:
+                emit_actor_commit_marker();
+                return;
+
+            case parus::sir::StmtKind::kRecastStmt:
+                emit_actor_recast_marker();
                 return;
 
             case parus::sir::StmtKind::kReturn:

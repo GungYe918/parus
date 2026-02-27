@@ -235,6 +235,8 @@ namespace parus::sir {
         kDoScopeStmt,
         kDoWhileStmt,
         kManualStmt,
+        kCommitStmt,
+        kRecastStmt,
         kReturn,
         kBreak,
         kContinue,

@@ -96,6 +96,20 @@ namespace parus::tyck {
                 return;
             }
 
+            case ast::StmtKind::kCommitStmt:
+                if (!in_actor_method_ || !in_actor_pub_method_) {
+                    diag_(diag::Code::kActorCommitOnlyInPub, s.span);
+                    err_(s.span, "commit is only allowed in actor pub methods");
+                }
+                return;
+
+            case ast::StmtKind::kRecastStmt:
+                if (!in_actor_method_ || !in_actor_sub_method_) {
+                    diag_(diag::Code::kActorRecastOnlyInSub, s.span);
+                    err_(s.span, "recast is only allowed in actor sub methods");
+                }
+                return;
+
             case ast::StmtKind::kSwitch:
                 check_stmt_switch_(s);
                 return;
@@ -114,6 +128,10 @@ namespace parus::tyck {
 
             case ast::StmtKind::kClassDecl:
                 check_stmt_class_decl_(sid);
+                return;
+
+            case ast::StmtKind::kActorDecl:
+                check_stmt_actor_decl_(sid);
                 return;
 
             case ast::StmtKind::kActsDecl:
@@ -1371,6 +1389,134 @@ namespace parus::tyck {
                 }
             }
         }
+    }
+
+    void TypeChecker::check_stmt_actor_decl_(ast::StmtId sid) {
+        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
+        const ast::Stmt& s = ast_.stmt(sid);
+        if (s.kind != ast::StmtKind::kActorDecl) return;
+
+        const ty::TypeId self_ty = (s.type == ty::kInvalidType)
+            ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
+            : s.type;
+
+        if (self_ty != ty::kInvalidType) {
+            FieldAbiMeta meta{};
+            meta.sid = sid;
+            meta.layout = ast::FieldLayout::kNone;
+            meta.align = 0;
+            field_abi_meta_by_type_[self_ty] = meta;
+        }
+
+        std::unordered_set<std::string> actor_member_names;
+        std::unordered_map<std::string, std::vector<ast::StmtId>> impl_methods;
+        std::unordered_set<std::string> actor_method_names;
+
+        {
+            const uint64_t fmb = s.field_member_begin;
+            const uint64_t fme = fmb + s.field_member_count;
+            if (fmb <= ast_.field_members().size() && fme <= ast_.field_members().size()) {
+                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                    const auto& fm = ast_.field_members()[i];
+                    const std::string key(fm.name);
+                    if (!actor_member_names.insert(key).second) {
+                        diag_(diag::Code::kDuplicateDecl, fm.span, fm.name);
+                        err_(fm.span, "duplicate actor draft member name");
+                    }
+                }
+            } else {
+                diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);
+                err_(s.span, "invalid actor draft member range");
+            }
+        }
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = s.stmt_begin;
+        const uint32_t end = s.stmt_begin + s.stmt_count;
+        if (begin <= kids.size() && end <= kids.size()) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) continue;
+
+                const std::string key(m.name);
+                if (actor_member_names.find(key) != actor_member_names.end()) {
+                    diag_(diag::Code::kDuplicateDecl, m.span, m.name);
+                    err_(m.span, "duplicate actor member name");
+                }
+                actor_method_names.insert(key);
+                impl_methods[std::string(m.name)].push_back(msid);
+
+                if (m.name != "init" && m.fn_mode == ast::FnMode::kNone) {
+                    diag_(diag::Code::kActorMethodModeRequired, m.span);
+                    err_(m.span, "actor method requires mode sub/pub");
+                }
+            }
+        }
+
+        if (self_ty != ty::kInvalidType) {
+            actor_method_map_[self_ty] = impl_methods;
+        }
+
+        sym_.push_scope();
+        if (begin <= kids.size() && end <= kids.size()) {
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) continue;
+                (void)sym_.insert(sema::SymbolKind::kFn, m.name, m.type, m.span);
+            }
+
+            for (uint32_t i = begin; i < end; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) continue;
+
+                const bool was_in_actor_method = in_actor_method_;
+                const bool was_in_actor_pub = in_actor_pub_method_;
+                const bool was_in_actor_sub = in_actor_sub_method_;
+
+                in_actor_method_ = true;
+                in_actor_pub_method_ = (m.fn_mode == ast::FnMode::kPub);
+                in_actor_sub_method_ = (m.fn_mode == ast::FnMode::kSub);
+
+                check_stmt_fn_decl_(m);
+
+                if (m.fn_mode == ast::FnMode::kPub) {
+                    bool has_top_level_commit = false;
+                    if (m.a != ast::k_invalid_stmt && (size_t)m.a < ast_.stmts().size()) {
+                        const auto& body = ast_.stmt(m.a);
+                        if (body.kind == ast::StmtKind::kBlock) {
+                            const auto& body_kids = ast_.stmt_children();
+                            const uint64_t bb = body.stmt_begin;
+                            const uint64_t be = bb + body.stmt_count;
+                            if (bb <= body_kids.size() && be <= body_kids.size()) {
+                                for (uint32_t bi = body.stmt_begin; bi < body.stmt_begin + body.stmt_count; ++bi) {
+                                    const ast::StmtId bcid = body_kids[bi];
+                                    if (bcid == ast::k_invalid_stmt || (size_t)bcid >= ast_.stmts().size()) continue;
+                                    if (ast_.stmt(bcid).kind == ast::StmtKind::kCommitStmt) {
+                                        has_top_level_commit = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!has_top_level_commit) {
+                        diag_(diag::Code::kActorPubMissingTopLevelCommit, m.span);
+                        err_(m.span, "actor pub method requires top-level commit");
+                    }
+                }
+
+                in_actor_method_ = was_in_actor_method;
+                in_actor_pub_method_ = was_in_actor_pub;
+                in_actor_sub_method_ = was_in_actor_sub;
+            }
+        }
+        sym_.pop_scope();
     }
 
     /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.

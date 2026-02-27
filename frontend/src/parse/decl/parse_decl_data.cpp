@@ -7,6 +7,7 @@
 #include <string>
 #include <limits>
 #include <vector>
+#include <unordered_set>
 
 
 namespace parus {
@@ -739,6 +740,152 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
+    /// @brief actor 전용 lifecycle 멤버:
+    /// - init(...) { ... }
+    /// - init() = default;
+    /// 일반 def와 달리 return type(`->`)을 쓰지 않는다.
+    ast::StmtId Parser::parse_decl_actor_init_member() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        if (!is_context_keyword(start_tok, "init")) {
+            diag_report(diag::Code::kExpectedToken, start_tok.span, "init");
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = start_tok.span;
+            return ast_.add_stmt(s);
+        }
+        cursor_.bump(); // init
+
+        uint32_t param_begin = 0;
+        uint32_t param_count = 0;
+        uint32_t positional_count = 0;
+        bool has_named_group = false;
+        parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+        const uint32_t user_param_count = param_count;
+        if (has_named_group) {
+            diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                        "actor init() does not support named-group parameters in v0");
+        }
+
+        for (uint32_t i = 0; i < user_param_count; ++i) {
+            const auto& p = ast_.params()[param_begin + i];
+            if (p.is_self) {
+                diag_report(diag::Code::kClassLifecycleSelfNotAllowed, p.span);
+            }
+        }
+
+        if (cursor_.at(K::kArrow)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "actor init() must not declare return type");
+            cursor_.bump();
+            (void)parse_type(); // recovery
+        }
+
+        // actor lifecycle hidden receiver:
+        // - source name: draft
+        // - internal type: &mut Self
+        ast::Param hidden_self{};
+        hidden_self.name = std::string_view("draft");
+        hidden_self.type = types_.make_borrow(types_.intern_ident("Self"), /*is_mut=*/true);
+        hidden_self.type_node = ast::k_invalid_type_node;
+        hidden_self.is_mut = false;
+        hidden_self.is_self = true;
+        hidden_self.self_kind = ast::SelfReceiverKind::kMut;
+        hidden_self.is_named_group = false;
+        hidden_self.has_default = false;
+        hidden_self.default_expr = ast::k_invalid_expr;
+        hidden_self.span = start_tok.span;
+        ast_.add_param(hidden_self);
+        ++param_count;
+
+        std::vector<ty::TypeId> pts;
+        std::vector<std::string_view> labels;
+        std::vector<uint8_t> has_default_flags;
+        pts.reserve(param_count);
+        labels.reserve(param_count);
+        has_default_flags.reserve(param_count);
+        for (uint32_t i = 0; i < param_count; ++i) {
+            const auto& p = ast_.params()[param_begin + i];
+            pts.push_back(p.type);
+            labels.push_back(p.name);
+            has_default_flags.push_back(p.has_default ? 1u : 0u);
+        }
+
+        const ty::TypeId unit_ty = types_.builtin(ty::Builtin::kUnit);
+        const ty::TypeId sig_id = types_.make_fn(
+            unit_ty,
+            pts.empty() ? nullptr : pts.data(),
+            static_cast<uint32_t>(pts.size()),
+            positional_count,
+            labels.empty() ? nullptr : labels.data(),
+            has_default_flags.empty() ? nullptr : has_default_flags.data()
+        );
+
+        ast::StmtId body = ast::k_invalid_stmt;
+        Span end_sp = cursor_.prev().span;
+        if (cursor_.eat(K::kAssign)) {
+            if (!cursor_.eat(K::kKwDefault)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "default");
+                if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "default") {
+                    cursor_.bump();
+                }
+            }
+
+            if (user_param_count != 0) {
+                diag_report(diag::Code::kClassLifecycleDefaultParamNotAllowed, start_tok.span);
+            }
+
+            ast::Stmt empty{};
+            empty.kind = ast::StmtKind::kBlock;
+            empty.span = cursor_.prev().span;
+            empty.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+            empty.stmt_count = 0;
+            body = ast_.add_stmt(empty);
+
+            end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        } else {
+            body = parse_stmt_required_block("actor init");
+            end_sp = ast_.stmt(body).span;
+            if (cursor_.at(K::kSemicolon)) {
+                end_sp = cursor_.bump().span;
+            }
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kFnDecl;
+        s.span = span_join(start_tok.span, end_sp);
+        s.name = std::string_view("init");
+        s.type = sig_id;
+        s.fn_ret = unit_ty;
+        s.fn_ret_type_node = ast::k_invalid_type_node;
+        s.a = body;
+
+        s.is_export = false;
+        s.is_extern = false;
+        s.link_abi = ast::LinkAbi::kNone;
+        s.fn_mode = ast::FnMode::kNone;
+        s.is_throwing = false;
+        s.is_pure = false;
+        s.is_comptime = false;
+        s.is_commit = false;
+        s.is_recast = false;
+        s.attr_begin = 0;
+        s.attr_count = 0;
+
+        s.param_begin = param_begin;
+        s.param_count = param_count;
+        s.positional_param_count = positional_count;
+        s.has_named_group = has_named_group;
+        s.fn_is_proto_sig = false;
+        s.fn_generic_param_begin = 0;
+        s.fn_generic_param_count = 0;
+        s.fn_constraint_begin = 0;
+        s.fn_constraint_count = 0;
+        return ast_.add_stmt(s);
+    }
+
     /// @brief `class Name [: ProtoA, ...] { x: T; static y: T = v; static def ...; ... }`
     ast::StmtId Parser::parse_decl_class() {
         using K = syntax::TokenKind;
@@ -997,6 +1144,342 @@ namespace parus {
         s.field_member_count = class_field_member_count;
         s.decl_path_ref_begin = impl_begin;
         s.decl_path_ref_count = impl_count;
+        return ast_.add_stmt(s);
+    }
+
+    /// @brief `actor Name { draft { x: T; } init(...){...} def sub|pub ... }`
+    ast::StmtId Parser::parse_decl_actor() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+
+        bool is_export = false;
+        if (cursor_.at(K::kKwExport)) {
+            is_export = true;
+            start = cursor_.bump().span;
+        }
+
+        if (cursor_.at(K::kKwExtern)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "'extern' is not allowed on actor declarations");
+            cursor_.bump();
+        }
+
+        if (!cursor_.eat(K::kKwActor)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "actor");
+            stmt_sync_to_boundary();
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
+        }
+
+        if (cursor_.eat(K::kColon)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.prev().span,
+                        "actor does not support proto/acts inheritance in v0");
+            while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                cursor_.bump();
+            }
+        }
+
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        std::vector<ast::StmtId> members;
+        members.reserve(16);
+
+        uint32_t draft_field_begin = static_cast<uint32_t>(ast_.field_members().size());
+        uint32_t draft_field_count = 0;
+        bool seen_draft = false;
+
+        auto parse_actor_method_member = [&]() -> ast::StmtId {
+            const Token def_tok = cursor_.peek();
+            if (!cursor_.eat(K::kKwFn)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "def");
+            }
+
+            ast::FnMode mode = ast::FnMode::kNone;
+            const Token mode_tok = cursor_.peek();
+            const bool is_sub =
+                (mode_tok.kind == K::kKwSub) ||
+                (mode_tok.kind == K::kIdent && mode_tok.lexeme == "sub");
+            const bool is_pub =
+                (mode_tok.kind == K::kKwPub) ||
+                (mode_tok.kind == K::kIdent && mode_tok.lexeme == "pub");
+            if (is_sub) {
+                mode = ast::FnMode::kSub;
+                cursor_.bump();
+            } else if (is_pub) {
+                mode = ast::FnMode::kPub;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kActorMethodModeRequired, mode_tok.span);
+            }
+
+            std::string_view fn_name{};
+            const Token fn_name_tok = cursor_.peek();
+            if (fn_name_tok.kind == K::kIdent) {
+                fn_name = fn_name_tok.lexeme;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kFnNameExpected, fn_name_tok.span);
+            }
+
+            uint32_t param_begin = 0;
+            uint32_t param_count = 0;
+            uint32_t positional_count = 0;
+            bool has_named_group = false;
+            parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+            uint32_t constraint_begin = 0;
+            uint32_t constraint_count = 0;
+            (void)parse_decl_fn_constraint_clause(constraint_begin, constraint_count);
+
+            if (!cursor_.at(K::kArrow)) {
+                if (cursor_.at(K::kMinus) && cursor_.peek(1).kind == K::kGt) {
+                    cursor_.bump();
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "->");
+                    recover_to_delim(K::kArrow, K::kLBrace, K::kSemicolon);
+                    cursor_.eat(K::kArrow);
+                }
+            } else {
+                cursor_.bump();
+            }
+            auto ret_ty = parse_type();
+
+            ast::StmtId body = parse_stmt_required_block("actor def");
+            Span end_sp = ast_.stmt(body).span;
+            if (cursor_.at(K::kSemicolon)) {
+                end_sp = cursor_.bump().span;
+            }
+
+            ast::Param hidden_self{};
+            hidden_self.name = std::string_view("draft");
+            hidden_self.type = types_.make_borrow(types_.intern_ident("Self"), /*is_mut=*/true);
+            hidden_self.type_node = ast::k_invalid_type_node;
+            hidden_self.is_mut = false;
+            hidden_self.is_self = true;
+            hidden_self.self_kind = ast::SelfReceiverKind::kMut;
+            hidden_self.is_named_group = false;
+            hidden_self.has_default = false;
+            hidden_self.default_expr = ast::k_invalid_expr;
+            hidden_self.span = def_tok.span;
+            ast_.add_param(hidden_self);
+            ++param_count;
+
+            std::vector<ty::TypeId> pts;
+            std::vector<std::string_view> labels;
+            std::vector<uint8_t> has_default_flags;
+            pts.reserve(param_count);
+            labels.reserve(param_count);
+            has_default_flags.reserve(param_count);
+            for (uint32_t i = 0; i < param_count; ++i) {
+                const auto& p = ast_.params()[param_begin + i];
+                pts.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                labels.push_back(p.name);
+                has_default_flags.push_back(p.has_default ? 1u : 0u);
+            }
+
+            const ty::TypeId sig_id = types_.make_fn(
+                ret_ty.id,
+                pts.empty() ? nullptr : pts.data(),
+                static_cast<uint32_t>(pts.size()),
+                positional_count,
+                labels.empty() ? nullptr : labels.data(),
+                has_default_flags.empty() ? nullptr : has_default_flags.data()
+            );
+
+            ast::Stmt fs{};
+            fs.kind = ast::StmtKind::kFnDecl;
+            fs.span = span_join(def_tok.span, end_sp);
+            fs.name = fn_name;
+            fs.type = sig_id;
+            fs.fn_ret = ret_ty.id;
+            fs.fn_ret_type_node = ret_ty.node;
+            fs.a = body;
+            fs.fn_mode = mode;
+            fs.is_export = false;
+            fs.is_extern = false;
+            fs.link_abi = ast::LinkAbi::kNone;
+            fs.is_throwing = false;
+            fs.is_pure = false;
+            fs.is_comptime = false;
+            fs.is_commit = false;
+            fs.is_recast = false;
+            fs.attr_begin = 0;
+            fs.attr_count = 0;
+            fs.param_begin = param_begin;
+            fs.param_count = param_count;
+            fs.positional_param_count = positional_count;
+            fs.has_named_group = has_named_group;
+            fs.fn_is_proto_sig = false;
+            fs.fn_generic_param_begin = 0;
+            fs.fn_generic_param_count = 0;
+            fs.fn_constraint_begin = constraint_begin;
+            fs.fn_constraint_count = constraint_count;
+            return ast_.add_stmt(fs);
+        };
+
+        auto parse_draft_block = [&](bool accept_members) {
+            const Token draft_tok = cursor_.peek();
+            cursor_.bump(); // draft
+
+            if (!cursor_.eat(K::kLBrace)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+                recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kLBrace);
+            }
+
+            const uint32_t local_begin = static_cast<uint32_t>(ast_.field_members().size());
+            uint32_t local_count = 0;
+            while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                if (cursor_.eat(K::kSemicolon)) continue;
+
+                const Token member_name_tok = cursor_.peek();
+                if (member_name_tok.kind != K::kIdent) {
+                    diag_report(diag::Code::kFieldMemberNameExpected, member_name_tok.span);
+                    recover_to_delim(K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kSemicolon);
+                    continue;
+                }
+                cursor_.bump(); // name
+
+                if (!cursor_.eat(K::kColon)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                    recover_to_delim(K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kSemicolon);
+                    continue;
+                }
+
+                auto parsed_ty = parse_type();
+                if (parsed_ty.id == ty::kInvalidType) {
+                    recover_to_delim(K::kSemicolon, K::kRBrace);
+                    cursor_.eat(K::kSemicolon);
+                    continue;
+                }
+
+                Span end_span = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+                if (accept_members) {
+                    ast::FieldMember fm{};
+                    fm.type = parsed_ty.id;
+                    fm.type_node = parsed_ty.node;
+                    fm.name = member_name_tok.lexeme;
+                    fm.span = span_join(draft_tok.span, end_span);
+                    ast_.add_field_member(fm);
+                    ++local_count;
+                }
+            }
+
+            if (!cursor_.eat(K::kRBrace)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+                recover_to_delim(K::kRBrace, K::kSemicolon);
+                cursor_.eat(K::kRBrace);
+            }
+
+            if (accept_members) {
+                draft_field_begin = local_begin;
+                draft_field_count = local_count;
+            }
+        };
+
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            if (cursor_.eat(K::kSemicolon)) continue;
+
+            const Token t = cursor_.peek();
+            if (is_context_keyword(t, "draft")) {
+                if (seen_draft) {
+                    diag_report(diag::Code::kActorRequiresSingleDraft, t.span);
+                    parse_draft_block(/*accept_members=*/false);
+                } else {
+                    seen_draft = true;
+                    parse_draft_block(/*accept_members=*/true);
+                }
+                continue;
+            }
+
+            if (is_context_keyword(t, "init")) {
+                members.push_back(parse_decl_actor_init_member());
+                continue;
+            }
+
+            if (is_context_keyword(t, "deinit")) {
+                diag_report(diag::Code::kActorDeinitNotAllowed, t.span);
+                const ast::StmtId bad_sid = parse_decl_class_lifecycle_member();
+                auto& bad = ast_.stmt_mut(bad_sid);
+                bad.kind = ast::StmtKind::kError;
+                continue;
+            }
+
+            if (t.kind == K::kKwStatic || t.kind == K::kKwLet || t.kind == K::kKwSet || t.kind == K::kKwMut) {
+                diag_report(diag::Code::kActorMemberNotAllowed, t.span);
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+                continue;
+            }
+
+            if (t.kind == K::kKwFn) {
+                members.push_back(parse_actor_method_member());
+                continue;
+            }
+
+            if (t.kind == K::kAt || t.kind == K::kKwExport || t.kind == K::kKwExtern) {
+                diag_report(diag::Code::kUnexpectedToken, t.span,
+                            "actor methods use 'def sub|pub ...' without attribute/export/extern in v0");
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                cursor_.eat(K::kSemicolon);
+                continue;
+            }
+
+            diag_report(diag::Code::kUnexpectedToken, t.span,
+                        "actor member declaration");
+            recover_to_delim(K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kSemicolon);
+        }
+
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+        Span end_sp = cursor_.prev().span;
+        if (cursor_.at(K::kSemicolon)) {
+            end_sp = cursor_.bump().span;
+        }
+
+        if (!seen_draft) {
+            diag_report(diag::Code::kActorRequiresSingleDraft, span_join(start, end_sp));
+        }
+
+        const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+        for (const auto sid : members) {
+            ast_.add_stmt_child(sid);
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kActorDecl;
+        s.span = span_join(start, end_sp);
+        s.name = name;
+        s.is_export = is_export;
+        s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
+        s.stmt_begin = member_begin;
+        s.stmt_count = static_cast<uint32_t>(members.size());
+        s.field_member_begin = draft_field_begin;
+        s.field_member_count = seen_draft ? draft_field_count : 0;
         return ast_.add_stmt(s);
     }
 

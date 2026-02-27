@@ -1,0 +1,22 @@
+actor Counter {
+  draft {
+    value: i32;
+  }
+
+  init(seed: i32) {
+    draft.value = seed;
+  }
+
+  def pub add_twice(delta: i32) -> i32 {
+    draft.value = draft.value + delta;
+    commit;
+    draft.value = draft.value + delta;
+    commit;
+    return draft.value;
+  }
+}
+
+def main() -> i32 {
+  set c = spawn Counter(seed: 1i32);
+  return c.add_twice(delta: 2i32);
+}

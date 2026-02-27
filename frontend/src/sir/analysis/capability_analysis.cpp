@@ -822,6 +822,10 @@ namespace parus::sir {
                     case StmtKind::kContinue:
                         return;
 
+                    case StmtKind::kCommitStmt:
+                    case StmtKind::kRecastStmt:
+                        return;
+
                     case StmtKind::kSwitch: {
                         const FlowState in = capture_flow_state_();
                         analyze_value_(s.expr, ValueUse::kValue);

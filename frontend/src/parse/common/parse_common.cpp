@@ -156,6 +156,7 @@ namespace parus {
             if (k1 == K::kKwLet || k1 == K::kKwSet || k1 == K::kKwStatic) return true;
         }
         if (k == K::kKwReturn || k == K::kKwBreak || k == K::kKwContinue)   return true;
+        if (k == K::kKwCommit || k == K::kKwRecast)                          return true;
         if (k == K::kKwWhile || k == K::kKwDo || k == K::kKwSwitch)         return true;
         if (k == K::kKwManual)                                               return true;
         if (k == K::kKwUse)                                                 return true;

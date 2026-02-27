@@ -627,6 +627,10 @@ namespace parus::tyck {
                 t = check_expr_call_(e);
                 break;
 
+            case ast::ExprKind::kSpawn:
+                t = check_expr_call_(e);
+                break;
+
             case ast::ExprKind::kIndex:
                 t = check_expr_index_(e);
                 break;
@@ -998,6 +1002,14 @@ namespace parus::tyck {
         }
 
         if (e.op == K::kAmpAmp) {
+            if (in_actor_method_ && e.a != ast::k_invalid_expr) {
+                const auto& opnd = ast_.expr(e.a);
+                if (opnd.kind == ast::ExprKind::kIdent && opnd.text == "draft") {
+                    diag_(diag::Code::kActorEscapeDraftMoveNotAllowed, e.span);
+                    err_(e.span, "actor draft cannot be moved with '&&'");
+                    return types_.error();
+                }
+            }
             ty::TypeId at = check_expr_(e.a);
             return types_.make_escape(at);
         }
@@ -1110,8 +1122,8 @@ namespace parus::tyck {
 
             if (meta_it == field_abi_meta_by_type_.end()) {
                 diag_(diag::Code::kTypeErrorGeneric, e.span,
-                    std::string("member access is only available on field/class values in v0, got ") + types_.to_string(base_t));
-                err_(e.span, "member access on non field/class value");
+                    std::string("member access is only available on field/class/actor values in v0, got ") + types_.to_string(base_t));
+                err_(e.span, "member access on non field/class/actor value");
                 return types_.error();
             }
 

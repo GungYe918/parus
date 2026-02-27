@@ -205,6 +205,9 @@ namespace parus::oir {
                         apply(x.index);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         apply(x.base);
+                    } else if constexpr (std::is_same_v<T, InstActorCommit> ||
+                                         std::is_same_v<T, InstActorRecast>) {
+                        // no operand
                     } else if constexpr (std::is_same_v<T, InstDrop>) {
                         apply(x.slot);
                     } else if constexpr (std::is_same_v<T, InstLoad>) {
@@ -267,6 +270,13 @@ namespace parus::oir {
                     out.write_fp = AliasFootprint::Unknown;
                 }
             } else if (std::holds_alternative<InstCall>(inst.data)) {
+                out.reads = true;
+                out.writes = true;
+                out.may_call = true;
+                out.read_fp = AliasFootprint::Unknown;
+                out.write_fp = AliasFootprint::Unknown;
+            } else if (std::holds_alternative<InstActorCommit>(inst.data) ||
+                       std::holds_alternative<InstActorRecast>(inst.data)) {
                 out.reads = true;
                 out.writes = true;
                 out.may_call = true;
@@ -357,6 +367,9 @@ namespace parus::oir {
                         add(x.index);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         add(x.base);
+                    } else if constexpr (std::is_same_v<T, InstActorCommit> ||
+                                         std::is_same_v<T, InstActorRecast>) {
+                        // no operand
                     } else if constexpr (std::is_same_v<T, InstDrop>) {
                         add(x.slot);
                     } else if constexpr (std::is_same_v<T, InstLoad>) {
@@ -431,6 +444,9 @@ namespace parus::oir {
                     def(x.index);
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     def(x.base);
+                } else if constexpr (std::is_same_v<T, InstActorCommit> ||
+                                     std::is_same_v<T, InstActorRecast>) {
+                    // no operand
                 } else if constexpr (std::is_same_v<T, InstDrop>) {
                     def(x.slot);
                 } else if constexpr (std::is_same_v<T, InstLoad>) {
@@ -1385,6 +1401,9 @@ namespace parus::oir {
                         return x.base == slot || x.index == slot;
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         return x.base == slot;
+                    } else if constexpr (std::is_same_v<T, InstActorCommit> ||
+                                         std::is_same_v<T, InstActorRecast>) {
+                        return false;
                     } else if constexpr (std::is_same_v<T, InstDrop>) {
                         return x.slot == slot;
                     } else if constexpr (std::is_same_v<T, InstFuncRef>) {
@@ -2012,6 +2031,9 @@ namespace parus::oir {
                     return {x.base, x.index};
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     return {x.base};
+                } else if constexpr (std::is_same_v<T, InstActorCommit> ||
+                                     std::is_same_v<T, InstActorRecast>) {
+                    return {};
                 } else if constexpr (std::is_same_v<T, InstDrop>) {
                     return {x.slot};
                 } else if constexpr (std::is_same_v<T, InstLoad>) {

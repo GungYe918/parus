@@ -401,6 +401,7 @@ namespace parus {
         if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
         if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
+        if (t.lexeme == "actor")   { t.kind = syntax::TokenKind::kKwActor;   return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
         if (t.lexeme == "extern")   { t.kind = syntax::TokenKind::kKwExtern;   return t; }

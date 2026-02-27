@@ -349,6 +349,8 @@ namespace parus::cap {
                         return;
 
                     case ast::StmtKind::kContinue:
+                    case ast::StmtKind::kCommitStmt:
+                    case ast::StmtKind::kRecastStmt:
                         return;
 
                     case ast::StmtKind::kFnDecl:
@@ -380,6 +382,14 @@ namespace parus::cap {
                         return;
 
                     case ast::StmtKind::kClassDecl: {
+                        const auto& kids = ast_.stmt_children();
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            walk_stmt_(kids[s.stmt_begin + i]);
+                        }
+                        return;
+                    }
+
+                    case ast::StmtKind::kActorDecl: {
                         const auto& kids = ast_.stmt_children();
                         for (uint32_t i = 0; i < s.stmt_count; ++i) {
                             walk_stmt_(kids[s.stmt_begin + i]);
@@ -510,7 +520,8 @@ namespace parus::cap {
                         walk_expr_(e.c, ExprUse::kValue);
                         return;
 
-                    case ast::ExprKind::kCall: {
+                    case ast::ExprKind::kCall:
+                    case ast::ExprKind::kSpawn: {
                         // call 인자에서 생성된 임시 borrow는 call 식 범위에서 정리한다.
                         enter_scope_();
                         walk_expr_(e.a, ExprUse::kValue);

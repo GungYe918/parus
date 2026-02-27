@@ -317,6 +317,81 @@ namespace parus {
         return ast_.add_expr(out);
     }
 
+    ast::ExprId Parser::parse_expr_spawn(int ternary_depth) {
+        using K = syntax::TokenKind;
+
+        const Token spawn_tok = cursor_.peek();
+        if (!is_context_keyword(spawn_tok, "spawn")) {
+            diag_report(diag::Code::kExpectedToken, spawn_tok.span, "spawn");
+            ast::Expr err{};
+            err.kind = ast::ExprKind::kError;
+            err.span = spawn_tok.span;
+            err.text = "spawn_expected";
+            return ast_.add_expr(err);
+        }
+        cursor_.bump(); // spawn
+
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kTypeNameExpected, first.span);
+            ast::Expr err{};
+            err.kind = ast::ExprKind::kError;
+            err.span = span_join(spawn_tok.span, first.span);
+            err.text = "spawn_type_expected";
+            return ast_.add_expr(err);
+        }
+
+        cursor_.bump();
+        std::string joined(first.lexeme);
+        Span path_sp = first.span;
+
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.eat(K::kColonColon)) return true;
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
+
+        while (eat_coloncolon()) {
+            const Token seg = cursor_.peek();
+            if (seg.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (type path segment)");
+                break;
+            }
+            cursor_.bump();
+            joined += "::";
+            joined.append(seg.lexeme.data(), seg.lexeme.size());
+            path_sp = span_join(path_sp, seg.span);
+        }
+
+        ast::Expr callee{};
+        callee.kind = ast::ExprKind::kIdent;
+        callee.span = path_sp;
+        callee.text = ast_.add_owned_string(std::move(joined));
+        const ast::ExprId callee_id = ast_.add_expr(callee);
+
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            ast::Expr out{};
+            out.kind = ast::ExprKind::kSpawn;
+            out.a = callee_id;
+            out.arg_begin = static_cast<uint32_t>(ast_.args().size());
+            out.arg_count = 0;
+            out.span = span_join(spawn_tok.span, ast_.expr(callee_id).span);
+            return ast_.add_expr(out);
+        }
+
+        const Token lp = cursor_.prev();
+        const ast::ExprId call_id = parse_expr_call(callee_id, lp, ternary_depth);
+        auto& call = ast_.expr_mut(call_id);
+        call.kind = ast::ExprKind::kSpawn;
+        call.span = span_join(spawn_tok.span, call.span);
+        return call_id;
+    }
+
     ast::ExprId Parser::parse_expr_primary(int ternary_depth) {
         const Token t = cursor_.peek();
 
@@ -619,6 +694,10 @@ namespace parus {
             e.span = path_sp;
             e.text = ast_.add_owned_string(std::move(joined));
             return ast_.add_expr(e);
+        }
+
+        if (is_context_keyword(t, "spawn")) {
+            return parse_expr_spawn(ternary_depth);
         }
 
         if (t.kind == syntax::TokenKind::kIdent) {

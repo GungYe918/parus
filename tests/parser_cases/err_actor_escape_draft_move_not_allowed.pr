@@ -1,0 +1,18 @@
+actor Counter {
+  draft {
+    value: i32;
+  }
+
+  init() = default;
+
+  def pub leak() -> i32 {
+    set h = &&draft;
+    commit;
+    return 0i32;
+  }
+}
+
+def main() -> i32 {
+  set c = spawn Counter();
+  return c.leak();
+}

@@ -1,0 +1,19 @@
+actor Counter {
+  draft {
+    value: i32;
+  }
+
+  init() = default;
+
+  def pub add(delta: i32) -> i32 {
+    draft.value = draft.value + delta;
+    commit;
+    return draft.value;
+  }
+}
+
+def main() -> i32 {
+  set c = spawn Counter();
+  Counter::add(draft: c, delta: 1i32);
+  return 0i32;
+}

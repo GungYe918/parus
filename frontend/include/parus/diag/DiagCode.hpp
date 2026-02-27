@@ -94,12 +94,22 @@ namespace parus::diag {
         kClassStaticMutNotAllowed,        // static mut member is not supported in class
         kClassStaticVarRequiresInitializer, // class static var requires initializer
         kClassInheritanceNotAllowed,      // class-to-class inheritance is not allowed (proto only)
+        kActorRequiresSingleDraft,        // actor must contain exactly one draft block
+        kActorMemberNotAllowed,           // actor body allows only draft/init/def sub|pub/;
+        kActorDeinitNotAllowed,           // actor does not support deinit
+        kActorMethodModeRequired,         // actor method must declare sub/pub mode
+        kActorLifecycleDirectCallForbidden, // actor init/deinit direct call is forbidden
+        kActorSpawnTargetMustBeActor,     // spawn target must be actor type
+        kActorSpawnMissingInit,           // spawn target requires init overload
+        kActorCtorStyleCallNotAllowed,    // actor must be created with spawn
+        kActorPathCallRemoved,            // actor member path call is removed (dot only)
+        kActorCommitOnlyInPub,            // commit is only allowed in actor pub methods
+        kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
+        kActorPubMissingTopLevelCommit,   // actor pub method needs at least one top-level commit
+        kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by &&
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
-
-        // pub/sub misuse
-        kPubSubOnlyAllowedInClass,
 
         // ---- type parsing ----
         kTypeFnSignatureExpected, // type-context 'def' must be followed by '('

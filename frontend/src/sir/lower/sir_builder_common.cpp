@@ -208,6 +208,10 @@ namespace parus::sir::detail {
             case StmtKind::kManualStmt:
                 if (s.a != k_invalid_block) join_block(s.a);
                 break;
+            case StmtKind::kCommitStmt:
+            case StmtKind::kRecastStmt:
+                eff = join_effect_(eff, EffectClass::kUnknown);
+                break;
             case StmtKind::kSwitch:
                 join_value(s.expr);
                 if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)m.switch_cases.size()) {

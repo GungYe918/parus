@@ -131,6 +131,8 @@ namespace parus {
         if (tok.kind == K::kKwReturn)   return parse_stmt_return();
         if (tok.kind == K::kKwBreak)    return parse_stmt_break();
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();
+        if (tok.kind == K::kKwCommit || is_context_keyword(tok, "commit")) return parse_stmt_commit();
+        if (tok.kind == K::kKwRecast || is_context_keyword(tok, "recast")) return parse_stmt_recast();
         if (tok.kind == K::kKwSwitch)   return parse_stmt_switch();
         if (tok.kind == K::kKwUse)      return parse_stmt_use();
         if (tok.kind == K::kKwImport)   return parse_stmt_import();
@@ -138,23 +140,6 @@ namespace parus {
         if (tok.kind == K::kKwStatic) return parse_stmt_var();
         if (tok.kind == K::kKwLet || tok.kind == K::kKwSet) return parse_stmt_var();
         if (tok.kind == K::kKwMut && is_var_stmt_start_lookahead(/*off=*/0)) return parse_stmt_var();
-
-        if (tok.kind == K::kKwPub 
-        || tok.kind == K::kKwSub) {
-            diag_report(diag::Code::kPubSubOnlyAllowedInClass, tok.span);
-            cursor_.bump(); // pub/sub 소비
-
-            // 뒤가 def/export/def-attrs면 decl로 계속 파싱해서 연쇄 오류를 막는다.
-            if (is_decl_start(cursor_.peek().kind)) {
-                return parse_decl_any();
-            }
-
-            // 아니면 그냥 에러 stmt
-            ast::Stmt s{};
-            s.kind = ast::StmtKind::kError;
-            s.span = tok.span;
-            return ast_.add_stmt(s);
-        }
 
         return parse_stmt_expr();
     }
@@ -696,6 +681,26 @@ namespace parus {
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kContinue;
+        s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_stmt_commit() {
+        const Token kw = cursor_.bump();
+        const Span term_end = stmt_consume_semicolon_or_recover(kw.span);
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kCommitStmt;
+        s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_stmt_recast() {
+        const Token kw = cursor_.bump();
+        const Span term_end = stmt_consume_semicolon_or_recover(kw.span);
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kRecastStmt;
         s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }

@@ -366,6 +366,9 @@ namespace parus::backend::aot {
                         as_value(x.index);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstField>) {
                         as_value(x.base);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstActorCommit> ||
+                                         std::is_same_v<T, parus::oir::InstActorRecast>) {
+                        // no operand
                     } else if constexpr (std::is_same_v<T, parus::oir::InstDrop>) {
                         as_slot(x.slot);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstLoad>) {
@@ -1692,6 +1695,10 @@ namespace parus::backend::aot {
                             emit_index_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstField>) {
                             emit_field_(os, inst, x);
+                        } else if constexpr (std::is_same_v<T, InstActorCommit>) {
+                            os << "  call void @__parus_actor_commit_marker()\n";
+                        } else if constexpr (std::is_same_v<T, InstActorRecast>) {
+                            os << "  call void @__parus_actor_recast_marker()\n";
                         } else if constexpr (std::is_same_v<T, InstDrop>) {
                             emit_drop_(os, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
@@ -2248,6 +2255,15 @@ namespace parus::backend::aot {
                 "emitted main entry wrapper for executable link."
             });
         }
+
+        os << "define internal void @__parus_actor_commit_marker() {\n";
+        os << "entry:\n";
+        os << "  ret void\n";
+        os << "}\n\n";
+        os << "define internal void @__parus_actor_recast_marker() {\n";
+        os << "entry:\n";
+        os << "  ret void\n";
+        os << "}\n\n";
 
         if (need_call_stub) {
             // 링크 단계에서 unresolved 심볼이 생기지 않도록 내부 no-op 스텁을 함께 생성한다.
