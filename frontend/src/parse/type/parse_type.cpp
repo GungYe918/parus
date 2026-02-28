@@ -323,6 +323,26 @@ namespace parus {
                     last_span = seg.span;
                 }
 
+                std::vector<ParsedType> generic_args{};
+                if (cursor_.eat(K::kLt)) {
+                    while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+                        ParsedType at = parse_type();
+                        generic_args.push_back(at);
+                        if (cursor_.eat(K::kComma)) {
+                            if (cursor_.at(K::kGt)) break;
+                            continue;
+                        }
+                        break;
+                    }
+
+                    if (!cursor_.eat(K::kGt)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                        recover_to_delim(K::kGt, K::kQuestion, K::kLBracket);
+                        cursor_.eat(K::kGt);
+                    }
+                    last_span = cursor_.prev().span;
+                }
+
                 if (segs.size() == 1 && segs[0] == "unit") {
                     diag_report(diag::Code::kTypeInternalNameReserved, first.span, "unit");
                     return make_error_type_(span_join(first.span, last_span));
@@ -338,7 +358,28 @@ namespace parus {
                 n.span = span_join(first.span, last_span);
                 n.path_begin = pb;
                 n.path_count = static_cast<uint32_t>(segs.size());
-                n.resolved_type = types_.intern_path(segs.data(), (uint32_t)segs.size());
+                n.generic_arg_begin = static_cast<uint32_t>(ast_.type_node_children().size());
+                n.generic_arg_count = static_cast<uint32_t>(generic_args.size());
+                for (const auto& ga : generic_args) {
+                    ast_.add_type_node_child(ga.node);
+                }
+
+                if (generic_args.empty()) {
+                    n.resolved_type = types_.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
+                } else {
+                    std::string flat{};
+                    for (size_t i = 0; i < segs.size(); ++i) {
+                        if (i) flat += "::";
+                        flat += std::string(segs[i]);
+                    }
+                    flat += "<";
+                    for (size_t i = 0; i < generic_args.size(); ++i) {
+                        if (i) flat += ",";
+                        flat += types_.to_string(generic_args[i].id);
+                    }
+                    flat += ">";
+                    n.resolved_type = types_.intern_ident(ast_.add_owned_string(std::move(flat)));
+                }
 
                 ParsedType out{};
                 out.node = ast_.add_type_node(n);

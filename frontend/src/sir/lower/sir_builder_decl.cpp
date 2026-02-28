@@ -1,6 +1,7 @@
 // frontend/src/sir/sir_builder_decl.cpp
 #include <parus/sir/Builder.hpp>
 #include "sir_builder_internal.hpp"
+#include <unordered_set>
 
 
 namespace parus::sir::detail {
@@ -116,7 +117,7 @@ namespace parus::sir::detail {
             }
 
             // param SymbolId binding
-            sp.sym = resolve_symbol_from_param_index(nres, param_index);
+            sp.sym = resolve_symbol_from_param_index(nres, tyck, param_index);
 
             m.add_param(sp);
             f.param_count++;
@@ -361,6 +362,19 @@ namespace parus::sir {
         m.current_source_norm = opt.current_source_norm;
         m.bundle_sources_norm = opt.bundle_sources_norm;
         bool global_init_has_any_write = false;
+        std::unordered_set<ast::StmtId> lowered_fn_stmt_ids;
+
+        const auto lower_fn_once = [&](ast::StmtId fn_sid,
+                                       bool is_acts_member,
+                                       ActsId owner_acts) -> FuncId {
+            if (fn_sid == ast::k_invalid_stmt || (size_t)fn_sid >= ast.stmts().size()) {
+                return k_invalid_func;
+            }
+            if (!lowered_fn_stmt_ids.insert(fn_sid).second) {
+                return k_invalid_func;
+            }
+            return lower_func_decl_(m, ast, sym, nres, tyck, fn_sid, is_acts_member, owner_acts);
+        };
 
         // program root must be a block
         if (program_root == ast::k_invalid_stmt || (size_t)program_root >= ast.stmts().size()) {
@@ -376,7 +390,8 @@ namespace parus::sir {
             const auto& s = ast.stmt(sid);
 
             if (s.kind == ast::StmtKind::kFnDecl) {
-                (void)lower_func_decl_(m, ast, sym, nres, tyck, sid, /*is_acts_member=*/false, k_invalid_acts);
+                if (s.fn_generic_param_count > 0) return;
+                (void)lower_fn_once(sid, /*is_acts_member=*/false, k_invalid_acts);
                 return;
             }
 
@@ -396,10 +411,8 @@ namespace parus::sir {
                         const auto& member = ast.stmt(member_sid);
                         if (member.kind != ast::StmtKind::kFnDecl) continue;
                         if (member.a == ast::k_invalid_stmt) continue; // signature-only proto member
-                        (void)lower_func_decl_(
-                            m, ast, sym, nres, tyck, member_sid,
-                            /*is_acts_member=*/false, k_invalid_acts
-                        );
+                        if (member.fn_generic_param_count > 0) continue;
+                        (void)lower_fn_once(member_sid, /*is_acts_member=*/false, k_invalid_acts);
                     }
                 }
                 return;
@@ -424,10 +437,8 @@ namespace parus::sir {
                         const auto& member = ast.stmt(member_sid);
                         if (member.kind == ast::StmtKind::kFnDecl) {
                             if (member.a == ast::k_invalid_stmt) continue; // declaration-only member is not lowered
-                            (void)lower_func_decl_(
-                                m, ast, sym, nres, tyck, member_sid,
-                                /*is_acts_member=*/false, k_invalid_acts
-                            );
+                            if (member.fn_generic_param_count > 0) continue;
+                            (void)lower_fn_once(member_sid, /*is_acts_member=*/false, k_invalid_acts);
                             continue;
                         }
 
@@ -461,10 +472,8 @@ namespace parus::sir {
                         const auto& member = ast.stmt(member_sid);
                         if (member.kind != ast::StmtKind::kFnDecl) continue;
                         if (member.a == ast::k_invalid_stmt) continue;
-                        (void)lower_func_decl_(
-                            m, ast, sym, nres, tyck, member_sid,
-                            /*is_acts_member=*/false, k_invalid_acts
-                        );
+                        if (member.fn_generic_param_count > 0) continue;
+                        (void)lower_fn_once(member_sid, /*is_acts_member=*/false, k_invalid_acts);
                     }
                 }
                 return;
@@ -496,11 +505,9 @@ namespace parus::sir {
                         const auto member_sid = kids[k];
                         if (member_sid == ast::k_invalid_stmt || (size_t)member_sid >= ast.stmts().size()) continue;
                         if (ast.stmt(member_sid).kind != ast::StmtKind::kFnDecl) continue;
+                        if (ast.stmt(member_sid).fn_generic_param_count > 0) continue;
 
-                        const FuncId fid = lower_func_decl_(
-                            m, ast, sym, nres, tyck, member_sid,
-                            /*is_acts_member=*/true, aid
-                        );
+                        const FuncId fid = lower_fn_once(member_sid, /*is_acts_member=*/true, aid);
                         if (fid != k_invalid_func) {
                             m.acts[aid].func_count++;
                         }
@@ -535,6 +542,14 @@ namespace parus::sir {
         };
 
         lower_stmt_recursive(lower_stmt_recursive, program_root);
+
+        for (const auto inst_sid : tyck.generic_instantiated_fn_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            const auto& fs = ast.stmt(inst_sid);
+            if (fs.kind != ast::StmtKind::kFnDecl) continue;
+            if (fs.a == ast::k_invalid_stmt) continue;
+            (void)lower_fn_once(inst_sid, /*is_acts_member=*/false, k_invalid_acts);
+        }
 
         return m;
     }

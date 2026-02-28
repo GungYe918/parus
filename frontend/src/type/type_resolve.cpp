@@ -2,6 +2,7 @@
 
 #include <parus/diag/DiagCode.hpp>
 
+#include <string>
 #include <vector>
 
 namespace parus::type {
@@ -47,7 +48,30 @@ namespace parus::type {
                             out = types.error();
                             break;
                         }
-                        out = types.intern_path(&segs[n.path_begin], n.path_count);
+                        if (n.generic_arg_count == 0) {
+                            out = types.intern_path(&segs[n.path_begin], n.path_count);
+                            break;
+                        }
+
+                        const auto& children = ast.type_node_children();
+                        if (n.generic_arg_begin + n.generic_arg_count > children.size()) {
+                            out = types.error();
+                            break;
+                        }
+
+                        std::string flat{};
+                        for (uint32_t i = 0; i < n.path_count; ++i) {
+                            if (i) flat += "::";
+                            flat += std::string(segs[n.path_begin + i]);
+                        }
+                        flat += "<";
+                        for (uint32_t i = 0; i < n.generic_arg_count; ++i) {
+                            if (i) flat += ",";
+                            const auto aid = resolve_node(children[n.generic_arg_begin + i]);
+                            flat += types.to_string(aid);
+                        }
+                        flat += ">";
+                        out = types.intern_ident(ast.add_owned_string(std::move(flat)));
                         break;
                     }
 

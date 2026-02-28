@@ -910,6 +910,67 @@ namespace {
         return ok;
     }
 
+    /// @brief generic 함수 인스턴스가 dedup되고 LLVM call이 concrete 심볼로 내려가는지 검사한다.
+    static bool test_generic_fn_instantiation_llvm_symbols_() {
+        const std::string src = R"(
+            def add<T>(a: T, b: T) -> i32 {
+                return a + b;
+            }
+
+            def main() -> i32 {
+                set x = add<i32>(1, 2);
+                set y = add<i32>(3, 4);
+                return x + y;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "generic call source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        uint32_t generic_add_defs = 0;
+        for (const auto& f : p->oir.mod.funcs) {
+            if (f.source_name.find("add<") != std::string::npos) {
+                ++generic_add_defs;
+            }
+        }
+        ok &= require_(generic_add_defs == 1, "same concrete generic tuple must be deduplicated before LLVM lowering");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for generic call source must succeed");
+        std::string add_symbol;
+        size_t pos = 0;
+        while (pos < lowered.llvm_ir.size()) {
+            const size_t end = lowered.llvm_ir.find('\n', pos);
+            const size_t len = (end == std::string::npos) ? (lowered.llvm_ir.size() - pos) : (end - pos);
+            const std::string_view line(lowered.llvm_ir.data() + pos, len);
+            if (line.find("define i32 @") != std::string_view::npos &&
+                line.find("add_i32") != std::string_view::npos) {
+                const size_t at = line.find('@');
+                const size_t lp = line.find('(', at);
+                if (at != std::string_view::npos && lp != std::string_view::npos && lp > at + 1) {
+                    add_symbol.assign(line.substr(at + 1, lp - (at + 1)));
+                    break;
+                }
+            }
+            if (end == std::string::npos) break;
+            pos = end + 1;
+        }
+        ok &= require_(!add_symbol.empty(), "LLVM IR must include concrete generic add symbol definition");
+        if (!ok) return false;
+
+        const std::string call_pattern = "call i32 @" + add_symbol + "(";
+        const bool has_call_to_add = (lowered.llvm_ir.find(call_pattern) != std::string::npos);
+        ok &= require_(has_call_to_add, "generic call must lower to direct concrete add symbol call");
+        return ok;
+    }
+
     /// @brief class/proto(default body) 멤버가 LLVM IR 함수로 출력되는지 검사한다.
     static bool test_class_proto_default_member_llvm_symbols_() {
         const std::string src = R"(
@@ -1433,6 +1494,7 @@ int main() {
         {"field_literal_lowering", test_field_literal_lowering_},
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
+        {"generic_fn_instantiation_llvm_symbols", test_generic_fn_instantiation_llvm_symbols_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"proto_override_call_prefers_class_symbol", test_proto_override_call_prefers_class_symbol_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},

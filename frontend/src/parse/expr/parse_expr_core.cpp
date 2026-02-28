@@ -1021,6 +1021,20 @@ namespace parus {
                 continue;
             }
 
+            // generic call type args + call
+            if (t.kind == K::kLt) {
+                const size_t save = cursor_.pos();
+                uint32_t type_arg_begin = 0;
+                uint32_t type_arg_count = 0;
+                const bool parsed_type_args = parse_expr_try_call_type_args(type_arg_begin, type_arg_count);
+                if (parsed_type_args && cursor_.at(K::kLParen)) {
+                    const Token lp = cursor_.bump();
+                    base = parse_expr_call(base, lp, ternary_depth, type_arg_begin, type_arg_count);
+                    continue;
+                }
+                cursor_.rewind(save);
+            }
+
             // call
             if (t.kind == K::kLParen) {
                 const Token lp = cursor_.bump();

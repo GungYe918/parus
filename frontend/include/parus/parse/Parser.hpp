@@ -106,7 +106,12 @@ namespace parus {
         ast::ExprId parse_expr_postfix(ast::ExprId base, int ternary_depth);
 
         //  call 파싱
-        ast::ExprId parse_expr_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth);
+        ast::ExprId parse_expr_call(ast::ExprId callee,
+                                    const Token& lparen_tok,
+                                    int ternary_depth,
+                                    uint32_t call_type_arg_begin = 0,
+                                    uint32_t call_type_arg_count = 0);
+        bool parse_expr_try_call_type_args(uint32_t& out_begin, uint32_t& out_count);
 
         //  index 파싱
         ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
@@ -223,6 +228,7 @@ namespace parus {
         //  파라미터 1개(Ident ':' Type ['=' Expr])를 파싱
         //  반환값: 성공 여부(이름/타입까지 정상 파싱되었는지)
         bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self = nullptr);
+        bool parse_decl_generic_param_clause(uint32_t& out_begin, uint32_t& out_count);
         bool parse_decl_fn_constraint_clause(uint32_t& out_begin, uint32_t& out_count);
         ast::StmtId parse_decl_proto_member_sig();
 

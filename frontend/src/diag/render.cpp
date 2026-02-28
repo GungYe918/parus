@@ -56,6 +56,7 @@ namespace parus::diag {
             case Code::kPipeHoleMustBeLabeled: return "PipeHoleMustBeLabeled";
             case Code::kPipeHoleCountMismatch: return "PipeHoleCountMismatch";
             case Code::kPipeHolePositionalNotAllowed: return "PipeHolePositionalNotAllowed";
+            case Code::kGenericCallTypeArgParseAmbiguous: return "GenericCallTypeArgParseAmbiguous";
             case Code::kDeclExpected: return "DeclExpected";
             case Code::kFnNameExpected: return "FnNameExpected";
             case Code::kFnParamNameExpected: return "FnParamNameExpected";
@@ -266,6 +267,11 @@ namespace parus::diag {
             case Code::kDotReceiverMustBeValue: return "DotReceiverMustBeValue";
             case Code::kClassCtorMissingInit: return "ClassCtorMissingInit";
             case Code::kClassProtoPathCallRemoved: return "ClassProtoPathCallRemoved";
+            case Code::kGenericArityMismatch: return "GenericArityMismatch";
+            case Code::kGenericTypeArgInferenceFailed: return "GenericTypeArgInferenceFailed";
+            case Code::kGenericAmbiguousOverload: return "GenericAmbiguousOverload";
+            case Code::kGenericConstraintProtoNotFound: return "GenericConstraintProtoNotFound";
+            case Code::kGenericConstraintUnsatisfied: return "GenericConstraintUnsatisfied";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -299,6 +305,7 @@ namespace parus::diag {
             case Code::kPipeHoleMustBeLabeled: return "hole '_' must appear as a labeled argument value (e.g., a: _)";
             case Code::kPipeHoleCountMismatch: return "pipe call must contain exactly one labeled hole '_' (found {0})";
             case Code::kPipeHolePositionalNotAllowed: return "hole '_' is not allowed as a positional argument in pipe calls";
+            case Code::kGenericCallTypeArgParseAmbiguous: return "generic call type-argument list '<...>' is malformed or ambiguous";
             case Code::kDeclExpected: return "declaration expected";
             case Code::kFnNameExpected: return "function name identifier is required";
             case Code::kFnParamNameExpected: return "function parameter name identifier is required";
@@ -516,6 +523,11 @@ namespace parus::diag {
             case Code::kDotReceiverMustBeValue: return "dot method call receiver must be a value; type names are not allowed";
             case Code::kClassCtorMissingInit: return "class constructor call '{0}(...)' requires at least one init(...) overload";
             case Code::kClassProtoPathCallRemoved: return "path call '{0}' is removed for class/proto members; use value dot call instead";
+            case Code::kGenericArityMismatch: return "generic arity mismatch: expected {0} type arguments, got {1}";
+            case Code::kGenericTypeArgInferenceFailed: return "failed to infer generic type arguments for call '{0}'";
+            case Code::kGenericAmbiguousOverload: return "generic overload resolution is ambiguous for call '{0}'";
+            case Code::kGenericConstraintProtoNotFound: return "generic constraint references unknown proto '{0}'";
+            case Code::kGenericConstraintUnsatisfied: return "generic constraint '{0}: {1}' is not satisfied by '{2}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -548,6 +560,7 @@ namespace parus::diag {
             case Code::kPipeHoleMustBeLabeled: return "'_'는 라벨 인자 값 위치에만 올 수 있습니다(예: a: _)";
             case Code::kPipeHoleCountMismatch: return "파이프 호출에는 라벨 인자 값으로 '_'가 정확히 1개 있어야 합니다(현재 {0}개)";
             case Code::kPipeHolePositionalNotAllowed: return "'_'는 파이프 호출에서 위치 인자로 사용할 수 없습니다";
+            case Code::kGenericCallTypeArgParseAmbiguous: return "제네릭 호출 타입 인자 '<...>' 구문이 잘못되었거나 모호합니다";
             case Code::kDeclExpected: return "이 위치에는 선언(declaration)이 필요합니다";
             case Code::kFnNameExpected: return "함수 이름 식별자가 필요합니다";
             case Code::kFnParamNameExpected: return "함수 파라미터 이름 식별자가 필요합니다";
@@ -771,6 +784,11 @@ namespace parus::diag {
             case Code::kDotReceiverMustBeValue: return "dot 메서드 호출의 receiver는 값이어야 하며 타입 이름은 허용되지 않습니다";
             case Code::kClassCtorMissingInit: return "class 생성 호출 '{0}(...)'에는 최소 1개의 init(...) 오버로드가 필요합니다";
             case Code::kClassProtoPathCallRemoved: return "class/proto 멤버 경로 호출 '{0}'은 제거되었습니다. 값 dot 호출을 사용하세요";
+            case Code::kGenericArityMismatch: return "제네릭 타입 인자 개수가 맞지 않습니다: 기대 {0}개, 실제 {1}개";
+            case Code::kGenericTypeArgInferenceFailed: return "호출 '{0}'의 제네릭 타입 인자 추론에 실패했습니다";
+            case Code::kGenericAmbiguousOverload: return "호출 '{0}'의 제네릭 오버로드 해석이 모호합니다";
+            case Code::kGenericConstraintProtoNotFound: return "제네릭 제약이 알 수 없는 proto '{0}'를 참조합니다";
+            case Code::kGenericConstraintUnsatisfied: return "제네릭 제약 '{0}: {1}'을(를) '{2}' 타입이 만족하지 않습니다";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

@@ -282,6 +282,10 @@ namespace parus {
             diag_report(diag::Code::kFieldNameExpected, name_tok.span);
         }
 
+        uint32_t decl_generic_begin = 0;
+        uint32_t decl_generic_count = 0;
+        (void)parse_decl_generic_param_clause(decl_generic_begin, decl_generic_count);
+
         const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
         uint32_t impl_count = 0;
         if (cursor_.eat(K::kColon)) {
@@ -306,6 +310,10 @@ namespace parus {
                 break;
             }
         }
+
+        uint32_t decl_constraint_begin = 0;
+        uint32_t decl_constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(decl_constraint_begin, decl_constraint_count);
 
         if (!cursor_.eat(K::kLBrace)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
@@ -416,6 +424,10 @@ namespace parus {
         s.field_member_count = field_member_count;
         s.decl_path_ref_begin = impl_begin;
         s.decl_path_ref_count = impl_count;
+        s.decl_generic_param_begin = decl_generic_begin;
+        s.decl_generic_param_count = decl_generic_count;
+        s.decl_constraint_begin = decl_constraint_begin;
+        s.decl_constraint_count = decl_constraint_count;
         return ast_.add_stmt(s);
     }
 
@@ -456,6 +468,10 @@ namespace parus {
         } else {
             diag_report(diag::Code::kFieldNameExpected, name_tok.span);
         }
+
+        uint32_t decl_generic_begin = 0;
+        uint32_t decl_generic_count = 0;
+        (void)parse_decl_generic_param_clause(decl_generic_begin, decl_generic_count);
 
         const uint32_t inherit_begin = static_cast<uint32_t>(ast_.path_refs().size());
         uint32_t inherit_count = 0;
@@ -573,6 +589,10 @@ namespace parus {
         s.decl_path_ref_count = inherit_count;
         s.proto_has_require = has_require;
         s.proto_require_expr = require_expr;
+        s.decl_generic_param_begin = decl_generic_begin;
+        s.decl_generic_param_count = decl_generic_count;
+        s.decl_constraint_begin = 0;
+        s.decl_constraint_count = 0;
         return ast_.add_stmt(s);
     }
 
@@ -923,6 +943,10 @@ namespace parus {
             diag_report(diag::Code::kFieldNameExpected, name_tok.span);
         }
 
+        uint32_t decl_generic_begin = 0;
+        uint32_t decl_generic_count = 0;
+        (void)parse_decl_generic_param_clause(decl_generic_begin, decl_generic_count);
+
         const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
         uint32_t impl_count = 0;
         if (cursor_.eat(K::kColon)) {
@@ -945,6 +969,10 @@ namespace parus {
                 break;
             }
         }
+
+        uint32_t decl_constraint_begin = 0;
+        uint32_t decl_constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(decl_constraint_begin, decl_constraint_count);
 
         if (!cursor_.eat(K::kLBrace)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
@@ -1144,6 +1172,10 @@ namespace parus {
         s.field_member_count = class_field_member_count;
         s.decl_path_ref_begin = impl_begin;
         s.decl_path_ref_count = impl_count;
+        s.decl_generic_param_begin = decl_generic_begin;
+        s.decl_generic_param_count = decl_generic_count;
+        s.decl_constraint_begin = decl_constraint_begin;
+        s.decl_constraint_count = decl_constraint_count;
         return ast_.add_stmt(s);
     }
 
@@ -1238,6 +1270,10 @@ namespace parus {
                 diag_report(diag::Code::kFnNameExpected, fn_name_tok.span);
             }
 
+            uint32_t generic_begin = 0;
+            uint32_t generic_count = 0;
+            (void)parse_decl_generic_param_clause(generic_begin, generic_count);
+
             uint32_t param_begin = 0;
             uint32_t param_count = 0;
             uint32_t positional_count = 0;
@@ -1328,8 +1364,8 @@ namespace parus {
             fs.positional_param_count = positional_count;
             fs.has_named_group = has_named_group;
             fs.fn_is_proto_sig = false;
-            fs.fn_generic_param_begin = 0;
-            fs.fn_generic_param_count = 0;
+            fs.fn_generic_param_begin = generic_begin;
+            fs.fn_generic_param_count = generic_count;
             fs.fn_constraint_begin = constraint_begin;
             fs.fn_constraint_count = constraint_count;
             return ast_.add_stmt(fs);

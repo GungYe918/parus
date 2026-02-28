@@ -30,6 +30,7 @@ namespace parus::tyck {
         fn_ctx_ = FnCtx{};
         pending_int_sym_.clear();
         pending_int_expr_.clear();
+        fn_sid_stack_.clear();
         sym_is_mut_.clear();
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
@@ -37,6 +38,13 @@ namespace parus::tyck {
         acts_selection_scope_stack_.clear();
         acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
+        generic_fn_template_sid_set_.clear();
+        generic_fn_instance_cache_.clear();
+        generic_fn_checked_instances_.clear();
+        generic_fn_checking_instances_.clear();
+        generic_instantiated_fn_sids_.clear();
+        pending_generic_instance_queue_.clear();
+        pending_generic_instance_enqueued_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
         namespace_stack_.clear();
@@ -69,9 +77,13 @@ namespace parus::tyck {
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_overload_target_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_ctor_owner_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_resolved_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
         result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
+        result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
         // string literal은 builtin text 타입으로 고정한다.
         if (string_type_ == ty::kInvalidType) {
@@ -120,6 +132,40 @@ namespace parus::tyck {
             check_stmt_(child_id);
             // 에러가 나도 계속 진행(정책)
         }
+
+        // Drain concrete generic instances after top-level walk.
+        while (!pending_generic_instance_queue_.empty()) {
+            const ast::StmtId inst_sid = pending_generic_instance_queue_.front();
+            pending_generic_instance_queue_.pop_front();
+            pending_generic_instance_enqueued_.erase(inst_sid);
+
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+                continue;
+            }
+            if (generic_fn_checked_instances_.find(inst_sid) != generic_fn_checked_instances_.end()) {
+                continue;
+            }
+            if (!generic_fn_checking_instances_.insert(inst_sid).second) {
+                continue;
+            }
+
+            const auto& inst = ast_.stmt(inst_sid);
+            const bool was_in_actor_method = in_actor_method_;
+            const bool was_in_actor_pub = in_actor_pub_method_;
+            const bool was_in_actor_sub = in_actor_sub_method_;
+            if (actor_member_fn_sid_set_.find(inst_sid) != actor_member_fn_sid_set_.end()) {
+                in_actor_method_ = true;
+                in_actor_pub_method_ = (inst.fn_mode == ast::FnMode::kPub);
+                in_actor_sub_method_ = (inst.fn_mode == ast::FnMode::kSub);
+            }
+            check_stmt_fn_decl_(inst_sid, inst);
+            in_actor_method_ = was_in_actor_method;
+            in_actor_pub_method_ = was_in_actor_pub;
+            in_actor_sub_method_ = was_in_actor_sub;
+
+            generic_fn_checked_instances_.insert(inst_sid);
+            generic_fn_checking_instances_.erase(inst_sid);
+        }
         pop_alias_scope_();
         pop_acts_selection_scope_();
 
@@ -165,7 +211,10 @@ namespace parus::tyck {
         result_.expr_types = expr_type_cache_;
         result_.expr_overload_target = expr_overload_target_cache_;
         result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
+        result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
+        result_.generic_instantiated_fn_sids = generic_instantiated_fn_sids_;
         return result_;
     }
 
@@ -334,6 +383,461 @@ namespace parus::tyck {
             diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("global '") + std::string(s.name) + "'", types_.to_string(s.type));
             err_(s.span, "C ABI global type is not FFI-safe: " + types_.to_string(s.type));
         }
+    }
+
+    std::vector<std::string> TypeChecker::collect_generic_param_names_(const ast::Stmt& fn_decl) const {
+        std::vector<std::string> out;
+        if (fn_decl.fn_generic_param_count == 0) return out;
+        out.reserve(fn_decl.fn_generic_param_count);
+        for (uint32_t i = 0; i < fn_decl.fn_generic_param_count; ++i) {
+            const uint32_t idx = fn_decl.fn_generic_param_begin + i;
+            if (idx >= ast_.generic_param_decls().size()) break;
+            out.emplace_back(ast_.generic_param_decls()[idx].name);
+        }
+        return out;
+    }
+
+    ty::TypeId TypeChecker::substitute_generic_type_(
+        ty::TypeId src,
+        const std::unordered_map<std::string, ty::TypeId>& subst
+    ) const {
+        if (src == ty::kInvalidType) return src;
+        const auto& tt = types_.get(src);
+        switch (tt.kind) {
+            case ty::Kind::kNamedUser: {
+                const std::string name = types_.to_string(src);
+                auto it = subst.find(name);
+                if (it != subst.end()) return it->second;
+                const size_t sep = name.rfind("::");
+                if (sep != std::string::npos && sep + 2 < name.size()) {
+                    const std::string tail = name.substr(sep + 2);
+                    auto tail_it = subst.find(tail);
+                    if (tail_it != subst.end()) return tail_it->second;
+                }
+                return src;
+            }
+            case ty::Kind::kBorrow: {
+                const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
+                return types_.make_borrow(elem, tt.borrow_is_mut);
+            }
+            case ty::Kind::kPtr: {
+                const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
+                return types_.make_ptr(elem, tt.ptr_is_mut);
+            }
+            case ty::Kind::kEscape: {
+                const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
+                return types_.make_escape(elem);
+            }
+            case ty::Kind::kOptional: {
+                const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
+                return types_.make_optional(elem);
+            }
+            case ty::Kind::kArray: {
+                const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
+                return types_.make_array(elem, tt.array_has_size, tt.array_size);
+            }
+            case ty::Kind::kFn: {
+                const uint32_t pc = tt.param_count;
+                std::vector<ty::TypeId> params;
+                std::vector<std::string_view> labels;
+                std::vector<uint8_t> has_default;
+                params.reserve(pc);
+                labels.reserve(pc);
+                has_default.reserve(pc);
+                for (uint32_t i = 0; i < pc; ++i) {
+                    params.push_back(substitute_generic_type_(types_.fn_param_at(src, i), subst));
+                    labels.push_back(types_.fn_param_label_at(src, i));
+                    has_default.push_back(types_.fn_param_has_default_at(src, i) ? 1u : 0u);
+                }
+                const ty::TypeId ret = substitute_generic_type_(tt.ret, subst);
+                return types_.make_fn(
+                    ret,
+                    params.empty() ? nullptr : params.data(),
+                    pc,
+                    types_.fn_positional_count(src),
+                    labels.empty() ? nullptr : labels.data(),
+                    has_default.empty() ? nullptr : has_default.data()
+                );
+            }
+            default:
+                return src;
+        }
+    }
+
+    ast::ExprId TypeChecker::clone_expr_with_type_subst_(
+        ast::ExprId src,
+        const std::unordered_map<std::string, ty::TypeId>& subst,
+        std::unordered_map<ast::ExprId, ast::ExprId>& expr_map,
+        std::unordered_map<ast::StmtId, ast::StmtId>& stmt_map
+    ) {
+        if (src == ast::k_invalid_expr || (size_t)src >= ast_.exprs().size()) {
+            return ast::k_invalid_expr;
+        }
+        if (auto it = expr_map.find(src); it != expr_map.end()) {
+            return it->second;
+        }
+
+        const ast::Expr old_e = ast_.expr(src);
+        ast::Expr e = old_e;
+
+        e.a = clone_expr_with_type_subst_(old_e.a, subst, expr_map, stmt_map);
+        e.b = clone_expr_with_type_subst_(old_e.b, subst, expr_map, stmt_map);
+        e.c = clone_expr_with_type_subst_(old_e.c, subst, expr_map, stmt_map);
+        e.block_tail = clone_expr_with_type_subst_(old_e.block_tail, subst, expr_map, stmt_map);
+        e.loop_iter = clone_expr_with_type_subst_(old_e.loop_iter, subst, expr_map, stmt_map);
+        e.block_stmt = clone_stmt_with_type_subst_(old_e.block_stmt, subst, expr_map, stmt_map);
+        e.loop_body = clone_stmt_with_type_subst_(old_e.loop_body, subst, expr_map, stmt_map);
+
+        if (old_e.arg_count > 0) {
+            const auto& args = ast_.args();
+            const uint64_t begin = old_e.arg_begin;
+            const uint64_t end = begin + old_e.arg_count;
+            if (begin <= args.size() && end <= args.size()) {
+                std::vector<ast::Arg> src_args;
+                src_args.reserve(old_e.arg_count);
+                for (uint32_t i = 0; i < old_e.arg_count; ++i) {
+                    src_args.push_back(args[old_e.arg_begin + i]);
+                }
+                e.arg_begin = static_cast<uint32_t>(ast_.args().size());
+                e.arg_count = old_e.arg_count;
+                for (uint32_t i = 0; i < old_e.arg_count; ++i) {
+                    ast::Arg a = src_args[i];
+                    a.expr = clone_expr_with_type_subst_(a.expr, subst, expr_map, stmt_map);
+                    ast_.add_arg(a);
+                }
+            } else {
+                e.arg_begin = 0;
+                e.arg_count = 0;
+            }
+        }
+
+        if (old_e.field_init_count > 0) {
+            const auto& inits = ast_.field_init_entries();
+            const uint64_t begin = old_e.field_init_begin;
+            const uint64_t end = begin + old_e.field_init_count;
+            if (begin <= inits.size() && end <= inits.size()) {
+                std::vector<ast::FieldInitEntry> src_inits;
+                src_inits.reserve(old_e.field_init_count);
+                for (uint32_t i = 0; i < old_e.field_init_count; ++i) {
+                    src_inits.push_back(inits[old_e.field_init_begin + i]);
+                }
+                e.field_init_begin = static_cast<uint32_t>(ast_.field_init_entries().size());
+                e.field_init_count = old_e.field_init_count;
+                for (uint32_t i = 0; i < old_e.field_init_count; ++i) {
+                    ast::FieldInitEntry fe = src_inits[i];
+                    fe.expr = clone_expr_with_type_subst_(fe.expr, subst, expr_map, stmt_map);
+                    ast_.add_field_init_entry(fe);
+                }
+            } else {
+                e.field_init_begin = 0;
+                e.field_init_count = 0;
+            }
+        }
+
+        if (old_e.string_part_count > 0) {
+            const auto& parts = ast_.fstring_parts();
+            const uint64_t begin = old_e.string_part_begin;
+            const uint64_t end = begin + old_e.string_part_count;
+            if (begin <= parts.size() && end <= parts.size()) {
+                std::vector<ast::FStringPart> src_parts;
+                src_parts.reserve(old_e.string_part_count);
+                for (uint32_t i = 0; i < old_e.string_part_count; ++i) {
+                    src_parts.push_back(parts[old_e.string_part_begin + i]);
+                }
+                e.string_part_begin = static_cast<uint32_t>(ast_.fstring_parts().size());
+                e.string_part_count = old_e.string_part_count;
+                for (uint32_t i = 0; i < old_e.string_part_count; ++i) {
+                    ast::FStringPart fp = src_parts[i];
+                    if (fp.is_expr) {
+                        fp.expr = clone_expr_with_type_subst_(fp.expr, subst, expr_map, stmt_map);
+                    }
+                    ast_.add_fstring_part(fp);
+                }
+            } else {
+                e.string_part_begin = 0;
+                e.string_part_count = 0;
+            }
+        }
+
+        if (old_e.call_type_arg_count > 0) {
+            const auto& targs = ast_.type_args();
+            const uint64_t begin = old_e.call_type_arg_begin;
+            const uint64_t end = begin + old_e.call_type_arg_count;
+            if (begin <= targs.size() && end <= targs.size()) {
+                std::vector<ty::TypeId> src_type_args;
+                src_type_args.reserve(old_e.call_type_arg_count);
+                for (uint32_t i = 0; i < old_e.call_type_arg_count; ++i) {
+                    src_type_args.push_back(targs[old_e.call_type_arg_begin + i]);
+                }
+                e.call_type_arg_begin = static_cast<uint32_t>(ast_.type_args().size());
+                e.call_type_arg_count = old_e.call_type_arg_count;
+                for (uint32_t i = 0; i < old_e.call_type_arg_count; ++i) {
+                    const ty::TypeId t = substitute_generic_type_(src_type_args[i], subst);
+                    ast_.add_type_arg(t);
+                }
+            } else {
+                e.call_type_arg_begin = 0;
+                e.call_type_arg_count = 0;
+            }
+        }
+
+        if (e.cast_type != ty::kInvalidType) {
+            e.cast_type = substitute_generic_type_(e.cast_type, subst);
+        }
+        if (e.target_type != ty::kInvalidType) {
+            e.target_type = substitute_generic_type_(e.target_type, subst);
+        }
+
+        const ast::ExprId dst = ast_.add_expr(e);
+        expr_map[src] = dst;
+        return dst;
+    }
+
+    ast::StmtId TypeChecker::clone_stmt_with_type_subst_(
+        ast::StmtId src,
+        const std::unordered_map<std::string, ty::TypeId>& subst,
+        std::unordered_map<ast::ExprId, ast::ExprId>& expr_map,
+        std::unordered_map<ast::StmtId, ast::StmtId>& stmt_map
+    ) {
+        if (src == ast::k_invalid_stmt || (size_t)src >= ast_.stmts().size()) {
+            return ast::k_invalid_stmt;
+        }
+        if (auto it = stmt_map.find(src); it != stmt_map.end()) {
+            return it->second;
+        }
+
+        const ast::Stmt old_s = ast_.stmt(src);
+        ast::Stmt s = old_s;
+
+        s.expr = clone_expr_with_type_subst_(old_s.expr, subst, expr_map, stmt_map);
+        s.init = clone_expr_with_type_subst_(old_s.init, subst, expr_map, stmt_map);
+        s.a = clone_stmt_with_type_subst_(old_s.a, subst, expr_map, stmt_map);
+        s.b = clone_stmt_with_type_subst_(old_s.b, subst, expr_map, stmt_map);
+
+        if (s.type != ty::kInvalidType) s.type = substitute_generic_type_(s.type, subst);
+        if (s.fn_ret != ty::kInvalidType) s.fn_ret = substitute_generic_type_(s.fn_ret, subst);
+        if (s.acts_target_type != ty::kInvalidType) s.acts_target_type = substitute_generic_type_(s.acts_target_type, subst);
+        if (s.var_acts_target_type != ty::kInvalidType) s.var_acts_target_type = substitute_generic_type_(s.var_acts_target_type, subst);
+
+        if (old_s.param_count > 0) {
+            const auto& params = ast_.params();
+            const uint64_t begin = old_s.param_begin;
+            const uint64_t end = begin + old_s.param_count;
+            if (begin <= params.size() && end <= params.size()) {
+                std::vector<ast::Param> src_params;
+                src_params.reserve(old_s.param_count);
+                for (uint32_t i = 0; i < old_s.param_count; ++i) {
+                    src_params.push_back(params[old_s.param_begin + i]);
+                }
+                s.param_begin = static_cast<uint32_t>(ast_.params().size());
+                s.param_count = old_s.param_count;
+                for (uint32_t i = 0; i < old_s.param_count; ++i) {
+                    ast::Param p = src_params[i];
+                    p.type = substitute_generic_type_(p.type, subst);
+                    if (p.has_default) {
+                        p.default_expr = clone_expr_with_type_subst_(p.default_expr, subst, expr_map, stmt_map);
+                    }
+                    ast_.add_param(p);
+                }
+            } else {
+                s.param_begin = 0;
+                s.param_count = 0;
+            }
+        }
+
+        if (old_s.stmt_count > 0) {
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = old_s.stmt_begin;
+            const uint64_t end = begin + old_s.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                std::vector<ast::StmtId> src_kids;
+                src_kids.reserve(old_s.stmt_count);
+                for (uint32_t i = 0; i < old_s.stmt_count; ++i) {
+                    src_kids.push_back(kids[old_s.stmt_begin + i]);
+                }
+                s.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+                s.stmt_count = old_s.stmt_count;
+                for (uint32_t i = 0; i < old_s.stmt_count; ++i) {
+                    const ast::StmtId child = clone_stmt_with_type_subst_(src_kids[i], subst, expr_map, stmt_map);
+                    ast_.add_stmt_child(child);
+                }
+            } else {
+                s.stmt_begin = 0;
+                s.stmt_count = 0;
+            }
+        }
+
+        if (old_s.case_count > 0) {
+            const auto& cases = ast_.switch_cases();
+            const uint64_t begin = old_s.case_begin;
+            const uint64_t end = begin + old_s.case_count;
+            if (begin <= cases.size() && end <= cases.size()) {
+                std::vector<ast::SwitchCase> src_cases;
+                src_cases.reserve(old_s.case_count);
+                for (uint32_t i = 0; i < old_s.case_count; ++i) {
+                    src_cases.push_back(cases[old_s.case_begin + i]);
+                }
+                s.case_begin = static_cast<uint32_t>(ast_.switch_cases().size());
+                s.case_count = old_s.case_count;
+                for (uint32_t i = 0; i < old_s.case_count; ++i) {
+                    ast::SwitchCase c = src_cases[i];
+                    c.body = clone_stmt_with_type_subst_(c.body, subst, expr_map, stmt_map);
+                    ast_.add_switch_case(c);
+                }
+            } else {
+                s.case_begin = 0;
+                s.case_count = 0;
+            }
+        }
+
+        const ast::StmtId dst = ast_.add_stmt(s);
+        stmt_map[src] = dst;
+        return dst;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_function_instance_(
+        ast::StmtId template_sid,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span call_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kFnDecl || templ.fn_generic_param_count == 0) {
+            return template_sid;
+        }
+
+        const auto generic_names = collect_generic_param_names_(templ);
+        if (generic_names.size() != concrete_args.size()) {
+            diag_(diag::Code::kGenericArityMismatch, call_span,
+                  std::to_string(generic_names.size()),
+                  std::to_string(concrete_args.size()));
+            err_(call_span, "generic arity mismatch");
+            return std::nullopt;
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+
+        if (auto it = generic_fn_instance_cache_.find(cache_key);
+            it != generic_fn_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size());
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+
+        const uint32_t new_param_begin = static_cast<uint32_t>(ast_.params().size());
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        for (uint32_t i = 0; i < templ.param_count; ++i) {
+            ast::Param p = ast_.params()[templ.param_begin + i];
+            p.type = substitute_generic_type_(p.type, subst);
+            if (p.has_default) {
+                p.default_expr = clone_expr_with_type_subst_(p.default_expr, subst, expr_clone_map, stmt_clone_map);
+            }
+            ast_.add_param(p);
+        }
+
+        ast::Stmt inst = templ;
+        inst.param_begin = new_param_begin;
+        inst.param_count = templ.param_count;
+        inst.fn_ret = substitute_generic_type_(templ.fn_ret, subst);
+        inst.a = clone_stmt_with_type_subst_(templ.a, subst, expr_clone_map, stmt_clone_map);
+        inst.b = clone_stmt_with_type_subst_(templ.b, subst, expr_clone_map, stmt_clone_map);
+        inst.expr = clone_expr_with_type_subst_(templ.expr, subst, expr_clone_map, stmt_clone_map);
+        inst.init = clone_expr_with_type_subst_(templ.init, subst, expr_clone_map, stmt_clone_map);
+        inst.fn_generic_param_begin = 0;
+        inst.fn_generic_param_count = 0;
+        inst.fn_constraint_begin = 0;
+        inst.fn_constraint_count = 0;
+
+        std::vector<ty::TypeId> params;
+        std::vector<std::string_view> labels;
+        std::vector<uint8_t> has_default_flags;
+        params.reserve(inst.param_count);
+        labels.reserve(inst.param_count);
+        has_default_flags.reserve(inst.param_count);
+        for (uint32_t i = 0; i < inst.param_count; ++i) {
+            const auto& p = ast_.params()[inst.param_begin + i];
+            params.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+            labels.push_back(p.name);
+            has_default_flags.push_back(p.has_default ? 1u : 0u);
+        }
+        ty::TypeId ret = inst.fn_ret;
+        if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+        inst.type = types_.make_fn(
+            ret,
+            params.empty() ? nullptr : params.data(),
+            static_cast<uint32_t>(params.size()),
+            inst.positional_param_count,
+            labels.empty() ? nullptr : labels.data(),
+            has_default_flags.empty() ? nullptr : has_default_flags.data()
+        );
+
+        const ast::StmtId inst_sid = ast_.add_stmt(inst);
+
+        std::string base_qname = std::string(templ.name);
+        if (auto it = fn_qualified_name_by_stmt_.find(template_sid);
+            it != fn_qualified_name_by_stmt_.end()) {
+            base_qname = it->second;
+        }
+        std::ostringstream qn;
+        qn << base_qname << "<";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) qn << ",";
+            qn << types_.to_string(concrete_args[i]);
+        }
+        qn << ">";
+        const std::string inst_qname = qn.str();
+        fn_qualified_name_by_stmt_[inst_sid] = inst_qname;
+        fn_decl_by_name_[inst_qname].push_back(inst_sid);
+        if (class_member_fn_sid_set_.find(template_sid) != class_member_fn_sid_set_.end()) {
+            class_member_fn_sid_set_.insert(inst_sid);
+        }
+        if (actor_member_fn_sid_set_.find(template_sid) != actor_member_fn_sid_set_.end()) {
+            actor_member_fn_sid_set_.insert(inst_sid);
+        }
+        if (proto_member_fn_sid_set_.find(template_sid) != proto_member_fn_sid_set_.end()) {
+            proto_member_fn_sid_set_.insert(inst_sid);
+        }
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) {
+            expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_overload_target_cache_.size() < expr_size) {
+            expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        }
+        if (expr_ctor_owner_type_cache_.size() < expr_size) {
+            expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_resolved_symbol_cache_.size() < expr_size) {
+            expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        }
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) {
+            param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+        }
+
+        generic_fn_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_fn_sids_.push_back(inst_sid);
+
+        if (generic_fn_checked_instances_.find(inst_sid) == generic_fn_checked_instances_.end() &&
+            pending_generic_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_instance_queue_.push_back(inst_sid);
+        }
+
+        return inst_sid;
     }
 
     std::string TypeChecker::path_join_(uint32_t begin, uint32_t count) const {
@@ -740,6 +1244,9 @@ namespace parus::tyck {
             }
 
             if (s.kind == ast::StmtKind::kFnDecl) {
+                if (s.fn_generic_param_count > 0) {
+                    generic_fn_template_sid_set_.insert(sid);
+                }
                 const std::string qname = qualify_decl_name_(s.name);
                 fn_qualified_name_by_stmt_[sid] = qname;
                 fn_decl_by_name_[qname].push_back(sid);
@@ -895,6 +1402,9 @@ namespace parus::tyck {
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        if (ms.fn_generic_param_count > 0) {
+                            generic_fn_template_sid_set_.insert(msid);
+                        }
                         proto_member_fn_sid_set_.insert(msid);
 
                         std::string mqname = qname;
@@ -1013,6 +1523,9 @@ namespace parus::tyck {
                         }
 
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        if (ms.fn_generic_param_count > 0) {
+                            generic_fn_template_sid_set_.insert(msid);
+                        }
                         class_member_fn_sid_set_.insert(msid);
 
                         for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
@@ -1137,6 +1650,9 @@ namespace parus::tyck {
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        if (ms.fn_generic_param_count > 0) {
+                            generic_fn_template_sid_set_.insert(msid);
+                        }
                         actor_member_fn_sid_set_.insert(msid);
 
                         for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
@@ -1259,6 +1775,9 @@ namespace parus::tyck {
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl) continue;
+                        if (ms.fn_generic_param_count > 0) {
+                            generic_fn_template_sid_set_.insert(msid);
+                        }
 
                         if (ms.param_count > 0) {
                             auto& p0 = ast_.params_mut()[ms.param_begin];

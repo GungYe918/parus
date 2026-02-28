@@ -1,0 +1,11 @@
+def id<T>(x: T) -> T {
+    return x;
+}
+
+def add<T>(a: T, b: T) -> i32 {
+    return id<T>(a) + id<T>(b);
+}
+
+def main() -> i32 {
+    return add<i32>(1, 2);
+}

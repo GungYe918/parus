@@ -254,6 +254,8 @@ namespace parus::ast {
         // for named path
         uint32_t path_begin = 0;
         uint32_t path_count = 0;
+        uint32_t generic_arg_begin = 0; // slice in AstArena::type_node_children_
+        uint32_t generic_arg_count = 0;
 
         // common child for optional/array/borrow/escape/ptr
         TypeNodeId elem = k_invalid_type_node;
@@ -370,6 +372,8 @@ namespace parus::ast {
         // call args storage (Arg 배열 slice)
         uint32_t arg_begin = 0;
         uint32_t arg_count = 0;
+        uint32_t call_type_arg_begin = 0; // slice in AstArena::type_args_
+        uint32_t call_type_arg_count = 0;
 
         // field init entries storage (FieldInitEntry 배열 slice)
         uint32_t field_init_begin = 0;
@@ -497,6 +501,10 @@ namespace parus::ast {
         uint32_t fn_generic_param_count = 0;
         uint32_t fn_constraint_begin = 0;
         uint32_t fn_constraint_count = 0;
+        uint32_t decl_generic_param_begin = 0;
+        uint32_t decl_generic_param_count = 0;
+        uint32_t decl_constraint_begin = 0;
+        uint32_t decl_constraint_count = 0;
 
         // def/operator
         bool fn_is_operator = false; // true when declared as `operator(...)`
@@ -572,6 +580,10 @@ namespace parus::ast {
         uint32_t add_type_node_child(TypeNodeId id) {
             type_node_children_.push_back(id);
             return static_cast<uint32_t>(type_node_children_.size() - 1);
+        }
+        uint32_t add_type_arg(TypeId id) {
+            type_args_.push_back(id);
+            return static_cast<uint32_t>(type_args_.size() - 1);
         }
 
         uint32_t add_arg(const Arg& a) { args_.push_back(a); return static_cast<uint32_t>(args_.size() - 1); }
@@ -657,6 +669,8 @@ namespace parus::ast {
         std::vector<TypeNode>& type_nodes_mut() { return type_nodes_; }
         const std::vector<TypeNodeId>& type_node_children() const { return type_node_children_; }
         std::vector<TypeNodeId>& type_node_children_mut() { return type_node_children_; }
+        const std::vector<TypeId>& type_args() const { return type_args_; }
+        std::vector<TypeId>& type_args_mut() { return type_args_; }
 
         const std::vector<Arg>& args() const { return args_; }
         std::vector<Arg>& args_mut() { return args_; }
@@ -706,6 +720,7 @@ namespace parus::ast {
         std::vector<Stmt> stmts_;
         std::vector<TypeNode> type_nodes_;
         std::vector<TypeNodeId> type_node_children_;
+        std::vector<TypeId> type_args_;
         std::vector<Arg>  args_;
 
         std::vector<Attr> fn_attrs_;

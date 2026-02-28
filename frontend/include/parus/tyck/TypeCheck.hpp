@@ -13,6 +13,7 @@
 #include <string_view>
 #include <vector>
 #include <optional>
+#include <deque>
 #include <unordered_map> 
 #include <unordered_set>
 
@@ -34,7 +35,10 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
         std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
         std::vector<ty::TypeId> expr_ctor_owner_type; // expr index -> class ctor owner type, invalid if not ctor-call expr
+        std::vector<uint32_t> expr_resolved_symbol; // expr index -> resolved symbol id (tyck fallback for cloned generic nodes)
+        std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
+        std::vector<ast::StmtId> generic_instantiated_fn_sids; // concrete generic fn instantiations created during tyck
         std::vector<TyError> errors;
     };
 
@@ -139,7 +143,7 @@ namespace parus::tyck {
         void check_stmt_manual_(const ast::Stmt& s);
         void check_stmt_return_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
-        void check_stmt_fn_decl_(const ast::Stmt& s);
+        void check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s);
         void check_stmt_proto_decl_(ast::StmtId sid);
         void check_stmt_class_decl_(ast::StmtId sid);
         void check_stmt_actor_decl_(ast::StmtId sid);
@@ -154,7 +158,7 @@ namespace parus::tyck {
         ty::TypeId check_expr_binary_(const ast::Expr& e);
         ty::TypeId check_expr_assign_(const ast::Expr& e);
         ty::TypeId check_expr_ternary_(const ast::Expr& e);
-        ty::TypeId check_expr_call_(const ast::Expr& e);
+        ty::TypeId check_expr_call_(ast::Expr e);
         ty::TypeId check_expr_index_(const ast::Expr& e);
         ty::TypeId check_expr_array_lit_(const ast::Expr& e);
         ty::TypeId check_expr_field_init_(const ast::Expr& e);
@@ -228,6 +232,7 @@ namespace parus::tyck {
             ty::TypeId ret = ty::kInvalidType;
         };
         FnCtx fn_ctx_{};
+        std::vector<ast::StmtId> fn_sid_stack_;
 
         // 심볼 테이블
         sema::SymbolTable sym_;
@@ -240,6 +245,8 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_type_cache_;
         std::vector<ast::StmtId> expr_overload_target_cache_;
         std::vector<ty::TypeId> expr_ctor_owner_type_cache_;
+        std::vector<uint32_t> expr_resolved_symbol_cache_;
+        std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
         // builtin text type for string literals
@@ -377,6 +384,28 @@ namespace parus::tyck {
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
         void check_c_abi_global_decl_(const ast::Stmt& s);
+        std::vector<std::string> collect_generic_param_names_(const ast::Stmt& fn_decl) const;
+        ty::TypeId substitute_generic_type_(
+            ty::TypeId src,
+            const std::unordered_map<std::string, ty::TypeId>& subst
+        ) const;
+        ast::ExprId clone_expr_with_type_subst_(
+            ast::ExprId src,
+            const std::unordered_map<std::string, ty::TypeId>& subst,
+            std::unordered_map<ast::ExprId, ast::ExprId>& expr_map,
+            std::unordered_map<ast::StmtId, ast::StmtId>& stmt_map
+        );
+        ast::StmtId clone_stmt_with_type_subst_(
+            ast::StmtId src,
+            const std::unordered_map<std::string, ty::TypeId>& subst,
+            std::unordered_map<ast::ExprId, ast::ExprId>& expr_map,
+            std::unordered_map<ast::StmtId, ast::StmtId>& stmt_map
+        );
+        std::optional<ast::StmtId> ensure_generic_function_instance_(
+            ast::StmtId template_sid,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span call_span
+        );
 
         struct FieldAbiMeta {
             ast::StmtId sid = ast::k_invalid_stmt;
@@ -385,6 +414,13 @@ namespace parus::tyck {
         };
 
         std::unordered_map<ty::TypeId, FieldAbiMeta> field_abi_meta_by_type_;
+        std::unordered_set<ast::StmtId> generic_fn_template_sid_set_;
+        std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
+        std::unordered_set<ast::StmtId> generic_fn_checked_instances_;
+        std::unordered_set<ast::StmtId> generic_fn_checking_instances_;
+        std::vector<ast::StmtId> generic_instantiated_fn_sids_;
+        std::deque<ast::StmtId> pending_generic_instance_queue_;
+        std::unordered_set<ast::StmtId> pending_generic_instance_enqueued_;
 
     };
 

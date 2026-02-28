@@ -71,7 +71,7 @@ namespace parus::sir::detail {
             case parus::ast::ExprKind::kIdent: {
                 v.kind = ValueKind::kLocal;
                 v.text = e.text;
-                v.sym = resolve_symbol_from_expr(nres, eid);
+                v.sym = resolve_symbol_from_expr(nres, tyck, eid);
                 break;
             }
 
@@ -81,14 +81,14 @@ namespace parus::sir::detail {
                     v.borrow_is_mut = e.unary_is_mut;
                     v.op = (uint32_t)e.op;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
-                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, e.a);
+                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
                     break;
                 }
                 if (e.op == parus::syntax::TokenKind::kAmpAmp) {
                     v.kind = ValueKind::kEscape;
                     v.op = (uint32_t)e.op;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
-                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, e.a);
+                    v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
                     break;
                 }
 

@@ -19,7 +19,7 @@ namespace parus::tyck {
     using detail::parse_int_literal_;
 
     void TypeChecker::check_stmt_(ast::StmtId sid) {
-        const ast::Stmt& s = ast_.stmt(sid);
+        const ast::Stmt s = ast_.stmt(sid);
 
         switch (s.kind) {
             case ast::StmtKind::kEmpty:
@@ -115,7 +115,7 @@ namespace parus::tyck {
                 return;
 
             case ast::StmtKind::kFnDecl:
-                check_stmt_fn_decl_(s);
+                check_stmt_fn_decl_(sid, s);
                 return;
 
             case ast::StmtKind::kFieldDecl:
@@ -570,7 +570,7 @@ namespace parus::tyck {
         }
     }
 
-    void TypeChecker::check_stmt_fn_decl_(const ast::Stmt& s) {
+    void TypeChecker::check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s) {
         // ----------------------------
         // 0) 시그니처 타입 확보
         // ----------------------------
@@ -674,6 +674,14 @@ namespace parus::tyck {
             }
         }
 
+        // generic templates are declaration-only at this stage.
+        // concrete instances are materialized and checked on-demand at call sites.
+        if (sid != ast::k_invalid_stmt &&
+            s.fn_generic_param_count > 0 &&
+            generic_fn_template_sid_set_.find(sid) != generic_fn_template_sid_set_.end()) {
+            return;
+        }
+
         // ----------------------------
         // 1) 함수 스코프 진입 + def ctx 설정
         // ----------------------------
@@ -684,6 +692,7 @@ namespace parus::tyck {
         fn_ctx_.is_pure = s.is_pure;
         fn_ctx_.is_comptime = s.is_comptime;
         fn_ctx_.ret = (ret == ty::kInvalidType) ? types_.error() : ret;
+        fn_sid_stack_.push_back(sid);
 
         // ----------------------------
         // 2) 파라미터 심볼 삽입 + default expr 검사
@@ -698,6 +707,10 @@ namespace parus::tyck {
                 diag_(diag::Code::kTypeDuplicateParam, p.span, p.name);
             }
             if (ins.ok) {
+                if ((size_t)(s.param_begin + i) >= param_resolved_symbol_cache_.size()) {
+                    param_resolved_symbol_cache_.resize((size_t)(s.param_begin + i) + 1, sema::SymbolTable::kNoScope);
+                }
+                param_resolved_symbol_cache_[s.param_begin + i] = ins.symbol_id;
                 // receiver mutability follows `self mut`; regular params follow `mut name: T`.
                 const bool param_is_mut = p.is_mut ||
                     (p.is_self && p.self_kind == ast::SelfReceiverKind::kMut);
@@ -817,6 +830,9 @@ namespace parus::tyck {
         // 4) 종료
         // ----------------------------
         fn_ctx_ = saved;
+        if (!fn_sid_stack_.empty()) {
+            fn_sid_stack_.pop_back();
+        }
         sym_.pop_scope();
     }
 
@@ -878,7 +894,7 @@ namespace parus::tyck {
 
         for (const ast::StmtId msid : proto_default_members) {
             if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-            check_stmt_fn_decl_(ast_.stmt(msid));
+            check_stmt_fn_decl_(msid, ast_.stmt(msid));
         }
 
         if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
@@ -1290,7 +1306,7 @@ namespace parus::tyck {
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
-                    check_stmt_fn_decl_(m);
+                    check_stmt_fn_decl_(msid, m);
                 } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
                     if (m.init == ast::k_invalid_expr) {
                         diag_(diag::Code::kClassStaticVarRequiresInitializer, m.span);
@@ -1483,7 +1499,7 @@ namespace parus::tyck {
                 in_actor_pub_method_ = (m.fn_mode == ast::FnMode::kPub);
                 in_actor_sub_method_ = (m.fn_mode == ast::FnMode::kSub);
 
-                check_stmt_fn_decl_(m);
+                check_stmt_fn_decl_(msid, m);
 
                 if (m.fn_mode == ast::FnMode::kPub) {
                     bool has_top_level_commit = false;
@@ -1778,7 +1794,7 @@ namespace parus::tyck {
                 if (sid == ast::k_invalid_stmt) continue;
                 const auto& member = ast_.stmt(sid);
                 if (member.kind != ast::StmtKind::kFnDecl) continue;
-                check_stmt_fn_decl_(member);
+                check_stmt_fn_decl_(sid, member);
             }
         }
 

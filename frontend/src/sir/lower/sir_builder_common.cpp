@@ -16,35 +16,44 @@ namespace parus::sir::detail {
     // -----------------------------
     SymbolId resolve_symbol_from_expr(
         const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
         parus::ast::ExprId eid
     ) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
-        if ((size_t)eid >= nres.expr_to_resolved.size()) return k_invalid_symbol;
-
-        const auto rid = nres.expr_to_resolved[(uint32_t)eid];
-        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
-        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
-
-        return (SymbolId)nres.resolved[rid].sym;
+        if ((size_t)eid < nres.expr_to_resolved.size()) {
+            const auto rid = nres.expr_to_resolved[(uint32_t)eid];
+            if (rid != passes::NameResolveResult::k_invalid_resolved &&
+                (size_t)rid < nres.resolved.size()) {
+                return (SymbolId)nres.resolved[rid].sym;
+            }
+        }
+        if ((size_t)eid < tyck.expr_resolved_symbol.size()) {
+            const uint32_t sid = tyck.expr_resolved_symbol[eid];
+            if (sid != sema::SymbolTable::kNoScope) {
+                return (SymbolId)sid;
+            }
+        }
+        return k_invalid_symbol;
     }
 
     SymbolId resolve_root_place_symbol_from_expr(
         const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
         parus::ast::ExprId eid
     ) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
         const auto& e = ast.expr(eid);
 
         if (e.kind == parus::ast::ExprKind::kIdent) {
-            return resolve_symbol_from_expr(nres, eid);
+            return resolve_symbol_from_expr(nres, tyck, eid);
         }
         if (e.kind == parus::ast::ExprKind::kIndex) {
-            return resolve_root_place_symbol_from_expr(ast, nres, e.a);
+            return resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
         }
         if (e.kind == parus::ast::ExprKind::kBinary &&
             e.op == parus::syntax::TokenKind::kDot) {
-            return resolve_root_place_symbol_from_expr(ast, nres, e.a);
+            return resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
         }
         return k_invalid_symbol;
     }
@@ -65,15 +74,23 @@ namespace parus::sir::detail {
 
     SymbolId resolve_symbol_from_param_index(
         const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
         uint32_t param_index
     ) {
-        if ((size_t)param_index >= nres.param_to_resolved.size()) return k_invalid_symbol;
-
-        const auto rid = nres.param_to_resolved[param_index];
-        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
-        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
-
-        return (SymbolId)nres.resolved[rid].sym;
+        if ((size_t)param_index < nres.param_to_resolved.size()) {
+            const auto rid = nres.param_to_resolved[param_index];
+            if (rid != passes::NameResolveResult::k_invalid_resolved &&
+                (size_t)rid < nres.resolved.size()) {
+                return (SymbolId)nres.resolved[rid].sym;
+            }
+        }
+        if ((size_t)param_index < tyck.param_resolved_symbol.size()) {
+            const uint32_t sid = tyck.param_resolved_symbol[param_index];
+            if (sid != sema::SymbolTable::kNoScope) {
+                return (SymbolId)sid;
+            }
+        }
+        return k_invalid_symbol;
     }
 
     // Resolve the most concrete type we can observe from identifier use-sites

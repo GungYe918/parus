@@ -9,12 +9,17 @@ namespace parus::sir::detail {
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid);
 
     /// @brief AST expression 노드에서 name-resolve 심볼을 찾는다.
-    SymbolId resolve_symbol_from_expr(const passes::NameResolveResult& nres, parus::ast::ExprId eid);
+    SymbolId resolve_symbol_from_expr(
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        parus::ast::ExprId eid
+    );
 
     /// @brief place expression의 root 심볼(ident/index.base)을 찾는다.
     SymbolId resolve_root_place_symbol_from_expr(
         const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
         parus::ast::ExprId eid
     );
 
@@ -22,7 +27,11 @@ namespace parus::sir::detail {
     SymbolId resolve_symbol_from_stmt(const passes::NameResolveResult& nres, parus::ast::StmtId sid);
 
     /// @brief AST 파라미터 인덱스에서 name-resolve 심볼을 찾는다.
-    SymbolId resolve_symbol_from_param_index(const passes::NameResolveResult& nres, uint32_t param_index);
+    SymbolId resolve_symbol_from_param_index(
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        uint32_t param_index
+    );
 
     /// @brief 동일 심볼의 사용 위치를 기준으로 선언 타입을 보강 추론한다.
     TypeId resolve_decl_type_from_symbol_uses(

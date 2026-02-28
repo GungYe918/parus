@@ -19,7 +19,7 @@ namespace parus::tyck {
     using detail::parse_float_literal_;
     using detail::parse_int_literal_;
 
-    ty::TypeId TypeChecker::check_expr_call_(const ast::Expr& e) {
+    ty::TypeId TypeChecker::check_expr_call_(ast::Expr e) {
         // e.a = callee, args slice in e.arg_begin/e.arg_count
         const bool is_spawn_expr = (e.kind == ast::ExprKind::kSpawn);
         if (current_expr_id_ != ast::k_invalid_expr &&
@@ -31,12 +31,47 @@ namespace parus::tyck {
             expr_ctor_owner_type_cache_[current_expr_id_] = ty::kInvalidType;
         }
 
+        // Snapshot call-site args before any generic instantiation can mutate AST storage.
+        std::vector<ast::Arg> call_args;
+        {
+            const auto& all_args = ast_.args();
+            const uint64_t begin = e.arg_begin;
+            const uint64_t end = begin + e.arg_count;
+            if (begin <= all_args.size() && end <= all_args.size()) {
+                call_args.reserve(e.arg_count);
+                for (uint32_t i = 0; i < e.arg_count; ++i) {
+                    call_args.push_back(all_args[e.arg_begin + i]);
+                }
+            } else {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid call-argument slice on call expression");
+                err_(e.span, "invalid call-argument slice");
+                return types_.error();
+            }
+        }
+
         auto check_all_arg_exprs_only = [&]() {
-            for (uint32_t i = 0; i < e.arg_count; ++i) {
-                const auto& a = ast_.args()[e.arg_begin + i];
+            for (const auto& a : call_args) {
                 if (a.expr != ast::k_invalid_expr) (void)check_expr_(a.expr);
             }
         };
+
+        std::vector<ty::TypeId> explicit_call_type_args;
+        if (e.call_type_arg_count > 0) {
+            const auto& type_args = ast_.type_args();
+            const uint64_t begin = e.call_type_arg_begin;
+            const uint64_t end = begin + e.call_type_arg_count;
+            if (begin <= type_args.size() && end <= type_args.size()) {
+                explicit_call_type_args.reserve(e.call_type_arg_count);
+                for (uint32_t i = 0; i < e.call_type_arg_count; ++i) {
+                    explicit_call_type_args.push_back(type_args[e.call_type_arg_begin + i]);
+                }
+            } else {
+                diag_(diag::Code::kGenericCallTypeArgParseAmbiguous, e.span);
+                err_(e.span, "invalid generic type-argument slice on call expression");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+        }
 
         // ------------------------------------------------------------
         // 0) split args + call form classification
@@ -49,8 +84,8 @@ namespace parus::tyck {
         bool seen_labeled = false;
         bool has_invalid_order = false;
 
-        for (uint32_t i = 0; i < e.arg_count; ++i) {
-            const auto& a = ast_.args()[e.arg_begin + i];
+        for (uint32_t i = 0; i < call_args.size(); ++i) {
+            const auto& a = call_args[i];
             const bool is_labeled = a.has_label || (a.kind == ast::ArgKind::kLabeled);
             if (is_labeled) {
                 seen_labeled = true;
@@ -911,6 +946,135 @@ namespace parus::tyck {
             return fallback_ret;
         }
 
+        struct GenericFailureInfo {
+            bool has_arity = false;
+            uint32_t expected_arity = 0;
+            uint32_t got_arity = 0;
+            bool has_infer_fail = false;
+            bool has_proto_not_found = false;
+            std::string proto_not_found{};
+            bool has_unsatisfied = false;
+            std::string unsat_type_param{};
+            std::string unsat_proto{};
+            std::string unsat_concrete{};
+        };
+        GenericFailureInfo generic_failure{};
+
+        auto infer_generic_bindings = [&](auto&& self,
+                                          ty::TypeId param_t,
+                                          ty::TypeId arg_t,
+                                          const std::unordered_set<std::string>& generic_set,
+                                          std::unordered_map<std::string, ty::TypeId>& out_bindings) -> bool {
+            if (param_t == ty::kInvalidType || arg_t == ty::kInvalidType) return true;
+            const auto& pt = types_.get(param_t);
+            if (pt.kind == ty::Kind::kNamedUser) {
+                const std::string pname = types_.to_string(param_t);
+                if (generic_set.find(pname) != generic_set.end()) {
+                    auto it = out_bindings.find(pname);
+                    if (it == out_bindings.end()) {
+                        out_bindings.emplace(pname, arg_t);
+                        return true;
+                    }
+                    return it->second == arg_t;
+                }
+                return true;
+            }
+
+            const auto& at = types_.get(arg_t);
+            if (pt.kind != at.kind) return true;
+            switch (pt.kind) {
+                case ty::Kind::kBorrow:
+                case ty::Kind::kPtr:
+                case ty::Kind::kEscape:
+                case ty::Kind::kOptional:
+                    return self(self, pt.elem, at.elem, generic_set, out_bindings);
+                case ty::Kind::kArray:
+                    if (pt.array_has_size != at.array_has_size) return false;
+                    if (pt.array_has_size && pt.array_size != at.array_size) return false;
+                    return self(self, pt.elem, at.elem, generic_set, out_bindings);
+                case ty::Kind::kFn: {
+                    if (pt.param_count != at.param_count) return false;
+                    for (uint32_t i = 0; i < pt.param_count; ++i) {
+                        if (!self(self,
+                                  types_.fn_param_at(param_t, i),
+                                  types_.fn_param_at(arg_t, i),
+                                  generic_set,
+                                  out_bindings)) {
+                            return false;
+                        }
+                    }
+                    return self(self, pt.ret, at.ret, generic_set, out_bindings);
+                }
+                default:
+                    return true;
+            }
+        };
+
+        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        auto proto_all_default_impl = [&](ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = ps.stmt_begin;
+            const uint64_t end = begin + ps.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return false;
+            if (ps.stmt_count == 0) return true;
+            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
+                const ast::StmtId msid = kids[ps.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) return false;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) return false;
+                if (m.a == ast::k_invalid_stmt) return false;
+            }
+            return true;
+        };
+
+        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt) return false;
+            if (proto_all_default_impl(proto_sid)) return true;
+
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
+                owner_sid = cit->second;
+            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
+                owner_sid = fit->second.sid;
+            }
+
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
+            const auto& owner = ast_.stmt(owner_sid);
+            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) {
+                return false;
+            }
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                const auto& pr = refs[i];
+                const std::string path = path_join_(pr.path_begin, pr.path_count);
+                auto psid = resolve_proto_sid_for_constraint(path);
+                if (psid.has_value() && *psid == proto_sid) return true;
+            }
+            return false;
+        };
+
         // ------------------------------------------------------------
         // 4) overload 후보 구성
         // ------------------------------------------------------------
@@ -924,12 +1088,17 @@ namespace parus::tyck {
         struct Candidate {
             ast::StmtId decl_id = ast::k_invalid_stmt;
             ty::TypeId ret = ty::kInvalidType;
+            bool is_generic = false;
+            std::vector<std::string> generic_param_names;
+            std::unordered_map<std::string, ty::TypeId> generic_bindings;
+            std::vector<ty::TypeId> generic_concrete_args;
             bool inject_receiver = false;
             uint32_t receiver_decl_index = 0xFFFF'FFFFu;
             std::vector<ParamInfo> positional;
             std::vector<ParamInfo> named;
             std::unordered_map<std::string, size_t> positional_by_label;
             std::unordered_map<std::string, size_t> named_by_label;
+            bool generic_viable = true;
         };
 
         std::vector<Candidate> candidates;
@@ -941,6 +1110,32 @@ namespace parus::tyck {
 
             Candidate c{};
             c.decl_id = sid;
+            c.is_generic = (def.fn_generic_param_count > 0);
+            if (c.is_generic) {
+                c.generic_param_names = collect_generic_param_names_(def);
+                if (!explicit_call_type_args.empty()) {
+                    if (c.generic_param_names.size() != explicit_call_type_args.size()) {
+                        generic_failure.has_arity = true;
+                        generic_failure.expected_arity = static_cast<uint32_t>(c.generic_param_names.size());
+                        generic_failure.got_arity = static_cast<uint32_t>(explicit_call_type_args.size());
+                        c.generic_viable = false;
+                    } else {
+                        for (size_t gi = 0; gi < c.generic_param_names.size(); ++gi) {
+                            c.generic_bindings.emplace(c.generic_param_names[gi], explicit_call_type_args[gi]);
+                        }
+                    }
+                }
+            } else if (!explicit_call_type_args.empty()) {
+                generic_failure.has_arity = true;
+                generic_failure.expected_arity = 0;
+                generic_failure.got_arity = static_cast<uint32_t>(explicit_call_type_args.size());
+                c.generic_viable = false;
+            }
+
+            if (!c.generic_viable) {
+                continue;
+            }
+
             ty::TypeId resolved_ret = (def.fn_ret != ty::kInvalidType)
                 ? def.fn_ret
                 : ((def.type != ty::kInvalidType && types_.get(def.type).kind == ty::Kind::kFn)
@@ -948,6 +1143,9 @@ namespace parus::tyck {
                     : fallback_ret);
             if (is_dot_method_call && dot_needs_self_normalization && dot_owner_type != ty::kInvalidType) {
                 resolved_ret = normalize_self_for_owner(normalize_self_for_owner, resolved_ret, dot_owner_type);
+            }
+            if (c.is_generic && !c.generic_bindings.empty()) {
+                resolved_ret = substitute_generic_type_(resolved_ret, c.generic_bindings);
             }
             if (is_ctor_call && ctor_owner_type != ty::kInvalidType) {
                 c.ret = ctor_owner_type;
@@ -1011,6 +1209,9 @@ namespace parus::tyck {
                 if (is_dot_method_call && dot_needs_self_normalization && dot_owner_type != ty::kInvalidType) {
                     info.type = normalize_self_for_owner(normalize_self_for_owner, info.type, dot_owner_type);
                 }
+                if (c.is_generic && !c.generic_bindings.empty()) {
+                    info.type = substitute_generic_type_(info.type, c.generic_bindings);
+                }
                 info.has_default = p.has_default;
                 info.span = p.span;
 
@@ -1027,6 +1228,142 @@ namespace parus::tyck {
             candidates.push_back(std::move(c));
         }
 
+        for (auto& c : candidates) {
+            if (!c.is_generic || !c.generic_viable) continue;
+
+            if (c.generic_bindings.empty()) {
+                std::unordered_set<std::string> generic_set;
+                generic_set.reserve(c.generic_param_names.size());
+                for (const auto& n : c.generic_param_names) {
+                    generic_set.insert(n);
+                }
+
+                auto infer_arg = [&](const ast::Arg* a, const ParamInfo& p) -> bool {
+                    if (a == nullptr || a->expr == ast::k_invalid_expr) return true;
+                    const ty::TypeId at = check_expr_(a->expr);
+                    return infer_generic_bindings(
+                        infer_generic_bindings,
+                        p.type,
+                        at,
+                        generic_set,
+                        c.generic_bindings
+                    );
+                };
+
+                bool infer_ok = true;
+                if (form == CallForm::kPositionalOnly) {
+                    const size_t n = std::min(outside_positional.size(), c.positional.size());
+                    for (size_t i = 0; i < n; ++i) {
+                        if (!infer_arg(outside_positional[i], c.positional[i])) {
+                            infer_ok = false;
+                            break;
+                        }
+                    }
+                } else if (form == CallForm::kLabeledOnly) {
+                    for (const auto& p : c.positional) {
+                        auto it = labeled_by_label.find(p.name);
+                        if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
+                            infer_ok = false;
+                            break;
+                        }
+                    }
+                    if (infer_ok) {
+                        for (const auto& p : c.named) {
+                            auto it = labeled_by_label.find(p.name);
+                            if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
+                                infer_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                } else if (form == CallForm::kPositionalThenLabeled) {
+                    const size_t n = std::min(outside_positional.size(), c.positional.size());
+                    for (size_t i = 0; i < n; ++i) {
+                        if (!infer_arg(outside_positional[i], c.positional[i])) {
+                            infer_ok = false;
+                            break;
+                        }
+                    }
+                    if (infer_ok) {
+                        for (const auto& p : c.named) {
+                            auto it = labeled_by_label.find(p.name);
+                            if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
+                                infer_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!infer_ok) {
+                    generic_failure.has_infer_fail = true;
+                    c.generic_viable = false;
+                    continue;
+                }
+
+                for (const auto& n : c.generic_param_names) {
+                    if (c.generic_bindings.find(n) == c.generic_bindings.end()) {
+                        generic_failure.has_infer_fail = true;
+                        c.generic_viable = false;
+                        break;
+                    }
+                }
+                if (!c.generic_viable) continue;
+
+                c.generic_concrete_args.reserve(c.generic_param_names.size());
+                for (const auto& n : c.generic_param_names) {
+                    c.generic_concrete_args.push_back(c.generic_bindings[n]);
+                }
+
+                c.ret = substitute_generic_type_(c.ret, c.generic_bindings);
+                for (auto& p : c.positional) p.type = substitute_generic_type_(p.type, c.generic_bindings);
+                for (auto& p : c.named) p.type = substitute_generic_type_(p.type, c.generic_bindings);
+            } else {
+                c.generic_concrete_args.reserve(c.generic_param_names.size());
+                for (const auto& n : c.generic_param_names) {
+                    auto it = c.generic_bindings.find(n);
+                    if (it == c.generic_bindings.end()) {
+                        generic_failure.has_infer_fail = true;
+                        c.generic_viable = false;
+                        break;
+                    }
+                    c.generic_concrete_args.push_back(it->second);
+                }
+                if (!c.generic_viable) continue;
+            }
+
+            const auto& def = ast_.stmt(c.decl_id);
+            for (uint32_t ci = 0; ci < def.fn_constraint_count; ++ci) {
+                const uint32_t cidx = def.fn_constraint_begin + ci;
+                if (cidx >= ast_.fn_constraint_decls().size()) break;
+                const auto& cc = ast_.fn_constraint_decls()[cidx];
+                auto bit = c.generic_bindings.find(std::string(cc.type_param));
+                if (bit == c.generic_bindings.end()) {
+                    generic_failure.has_infer_fail = true;
+                    c.generic_viable = false;
+                    break;
+                }
+
+                const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+                auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
+                if (!proto_sid.has_value()) {
+                    generic_failure.has_proto_not_found = true;
+                    generic_failure.proto_not_found = proto_path;
+                    c.generic_viable = false;
+                    break;
+                }
+
+                if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
+                    generic_failure.has_unsatisfied = true;
+                    generic_failure.unsat_type_param = std::string(cc.type_param);
+                    generic_failure.unsat_proto = proto_path;
+                    generic_failure.unsat_concrete = types_.to_string(bit->second);
+                    c.generic_viable = false;
+                    break;
+                }
+            }
+        }
+
         if (candidates.empty()) {
             std::string msg = "no callable declaration candidate for '" + callee_name + "'";
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, "no declaration candidates");
@@ -1039,6 +1376,9 @@ namespace parus::tyck {
         filtered.reserve(candidates.size());
         for (size_t i = 0; i < candidates.size(); ++i) {
             const auto& c = candidates[i];
+            if (!c.generic_viable) {
+                continue;
+            }
             if (form == CallForm::kPositionalThenLabeled && c.named.empty()) {
                 continue;
             }
@@ -1046,6 +1386,35 @@ namespace parus::tyck {
         }
 
         if (filtered.empty()) {
+            if (generic_failure.has_arity) {
+                diag_(diag::Code::kGenericArityMismatch, e.span,
+                      std::to_string(generic_failure.expected_arity),
+                      std::to_string(generic_failure.got_arity));
+                err_(e.span, "generic arity mismatch");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_proto_not_found) {
+                diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, generic_failure.proto_not_found);
+                err_(e.span, "generic constraint references unknown proto");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_unsatisfied) {
+                diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
+                      generic_failure.unsat_type_param,
+                      generic_failure.unsat_proto,
+                      generic_failure.unsat_concrete);
+                err_(e.span, "generic constraint is not satisfied");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_infer_fail) {
+                diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                err_(e.span, "failed to infer generic call type arguments");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
             std::string msg = "no overload candidate matches call form for '" + callee_name + "'";
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
@@ -1139,6 +1508,35 @@ namespace parus::tyck {
         }
 
         if (final_matches.empty()) {
+            if (generic_failure.has_arity) {
+                diag_(diag::Code::kGenericArityMismatch, e.span,
+                      std::to_string(generic_failure.expected_arity),
+                      std::to_string(generic_failure.got_arity));
+                err_(e.span, "generic arity mismatch");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_proto_not_found) {
+                diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, generic_failure.proto_not_found);
+                err_(e.span, "generic constraint references unknown proto");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_unsatisfied) {
+                diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
+                      generic_failure.unsat_type_param,
+                      generic_failure.unsat_proto,
+                      generic_failure.unsat_concrete);
+                err_(e.span, "generic constraint is not satisfied");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (generic_failure.has_infer_fail) {
+                diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                err_(e.span, "failed to infer generic call type arguments");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
             std::string msg = "no matching overload found for call '" + callee_name + "'";
             diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
             err_(e.span, msg);
@@ -1147,31 +1545,64 @@ namespace parus::tyck {
         }
 
         if (final_matches.size() > 1) {
-            std::string msg = "ambiguous overloaded call '" + callee_name + "'";
-            diag_(diag::Code::kSymbolAmbiguousOverload, e.span, callee_name);
-            err_(e.span, msg);
-            check_all_arg_exprs_only();
-            return fallback_ret;
+            std::vector<size_t> non_generic;
+            std::vector<size_t> only_generic;
+            non_generic.reserve(final_matches.size());
+            only_generic.reserve(final_matches.size());
+            for (const auto idx : final_matches) {
+                if (candidates[idx].is_generic) only_generic.push_back(idx);
+                else non_generic.push_back(idx);
+            }
+
+            if (non_generic.size() == 1) {
+                final_matches = {non_generic.front()};
+            } else if (non_generic.size() > 1) {
+                std::string msg = "ambiguous overloaded call '" + callee_name + "'";
+                diag_(diag::Code::kSymbolAmbiguousOverload, e.span, callee_name);
+                err_(e.span, msg);
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            } else if (only_generic.size() == 1) {
+                final_matches = {only_generic.front()};
+            } else {
+                diag_(diag::Code::kGenericAmbiguousOverload, e.span, callee_name);
+                err_(e.span, "ambiguous generic overload call");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
         }
 
         const Candidate& selected = candidates[final_matches.front()];
+        ast::StmtId selected_decl_sid = selected.decl_id;
+        if (selected.is_generic) {
+            auto inst_sid = ensure_generic_function_instance_(
+                selected.decl_id,
+                selected.generic_concrete_args,
+                e.span
+            );
+            if (!inst_sid.has_value()) {
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+            selected_decl_sid = *inst_sid;
+        }
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
-            expr_overload_target_cache_[current_expr_id_] = selected.decl_id;
+            expr_overload_target_cache_[current_expr_id_] = selected_decl_sid;
         }
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_ctor_owner_type_cache_.size()) {
             expr_ctor_owner_type_cache_[current_expr_id_] = is_ctor_call ? ctor_owner_type : ty::kInvalidType;
         }
 
-        if (!is_ctor_call && is_actor_lifecycle_decl(selected.decl_id)) {
+        if (!is_ctor_call && is_actor_lifecycle_decl(selected_decl_sid)) {
             diag_(diag::Code::kActorLifecycleDirectCallForbidden, e.span, callee_name);
             err_(e.span, "actor lifecycle direct call is forbidden");
             check_all_arg_exprs_only();
             return types_.error();
         }
 
-        if (!is_ctor_call && is_class_lifecycle_decl(selected.decl_id)) {
+        if (!is_ctor_call && is_class_lifecycle_decl(selected_decl_sid)) {
             diag_(diag::Code::kClassLifecycleDirectCallForbidden, e.span, callee_name);
             err_(e.span, "class lifecycle direct call is forbidden");
             check_all_arg_exprs_only();

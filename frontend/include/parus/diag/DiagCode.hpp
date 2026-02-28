@@ -45,6 +45,7 @@ namespace parus::diag {
         kPipeHoleMustBeLabeled,
         kPipeHoleCountMismatch,
         kPipeHolePositionalNotAllowed,
+        kGenericCallTypeArgParseAmbiguous, // `<...>` in call-site is ambiguous or malformed
 
         // call rules
         kDeclExpected,               // declaration expected in current context
@@ -247,6 +248,11 @@ namespace parus::diag {
         kDotReceiverMustBeValue, // dot method calls require value receiver (type names are not allowed)
         kClassCtorMissingInit,  // class constructor call requires init overload
         kClassProtoPathCallRemoved, // class/proto member path call removed (use dot call)
+        kGenericArityMismatch, // generic type argument count mismatch
+        kGenericTypeArgInferenceFailed, // generic call type argument inference failed
+        kGenericAmbiguousOverload, // generic overload selection is ambiguous
+        kGenericConstraintProtoNotFound, // proto path in generic constraint not found
+        kGenericConstraintUnsatisfied, // concrete type does not satisfy generic proto constraint
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)

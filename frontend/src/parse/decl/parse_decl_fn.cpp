@@ -355,6 +355,43 @@ namespace parus {
         }
     }
 
+    bool Parser::parse_decl_generic_param_clause(uint32_t& out_begin, uint32_t& out_count) {
+        using K = syntax::TokenKind;
+        out_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        out_count = 0;
+        if (!cursor_.eat(K::kLt)) return false;
+
+        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
+            const Token gp = cursor_.peek();
+            if (gp.kind == K::kIdent) {
+                cursor_.bump();
+                ast::GenericParamDecl g{};
+                g.name = gp.lexeme;
+                g.span = gp.span;
+                ast_.add_generic_param_decl(g);
+                ++out_count;
+            } else {
+                diag_report(diag::Code::kTypeParamTypeRequired, gp.span, "type parameter");
+                recover_to_delim(K::kComma, K::kGt, K::kLParen);
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+
+            if (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kGt)) break;
+                continue;
+            }
+            break;
+        }
+
+        if (!cursor_.eat(K::kGt)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+            recover_to_delim(K::kGt, K::kLParen, K::kArrow);
+            cursor_.eat(K::kGt);
+        }
+        return true;
+    }
+
     bool Parser::parse_decl_fn_constraint_clause(uint32_t& out_begin, uint32_t& out_count) {
         using K = syntax::TokenKind;
         out_begin = static_cast<uint32_t>(ast_.fn_constraint_decls().size());
@@ -457,38 +494,9 @@ namespace parus {
         }
 
         // optional generic clause
-        uint32_t generic_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        uint32_t generic_begin = 0;
         uint32_t generic_count = 0;
-        if (cursor_.eat(K::kLt)) {
-            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
-                const Token gp = cursor_.peek();
-                if (gp.kind == K::kIdent) {
-                    cursor_.bump();
-                    ast::GenericParamDecl g{};
-                    g.name = gp.lexeme;
-                    g.span = gp.span;
-                    ast_.add_generic_param_decl(g);
-                    ++generic_count;
-                } else {
-                    diag_report(diag::Code::kTypeParamTypeRequired, gp.span, "type parameter");
-                    recover_to_delim(K::kComma, K::kGt, K::kLParen);
-                    if (cursor_.eat(K::kComma)) continue;
-                    break;
-                }
-
-                if (cursor_.eat(K::kComma)) {
-                    if (cursor_.at(K::kGt)) break;
-                    continue;
-                }
-                break;
-            }
-
-            if (!cursor_.eat(K::kGt)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-                recover_to_delim(K::kGt, K::kLParen, K::kArrow);
-                cursor_.eat(K::kGt);
-            }
-        }
+        (void)parse_decl_generic_param_clause(generic_begin, generic_count);
 
         uint32_t param_begin = 0;
         uint32_t param_count = 0;
@@ -675,38 +683,9 @@ namespace parus {
         }
 
         // 6.5) optional generic clause: <T, U, ...>
-        uint32_t generic_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        uint32_t generic_begin = 0;
         uint32_t generic_count = 0;
-        if (cursor_.eat(K::kLt)) {
-            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
-                const Token gp = cursor_.peek();
-                if (gp.kind == K::kIdent) {
-                    cursor_.bump();
-                    ast::GenericParamDecl g{};
-                    g.name = gp.lexeme;
-                    g.span = gp.span;
-                    ast_.add_generic_param_decl(g);
-                    ++generic_count;
-                } else {
-                    diag_report(diag::Code::kTypeParamTypeRequired, gp.span, "type parameter");
-                    recover_to_delim(K::kComma, K::kGt, K::kLParen);
-                    if (cursor_.eat(K::kComma)) continue;
-                    break;
-                }
-
-                if (cursor_.eat(K::kComma)) {
-                    if (cursor_.at(K::kGt)) break;
-                    continue;
-                }
-                break;
-            }
-
-            if (!cursor_.eat(K::kGt)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-                recover_to_delim(K::kGt, K::kLParen, K::kArrow);
-                cursor_.eat(K::kGt);
-            }
-        }
+        (void)parse_decl_generic_param_clause(generic_begin, generic_count);
 
         // 7) params
         uint32_t param_begin = 0, param_count = 0, positional_count = 0;

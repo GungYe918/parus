@@ -578,11 +578,35 @@ namespace parus::tyck {
 
             case ast::ExprKind::kIdent: {
                 auto id = lookup_symbol_(e.text);
+                if (!id && !fn_sid_stack_.empty()) {
+                    const ast::StmtId cur_fn_sid = fn_sid_stack_.back();
+                    if (cur_fn_sid != ast::k_invalid_stmt && (size_t)cur_fn_sid < ast_.stmts().size()) {
+                        const auto& fs = ast_.stmt(cur_fn_sid);
+                        if (fs.kind == ast::StmtKind::kFnDecl) {
+                            for (uint32_t i = 0; i < fs.param_count; ++i) {
+                                const uint32_t pidx = fs.param_begin + i;
+                                if ((size_t)pidx >= ast_.params().size()) break;
+                                const auto& p = ast_.params()[pidx];
+                                if (p.name != e.text) continue;
+                                if ((size_t)pidx < param_resolved_symbol_cache_.size()) {
+                                    const uint32_t sid = param_resolved_symbol_cache_[pidx];
+                                    if (sid != sema::SymbolTable::kNoScope) {
+                                        id = sid;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
                 if (!id) {
                     diag_(diag::Code::kUndefinedName, e.span, e.text);
                     err_(e.span, "unknown identifier");
                     t = types_.error();
                 } else {
+                    if (eid < expr_resolved_symbol_cache_.size()) {
+                        expr_resolved_symbol_cache_[eid] = *id;
+                    }
                     t = sym_.symbol(*id).declared_type;
                     if (t == ty::kInvalidType) t = types_.error();
 

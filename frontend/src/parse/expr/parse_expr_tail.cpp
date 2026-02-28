@@ -48,7 +48,87 @@ namespace parus {
         return a;
     }
 
-    ast::ExprId Parser::parse_expr_call(ast::ExprId callee, const Token& lparen_tok, int ternary_depth) {
+    bool Parser::parse_expr_try_call_type_args(uint32_t& out_begin, uint32_t& out_count) {
+        using K = syntax::TokenKind;
+        out_begin = 0;
+        out_count = 0;
+
+        if (!cursor_.at(K::kLt)) return false;
+
+        // speculative pre-scan without diagnostics:
+        // accept only if a balanced angle-bracket segment is immediately followed by '('.
+        size_t i = cursor_.pos();
+        int angle = 0;
+        int paren = 0;
+        int bracket = 0;
+        bool closed = false;
+        while (true) {
+            const Token t = cursor_.peek(i - cursor_.pos());
+            if (t.kind == K::kEof) return false;
+
+            if (t.kind == K::kLt) {
+                ++angle;
+                ++i;
+                continue;
+            }
+            if (t.kind == K::kGt) {
+                --angle;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
+                continue;
+            }
+
+            if (t.kind == K::kLParen) { ++paren; ++i; continue; }
+            if (t.kind == K::kRParen) { --paren; ++i; if (paren < 0) return false; continue; }
+            if (t.kind == K::kLBracket) { ++bracket; ++i; continue; }
+            if (t.kind == K::kRBracket) { --bracket; ++i; if (bracket < 0) return false; continue; }
+
+            // obvious expression-only operators are not valid in type args.
+            if (t.kind == K::kPlus || t.kind == K::kMinus || t.kind == K::kStar ||
+                t.kind == K::kSlash || t.kind == K::kPercent || t.kind == K::kEqEq ||
+                t.kind == K::kBangEq || t.kind == K::kPipePipe ||
+                t.kind == K::kPipeFwd || t.kind == K::kPipeRev ||
+                t.kind == K::kKwAnd || t.kind == K::kKwOr) {
+                return false;
+            }
+
+            ++i;
+        }
+
+        if (!closed) return false;
+        if (cursor_.peek(i - cursor_.pos()).kind != K::kLParen) return false;
+
+        // real parse
+        if (!cursor_.eat(K::kLt)) return false;
+        out_begin = static_cast<uint32_t>(ast_.type_args().size());
+        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+            auto ty = parse_type();
+            ast_.add_type_arg(ty.id);
+            ++out_count;
+            if (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kGt)) break;
+                continue;
+            }
+            break;
+        }
+
+        if (!cursor_.eat(K::kGt)) {
+            diag_report(diag::Code::kGenericCallTypeArgParseAmbiguous, cursor_.peek().span);
+            recover_to_delim(K::kGt, K::kLParen, K::kSemicolon);
+            cursor_.eat(K::kGt);
+        }
+        return true;
+    }
+
+    ast::ExprId Parser::parse_expr_call(ast::ExprId callee,
+                                        const Token& lparen_tok,
+                                        int ternary_depth,
+                                        uint32_t call_type_arg_begin,
+                                        uint32_t call_type_arg_count) {
         using K = syntax::TokenKind;
 
         if (aborted_) {
@@ -153,6 +233,8 @@ namespace parus {
         out.a = callee;
         out.arg_begin = begin;
         out.arg_count = count;
+        out.call_type_arg_begin = call_type_arg_begin;
+        out.call_type_arg_count = call_type_arg_count;
         return ast_.add_expr(out);
     }
 

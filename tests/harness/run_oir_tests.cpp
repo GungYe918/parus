@@ -130,6 +130,60 @@ namespace {
         return ok;
     }
 
+    /// @brief generic 함수 인스턴스가 1회 materialize되고 direct call로 선택되는지 검사한다.
+    static bool test_generic_fn_instantiation_oir_call_ok() {
+        const std::string src = R"(
+            def add<T>(a: T, b: T) -> i32 {
+                return a + b;
+            }
+            def main() -> i32 {
+                set x = add<i32>(1, 2);
+                set y = add<i32>(3, 4);
+                return x + y;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic call source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic call source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic call source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic call source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass after generic call lowering");
+        if (!ok) return false;
+
+        uint32_t generic_add_defs = 0;
+        for (const auto& f : oir.mod.funcs) {
+            if (f.source_name.find("add<") != std::string::npos) {
+                ++generic_add_defs;
+            }
+        }
+
+        bool has_call_to_generic_add = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.source_name.find("add<") != std::string::npos) {
+                has_call_to_generic_add = true;
+                break;
+            }
+        }
+
+        ok &= require_(generic_add_defs == 1, "same concrete generic tuple must be deduplicated in OIR");
+        ok &= require_(has_call_to_generic_add, "generic call must lower to direct concrete callee");
+        return ok;
+    }
+
     /// @brief OIR pass가 상수 폴딩과 dead pure inst 제거를 수행하는지 검사한다.
     static bool test_oir_const_fold_and_dce() {
         parus::oir::Module m;
@@ -1076,6 +1130,7 @@ int main() {
 
     const Case cases[] = {
         {"oir_call_lowering_ok", test_oir_call_lowering_ok},
+        {"generic_fn_instantiation_oir_call_ok", test_generic_fn_instantiation_oir_call_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},
