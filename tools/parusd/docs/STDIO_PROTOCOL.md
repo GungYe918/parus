@@ -18,8 +18,10 @@
 5. `textDocument/didOpen`
 6. `textDocument/didChange`
 7. `textDocument/didClose`
-8. `textDocument/semanticTokens/full`
-9. `workspace/didChangeWatchedFiles`
+8. `textDocument/completion`
+9. `textDocument/definition`
+10. `textDocument/semanticTokens/full`
+11. `workspace/didChangeWatchedFiles`
 
 지원하지 않는 요청은 JSON-RPC `-32601 method not found` 반환.
 
@@ -39,11 +41,25 @@
 1. `textDocumentSync` (`openClose=true`, `change=2`)
 2. `positionEncoding = utf-16`
 3. `semanticTokensProvider` (`full=true`, `range=false`)
+4. `completionProvider` (`triggerCharacters=[".",":"]`)
+5. `definitionProvider = true`
 
 ## semanticTokens 동작
 
 1. Parus 문서: 토큰 분류 결과 반환
 2. LEI 문서: 안정성 우선으로 빈 토큰 배열 반환 (`{data:[]}`)
+
+## completion 동작
+
+1. Parus/LEI 공통 keyword completion을 제공한다.
+2. Parus는 현재 문서의 top-level 선언(`def/class/proto/actor/field/acts/nest`)도 completion 후보에 포함한다.
+3. LEI는 `def/proto/plan/import alias/let/var` 선언명을 completion 후보에 포함한다.
+
+## definition 동작
+
+1. 현재 문서 로컬 심볼은 NameResolve 결과 기반으로 선언 위치를 반환한다.
+2. 번들 내부/의존 번들의 export-index(v3) `decl_span`이 있으면 해당 파일 위치로 이동한다.
+3. 결과는 단일 위치 또는 `Location[]`으로 반환된다.
 
 ## 코드 근거
 

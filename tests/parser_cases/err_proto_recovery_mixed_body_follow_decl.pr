@@ -1,0 +1,10 @@
+proto Mixed {
+  def a(self) -> i32;
+  def b(self) -> i32 {
+    return 1i32;
+  }
+};
+
+def after() -> i32 {
+  return 4i32;
+}

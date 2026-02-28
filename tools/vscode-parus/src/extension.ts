@@ -13,6 +13,12 @@ import {
   type ServerOptions,
   Trace,
 } from "vscode-languageclient/node";
+import { registerLeiCompletionProvider as registerLeiCompletionProviderFeature } from "./features/lei/completion";
+import { registerParusFallbackCompletionProvider } from "./features/parus/completion";
+import { registerFallbackDefinitionProvider } from "./features/navigation/definition";
+import { enhanceDiagnostics as enhanceDiagnosticsFeature } from "./features/diagnostics/enhancer";
+import { refreshLintStatusBar as refreshLintStatusBarFeature } from "./features/statusbar/lint";
+import { updateServerPathStatusBar as updateServerPathStatusBarFeature } from "./features/statusbar/serverPath";
 
 type ServerMode = "driver" | "direct";
 type TraceSetting = "off" | "messages" | "verbose";
@@ -439,7 +445,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   lintStatusBarItem.show();
   context.subscriptions.push(lintStatusBarItem);
-  context.subscriptions.push(registerLeiCompletionProvider());
+  context.subscriptions.push(
+    registerLeiCompletionProviderFeature(),
+    registerParusFallbackCompletionProvider(),
+    registerFallbackDefinitionProvider()
+  );
 
   updateServerPathStatusBar(readConfig());
   refreshLintStatusBar();
@@ -726,7 +736,7 @@ async function startLanguageClient(reason: string): Promise<void> {
       didClose: (document, next) => changeDebouncer?.didClose(document, next) ?? next(document),
       // parusd 진단 code/source를 메시지와 상태바 요약에 반영한다.
       handleDiagnostics: (uri, diagnostics, next) => {
-        const enhanced = enhanceDiagnostics(uri, diagnostics);
+        const enhanced = enhanceDiagnosticsFeature(uri, diagnostics);
         cacheParusDiagnostics(uri, enhanced);
         next(uri, enhanced);
       },
@@ -1225,79 +1235,12 @@ function cacheParusDiagnostics(uri: vscode.Uri, diagnostics: readonly vscode.Dia
 }
 
 function refreshLintStatusBar(): void {
-  if (!lintStatusBarItem) {
-    return;
-  }
-
-  const editor = vscode.window.activeTextEditor;
-  if (!editor || !isSupportedLanguageId(editor.document.languageId)) {
-    lintStatusBarItem.hide();
-    return;
-  }
-
-  const diagnostics = parusDiagnosticsByUri.get(editor.document.uri.toString()) ?? [];
-  let errors = 0;
-  let warnings = 0;
-  let infos = 0;
-  let hints = 0;
-
-  for (const diag of diagnostics) {
-    switch (diag.severity) {
-      case vscode.DiagnosticSeverity.Error:
-        errors += 1;
-        break;
-      case vscode.DiagnosticSeverity.Warning:
-        warnings += 1;
-        break;
-      case vscode.DiagnosticSeverity.Information:
-        infos += 1;
-        break;
-      case vscode.DiagnosticSeverity.Hint:
-        hints += 1;
-        break;
-      default:
-        break;
-    }
-  }
-
-  if (diagnostics.length === 0) {
-    lintStatusBarItem.text = "$(check) Parus/LEI Lint: clean";
-    lintStatusBarItem.tooltip = "Parus/LEI: 현재 파일 진단 없음";
-    lintStatusBarItem.show();
-    return;
-  }
-
-  const parts = [`$(error) ${errors}`, `$(warning) ${warnings}`];
-  if (infos > 0) {
-    parts.push(`$(info) ${infos}`);
-  }
-  if (hints > 0) {
-    parts.push(`$(light-bulb) ${hints}`);
-  }
-
-  lintStatusBarItem.text = `Parus/LEI Lint ${parts.join(" ")}`;
-  lintStatusBarItem.tooltip = "Parus/LEI: Problems 보기 열기";
-  lintStatusBarItem.show();
+  refreshLintStatusBarFeature(lintStatusBarItem, parusDiagnosticsByUri, vscode.window.activeTextEditor);
 }
 
 function updateServerPathStatusBar(cfg: ParusConfig): void {
-  if (!serverPathStatusBarItem) {
-    return;
-  }
-
-  const modeText = cfg.serverMode === "driver" ? "driver" : "direct";
-  const pathText = cfg.serverPath === "" ? "auto" : cfg.serverPath;
-  const shortPath = cfg.serverPath === "" ? "auto" : path.basename(cfg.serverPath);
-
-  serverPathStatusBarItem.text = `$(server-process) Parus LS: ${shortPath}`;
-  serverPathStatusBarItem.tooltip = [
-    "Parus Language Server",
-    `mode: ${modeText}`,
-    `path: ${pathText}`,
-    "",
-    "클릭해서 서버 경로를 설정합니다.",
-  ].join("\n");
-  serverPathStatusBarItem.show();
+  updateServerPathStatusBarFeature(serverPathStatusBarItem, cfg);
+  serverPathStatusBarItem?.show();
 }
 
 function toTraceLevel(trace: TraceSetting): Trace {

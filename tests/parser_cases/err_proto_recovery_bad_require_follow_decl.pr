@@ -1,0 +1,7 @@
+proto A {
+  def id(self) -> i32;
+} with require(and true);
+
+def after() -> i32 {
+  return 3i32;
+}

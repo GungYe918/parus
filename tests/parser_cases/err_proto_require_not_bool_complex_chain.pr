@@ -1,0 +1,7 @@
+proto NeedsBool {
+  def f(self) -> i32;
+} with require(1i32 and true);
+
+def main() -> i32 {
+  return 0i32;
+}

@@ -184,6 +184,113 @@ bool test_parus_regression_valid_pr() {
     return true;
 }
 
+bool test_initialize_advertises_completion_and_definition() {
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":11,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","id":12,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    if (rc != 0) {
+        std::cerr << "initialize capability session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"completionProvider\"") || !contains(out, "\"definitionProvider\":true")) {
+        std::cerr << "initialize response must advertise completion/definition capabilities\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool test_completion_keywords_parus_and_lei() {
+    const std::string parus_uri = "file:///tmp/parusd_completion.pr";
+    const std::string lei_uri = "file:///tmp/parusd_completion.lei";
+    const std::string parus_text =
+        "def main() -> i32 {\\n"
+        "  ret\\n"
+        "  return 0i32;\\n"
+        "}\\n";
+    const std::string lei_text =
+        "plan master = master & {\\n"
+        "  project = { name: \\\"ok\\\", version: \\\"0.1.0\\\" };\\n"
+        "  bundles = [];\\n"
+        "  tasks = [];\\n"
+        "  codegens = [];\\n"
+        "};\\n";
+
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":21,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + parus_uri
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + parus_text + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + lei_uri
+            + "\",\"languageId\":\"lei\",\"version\":1,\"text\":\"" + lei_text + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\""
+            + parus_uri + "\"},\"position\":{\"line\":1,\"character\":0}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\""
+            + lei_uri + "\"},\"position\":{\"line\":0,\"character\":0}}}",
+        R"({"jsonrpc":"2.0","id":24,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    if (rc != 0) {
+        std::cerr << "completion session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+
+    if (!contains(out, "\"id\":22") || !contains(out, "\"label\":\"return\"")
+        || !contains(out, "\"label\":\"require\"") || !contains(out, "\"label\":\"proto\"")
+        || !contains(out, "\"label\":\"actor\"")) {
+        std::cerr << "parus completion result must include v0 keywords\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"id\":23") || !contains(out, "\"label\":\"plan\"")
+        || !contains(out, "\"label\":\"import\"") || !contains(out, "\"label\":\"proto\"")) {
+        std::cerr << "lei completion result must include keyword set\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool test_definition_local_symbol() {
+    const std::string uri = "file:///tmp/parusd_definition_local.pr";
+    const std::string text =
+        "def add(a: i32, b: i32) -> i32 {\\n"
+        "  return a + b;\\n"
+        "}\\n"
+        "def main() -> i32 {\\n"
+        "  return add(a: 1i32, b: 2i32);\\n"
+        "}\\n";
+
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":31,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + uri
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + text + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
+            + uri + "\"},\"position\":{\"line\":4,\"character\":10}}}",
+        R"({"jsonrpc":"2.0","id":33,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    if (rc != 0) {
+        std::cerr << "local definition session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"id\":32") || !contains(out, "\"result\":[{\"uri\":\"" + uri + "\"")
+        || !contains(out, "\"line\":0")) {
+        std::cerr << "local definition must jump to same-file declaration span\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool test_parus_module_first_bundle_context() {
     const auto stamp = std::to_string(
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -256,11 +363,14 @@ bool test_parus_module_first_bundle_context() {
     }
 
     const std::string uri = to_file_uri(app_main);
+    const std::string add_uri = to_file_uri(math_add);
     std::vector<std::string> payloads{
         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
         R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
             + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(app_main_text) + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
+            + json_escape(uri) + "\"},\"position\":{\"line\":2,\"character\":9}}}",
         R"({"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}})",
         R"({"jsonrpc":"2.0","method":"exit","params":{}})",
     };
@@ -282,6 +392,10 @@ bool test_parus_module_first_bundle_context() {
         std::cerr << "unexpected unresolved-name diagnostics in module-first scenario\n" << out << "\n";
         return false;
     }
+    if (!contains(out, "\"id\":2") || !contains(out, "\"uri\":\"" + add_uri + "\"")) {
+        std::cerr << "cross-file definition must jump to imported bundle export declaration\n" << out << "\n";
+        return false;
+    }
     return true;
 }
 
@@ -291,9 +405,12 @@ int main() {
     const bool ok1 = test_valid_lei_and_semantic_empty();
     const bool ok2 = test_invalid_lei_reports_diagnostics();
     const bool ok3 = test_parus_regression_valid_pr();
-    const bool ok4 = test_parus_module_first_bundle_context();
+    const bool ok4 = test_initialize_advertises_completion_and_definition();
+    const bool ok5 = test_completion_keywords_parus_and_lei();
+    const bool ok6 = test_definition_local_symbol();
+    const bool ok7 = test_parus_module_first_bundle_context();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

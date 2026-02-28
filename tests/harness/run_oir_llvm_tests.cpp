@@ -950,6 +950,63 @@ namespace {
         return ok;
     }
 
+    /// @brief class override가 있으면 proto default가 아니라 class 멤버 호출이 선택되어야 한다.
+    static bool test_proto_override_call_prefers_class_symbol_() {
+        const std::string src = R"(
+            proto ValueProto {
+                def value(self) -> i32 {
+                    return 1i32;
+                }
+            };
+
+            class Counter : ValueProto {
+                init() = default;
+
+                def value(self) -> i32 {
+                    return 2i32;
+                }
+            }
+
+            def main() -> i32 {
+                set c = Counter();
+                return c.value();
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "proto override source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for proto override source must succeed");
+        ok &= require_(lowered.llvm_ir.find("$ValueProto$value$") != std::string::npos,
+                       "LLVM IR must include proto default value symbol");
+        ok &= require_(lowered.llvm_ir.find("$Counter$value$") != std::string::npos,
+                       "LLVM IR must include class override value symbol");
+
+        bool call_hits_class = false;
+        size_t pos = 0;
+        while (pos < lowered.llvm_ir.size()) {
+            const size_t end = lowered.llvm_ir.find('\n', pos);
+            const size_t len = (end == std::string::npos) ? (lowered.llvm_ir.size() - pos) : (end - pos);
+            const std::string_view line(lowered.llvm_ir.data() + pos, len);
+            if (line.find("call i32 @") != std::string_view::npos &&
+                line.find("$Counter$value$") != std::string_view::npos) {
+                call_hits_class = true;
+                break;
+            }
+            if (end == std::string::npos) break;
+            pos = end + 1;
+        }
+        ok &= require_(call_hits_class, "dot call must lower to class override symbol call");
+        return ok;
+    }
+
     /// @brief class 생성식 `A(...)`가 LLVM IR에서 `A::init` 호출로 내려가는지 검사한다.
     static bool test_class_ctor_call_llvm_init_symbol_() {
         const std::string src = R"(
@@ -1377,6 +1434,7 @@ int main() {
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
+        {"proto_override_call_prefers_class_symbol", test_proto_override_call_prefers_class_symbol_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},
         {"class_ctor_temp_receiver_safe", test_class_ctor_temp_receiver_safe_},
         {"class_field_offset_lowering", test_class_field_offset_lowering_},

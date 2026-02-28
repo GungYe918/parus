@@ -1,0 +1,18 @@
+proto Base {
+  def id(self) -> i32 {
+    return 1i32;
+  }
+};
+
+class C : Base {
+  init() = default;
+
+  def id(self) -> i32 {
+    return 7i32;
+  }
+}
+
+def main() -> i32 {
+  set c = C();
+  return c.id();
+}

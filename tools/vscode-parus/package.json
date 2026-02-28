@@ -54,6 +54,18 @@
         }
       }
     ],
+    "grammars": [
+      {
+        "language": "parus",
+        "scopeName": "source.parus",
+        "path": "./syntaxes/parus.tmLanguage.json"
+      },
+      {
+        "language": "lei",
+        "scopeName": "source.lei",
+        "path": "./syntaxes/lei.tmLanguage.json"
+      }
+    ],
     "commands": [
       {
         "command": "parus.restartLanguageServer",

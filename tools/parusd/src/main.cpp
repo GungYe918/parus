@@ -512,9 +512,32 @@ namespace {
         uint32_t token_modifiers = 0;
     };
 
+    struct LspLocation {
+        std::string uri{};
+        uint32_t start_line = 0;
+        uint32_t start_character = 0;
+        uint32_t end_line = 0;
+        uint32_t end_character = 0;
+    };
+
+    struct CompletionEntry {
+        std::string label{};
+        uint32_t kind = 14; // CompletionItemKind::Keyword
+        std::string detail{};
+    };
+
+    struct DefinitionBinding {
+        uint32_t use_lo = 0;
+        uint32_t use_hi = 0;
+        std::vector<LspLocation> targets{};
+    };
+
     struct AnalysisResult {
         std::vector<LspDiag> diagnostics{};
         std::vector<SemToken> semantic_tokens{};
+        std::vector<CompletionEntry> completion_items{};
+        std::vector<DefinitionBinding> definition_bindings{};
+        std::unordered_map<std::string, std::vector<LspLocation>> top_level_definitions{};
         parus::parse::ReparseMode parse_mode = parus::parse::ReparseMode::kNone;
     };
 
@@ -541,6 +564,22 @@ namespace {
         "declaration",
         "readonly",
         "static",
+    };
+
+    constexpr std::array<std::string_view, 45> kParusCompletionKeywords = {
+        "def", "field", "proto", "class", "actor", "acts",
+        "let", "set", "mut", "static", "if", "elif", "else",
+        "while", "do", "loop", "in", "return", "break", "continue",
+        "true", "false", "null", "and", "or", "not", "xor",
+        "export", "extern", "layout", "align", "switch", "case", "default",
+        "import", "module", "use", "nest", "as", "with", "require",
+        "spawn", "commit", "recast", "manual"
+    };
+
+    constexpr std::array<std::string_view, 20> kLeiCompletionKeywords = {
+        "import", "from", "export", "proto", "plan", "let", "var",
+        "def", "assert", "if", "else", "true", "false", "int", "float",
+        "string", "bool", "return", "for", "in"
     };
 
     struct Position {
@@ -575,6 +614,9 @@ namespace {
             bool valid = false;
             std::vector<LspDiag> diagnostics{};
             std::vector<SemToken> semantic_tokens{};
+            std::vector<CompletionEntry> completion_items{};
+            std::vector<DefinitionBinding> definition_bindings{};
+            std::unordered_map<std::string, std::vector<LspLocation>> top_level_definitions{};
         } analysis{};
     };
 
@@ -660,6 +702,52 @@ namespace {
         std::replace(decoded.begin(), decoded.end(), '/', '\\');
 #endif
         return decoded;
+    }
+
+    std::string file_path_to_uri_(std::string_view raw_path) {
+        namespace fs = std::filesystem;
+        std::error_code ec{};
+        fs::path p(raw_path);
+        if (p.is_relative()) {
+            p = fs::absolute(p, ec);
+            if (ec) {
+                ec.clear();
+                p = fs::path(raw_path);
+            }
+        }
+        fs::path canon = fs::weakly_canonical(p, ec);
+        if (ec || canon.empty()) {
+            ec.clear();
+            canon = p.lexically_normal();
+        }
+        std::string norm = canon.string();
+#if defined(_WIN32)
+        std::replace(norm.begin(), norm.end(), '\\', '/');
+        if (!norm.empty() && norm[0] != '/') {
+            norm.insert(norm.begin(), '/');
+        }
+#endif
+        std::string encoded{};
+        encoded.reserve(norm.size() + 16);
+        auto append_hex = [&](unsigned char c) {
+            static constexpr char kHex[] = "0123456789ABCDEF";
+            encoded.push_back('%');
+            encoded.push_back(kHex[(c >> 4) & 0x0F]);
+            encoded.push_back(kHex[c & 0x0F]);
+        };
+        for (const unsigned char c : norm) {
+            const bool safe =
+                (c >= 'a' && c <= 'z') ||
+                (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') ||
+                c == '/' || c == '_' || c == '-' || c == '.' || c == '~';
+            if (safe) {
+                encoded.push_back(static_cast<char>(c));
+            } else {
+                append_hex(c);
+            }
+        }
+        return "file://" + encoded;
     }
 
     std::string normalize_host_path_(std::string_view raw_path) {
@@ -896,6 +984,81 @@ namespace {
         }
     }
 
+    bool location_from_span_(
+        const parus::SourceManager& sm,
+        const parus::Span& sp,
+        std::string_view uri,
+        LspLocation& out
+    ) {
+        if (sp.hi < sp.lo) return false;
+        const auto begin_lc = sm.line_col(sp.file_id, sp.lo);
+        const auto end_lc = sm.line_col(sp.file_id, (sp.hi > sp.lo) ? sp.hi : sp.lo + 1);
+        if (begin_lc.line == 0 || begin_lc.col == 0 || end_lc.line == 0 || end_lc.col == 0) {
+            return false;
+        }
+        out.uri = std::string(uri);
+        out.start_line = begin_lc.line - 1;
+        out.start_character = begin_lc.col - 1;
+        out.end_line = end_lc.line - 1;
+        out.end_character = end_lc.col - 1;
+        return true;
+    }
+
+    bool same_location_(const LspLocation& a, const LspLocation& b) {
+        return a.uri == b.uri &&
+               a.start_line == b.start_line &&
+               a.start_character == b.start_character &&
+               a.end_line == b.end_line &&
+               a.end_character == b.end_character;
+    }
+
+    void append_unique_location_(std::vector<LspLocation>& out, const LspLocation& loc) {
+        for (const auto& e : out) {
+            if (same_location_(e, loc)) return;
+        }
+        out.push_back(loc);
+    }
+
+    void append_keyword_completions_(
+        const std::span<const std::string_view> kws,
+        std::vector<CompletionEntry>& out
+    ) {
+        out.reserve(out.size() + kws.size());
+        for (const auto kw : kws) {
+            CompletionEntry item{};
+            item.label = std::string(kw);
+            item.kind = 14; // CompletionItemKind::Keyword
+            item.detail = "keyword";
+            out.push_back(std::move(item));
+        }
+    }
+
+    void append_completion_entry_unique_(
+        std::vector<CompletionEntry>& out,
+        std::string_view label,
+        uint32_t kind,
+        std::string_view detail
+    ) {
+        if (label.empty()) return;
+        for (const auto& it : out) {
+            if (it.label == label) return;
+        }
+        CompletionEntry e{};
+        e.label = std::string(label);
+        e.kind = kind;
+        e.detail = std::string(detail);
+        out.push_back(std::move(e));
+    }
+
+    void append_definition_target_(
+        std::unordered_map<std::string, std::vector<LspLocation>>& out,
+        std::string_view key,
+        const LspLocation& loc
+    ) {
+        if (key.empty()) return;
+        append_unique_location_(out[std::string(key)], loc);
+    }
+
     uint64_t sem_span_key_(const parus::Span& sp) {
         return (static_cast<uint64_t>(sp.lo) << 32) | static_cast<uint64_t>(sp.hi);
     }
@@ -964,6 +1127,8 @@ namespace {
             case K::kKwField:
             case K::kKwActs:
             case K::kKwClass:
+            case K::kKwProto:
+            case K::kKwActor:
             case K::kKwSwitch:
             case K::kKwCase:
             case K::kKwDefault:
@@ -980,6 +1145,8 @@ namespace {
             case K::kKwModule:
             case K::kKwAs:
             case K::kKwNest:
+            case K::kKwWith:
+            case K::kKwRequire:
                 return true;
             default:
                 return false;
@@ -1173,8 +1340,12 @@ namespace {
                 mark_ident(i + 1, SemTokenType::kType, 0);
             }
 
-            if (kind == K::kKwActs || kind == K::kKwClass) {
+            if (kind == K::kKwActs || kind == K::kKwClass || kind == K::kKwActor) {
                 mark_ident(i + 1, SemTokenType::kClass, 0);
+            }
+
+            if (kind == K::kKwProto) {
+                mark_ident(i + 1, SemTokenType::kType, 0);
             }
 
             if (kind == K::kKwModule || kind == K::kKwNest) {
@@ -1221,7 +1392,199 @@ namespace {
         return out;
     }
 
+    std::string qualify_path_(const std::vector<std::string>& ns_stack, std::string_view name) {
+        if (name.empty()) return {};
+        if (ns_stack.empty()) return std::string(name);
+        std::string out{};
+        for (size_t i = 0; i < ns_stack.size(); ++i) {
+            if (i) out += "::";
+            out += ns_stack[i];
+        }
+        out += "::";
+        out += std::string(name);
+        return out;
+    }
+
+    uint32_t completion_kind_for_stmt_(parus::ast::StmtKind kind) {
+        using K = parus::ast::StmtKind;
+        switch (kind) {
+            case K::kFnDecl: return 3;      // Function
+            case K::kProtoDecl: return 8;   // Interface
+            case K::kFieldDecl:
+            case K::kClassDecl:
+            case K::kActorDecl:
+            case K::kActsDecl: return 7;    // Class
+            case K::kNestDecl: return 9;    // Module
+            case K::kVar: return 6;         // Variable
+            default: return 1;
+        }
+    }
+
+    void collect_parus_top_level_symbols_stmt_(
+        const parus::ast::AstArena& ast,
+        parus::ast::StmtId sid,
+        const parus::SourceManager& sm,
+        std::string_view uri,
+        std::vector<std::string>& ns_stack,
+        std::vector<CompletionEntry>& completion_items,
+        std::unordered_map<std::string, std::vector<LspLocation>>& definitions
+    ) {
+        if (sid == parus::ast::k_invalid_stmt) return;
+        const auto& s = ast.stmt(sid);
+        const auto& kids = ast.stmt_children();
+
+        if (s.kind == parus::ast::StmtKind::kBlock) {
+            const uint64_t begin = s.stmt_begin;
+            const uint64_t end = begin + s.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                    collect_parus_top_level_symbols_stmt_(
+                        ast,
+                        kids[s.stmt_begin + i],
+                        sm,
+                        uri,
+                        ns_stack,
+                        completion_items,
+                        definitions
+                    );
+                }
+            }
+            return;
+        }
+
+        if (s.kind == parus::ast::StmtKind::kNestDecl) {
+            const auto& segs = ast.path_segs();
+            uint32_t pushed = 0;
+            const uint64_t begin = s.nest_path_begin;
+            const uint64_t end = begin + s.nest_path_count;
+            if (begin <= segs.size() && end <= segs.size()) {
+                for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                    ns_stack.push_back(std::string(segs[s.nest_path_begin + i]));
+                    ++pushed;
+                }
+            }
+            if (!s.nest_is_file_directive) {
+                collect_parus_top_level_symbols_stmt_(
+                    ast, s.a, sm, uri, ns_stack, completion_items, definitions
+                );
+            }
+            while (pushed > 0) {
+                ns_stack.pop_back();
+                --pushed;
+            }
+            return;
+        }
+
+        auto add_named_decl = [&](std::string_view name, parus::ast::StmtKind kind) {
+            if (name.empty()) return;
+            LspLocation loc{};
+            if (!location_from_span_(sm, s.span, uri, loc)) return;
+
+            append_completion_entry_unique_(
+                completion_items,
+                name,
+                completion_kind_for_stmt_(kind),
+                "top-level declaration"
+            );
+            append_definition_target_(definitions, name, loc);
+
+            const std::string qname = qualify_path_(ns_stack, name);
+            if (!qname.empty() && qname != name) {
+                append_definition_target_(definitions, qname, loc);
+            }
+        };
+
+        switch (s.kind) {
+            case parus::ast::StmtKind::kFnDecl:
+            case parus::ast::StmtKind::kFieldDecl:
+            case parus::ast::StmtKind::kProtoDecl:
+            case parus::ast::StmtKind::kClassDecl:
+            case parus::ast::StmtKind::kActorDecl:
+            case parus::ast::StmtKind::kActsDecl:
+                add_named_decl(s.name, s.kind);
+                break;
+            case parus::ast::StmtKind::kVar: {
+                const bool global_decl =
+                    s.is_static || s.is_extern || s.is_export || (s.link_abi == parus::ast::LinkAbi::kC);
+                if (global_decl) {
+                    add_named_decl(s.name, s.kind);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+
+    void collect_parus_definition_bindings_(
+        const parus::passes::NameResolveResult& resolve,
+        const parus::sema::SymbolTable& sym,
+        const parus::SourceManager& sm,
+        uint32_t current_file_id,
+        std::string_view current_uri,
+        const std::unordered_map<std::string, std::vector<LspLocation>>* external_defs,
+        std::vector<DefinitionBinding>& out
+    ) {
+        auto append_from_resolved_id = [&](parus::passes::NameResolveResult::ResolvedId rid) {
+            if (rid == parus::passes::NameResolveResult::k_invalid_resolved) return;
+            if (rid >= resolve.resolved.size()) return;
+            const auto& rs = resolve.resolved[rid];
+            if (rs.sym == parus::passes::ResolvedSymbol::k_invalid_symbol) return;
+            if (rs.sym >= sym.symbols().size()) return;
+            if (rs.span.hi <= rs.span.lo) return;
+            if (rs.span.file_id != current_file_id) return;
+
+            const auto& symobj = sym.symbol(rs.sym);
+            DefinitionBinding bind{};
+            bind.use_lo = rs.span.lo;
+            bind.use_hi = rs.span.hi;
+
+            if (!symobj.is_external && symobj.decl_span.file_id == current_file_id) {
+                LspLocation loc{};
+                if (location_from_span_(sm, symobj.decl_span, current_uri, loc)) {
+                    append_unique_location_(bind.targets, loc);
+                }
+            }
+
+            if (symobj.is_external && external_defs != nullptr) {
+                auto append_locs = [&](const std::vector<LspLocation>& locs) {
+                    for (const auto& loc : locs) {
+                        append_unique_location_(bind.targets, loc);
+                    }
+                };
+
+                if (auto it = external_defs->find(symobj.name); it != external_defs->end()) {
+                    append_locs(it->second);
+                } else {
+                    std::string tail = symobj.name;
+                    if (const size_t pos = tail.rfind("::"); pos != std::string::npos && pos + 2 < tail.size()) {
+                        tail = tail.substr(pos + 2);
+                    }
+                    const std::string suffix = "::" + tail;
+                    for (const auto& [k, v] : *external_defs) {
+                        if (k == tail || ends_with_(k, suffix)) {
+                            append_locs(v);
+                        }
+                    }
+                }
+            }
+
+            if (!bind.targets.empty()) {
+                out.push_back(std::move(bind));
+            }
+        };
+
+        for (const auto rid : resolve.expr_to_resolved) append_from_resolved_id(rid);
+    }
+
 #if PARUSD_ENABLE_LEI
+    struct ExternalDeclLocation {
+        std::string path{};
+        std::string file_uri{};
+        uint32_t line = 0;
+        uint32_t character = 0;
+    };
+
     struct BundleUnitMeta {
         std::string bundle_name{};
         std::vector<std::string> bundle_deps{};
@@ -1236,6 +1599,7 @@ namespace {
         std::string current_source_dir_norm{};
         std::unordered_set<std::string> allowed_import_heads{};
         std::vector<parus::passes::NameResolveOptions::ExternalExport> external_exports{};
+        std::unordered_map<std::string, std::vector<ExternalDeclLocation>> external_decl_locs{};
     };
 
     struct BundleUnitsSnapshotCache {
@@ -1656,7 +2020,8 @@ namespace {
         std::string_view fallback_bundle_name,
         std::string_view current_module_head,
         bool same_bundle,
-        std::vector<parus::passes::NameResolveOptions::ExternalExport>& out_exports
+        std::vector<parus::passes::NameResolveOptions::ExternalExport>& out_exports,
+        std::unordered_map<std::string, std::vector<ExternalDeclLocation>>* out_decl_locs = nullptr
     ) {
         std::string json{};
         if (!read_text_file_(index_path, json)) return false;
@@ -1686,6 +2051,7 @@ namespace {
             const auto decl_dir_s = as_string_(obj_get_(ev, "decl_dir"));
             const auto type_repr_s = as_string_(obj_get_(ev, "type_repr"));
             const auto is_export_s = as_bool_(obj_get_(ev, "is_export"));
+            const auto* decl_span_node = obj_get_(ev, "decl_span");
             if (!kind_s.has_value() ||
                 !path_s.has_value() ||
                 path_s->empty() ||
@@ -1717,16 +2083,58 @@ namespace {
                     lookup_path = prefix + lookup_path;
                 }
             }
+            const std::string lookup_path_for_nav = lookup_path;
 
             parus::passes::NameResolveOptions::ExternalExport ex{};
             ex.kind = *mapped_kind;
-            ex.path = std::move(lookup_path);
+            ex.path = lookup_path;
             ex.declared_type_repr = std::string(*type_repr_s);
             ex.decl_bundle_name = bundle_name;
             ex.module_head = std::move(module_head);
             ex.decl_source_dir_norm = std::move(decl_source_dir);
             ex.is_export = true;
             out_exports.push_back(std::move(ex));
+
+            if (out_decl_locs != nullptr && decl_span_node != nullptr &&
+                decl_span_node->kind == JsonValue::Kind::kObject) {
+                const auto decl_file = as_string_(obj_get_(*decl_span_node, "file"));
+                const auto decl_line = as_i64_(obj_get_(*decl_span_node, "line"));
+                const auto decl_col = as_i64_(obj_get_(*decl_span_node, "col"));
+                if (decl_file.has_value() && !decl_file->empty()) {
+                    ExternalDeclLocation loc{};
+                    loc.file_uri = file_path_to_uri_(*decl_file);
+                    loc.line = (decl_line.has_value() && *decl_line > 0)
+                        ? static_cast<uint32_t>(*decl_line - 1)
+                        : 0;
+                    loc.character = (decl_col.has_value() && *decl_col > 0)
+                        ? static_cast<uint32_t>(*decl_col - 1)
+                        : 0;
+
+                    auto add_decl = [&](const std::string& key) {
+                        if (key.empty()) return;
+                        loc.path = key;
+                        (*out_decl_locs)[key].push_back(loc);
+                    };
+
+                    add_decl(lookup_path_for_nav);
+                    if (!module_head_s->empty()) {
+                        const std::string prefix = std::string(*module_head_s) + "::";
+                        const bool already_prefixed =
+                            lookup_path_for_nav == *module_head_s ||
+                            lookup_path_for_nav.starts_with(prefix);
+                        if (!already_prefixed) {
+                            add_decl(prefix + lookup_path_for_nav);
+                        }
+                        if (same_bundle && current_module_head == *module_head_s) {
+                            std::string local = lookup_path_for_nav;
+                            if (local.starts_with(prefix)) {
+                                local.erase(0, prefix.size());
+                            }
+                            add_decl(local);
+                        }
+                    }
+                }
+            }
         }
         return true;
     }
@@ -1850,7 +2258,8 @@ namespace {
                     bundle_name,
                     ctx.current_module_head,
                     same_bundle,
-                    ctx.external_exports)) {
+                    ctx.external_exports,
+                    &ctx.external_decl_locs)) {
                 return;
             }
 
@@ -1865,7 +2274,8 @@ namespace {
                 bundle_name,
                 ctx.current_module_head,
                 same_bundle,
-                ctx.external_exports
+                ctx.external_exports,
+                &ctx.external_decl_locs
             );
         };
 
@@ -1921,6 +2331,9 @@ namespace {
         const auto& toks = snapshot.tokens;
 
         std::unordered_map<uint64_t, SemClass> resolved_map;
+        parus::passes::PassResults pass_res{};
+        bool has_pass_results = false;
+        std::unordered_map<std::string, std::vector<LspLocation>> external_definitions{};
         if (!bag.has_error()) {
             const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, macro_budget);
             if (!bag.has_error() && macro_ok) {
@@ -1935,6 +2348,18 @@ namespace {
                         popt.name_resolve.current_source_dir_norm = lint_ctx->current_source_dir_norm;
                         popt.name_resolve.allowed_import_heads = lint_ctx->allowed_import_heads;
                         popt.name_resolve.external_exports = lint_ctx->external_exports;
+                        for (const auto& [k, v] : lint_ctx->external_decl_locs) {
+                            auto& dst = external_definitions[k];
+                            for (const auto& loc : v) {
+                                LspLocation lsp{};
+                                lsp.uri = loc.file_uri;
+                                lsp.start_line = loc.line;
+                                lsp.start_character = loc.character;
+                                lsp.end_line = loc.line;
+                                lsp.end_character = loc.character + 1;
+                                append_unique_location_(dst, lsp);
+                            }
+                        }
                         for (auto& ex : popt.name_resolve.external_exports) {
                             if (ex.declared_type == parus::ty::kInvalidType) {
                                 if (!ex.declared_type_repr.empty()) {
@@ -1951,7 +2376,8 @@ namespace {
                         }
                     }
 #endif
-                    const auto pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+                    pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+                    has_pass_results = true;
                     resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
 
                     if (!bag.has_error()) {
@@ -1967,6 +2393,35 @@ namespace {
                         }
                     }
                 }
+            }
+        }
+
+        {
+            std::vector<std::string> ns_stack{};
+            collect_parus_top_level_symbols_stmt_(
+                ast,
+                root,
+                sm,
+                uri,
+                ns_stack,
+                out.completion_items,
+                out.top_level_definitions
+            );
+            append_keyword_completions_(kParusCompletionKeywords, out.completion_items);
+            for (const auto& [k, locs] : external_definitions) {
+                auto& dst = out.top_level_definitions[k];
+                for (const auto& loc : locs) append_unique_location_(dst, loc);
+            }
+            if (has_pass_results) {
+                collect_parus_definition_bindings_(
+                    pass_res.name_resolve,
+                    pass_res.sym,
+                    sm,
+                    file_id,
+                    uri,
+                    external_definitions.empty() ? nullptr : &external_definitions,
+                    out.definition_bindings
+                );
             }
         }
 
@@ -2011,8 +2466,10 @@ namespace {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), 0};
                     } else if (prev_kind == K::kKwField) {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), kSemModDeclaration};
-                    } else if (prev_kind == K::kKwActs || prev_kind == K::kKwClass) {
+                    } else if (prev_kind == K::kKwActs || prev_kind == K::kKwClass || prev_kind == K::kKwActor) {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kClass), kSemModDeclaration};
+                    } else if (prev_kind == K::kKwProto) {
+                        sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kType), kSemModDeclaration};
                     } else {
                         sem_class = SemClass{static_cast<uint32_t>(SemTokenType::kVariable), 0};
                     }
@@ -2201,6 +2658,58 @@ namespace {
         return out;
     }
 
+    void collect_lei_completion_and_definitions_(
+        const std::vector<lei::syntax::Token>& toks,
+        std::string_view uri,
+        std::vector<CompletionEntry>& completion_items,
+        std::unordered_map<std::string, std::vector<LspLocation>>& top_level_definitions
+    ) {
+        append_keyword_completions_(kLeiCompletionKeywords, completion_items);
+        using K = lei::syntax::TokenKind;
+
+        auto add_decl = [&](const lei::syntax::Token& name_tok, uint32_t kind, std::string_view detail) {
+            if (name_tok.kind != K::kIdent || name_tok.lexeme.empty()) return;
+            append_completion_entry_unique_(completion_items, name_tok.lexeme, kind, detail);
+            LspLocation loc{};
+            loc.uri = std::string(uri);
+            loc.start_line = (name_tok.loc.line > 0) ? (name_tok.loc.line - 1) : 0;
+            loc.start_character = (name_tok.loc.column > 0) ? (name_tok.loc.column - 1) : 0;
+            const uint32_t len = std::max<uint32_t>(1, static_cast<uint32_t>(name_tok.lexeme.size()));
+            loc.end_line = loc.start_line;
+            loc.end_character = loc.start_character + len;
+            append_definition_target_(top_level_definitions, name_tok.lexeme, loc);
+        };
+
+        for (size_t i = 0; i < toks.size(); ++i) {
+            const auto& tok = toks[i];
+            if (tok.kind == K::kKwDef && i + 1 < toks.size()) {
+                add_decl(toks[i + 1], 3, "function");
+                continue;
+            }
+            if (tok.kind == K::kKwProto && i + 1 < toks.size()) {
+                add_decl(toks[i + 1], 8, "proto");
+                continue;
+            }
+            if (tok.kind == K::kKwPlan && i + 1 < toks.size()) {
+                add_decl(toks[i + 1], 9, "plan");
+                continue;
+            }
+            if ((tok.kind == K::kKwLet || tok.kind == K::kKwVar) && i + 1 < toks.size()) {
+                add_decl(toks[i + 1], 6, "variable");
+                continue;
+            }
+            if (tok.kind == K::kKwImport) {
+                for (size_t j = i + 1; j < toks.size(); ++j) {
+                    if (toks[j].kind == K::kSemicolon) break;
+                    if (toks[j].kind == K::kKwFrom && j > i + 1 && toks[j - 1].kind == K::kIdent) {
+                        add_decl(toks[j - 1], 9, "import alias");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     [[maybe_unused]] std::vector<SemToken> semantic_tokens_for_lei_document_(
         std::string_view source,
         std::string_view file_path
@@ -2358,11 +2867,18 @@ namespace {
         std::unordered_set<std::string> dedupe{};
 
         lei::diag::Bag parse_bag;
+        const auto toks = lei::parse::lex(doc.text, parsed_file, parse_bag);
         (void)lei::parse::parse_source(doc.text, parsed_file, parse_bag);
         out.diagnostics.reserve(parse_bag.all().size());
         for (const auto& d : parse_bag.all()) {
             append_lei_diagnostic_(out.diagnostics, dedupe, d);
         }
+        collect_lei_completion_and_definitions_(
+            toks,
+            uri,
+            out.completion_items,
+            out.top_level_definitions
+        );
 
         // v1 LEI LSP semantic tokens: intentionally empty for stability.
         out.semantic_tokens.clear();
@@ -2401,6 +2917,7 @@ namespace {
         (void)doc;
         (void)uri;
         (void)overlays;
+        append_keyword_completions_(kLeiCompletionKeywords, out.completion_items);
         LspDiag ld{};
         ld.start_line = 0;
         ld.start_character = 0;
@@ -2509,10 +3026,104 @@ namespace {
         return json;
     }
 
+    bool is_ident_char_(char ch) {
+        const unsigned char u = static_cast<unsigned char>(ch);
+        return std::isalnum(u) || ch == '_';
+    }
+
+    std::string symbol_prefix_before_offset_(std::string_view text, size_t off) {
+        if (off > text.size()) off = text.size();
+        size_t begin = off;
+        while (begin > 0) {
+            const char ch = text[begin - 1];
+            if (is_ident_char_(ch) || ch == ':') {
+                --begin;
+                continue;
+            }
+            break;
+        }
+        return std::string(text.substr(begin, off - begin));
+    }
+
+    std::string symbol_at_offset_(std::string_view text, size_t off) {
+        if (off > text.size()) off = text.size();
+        size_t begin = off;
+        while (begin > 0) {
+            const char ch = text[begin - 1];
+            if (is_ident_char_(ch) || ch == ':') {
+                --begin;
+                continue;
+            }
+            break;
+        }
+        size_t end = off;
+        while (end < text.size()) {
+            const char ch = text[end];
+            if (is_ident_char_(ch) || ch == ':') {
+                ++end;
+                continue;
+            }
+            break;
+        }
+        return std::string(text.substr(begin, end - begin));
+    }
+
+    std::string build_completion_result_(
+        const std::vector<CompletionEntry>& items,
+        std::string_view prefix
+    ) {
+        std::string json = "[";
+        std::unordered_set<std::string> seen{};
+        bool first = true;
+        size_t emitted = 0;
+        for (const auto& it : items) {
+            if (it.label.empty()) continue;
+            if (!prefix.empty() && !it.label.starts_with(prefix)) continue;
+            if (!seen.insert(it.label).second) continue;
+
+            if (!first) json += ",";
+            first = false;
+            json += "{";
+            json += "\"label\":\"" + json_escape_(it.label) + "\",";
+            json += "\"kind\":" + std::to_string(it.kind);
+            if (!it.detail.empty()) {
+                json += ",\"detail\":\"" + json_escape_(it.detail) + "\"";
+            }
+            json += "}";
+
+            ++emitted;
+            if (emitted >= 200) break;
+        }
+        json += "]";
+        return json;
+    }
+
+    std::string build_definition_result_(const std::vector<LspLocation>& targets) {
+        if (targets.empty()) return "null";
+        std::string json = "[";
+        for (size_t i = 0; i < targets.size(); ++i) {
+            if (i != 0) json += ",";
+            const auto& loc = targets[i];
+            json += "{";
+            json += "\"uri\":\"" + json_escape_(loc.uri) + "\",";
+            json += "\"range\":{";
+            json += "\"start\":{\"line\":" + std::to_string(loc.start_line) +
+                    ",\"character\":" + std::to_string(loc.start_character) + "},";
+            json += "\"end\":{\"line\":" + std::to_string(loc.end_line) +
+                    ",\"character\":" + std::to_string(loc.end_character) + "}";
+            json += "}";
+            json += "}";
+        }
+        json += "]";
+        return json;
+    }
+
     std::string build_initialize_result_() {
         std::string json = "{\"capabilities\":{";
         json += "\"textDocumentSync\":{\"openClose\":true,\"change\":2},";
         json += "\"positionEncoding\":\"utf-16\",";
+        json += "\"completionProvider\":{\"triggerCharacters\":[\".\",\":\"],\"resolveProvider\":false},";
+        json += "\"definitionProvider\":true,";
         json += "\"semanticTokensProvider\":{";
         json += "\"legend\":{";
         json += "\"tokenTypes\":[";
@@ -2662,6 +3273,16 @@ namespace {
                     continue;
                 }
 
+                if (*method == "textDocument/completion") {
+                    handle_completion_(id, params);
+                    continue;
+                }
+
+                if (*method == "textDocument/definition") {
+                    handle_definition_(id, params);
+                    continue;
+                }
+
                 if (*method == "textDocument/semanticTokens/full") {
                     handle_semantic_tokens_full_(id, params);
                     continue;
@@ -2769,6 +3390,9 @@ namespace {
             st.analysis.valid = true;
             st.analysis.diagnostics = std::move(analyzed.diagnostics);
             st.analysis.semantic_tokens = std::move(analyzed.semantic_tokens);
+            st.analysis.completion_items = std::move(analyzed.completion_items);
+            st.analysis.definition_bindings = std::move(analyzed.definition_bindings);
+            st.analysis.top_level_definitions = std::move(analyzed.top_level_definitions);
 
             if (trace_incremental_) {
                 const char* lang_name = "unknown";
@@ -2933,6 +3557,167 @@ namespace {
 
             ensure_analysis_cache_(*uri, it->second);
             const auto result = build_semantic_tokens_result_(it->second.analysis.semantic_tokens);
+            const auto response = build_response_result_(id, result);
+            if (!response.empty()) write_lsp_message_(std::cout, response);
+        }
+
+        std::vector<LspLocation> find_definition_targets_(
+            const DocumentState& st,
+            size_t offset
+        ) const {
+            std::vector<LspLocation> out{};
+            uint32_t best_span = std::numeric_limits<uint32_t>::max();
+            for (const auto& bind : st.analysis.definition_bindings) {
+                if (offset < bind.use_lo || offset >= bind.use_hi) continue;
+                const uint32_t span = (bind.use_hi > bind.use_lo) ? (bind.use_hi - bind.use_lo) : 1;
+                if (span < best_span) {
+                    best_span = span;
+                    out = bind.targets;
+                } else if (span == best_span) {
+                    for (const auto& loc : bind.targets) {
+                        append_unique_location_(out, loc);
+                    }
+                }
+            }
+            if (!out.empty()) return out;
+
+            const std::string sym = symbol_at_offset_(st.text, offset);
+            if (sym.empty()) return out;
+
+            if (auto it = st.analysis.top_level_definitions.find(sym);
+                it != st.analysis.top_level_definitions.end()) {
+                out = it->second;
+                return out;
+            }
+
+            std::string tail = sym;
+            if (const size_t pos = tail.rfind("::"); pos != std::string::npos && pos + 2 < tail.size()) {
+                tail = tail.substr(pos + 2);
+            }
+            if (!tail.empty()) {
+                const std::string suffix = "::" + tail;
+                for (const auto& [k, v] : st.analysis.top_level_definitions) {
+                    if (!(k == tail || ends_with_(k, suffix))) continue;
+                    for (const auto& loc : v) append_unique_location_(out, loc);
+                }
+            }
+            return out;
+        }
+
+        std::vector<LspLocation> find_external_definition_fallback_(
+            std::string_view uri,
+            const DocumentState& st,
+            size_t offset
+        ) const {
+            std::vector<LspLocation> out{};
+#if PARUSD_ENABLE_LEI
+            if (st.lang != DocLang::kParus) return out;
+            const auto lint_ctx = build_parus_bundle_lint_context_(uri, nullptr);
+            if (!lint_ctx.has_value()) return out;
+
+            const std::string sym = symbol_at_offset_(st.text, offset);
+            if (sym.empty()) return out;
+            std::string tail = sym;
+            if (const size_t pos = tail.rfind("::"); pos != std::string::npos && pos + 2 < tail.size()) {
+                tail = tail.substr(pos + 2);
+            }
+            const std::string suffix = "::" + tail;
+
+            auto append_loc = [&](const ExternalDeclLocation& loc) {
+                LspLocation l{};
+                l.uri = loc.file_uri;
+                l.start_line = loc.line;
+                l.start_character = loc.character;
+                l.end_line = loc.line;
+                l.end_character = loc.character + 1;
+                append_unique_location_(out, l);
+            };
+
+            for (const auto& [k, locs] : lint_ctx->external_decl_locs) {
+                if (!(k == sym || k == tail || ends_with_(k, suffix))) continue;
+                for (const auto& loc : locs) append_loc(loc);
+            }
+#else
+            (void)uri;
+            (void)st;
+            (void)offset;
+#endif
+            return out;
+        }
+
+        void handle_completion_(const JsonValue* id, const JsonValue* params) {
+            if (id == nullptr) return;
+            if (params == nullptr || params->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto* td = obj_get_(*params, "textDocument");
+            if (td == nullptr || td->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+            const auto uri = as_string_(obj_get_(*td, "uri"));
+            Position pos{};
+            if (!uri.has_value() || !parse_position_(obj_get_(*params, "position"), pos)) {
+                const auto response = build_response_error_(id, -32602, "textDocument.uri/position is required");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto it = documents_.find(std::string(*uri));
+            if (it == documents_.end()) {
+                const auto response = build_response_result_(id, "[]");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            ensure_analysis_cache_(*uri, it->second);
+            const size_t off = byte_offset_from_position_(it->second.text, pos);
+            const std::string prefix = symbol_prefix_before_offset_(it->second.text, off);
+            const auto result = build_completion_result_(it->second.analysis.completion_items, prefix);
+            const auto response = build_response_result_(id, result);
+            if (!response.empty()) write_lsp_message_(std::cout, response);
+        }
+
+        void handle_definition_(const JsonValue* id, const JsonValue* params) {
+            if (id == nullptr) return;
+            if (params == nullptr || params->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto* td = obj_get_(*params, "textDocument");
+            if (td == nullptr || td->kind != JsonValue::Kind::kObject) {
+                const auto response = build_response_error_(id, -32602, "invalid params");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+            const auto uri = as_string_(obj_get_(*td, "uri"));
+            Position pos{};
+            if (!uri.has_value() || !parse_position_(obj_get_(*params, "position"), pos)) {
+                const auto response = build_response_error_(id, -32602, "textDocument.uri/position is required");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            const auto it = documents_.find(std::string(*uri));
+            if (it == documents_.end()) {
+                const auto response = build_response_result_(id, "null");
+                if (!response.empty()) write_lsp_message_(std::cout, response);
+                return;
+            }
+
+            ensure_analysis_cache_(*uri, it->second);
+            const size_t off = byte_offset_from_position_(it->second.text, pos);
+            auto targets = find_definition_targets_(it->second, off);
+            if (targets.empty()) {
+                targets = find_external_definition_fallback_(*uri, it->second, off);
+            }
+            const auto result = build_definition_result_(targets);
             const auto response = build_response_result_(id, result);
             if (!response.empty()) write_lsp_message_(std::cout, response);
         }

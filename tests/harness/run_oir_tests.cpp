@@ -665,6 +665,49 @@ namespace {
         return ok;
     }
 
+    /// @brief class override가 있으면 proto default 대신 class 멤버를 호출해야 한다.
+    static bool test_proto_default_override_dispatch_prefers_class_member_ok() {
+        const std::string src = R"(
+            proto ValueProto {
+                def value(self) -> i32 {
+                    return 1i32;
+                }
+            };
+
+            class Counter : ValueProto {
+                init() = default;
+
+                def value(self) -> i32 {
+                    return 2i32;
+                }
+            }
+
+            def main() -> i32 {
+                set c = Counter();
+                return c.value();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "proto override seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "proto override seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "proto override seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for proto override source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for proto override source");
+        if (!ok) return false;
+
+        return ok;
+    }
+
     /// @brief class 생성식 `A(...)`가 OIR에서 `A::init(...)` direct call로 lowering되는지 검사한다.
     static bool test_class_ctor_call_lowers_to_init_call_ok() {
         const std::string src = R"(
@@ -1042,6 +1085,7 @@ int main() {
         {"oir_gvn_cse_ok", test_oir_gvn_cse_ok},
         {"oir_loop_canonical_and_licm_ok", test_oir_loop_canonical_and_licm_ok},
         {"class_and_proto_default_member_lowering_ok", test_class_and_proto_default_member_lowering_ok},
+        {"proto_default_override_dispatch_prefers_class_member_ok", test_proto_default_override_dispatch_prefers_class_member_ok},
         {"class_ctor_call_lowers_to_init_call_ok", test_class_ctor_call_lowers_to_init_call_ok},
         {"class_field_layout_lowering_ok", test_class_field_layout_lowering_ok},
         {"class_static_members_lowering_ok", test_class_static_members_lowering_ok},

@@ -1,0 +1,8 @@
+proto Broken {
+  def id(self) -> i32 {
+    return 1i32;
+  }
+
+def after() -> i32 {
+  return 2i32;
+}

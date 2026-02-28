@@ -1,0 +1,15 @@
+proto Eq {
+  def id(self) -> i32 {
+    return 1i32;
+  }
+};
+
+class C : Eq {
+  init() = default;
+}
+
+def main() -> i32 {
+  set c = C();
+  Eq::id(self: c);
+  return c.id();
+}
