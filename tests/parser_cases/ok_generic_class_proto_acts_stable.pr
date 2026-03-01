@@ -1,0 +1,30 @@
+proto Echo<T> {
+  def echo(self, v: T) -> T;
+} with require(true);
+
+class Box<T>: Echo<T> {
+  value: T;
+
+  init(v: T) {
+    self.value = v;
+  }
+
+  def echo(self, v: T) -> T {
+    return v;
+  }
+}
+
+acts for Box<T> {
+  def get(self) -> T {
+    return self.value;
+  }
+}
+
+def use_i32(b: Box<i32>) -> i32 {
+  return b.get() + b.echo(v: 1i32);
+}
+
+def main() -> i32 {
+  set b = Box<i32>(v: 10i32);
+  return use_i32(b: b);
+}

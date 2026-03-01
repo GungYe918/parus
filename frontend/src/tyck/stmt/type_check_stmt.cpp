@@ -935,7 +935,9 @@ namespace parus::tyck {
                 const auto& pr = refs[i];
                 const std::string path = path_ref_display_(pr);
                 if (path.empty()) continue;
-                if (!resolve_proto_decl_from_path_ref_(pr, pr.span).has_value()) {
+                bool typed_path_failure = false;
+                if (!resolve_proto_decl_from_path_ref_(pr, pr.span, &typed_path_failure).has_value()) {
+                    if (typed_path_failure) continue;
                     diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, path);
                     err_(pr.span, "unknown base proto: " + path);
                 }
@@ -1118,15 +1120,25 @@ namespace parus::tyck {
         }
 
         local_overload_sets = impl_methods;
+        const auto& refs = ast_.path_refs();
+        const uint32_t pb = s.decl_path_ref_begin;
+        const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
+        std::vector<std::optional<ast::StmtId>> resolved_impl_proto_sids{};
+        std::vector<uint8_t> resolved_impl_proto_typed_failure{};
+        if (pb <= refs.size() && pe <= refs.size()) {
+            const uint32_t count = pe - pb;
+            resolved_impl_proto_sids.resize(count);
+            resolved_impl_proto_typed_failure.resize(count, 0u);
+            for (uint32_t i = pb; i < pe; ++i) {
+                bool typed_path_failure = false;
+                resolved_impl_proto_sids[i - pb] = resolve_proto_decl_from_path_ref_(refs[i], refs[i].span, &typed_path_failure);
+                resolved_impl_proto_typed_failure[i - pb] = typed_path_failure ? 1u : 0u;
+            }
+        }
         {
-            const auto& refs = ast_.path_refs();
-            const uint32_t pb = s.decl_path_ref_begin;
-            const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
             if (pb <= refs.size() && pe <= refs.size()) {
                 for (uint32_t i = pb; i < pe; ++i) {
-                    const auto& pr = refs[i];
-                    const std::string proto_path = path_ref_display_(pr);
-                    const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
+                    const auto& proto_sid = resolved_impl_proto_sids[i - pb];
                     if (!proto_sid.has_value()) continue;
 
                     std::vector<ast::StmtId> defaults;
@@ -1317,9 +1329,6 @@ namespace parus::tyck {
         }
 
         // Implements validation: class : ProtoA, ProtoB
-        const auto& refs = ast_.path_refs();
-        const uint32_t pb = s.decl_path_ref_begin;
-        const uint32_t pe = s.decl_path_ref_begin + s.decl_path_ref_count;
         auto is_non_proto_base = [&](std::string_view raw) -> bool {
             if (raw.empty()) return false;
             std::string key(raw);
@@ -1340,8 +1349,14 @@ namespace parus::tyck {
             for (uint32_t i = pb; i < pe; ++i) {
                 const auto& pr = refs[i];
                 const std::string proto_path = path_ref_display_(pr);
-                const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
+                const bool typed_path_failure = (i - pb < resolved_impl_proto_typed_failure.size())
+                    ? (resolved_impl_proto_typed_failure[i - pb] != 0u)
+                    : false;
+                const auto proto_sid = (i - pb < resolved_impl_proto_sids.size())
+                    ? resolved_impl_proto_sids[i - pb]
+                    : std::optional<ast::StmtId>{};
                 if (!proto_sid.has_value()) {
+                    if (typed_path_failure) continue;
                     if (is_non_proto_base(proto_path)) {
                         diag_(diag::Code::kClassInheritanceNotAllowed, pr.span, proto_path);
                         err_(pr.span, "class inheritance is not allowed: " + proto_path);
@@ -1382,6 +1397,11 @@ namespace parus::tyck {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
         if (s.kind != ast::StmtKind::kActorDecl) return;
+        if (s.decl_generic_param_count > 0) {
+            diag_(diag::Code::kGenericActorDeclNotSupportedV1, s.span, s.name);
+            err_(s.span, "generic actor declaration is not supported in v1");
+            return;
+        }
 
         const ty::TypeId self_ty = (s.type == ty::kInvalidType)
             ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
@@ -1509,6 +1529,11 @@ namespace parus::tyck {
     /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.
     void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
+        if (s.decl_generic_param_count > 0) {
+            diag_(diag::Code::kGenericFieldNotSupportedV1, s.span, s.name);
+            err_(s.span, "generic field declaration is not supported in v1");
+            return;
+        }
 
         if (s.field_align != 0) {
             if ((s.field_align & (s.field_align - 1u)) != 0u) {
@@ -1620,8 +1645,10 @@ namespace parus::tyck {
             for (uint32_t i = pb; i < pe; ++i) {
                 const auto& pr = refs[i];
                 const std::string proto_path = path_ref_display_(pr);
-                const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
+                bool typed_path_failure = false;
+                const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span, &typed_path_failure);
                 if (!proto_sid.has_value()) {
+                    if (typed_path_failure) continue;
                     diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
                     err_(pr.span, "unknown proto target: " + proto_path);
                     continue;

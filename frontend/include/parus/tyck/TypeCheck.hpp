@@ -410,8 +410,16 @@ namespace parus::tyck {
             Span use_span
         );
         void ensure_generic_acts_for_owner_(ty::TypeId concrete_owner_type, Span use_span);
-        std::optional<ast::StmtId> resolve_proto_decl_from_type_(ty::TypeId proto_type, Span use_span);
-        std::optional<ast::StmtId> resolve_proto_decl_from_path_ref_(const ast::PathRef& pr, Span use_span);
+        std::optional<ast::StmtId> resolve_proto_decl_from_type_(
+            ty::TypeId proto_type,
+            Span use_span,
+            bool* out_typed_path_failure = nullptr
+        );
+        std::optional<ast::StmtId> resolve_proto_decl_from_path_ref_(
+            const ast::PathRef& pr,
+            Span use_span,
+            bool* out_typed_path_failure = nullptr
+        );
         std::string path_ref_display_(const ast::PathRef& pr) const;
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
@@ -460,6 +468,13 @@ namespace parus::tyck {
         std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
+        struct GenericNamedSplitCacheEntry {
+            bool parsed = false;
+            std::string base{};
+            std::vector<ty::TypeId> args{};
+        };
+        mutable std::unordered_map<ty::TypeId, GenericNamedSplitCacheEntry> generic_named_split_cache_;
+        mutable std::unordered_map<std::string, ty::TypeId> generic_named_type_cache_;
         std::unordered_set<ast::StmtId> generic_decl_checked_instances_;
         std::unordered_set<ast::StmtId> generic_decl_checking_instances_;
         std::deque<ast::StmtId> pending_generic_decl_instance_queue_;

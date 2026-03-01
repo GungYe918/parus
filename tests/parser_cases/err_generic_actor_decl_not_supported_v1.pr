@@ -1,0 +1,16 @@
+actor Counter<T> {
+  draft {
+    value: i32;
+  }
+
+  init() = default;
+
+  def sub get() -> i32 {
+    recast;
+    return draft.value;
+  }
+}
+
+def main() -> i32 {
+  return 0i32;
+}

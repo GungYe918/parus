@@ -278,6 +278,8 @@ namespace parus::diag {
             case Code::kGenericTypePathArityMismatch: return "GenericTypePathArityMismatch";
             case Code::kGenericTypePathTemplateNotFound: return "GenericTypePathTemplateNotFound";
             case Code::kGenericActsOverlap: return "GenericActsOverlap";
+            case Code::kGenericFieldNotSupportedV1: return "GenericFieldNotSupportedV1";
+            case Code::kGenericActorDeclNotSupportedV1: return "GenericActorDeclNotSupportedV1";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -540,6 +542,8 @@ namespace parus::diag {
             case Code::kGenericTypePathArityMismatch: return "generic type path arity mismatch on '{0}': expected {1}, got {2}";
             case Code::kGenericTypePathTemplateNotFound: return "generic type path target template not found: '{0}'";
             case Code::kGenericActsOverlap: return "generic acts overlap detected for owner '{0}' and member '{1}'";
+            case Code::kGenericFieldNotSupportedV1: return "generic field declaration is not supported in v1: '{0}'";
+            case Code::kGenericActorDeclNotSupportedV1: return "generic actor declaration is not supported in v1: '{0}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -807,6 +811,8 @@ namespace parus::diag {
             case Code::kGenericTypePathArityMismatch: return "제네릭 타입 경로 '{0}'의 인자 개수가 맞지 않습니다: 기대 {1}개, 실제 {2}개";
             case Code::kGenericTypePathTemplateNotFound: return "제네릭 타입 경로 대상 템플릿을 찾을 수 없습니다: '{0}'";
             case Code::kGenericActsOverlap: return "owner '{0}'와 멤버 '{1}'에서 제네릭 acts 중복(coherence overlap)이 발생했습니다";
+            case Code::kGenericFieldNotSupportedV1: return "v1에서는 제네릭 field 선언을 지원하지 않습니다: '{0}'";
+            case Code::kGenericActorDeclNotSupportedV1: return "v1에서는 제네릭 actor 선언을 지원하지 않습니다: '{0}'";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

@@ -51,6 +51,8 @@ namespace parus::tyck {
         generic_class_instance_cache_.clear();
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
+        generic_named_split_cache_.clear();
+        generic_named_type_cache_.clear();
         generic_decl_checked_instances_.clear();
         generic_decl_checking_instances_.clear();
         pending_generic_decl_instance_queue_.clear();
@@ -456,19 +458,30 @@ namespace parus::tyck {
         out_base.clear();
         out_args.clear();
         if (t == ty::kInvalidType) return false;
+        if (auto it = generic_named_split_cache_.find(t); it != generic_named_split_cache_.end()) {
+            out_base = it->second.base;
+            out_args = it->second.args;
+            return it->second.parsed;
+        }
+
+        GenericNamedSplitCacheEntry cache_entry{};
         const auto& tt = types_.get(t);
-        if (tt.kind != ty::Kind::kNamedUser) return false;
-
-        const std::string name = types_.to_string(t);
-        if (name.empty()) return false;
-
-        const size_t lt = name.find('<');
-        if (lt == std::string::npos) {
-            out_base = name;
+        if (tt.kind != ty::Kind::kNamedUser) {
+            generic_named_split_cache_.emplace(t, std::move(cache_entry));
             return false;
         }
-        if (name.back() != '>') {
-            out_base = name;
+
+        const std::string name = types_.to_string(t);
+        if (name.empty()) {
+            generic_named_split_cache_.emplace(t, std::move(cache_entry));
+            return false;
+        }
+
+        const size_t lt = name.find('<');
+        if (lt == std::string::npos || name.back() != '>') {
+            cache_entry.base = name;
+            generic_named_split_cache_.emplace(t, cache_entry);
+            out_base = cache_entry.base;
             return false;
         }
 
@@ -481,19 +494,30 @@ namespace parus::tyck {
                 if (depth == 0) first_lt = i;
                 ++depth;
             } else if (ch == '>') {
-                if (depth == 0) return false;
+                if (depth == 0) {
+                    cache_entry.base = name;
+                    generic_named_split_cache_.emplace(t, cache_entry);
+                    out_base = cache_entry.base;
+                    return false;
+                }
                 --depth;
                 if (depth == 0) matching_gt = i;
             }
         }
         if (depth != 0 || first_lt == std::string::npos || matching_gt != name.size() - 1) {
-            out_base = name;
+            cache_entry.base = name;
+            generic_named_split_cache_.emplace(t, cache_entry);
+            out_base = cache_entry.base;
             return false;
         }
 
-        out_base = name.substr(0, first_lt);
+        cache_entry.base = name.substr(0, first_lt);
         const std::string payload = name.substr(first_lt + 1, matching_gt - first_lt - 1);
-        if (payload.empty()) return false;
+        if (payload.empty()) {
+            generic_named_split_cache_.emplace(t, cache_entry);
+            out_base = cache_entry.base;
+            return false;
+        }
 
         auto trim_ws = [](std::string_view sv) -> std::string {
             size_t b = 0;
@@ -505,6 +529,7 @@ namespace parus::tyck {
 
         int arg_depth = 0;
         size_t part_begin = 0;
+        bool parse_ok = true;
         for (size_t i = 0; i <= payload.size(); ++i) {
             const bool at_end = (i == payload.size());
             const char ch = at_end ? '\0' : payload[i];
@@ -512,14 +537,32 @@ namespace parus::tyck {
                 if (ch == '<') ++arg_depth;
                 else if (ch == '>') --arg_depth;
             }
-            if ((at_end || (ch == ',' && arg_depth == 0))) {
+            if (at_end || (ch == ',' && arg_depth == 0)) {
                 const std::string part = trim_ws(std::string_view(payload).substr(part_begin, i - part_begin));
-                if (part.empty()) return false;
-                out_args.push_back(types_.intern_ident(ast_.add_owned_string(part)));
+                if (part.empty()) {
+                    parse_ok = false;
+                    break;
+                }
+                ty::TypeId arg_ty = ty::kInvalidType;
+                if (auto it = generic_named_type_cache_.find(part); it != generic_named_type_cache_.end()) {
+                    arg_ty = it->second;
+                } else {
+                    arg_ty = types_.intern_ident(ast_.add_owned_string(part));
+                    generic_named_type_cache_[part] = arg_ty;
+                }
+                cache_entry.args.push_back(arg_ty);
                 part_begin = i + 1;
             }
         }
-        return !out_args.empty();
+        cache_entry.parsed = parse_ok && !cache_entry.args.empty();
+        if (!cache_entry.parsed) {
+            cache_entry.args.clear();
+        }
+
+        generic_named_split_cache_.emplace(t, cache_entry);
+        out_base = cache_entry.base;
+        out_args = cache_entry.args;
+        return cache_entry.parsed;
     }
 
     std::vector<std::string> TypeChecker::collect_decl_generic_param_names_(const ast::Stmt& decl) const {
@@ -556,17 +599,34 @@ namespace parus::tyck {
                 std::vector<ty::TypeId> args;
                 if (split_generic_applied_named_type_(src, base, args) && !args.empty()) {
                     bool changed = false;
-                    std::string rebuilt = base;
-                    rebuilt += "<";
+                    std::vector<ty::TypeId> sub_args;
+                    sub_args.reserve(args.size());
+                    std::string cache_key = "$inst$";
+                    cache_key += base;
+                    cache_key += "<";
                     for (size_t i = 0; i < args.size(); ++i) {
-                        if (i) rebuilt += ",";
                         const ty::TypeId sub = substitute_generic_type_(args[i], subst);
                         if (sub != args[i]) changed = true;
-                        rebuilt += types_.to_string(sub);
+                        sub_args.push_back(sub);
+                        if (i) cache_key += ",";
+                        cache_key += std::to_string(sub);
                     }
-                    rebuilt += ">";
+                    cache_key += ">";
                     if (changed) {
-                        return types_.intern_ident(ast_.add_owned_string(std::move(rebuilt)));
+                        if (auto it = generic_named_type_cache_.find(cache_key);
+                            it != generic_named_type_cache_.end()) {
+                            return it->second;
+                        }
+                        std::string rebuilt = base;
+                        rebuilt += "<";
+                        for (size_t i = 0; i < sub_args.size(); ++i) {
+                            if (i) rebuilt += ",";
+                            rebuilt += types_.to_string(sub_args[i]);
+                        }
+                        rebuilt += ">";
+                        const ty::TypeId applied = types_.intern_ident(ast_.add_owned_string(std::move(rebuilt)));
+                        generic_named_type_cache_[cache_key] = applied;
+                        return applied;
                     }
                 }
                 return src;
@@ -1061,7 +1121,12 @@ namespace parus::tyck {
         return path_join_(pr.path_begin, pr.path_count);
     }
 
-    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_type_(ty::TypeId proto_type, Span use_span) {
+    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_type_(
+        ty::TypeId proto_type,
+        Span use_span,
+        bool* out_typed_path_failure
+    ) {
+        if (out_typed_path_failure) *out_typed_path_failure = false;
         if (proto_type == ty::kInvalidType) return std::nullopt;
 
         if (auto it = proto_decl_by_type_.find(proto_type); it != proto_decl_by_type_.end()) {
@@ -1109,6 +1174,7 @@ namespace parus::tyck {
         }
 
         if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
+            if (out_typed_path_failure) *out_typed_path_failure = true;
             diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
             err_(use_span, "generic proto template not found: " + base_key);
             return std::nullopt;
@@ -1116,6 +1182,7 @@ namespace parus::tyck {
 
         const auto& templ = ast_.stmt(templ_sid);
         if (templ.kind != ast::StmtKind::kProtoDecl) {
+            if (out_typed_path_failure) *out_typed_path_failure = true;
             diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
             err_(use_span, "generic type path target is not proto: " + base_key);
             return std::nullopt;
@@ -1124,6 +1191,7 @@ namespace parus::tyck {
         const uint32_t expected = templ.decl_generic_param_count;
         const uint32_t got = static_cast<uint32_t>(args.size());
         if (expected != got) {
+            if (out_typed_path_failure) *out_typed_path_failure = true;
             diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
                   base_key, std::to_string(expected), std::to_string(got));
             err_(use_span, "generic proto arity mismatch");
@@ -1133,13 +1201,27 @@ namespace parus::tyck {
             return templ_sid;
         }
 
-        return ensure_generic_proto_instance_(templ_sid, args, use_span);
+        const auto inst = ensure_generic_proto_instance_(templ_sid, args, use_span);
+        if (!inst.has_value() && out_typed_path_failure) {
+            *out_typed_path_failure = true;
+        }
+        return inst;
     }
 
-    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_path_ref_(const ast::PathRef& pr, Span use_span) {
+    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_path_ref_(
+        const ast::PathRef& pr,
+        Span use_span,
+        bool* out_typed_path_failure
+    ) {
+        if (out_typed_path_failure) *out_typed_path_failure = false;
         if (pr.type != ty::kInvalidType) {
-            if (auto sid = resolve_proto_decl_from_type_(pr.type, use_span)) {
+            bool typed_path_failure = false;
+            if (auto sid = resolve_proto_decl_from_type_(pr.type, use_span, &typed_path_failure)) {
                 return sid;
+            }
+            if (typed_path_failure) {
+                if (out_typed_path_failure) *out_typed_path_failure = true;
+                return std::nullopt;
             }
         }
 

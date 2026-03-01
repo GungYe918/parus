@@ -112,3 +112,5 @@ class IntHolder: Holder<i32> {
 11. `GenericUnknownTypeParamInConstraint`
 12. `GenericActsOverlap`
 13. `ActsGenericClauseRemoved`
+14. `GenericFieldNotSupportedV1`
+15. `GenericActorDeclNotSupportedV1`

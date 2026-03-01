@@ -47,14 +47,17 @@
 
 1. 함수 generic 파라미터 파싱(`<T, U>`)  
 1. 함수 제약절 파싱(`with [T: Proto]`)  
-1. 선언 시점의 최소 제약 검증(unknown type param/proto path)
+1. 함수 제네릭 호출 해석(`foo<T>(...)`) 및 인스턴스화/중복제거
+1. `class/proto/acts(owner-only)` 제네릭 선언 파싱 및 concrete materialization(정적 경로)
+1. 선언 시점/인스턴스화 시점 제약 검증(unknown type param/proto path/unsatisfied)
+1. SIR/OIR/LLVM에서 materialized generic symbol만 하향
 
 현재 부족한 부분:
 
-1. 제네릭 인스턴스 실체화 파이프라인 부재
-1. generic 함수 호출 시 타입 인자 추론/결정 부재
-1. generic class/field/proto의 전면 타입체크 및 lowering 부재
-1. generic acts 결합 부재
+1. generic `field` 선언의 전면 의미론/생성식 지원
+1. generic `actor` 선언 지원
+1. 런타임 `dyn` 결합 경로
+1. 동적 모노모피제이션(JIT) 경로
 
 ---
 
@@ -150,7 +153,8 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 목표:
 
 1. generic 함수 호출/추론/인스턴스화 완성
-1. generic class/field/proto 선언 및 concrete 사용 가능
+1. generic class/proto/acts(owner-only) 선언 및 concrete 사용 가능
+1. generic field/actor 선언은 v1 비지원으로 명시 진단 제공
 1. SIR/OIR/LLVM까지 인스턴스 lowering 연결
 
 구현 항목:

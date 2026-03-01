@@ -1,0 +1,17 @@
+nest math {
+  def id<T>(x: T) -> T {
+    return x;
+  }
+}
+
+class Util {
+  static def id<T>(x: T) -> T {
+    return x;
+  }
+}
+
+def main() -> i32 {
+  set a = math::id<i32>(x: 3i32);
+  set b = Util::id<i32>(x: 4i32);
+  return a + b;
+}

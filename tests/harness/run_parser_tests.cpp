@@ -1286,6 +1286,63 @@ namespace {
         return ok;
     }
 
+    static size_t count_diag_code_(const parus::diag::Bag& bag, parus::diag::Code code) {
+        size_t n = 0;
+        for (const auto& d : bag.diags()) {
+            if (d.code() == code) ++n;
+        }
+        return n;
+    }
+
+    static bool test_generic_proto_target_arity_reports_once() {
+        const std::string src = R"(
+            proto Holder<T> {
+                def get(self) -> T;
+            };
+
+            class Bad: Holder<i32, i32> {
+                init() = default;
+                def get(self) -> i32 { return 1i32; }
+            }
+
+            def main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kGenericTypePathArityMismatch) == 1,
+            "generic proto arity mismatch must be reported exactly once");
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kProtoImplTargetNotSupported),
+            "generic proto arity mismatch must not cascade to ProtoImplTargetNotSupported");
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kProtoImplMissingMember),
+            "generic proto arity mismatch must not cascade to ProtoImplMissingMember");
+        return ok;
+    }
+
+    static bool test_generic_proto_target_not_found_reports_once() {
+        const std::string src = R"(
+            class MissingImpl: MissingProto<i32> {
+                init() = default;
+            }
+
+            def main() -> i32 { return 0i32; }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kGenericTypePathTemplateNotFound) == 1,
+            "generic proto target-not-found must be reported exactly once");
+        ok &= require_(!p.bag.has_code(parus::diag::Code::kProtoImplTargetNotSupported),
+            "generic proto target-not-found must not cascade to ProtoImplTargetNotSupported");
+        return ok;
+    }
+
     static bool test_file_cases_directory() {
 #ifndef PARUS_TEST_CASE_DIR
         std::cerr << "  - PARUS_TEST_CASE_DIR is not defined\n";
@@ -1369,6 +1426,8 @@ int main() {
         {"field_export_disallowed", test_field_export_disallowed},
         {"var_mut_prefix_forbidden_on_set", test_var_mut_prefix_forbidden_on_set},
         {"var_mut_prefix_forbidden_on_static", test_var_mut_prefix_forbidden_on_static},
+        {"generic_proto_target_arity_reports_once", test_generic_proto_target_arity_reports_once},
+        {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
         {"file_cases_directory", test_file_cases_directory},
     };
 

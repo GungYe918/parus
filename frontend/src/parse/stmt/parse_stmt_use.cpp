@@ -142,27 +142,90 @@ namespace parus {
             (void)eat_coloncolon();
         }
 
-        auto ty = parse_type();
+        const uint32_t path_begin = static_cast<uint32_t>(ast_.path_segs().size());
+        uint32_t path_count = 0;
+
+        const Token first = cursor_.peek();
+        if (first.kind != K::kIdent) {
+            diag_report(diag::Code::kUnexpectedToken, first.span, "type path");
+            out = ast::PathRef{};
+            out.span = first.span;
+            return false;
+        }
+        cursor_.bump();
+        ast_.add_path_seg(first.lexeme);
+        ++path_count;
+        Span end_span = first.span;
+
+        while (eat_coloncolon()) {
+            const Token seg = cursor_.peek();
+            if (seg.kind != K::kIdent) {
+                diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
+                break;
+            }
+            cursor_.bump();
+            ast_.add_path_seg(seg.lexeme);
+            ++path_count;
+            end_span = seg.span;
+        }
+
+        std::vector<ParsedType> generic_args{};
+        if (cursor_.eat(K::kLt)) {
+            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
+                ParsedType at = parse_type();
+                generic_args.push_back(at);
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kGt)) break;
+                    continue;
+                }
+                break;
+            }
+
+            if (!cursor_.eat(K::kGt)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                recover_to_delim(K::kGt, K::kComma, K::kLBrace);
+                cursor_.eat(K::kGt);
+            }
+            end_span = cursor_.prev().span;
+        }
+
+        ast::TypeNode n{};
+        n.kind = ast::TypeNodeKind::kNamedPath;
+        n.span = span_join(start_tok.span, end_span);
+        n.path_begin = path_begin;
+        n.path_count = path_count;
+        n.generic_arg_begin = static_cast<uint32_t>(ast_.type_node_children().size());
+        n.generic_arg_count = static_cast<uint32_t>(generic_args.size());
+        for (const auto& ga : generic_args) {
+            ast_.add_type_node_child(ga.node);
+        }
+
+        if (generic_args.empty()) {
+            const auto& segs = ast_.path_segs();
+            n.resolved_type = types_.intern_path(&segs[path_begin], path_count);
+        } else {
+            const auto& segs = ast_.path_segs();
+            std::string flat{};
+            for (uint32_t i = 0; i < path_count; ++i) {
+                if (i) flat += "::";
+                flat += std::string(segs[path_begin + i]);
+            }
+            flat += "<";
+            for (size_t i = 0; i < generic_args.size(); ++i) {
+                if (i) flat += ",";
+                flat += types_.to_string(generic_args[i].id);
+            }
+            flat += ">";
+            n.resolved_type = types_.intern_ident(ast_.add_owned_string(std::move(flat)));
+        }
 
         out = ast::PathRef{};
-        out.type_node = ty.node;
-        out.type = ty.id;
-        out.span = ty.span.hi ? ty.span : start_tok.span;
-
-        if (ty.node == ast::k_invalid_type_node || (size_t)ty.node >= ast_.type_nodes().size()) {
-            diag_report(diag::Code::kUnexpectedToken, start_tok.span, "type path");
-            return false;
-        }
-
-        const auto& tn = ast_.type_node(ty.node);
-        if (tn.kind != ast::TypeNodeKind::kNamedPath || tn.path_count == 0) {
-            diag_report(diag::Code::kUnexpectedToken, out.span, "type path");
-            return false;
-        }
-
-        out.path_begin = tn.path_begin;
-        out.path_count = tn.path_count;
-        return true;
+        out.path_begin = path_begin;
+        out.path_count = path_count;
+        out.type_node = ast_.add_type_node(n);
+        out.type = n.resolved_type;
+        out.span = n.span;
+        return path_count > 0;
     }
 
     /// @brief import 선언을 파싱한다.
