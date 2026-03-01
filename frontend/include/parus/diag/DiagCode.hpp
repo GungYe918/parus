@@ -76,6 +76,7 @@ namespace parus::diag {
         kActsForNotSupported,             // acts for T is not supported yet in parser
         kActsMemberExportNotAllowed,      // member-level export inside acts is not allowed
         kActsForTypeExpected,             // `acts for` requires a target type
+        kActsGenericClauseRemoved,        // acts owner-only generic rule: trailing generic clause is removed
         kOperatorDeclOnlyInActsFor,       // operator(...) is only allowed in acts-for forms
         kOperatorKeyExpected,             // operator(<key>) key is missing/invalid
         kOperatorSelfFirstParamRequired,  // operator(...) first parameter must be `self`
@@ -253,6 +254,11 @@ namespace parus::diag {
         kGenericAmbiguousOverload, // generic overload selection is ambiguous
         kGenericConstraintProtoNotFound, // proto path in generic constraint not found
         kGenericConstraintUnsatisfied, // concrete type does not satisfy generic proto constraint
+        kGenericUnknownTypeParamInConstraint, // declaration constraint references unknown generic parameter
+        kGenericDeclConstraintUnsatisfied, // declaration-level generic constraint is unsatisfied
+        kGenericTypePathArityMismatch, // generic-applied type path arity mismatch
+        kGenericTypePathTemplateNotFound, // generic-applied type path target template not found
+        kGenericActsOverlap, // acts coherence overlap
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)

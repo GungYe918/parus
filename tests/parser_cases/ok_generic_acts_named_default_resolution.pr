@@ -1,0 +1,22 @@
+class Vec<T> {
+  data: T;
+  init(v: T) { self.data = v; }
+}
+
+acts for Vec<T> {
+  def pick(self, rhs: T) -> T {
+    return self.data;
+  }
+};
+
+acts Math for Vec<T> {
+  def pick(self, lhs: T, rhs: T) -> T {
+    return self.data;
+  }
+};
+
+def main() -> i32 {
+  set v = Vec<i32>(v: 3i32);
+  set a = v.pick(1i32);
+  return a;
+}

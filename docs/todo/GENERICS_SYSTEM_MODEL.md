@@ -74,7 +74,7 @@ NormalFuncDecl := ... Ident GenericParamClauseOpt FuncParams ConstraintClauseOpt
 ProtoDecl      := "proto" Ident GenericParamClauseOpt ProtoBaseListOpt ProtoBody ProtoTailOpt ;
 ClassDecl      := "class" Ident GenericParamClauseOpt ClassProtoListOpt ConstraintClauseOpt ClassBody ;
 FieldDecl      := "field" Ident GenericParamClauseOpt FieldProtoListOpt ConstraintClauseOpt FieldBody ;
-ActsForDecl    := "acts" NameOpt "for" TypePath GenericParamClauseOpt ConstraintClauseOpt ActsBody ;
+ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 ```
 
 고정 규칙:
@@ -85,6 +85,9 @@ ActsForDecl    := "acts" NameOpt "for" TypePath GenericParamClauseOpt Constraint
 1. 실패 시 명시적 `<...>`를 요구한다.
 1. `class/field/acts`의 `with [...]`는 해당 선언의 generic param만 참조 가능하다.
 1. `proto`의 `with require(...)`와 제네릭 `with [ ... ]`는 문법적으로 다른 레이어이며 혼용하지 않는다.
+1. `acts` 제네릭은 owner 타입 표기만 허용한다.
+1. 금지: `acts for Vec<T> <T> { ... }`
+1. 허용: `acts for Vec<T> with [T: Proto] { ... }`
 
 ---
 
@@ -176,6 +179,11 @@ ActsForDecl    := "acts" NameOpt "for" TypePath GenericParamClauseOpt Constraint
 1. 같은 인스턴스 재사용(중복 코드 생성 없음)
 
 ## 6.2 v2: Generic Acts + Coherence
+
+상태 메모(2026-03):
+
+1. 본 저장소 구현은 v2 coherence 일부를 v1 라운드에서 선반영한다.
+1. 즉, `acts` owner-only 제네릭 규칙과 overlap 진단은 조기 적용 대상이다.
 
 목표:
 

@@ -184,6 +184,199 @@ namespace {
         return ok;
     }
 
+    /// @brief generic class 인스턴스가 materialize되고 ctor/member 호출이 concrete 심볼로 내려가는지 검사한다.
+    static bool test_generic_class_materialization_oir_lowering_ok() {
+        const std::string src = R"(
+            class Box<T> {
+                value: T;
+                init(v: T) { self.value = v; }
+                def get(self) -> T { return self.value; }
+            }
+
+            def main() -> i32 {
+                set b = Box<i32>(v: 1i32);
+                return b.get();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic class source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic class source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic class source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_class_sids.empty(),
+                       "generic class use must materialize at least one concrete class instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic class source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic class source");
+        if (!ok) return false;
+
+        bool has_box_init = false;
+        bool has_box_get = false;
+        for (const auto& f : oir.mod.funcs) {
+            if (f.name.find("Box_i32_") == std::string::npos) continue;
+            if (f.name.find("$init$") != std::string::npos) has_box_init = true;
+            if (f.name.find("$get$") != std::string::npos) has_box_get = true;
+        }
+
+        bool has_direct_get_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("Box_i32_") != std::string::npos &&
+                callee.name.find("$get$") != std::string::npos) {
+                has_direct_get_call = true;
+                break;
+            }
+        }
+
+        ok &= require_(has_box_init, "OIR must contain concrete generic class init symbol");
+        ok &= require_(has_box_get, "OIR must contain concrete generic class method symbol");
+        ok &= require_(has_direct_get_call, "dot call on generic class value must lower to direct concrete get call");
+        return ok;
+    }
+
+    /// @brief generic proto default impl이 concrete로 materialize되어 direct call로 선택되는지 검사한다.
+    static bool test_generic_proto_default_materialization_oir_lowering_ok() {
+        const std::string src = R"(
+            proto Echo<T> {
+                def echo(self, v: T) -> T {
+                    return v;
+                }
+            };
+
+            class EchoUser: Echo<i32> {
+                init() = default;
+            }
+
+            def main() -> i32 {
+                set u = EchoUser();
+                return u.echo(v: 7i32);
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic proto source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic proto source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic proto source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_proto_sids.empty(),
+                       "generic proto use must materialize at least one concrete proto instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic proto source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic proto source");
+        if (!ok) return false;
+
+        bool has_echo_i32 = false;
+        bool has_direct_echo_call = false;
+        for (const auto& f : oir.mod.funcs) {
+            if (f.name.find("Echo_i32_") != std::string::npos &&
+                f.name.find("$echo$") != std::string::npos) {
+                has_echo_i32 = true;
+            }
+        }
+
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("Echo_i32_") != std::string::npos &&
+                callee.name.find("$echo$") != std::string::npos) {
+                has_direct_echo_call = true;
+                break;
+            }
+        }
+
+        ok &= require_(has_echo_i32, "OIR must contain concrete generic proto default symbol");
+        ok &= require_(has_direct_echo_call, "proto default call must lower to direct concrete echo call");
+        return ok;
+    }
+
+    /// @brief generic acts 템플릿은 스킵되고 concrete owner용 acts 멤버만 하향되는지 검사한다.
+    static bool test_generic_acts_owner_materialization_oir_lowering_ok() {
+        const std::string src = R"(
+            class Vec<T> {
+                data: T;
+                init(v: T) { self.data = v; }
+            }
+
+            acts for Vec<T> {
+                def get(self) -> T {
+                    return self.data;
+                }
+            }
+
+            def main() -> i32 {
+                set v = Vec<i32>(v: 1i32);
+                return v.get();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic acts source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic acts source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic acts source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_acts_sids.empty(),
+                       "generic acts use must materialize at least one concrete acts instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic acts source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic acts source");
+        if (!ok) return false;
+
+        bool has_concrete_get = false;
+        bool has_direct_get_call = false;
+        bool has_template_t_symbol = false;
+        for (const auto& f : oir.mod.funcs) {
+            if (f.name.find("$get$") != std::string::npos && f.name.find("i32") != std::string::npos) {
+                has_concrete_get = true;
+            }
+            if (f.name.find("_____T$") != std::string::npos) {
+                has_template_t_symbol = true;
+            }
+        }
+
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("$get$") != std::string::npos && callee.name.find("i32") != std::string::npos) {
+                has_direct_get_call = true;
+                break;
+            }
+        }
+
+        ok &= require_(has_concrete_get, "OIR must contain concrete acts member symbol for Vec<i32>");
+        ok &= require_(has_direct_get_call, "dot call must lower to direct concrete acts member call");
+        ok &= require_(!has_template_t_symbol, "generic acts template symbol must not be lowered into OIR");
+        return ok;
+    }
+
     /// @brief OIR pass가 상수 폴딩과 dead pure inst 제거를 수행하는지 검사한다.
     static bool test_oir_const_fold_and_dce() {
         parus::oir::Module m;
@@ -1131,6 +1324,9 @@ int main() {
     const Case cases[] = {
         {"oir_call_lowering_ok", test_oir_call_lowering_ok},
         {"generic_fn_instantiation_oir_call_ok", test_generic_fn_instantiation_oir_call_ok},
+        {"generic_class_materialization_oir_lowering_ok", test_generic_class_materialization_oir_lowering_ok},
+        {"generic_proto_default_materialization_oir_lowering_ok", test_generic_proto_default_materialization_oir_lowering_ok},
+        {"generic_acts_owner_materialization_oir_lowering_ok", test_generic_acts_owner_materialization_oir_lowering_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},

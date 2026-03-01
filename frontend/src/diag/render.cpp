@@ -82,6 +82,7 @@ namespace parus::diag {
             case Code::kActsForNotSupported: return "ActsForNotSupported";
             case Code::kActsMemberExportNotAllowed: return "ActsMemberExportNotAllowed";
             case Code::kActsForTypeExpected: return "ActsForTypeExpected";
+            case Code::kActsGenericClauseRemoved: return "ActsGenericClauseRemoved";
             case Code::kOperatorDeclOnlyInActsFor: return "OperatorDeclOnlyInActsFor";
             case Code::kOperatorKeyExpected: return "OperatorKeyExpected";
             case Code::kOperatorSelfFirstParamRequired: return "OperatorSelfFirstParamRequired";
@@ -272,6 +273,11 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "GenericAmbiguousOverload";
             case Code::kGenericConstraintProtoNotFound: return "GenericConstraintProtoNotFound";
             case Code::kGenericConstraintUnsatisfied: return "GenericConstraintUnsatisfied";
+            case Code::kGenericUnknownTypeParamInConstraint: return "GenericUnknownTypeParamInConstraint";
+            case Code::kGenericDeclConstraintUnsatisfied: return "GenericDeclConstraintUnsatisfied";
+            case Code::kGenericTypePathArityMismatch: return "GenericTypePathArityMismatch";
+            case Code::kGenericTypePathTemplateNotFound: return "GenericTypePathTemplateNotFound";
+            case Code::kGenericActsOverlap: return "GenericActsOverlap";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -331,6 +337,7 @@ namespace parus::diag {
             case Code::kActsForNotSupported: return "'acts for T' is not supported yet; use 'acts A { ... }'";
             case Code::kActsMemberExportNotAllowed: return "member-level 'export' is not allowed inside acts";
             case Code::kActsForTypeExpected: return "'acts for' requires a target type";
+            case Code::kActsGenericClauseRemoved: return "acts trailing generic clause is removed; put generic parameters only on owner type (e.g. acts for Vec<T>)";
             case Code::kOperatorDeclOnlyInActsFor: return "operator(...) declarations are only allowed in 'acts for T' or 'acts Name for T'";
             case Code::kOperatorKeyExpected: return "operator key is missing or invalid (e.g., +, ==, ++pre)";
             case Code::kOperatorSelfFirstParamRequired: return "operator(...) first parameter must be a receiver marked with 'self'";
@@ -528,6 +535,11 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "generic overload resolution is ambiguous for call '{0}'";
             case Code::kGenericConstraintProtoNotFound: return "generic constraint references unknown proto '{0}'";
             case Code::kGenericConstraintUnsatisfied: return "generic constraint '{0}: {1}' is not satisfied by '{2}'";
+            case Code::kGenericUnknownTypeParamInConstraint: return "constraint references unknown generic type parameter '{0}'";
+            case Code::kGenericDeclConstraintUnsatisfied: return "declaration generic constraint '{0}: {1}' is not satisfied by '{2}'";
+            case Code::kGenericTypePathArityMismatch: return "generic type path arity mismatch on '{0}': expected {1}, got {2}";
+            case Code::kGenericTypePathTemplateNotFound: return "generic type path target template not found: '{0}'";
+            case Code::kGenericActsOverlap: return "generic acts overlap detected for owner '{0}' and member '{1}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -586,6 +598,7 @@ namespace parus::diag {
             case Code::kActsForNotSupported: return "'acts for T'는 아직 지원되지 않습니다. 'acts A { ... }' 형태를 사용하세요";
             case Code::kActsMemberExportNotAllowed: return "acts 내부 멤버 함수에는 'export'를 붙일 수 없습니다";
             case Code::kActsForTypeExpected: return "'acts for' 뒤에는 대상 타입이 필요합니다";
+            case Code::kActsGenericClauseRemoved: return "acts의 trailing generic 절은 제거되었습니다. owner 타입에만 제네릭을 표기하세요 (예: acts for Vec<T>)";
             case Code::kOperatorDeclOnlyInActsFor: return "operator(...) 선언은 'acts for T' 또는 'acts Name for T' 내부에서만 허용됩니다";
             case Code::kOperatorKeyExpected: return "operator 키가 없거나 올바르지 않습니다 (예: +, ==, ++pre)";
             case Code::kOperatorSelfFirstParamRequired: return "operator(...)의 첫 번째 파라미터는 'self' 리시버여야 합니다";
@@ -789,6 +802,11 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "호출 '{0}'의 제네릭 오버로드 해석이 모호합니다";
             case Code::kGenericConstraintProtoNotFound: return "제네릭 제약이 알 수 없는 proto '{0}'를 참조합니다";
             case Code::kGenericConstraintUnsatisfied: return "제네릭 제약 '{0}: {1}'을(를) '{2}' 타입이 만족하지 않습니다";
+            case Code::kGenericUnknownTypeParamInConstraint: return "제약이 알 수 없는 제네릭 타입 파라미터 '{0}'를 참조합니다";
+            case Code::kGenericDeclConstraintUnsatisfied: return "선언 제네릭 제약 '{0}: {1}'을(를) '{2}' 타입이 만족하지 않습니다";
+            case Code::kGenericTypePathArityMismatch: return "제네릭 타입 경로 '{0}'의 인자 개수가 맞지 않습니다: 기대 {1}개, 실제 {2}개";
+            case Code::kGenericTypePathTemplateNotFound: return "제네릭 타입 경로 대상 템플릿을 찾을 수 없습니다: '{0}'";
+            case Code::kGenericActsOverlap: return "owner '{0}'와 멤버 '{1}'에서 제네릭 acts 중복(coherence overlap)이 발생했습니다";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

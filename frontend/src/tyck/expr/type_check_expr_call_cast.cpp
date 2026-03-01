@@ -265,6 +265,28 @@ namespace parus::tyck {
                         }
                     }
 
+                    {
+                        std::string owner_base;
+                        std::vector<ty::TypeId> owner_args;
+                        if (split_generic_applied_named_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
+                            std::string owner_key = owner_base;
+                            if (auto rewritten = rewrite_imported_path_(owner_key)) {
+                                owner_key = *rewritten;
+                            }
+                            auto cit = class_decl_by_name_.find(owner_key);
+                            if (cit != class_decl_by_name_.end()) {
+                                if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, rhs.span)) {
+                                    const auto& inst = ast_.stmt(*inst_sid);
+                                    if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                                        owner_t = inst.type;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    ensure_generic_acts_for_owner_(owner_t, rhs.span);
+
                     auto resolve_owner_type_in_map = [&](auto& method_map, ty::TypeId t) -> ty::TypeId {
                         if (t == ty::kInvalidType) return t;
                         if (method_map.find(t) != method_map.end()) {
@@ -282,9 +304,22 @@ namespace parus::tyck {
                         return t;
                     };
 
-                    const ty::TypeId class_owner_t = resolve_owner_type_in_map(class_effective_method_map_, owner_t);
+                    ty::TypeId class_owner_t = resolve_owner_type_in_map(class_effective_method_map_, owner_t);
                     const ty::TypeId actor_owner_t = resolve_owner_type_in_map(actor_method_map_, owner_t);
                     bool dot_member_named = false;
+
+                    if (class_owner_t != ty::kInvalidType &&
+                        class_effective_method_map_.find(class_owner_t) == class_effective_method_map_.end()) {
+                        if (auto cit = class_decl_by_type_.find(class_owner_t); cit != class_decl_by_type_.end()) {
+                            const ast::StmtId csid = cit->second;
+                            if (generic_decl_checked_instances_.find(csid) == generic_decl_checked_instances_.end() &&
+                                generic_decl_checking_instances_.find(csid) == generic_decl_checking_instances_.end()) {
+                                check_stmt_class_decl_(csid);
+                                generic_decl_checked_instances_.insert(csid);
+                            }
+                        }
+                    }
+                    class_owner_t = resolve_owner_type_in_map(class_effective_method_map_, owner_t);
 
                     if (class_owner_t != ty::kInvalidType) {
                         auto cit = class_effective_method_map_.find(class_owner_t);
@@ -465,6 +500,7 @@ namespace parus::tyck {
                         check_all_arg_exprs_only();
                         return types_.error();
                     }
+                    ensure_generic_acts_for_owner_(owner_t, callee_expr.span);
 
                     auto collect_member_from_decl = [&](ast::StmtId acts_sid) {
                         if (acts_sid == ast::k_invalid_stmt || (size_t)acts_sid >= ast_.stmts().size()) return;
@@ -581,16 +617,74 @@ namespace parus::tyck {
                                 check_all_arg_exprs_only();
                                 return types_.error();
                             } else if (is_class_type) {
+                                ast::StmtId class_sid = ast::k_invalid_stmt;
+                                if (auto it = class_decl_by_name_.find(sym.name); it != class_decl_by_name_.end()) {
+                                    class_sid = it->second;
+                                }
+
                                 is_ctor_call = true;
                                 ctor_owner_type = sym.declared_type;
                                 fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
                                 callee_name = sym.name;
 
-                                std::string init_qname = sym.name;
-                                init_qname += "::init";
-                                auto fit = fn_decl_by_name_.find(init_qname);
-                                if (fit != fn_decl_by_name_.end()) {
-                                    overload_decl_ids = fit->second;
+                                if (class_sid != ast::k_invalid_stmt &&
+                                    (size_t)class_sid < ast_.stmts().size() &&
+                                    ast_.stmt(class_sid).decl_generic_param_count > 0) {
+                                    if (explicit_call_type_args.empty()) {
+                                        diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_expr.span, sym.name);
+                                        err_(callee_expr.span, "generic class constructor requires explicit type arguments");
+                                        check_all_arg_exprs_only();
+                                        return types_.error();
+                                    }
+
+                                    auto inst_sid = ensure_generic_class_instance_(class_sid, explicit_call_type_args, callee_expr.span);
+                                    if (!inst_sid.has_value() ||
+                                        *inst_sid == ast::k_invalid_stmt ||
+                                        (size_t)(*inst_sid) >= ast_.stmts().size()) {
+                                        check_all_arg_exprs_only();
+                                        return types_.error();
+                                    }
+
+                                    const auto& inst_decl = ast_.stmt(*inst_sid);
+                                    ctor_owner_type = inst_decl.type;
+                                    fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
+
+                                    auto qit = class_qualified_name_by_stmt_.find(*inst_sid);
+                                    if (qit != class_qualified_name_by_stmt_.end()) {
+                                        callee_name = qit->second;
+                                    }
+
+                                    const auto& kids = ast_.stmt_children();
+                                    const uint64_t mb = inst_decl.stmt_begin;
+                                    const uint64_t me = mb + inst_decl.stmt_count;
+                                    if (mb <= kids.size() && me <= kids.size()) {
+                                        for (uint32_t mi = inst_decl.stmt_begin; mi < inst_decl.stmt_begin + inst_decl.stmt_count; ++mi) {
+                                            const ast::StmtId msid = kids[mi];
+                                            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                                            const auto& member = ast_.stmt(msid);
+                                            if (member.kind != ast::StmtKind::kFnDecl) continue;
+                                            if (member.name != "init") continue;
+                                            overload_decl_ids.push_back(msid);
+                                        }
+                                    }
+
+                                    // class constructor type-args were consumed at class-level, not function-level.
+                                    explicit_call_type_args.clear();
+                                } else {
+                                    if (!explicit_call_type_args.empty()) {
+                                        diag_(diag::Code::kGenericArityMismatch, callee_expr.span, "0",
+                                              std::to_string(explicit_call_type_args.size()));
+                                        err_(callee_expr.span, "non-generic class constructor call does not accept type arguments");
+                                        check_all_arg_exprs_only();
+                                        return types_.error();
+                                    }
+
+                                    std::string init_qname = sym.name;
+                                    init_qname += "::init";
+                                    auto fit = fn_decl_by_name_.find(init_qname);
+                                    if (fit != fn_decl_by_name_.end()) {
+                                        overload_decl_ids = fit->second;
+                                    }
                                 }
                                 if (overload_decl_ids.empty()) {
                                     diag_(diag::Code::kClassCtorMissingInit, callee_expr.span, sym.name);

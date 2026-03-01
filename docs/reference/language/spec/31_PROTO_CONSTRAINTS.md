@@ -74,7 +74,30 @@ def main() -> i32 {
 }
 ```
 
-## 19.6 진단 코드
+## 19.6 제네릭 결합 규칙 (v1)
+
+1. `proto` 선언은 제네릭 파라미터를 가질 수 있다.
+2. `class`는 `class A : Proto<i32>` 형태로 concrete proto를 구현할 수 있다.
+3. generic proto 멤버의 `Self`는 구현 class 기준 concrete 타입으로 정규화한다.
+4. proto default impl이 있을 때 class에서 멤버를 생략하면 default가 사용된다.
+5. `acts` 제네릭은 owner 타입 표기만 허용한다:
+6. 허용: `acts for Vec<T> with [T: Proto] { ... }`
+7. 금지: `acts for Vec<T> <T> { ... }`
+
+예시:
+
+```parus
+proto Holder<T> {
+  def get(self) -> T;
+};
+
+class IntHolder: Holder<i32> {
+  init() = default;
+  def get(self) -> i32 { return 1i32; }
+}
+```
+
+## 19.7 진단 코드
 
 1. `ProtoMemberBodyMixNotAllowed`
 2. `ProtoOperatorNotAllowed`
@@ -83,3 +106,9 @@ def main() -> i32 {
 5. `ProtoImplTargetNotSupported`
 6. `ProtoImplMissingMember`
 7. `ProtoConstraintUnsatisfied`
+8. `GenericTypePathArityMismatch`
+9. `GenericTypePathTemplateNotFound`
+10. `GenericDeclConstraintUnsatisfied`
+11. `GenericUnknownTypeParamInConstraint`
+12. `GenericActsOverlap`
+13. `ActsGenericClauseRemoved`

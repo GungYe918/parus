@@ -121,6 +121,50 @@ namespace parus {
         return { begin, count };
     }
 
+    bool Parser::parse_type_path_ref(ast::PathRef& out, bool allow_leading_coloncolon) {
+        using K = syntax::TokenKind;
+
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.at(K::kColonColon)) {
+                cursor_.bump();
+                return true;
+            }
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
+
+        const Token start_tok = cursor_.peek();
+        if (allow_leading_coloncolon) {
+            (void)eat_coloncolon();
+        }
+
+        auto ty = parse_type();
+
+        out = ast::PathRef{};
+        out.type_node = ty.node;
+        out.type = ty.id;
+        out.span = ty.span.hi ? ty.span : start_tok.span;
+
+        if (ty.node == ast::k_invalid_type_node || (size_t)ty.node >= ast_.type_nodes().size()) {
+            diag_report(diag::Code::kUnexpectedToken, start_tok.span, "type path");
+            return false;
+        }
+
+        const auto& tn = ast_.type_node(ty.node);
+        if (tn.kind != ast::TypeNodeKind::kNamedPath || tn.path_count == 0) {
+            diag_report(diag::Code::kUnexpectedToken, out.span, "type path");
+            return false;
+        }
+
+        out.path_begin = tn.path_begin;
+        out.path_count = tn.path_count;
+        return true;
+    }
+
     /// @brief import 선언을 파싱한다.
     ///
     /// 문법(v0):

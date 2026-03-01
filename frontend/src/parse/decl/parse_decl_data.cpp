@@ -290,19 +290,12 @@ namespace parus {
         uint32_t impl_count = 0;
         if (cursor_.eat(K::kColon)) {
             while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
-                const Token pstart = cursor_.peek();
-                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
-                if (pc == 0) {
-                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                ast::PathRef pr{};
+                if (!parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true) || pr.path_count == 0) {
                     recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
                     if (cursor_.eat(K::kComma)) continue;
                     break;
                 }
-
-                ast::PathRef pr{};
-                pr.path_begin = pb;
-                pr.path_count = pc;
-                pr.span = span_join(pstart.span, cursor_.prev().span);
                 ast_.add_path_ref(pr);
                 ++impl_count;
 
@@ -477,18 +470,12 @@ namespace parus {
         uint32_t inherit_count = 0;
         if (cursor_.eat(K::kColon)) {
             while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
-                const Token pstart = cursor_.peek();
-                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
-                if (pc == 0) {
-                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                ast::PathRef pr{};
+                if (!parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true) || pr.path_count == 0) {
                     recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
                     if (cursor_.eat(K::kComma)) continue;
                     break;
                 }
-                ast::PathRef pr{};
-                pr.path_begin = pb;
-                pr.path_count = pc;
-                pr.span = span_join(pstart.span, cursor_.prev().span);
                 ast_.add_path_ref(pr);
                 ++inherit_count;
 
@@ -951,18 +938,12 @@ namespace parus {
         uint32_t impl_count = 0;
         if (cursor_.eat(K::kColon)) {
             while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
-                const Token pstart = cursor_.peek();
-                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
-                if (pc == 0) {
-                    diag_report(diag::Code::kUnexpectedToken, pstart.span, "proto path");
+                ast::PathRef pr{};
+                if (!parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true) || pr.path_count == 0) {
                     recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
                     if (cursor_.eat(K::kComma)) continue;
                     break;
                 }
-                ast::PathRef pr{};
-                pr.path_begin = pb;
-                pr.path_count = pc;
-                pr.span = span_join(pstart.span, cursor_.prev().span);
                 ast_.add_path_ref(pr);
                 ++impl_count;
                 if (cursor_.eat(K::kComma)) continue;
@@ -1775,6 +1756,18 @@ namespace parus {
             name = ast_.add_owned_string("__acts_for$" + std::to_string((uint32_t)acts_target_type));
         }
 
+        // Removed syntax: acts for Vec<T> <T> { ... }
+        if (cursor_.at(K::kLt)) {
+            uint32_t removed_generic_begin = 0;
+            uint32_t removed_generic_count = 0;
+            (void)parse_decl_generic_param_clause(removed_generic_begin, removed_generic_count);
+            diag_report(diag::Code::kActsGenericClauseRemoved, cursor_.prev().span);
+        }
+
+        uint32_t decl_constraint_begin = 0;
+        uint32_t decl_constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(decl_constraint_begin, decl_constraint_count);
+
         if (!cursor_.eat(K::kLBrace)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
             recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
@@ -1850,6 +1843,10 @@ namespace parus {
         s.acts_has_set_name = acts_has_set_name;
         s.acts_target_type = acts_target_type;
         s.acts_target_type_node = acts_target_type_node;
+        s.decl_generic_param_begin = 0;
+        s.decl_generic_param_count = 0;
+        s.decl_constraint_begin = decl_constraint_begin;
+        s.decl_constraint_count = decl_constraint_count;
         return ast_.add_stmt(s);
     }
 

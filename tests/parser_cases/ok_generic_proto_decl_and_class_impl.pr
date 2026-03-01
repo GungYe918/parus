@@ -1,0 +1,13 @@
+proto Holder<T> {
+  def get(self) -> T;
+};
+
+class IntHolder: Holder<i32> {
+  init() = default;
+  def get(self) -> i32 { return 1i32; }
+}
+
+def main() -> i32 {
+  set h = IntHolder();
+  return h.get();
+}

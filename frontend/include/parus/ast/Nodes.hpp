@@ -207,6 +207,8 @@ namespace parus::ast {
     struct PathRef {
         uint32_t path_begin = 0;
         uint32_t path_count = 0;
+        TypeNodeId type_node = k_invalid_type_node; // generic-aware type path node (optional)
+        TypeId type = k_invalid_type;               // resolved type for the path (optional)
         Span span{};
     };
 

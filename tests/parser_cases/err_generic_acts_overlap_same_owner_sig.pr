@@ -1,0 +1,21 @@
+class Vec<T> {
+  data: T;
+  init(v: T) { self.data = v; }
+}
+
+acts for Vec<T> {
+  def get(self) -> T {
+    return self.data;
+  }
+}
+
+acts for Vec<T> {
+  def get(self) -> T {
+    return self.data;
+  }
+}
+
+def main() -> i32 {
+  set v = Vec<i32>(v: 1i32);
+  return v.get();
+}

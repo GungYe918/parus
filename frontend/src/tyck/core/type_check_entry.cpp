@@ -45,6 +45,19 @@ namespace parus::tyck {
         generic_instantiated_fn_sids_.clear();
         pending_generic_instance_queue_.clear();
         pending_generic_instance_enqueued_.clear();
+        generic_class_template_sid_set_.clear();
+        generic_proto_template_sid_set_.clear();
+        generic_acts_template_sid_set_.clear();
+        generic_class_instance_cache_.clear();
+        generic_proto_instance_cache_.clear();
+        generic_acts_instance_cache_.clear();
+        generic_decl_checked_instances_.clear();
+        generic_decl_checking_instances_.clear();
+        pending_generic_decl_instance_queue_.clear();
+        pending_generic_decl_instance_enqueued_.clear();
+        generic_instantiated_class_sids_.clear();
+        generic_instantiated_proto_sids_.clear();
+        generic_instantiated_acts_sids_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
         namespace_stack_.clear();
@@ -53,6 +66,9 @@ namespace parus::tyck {
         import_alias_scope_stack_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
+        class_qualified_name_by_stmt_.clear();
+        proto_decl_by_type_.clear();
+        acts_qualified_name_by_stmt_.clear();
         class_member_fn_sid_set_.clear();
         actor_decl_by_name_.clear();
         actor_decl_by_type_.clear();
@@ -134,37 +150,64 @@ namespace parus::tyck {
         }
 
         // Drain concrete generic instances after top-level walk.
-        while (!pending_generic_instance_queue_.empty()) {
-            const ast::StmtId inst_sid = pending_generic_instance_queue_.front();
-            pending_generic_instance_queue_.pop_front();
-            pending_generic_instance_enqueued_.erase(inst_sid);
+        bool progressed = true;
+        while (progressed) {
+            progressed = false;
 
-            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
-                continue;
-            }
-            if (generic_fn_checked_instances_.find(inst_sid) != generic_fn_checked_instances_.end()) {
-                continue;
-            }
-            if (!generic_fn_checking_instances_.insert(inst_sid).second) {
-                continue;
+            while (!pending_generic_decl_instance_queue_.empty()) {
+                const ast::StmtId inst_sid = pending_generic_decl_instance_queue_.front();
+                pending_generic_decl_instance_queue_.pop_front();
+                pending_generic_decl_instance_enqueued_.erase(inst_sid);
+
+                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+                    continue;
+                }
+                if (generic_decl_checked_instances_.find(inst_sid) != generic_decl_checked_instances_.end()) {
+                    continue;
+                }
+                if (!generic_decl_checking_instances_.insert(inst_sid).second) {
+                    continue;
+                }
+
+                check_stmt_(inst_sid);
+                generic_decl_checked_instances_.insert(inst_sid);
+                generic_decl_checking_instances_.erase(inst_sid);
+                progressed = true;
             }
 
-            const auto& inst = ast_.stmt(inst_sid);
-            const bool was_in_actor_method = in_actor_method_;
-            const bool was_in_actor_pub = in_actor_pub_method_;
-            const bool was_in_actor_sub = in_actor_sub_method_;
-            if (actor_member_fn_sid_set_.find(inst_sid) != actor_member_fn_sid_set_.end()) {
-                in_actor_method_ = true;
-                in_actor_pub_method_ = (inst.fn_mode == ast::FnMode::kPub);
-                in_actor_sub_method_ = (inst.fn_mode == ast::FnMode::kSub);
-            }
-            check_stmt_fn_decl_(inst_sid, inst);
-            in_actor_method_ = was_in_actor_method;
-            in_actor_pub_method_ = was_in_actor_pub;
-            in_actor_sub_method_ = was_in_actor_sub;
+            while (!pending_generic_instance_queue_.empty()) {
+                const ast::StmtId inst_sid = pending_generic_instance_queue_.front();
+                pending_generic_instance_queue_.pop_front();
+                pending_generic_instance_enqueued_.erase(inst_sid);
 
-            generic_fn_checked_instances_.insert(inst_sid);
-            generic_fn_checking_instances_.erase(inst_sid);
+                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+                    continue;
+                }
+                if (generic_fn_checked_instances_.find(inst_sid) != generic_fn_checked_instances_.end()) {
+                    continue;
+                }
+                if (!generic_fn_checking_instances_.insert(inst_sid).second) {
+                    continue;
+                }
+
+                const auto& inst = ast_.stmt(inst_sid);
+                const bool was_in_actor_method = in_actor_method_;
+                const bool was_in_actor_pub = in_actor_pub_method_;
+                const bool was_in_actor_sub = in_actor_sub_method_;
+                if (actor_member_fn_sid_set_.find(inst_sid) != actor_member_fn_sid_set_.end()) {
+                    in_actor_method_ = true;
+                    in_actor_pub_method_ = (inst.fn_mode == ast::FnMode::kPub);
+                    in_actor_sub_method_ = (inst.fn_mode == ast::FnMode::kSub);
+                }
+                check_stmt_fn_decl_(inst_sid, inst);
+                in_actor_method_ = was_in_actor_method;
+                in_actor_pub_method_ = was_in_actor_pub;
+                in_actor_sub_method_ = was_in_actor_sub;
+
+                generic_fn_checked_instances_.insert(inst_sid);
+                generic_fn_checking_instances_.erase(inst_sid);
+                progressed = true;
+            }
         }
         pop_alias_scope_();
         pop_acts_selection_scope_();
@@ -215,6 +258,14 @@ namespace parus::tyck {
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
         result_.generic_instantiated_fn_sids = generic_instantiated_fn_sids_;
+        result_.generic_instantiated_class_sids = generic_instantiated_class_sids_;
+        result_.generic_instantiated_proto_sids = generic_instantiated_proto_sids_;
+        result_.generic_instantiated_acts_sids = generic_instantiated_acts_sids_;
+        result_.generic_acts_template_sids.assign(
+            generic_acts_template_sid_set_.begin(),
+            generic_acts_template_sid_set_.end()
+        );
+        std::sort(result_.generic_acts_template_sids.begin(), result_.generic_acts_template_sids.end());
         return result_;
     }
 
@@ -397,6 +448,92 @@ namespace parus::tyck {
         return out;
     }
 
+    bool TypeChecker::split_generic_applied_named_type_(
+        ty::TypeId t,
+        std::string& out_base,
+        std::vector<ty::TypeId>& out_args
+    ) const {
+        out_base.clear();
+        out_args.clear();
+        if (t == ty::kInvalidType) return false;
+        const auto& tt = types_.get(t);
+        if (tt.kind != ty::Kind::kNamedUser) return false;
+
+        const std::string name = types_.to_string(t);
+        if (name.empty()) return false;
+
+        const size_t lt = name.find('<');
+        if (lt == std::string::npos) {
+            out_base = name;
+            return false;
+        }
+        if (name.back() != '>') {
+            out_base = name;
+            return false;
+        }
+
+        int depth = 0;
+        size_t first_lt = std::string::npos;
+        size_t matching_gt = std::string::npos;
+        for (size_t i = 0; i < name.size(); ++i) {
+            const char ch = name[i];
+            if (ch == '<') {
+                if (depth == 0) first_lt = i;
+                ++depth;
+            } else if (ch == '>') {
+                if (depth == 0) return false;
+                --depth;
+                if (depth == 0) matching_gt = i;
+            }
+        }
+        if (depth != 0 || first_lt == std::string::npos || matching_gt != name.size() - 1) {
+            out_base = name;
+            return false;
+        }
+
+        out_base = name.substr(0, first_lt);
+        const std::string payload = name.substr(first_lt + 1, matching_gt - first_lt - 1);
+        if (payload.empty()) return false;
+
+        auto trim_ws = [](std::string_view sv) -> std::string {
+            size_t b = 0;
+            while (b < sv.size() && std::isspace(static_cast<unsigned char>(sv[b]))) ++b;
+            size_t e = sv.size();
+            while (e > b && std::isspace(static_cast<unsigned char>(sv[e - 1]))) --e;
+            return std::string(sv.substr(b, e - b));
+        };
+
+        int arg_depth = 0;
+        size_t part_begin = 0;
+        for (size_t i = 0; i <= payload.size(); ++i) {
+            const bool at_end = (i == payload.size());
+            const char ch = at_end ? '\0' : payload[i];
+            if (!at_end) {
+                if (ch == '<') ++arg_depth;
+                else if (ch == '>') --arg_depth;
+            }
+            if ((at_end || (ch == ',' && arg_depth == 0))) {
+                const std::string part = trim_ws(std::string_view(payload).substr(part_begin, i - part_begin));
+                if (part.empty()) return false;
+                out_args.push_back(types_.intern_ident(ast_.add_owned_string(part)));
+                part_begin = i + 1;
+            }
+        }
+        return !out_args.empty();
+    }
+
+    std::vector<std::string> TypeChecker::collect_decl_generic_param_names_(const ast::Stmt& decl) const {
+        std::vector<std::string> out;
+        if (decl.decl_generic_param_count == 0) return out;
+        out.reserve(decl.decl_generic_param_count);
+        for (uint32_t i = 0; i < decl.decl_generic_param_count; ++i) {
+            const uint32_t idx = decl.decl_generic_param_begin + i;
+            if (idx >= ast_.generic_param_decls().size()) break;
+            out.emplace_back(ast_.generic_param_decls()[idx].name);
+        }
+        return out;
+    }
+
     ty::TypeId TypeChecker::substitute_generic_type_(
         ty::TypeId src,
         const std::unordered_map<std::string, ty::TypeId>& subst
@@ -413,6 +550,24 @@ namespace parus::tyck {
                     const std::string tail = name.substr(sep + 2);
                     auto tail_it = subst.find(tail);
                     if (tail_it != subst.end()) return tail_it->second;
+                }
+
+                std::string base;
+                std::vector<ty::TypeId> args;
+                if (split_generic_applied_named_type_(src, base, args) && !args.empty()) {
+                    bool changed = false;
+                    std::string rebuilt = base;
+                    rebuilt += "<";
+                    for (size_t i = 0; i < args.size(); ++i) {
+                        if (i) rebuilt += ",";
+                        const ty::TypeId sub = substitute_generic_type_(args[i], subst);
+                        if (sub != args[i]) changed = true;
+                        rebuilt += types_.to_string(sub);
+                    }
+                    rebuilt += ">";
+                    if (changed) {
+                        return types_.intern_ident(ast_.add_owned_string(std::move(rebuilt)));
+                    }
                 }
                 return src;
             }
@@ -655,10 +810,16 @@ namespace parus::tyck {
                 for (uint32_t i = 0; i < old_s.stmt_count; ++i) {
                     src_kids.push_back(kids[old_s.stmt_begin + i]);
                 }
-                s.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
-                s.stmt_count = old_s.stmt_count;
+                std::vector<ast::StmtId> cloned_kids;
+                cloned_kids.reserve(old_s.stmt_count);
                 for (uint32_t i = 0; i < old_s.stmt_count; ++i) {
-                    const ast::StmtId child = clone_stmt_with_type_subst_(src_kids[i], subst, expr_map, stmt_map);
+                    const ast::StmtId child =
+                        clone_stmt_with_type_subst_(src_kids[i], subst, expr_map, stmt_map);
+                    cloned_kids.push_back(child);
+                }
+                s.stmt_begin = static_cast<uint32_t>(ast_.stmt_children().size());
+                s.stmt_count = static_cast<uint32_t>(cloned_kids.size());
+                for (const auto child : cloned_kids) {
                     ast_.add_stmt_child(child);
                 }
             } else {
@@ -677,16 +838,69 @@ namespace parus::tyck {
                 for (uint32_t i = 0; i < old_s.case_count; ++i) {
                     src_cases.push_back(cases[old_s.case_begin + i]);
                 }
-                s.case_begin = static_cast<uint32_t>(ast_.switch_cases().size());
-                s.case_count = old_s.case_count;
+                std::vector<ast::SwitchCase> cloned_cases;
+                cloned_cases.reserve(old_s.case_count);
                 for (uint32_t i = 0; i < old_s.case_count; ++i) {
                     ast::SwitchCase c = src_cases[i];
                     c.body = clone_stmt_with_type_subst_(c.body, subst, expr_map, stmt_map);
+                    cloned_cases.push_back(c);
+                }
+                s.case_begin = static_cast<uint32_t>(ast_.switch_cases().size());
+                s.case_count = static_cast<uint32_t>(cloned_cases.size());
+                for (const auto& c : cloned_cases) {
                     ast_.add_switch_case(c);
                 }
             } else {
                 s.case_begin = 0;
                 s.case_count = 0;
+            }
+        }
+
+        if (old_s.field_member_count > 0) {
+            const auto& members = ast_.field_members();
+            const uint64_t begin = old_s.field_member_begin;
+            const uint64_t end = begin + old_s.field_member_count;
+            if (begin <= members.size() && end <= members.size()) {
+                std::vector<ast::FieldMember> src_members;
+                src_members.reserve(old_s.field_member_count);
+                for (uint32_t i = 0; i < old_s.field_member_count; ++i) {
+                    src_members.push_back(members[old_s.field_member_begin + i]);
+                }
+                s.field_member_begin = static_cast<uint32_t>(ast_.field_members().size());
+                s.field_member_count = old_s.field_member_count;
+                for (uint32_t i = 0; i < old_s.field_member_count; ++i) {
+                    ast::FieldMember m = src_members[i];
+                    m.type = substitute_generic_type_(m.type, subst);
+                    ast_.add_field_member(m);
+                }
+            } else {
+                s.field_member_begin = 0;
+                s.field_member_count = 0;
+            }
+        }
+
+        if (old_s.decl_path_ref_count > 0) {
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = old_s.decl_path_ref_begin;
+            const uint64_t end = begin + old_s.decl_path_ref_count;
+            if (begin <= refs.size() && end <= refs.size()) {
+                std::vector<ast::PathRef> src_refs;
+                src_refs.reserve(old_s.decl_path_ref_count);
+                for (uint32_t i = 0; i < old_s.decl_path_ref_count; ++i) {
+                    src_refs.push_back(refs[old_s.decl_path_ref_begin + i]);
+                }
+                s.decl_path_ref_begin = static_cast<uint32_t>(ast_.path_refs().size());
+                s.decl_path_ref_count = old_s.decl_path_ref_count;
+                for (uint32_t i = 0; i < old_s.decl_path_ref_count; ++i) {
+                    ast::PathRef pr = src_refs[i];
+                    if (pr.type != ty::kInvalidType) {
+                        pr.type = substitute_generic_type_(pr.type, subst);
+                    }
+                    ast_.add_path_ref(pr);
+                }
+            } else {
+                s.decl_path_ref_begin = 0;
+                s.decl_path_ref_count = 0;
             }
         }
 
@@ -838,6 +1052,695 @@ namespace parus::tyck {
         }
 
         return inst_sid;
+    }
+
+    std::string TypeChecker::path_ref_display_(const ast::PathRef& pr) const {
+        if (pr.type != ty::kInvalidType) {
+            return types_.to_string(pr.type);
+        }
+        return path_join_(pr.path_begin, pr.path_count);
+    }
+
+    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_type_(ty::TypeId proto_type, Span use_span) {
+        if (proto_type == ty::kInvalidType) return std::nullopt;
+
+        if (auto it = proto_decl_by_type_.find(proto_type); it != proto_decl_by_type_.end()) {
+            return it->second;
+        }
+
+        std::string direct_name = types_.to_string(proto_type);
+        if (!direct_name.empty()) {
+            if (auto rewritten = rewrite_imported_path_(direct_name)) {
+                direct_name = *rewritten;
+            }
+            if (auto it = proto_decl_by_name_.find(direct_name); it != proto_decl_by_name_.end()) {
+                return it->second;
+            }
+            if (auto sym_sid = lookup_symbol_(direct_name)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) {
+                    return pit->second;
+                }
+            }
+        }
+
+        std::string base;
+        std::vector<ty::TypeId> args;
+        const bool is_generic_applied = split_generic_applied_named_type_(proto_type, base, args);
+        if (!is_generic_applied) {
+            return std::nullopt;
+        }
+
+        std::string base_key = base;
+        if (auto rewritten = rewrite_imported_path_(base_key)) {
+            base_key = *rewritten;
+        }
+
+        ast::StmtId templ_sid = ast::k_invalid_stmt;
+        if (auto it = proto_decl_by_name_.find(base_key); it != proto_decl_by_name_.end()) {
+            templ_sid = it->second;
+        } else if (auto sym_sid = lookup_symbol_(base_key)) {
+            const auto& ss = sym_.symbol(*sym_sid);
+            auto pit = proto_decl_by_name_.find(ss.name);
+            if (pit != proto_decl_by_name_.end()) {
+                templ_sid = pit->second;
+            }
+        }
+
+        if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
+            diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
+            err_(use_span, "generic proto template not found: " + base_key);
+            return std::nullopt;
+        }
+
+        const auto& templ = ast_.stmt(templ_sid);
+        if (templ.kind != ast::StmtKind::kProtoDecl) {
+            diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
+            err_(use_span, "generic type path target is not proto: " + base_key);
+            return std::nullopt;
+        }
+
+        const uint32_t expected = templ.decl_generic_param_count;
+        const uint32_t got = static_cast<uint32_t>(args.size());
+        if (expected != got) {
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  base_key, std::to_string(expected), std::to_string(got));
+            err_(use_span, "generic proto arity mismatch");
+            return std::nullopt;
+        }
+        if (expected == 0) {
+            return templ_sid;
+        }
+
+        return ensure_generic_proto_instance_(templ_sid, args, use_span);
+    }
+
+    std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_path_ref_(const ast::PathRef& pr, Span use_span) {
+        if (pr.type != ty::kInvalidType) {
+            if (auto sid = resolve_proto_decl_from_type_(pr.type, use_span)) {
+                return sid;
+            }
+        }
+
+        std::string key = path_join_(pr.path_begin, pr.path_count);
+        if (key.empty()) return std::nullopt;
+        if (auto rewritten = rewrite_imported_path_(key)) {
+            key = *rewritten;
+        }
+        if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
+            return it->second;
+        }
+        if (auto sym_sid = lookup_symbol_(key)) {
+            const auto& ss = sym_.symbol(*sym_sid);
+            auto pit = proto_decl_by_name_.find(ss.name);
+            if (pit != proto_decl_by_name_.end()) {
+                return pit->second;
+            }
+        }
+        return std::nullopt;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_class_instance_(
+        ast::StmtId template_sid,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span use_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kClassDecl || templ.decl_generic_param_count == 0) {
+            return template_sid;
+        }
+
+        const auto generic_names = collect_decl_generic_param_names_(templ);
+        if (generic_names.size() != concrete_args.size()) {
+            const std::string base_qname =
+                (class_qualified_name_by_stmt_.find(template_sid) != class_qualified_name_by_stmt_.end())
+                    ? class_qualified_name_by_stmt_[template_sid]
+                    : std::string(templ.name);
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  base_qname,
+                  std::to_string(generic_names.size()),
+                  std::to_string(concrete_args.size()));
+            err_(use_span, "generic class arity mismatch");
+            return std::nullopt;
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+        if (auto it = generic_class_instance_cache_.find(cache_key);
+            it != generic_class_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::string base_qname = std::string(templ.name);
+        if (auto it = class_qualified_name_by_stmt_.find(template_sid);
+            it != class_qualified_name_by_stmt_.end()) {
+            base_qname = it->second;
+        }
+        std::ostringstream qn;
+        qn << base_qname << "<";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) qn << ",";
+            qn << types_.to_string(concrete_args[i]);
+        }
+        qn << ">";
+        const std::string inst_qname = qn.str();
+        const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size() + 8);
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+        auto add_subst_alias = [&](const std::string& key, ty::TypeId val) {
+            if (key.empty()) return;
+            subst.try_emplace(key, val);
+            const size_t sep = key.rfind("::");
+            if (sep != std::string::npos && sep + 2 < key.size()) {
+                subst.try_emplace(key.substr(sep + 2), val);
+            }
+        };
+        add_subst_alias("Self", inst_type);
+        add_subst_alias(std::string(templ.name), inst_type);
+        add_subst_alias(base_qname, inst_type);
+        if (templ.type != ty::kInvalidType) {
+            add_subst_alias(types_.to_string(templ.type), inst_type);
+        }
+
+        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        auto proto_all_default_impl = [&](ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = ps.stmt_begin;
+            const uint64_t end = begin + ps.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return false;
+            if (ps.stmt_count == 0) return true;
+            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
+                const ast::StmtId msid = kids[ps.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) return false;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl || m.a == ast::k_invalid_stmt) return false;
+            }
+            return true;
+        };
+
+        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt) return false;
+            if (proto_all_default_impl(proto_sid)) return true;
+
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
+                owner_sid = cit->second;
+            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
+                owner_sid = fit->second.sid;
+            }
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
+            const auto& owner = ast_.stmt(owner_sid);
+            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
+                    if (*psid == proto_sid) return true;
+                }
+            }
+            return false;
+        };
+
+        for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
+            const uint32_t idx = templ.decl_constraint_begin + ci;
+            if (idx >= ast_.fn_constraint_decls().size()) break;
+            const auto& cc = ast_.fn_constraint_decls()[idx];
+
+            auto bit = subst.find(std::string(cc.type_param));
+            if (bit == subst.end()) {
+                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
+                err_(cc.span, "declaration constraint references unknown generic parameter");
+                return std::nullopt;
+            }
+
+            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
+            if (!proto_sid.has_value()) {
+                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
+                err_(cc.span, "declaration constraint references unknown proto");
+                return std::nullopt;
+            }
+            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
+                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                      cc.type_param, proto_path, types_.to_string(bit->second));
+                err_(cc.span, "declaration generic constraint unsatisfied");
+                return std::nullopt;
+            }
+        }
+
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        const ast::StmtId inst_sid = clone_stmt_with_type_subst_(
+            template_sid, subst, expr_clone_map, stmt_clone_map);
+        if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        auto& inst = ast_.stmt_mut(inst_sid);
+        inst.decl_generic_param_begin = 0;
+        inst.decl_generic_param_count = 0;
+        inst.decl_constraint_begin = 0;
+        inst.decl_constraint_count = 0;
+
+        inst.type = inst_type;
+
+        class_qualified_name_by_stmt_[inst_sid] = inst_qname;
+        class_decl_by_name_[inst_qname] = inst_sid;
+        class_decl_by_type_[inst_type] = inst_sid;
+        field_abi_meta_by_type_[inst_type] = FieldAbiMeta{
+            .sid = inst_sid,
+            .layout = ast::FieldLayout::kNone,
+            .align = 0,
+        };
+
+        const auto& kids = ast_.stmt_children();
+        const uint64_t begin = inst.stmt_begin;
+        const uint64_t end = begin + inst.stmt_count;
+        if (begin <= kids.size() && end <= kids.size()) {
+            for (uint32_t i = inst.stmt_begin; i < inst.stmt_begin + inst.stmt_count; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind == ast::StmtKind::kFnDecl) {
+                    if (m.fn_generic_param_count > 0) {
+                        generic_fn_template_sid_set_.insert(msid);
+                    }
+                    class_member_fn_sid_set_.insert(msid);
+
+                    std::string mqname = inst_qname;
+                    if (!mqname.empty()) mqname += "::";
+                    mqname += std::string(m.name);
+                    fn_qualified_name_by_stmt_[msid] = mqname;
+                    fn_decl_by_name_[mqname].push_back(msid);
+                    if (!m.is_static) {
+                        class_effective_method_map_[inst_type][std::string(m.name)].push_back(msid);
+                    }
+
+                    if (auto existing = sym_.lookup_in_current(mqname)) {
+                        (void)sym_.update_declared_type(*existing, m.type);
+                    } else {
+                        (void)sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                    }
+                } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
+                    std::string vqname = inst_qname;
+                    if (!vqname.empty()) vqname += "::";
+                    vqname += std::string(m.name);
+                    const ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
+                    if (auto existing = sym_.lookup_in_current(vqname)) {
+                        (void)sym_.update_declared_type(*existing, vt);
+                    } else {
+                        (void)sym_.insert(sema::SymbolKind::kVar, vqname, vt, m.span);
+                    }
+                }
+            }
+        }
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+
+        generic_class_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_class_sids_.push_back(inst_sid);
+        if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
+            pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_decl_instance_queue_.push_back(inst_sid);
+        }
+        return inst_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_proto_instance_(
+        ast::StmtId template_sid,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span use_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kProtoDecl || templ.decl_generic_param_count == 0) {
+            return template_sid;
+        }
+
+        const auto generic_names = collect_decl_generic_param_names_(templ);
+        if (generic_names.size() != concrete_args.size()) {
+            const std::string base_qname =
+                (proto_qualified_name_by_stmt_.find(template_sid) != proto_qualified_name_by_stmt_.end())
+                    ? proto_qualified_name_by_stmt_[template_sid]
+                    : std::string(templ.name);
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  base_qname,
+                  std::to_string(generic_names.size()),
+                  std::to_string(concrete_args.size()));
+            err_(use_span, "generic proto arity mismatch");
+            return std::nullopt;
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+        if (auto it = generic_proto_instance_cache_.find(cache_key);
+            it != generic_proto_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size());
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        const ast::StmtId inst_sid = clone_stmt_with_type_subst_(
+            template_sid, subst, expr_clone_map, stmt_clone_map);
+        if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        auto& inst = ast_.stmt_mut(inst_sid);
+        inst.decl_generic_param_begin = 0;
+        inst.decl_generic_param_count = 0;
+        inst.decl_constraint_begin = 0;
+        inst.decl_constraint_count = 0;
+
+        std::string base_qname = std::string(templ.name);
+        if (auto it = proto_qualified_name_by_stmt_.find(template_sid);
+            it != proto_qualified_name_by_stmt_.end()) {
+            base_qname = it->second;
+        }
+        std::ostringstream qn;
+        qn << base_qname << "<";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) qn << ",";
+            qn << types_.to_string(concrete_args[i]);
+        }
+        qn << ">";
+        const std::string inst_qname = qn.str();
+        const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
+        inst.type = inst_type;
+
+        proto_qualified_name_by_stmt_[inst_sid] = inst_qname;
+        proto_decl_by_name_[inst_qname] = inst_sid;
+        proto_decl_by_type_[inst_type] = inst_sid;
+
+        const auto& kids = ast_.stmt_children();
+        const uint64_t begin = inst.stmt_begin;
+        const uint64_t end = begin + inst.stmt_count;
+        if (begin <= kids.size() && end <= kids.size()) {
+            for (uint32_t i = inst.stmt_begin; i < inst.stmt_begin + inst.stmt_count; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) continue;
+                if (m.fn_generic_param_count > 0) {
+                    generic_fn_template_sid_set_.insert(msid);
+                }
+                proto_member_fn_sid_set_.insert(msid);
+
+                std::string mqname = inst_qname;
+                if (!mqname.empty()) mqname += "::";
+                mqname += std::string(m.name);
+                fn_qualified_name_by_stmt_[msid] = mqname;
+
+                if (m.a != ast::k_invalid_stmt) {
+                    fn_decl_by_name_[mqname].push_back(msid);
+                    if (auto existing = sym_.lookup_in_current(mqname)) {
+                        (void)sym_.update_declared_type(*existing, m.type);
+                    } else {
+                        (void)sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                    }
+                }
+            }
+        }
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+
+        generic_proto_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_proto_sids_.push_back(inst_sid);
+        if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
+            pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_decl_instance_queue_.push_back(inst_sid);
+        }
+        return inst_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_acts_instance_(
+        ast::StmtId template_sid,
+        ty::TypeId concrete_owner_type,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span use_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kActsDecl || !templ.acts_is_for) {
+            return std::nullopt;
+        }
+
+        std::string owner_base;
+        std::vector<ty::TypeId> owner_generic_params;
+        if (!split_generic_applied_named_type_(templ.acts_target_type, owner_base, owner_generic_params)) {
+            return template_sid;
+        }
+        if (owner_generic_params.size() != concrete_args.size()) {
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  owner_base,
+                  std::to_string(owner_generic_params.size()),
+                  std::to_string(concrete_args.size()));
+            err_(use_span, "generic acts owner arity mismatch");
+            return std::nullopt;
+        }
+
+        std::vector<std::string> generic_names;
+        generic_names.reserve(owner_generic_params.size());
+        for (const auto t : owner_generic_params) {
+            generic_names.push_back(types_.to_string(t));
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|" << concrete_owner_type << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+        if (auto it = generic_acts_instance_cache_.find(cache_key);
+            it != generic_acts_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size());
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+
+        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        auto proto_all_default_impl = [&](ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = ps.stmt_begin;
+            const uint64_t end = begin + ps.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return false;
+            if (ps.stmt_count == 0) return true;
+            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
+                const ast::StmtId msid = kids[ps.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) return false;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl || m.a == ast::k_invalid_stmt) return false;
+            }
+            return true;
+        };
+
+        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt) return false;
+            if (proto_all_default_impl(proto_sid)) return true;
+
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
+                owner_sid = cit->second;
+            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
+                owner_sid = fit->second.sid;
+            }
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
+            const auto& owner = ast_.stmt(owner_sid);
+            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
+                    if (*psid == proto_sid) return true;
+                }
+            }
+            return false;
+        };
+
+        for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
+            const uint32_t idx = templ.decl_constraint_begin + ci;
+            if (idx >= ast_.fn_constraint_decls().size()) break;
+            const auto& cc = ast_.fn_constraint_decls()[idx];
+
+            auto bit = subst.find(std::string(cc.type_param));
+            if (bit == subst.end()) {
+                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
+                err_(cc.span, "acts declaration constraint references unknown generic parameter");
+                return std::nullopt;
+            }
+
+            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
+            if (!proto_sid.has_value()) {
+                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
+                err_(cc.span, "acts declaration constraint references unknown proto");
+                return std::nullopt;
+            }
+            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
+                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                      cc.type_param, proto_path, types_.to_string(bit->second));
+                err_(cc.span, "acts declaration generic constraint unsatisfied");
+                return std::nullopt;
+            }
+        }
+
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        const ast::StmtId inst_sid = clone_stmt_with_type_subst_(
+            template_sid, subst, expr_clone_map, stmt_clone_map);
+        if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        auto& inst = ast_.stmt_mut(inst_sid);
+        inst.acts_target_type = concrete_owner_type;
+        inst.decl_constraint_begin = 0;
+        inst.decl_constraint_count = 0;
+        inst.decl_generic_param_begin = 0;
+        inst.decl_generic_param_count = 0;
+
+        std::string acts_qname = std::string(templ.name);
+        if (auto it = acts_qualified_name_by_stmt_.find(template_sid);
+            it != acts_qualified_name_by_stmt_.end()) {
+            acts_qname = it->second;
+        }
+        acts_qualified_name_by_stmt_[inst_sid] = acts_qname;
+
+        if (inst.acts_has_set_name) {
+            acts_named_decl_by_owner_and_name_[acts_named_decl_key_(concrete_owner_type, acts_qname)] = inst_sid;
+        }
+        collect_acts_operator_decl_(inst_sid, inst, /*allow_named_set=*/true);
+        collect_acts_method_decl_(inst_sid, inst, /*allow_named_set=*/true);
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+
+        generic_acts_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_acts_sids_.push_back(inst_sid);
+        if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
+            pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_decl_instance_queue_.push_back(inst_sid);
+        }
+        return inst_sid;
+    }
+
+    void TypeChecker::ensure_generic_acts_for_owner_(ty::TypeId concrete_owner_type, Span use_span) {
+        concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
+        if (concrete_owner_type == ty::kInvalidType) return;
+
+        std::string owner_base;
+        std::vector<ty::TypeId> owner_args;
+        if (!split_generic_applied_named_type_(concrete_owner_type, owner_base, owner_args)) {
+            return;
+        }
+
+        std::vector<ast::StmtId> templates;
+        templates.reserve(generic_acts_template_sid_set_.size());
+        for (const auto sid : generic_acts_template_sid_set_) {
+            templates.push_back(sid);
+        }
+        std::sort(templates.begin(), templates.end());
+
+        for (const auto templ_sid : templates) {
+            if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) continue;
+            const auto& templ = ast_.stmt(templ_sid);
+            if (templ.kind != ast::StmtKind::kActsDecl || !templ.acts_is_for) continue;
+
+            std::string templ_base;
+            std::vector<ty::TypeId> templ_args;
+            if (!split_generic_applied_named_type_(templ.acts_target_type, templ_base, templ_args)) continue;
+            if (templ_base != owner_base) continue;
+            if (templ_args.size() != owner_args.size()) continue;
+
+            (void)ensure_generic_acts_instance_(templ_sid, concrete_owner_type, owner_args, use_span);
+        }
     }
 
     std::string TypeChecker::path_join_(uint32_t begin, uint32_t count) const {
@@ -1138,7 +2041,10 @@ namespace parus::tyck {
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
         proto_decl_by_name_.clear();
+        proto_decl_by_type_.clear();
         proto_qualified_name_by_stmt_.clear();
+        class_qualified_name_by_stmt_.clear();
+        acts_qualified_name_by_stmt_.clear();
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
         class_effective_method_map_.clear();
@@ -1368,6 +2274,9 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kProtoDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
+                if (s.decl_generic_param_count > 0) {
+                    generic_proto_template_sid_set_.insert(sid);
+                }
                 proto_qualified_name_by_stmt_[sid] = qname;
                 proto_decl_by_name_[qname] = sid;
 
@@ -1375,6 +2284,9 @@ namespace parus::tyck {
                 if (proto_ty == ty::kInvalidType && !qname.empty()) {
                     proto_ty = types_.intern_ident(qname);
                     ast_.stmt_mut(sid).type = proto_ty;
+                }
+                if (proto_ty != ty::kInvalidType) {
+                    proto_decl_by_type_[proto_ty] = sid;
                 }
 
                 if (auto existing = sym_.lookup_in_current(qname)) {
@@ -1440,6 +2352,10 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kClassDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
+                if (s.decl_generic_param_count > 0) {
+                    generic_class_template_sid_set_.insert(sid);
+                }
+                class_qualified_name_by_stmt_[sid] = qname;
                 ty::TypeId class_ty = s.type;
                 if (class_ty == ty::kInvalidType && !qname.empty()) {
                     class_ty = types_.intern_ident(qname);
@@ -1721,6 +2637,15 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kActsDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
+                acts_qualified_name_by_stmt_[sid] = qname;
+                if (s.acts_is_for &&
+                    s.acts_target_type_node != ast::k_invalid_type_node &&
+                    (size_t)s.acts_target_type_node < ast_.type_nodes().size()) {
+                    const auto& owner_tn = ast_.type_node(s.acts_target_type_node);
+                    if (owner_tn.kind == ast::TypeNodeKind::kNamedPath && owner_tn.generic_arg_count > 0) {
+                        generic_acts_template_sid_set_.insert(sid);
+                    }
+                }
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
                     if (existing_sym.kind != sema::SymbolKind::kAct) {
@@ -1873,7 +2798,7 @@ namespace parus::tyck {
             oss << "acts signature overlap for type " << types_.to_string(owner)
                 << " member '" << member_name
                 << "' between default and named acts (or duplicate default)";
-            diag_(diag::Code::kTypeErrorGeneric, sp, oss.str());
+            diag_(diag::Code::kGenericActsOverlap, sp, types_.to_string(owner), std::string(member_name));
             err_(sp, oss.str());
         };
 

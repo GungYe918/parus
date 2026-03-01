@@ -971,6 +971,127 @@ namespace {
         return ok;
     }
 
+    /// @brief generic class 인스턴스가 concrete 심볼로 materialize되어 LLVM에 직접 호출로 내려가는지 검사한다.
+    static bool test_generic_class_materialization_llvm_symbols_() {
+        const std::string src = R"(
+            class Box<T> {
+                value: T;
+                init(v: T) { self.value = v; }
+                def get(self) -> T { return self.value; }
+            }
+
+            def main() -> i32 {
+                set b = Box<i32>(v: 1i32);
+                return b.get();
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "generic class source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for generic class source must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("$Box_i32_$init$") != std::string::npos,
+                       "LLVM IR must include concrete generic class init symbol");
+        ok &= require_(lowered.llvm_ir.find("$Box_i32_$get$") != std::string::npos,
+                       "LLVM IR must include concrete generic class method symbol");
+        ok &= require_(lowered.llvm_ir.find("call i32 @") != std::string::npos &&
+                       lowered.llvm_ir.find("$Box_i32_$get$") != std::string::npos,
+                       "dot call on generic class value must lower to direct concrete get symbol call");
+        return ok;
+    }
+
+    /// @brief generic proto default impl이 concrete 심볼로 materialize되어 LLVM에서 호출되는지 검사한다.
+    static bool test_generic_proto_default_materialization_llvm_symbols_() {
+        const std::string src = R"(
+            proto Echo<T> {
+                def echo(self, v: T) -> T {
+                    return v;
+                }
+            };
+
+            class EchoUser: Echo<i32> {
+                init() = default;
+            }
+
+            def main() -> i32 {
+                set u = EchoUser();
+                return u.echo(v: 7i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "generic proto source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for generic proto source must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("$Echo_i32_$echo$") != std::string::npos,
+                       "LLVM IR must include concrete generic proto default symbol");
+        ok &= require_(lowered.llvm_ir.find("call i32 @") != std::string::npos &&
+                       lowered.llvm_ir.find("$Echo_i32_$echo$") != std::string::npos,
+                       "proto default call must lower to direct concrete echo symbol call");
+        return ok;
+    }
+
+    /// @brief generic acts 템플릿은 제외되고 concrete owner용 acts 멤버만 LLVM에 내려가는지 검사한다.
+    static bool test_generic_acts_owner_materialization_llvm_symbols_() {
+        const std::string src = R"(
+            class Vec<T> {
+                data: T;
+                init(v: T) { self.data = v; }
+            }
+
+            acts for Vec<T> {
+                def get(self) -> T {
+                    return self.data;
+                }
+            }
+
+            def main() -> i32 {
+                set v = Vec<i32>(v: 1i32);
+                return v.get();
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "generic acts source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for generic acts source must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("$Vec_i32_$init$") != std::string::npos,
+                       "LLVM IR must include concrete generic owner init symbol");
+        ok &= require_(lowered.llvm_ir.find("$get$") != std::string::npos &&
+                       lowered.llvm_ir.find("i32") != std::string::npos,
+                       "LLVM IR must include concrete acts member symbol for Vec<i32>");
+        ok &= require_(lowered.llvm_ir.find("_____T$") == std::string::npos,
+                       "generic acts template symbol must not be lowered into LLVM IR");
+        return ok;
+    }
+
     /// @brief class/proto(default body) 멤버가 LLVM IR 함수로 출력되는지 검사한다.
     static bool test_class_proto_default_member_llvm_symbols_() {
         const std::string src = R"(
@@ -1495,6 +1616,9 @@ int main() {
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"generic_fn_instantiation_llvm_symbols", test_generic_fn_instantiation_llvm_symbols_},
+        {"generic_class_materialization_llvm_symbols", test_generic_class_materialization_llvm_symbols_},
+        {"generic_proto_default_materialization_llvm_symbols", test_generic_proto_default_materialization_llvm_symbols_},
+        {"generic_acts_owner_materialization_llvm_symbols", test_generic_acts_owner_materialization_llvm_symbols_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"proto_override_call_prefers_class_symbol", test_proto_override_call_prefers_class_symbol_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},

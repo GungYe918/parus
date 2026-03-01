@@ -39,6 +39,10 @@ namespace parus::tyck {
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
         std::vector<ast::StmtId> generic_instantiated_fn_sids; // concrete generic fn instantiations created during tyck
+        std::vector<ast::StmtId> generic_instantiated_class_sids; // concrete generic class instantiations
+        std::vector<ast::StmtId> generic_instantiated_proto_sids; // concrete generic proto instantiations
+        std::vector<ast::StmtId> generic_instantiated_acts_sids; // concrete generic acts instantiations
+        std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
         std::vector<TyError> errors;
     };
 
@@ -148,7 +152,7 @@ namespace parus::tyck {
         void check_stmt_class_decl_(ast::StmtId sid);
         void check_stmt_actor_decl_(ast::StmtId sid);
         void check_stmt_field_decl_(ast::StmtId sid);
-        void check_stmt_acts_decl_(const ast::Stmt& s);
+        void check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s);
 
         // expr
         ty::TypeId check_expr_(ast::ExprId eid);
@@ -308,7 +312,10 @@ namespace parus::tyck {
         std::unordered_map<std::string, std::vector<ast::StmtId>> fn_decl_by_name_;
         std::unordered_map<ast::StmtId, std::string> fn_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> proto_decl_by_name_;
+        std::unordered_map<ty::TypeId, ast::StmtId> proto_decl_by_type_;
         std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
+        std::unordered_map<ast::StmtId, std::string> class_qualified_name_by_stmt_;
+        std::unordered_map<ast::StmtId, std::string> acts_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> class_decl_by_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> class_effective_method_map_;
@@ -380,6 +387,32 @@ namespace parus::tyck {
         std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name,
                                                                   const ActiveActsSelection* forced_selection = nullptr) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
+        bool split_generic_applied_named_type_(
+            ty::TypeId t,
+            std::string& out_base,
+            std::vector<ty::TypeId>& out_args
+        ) const;
+        std::vector<std::string> collect_decl_generic_param_names_(const ast::Stmt& decl) const;
+        std::optional<ast::StmtId> ensure_generic_class_instance_(
+            ast::StmtId template_sid,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
+        std::optional<ast::StmtId> ensure_generic_proto_instance_(
+            ast::StmtId template_sid,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
+        std::optional<ast::StmtId> ensure_generic_acts_instance_(
+            ast::StmtId template_sid,
+            ty::TypeId concrete_owner_type,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
+        void ensure_generic_acts_for_owner_(ty::TypeId concrete_owner_type, Span use_span);
+        std::optional<ast::StmtId> resolve_proto_decl_from_type_(ty::TypeId proto_type, Span use_span);
+        std::optional<ast::StmtId> resolve_proto_decl_from_path_ref_(const ast::PathRef& pr, Span use_span);
+        std::string path_ref_display_(const ast::PathRef& pr) const;
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
@@ -421,6 +454,19 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_fn_sids_;
         std::deque<ast::StmtId> pending_generic_instance_queue_;
         std::unordered_set<ast::StmtId> pending_generic_instance_enqueued_;
+        std::unordered_set<ast::StmtId> generic_class_template_sid_set_;
+        std::unordered_set<ast::StmtId> generic_proto_template_sid_set_;
+        std::unordered_set<ast::StmtId> generic_acts_template_sid_set_;
+        std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
+        std::unordered_set<ast::StmtId> generic_decl_checked_instances_;
+        std::unordered_set<ast::StmtId> generic_decl_checking_instances_;
+        std::deque<ast::StmtId> pending_generic_decl_instance_queue_;
+        std::unordered_set<ast::StmtId> pending_generic_decl_instance_enqueued_;
+        std::vector<ast::StmtId> generic_instantiated_class_sids_;
+        std::vector<ast::StmtId> generic_instantiated_proto_sids_;
+        std::vector<ast::StmtId> generic_instantiated_acts_sids_;
 
     };
 

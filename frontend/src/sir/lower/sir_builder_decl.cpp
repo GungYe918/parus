@@ -363,6 +363,11 @@ namespace parus::sir {
         m.bundle_sources_norm = opt.bundle_sources_norm;
         bool global_init_has_any_write = false;
         std::unordered_set<ast::StmtId> lowered_fn_stmt_ids;
+        std::unordered_set<ast::StmtId> lowered_decl_stmt_ids;
+        std::unordered_set<ast::StmtId> generic_acts_template_sid_set(
+            tyck.generic_acts_template_sids.begin(),
+            tyck.generic_acts_template_sids.end()
+        );
 
         const auto lower_fn_once = [&](ast::StmtId fn_sid,
                                        bool is_acts_member,
@@ -401,6 +406,12 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kProtoDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    return;
+                }
+                if (!lowered_decl_stmt_ids.insert(sid).second) {
+                    return;
+                }
                 const uint32_t begin = s.stmt_begin;
                 const uint32_t end = s.stmt_begin + s.stmt_count;
                 const auto& kids = ast.stmt_children();
@@ -419,6 +430,12 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kClassDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    return;
+                }
+                if (!lowered_decl_stmt_ids.insert(sid).second) {
+                    return;
+                }
                 (void)lower_class_field_decl_(m, ast, sym, nres, sid);
 
                 std::string class_qname = std::string(s.name);
@@ -480,6 +497,15 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kActsDecl) {
+                if (generic_acts_template_sid_set.find(sid) != generic_acts_template_sid_set.end()) {
+                    return;
+                }
+                if (s.decl_generic_param_count > 0) {
+                    return;
+                }
+                if (!lowered_decl_stmt_ids.insert(sid).second) {
+                    return;
+                }
                 ActsDecl a{};
                 a.span = s.span;
                 a.sym = resolve_symbol_from_stmt(nres, sid);
@@ -549,6 +575,19 @@ namespace parus::sir {
             if (fs.kind != ast::StmtKind::kFnDecl) continue;
             if (fs.a == ast::k_invalid_stmt) continue;
             (void)lower_fn_once(inst_sid, /*is_acts_member=*/false, k_invalid_acts);
+        }
+
+        for (const auto inst_sid : tyck.generic_instantiated_proto_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            lower_stmt_recursive(lower_stmt_recursive, inst_sid);
+        }
+        for (const auto inst_sid : tyck.generic_instantiated_class_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            lower_stmt_recursive(lower_stmt_recursive, inst_sid);
+        }
+        for (const auto inst_sid : tyck.generic_instantiated_acts_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            lower_stmt_recursive(lower_stmt_recursive, inst_sid);
         }
 
         return m;

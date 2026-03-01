@@ -1,0 +1,14 @@
+proto Echo<T> {
+  def echo(self, v: T) -> T {
+    return v;
+  }
+};
+
+class EchoUser: Echo<i32> {
+  init() = default;
+}
+
+def main() -> i32 {
+  set u = EchoUser();
+  return u.echo(v: 7i32);
+}

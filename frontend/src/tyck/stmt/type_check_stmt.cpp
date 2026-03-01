@@ -135,7 +135,7 @@ namespace parus::tyck {
                 return;
 
             case ast::StmtKind::kActsDecl:
-                check_stmt_acts_decl_(s);
+                check_stmt_acts_decl_(sid, s);
                 return;
 
             case ast::StmtKind::kUse:
@@ -244,7 +244,7 @@ namespace parus::tyck {
     }
 
     void TypeChecker::check_stmt_var_(ast::StmtId sid) {
-        ast::Stmt& s = ast_.stmt_mut(sid); // mutable access (AST에 타입 기록 위해)
+        const ast::Stmt s = ast_.stmt(sid);
         const bool is_global_decl =
             (block_depth_ == 0) &&
             (s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC));
@@ -303,7 +303,7 @@ namespace parus::tyck {
                 sym_is_mut_[var_sym] = s.is_mut;
             }
 
-            s.type = vt;
+            ast_.stmt_mut(sid).type = vt;
             check_c_abi_global_decl_(s);
             return;
         }
@@ -366,7 +366,7 @@ namespace parus::tyck {
             }
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
-            s.type = vt;
+            ast_.stmt_mut(sid).type = vt;
             if (var_sym != sema::SymbolTable::kNoScope && s.var_has_acts_binding) {
                 (void)bind_symbol_acts_selection_(var_sym, vt, s, s.span);
             }
@@ -384,7 +384,7 @@ namespace parus::tyck {
         if (s.init == ast::k_invalid_expr) {
             // 파서가 막았더라도 방어
             err_(s.span, "set requires initializer expression");
-            s.type = types_.error();
+            ast_.stmt_mut(sid).type = types_.error();
             return;
         }
 
@@ -409,13 +409,12 @@ namespace parus::tyck {
             if (ins.is_duplicate) {
                 diag_(diag::Code::kDuplicateDecl, s.span, s.name);
                 err_(s.span, "duplicate symbol (var): " + std::string(s.name));
-                s.type = types_.error();
+                ast_.stmt_mut(sid).type = types_.error();
                 return;
             } else if (ins.is_shadowing) {
                 diag_(diag::Code::kShadowing, s.span, s.name);
             }
         }
-
         // NEW: mut tracking (set mut / set)
         if (ins.ok) {
             sym_is_mut_[ins.symbol_id] = s.is_mut;
@@ -457,7 +456,7 @@ namespace parus::tyck {
         if (inferred == ty::kInvalidType) inferred = types_.error();
 
         // (F) AST에 “추론된 타입” 기록
-        s.type = inferred;
+        ast_.stmt_mut(sid).type = inferred;
         if (ins.ok && s.var_has_acts_binding) {
             (void)bind_symbol_acts_selection_(ins.symbol_id, inferred, s, s.span);
         }
@@ -840,22 +839,9 @@ namespace parus::tyck {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
         if (s.kind != ast::StmtKind::kProtoDecl) return;
-
-        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            }
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
+        if (generic_proto_template_sid_set_.find(sid) != generic_proto_template_sid_set_.end()) {
+            return;
+        }
 
         const auto& kids = ast_.stmt_children();
         const uint32_t mb = s.stmt_begin;
@@ -947,9 +933,9 @@ namespace parus::tyck {
         if (ib <= refs.size() && ie <= refs.size()) {
             for (uint32_t i = ib; i < ie; ++i) {
                 const auto& pr = refs[i];
-                const std::string path = path_join_(pr.path_begin, pr.path_count);
+                const std::string path = path_ref_display_(pr);
                 if (path.empty()) continue;
-                if (!resolve_proto_sid(path).has_value()) {
+                if (!resolve_proto_decl_from_path_ref_(pr, pr.span).has_value()) {
                     diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, path);
                     err_(pr.span, "unknown base proto: " + path);
                 }
@@ -961,22 +947,9 @@ namespace parus::tyck {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
         if (s.kind != ast::StmtKind::kClassDecl) return;
-
-        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            }
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
+        if (generic_class_template_sid_set_.find(sid) != generic_class_template_sid_set_.end()) {
+            return;
+        }
 
         const ty::TypeId self_ty = (s.type == ty::kInvalidType)
             ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
@@ -1036,8 +1009,7 @@ namespace parus::tyck {
             if (ib <= refs.size() && ie <= refs.size()) {
                 for (uint32_t i = ib; i < ie; ++i) {
                     const auto& pr = refs[i];
-                    const std::string p = path_join_(pr.path_begin, pr.path_count);
-                    if (auto base_sid = resolve_proto_sid(p)) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
                         self(self, *base_sid, out, visiting);
                     }
                 }
@@ -1071,8 +1043,7 @@ namespace parus::tyck {
             if (ib <= refs.size() && ie <= refs.size()) {
                 for (uint32_t i = ib; i < ie; ++i) {
                     const auto& pr = refs[i];
-                    const std::string p = path_join_(pr.path_begin, pr.path_count);
-                    if (auto base_sid = resolve_proto_sid(p)) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
                         self(self, *base_sid, out, visiting);
                     }
                 }
@@ -1154,8 +1125,8 @@ namespace parus::tyck {
             if (pb <= refs.size() && pe <= refs.size()) {
                 for (uint32_t i = pb; i < pe; ++i) {
                     const auto& pr = refs[i];
-                    const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
-                    const auto proto_sid = resolve_proto_sid(proto_path);
+                    const std::string proto_path = path_ref_display_(pr);
+                    const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
                     if (!proto_sid.has_value()) continue;
 
                     std::vector<ast::StmtId> defaults;
@@ -1368,8 +1339,8 @@ namespace parus::tyck {
         if (pb <= refs.size() && pe <= refs.size()) {
             for (uint32_t i = pb; i < pe; ++i) {
                 const auto& pr = refs[i];
-                const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
-                const auto proto_sid = resolve_proto_sid(proto_path);
+                const std::string proto_path = path_ref_display_(pr);
+                const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
                 if (!proto_sid.has_value()) {
                     if (is_non_proto_base(proto_path)) {
                         diag_(diag::Code::kClassInheritanceNotAllowed, pr.span, proto_path);
@@ -1608,22 +1579,6 @@ namespace parus::tyck {
         }
 
         // Implements validation for `field Name : ProtoA, ProtoB`
-        auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            }
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
-
         auto collect_required = [&](auto&& self,
                                     ast::StmtId proto_sid,
                                     std::vector<ast::StmtId>& out,
@@ -1639,8 +1594,7 @@ namespace parus::tyck {
             if (ib <= refs.size() && ie <= refs.size()) {
                 for (uint32_t i = ib; i < ie; ++i) {
                     const auto& pr = refs[i];
-                    const std::string p = path_join_(pr.path_begin, pr.path_count);
-                    if (auto base_sid = resolve_proto_sid(p)) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
                         self(self, *base_sid, out, visiting);
                     }
                 }
@@ -1665,8 +1619,8 @@ namespace parus::tyck {
         if (pb <= refs.size() && pe <= refs.size()) {
             for (uint32_t i = pb; i < pe; ++i) {
                 const auto& pr = refs[i];
-                const std::string proto_path = path_join_(pr.path_begin, pr.path_count);
-                const auto proto_sid = resolve_proto_sid(proto_path);
+                const std::string proto_path = path_ref_display_(pr);
+                const auto proto_sid = resolve_proto_decl_from_path_ref_(pr, pr.span);
                 if (!proto_sid.has_value()) {
                     diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
                     err_(pr.span, "unknown proto target: " + proto_path);
@@ -1687,23 +1641,30 @@ namespace parus::tyck {
     }
 
     /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
-    void TypeChecker::check_stmt_acts_decl_(const ast::Stmt& s) {
+    void TypeChecker::check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s) {
+        if (sid != ast::k_invalid_stmt &&
+            generic_acts_template_sid_set_.find(sid) != generic_acts_template_sid_set_.end()) {
+            return;
+        }
+
         sym_.push_scope();
 
         if (s.acts_is_for) {
             bool owner_ok = false;
             const ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
             if (owner_type != ty::kInvalidType) {
-                const auto& owner_ty = types_.get(owner_type);
-                if (owner_ty.kind == ty::Kind::kNamedUser) {
-                    const std::string owner_name = types_.to_string(owner_type);
-                    if (auto owner_sym = lookup_symbol_(owner_name)) {
-                        const auto& ss = sym_.symbol(*owner_sym);
-                        // v0 fixed policy:
-                        // - acts-for attachment is allowed on field/class
-                        // - current implementation tracks concrete value records as kField
-                        owner_ok = (ss.kind == sema::SymbolKind::kField ||
-                                    ss.kind == sema::SymbolKind::kType);
+                if (class_decl_by_type_.find(owner_type) != class_decl_by_type_.end() ||
+                    field_abi_meta_by_type_.find(owner_type) != field_abi_meta_by_type_.end()) {
+                    owner_ok = true;
+                } else {
+                    const auto& owner_ty = types_.get(owner_type);
+                    if (owner_ty.kind == ty::Kind::kNamedUser) {
+                        const std::string owner_name = types_.to_string(owner_type);
+                        if (auto owner_sym = lookup_symbol_(owner_name)) {
+                            const auto& ss = sym_.symbol(*owner_sym);
+                            owner_ok = (ss.kind == sema::SymbolKind::kField ||
+                                        ss.kind == sema::SymbolKind::kType);
+                        }
                     }
                 }
             }
