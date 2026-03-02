@@ -75,7 +75,7 @@
       "patterns": [
         {
           "name": "keyword.control.parus",
-          "match": "\\b(def|field|proto|class|actor|acts|if|elif|else|while|do|loop|in|return|break|continue|switch|case|default|let|set|mut|static|import|module|use|nest|as|with|require|spawn|commit|recast|manual|export|extern|layout|align|pure|comptime|init|deinit|pub|sub|and|or|not|xor|true|false|null)\\b"
+          "match": "\\b(def|struct|proto|class|actor|acts|if|elif|else|while|do|loop|in|return|break|continue|switch|case|default|let|set|mut|static|import|module|use|nest|as|with|require|spawn|commit|recast|manual|export|extern|layout|align|pure|comptime|init|deinit|pub|sub|and|or|not|xor|true|false|null)\\b"
         }
       ]
     },

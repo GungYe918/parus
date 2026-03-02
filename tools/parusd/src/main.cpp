@@ -567,7 +567,7 @@ namespace {
     };
 
     constexpr std::array<std::string_view, 45> kParusCompletionKeywords = {
-        "def", "field", "proto", "class", "actor", "acts",
+        "def", "struct", "proto", "class", "actor", "acts",
         "let", "set", "mut", "static", "if", "elif", "else",
         "while", "do", "loop", "in", "return", "break", "continue",
         "true", "false", "null", "and", "or", "not", "xor",
@@ -1990,7 +1990,7 @@ namespace {
     std::optional<parus::sema::SymbolKind> export_kind_from_string_(std::string_view kind) {
         if (kind == "fn") return parus::sema::SymbolKind::kFn;
         if (kind == "var") return parus::sema::SymbolKind::kVar;
-        if (kind == "field") return parus::sema::SymbolKind::kField;
+        if (kind == "field" || kind == "struct") return parus::sema::SymbolKind::kField;
         if (kind == "act") return parus::sema::SymbolKind::kAct;
         return std::nullopt;
     }

@@ -59,12 +59,12 @@ Parus v0 문자열 계층은 다음 2단계로 고정한다.
 C ABI 경계 문자열 전달은 다음 2개 타입으로 고정한다.
 
 ```parus
-field layout(c) Utf8Span {
+struct layout(c) Utf8Span {
   data: ptr u8;
   len: usize;
 }
 
-field layout(c) Utf8Buf {
+struct layout(c) Utf8Buf {
   data: ptr mut u8;
   len: usize;
   cap: usize;
@@ -109,12 +109,12 @@ cap : usize
 
 ---
 
-## 6. 표준 라이브러리 구현 지침 (`field + acts`)
+## 6. 표준 라이브러리 구현 지침 (`struct + acts`)
 
 표준 라이브러리의 최소 구현 형태:
 
 ```parus
-field String {
+struct String {
   data: ptr mut u8;
   len: usize;
   cap: usize;

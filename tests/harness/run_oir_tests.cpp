@@ -1029,9 +1029,9 @@ namespace {
 
         auto p = build_sir_pipeline_(src);
         bool ok = true;
-        ok &= require_(!p.prog.bag.has_error(), "class field layout seed must not emit diagnostics");
-        ok &= require_(p.ty.errors.empty(), "class field layout seed must not emit tyck errors");
-        ok &= require_(p.sir_cap.ok, "class field layout seed must pass SIR capability");
+        ok &= require_(!p.prog.bag.has_error(), "class struct layout seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "class struct layout seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "class struct layout seed must pass SIR capability");
         if (!ok) return false;
 
         bool has_class_layout = false;
@@ -1043,17 +1043,17 @@ namespace {
                 break;
             }
         }
-        ok &= require_(has_class_layout, "SIR must contain class field layout metadata for Vec2");
+        ok &= require_(has_class_layout, "SIR must contain class struct layout metadata for Vec2");
         if (!ok) return false;
 
         parus::oir::Builder ob(p.sir_mod, p.prog.types);
         auto oir = ob.build();
-        ok &= require_(oir.gate_passed, "OIR gate must pass for class field layout source");
+        ok &= require_(oir.gate_passed, "OIR gate must pass for class struct layout source");
         if (!ok) return false;
 
         parus::oir::run_passes(oir.mod);
         const auto verrs = parus::oir::verify(oir.mod);
-        ok &= require_(verrs.empty(), "OIR verify must pass for class field layout source");
+        ok &= require_(verrs.empty(), "OIR verify must pass for class struct layout source");
         if (!ok) return false;
 
         bool has_vec2_layout = false;
@@ -1064,7 +1064,7 @@ namespace {
                 break;
             }
         }
-        ok &= require_(has_vec2_layout, "OIR must contain class field layout metadata for Vec2");
+        ok &= require_(has_vec2_layout, "OIR must contain class struct layout metadata for Vec2");
         return ok;
     }
 

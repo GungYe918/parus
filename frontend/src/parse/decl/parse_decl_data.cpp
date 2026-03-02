@@ -176,23 +176,23 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `field layout(c)? align(n)? Name { member: Type; ... }` 선언을 파싱한다.
+    /// @brief `struct layout(c)? align(n)? Name { member: Type; ... }` 선언을 파싱한다.
     ast::StmtId Parser::parse_decl_field() {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
         Span start = start_tok.span;
 
-        // ABI 규칙: field에는 export/extern를 붙이지 않는다.
+        // ABI 규칙: struct에는 export/extern를 붙이지 않는다.
         while (cursor_.at(K::kKwExport) || cursor_.at(K::kKwExtern)) {
             const Token bad = cursor_.bump();
             start = bad.span;
             diag_report(diag::Code::kUnexpectedToken, bad.span,
-                        "'export/extern' is not allowed on field declarations");
+                        "'export/extern' is not allowed on struct declarations");
         }
 
         if (!cursor_.at(K::kKwField)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "field");
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "struct");
 
             stmt_sync_to_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
@@ -202,7 +202,12 @@ namespace parus {
             s.span = span_join(start, cursor_.prev().span);
             return ast_.add_stmt(s);
         }
-        cursor_.bump(); // field
+        const Token kw_tok = cursor_.peek();
+        if (kw_tok.kind == K::kKwField && kw_tok.lexeme == "field") {
+            diag_report(diag::Code::kUnexpectedToken, kw_tok.span,
+                        "'field' keyword is removed; use 'struct'");
+        }
+        cursor_.bump(); // struct
 
         ast::FieldLayout field_layout = ast::FieldLayout::kNone;
         uint32_t field_align = 0;
@@ -215,7 +220,7 @@ namespace parus {
                 (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "layout")) {
                 const Token qtok = cursor_.bump();
                 if (seen_layout) {
-                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated layout(...) in field declaration");
+                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated layout(...) in struct declaration");
                 }
                 seen_layout = true;
 
@@ -244,7 +249,7 @@ namespace parus {
                 (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "align")) {
                 const Token qtok = cursor_.bump();
                 if (seen_align) {
-                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated align(...) in field declaration");
+                    diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated align(...) in struct declaration");
                 }
                 seen_align = true;
 
@@ -329,10 +334,10 @@ namespace parus {
                 continue;
             }
 
-            // field 내부 함수/선언은 금지: member: Type; 혹은 (legacy) Type member;만 허용
+            // struct 내부 함수/선언은 금지: member: Type; 혹은 (legacy) Type member;만 허용
             if (is_decl_start(cursor_.peek().kind) || cursor_.at(K::kKwIf) || cursor_.at(K::kKwWhile)) {
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "field member declaration 'name: Type;' (use class for value+behavior)");
+                            "struct member declaration 'name: Type;' (use class for value+behavior)");
                 recover_to_delim(K::kSemicolon, K::kRBrace);
                 cursor_.eat(K::kSemicolon);
                 continue;

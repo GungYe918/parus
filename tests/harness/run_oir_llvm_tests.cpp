@@ -165,10 +165,10 @@ namespace {
         return ok;
     }
 
-    /// @brief layout(c)/align(n) field + C ABI global이 LLVM-IR에 반영되는지 검사한다.
+    /// @brief layout(c)/align(n) struct + C ABI global이 LLVM-IR에 반영되는지 검사한다.
     static bool test_c_abi_field_layout_and_global_symbol() {
         const std::string src = R"(
-            field layout(c) align(16) Vec2 {
+            struct layout(c) align(16) Vec2 {
                 x: f32;
                 y: f32;
             }
@@ -182,7 +182,7 @@ namespace {
 
         auto p = build_oir_pipeline_(src);
         bool ok = true;
-        ok &= require_(p.has_value(), "C ABI field/global source must pass frontend->OIR pipeline");
+        ok &= require_(p.has_value(), "C ABI struct/global source must pass frontend->OIR pipeline");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -191,7 +191,7 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
 
-        ok &= require_(lowered.ok, "LLVM text lowering for C ABI field/global case must succeed");
+        ok &= require_(lowered.ok, "LLVM text lowering for C ABI struct/global case must succeed");
         ok &= require_(lowered.llvm_ir.find("@g_vec = external global [16 x i8], align 16") != std::string::npos,
                        "C ABI global symbol must be emitted as external global with layout(c) align");
         ok &= require_(lowered.llvm_ir.find("define i32 @probe(") != std::string::npos,
@@ -199,10 +199,10 @@ namespace {
         return ok;
     }
 
-    /// @brief C ABI layout(c) field by-value 파라미터가 LLVM 시그니처에서 ptr이 아닌 aggregate로 내려가는지 검사한다.
+    /// @brief C ABI layout(c) struct by-value 파라미터가 LLVM 시그니처에서 ptr이 아닌 aggregate로 내려가는지 검사한다.
     static bool test_c_abi_field_by_value_param_signature() {
         const std::string src = R"(
-            field layout(c) Vec2 {
+            struct layout(c) Vec2 {
                 x: i32;
                 y: i32;
             }
@@ -216,7 +216,7 @@ namespace {
 
         auto p = build_oir_pipeline_(src);
         bool ok = true;
-        ok &= require_(p.has_value(), "C ABI by-value field source must pass frontend->OIR pipeline");
+        ok &= require_(p.has_value(), "C ABI by-value struct source must pass frontend->OIR pipeline");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -225,11 +225,11 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
 
-        ok &= require_(lowered.ok, "LLVM text lowering for C ABI by-value field case must succeed");
+        ok &= require_(lowered.ok, "LLVM text lowering for C ABI by-value struct case must succeed");
         ok &= require_(lowered.llvm_ir.find("declare i32 @takes([8 x i8])") != std::string::npos,
-                       "extern \"C\" field by-value parameter must be emitted as aggregate signature");
+                       "extern \"C\" struct by-value parameter must be emitted as aggregate signature");
         ok &= require_(lowered.llvm_ir.find("define i32 @pass([8 x i8] %arg0)") != std::string::npos,
-                       "export \"C\" field by-value parameter must be emitted as aggregate signature");
+                       "export \"C\" struct by-value parameter must be emitted as aggregate signature");
         ok &= require_(lowered.llvm_ir.find("call i32 @takes([8 x i8]") != std::string::npos,
                        "C ABI by-value call must pass aggregate argument, not ptr");
         return ok;
@@ -342,7 +342,7 @@ namespace {
         return ok;
     }
 
-    /// @brief 수동 OIR field 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
+    /// @brief 수동 OIR struct 모델이 주소 기반 lowering(getelementptr+load/store)으로 변환되는지 검사한다.
     static bool test_manual_field_lowering_memory_model() {
         parus::ty::TypePool types;
         parus::oir::Module m;
@@ -411,7 +411,7 @@ namespace {
 
         const auto verrs = parus::oir::verify(m);
         bool ok = true;
-        ok &= require_(verrs.empty(), "manual field OIR must pass verify");
+        ok &= require_(verrs.empty(), "manual struct OIR must pass verify");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -420,15 +420,15 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
 
-        ok &= require_(lowered.ok, "manual field case lowering must succeed");
+        ok &= require_(lowered.ok, "manual struct case lowering must succeed");
         ok &= require_(lowered.llvm_ir.find("getelementptr i8, ptr") != std::string::npos,
-                       "field lowering must emit byte-offset GEP");
+                       "struct lowering must emit byte-offset GEP");
         ok &= require_(lowered.llvm_ir.find("i64 4") != std::string::npos,
-                       "field lowering must use ABI metadata offset (y=4)");
+                       "struct lowering must use ABI metadata offset (y=4)");
         ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
-                       "field lowering must emit typed store");
+                       "struct lowering must emit typed store");
         ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
-                       "field lowering must emit typed load");
+                       "struct lowering must emit typed load");
         return ok;
     }
 
@@ -542,7 +542,7 @@ namespace {
     /// @brief 함수 오버로딩 + 연산자 오버로딩(acts for) 경로가 올바른 LLVM 호출로 내려가는지 검사한다.
     static bool test_overload_and_operator_lowering_patterns_() {
         const std::string src = R"(
-            field I32Box {
+            struct I32Box {
                 v: i32;
             };
 
@@ -715,10 +715,10 @@ namespace {
         return ok;
     }
 
-    /// @brief g_vec.x 체인이 field lowering 경로(GEP+store/load)로 내려가는지 검사한다.
+    /// @brief g_vec.x 체인이 struct lowering 경로(GEP+store/load)로 내려가는지 검사한다.
     static bool test_global_field_member_chain_lowering_() {
         const std::string src = R"(
-            field layout(c) Vec2 {
+            struct layout(c) Vec2 {
                 x: i32;
                 y: i32;
             }
@@ -733,7 +733,7 @@ namespace {
 
         auto p = build_oir_pipeline_(src);
         bool ok = true;
-        ok &= require_(p.has_value(), "global field member chain source must pass frontend->OIR pipeline");
+        ok &= require_(p.has_value(), "global struct member chain source must pass frontend->OIR pipeline");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -742,11 +742,11 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
 
-        ok &= require_(lowered.ok, "global field member chain lowering must succeed");
+        ok &= require_(lowered.ok, "global struct member chain lowering must succeed");
         ok &= require_(lowered.llvm_ir.find("@g_vec = external global [8 x i8]") != std::string::npos,
                        "extern global Vec2 symbol must be emitted");
         ok &= require_(count_substr_(lowered.llvm_ir, "getelementptr i8, ptr @g_vec, i64 0") >= 2,
-                       "g_vec.x read/write must both compute field address");
+                       "g_vec.x read/write must both compute struct address");
         ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
                        "g_vec.x assignment must emit typed store");
         ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
@@ -754,10 +754,10 @@ namespace {
         return ok;
     }
 
-    /// @brief field literal 생성/수정/읽기가 LLVM field 주소 계산 경로로 내려가는지 검사한다.
+    /// @brief struct literal 생성/수정/읽기가 LLVM struct 주소 계산 경로로 내려가는지 검사한다.
     static bool test_field_literal_lowering_() {
         const std::string src = R"(
-            field Vec2 {
+            struct Vec2 {
                 x: i32;
                 y: i32;
             }
@@ -771,7 +771,7 @@ namespace {
 
         auto p = build_oir_pipeline_(src);
         bool ok = true;
-        ok &= require_(p.has_value(), "field literal source must pass frontend->OIR pipeline");
+        ok &= require_(p.has_value(), "struct literal source must pass frontend->OIR pipeline");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -780,13 +780,13 @@ namespace {
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
 
-        ok &= require_(lowered.ok, "field literal lowering must succeed");
+        ok &= require_(lowered.ok, "struct literal lowering must succeed");
         ok &= require_(count_substr_(lowered.llvm_ir, "getelementptr i8, ptr") >= 3,
-                       "field literal init/update/read must emit field address GEPs");
+                       "struct literal init/update/read must emit struct address GEPs");
         ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
-                       "field literal lowering must emit typed store");
+                       "struct literal lowering must emit typed store");
         ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,
-                       "field literal lowering must emit typed load");
+                       "struct literal lowering must emit typed load");
         return ok;
     }
 
@@ -854,7 +854,7 @@ namespace {
                 }
             )",
             R"(
-                field I32Box {
+                struct I32Box {
                     v: i32;
                 };
                 acts for I32Box {
@@ -868,7 +868,7 @@ namespace {
                 }
             )",
             R"(
-                field I32Box {
+                struct I32Box {
                     v: i32;
                 };
                 acts for I32Box {
@@ -1286,7 +1286,7 @@ namespace {
 
         auto p = build_oir_pipeline_(src);
         bool ok = true;
-        ok &= require_(p.has_value(), "class field offset source must pass frontend->OIR pipeline");
+        ok &= require_(p.has_value(), "class struct offset source must pass frontend->OIR pipeline");
         if (!ok) return false;
 
         const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
@@ -1294,11 +1294,11 @@ namespace {
             p->prog.types,
             parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
         );
-        ok &= require_(lowered.ok, "LLVM text lowering for class field offset source must succeed");
+        ok &= require_(lowered.ok, "LLVM text lowering for class struct offset source must succeed");
         ok &= require_(lowered.llvm_ir.find("getelementptr i8, ptr") != std::string::npos,
-                       "class field access must emit byte-offset GEP");
+                       "class struct access must emit byte-offset GEP");
         ok &= require_(lowered.llvm_ir.find(", i64 4") != std::string::npos,
-                       "class field access for second i32 member should use offset 4");
+                       "class struct access for second i32 member should use offset 4");
         return ok;
     }
 

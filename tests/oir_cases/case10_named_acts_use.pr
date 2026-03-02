@@ -1,5 +1,5 @@
 // OIR->LLVM 케이스: named acts set 활성화(use T with acts) 후 메서드/연산자 해소
-field Vec2 {
+struct Vec2 {
     x: i32;
     y: i32;
 };

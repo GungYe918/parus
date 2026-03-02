@@ -1,4 +1,4 @@
-field A {
+struct A {
     x: i32?;
 }
 

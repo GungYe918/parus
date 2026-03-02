@@ -21,7 +21,7 @@ SIR에서 OIR로 넘어가는 경계(semantic handoff)를 정의한다.
 
 1. SIR local/var -> OIR alloca/load/store 또는 direct SSA value
 2. SIR call -> OIR `InstCall` (direct callee 가능 시 direct_callee 채움)
-3. SIR field/index -> OIR `InstField`/`InstIndex`
+3. SIR struct/index -> OIR `InstField`/`InstIndex`
 4. 상수 -> `InstConst*`
 
 ## verify 및 pass 경계

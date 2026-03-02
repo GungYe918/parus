@@ -52,7 +52,7 @@ namespace parus::syntax {
         kKwLayout,
         kKwAlign,
         kKwFn,
-        kKwField,
+        kKwField, // source keyword: struct
         kKwProto,
         kKwClass,
         kKwActor,
@@ -169,7 +169,7 @@ namespace parus::syntax {
             case TokenKind::kKwExtern: return "extern";
             case TokenKind::kKwLayout: return "layout";
             case TokenKind::kKwAlign: return "align";
-            case TokenKind::kKwField: return "field";
+            case TokenKind::kKwField: return "struct";
             case TokenKind::kKwProto: return "proto";
             case TokenKind::kKwActs: return "acts";
             case TokenKind::kKwLet: return "let";

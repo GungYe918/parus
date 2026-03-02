@@ -1,9 +1,9 @@
-// 비허용 케이스: field 멤버는 POD 내장 값 타입만 허용한다.
-field Inner {
+// 비허용 케이스: struct 멤버는 POD 내장 값 타입만 허용한다.
+struct Inner {
     i32 x;
 }
 
-field Outer {
+struct Outer {
     Inner item;
 }
 

@@ -1038,7 +1038,7 @@ namespace parus::oir {
             }
 
             case parus::sir::ValueKind::kFieldInit: {
-                // v0: field 리터럴은 임시 슬롯에 멤버를 순서대로 store하여 물질화한다.
+                // v0: struct 리터럴은 임시 슬롯에 멤버를 순서대로 store하여 물질화한다.
                 // 반환값은 aggregate slot 포인터 표현을 따른다.
                 ValueId obj_slot = emit_alloca(v.type);
 

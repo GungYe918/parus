@@ -56,7 +56,7 @@ namespace parus::sir {
 
         // composite literals (v0 예정)
         kArrayLit,  // [1,2,3]  (future lowering; keep slot)
-        kFieldInit, // field{...} / struct literal (future)
+        kFieldInit, // struct{...} literal
 
         // ops
         kBorrow,        // &x / &mut x

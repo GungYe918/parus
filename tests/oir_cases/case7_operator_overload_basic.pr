@@ -1,5 +1,5 @@
-// OIR->LLVM 케이스: field 기반 acts for operator(+) 오버로딩
-field I32Box {
+// OIR->LLVM 케이스: struct 기반 acts for operator(+) 오버로딩
+struct I32Box {
     v: i32;
 };
 

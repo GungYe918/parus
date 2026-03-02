@@ -1,5 +1,5 @@
-// 허용 케이스: field는 POD 값 타입 멤버를 가진다.
-field Vec2 {
+// 허용 케이스: struct는 POD 값 타입 멤버를 가진다.
+struct Vec2 {
     i32 x;
     u32 y;
     f32 z;

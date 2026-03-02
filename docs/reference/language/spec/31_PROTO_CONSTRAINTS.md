@@ -42,12 +42,12 @@ proto ProtoName [: BaseProto, ...] {
 ## 19.4 적용 대상
 
 1. `class Name : ProtoA, ...` 선언으로 proto 제약을 부착할 수 있다.
-2. `field Name : ProtoA, ...` 선언도 허용된다.
+2. `struct Name : ProtoA, ...` 선언도 허용된다.
 3. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
 
 ## 19.5 구현 충족 검사
 
-1. 구현체(`class`/`field`)는 proto가 요구한 필수 시그니처를 충족해야 한다.
+1. 구현체(`class`/`struct`)는 proto가 요구한 필수 시그니처를 충족해야 한다.
 2. 기본 구현이 있는 proto 멤버는 구현체가 생략할 수 있다.
 3. proto 상속이 있으면 상위 proto의 필수 시그니처까지 포함해 검사한다.
 4. 시그니처 매칭은 `Self`/`&Self`를 구현체 타입 기준으로 정규화해 비교한다.

@@ -1,6 +1,6 @@
 nest game::math;
 
-field Vec2 {
+struct Vec2 {
     x: i32;
     y: i32;
 };

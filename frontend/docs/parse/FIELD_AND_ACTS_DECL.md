@@ -1,21 +1,21 @@
-# Parse: field and acts Declarations
+# Parse: struct and acts Declarations
 
 ## 목적
 
-`field`, `acts`, `acts for` 선언 파싱 규칙과 self 문법을 명시한다.
+`struct`, `acts`, `acts for` 선언 파싱 규칙과 self 문법을 명시한다.
 
 ## 현재 구현 (코드 근거)
 
-1. field/acts 파싱: `frontend/src/parse/decl/parse_decl_data.cpp`
+1. struct/acts 파싱: `frontend/src/parse/decl/parse_decl_data.cpp`
 2. 함수/receiver 파싱: `frontend/src/parse/decl/parse_decl_fn.cpp`
 3. AST 구조: `frontend/include/parus/ast/Nodes.hpp`
 
-## `field` 선언
+## `struct` 선언
 
-1. 형태: `field layout(c)? align(n)? Name { member: Type; ... }`
+1. 형태: `struct layout(c)? align(n)? Name { member: Type; ... }`
 2. `layout(c)`만 허용
 3. `align(n)`은 정수 literal 파싱
-4. `mut` field member 선언은 파서에서 즉시 진단
+4. `mut` struct member 선언은 파서에서 즉시 진단
 5. legacy `Type name;` member도 recovery 차원에서 수용
 
 ## `acts` 선언
@@ -38,7 +38,7 @@
 ## EBNF (구현 반영)
 
 ```ebnf
-FieldDecl      := "field" FieldQual* Ident "{" FieldMember* "}" [";"] ;
+FieldDecl      := "struct" FieldQual* Ident "{" FieldMember* "}" [";"] ;
 FieldQual      := "layout" "(" "c" ")"
                | "align" "(" IntLit ")" ;
 FieldMember    := Ident ":" Type ";" ;
@@ -58,15 +58,15 @@ SelfRecv       := "self" ["mut" | "move"] ;
 
 1. acts block에서 비함수 token은 `UnexpectedToken` 후 `;`/`}`까지 recovery
 2. operator 선언 파싱 실패 시 block 경계까지 skip
-3. field qualifier 중복/잘못된 인자는 즉시 진단
+3. struct qualifier 중복/잘못된 인자는 즉시 진단
 
 ## 제약/비범위 (v0)
 
-1. field/proto/class 완전 통합 문법은 진행 중
-2. field member default value 문법 없음
+1. struct/proto/class 완전 통합 문법은 진행 중
+2. struct member default value 문법 없음
 3. acts inheritance/polymorphism 없음
 
 ## 미래 설계 (v1+)
 
-1. field member attribute 확장
+1. struct member attribute 확장
 2. acts declaration metadata 분리(AST slim)

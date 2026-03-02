@@ -14,7 +14,7 @@
 ## 18.2 고정 규칙 (Non-negotiable)
 
 1. bundle 내 심볼 수집은 모든 `.pr` 파일 대상으로 수행한다.
-2. 수집 대상 심볼은 `def/var/field/acts` 전체다.
+2. 수집 대상 심볼은 `def/var/struct/acts` 전체다.
 3. 같은 폴더 자동 공유는 `export` 심볼만 허용한다.
 4. 다른 폴더 참조는 반드시 `import <head> as <alias>;`를 사용한다.
 5. `import foo::bar`와 `import ::foo::bar`를 모두 허용하며 내부 canonical은 `foo::bar`다.

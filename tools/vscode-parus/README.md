@@ -7,7 +7,7 @@ VSCode extension workspace for Parus/LEI language support.
 - Diagnostics (`publishDiagnostics`) with underline + Problems integration.
 - Semantic tokens (`textDocument/semanticTokens/full`) for `.pr`, `.parus`, `.lei`.
 - Completion (`textDocument/completion`) via `parusd`:
-  - Parus keywords + top-level declarations (`def/class/proto/actor/field/acts/nest`).
+  - Parus keywords + top-level declarations (`def/class/proto/actor/struct/acts/nest`).
   - LEI keywords + top-level declarations (`def/proto/plan/import alias/let/var`).
 - Go to Definition (`textDocument/definition`) via `parusd`:
   - local symbol

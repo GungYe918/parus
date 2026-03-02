@@ -52,7 +52,7 @@
 ## completion 동작
 
 1. Parus/LEI 공통 keyword completion을 제공한다.
-2. Parus는 현재 문서의 top-level 선언(`def/class/proto/actor/field/acts/nest`)도 completion 후보에 포함한다.
+2. Parus는 현재 문서의 top-level 선언(`def/class/proto/actor/struct/acts/nest`)도 completion 후보에 포함한다.
 3. LEI는 `def/proto/plan/import alias/let/var` 선언명을 completion 후보에 포함한다.
 
 ## definition 동작

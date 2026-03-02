@@ -76,16 +76,16 @@ export "C" def parus_add(a: i32, b: i32) -> i32 {
 규칙:
 
 1. `export "C"` / `extern "C"`는 함수/전역 심볼 선언에만 적용
-2. `field` 선언에 `export`/`extern`을 붙이지 않는다
+2. `struct` 선언에 `export`/`extern`을 붙이지 않는다
 
 ---
 
-## 5. 레이아웃 규칙 (field)
+## 5. 레이아웃 규칙 (struct)
 
 FFI와 메모리 모델은 레이아웃 키워드로 명시한다.
 
 ```parus
-field layout(c) align(16) Vec2 {
+struct layout(c) align(16) Vec2 {
     x: f32;
     y: f32;
 }
@@ -93,10 +93,10 @@ field layout(c) align(16) Vec2 {
 
 규칙:
 
-1. C ABI 경계로 노출되는 `field`는 `layout(c)`를 명시해야 한다
+1. C ABI 경계로 노출되는 `struct`는 `layout(c)`를 명시해야 한다
 2. `align(n)`은 ABI와 성능 정책(벡터화/캐시 정렬) 양쪽에 사용 가능하다
-3. `layout(c)` field 멤버에는 optional(`T?`)을 허용하지 않는다 (`c-v0` 안전 정책)
-4. `field` 멤버 선언에는 `mut` 키워드를 붙이지 않는다 (가변성은 바인딩에서 표현)
+3. `layout(c)` struct 멤버에는 optional(`T?`)을 허용하지 않는다 (`c-v0` 안전 정책)
+4. `struct` 멤버 선언에는 `mut` 키워드를 붙이지 않는다 (가변성은 바인딩에서 표현)
 5. `@{repr:"C"}` 형태는 ABI 공식 문법으로 채택하지 않는다
 
 ---
@@ -126,9 +126,9 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 1. 정수: `i8/i16/i32/i64`, `u8/u16/u32/u64`, `isize/usize`
 2. 부동소수: `f32/f64`
 3. 포인터: `ptr T`, `ptr mut T` (T가 FFI-safe일 때)
-4. `layout(c)`를 만족하는 `field`
-5. 문자열 뷰 경계 타입: `layout(c) field Utf8Span { data: ptr u8; len: usize; }`
-6. 문자열 버퍼 경계 타입: `layout(c) field Utf8Buf { data: ptr mut u8; len: usize; cap: usize; }`
+4. `layout(c)`를 만족하는 `struct`
+5. 문자열 뷰 경계 타입: `layout(c) struct Utf8Span { data: ptr u8; len: usize; }`
+6. 문자열 버퍼 경계 타입: `layout(c) struct Utf8Buf { data: ptr mut u8; len: usize; cap: usize; }`
 
 ### 7.2 금지 타입
 
@@ -170,7 +170,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 
 1. 파서가 `extern "C"` / `export "C"`를 인식한다
 2. 타입체커가 FFI-safe 타입 제한을 강제한다
-3. `field layout(c)`와 `align(n)` 규칙을 검증한다
+3. `struct layout(c)`와 `align(n)` 규칙을 검증한다
 4. C ABI 심볼 중복/충돌을 진단한다
 5. 백엔드가 C ABI 심볼을 비맹글로 출력한다
 6. 문자열 C 경계 타입(`Utf8Span`, `Utf8Buf`) 레이아웃이 문서와 일치한다
@@ -205,7 +205,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `T -> T?`는 대입 경계에서만 허용한다.
    - `T <: T?` 전역 승격은 허용하지 않는다.
 7. OOP 모델은 역할 분리를 고정한다.
-   - `acts for` 부착 대상: `field`, `class`
+   - `acts for` 부착 대상: `struct`, `class`
    - `actor`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지
    - `proto`는 계약 전용이며 연산자 재정의를 담당하지 않는다
    - `acts for` 계열 함수는 `self`/`self mut` 리시버를 첫 파라미터로 강제한다 (`self move`는 v0 보류)
@@ -222,7 +222,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 
 1. ABI 문서 체계 최초 고정
 2. FFI 선언을 `extern "C"` / `export "C"`로 통일
-3. `field` 레이아웃 표기를 `layout(c)`/`align(n)`로 고정
+3. `struct` 레이아웃 표기를 `layout(c)`/`align(n)`로 고정
 4. 포인터 표기를 `ptr` / `ptr mut`로 고정
 
 ### v0.0.1 addendum (string/storage)

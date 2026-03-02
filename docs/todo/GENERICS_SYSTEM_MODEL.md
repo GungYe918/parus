@@ -11,7 +11,7 @@
 이 문서는 Parus 제네릭 시스템의 도입 순서를 `v1 -> v2 -> v3 -> v4`로 고정한다.
 
 1. 표면 문법과 의미론을 페이즈별로 분리 고정한다.
-1. `proto`, `acts`, `class/field`, `dyn`의 결합 규칙을 충돌 없이 정의한다.
+1. `proto`, `acts`, `class/struct`, `dyn`의 결합 규칙을 충돌 없이 정의한다.
 1. 정적 모노모피제이션과 동적 모노모피제이션(JIT)을 분리한다.
 1. 각 단계의 구현 체크리스트/테스트/수용 기준을 포함한다.
 
@@ -54,7 +54,7 @@
 
 현재 부족한 부분:
 
-1. generic `field` 선언의 전면 의미론/생성식 지원
+1. generic `struct` 선언의 전면 의미론/생성식 지원
 1. generic `actor` 선언 지원
 1. 런타임 `dyn` 결합 경로
 1. 동적 모노모피제이션(JIT) 경로
@@ -76,7 +76,7 @@ GenericArgsOpt := "<" Type ("," Type)* ">" | ε ;
 NormalFuncDecl := ... Ident GenericParamClauseOpt FuncParams ConstraintClauseOpt "->" Type Block ;
 ProtoDecl      := "proto" Ident GenericParamClauseOpt ProtoBaseListOpt ProtoBody ProtoTailOpt ;
 ClassDecl      := "class" Ident GenericParamClauseOpt ClassProtoListOpt ConstraintClauseOpt ClassBody ;
-FieldDecl      := "field" Ident GenericParamClauseOpt FieldProtoListOpt ConstraintClauseOpt FieldBody ;
+FieldDecl      := "struct" Ident GenericParamClauseOpt FieldProtoListOpt ConstraintClauseOpt FieldBody ;
 ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 ```
 
@@ -86,7 +86,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. 브래킷 없는 `with T: P` 금지.
 1. generic 인자 생략 호출은 추론 성공 시만 허용.
 1. 실패 시 명시적 `<...>`를 요구한다.
-1. `class/field/acts`의 `with [...]`는 해당 선언의 generic param만 참조 가능하다.
+1. `class/struct/acts`의 `with [...]`는 해당 선언의 generic param만 참조 가능하다.
 1. `proto`의 `with require(...)`와 제네릭 `with [ ... ]`는 문법적으로 다른 레이어이며 혼용하지 않는다.
 1. `acts` 제네릭은 owner 타입 표기만 허용한다.
 1. 금지: `acts for Vec<T> <T> { ... }`
@@ -115,7 +115,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. `P`는 proto로 해석되어야 한다.
 1. 인스턴스화 시점에 concrete 타입이 proto 요구를 충족해야 한다.
 1. proto의 `Self`는 concrete 타입으로 치환 후 시그니처를 비교한다.
-1. class/field 선언의 제약은 인스턴스화 경계(`TypePath` concrete화 시점)에서 검사한다.
+1. class/struct 선언의 제약은 인스턴스화 경계(`TypePath` concrete화 시점)에서 검사한다.
 1. 함수 선언의 제약은 호출 인스턴스화 시점에서 검사한다.
 
 ## 5.3 오버로드 해소 우선순위
@@ -154,7 +154,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. generic 함수 호출/추론/인스턴스화 완성
 1. generic class/proto/acts(owner-only) 선언 및 concrete 사용 가능
-1. generic field/actor 선언은 v1 비지원으로 명시 진단 제공
+1. generic struct/actor 선언은 v1 비지원으로 명시 진단 제공
 1. SIR/OIR/LLVM까지 인스턴스 lowering 연결
 
 구현 항목:
@@ -282,7 +282,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. proto: 계약
 1. acts: 행동/연산 정책
-1. class/field: 데이터/구현체
+1. class/struct: 데이터/구현체
 
 ## 8.2 generic 도입 이후 acts 사용
 
@@ -419,10 +419,10 @@ acts for Vec<T> with [T: Equatable] {
 }
 ```
 
-## 11.3-b generic field + constraint
+## 11.3-b generic struct + constraint
 
 ```parus
-field Pair<K, V> with [K: Hashable, V: Equatable] {
+struct Pair<K, V> with [K: Hashable, V: Equatable] {
     key: K;
     value: V;
 }

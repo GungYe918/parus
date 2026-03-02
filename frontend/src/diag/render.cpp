@@ -317,9 +317,9 @@ namespace parus::diag {
             case Code::kDeclExpected: return "declaration expected";
             case Code::kFnNameExpected: return "function name identifier is required";
             case Code::kFnParamNameExpected: return "function parameter name identifier is required";
-            case Code::kFieldNameExpected: return "field name identifier is required";
-            case Code::kFieldMemberNameExpected: return "field member name identifier is required";
-            case Code::kFieldMemberMutNotAllowed: return "field members must not use 'mut' (declare mutability on bindings instead)";
+            case Code::kFieldNameExpected: return "type declaration name identifier is required";
+            case Code::kFieldMemberNameExpected: return "struct member name identifier is required";
+            case Code::kFieldMemberMutNotAllowed: return "struct members must not use 'mut' (declare mutability on bindings instead)";
             case Code::kActsNameExpected: return "acts name identifier is required";
             case Code::kCallArgMixNotAllowed: return "mixing labeled and positional arguments is not allowed";
             case Code::kFnReturnTypeRequired: return "function return type is required (use: def name(...) -> T { ... })";
@@ -355,7 +355,7 @@ namespace parus::diag {
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit cannot be called directly; lifecycle is compiler-managed";
             case Code::kClassMemberLetSetRemoved: return "class member let/set syntax is removed; use 'name: Type;' for instance fields";
-            case Code::kClassMemberFieldInitNotAllowed: return "class instance field declaration must not include an initializer";
+            case Code::kClassMemberFieldInitNotAllowed: return "class instance struct declaration must not include an initializer";
             case Code::kClassStaticMutNotAllowed: return "class static mut members are not supported in v0";
             case Code::kClassStaticVarRequiresInitializer: return "class static variable requires an initializer";
             case Code::kClassInheritanceNotAllowed: return "class-to-class inheritance is not allowed; class can only implement proto constraints";
@@ -520,14 +520,14 @@ namespace parus::diag {
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '?" "?=' requires rhs assignable to {0} (got {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "empty array literal requires an explicit contextual type";
-            case Code::kTypeFieldMemberRangeInvalid: return "internal: field member range is out of AST bounds";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "field member '{0}' must use a POD builtin value type (got {1})";
-            case Code::kFieldInitTypeExpected: return "field initializer head must be a field type (got '{0}')";
-            case Code::kFieldInitUnknownMember: return "field initializer for '{0}' has unknown member '{1}'";
-            case Code::kFieldInitDuplicateMember: return "field initializer has duplicate member '{0}'";
-            case Code::kFieldInitMissingMember: return "field initializer for '{0}' is missing member '{1}'";
-            case Code::kFieldInitNonOptionalNull: return "field member '{0}' of type '{1}' is non-optional and cannot be initialized with null";
-            case Code::kFieldInitEmptyNotAllowed: return "empty field initializer is not allowed for non-empty field type '{0}'";
+            case Code::kTypeFieldMemberRangeInvalid: return "internal: struct member range is out of AST bounds";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct member '{0}' must use a POD builtin value type (got {1})";
+            case Code::kFieldInitTypeExpected: return "struct initializer head must be a struct type (got '{0}')";
+            case Code::kFieldInitUnknownMember: return "struct initializer for '{0}' has unknown member '{1}'";
+            case Code::kFieldInitDuplicateMember: return "struct initializer has duplicate member '{0}'";
+            case Code::kFieldInitMissingMember: return "struct initializer for '{0}' is missing member '{1}'";
+            case Code::kFieldInitNonOptionalNull: return "struct member '{0}' of type '{1}' is non-optional and cannot be initialized with null";
+            case Code::kFieldInitEmptyNotAllowed: return "empty struct initializer is not allowed for non-empty struct type '{0}'";
             case Code::kDotMethodSelfRequired: return "dot method call requires the first parameter to be a 'self' receiver";
             case Code::kDotReceiverMustBeValue: return "dot method call receiver must be a value; type names are not allowed";
             case Code::kClassCtorMissingInit: return "class constructor call '{0}(...)' requires at least one init(...) overload";
@@ -542,7 +542,7 @@ namespace parus::diag {
             case Code::kGenericTypePathArityMismatch: return "generic type path arity mismatch on '{0}': expected {1}, got {2}";
             case Code::kGenericTypePathTemplateNotFound: return "generic type path target template not found: '{0}'";
             case Code::kGenericActsOverlap: return "generic acts overlap detected for owner '{0}' and member '{1}'";
-            case Code::kGenericFieldNotSupportedV1: return "generic field declaration is not supported in v1: '{0}'";
+            case Code::kGenericFieldNotSupportedV1: return "generic struct declaration is not supported in v1: '{0}'";
             case Code::kGenericActorDeclNotSupportedV1: return "generic actor declaration is not supported in v1: '{0}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
@@ -580,9 +580,9 @@ namespace parus::diag {
             case Code::kDeclExpected: return "이 위치에는 선언(declaration)이 필요합니다";
             case Code::kFnNameExpected: return "함수 이름 식별자가 필요합니다";
             case Code::kFnParamNameExpected: return "함수 파라미터 이름 식별자가 필요합니다";
-            case Code::kFieldNameExpected: return "field 이름 식별자가 필요합니다";
-            case Code::kFieldMemberNameExpected: return "field 멤버 이름 식별자가 필요합니다";
-            case Code::kFieldMemberMutNotAllowed: return "field 멤버에는 'mut'를 사용할 수 없습니다(가변성은 바인딩에서 표현하세요)";
+            case Code::kFieldNameExpected: return "타입 선언 이름 식별자가 필요합니다";
+            case Code::kFieldMemberNameExpected: return "struct 멤버 이름 식별자가 필요합니다";
+            case Code::kFieldMemberMutNotAllowed: return "struct 멤버에는 'mut'를 사용할 수 없습니다(가변성은 바인딩에서 표현하세요)";
             case Code::kActsNameExpected: return "acts 이름 식별자가 필요합니다";
             case Code::kCallArgMixNotAllowed: return "라벨 인자와 위치 인자를 섞어 호출할 수 없습니다";
             case Code::kFnReturnTypeRequired: return "함수 반환 타입이 필요합니다 (예: def name(...) -> T { ... })";
@@ -789,14 +789,14 @@ namespace parus::diag {
             // args: {0}=elem_type, {1}=rhs_type
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "'?" "?=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "빈 배열 리터럴은 명시적 문맥 타입이 필요합니다";
-            case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: field 멤버 범위가 AST 범위를 벗어났습니다";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "field 멤버 '{0}'는 POD 내장 값 타입이어야 합니다(현재 {1})";
-            case Code::kFieldInitTypeExpected: return "field 초기화 헤드는 field 타입이어야 합니다(현재 '{0}')";
-            case Code::kFieldInitUnknownMember: return "field '{0}' 초기화에 존재하지 않는 멤버 '{1}'가 있습니다";
-            case Code::kFieldInitDuplicateMember: return "field 초기화에서 멤버 '{0}'가 중복되었습니다";
-            case Code::kFieldInitMissingMember: return "field '{0}' 초기화에서 멤버 '{1}'가 누락되었습니다";
+            case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: struct 멤버 범위가 AST 범위를 벗어났습니다";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct 멤버 '{0}'는 POD 내장 값 타입이어야 합니다(현재 {1})";
+            case Code::kFieldInitTypeExpected: return "struct 초기화 헤드는 struct 타입이어야 합니다(현재 '{0}')";
+            case Code::kFieldInitUnknownMember: return "struct '{0}' 초기화에 존재하지 않는 멤버 '{1}'가 있습니다";
+            case Code::kFieldInitDuplicateMember: return "struct 초기화에서 멤버 '{0}'가 중복되었습니다";
+            case Code::kFieldInitMissingMember: return "struct '{0}' 초기화에서 멤버 '{1}'가 누락되었습니다";
             case Code::kFieldInitNonOptionalNull: return "멤버 '{0}' 타입 '{1}'는 non-optional이므로 null로 초기화할 수 없습니다";
-            case Code::kFieldInitEmptyNotAllowed: return "멤버가 있는 field 타입 '{0}'에는 빈 초기화 '{}'를 사용할 수 없습니다";
+            case Code::kFieldInitEmptyNotAllowed: return "멤버가 있는 struct 타입 '{0}'에는 빈 초기화 '{}'를 사용할 수 없습니다";
             case Code::kDotMethodSelfRequired: return "dot 메서드 호출은 첫 번째 파라미터가 'self' 리시버여야 합니다";
             case Code::kDotReceiverMustBeValue: return "dot 메서드 호출의 receiver는 값이어야 하며 타입 이름은 허용되지 않습니다";
             case Code::kClassCtorMissingInit: return "class 생성 호출 '{0}(...)'에는 최소 1개의 init(...) 오버로드가 필요합니다";
@@ -811,7 +811,7 @@ namespace parus::diag {
             case Code::kGenericTypePathArityMismatch: return "제네릭 타입 경로 '{0}'의 인자 개수가 맞지 않습니다: 기대 {1}개, 실제 {2}개";
             case Code::kGenericTypePathTemplateNotFound: return "제네릭 타입 경로 대상 템플릿을 찾을 수 없습니다: '{0}'";
             case Code::kGenericActsOverlap: return "owner '{0}'와 멤버 '{1}'에서 제네릭 acts 중복(coherence overlap)이 발생했습니다";
-            case Code::kGenericFieldNotSupportedV1: return "v1에서는 제네릭 field 선언을 지원하지 않습니다: '{0}'";
+            case Code::kGenericFieldNotSupportedV1: return "v1에서는 제네릭 struct 선언을 지원하지 않습니다: '{0}'";
             case Code::kGenericActorDeclNotSupportedV1: return "v1에서는 제네릭 actor 선언을 지원하지 않습니다: '{0}'";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";

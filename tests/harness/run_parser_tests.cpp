@@ -618,9 +618,9 @@ namespace {
     }
 
     static bool test_diag_field_member_name_expected() {
-        // field 멤버 선언은 이름 식별자가 필요하다.
+        // struct 멤버 선언은 이름 식별자가 필요하다.
         const std::string src = R"(
-            field P {
+            struct P {
                 i32;
             }
         )";
@@ -631,14 +631,14 @@ namespace {
 
         bool ok = true;
         ok &= require_(p.bag.has_code(parus::diag::Code::kFieldMemberNameExpected),
-            "missing field member name must emit FieldMemberNameExpected");
+            "missing struct member name must emit FieldMemberNameExpected");
         return ok;
     }
 
     static bool test_acts_for_parse_and_tyck_ok() {
         // acts for / operator(...) 기본 파싱과 tyck 경로가 동작해야 한다.
         const std::string src = R"(
-            field I32Box {
+            struct I32Box {
                 v: i32;
             }
 
@@ -1192,7 +1192,7 @@ namespace {
 
     static bool test_c_abi_layout_c_field_ok() {
         const std::string src = R"(
-            field layout(c) align(16) Vec2 {
+            struct layout(c) align(16) Vec2 {
                 x: f32;
                 y: f32;
             }
@@ -1207,14 +1207,14 @@ namespace {
         auto ty = run_tyck(p);
 
         bool ok = true;
-        ok &= require_(!p.bag.has_error(), "layout(c) field in C ABI signature must pass diagnostics");
-        ok &= require_(ty.errors.empty(), "layout(c) field in C ABI signature must pass tyck");
+        ok &= require_(!p.bag.has_error(), "layout(c) struct in C ABI signature must pass diagnostics");
+        ok &= require_(ty.errors.empty(), "layout(c) struct in C ABI signature must pass tyck");
         return ok;
     }
 
     static bool test_c_abi_reject_non_layout_field() {
         const std::string src = R"(
-            field Vec2 {
+            struct Vec2 {
                 x: f32;
                 y: f32;
             }
@@ -1229,13 +1229,13 @@ namespace {
 
         bool ok = true;
         ok &= require_(p.bag.has_code(parus::diag::Code::kAbiCTypeNotFfiSafe),
-            "non-layout(c) field in C ABI signature must emit AbiCTypeNotFfiSafe");
+            "non-layout(c) struct in C ABI signature must emit AbiCTypeNotFfiSafe");
         return ok;
     }
 
     static bool test_field_export_disallowed() {
         const std::string src = R"(
-            export field layout(c) Vec2 {
+            export struct layout(c) Vec2 {
                 x: f32;
                 y: f32;
             }
@@ -1248,7 +1248,7 @@ namespace {
 
         bool ok = true;
         ok &= require_(p.bag.has_code(parus::diag::Code::kUnexpectedToken),
-            "export field must be rejected by parser");
+            "export struct must be rejected by parser");
         return ok;
     }
 

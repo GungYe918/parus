@@ -32,7 +32,7 @@ nullable 관련 사항에서 `docs/reference/language/SPEC.md`와 충돌하면, 
 
 1. let/set 초기화
 2. 대입(`=`)
-3. field initializer 멤버 값
+3. struct initializer 멤버 값
 4. 함수 인자 전달
 5. return
 6. default parameter
@@ -89,7 +89,7 @@ nullable 관련 사항에서 `docs/reference/language/SPEC.md`와 충돌하면, 
 ## 7. ABI/FFI 경계
 
 1. C ABI(`c-v0`)에서는 optional 직접 값 전달을 허용하지 않는다.
-2. `layout(c)` field 멤버에 optional(`T?`)은 금지한다.
+2. `layout(c)` struct 멤버에 optional(`T?`)은 금지한다.
 3. nullable은 Parus Internal ABI 규칙으로 다룬다.
 
 ---
@@ -107,7 +107,7 @@ nullable 관련 사항에서 `docs/reference/language/SPEC.md`와 충돌하면, 
 다음을 통과해야 nullable hybrid 규칙 준수로 본다.
 
 1. `let a: i32? = 5;`가 정상 동작한다.
-2. `field A { x: i32? }` + `A{ x: 10 }`가 정상 동작한다.
+2. `struct A { x: i32? }` + `A{ x: 10 }`가 정상 동작한다.
 3. 표현식 전역 승격 없이 대입 경계 주입만 허용된다.
 4. `{integer}` 내부명이 사용자 진단에 직접 노출되지 않는다.
 5. optional 값 표현이 OIR/LLVM에서 일관된다.

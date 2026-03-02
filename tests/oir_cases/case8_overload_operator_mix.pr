@@ -1,5 +1,5 @@
-// OIR->LLVM 케이스: 함수 오버로딩 + field operator 오버로딩 혼합
-field I32Box {
+// OIR->LLVM 케이스: 함수 오버로딩 + struct operator 오버로딩 혼합
+struct I32Box {
     v: i32;
 };
 

@@ -8,7 +8,7 @@
 
 1. `can_assign_`, `classify_assign_with_coercion_`: `frontend/src/tyck/expr/type_check_expr_core.cpp`
 2. API/enum: `frontend/include/parus/tyck/TypeCheck.hpp`
-3. let/assign/return/call/default/field-init 통합 호출: `frontend/src/tyck/stmt/type_check_stmt.cpp`, `frontend/src/tyck/expr/type_check_expr_call_cast.cpp`
+3. let/assign/return/call/default/struct-init 통합 호출: `frontend/src/tyck/stmt/type_check_stmt.cpp`, `frontend/src/tyck/expr/type_check_expr_call_cast.cpp`
 
 ## 모델 (v0)
 

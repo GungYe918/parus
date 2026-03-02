@@ -1,5 +1,5 @@
 // 허용 케이스: named-group + 배열 + slice borrow + &mut call 조합
-field Vec2 {
+struct Vec2 {
   i32 x;
   i32 y;
 }

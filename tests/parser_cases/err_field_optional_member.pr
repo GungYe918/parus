@@ -1,5 +1,5 @@
-// 비허용 케이스: layout(c) field 멤버에 optional 타입(i32?)은 금지한다.
-field layout(c) BadOptional {
+// 비허용 케이스: layout(c) struct 멤버에 optional 타입(i32?)은 금지한다.
+struct layout(c) BadOptional {
     i32? maybe;
 }
 

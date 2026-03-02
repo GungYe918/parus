@@ -398,7 +398,10 @@ namespace parus {
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }
 
         if (t.lexeme == "def")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
-        if (t.lexeme == "field")    { t.kind = syntax::TokenKind::kKwField;    return t; }
+        if (t.lexeme == "struct" || t.lexeme == "field") {
+            t.kind = syntax::TokenKind::kKwField;
+            return t;
+        }
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
         if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
         if (t.lexeme == "actor")   { t.kind = syntax::TokenKind::kKwActor;   return t; }

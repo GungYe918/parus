@@ -22,7 +22,7 @@ AST/NameResolve/Tyck 결과를 SIR 모듈로 내리는 실제 lowering 계약을
 
 1. `sir::Module`
 2. 함수/블록/값/문장 테이블 일관성
-3. call, field init, acts 관련 메타가 SIR 노드에 반영
+3. call, struct init, acts 관련 메타가 SIR 노드에 반영
 
 ## acts 관련 lowering 메모
 

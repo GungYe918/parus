@@ -37,7 +37,7 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 #### 3.1.1 braced declaration item (종결 `;` 불필요)
 
 1. `def` 본문 선언
-2. `field`
+2. `struct`
 3. `acts`
 4. (미래) `proto`
 5. (미래) `class`
@@ -94,7 +94,7 @@ nest app::core;
 ;
 ;;
 
-field Vec2 {
+struct Vec2 {
   x: i32;
   y: i32;
 }

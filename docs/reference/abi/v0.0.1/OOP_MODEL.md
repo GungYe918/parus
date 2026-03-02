@@ -14,7 +14,7 @@ OOP 관련 사항에서 `docs/reference/language/SPEC.md` 또는 다른 안내 �
 Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 
 1. 정적 디스패치 기반의 예측 가능한 성능
-2. `field`/`acts`/`proto`/`class`/`actor` 역할 분리
+2. `struct`/`acts`/`proto`/`class`/`actor` 역할 분리
 3. 멀티스레딩 핵심 모델(`actor`, `commit`, `recast`)의 불변식 보호
 4. v1+ 제네릭 확장 시 문법 복잡도(`<>` 과밀) 최소화
 
@@ -32,7 +32,7 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 
 ## 3. 요소별 역할 분리
 
-### 3.1 `field`
+### 3.1 `struct`
 
 1. 순수 데이터 저장소(POD 중심)다.
 2. 레이아웃/ABI 중심 타입이다.
@@ -129,7 +129,7 @@ acts for Vec2 {
 
 ### 6.2 부착 대상 제한
 
-1. 허용: `field`, `class`
+1. 허용: `struct`, `class`
 2. 금지: `actor`, `proto`
 3. 이유:
    - `actor`: commit/recast 상태머신 불변식 보호
@@ -231,7 +231,7 @@ proto Keyable : Hashable, Equatable {
 
 1. 제네릭 제약의 중심으로 확장
 2. 제약 표기는 `with [ ... ]` 단일 문법으로 고정
-3. 구현 권한 확장 후보: `field`의 제한적 `proto` 구현 허용
+3. 구현 권한 확장 후보: `struct`의 제한적 `proto` 구현 허용
 4. 런타임 다형성(`dyn`)은 명시 opt-in으로 분리
 
 예시(미래 문법 초안):
@@ -315,9 +315,9 @@ actor Scene {
 
 ## 10. 포함(Composition) 규칙
 
-1. `field` 안에 `field` 포함: 허용
-2. `class` 안에 `field` 포함: 허용
-3. `actor` draft에 `field` 포함: 허용(기존 draft 규칙 준수)
+1. `struct` 안에 `struct` 포함: 허용
+2. `class` 안에 `struct` 포함: 허용
+3. `actor` draft에 `struct` 포함: 허용(기존 draft 규칙 준수)
 4. `proto` 안의 저장 필드: v0 금지 (함수 계약으로 대체)
 
 권장:
@@ -369,7 +369,7 @@ def f<T, U, V>(...) with [T: P, U: Q<T>, V: R<U>] -> ...
 ### 13.1 값 타입 + 연산
 
 ```parus
-field Vec2 {
+struct Vec2 {
   x: i32;
   y: i32;
 }
@@ -417,7 +417,7 @@ actor Scene {
 
 다음을 통과해야 본 OOP 모델 준수로 본다.
 
-1. `acts for` 부착 대상 제한(`field`/`class`)이 강제된다.
+1. `acts for` 부착 대상 제한(`struct`/`class`)이 강제된다.
 2. `actor`에 `acts for`를 시도하면 컴파일 에러가 난다.
 3. `proto`에서 연산자 선언이 금지된다.
 4. `proto` 상속과 구현 요구사항 closure 검사가 일관 동작한다.
@@ -432,7 +432,7 @@ actor Scene {
 
 ### v0.0.1
 
-1. OOP 역할 분리(`field`/`acts`/`proto`/`class`/`actor`) 정본 고정
+1. OOP 역할 분리(`struct`/`acts`/`proto`/`class`/`actor`) 정본 고정
 2. `acts` 최소 모델(v0) + `proto` 중심 확장(v1+) 로드맵 고정
 3. `self`와 `Self`의 문맥 의미를 정식 규칙으로 고정
 4. `with`의 v0(acts 선택) / v1+(제약) 사용 원칙 고정

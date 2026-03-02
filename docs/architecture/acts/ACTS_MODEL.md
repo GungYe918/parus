@@ -10,9 +10,9 @@
 
 ## 1. 목적
 
-`acts`는 Parus에서 "행동"을 타입 저장소(`field`)와 분리해 기술하기 위한 장치다.
+`acts`는 Parus에서 "행동"을 타입 저장소(`struct`)와 분리해 기술하기 위한 장치다.
 
-1. 저장소/레이아웃(`field`)과 연산/행동(`acts`) 분리
+1. 저장소/레이아웃(`struct`)과 연산/행동(`acts`) 분리
 2. dot 호출/연산자 해석을 명시적 규칙으로 고정
 3. 스코프 기반 정책 선택으로 실험/최적화 정책을 안전하게 교체
 
@@ -20,7 +20,7 @@
 
 ## 2. 핵심 철학
 
-1. `field`는 데이터, `acts`는 동작이다.
+1. `struct`는 데이터, `acts`는 동작이다.
 2. 연산자 의미는 runtime 동적 디스패치가 아니라 compile-time 해소로 결정한다.
 3. `acts` 선택은 lexical scope에서만 영향을 준다.
 4. default 동작은 항상 존재 가능하며, named acts는 선택적으로 덮어쓴다.
@@ -138,7 +138,7 @@ v2::acts(FastMath)::add(v, 1);
 ## 8. 예시
 
 ```parus
-field Vec2 {
+struct Vec2 {
   x: i32;
   y: i32;
 }

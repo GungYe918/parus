@@ -1,4 +1,4 @@
-field MaybePair {
+struct MaybePair {
     a: i32?;
     b: i32?;
 }

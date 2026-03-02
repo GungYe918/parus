@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 
 const PARUS_FALLBACK_KEYWORDS = [
   "def",
-  "field",
+  "struct",
   "proto",
   "class",
   "actor",

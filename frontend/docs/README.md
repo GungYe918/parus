@@ -14,7 +14,7 @@
 2. `pipeline/INCREMENTAL_PARSING.md`: 증분 파싱 API/구조(구현 기준)
 3. `parse/TOP_LEVEL_ITEMS.md`: top-level item, empty item(`;`) 정책
 4. `parse/USE_IMPORT_NEST.md`: `use`/`import`/`nest` 파싱 규칙
-5. `parse/FIELD_AND_ACTS_DECL.md`: `field`, `acts` 선언 파싱
+5. `parse/FIELD_AND_ACTS_DECL.md`: `struct`, `acts` 선언 파싱
 6. `passes/NAME_RESOLVE.md`: 이름 해소와 alias rewrite
 7. `passes/PASS_PIPELINE.md`: pass 순서/입출력 계약
 8. `tyck/ASSIGN_COERCION_AND_NULLABLE.md`: nullable + 중앙 coercion
