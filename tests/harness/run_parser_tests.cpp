@@ -64,11 +64,15 @@ namespace {
         return parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
     }
 
-    static parus::tyck::TyckResult run_tyck(ParsedProgram& p, const parus::sema::SymbolTable* seed = nullptr) {
+    static parus::tyck::TyckResult run_tyck(
+        ParsedProgram& p,
+        const parus::passes::GenericPrepResult* gp = nullptr,
+        const parus::sema::SymbolTable* seed = nullptr
+    ) {
         if (!run_macro_and_type(p)) {
             return parus::tyck::TyckResult{};
         }
-        parus::tyck::TypeChecker tc(p.ast, p.types, p.bag, &p.type_resolve);
+        parus::tyck::TypeChecker tc(p.ast, p.types, p.bag, &p.type_resolve, gp);
         tc.set_seed_symbol_table(seed);
         return tc.check_program(p.root);
     }
@@ -138,7 +142,7 @@ namespace {
 
         auto prog = parse_program(src);
         auto pres = run_passes(prog);
-        auto ty = run_tyck(prog);
+        auto ty = run_tyck(prog, &pres.generic_prep);
         auto cap = run_cap(prog, pres, ty);
         auto sir = run_sir(prog, pres, ty);
 

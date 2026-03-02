@@ -258,6 +258,7 @@ namespace parus::diag {
         kGenericDeclConstraintUnsatisfied, // declaration-level generic constraint is unsatisfied
         kGenericTypePathArityMismatch, // generic-applied type path arity mismatch
         kGenericTypePathTemplateNotFound, // generic-applied type path target template not found
+        kGenericTypePathTemplateKindMismatch, // generic-applied type path target kind mismatch
         kGenericActsOverlap, // acts coherence overlap
         kGenericActorDeclNotSupportedV1, // generic actor declaration is not supported in v1
 

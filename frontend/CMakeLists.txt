@@ -19,6 +19,7 @@ add_library(parus_frontend STATIC
     src/passes/check_place_expr.cpp
     src/passes/check_pub_commit.cpp
     src/passes/check_top_level_decl_only.cpp
+    src/passes/generic_prep.cpp
     src/passes/name_resolve.cpp
     src/passes/passes.cpp
     ${PARUS_CAP_SOURCES}

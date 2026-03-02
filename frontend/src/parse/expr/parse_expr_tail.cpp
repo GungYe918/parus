@@ -13,57 +13,21 @@ namespace parus {
         if (!t.lexeme.empty()) return t.lexeme;
         return syntax::token_kind_name(t.kind);
     }
-    ast::Arg Parser::parse_call_arg(int ternary_depth) {
-        ast::Arg a{};
-        const Token first = cursor_.peek();
 
-        // labeled arg: Ident ':' (Expr | Hole-as-expr)
-        if (first.kind == syntax::TokenKind::kIdent && cursor_.peek(1).kind == syntax::TokenKind::kColon) {
-            cursor_.bump(); // label
-            cursor_.bump(); // ':'
-
-            a.kind = ast::ArgKind::kLabeled;
-            a.has_label = true;
-            a.label = first.lexeme;
-
-            const Token next = cursor_.peek();
-            if (next.kind == syntax::TokenKind::kHole) {
-                cursor_.bump();
-                a.is_hole = true;
-                a.expr = ast::k_invalid_expr;
-                a.span = span_join(first.span, next.span);
-                return a;
-            }
-
-            a.expr = parse_expr_pratt(0, ternary_depth);
-            a.span = span_join(first.span, ast_.expr(a.expr).span);
-            return a;
-        }
-
-        // positional arg: Expr
-        a.kind = ast::ArgKind::kPositional;
-        a.has_label = false;
-        a.expr = parse_expr_pratt(0, ternary_depth);
-        a.span = ast_.expr(a.expr).span;
-        return a;
-    }
-
-    bool Parser::parse_expr_try_call_type_args(uint32_t& out_begin, uint32_t& out_count) {
+    static bool scan_generic_angle_clause_followed_by(
+        const Cursor& cursor,
+        syntax::TokenKind follow_kind
+    ) {
         using K = syntax::TokenKind;
-        out_begin = 0;
-        out_count = 0;
+        if (!cursor.at(K::kLt)) return false;
 
-        if (!cursor_.at(K::kLt)) return false;
-
-        // speculative pre-scan without diagnostics:
-        // accept only if a balanced angle-bracket segment is immediately followed by '('.
-        size_t i = cursor_.pos();
+        size_t i = cursor.pos();
         int angle = 0;
         int paren = 0;
         int bracket = 0;
         bool closed = false;
         while (true) {
-            const Token t = cursor_.peek(i - cursor_.pos());
+            const Token t = cursor.peek(i - cursor.pos());
             if (t.kind == K::kEof) return false;
 
             if (t.kind == K::kLt) {
@@ -110,7 +74,54 @@ namespace parus {
         }
 
         if (!closed) return false;
-        if (cursor_.peek(i - cursor_.pos()).kind != K::kLParen) return false;
+        return cursor.peek(i - cursor.pos()).kind == follow_kind;
+    }
+
+    ast::Arg Parser::parse_call_arg(int ternary_depth) {
+        ast::Arg a{};
+        const Token first = cursor_.peek();
+
+        // labeled arg: Ident ':' (Expr | Hole-as-expr)
+        if (first.kind == syntax::TokenKind::kIdent && cursor_.peek(1).kind == syntax::TokenKind::kColon) {
+            cursor_.bump(); // label
+            cursor_.bump(); // ':'
+
+            a.kind = ast::ArgKind::kLabeled;
+            a.has_label = true;
+            a.label = first.lexeme;
+
+            const Token next = cursor_.peek();
+            if (next.kind == syntax::TokenKind::kHole) {
+                cursor_.bump();
+                a.is_hole = true;
+                a.expr = ast::k_invalid_expr;
+                a.span = span_join(first.span, next.span);
+                return a;
+            }
+
+            a.expr = parse_expr_pratt(0, ternary_depth);
+            a.span = span_join(first.span, ast_.expr(a.expr).span);
+            return a;
+        }
+
+        // positional arg: Expr
+        a.kind = ast::ArgKind::kPositional;
+        a.has_label = false;
+        a.expr = parse_expr_pratt(0, ternary_depth);
+        a.span = ast_.expr(a.expr).span;
+        return a;
+    }
+
+    bool Parser::parse_expr_try_call_type_args(uint32_t& out_begin,
+                                               uint32_t& out_count,
+                                               std::vector<ast::TypeNodeId>* out_nodes) {
+        using K = syntax::TokenKind;
+        out_begin = 0;
+        out_count = 0;
+        if (out_nodes) out_nodes->clear();
+
+        if (!cursor_.at(K::kLt)) return false;
+        if (!scan_generic_angle_clause_followed_by(cursor_, K::kLParen)) return false;
 
         // real parse
         if (!cursor_.eat(K::kLt)) return false;
@@ -118,6 +129,7 @@ namespace parus {
         while (!at_generic_type_arg_close() && !cursor_.at(K::kEof)) {
             auto ty = parse_type();
             ast_.add_type_arg(ty.id);
+            if (out_nodes) out_nodes->push_back(ty.node);
             ++out_count;
             if (cursor_.eat(K::kComma)) {
                 if (at_generic_type_arg_close()) break;
@@ -134,68 +146,16 @@ namespace parus {
         return true;
     }
 
-    bool Parser::parse_expr_try_literal_type_args(uint32_t& out_begin, uint32_t& out_count) {
+    bool Parser::parse_expr_try_literal_type_args(uint32_t& out_begin,
+                                                  uint32_t& out_count,
+                                                  std::vector<ast::TypeNodeId>* out_nodes) {
         using K = syntax::TokenKind;
         out_begin = 0;
         out_count = 0;
+        if (out_nodes) out_nodes->clear();
 
         if (!cursor_.at(K::kLt)) return false;
-
-        // speculative pre-scan:
-        // accept only if balanced angle-bracket segment is immediately followed by '{'.
-        size_t i = cursor_.pos();
-        int angle = 0;
-        int paren = 0;
-        int bracket = 0;
-        bool closed = false;
-        while (true) {
-            const Token t = cursor_.peek(i - cursor_.pos());
-            if (t.kind == K::kEof) return false;
-
-            if (t.kind == K::kLt) {
-                ++angle;
-                ++i;
-                continue;
-            }
-            if (t.kind == K::kShiftRight) {
-                angle -= 2;
-                ++i;
-                if (angle == 0) {
-                    closed = true;
-                    break;
-                }
-                if (angle < 0) return false;
-                continue;
-            }
-            if (t.kind == K::kGt) {
-                --angle;
-                ++i;
-                if (angle == 0) {
-                    closed = true;
-                    break;
-                }
-                if (angle < 0) return false;
-                continue;
-            }
-
-            if (t.kind == K::kLParen) { ++paren; ++i; continue; }
-            if (t.kind == K::kRParen) { --paren; ++i; if (paren < 0) return false; continue; }
-            if (t.kind == K::kLBracket) { ++bracket; ++i; continue; }
-            if (t.kind == K::kRBracket) { --bracket; ++i; if (bracket < 0) return false; continue; }
-
-            if (t.kind == K::kPlus || t.kind == K::kMinus || t.kind == K::kStar ||
-                t.kind == K::kSlash || t.kind == K::kPercent || t.kind == K::kEqEq ||
-                t.kind == K::kBangEq || t.kind == K::kPipePipe ||
-                t.kind == K::kPipeFwd || t.kind == K::kPipeRev ||
-                t.kind == K::kKwAnd || t.kind == K::kKwOr) {
-                return false;
-            }
-
-            ++i;
-        }
-
-        if (!closed) return false;
-        if (cursor_.peek(i - cursor_.pos()).kind != K::kLBrace) return false;
+        if (!scan_generic_angle_clause_followed_by(cursor_, K::kLBrace)) return false;
 
         // real parse
         if (!cursor_.eat(K::kLt)) return false;
@@ -203,6 +163,7 @@ namespace parus {
         while (!at_generic_type_arg_close() && !cursor_.at(K::kEof)) {
             auto ty = parse_type();
             ast_.add_type_arg(ty.id);
+            if (out_nodes) out_nodes->push_back(ty.node);
             ++out_count;
             if (cursor_.eat(K::kComma)) {
                 if (at_generic_type_arg_close()) break;

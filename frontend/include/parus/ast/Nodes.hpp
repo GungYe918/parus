@@ -380,6 +380,7 @@ namespace parus::ast {
         // field init entries storage (FieldInitEntry 배열 slice)
         uint32_t field_init_begin = 0;
         uint32_t field_init_count = 0;
+        TypeNodeId field_init_type_node = k_invalid_type_node; // optional typed head for struct literal
 
         // block expression payload
         StmtId block_stmt = k_invalid_stmt; // '{ ... }' block stmt id

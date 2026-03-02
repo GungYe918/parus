@@ -23,7 +23,6 @@ namespace parus::type {
 
             std::vector<uint8_t> visiting{};
             std::vector<uint8_t> done{};
-            std::unordered_map<std::string, ty::TypeId> named_path_generic_cache{};
 
             ty::TypeId resolve_node(ast::TypeNodeId id) {
                 if (id == ast::k_invalid_type_node) return ty::kInvalidType;
@@ -61,12 +60,6 @@ namespace parus::type {
                             break;
                         }
 
-                        std::string path_prefix{};
-                        for (uint32_t i = 0; i < n.path_count; ++i) {
-                            if (i) path_prefix += "::";
-                            path_prefix += std::string(segs[n.path_begin + i]);
-                        }
-
                         std::vector<ty::TypeId> arg_ids{};
                         arg_ids.reserve(n.generic_arg_count);
                         for (uint32_t i = 0; i < n.generic_arg_count; ++i) {
@@ -74,29 +67,12 @@ namespace parus::type {
                             arg_ids.push_back(aid);
                         }
 
-                        std::string cache_key = "$named_path$";
-                        cache_key += path_prefix;
-                        cache_key += "<";
-                        for (uint32_t i = 0; i < n.generic_arg_count; ++i) {
-                            if (i) cache_key += ",";
-                            cache_key += std::to_string(arg_ids[i]);
-                        }
-                        cache_key += ">";
-                        if (auto it = named_path_generic_cache.find(cache_key);
-                            it != named_path_generic_cache.end()) {
-                            out = it->second;
-                            break;
-                        }
-
-                        std::string flat = path_prefix;
-                        flat += "<";
-                        for (uint32_t i = 0; i < n.generic_arg_count; ++i) {
-                            if (i) flat += ",";
-                            flat += types.to_string(arg_ids[i]);
-                        }
-                        flat += ">";
-                        out = types.intern_ident(ast.add_owned_string(std::move(flat)));
-                        named_path_generic_cache.emplace(std::move(cache_key), out);
+                        out = types.intern_named_path_with_args(
+                            &segs[n.path_begin],
+                            n.path_count,
+                            arg_ids.data(),
+                            static_cast<uint32_t>(arg_ids.size())
+                        );
                         break;
                     }
 

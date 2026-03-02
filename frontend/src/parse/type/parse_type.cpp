@@ -367,18 +367,17 @@ namespace parus {
                 if (generic_args.empty()) {
                     n.resolved_type = types_.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
                 } else {
-                    std::string flat{};
-                    for (size_t i = 0; i < segs.size(); ++i) {
-                        if (i) flat += "::";
-                        flat += std::string(segs[i]);
+                    std::vector<ty::TypeId> arg_ids{};
+                    arg_ids.reserve(generic_args.size());
+                    for (const auto& ga : generic_args) {
+                        arg_ids.push_back(ga.id);
                     }
-                    flat += "<";
-                    for (size_t i = 0; i < generic_args.size(); ++i) {
-                        if (i) flat += ",";
-                        flat += types_.to_string(generic_args[i].id);
-                    }
-                    flat += ">";
-                    n.resolved_type = types_.intern_ident(ast_.add_owned_string(std::move(flat)));
+                    n.resolved_type = types_.intern_named_path_with_args(
+                        segs.data(),
+                        static_cast<uint32_t>(segs.size()),
+                        arg_ids.data(),
+                        static_cast<uint32_t>(arg_ids.size())
+                    );
                 }
 
                 ParsedType out{};

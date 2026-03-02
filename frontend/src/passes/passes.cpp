@@ -5,6 +5,7 @@
 #include <parus/passes/CheckPipeHole.hpp>
 #include <parus/passes/CheckPlaceExpr.hpp>
 #include <parus/passes/CheckTopLevelDeclOnly.hpp>
+#include <parus/passes/GenericPrep.hpp>
 
 
 namespace parus::passes {
@@ -67,7 +68,11 @@ namespace parus::passes {
         check_top_level_decl_only(ast, program_root, bag);
 
         // 1) stmt 기반 패스
-        return run_on_stmt_tree(ast, program_root, bag, opt);
+        auto res = run_on_stmt_tree(ast, program_root, bag, opt);
+
+        // 2) generic prepass (index + lightweight validation prep)
+        res.generic_prep = run_generic_prep(ast, program_root, bag);
+        return res;
     }
 
 } // namespace parus::passes

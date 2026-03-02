@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <ostream>
+#include <cctype>
 
 
 namespace parus::ty {
@@ -18,6 +19,7 @@ namespace parus::ty {
             fn_param_labels_.reserve(256);
             fn_param_has_default_.reserve(256);
             user_path_segs_.reserve(256);
+            named_type_args_.reserve(256);
 
             // [0] canonical error type
             {
@@ -48,17 +50,40 @@ namespace parus::ty {
 
         uint32_t count() const { return (uint32_t)types_.size(); }
 
-        // ---- user-defined named type (path) interning ----
+        // ---- user-defined named type (path [+generic args]) interning ----
         // Stores path segments as a slice into user_path_segs_ to avoid string flatten.
         //
         // Example: Foo::Bar::Baz is stored as segs ["Foo","Bar","Baz"].
         TypeId make_named_user_path(const std::string_view* segs, uint32_t seg_count) {
+            return make_named_user_path_with_args(segs, seg_count, nullptr, 0);
+        }
+
+        TypeId make_named_user_path_with_args(const std::string_view* segs,
+                                              uint32_t seg_count,
+                                              const TypeId* args,
+                                              uint32_t arg_count) {
             if (!segs || seg_count == 0) {
                 Type t{};
                 t.kind = Kind::kNamedUser;
                 t.path_begin = 0;
                 t.path_count = 0;
+                t.named_arg_begin = 0;
+                t.named_arg_count = 0;
                 return push_(t);
+            }
+
+            // Snapshot inputs to avoid alias/lifetime issues when caller-provided
+            // string_views point to transient buffers or to our own growable storage.
+            std::vector<std::string> seg_snapshot{};
+            seg_snapshot.reserve(seg_count);
+            for (uint32_t k = 0; k < seg_count; ++k) {
+                seg_snapshot.emplace_back(segs[k]);
+            }
+
+            std::vector<TypeId> arg_snapshot{};
+            arg_snapshot.reserve(arg_count);
+            for (uint32_t k = 0; k < arg_count; ++k) {
+                arg_snapshot.push_back(args ? args[k] : error());
             }
 
             // linear search v0: compare segment slices
@@ -66,10 +91,15 @@ namespace parus::ty {
                 const auto& t = types_[i];
                 if (t.kind != Kind::kNamedUser) continue;
                 if (t.path_count != seg_count) continue;
+                if (t.named_arg_count != arg_count) continue;
 
                 bool same = true;
                 for (uint32_t k = 0; k < seg_count; ++k) {
-                    if (user_path_segs_[t.path_begin + k] != segs[k]) { same = false; break; }
+                    if (user_path_segs_[t.path_begin + k] != seg_snapshot[k]) { same = false; break; }
+                }
+                if (!same) continue;
+                for (uint32_t k = 0; k < arg_count; ++k) {
+                    if (named_type_args_[t.named_arg_begin + k] != arg_snapshot[k]) { same = false; break; }
                 }
                 if (same) return i;
             }
@@ -78,8 +108,11 @@ namespace parus::ty {
             t.kind = Kind::kNamedUser;
             t.path_begin = (uint32_t)user_path_segs_.size();
             t.path_count = seg_count;
+            t.named_arg_begin = (uint32_t)named_type_args_.size();
+            t.named_arg_count = arg_count;
 
-            for (uint32_t k = 0; k < seg_count; ++k) user_path_segs_.push_back(segs[k]);
+            for (uint32_t k = 0; k < seg_count; ++k) user_path_segs_.push_back(seg_snapshot[k]);
+            for (uint32_t k = 0; k < arg_count; ++k) named_type_args_.push_back(arg_snapshot[k]);
 
             return push_(t);
         }
@@ -92,6 +125,13 @@ namespace parus::ty {
                 if (builtin_from_name(segs[0], b)) return builtin(b);
             }
             return make_named_user_path(segs, seg_count);
+        }
+
+        TypeId intern_named_path_with_args(const std::string_view* segs,
+                                           uint32_t seg_count,
+                                           const TypeId* args,
+                                           uint32_t arg_count) {
+            return make_named_user_path_with_args(segs, seg_count, args, arg_count);
         }
 
         // intern optional/array (simple linear search v0)
@@ -265,8 +305,30 @@ namespace parus::ty {
 
         // convenience: ident -> (builtin or named_user)
         TypeId intern_ident(std::string_view name) {
+            TypeId parsed = kInvalidType;
+            if (parse_generic_applied_ident_(name, parsed)) return parsed;
             const std::string_view segs[1] = { name };
             return intern_path(segs, 1);
+        }
+
+        bool decompose_named_user(TypeId id,
+                                  std::vector<std::string_view>& out_path,
+                                  std::vector<TypeId>& out_args) const {
+            out_path.clear();
+            out_args.clear();
+            if (id == kInvalidType || id >= types_.size()) return false;
+            const auto& t = types_[id];
+            if (t.kind != Kind::kNamedUser) return false;
+            if (t.path_count == 0) return false;
+            out_path.reserve(t.path_count);
+            out_args.reserve(t.named_arg_count);
+            for (uint32_t i = 0; i < t.path_count; ++i) {
+                out_path.push_back(user_path_segs_[t.path_begin + i]);
+            }
+            for (uint32_t i = 0; i < t.named_arg_count; ++i) {
+                out_args.push_back(named_type_args_[t.named_arg_begin + i]);
+            }
+            return true;
         }
 
         // builtin name -> Builtin (aliases 포함)
@@ -394,6 +456,14 @@ namespace parus::ty {
                                 os << user_path_segs_[t.path_begin + k];
                             }
                         }
+                        if (t.named_arg_count > 0) {
+                            os << " args=<";
+                            for (uint32_t k = 0; k < t.named_arg_count; ++k) {
+                                if (k) os << ",";
+                                os << to_string(named_type_args_[t.named_arg_begin + k]);
+                            }
+                            os << ">";
+                        }
                         os << ")";
                         break;
                     }
@@ -456,6 +526,14 @@ namespace parus::ty {
                         if (k) out += "::";
                         const auto seg = user_path_segs_[t.path_begin + k];
                         out.append(seg.data(), seg.size());
+                    }
+                    if (t.named_arg_count > 0) {
+                        out += "<";
+                        for (uint32_t i = 0; i < t.named_arg_count; ++i) {
+                            if (i) out += ",";
+                            render_into_export_(out, named_type_args_[t.named_arg_begin + i]);
+                        }
+                        out += ">";
                     }
                     return;
                 }
@@ -568,6 +646,14 @@ namespace parus::ty {
                         if (k) out += "::";
                         const auto seg = user_path_segs_[t.path_begin + k];
                         out.append(seg.data(), seg.size());
+                    }
+                    if (t.named_arg_count > 0) {
+                        out += "<";
+                        for (uint32_t i = 0; i < t.named_arg_count; ++i) {
+                            if (i) out += ",";
+                            render_into_(out, named_type_args_[t.named_arg_begin + i], RenderCtx::kTop);
+                        }
+                        out += ">";
                     }
                     return;
                 }
@@ -696,7 +782,92 @@ namespace parus::ty {
         std::vector<std::string_view> fn_param_labels_;
         std::vector<uint8_t> fn_param_has_default_;
         std::vector<TypeId> builtin_ids_;
-        std::vector<std::string_view> user_path_segs_;
+        std::vector<std::string> user_path_segs_;
+        std::vector<TypeId> named_type_args_;
+
+        static std::string trim_copy_(std::string_view sv) {
+            size_t b = 0;
+            while (b < sv.size() && std::isspace(static_cast<unsigned char>(sv[b]))) ++b;
+            size_t e = sv.size();
+            while (e > b && std::isspace(static_cast<unsigned char>(sv[e - 1]))) --e;
+            return std::string(sv.substr(b, e - b));
+        }
+
+        bool parse_generic_applied_ident_(std::string_view raw, TypeId& out) {
+            out = kInvalidType;
+            if (raw.empty()) return false;
+            const size_t lt = raw.find('<');
+            if (lt == std::string_view::npos) return false;
+            if (raw.back() != '>') return false;
+
+            int depth = 0;
+            size_t first_lt = std::string_view::npos;
+            size_t matching_gt = std::string_view::npos;
+            for (size_t i = 0; i < raw.size(); ++i) {
+                const char ch = raw[i];
+                if (ch == '<') {
+                    if (depth == 0) first_lt = i;
+                    ++depth;
+                    continue;
+                }
+                if (ch == '>') {
+                    if (depth == 0) return false;
+                    --depth;
+                    if (depth == 0) matching_gt = i;
+                }
+            }
+            if (depth != 0 || first_lt == std::string_view::npos || matching_gt != raw.size() - 1) {
+                return false;
+            }
+
+            std::string base = trim_copy_(raw.substr(0, first_lt));
+            if (base.empty()) return false;
+            const std::string payload = trim_copy_(raw.substr(first_lt + 1, matching_gt - first_lt - 1));
+            if (payload.empty()) return false;
+
+            std::vector<std::string_view> segs{};
+            {
+                size_t pos = 0;
+                while (pos < base.size()) {
+                    size_t next = base.find("::", pos);
+                    if (next == std::string::npos) next = base.size();
+                    std::string_view part(base.data() + pos, next - pos);
+                    if (part.empty()) return false;
+                    segs.push_back(part);
+                    pos = next + 2;
+                }
+            }
+            if (segs.empty()) return false;
+
+            std::vector<TypeId> args{};
+            int arg_depth = 0;
+            size_t part_begin = 0;
+            for (size_t i = 0; i <= payload.size(); ++i) {
+                const bool at_end = (i == payload.size());
+                const char ch = at_end ? '\0' : payload[i];
+                if (!at_end) {
+                    if (ch == '<') ++arg_depth;
+                    else if (ch == '>') --arg_depth;
+                }
+                if (at_end || (ch == ',' && arg_depth == 0)) {
+                    std::string part = trim_copy_(std::string_view(payload).substr(part_begin, i - part_begin));
+                    if (part.empty()) return false;
+                    const TypeId arg_ty = intern_ident(part);
+                    if (arg_ty == kInvalidType) return false;
+                    args.push_back(arg_ty);
+                    part_begin = i + 1;
+                }
+            }
+            if (args.empty()) return false;
+
+            out = intern_named_path_with_args(
+                segs.data(),
+                static_cast<uint32_t>(segs.size()),
+                args.data(),
+                static_cast<uint32_t>(args.size())
+            );
+            return out != kInvalidType;
+        }
     };      
 
 } // namespace parus::ty

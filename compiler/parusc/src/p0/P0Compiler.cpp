@@ -1262,7 +1262,7 @@ namespace parusc::p0 {
 
         parus::tyck::TyckResult tyck_res;
         {
-            parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve);
+            parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
             if (opt.bundle.enabled || !inv.load_export_index_paths.empty() || !inv.bundle_sources.empty()) {
                 tc.set_seed_symbol_table(&pres.sym);
             }

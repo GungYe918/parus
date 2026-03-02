@@ -1,0 +1,16 @@
+proto Holder<T> {
+  def get(self) -> T;
+};
+
+class Bad: Holder<i32 {
+  init() = default;
+  def get(self) -> i32 { return 0i32; }
+}
+
+def after() -> i32 {
+  return 42i32;
+}
+
+def main() -> i32 {
+  return after();
+}

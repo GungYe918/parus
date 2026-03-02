@@ -7,6 +7,7 @@
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/num/BigInt.hpp>
 #include <parus/syntax/TokenKind.hpp>
+#include <parus/passes/GenericPrep.hpp>
 
 #include <cstdint>
 #include <string>
@@ -49,11 +50,18 @@ namespace parus::tyck {
 
     class TypeChecker {
     public:
-        TypeChecker(ast::AstArena& ast, ty::TypePool& types, const parus::type::TypeResolveResult* tr = nullptr)
-            : ast_(ast), types_(types), type_resolve_(tr) {}
+        TypeChecker(ast::AstArena& ast,
+                    ty::TypePool& types,
+                    const parus::type::TypeResolveResult* tr = nullptr,
+                    const passes::GenericPrepResult* gp = nullptr)
+            : ast_(ast), types_(types), type_resolve_(tr), generic_prep_(gp) {}
 
-        TypeChecker(ast::AstArena& ast, ty::TypePool& types, diag::Bag& bag, const parus::type::TypeResolveResult* tr = nullptr)
-            : ast_(ast), types_(types), type_resolve_(tr), diag_bag_(&bag) {}
+        TypeChecker(ast::AstArena& ast,
+                    ty::TypePool& types,
+                    diag::Bag& bag,
+                    const parus::type::TypeResolveResult* tr = nullptr,
+                    const passes::GenericPrepResult* gp = nullptr)
+            : ast_(ast), types_(types), type_resolve_(tr), generic_prep_(gp), diag_bag_(&bag) {}
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
         void set_seed_symbol_table(const sema::SymbolTable* seed) { seed_sym_ = seed; }
@@ -261,6 +269,7 @@ namespace parus::tyck {
         ast::AstArena& ast_;
         ty::TypePool& types_;
         const parus::type::TypeResolveResult* type_resolve_ = nullptr;
+        const passes::GenericPrepResult* generic_prep_ = nullptr;
         diag::Bag* diag_bag_ = nullptr;
 
         // ----------------------------------------
@@ -372,6 +381,12 @@ namespace parus::tyck {
 
         static uint64_t acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix);
         static std::string acts_named_decl_key_(ty::TypeId owner_type, std::string_view set_qname);
+        bool is_self_named_type_(ty::TypeId t) const;
+        bool decompose_named_user_type_(
+            ty::TypeId t,
+            std::string& out_base,
+            std::vector<ty::TypeId>& out_args
+        ) const;
         void push_acts_selection_scope_();
         void pop_acts_selection_scope_();
         const ActiveActsSelection* lookup_active_acts_selection_(ty::TypeId owner_type) const;
@@ -388,11 +403,6 @@ namespace parus::tyck {
         std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name,
                                                                   const ActiveActsSelection* forced_selection = nullptr) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
-        bool split_generic_applied_named_type_(
-            ty::TypeId t,
-            std::string& out_base,
-            std::vector<ty::TypeId>& out_args
-        ) const;
         std::vector<std::string> collect_decl_generic_param_names_(const ast::Stmt& decl) const;
         std::optional<ast::StmtId> ensure_generic_class_instance_(
             ast::StmtId template_sid,
@@ -480,13 +490,6 @@ namespace parus::tyck {
         std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_field_instance_cache_;
-        struct GenericNamedSplitCacheEntry {
-            bool parsed = false;
-            std::string base{};
-            std::vector<ty::TypeId> args{};
-        };
-        mutable std::unordered_map<ty::TypeId, GenericNamedSplitCacheEntry> generic_named_split_cache_;
-        mutable std::unordered_map<std::string, ty::TypeId> generic_named_type_cache_;
         std::unordered_set<ast::StmtId> generic_decl_checked_instances_;
         std::unordered_set<ast::StmtId> generic_decl_checking_instances_;
         std::deque<ast::StmtId> pending_generic_decl_instance_queue_;

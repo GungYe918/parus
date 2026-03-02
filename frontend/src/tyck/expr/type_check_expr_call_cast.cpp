@@ -162,7 +162,7 @@ namespace parus::tyck {
             const auto& tt = types_.get(t);
             switch (tt.kind) {
                 case ty::Kind::kNamedUser:
-                    if (types_.to_string(t) == "Self") return owner_t;
+                    if (is_self_named_type_(t)) return owner_t;
                     return t;
                 case ty::Kind::kBorrow: {
                     const ty::TypeId elem = self(self, tt.elem, owner_t);
@@ -268,7 +268,7 @@ namespace parus::tyck {
                     {
                         std::string owner_base;
                         std::vector<ty::TypeId> owner_args;
-                        if (split_generic_applied_named_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
+                        if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
                             std::string owner_key = owner_base;
                             if (auto rewritten = rewrite_imported_path_(owner_key)) {
                                 owner_key = *rewritten;

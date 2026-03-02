@@ -112,8 +112,16 @@ namespace parus {
                                     int ternary_depth,
                                     uint32_t call_type_arg_begin = 0,
                                     uint32_t call_type_arg_count = 0);
-        bool parse_expr_try_call_type_args(uint32_t& out_begin, uint32_t& out_count);
-        bool parse_expr_try_literal_type_args(uint32_t& out_begin, uint32_t& out_count);
+        bool parse_expr_try_call_type_args(
+            uint32_t& out_begin,
+            uint32_t& out_count,
+            std::vector<ast::TypeNodeId>* out_nodes = nullptr
+        );
+        bool parse_expr_try_literal_type_args(
+            uint32_t& out_begin,
+            uint32_t& out_count,
+            std::vector<ast::TypeNodeId>* out_nodes = nullptr
+        );
 
         //  index 파싱
         ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);
@@ -265,6 +273,12 @@ namespace parus {
         // treat lexer token '>>' as two consecutive generic closers.
         bool at_generic_type_arg_close() const;
         bool eat_generic_type_arg_close();
+        struct ParseCheckpoint {
+            size_t cursor_pos = 0;
+            uint8_t generic_gt_pending = 0;
+        };
+        ParseCheckpoint save_parse_checkpoint_() const;
+        void restore_parse_checkpoint_(const ParseCheckpoint& cp);
 
         Cursor cursor_;
         ast::AstArena& ast_;

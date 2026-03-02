@@ -207,6 +207,18 @@ namespace parus {
         return false;
     }
 
+    Parser::ParseCheckpoint Parser::save_parse_checkpoint_() const {
+        Parser::ParseCheckpoint cp{};
+        cp.cursor_pos = cursor_.pos();
+        cp.generic_gt_pending = generic_gt_pending_;
+        return cp;
+    }
+
+    void Parser::restore_parse_checkpoint_(const ParseCheckpoint& cp) {
+        cursor_.rewind(cp.cursor_pos);
+        generic_gt_pending_ = cp.generic_gt_pending;
+    }
+
     bool Parser::parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span) {
         using K = syntax::TokenKind;
         out_path_begin = static_cast<uint32_t>(ast_.path_segs().size());

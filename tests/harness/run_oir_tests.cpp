@@ -73,7 +73,13 @@ namespace {
         parus::passes::PassOptions popt{};
         out.pres = parus::passes::run_on_program(out.prog.ast, out.prog.root, out.prog.bag, popt);
 
-        parus::tyck::TypeChecker tc(out.prog.ast, out.prog.types, out.prog.bag, &out.prog.type_resolve);
+        parus::tyck::TypeChecker tc(
+            out.prog.ast,
+            out.prog.types,
+            out.prog.bag,
+            &out.prog.type_resolve,
+            &out.pres.generic_prep
+        );
         out.ty = tc.check_program(out.prog.root);
 
         parus::sir::BuildOptions bopt{};

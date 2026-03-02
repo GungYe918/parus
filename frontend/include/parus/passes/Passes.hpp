@@ -4,6 +4,7 @@
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/sema/SymbolTable.hpp>
 #include <parus/passes/NameResolve.hpp>
+#include <parus/passes/GenericPrep.hpp>
 
 
 namespace parus::passes {
@@ -16,6 +17,7 @@ namespace parus::passes {
     struct PassResults {
         sema::SymbolTable sym;
         NameResolveResult name_resolve;
+        GenericPrepResult generic_prep;
     };
 
     // expr 루트에 대한 passes (expr-only: pipe-hole/place 규칙 등)

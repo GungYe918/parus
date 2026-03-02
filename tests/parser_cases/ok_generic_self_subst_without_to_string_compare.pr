@@ -1,0 +1,21 @@
+class Box<T> {
+  value: T;
+  init(v: T) {
+    self.value = v;
+  }
+
+  def read(self) -> T {
+    return self.value;
+  }
+}
+
+acts for Box<T> {
+  def read2(self) -> T {
+    return self.value;
+  }
+}
+
+def main() -> i32 {
+  set b = Box<i32>(v: 9i32);
+  return b.read() + b.read2();
+}

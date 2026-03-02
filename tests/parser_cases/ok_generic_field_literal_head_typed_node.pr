@@ -1,0 +1,9 @@
+struct Pair<T> {
+  first: T;
+  second: T;
+}
+
+def main() -> i32 {
+  let p: Pair<i32> = Pair<i32>{ first: 7i32, second: 8i32 };
+  return p.first + p.second;
+}

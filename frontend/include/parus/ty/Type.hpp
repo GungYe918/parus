@@ -65,9 +65,11 @@ namespace parus::ty {
         bool array_has_size = false;
         uint32_t array_size = 0;
 
-        // kNamedUser: path slice (no string flatten!)
+        // kNamedUser: path slice + optional applied generic args
         uint32_t path_begin = 0;
         uint32_t path_count = 0;
+        uint32_t named_arg_begin = 0;
+        uint32_t named_arg_count = 0;
 
         // kBorrow
         bool borrow_is_mut = false;

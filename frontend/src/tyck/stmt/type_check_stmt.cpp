@@ -970,12 +970,12 @@ namespace parus::tyck {
         auto normalize_self = [&](ty::TypeId t) -> ty::TypeId {
             if (t == ty::kInvalidType) return t;
             const auto& tt = types_.get(t);
-            if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+            if (tt.kind == ty::Kind::kNamedUser && is_self_named_type_(t)) {
                 return self_ty;
             }
             if (tt.kind == ty::Kind::kBorrow) {
                 const auto& et = types_.get(tt.elem);
-                if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                if (et.kind == ty::Kind::kNamedUser && is_self_named_type_(tt.elem)) {
                     return types_.make_borrow(self_ty, tt.borrow_is_mut);
                 }
             }

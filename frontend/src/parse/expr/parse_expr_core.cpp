@@ -709,6 +709,10 @@ namespace parus {
             std::string joined(t.lexeme);
             Span path_sp = t.span;
             bool has_path_tail = false;
+            bool path_can_be_type = true;
+            std::vector<std::string_view> path_segments{};
+            path_segments.reserve(4);
+            path_segments.push_back(t.lexeme);
 
             auto eat_coloncolon = [&]() -> bool {
                 if (cursor_.eat(syntax::TokenKind::kColonColon)) return true;
@@ -782,6 +786,7 @@ namespace parus {
                     joined += ")";
                     path_sp = span_join(path_sp, acts_end.hi ? acts_end : acts_kw.span);
                     has_path_tail = true;
+                    path_can_be_type = false;
                     continue;
                 }
 
@@ -794,6 +799,7 @@ namespace parus {
                 joined.append(seg.lexeme.data(), seg.lexeme.size());
                 path_sp = span_join(path_sp, seg.span);
                 has_path_tail = true;
+                path_segments.push_back(seg.lexeme);
             }
 
             std::string_view path_text = has_path_tail
@@ -802,8 +808,9 @@ namespace parus {
 
             uint32_t literal_type_arg_begin = 0;
             uint32_t literal_type_arg_count = 0;
+            std::vector<ast::TypeNodeId> literal_type_arg_nodes{};
             if (cursor_.at(syntax::TokenKind::kLt) &&
-                parse_expr_try_literal_type_args(literal_type_arg_begin, literal_type_arg_count)) {
+                parse_expr_try_literal_type_args(literal_type_arg_begin, literal_type_arg_count, &literal_type_arg_nodes)) {
                 if (cursor_.prev().kind == syntax::TokenKind::kGt) {
                     path_sp = span_join(path_sp, cursor_.prev().span);
                 }
@@ -826,6 +833,43 @@ namespace parus {
             // Field literal primary:
             //   TypePath{ name: expr, ... }
             if (cursor_.at(syntax::TokenKind::kLBrace)) {
+                ast::TypeNodeId field_init_type_node = ast::k_invalid_type_node;
+                if (path_can_be_type && !path_segments.empty()) {
+                    ast::TypeNode tn{};
+                    tn.kind = ast::TypeNodeKind::kNamedPath;
+                    tn.span = path_sp;
+                    tn.path_begin = static_cast<uint32_t>(ast_.path_segs().size());
+                    tn.path_count = static_cast<uint32_t>(path_segments.size());
+                    for (const auto seg : path_segments) {
+                        ast_.add_path_seg(seg);
+                    }
+
+                    tn.generic_arg_begin = static_cast<uint32_t>(ast_.type_node_children().size());
+                    tn.generic_arg_count = static_cast<uint32_t>(literal_type_arg_nodes.size());
+                    for (const auto node : literal_type_arg_nodes) {
+                        ast_.add_type_node_child(node);
+                    }
+
+                    if (literal_type_arg_count == 0) {
+                        tn.resolved_type = types_.intern_path(path_segments.data(), static_cast<uint32_t>(path_segments.size()));
+                    } else {
+                        const auto& targs = ast_.type_args();
+                        std::vector<ty::TypeId> arg_ids{};
+                        arg_ids.reserve(literal_type_arg_count);
+                        for (uint32_t i = 0; i < literal_type_arg_count; ++i) {
+                            const uint32_t idx = literal_type_arg_begin + i;
+                            if (idx < targs.size()) arg_ids.push_back(targs[idx]);
+                        }
+                        tn.resolved_type = types_.intern_named_path_with_args(
+                            path_segments.data(),
+                            static_cast<uint32_t>(path_segments.size()),
+                            arg_ids.empty() ? nullptr : arg_ids.data(),
+                            static_cast<uint32_t>(arg_ids.size())
+                        );
+                    }
+                    field_init_type_node = ast_.add_type_node(tn);
+                }
+
                 const Token lb = cursor_.bump(); // '{'
                 const uint32_t begin = static_cast<uint32_t>(ast_.field_init_entries().size());
                 uint32_t count = 0;
@@ -888,6 +932,7 @@ namespace parus {
                 e.text = path_text;
                 e.field_init_begin = begin;
                 e.field_init_count = count;
+                e.field_init_type_node = field_init_type_node;
                 e.span = span_join(path_sp, end_span);
                 return ast_.add_expr(e);
             }
@@ -1046,8 +1091,7 @@ namespace parus {
 
             // generic call type args + call
             if (t.kind == K::kLt) {
-                const size_t save = cursor_.pos();
-                const uint8_t save_pending_gt = generic_gt_pending_;
+                const auto cp = save_parse_checkpoint_();
                 uint32_t type_arg_begin = 0;
                 uint32_t type_arg_count = 0;
                 const bool parsed_type_args = parse_expr_try_call_type_args(type_arg_begin, type_arg_count);
@@ -1056,8 +1100,7 @@ namespace parus {
                     base = parse_expr_call(base, lp, ternary_depth, type_arg_begin, type_arg_count);
                     continue;
                 }
-                cursor_.rewind(save);
-                generic_gt_pending_ = save_pending_gt;
+                restore_parse_checkpoint_(cp);
             }
 
             // call

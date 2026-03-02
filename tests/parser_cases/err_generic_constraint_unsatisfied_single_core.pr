@@ -1,0 +1,11 @@
+proto NeedsRun {
+  def run(self) -> i32;
+};
+
+def call<T>(x: T) with [T: NeedsRun] -> i32 {
+  return 0i32;
+}
+
+def main() -> i32 {
+  return call<i32>(x: 1i32);
+}

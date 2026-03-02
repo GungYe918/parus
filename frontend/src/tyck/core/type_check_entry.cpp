@@ -53,8 +53,6 @@ namespace parus::tyck {
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
         generic_field_instance_cache_.clear();
-        generic_named_split_cache_.clear();
-        generic_named_type_cache_.clear();
         generic_decl_checked_instances_.clear();
         generic_decl_checking_instances_.clear();
         pending_generic_decl_instance_queue_.clear();
@@ -466,7 +464,14 @@ namespace parus::tyck {
         return out;
     }
 
-    bool TypeChecker::split_generic_applied_named_type_(
+    bool TypeChecker::is_self_named_type_(ty::TypeId t) const {
+        std::vector<std::string_view> path{};
+        std::vector<ty::TypeId> args{};
+        if (!types_.decompose_named_user(t, path, args)) return false;
+        return path.size() == 1 && path[0] == "Self" && args.empty();
+    }
+
+    bool TypeChecker::decompose_named_user_type_(
         ty::TypeId t,
         std::string& out_base,
         std::vector<ty::TypeId>& out_args
@@ -474,111 +479,18 @@ namespace parus::tyck {
         out_base.clear();
         out_args.clear();
         if (t == ty::kInvalidType) return false;
-        if (auto it = generic_named_split_cache_.find(t); it != generic_named_split_cache_.end()) {
-            out_base = it->second.base;
-            out_args = it->second.args;
-            return it->second.parsed;
-        }
 
-        GenericNamedSplitCacheEntry cache_entry{};
-        const auto& tt = types_.get(t);
-        if (tt.kind != ty::Kind::kNamedUser) {
-            generic_named_split_cache_.emplace(t, std::move(cache_entry));
+        std::vector<std::string_view> path{};
+        if (!types_.decompose_named_user(t, path, out_args) || path.empty()) {
+            out_args.clear();
             return false;
         }
 
-        const std::string name = types_.to_string(t);
-        if (name.empty()) {
-            generic_named_split_cache_.emplace(t, std::move(cache_entry));
-            return false;
+        for (size_t i = 0; i < path.size(); ++i) {
+            if (i) out_base += "::";
+            out_base.append(path[i].data(), path[i].size());
         }
-
-        const size_t lt = name.find('<');
-        if (lt == std::string::npos || name.back() != '>') {
-            cache_entry.base = name;
-            generic_named_split_cache_.emplace(t, cache_entry);
-            out_base = cache_entry.base;
-            return false;
-        }
-
-        int depth = 0;
-        size_t first_lt = std::string::npos;
-        size_t matching_gt = std::string::npos;
-        for (size_t i = 0; i < name.size(); ++i) {
-            const char ch = name[i];
-            if (ch == '<') {
-                if (depth == 0) first_lt = i;
-                ++depth;
-            } else if (ch == '>') {
-                if (depth == 0) {
-                    cache_entry.base = name;
-                    generic_named_split_cache_.emplace(t, cache_entry);
-                    out_base = cache_entry.base;
-                    return false;
-                }
-                --depth;
-                if (depth == 0) matching_gt = i;
-            }
-        }
-        if (depth != 0 || first_lt == std::string::npos || matching_gt != name.size() - 1) {
-            cache_entry.base = name;
-            generic_named_split_cache_.emplace(t, cache_entry);
-            out_base = cache_entry.base;
-            return false;
-        }
-
-        cache_entry.base = name.substr(0, first_lt);
-        const std::string payload = name.substr(first_lt + 1, matching_gt - first_lt - 1);
-        if (payload.empty()) {
-            generic_named_split_cache_.emplace(t, cache_entry);
-            out_base = cache_entry.base;
-            return false;
-        }
-
-        auto trim_ws = [](std::string_view sv) -> std::string {
-            size_t b = 0;
-            while (b < sv.size() && std::isspace(static_cast<unsigned char>(sv[b]))) ++b;
-            size_t e = sv.size();
-            while (e > b && std::isspace(static_cast<unsigned char>(sv[e - 1]))) --e;
-            return std::string(sv.substr(b, e - b));
-        };
-
-        int arg_depth = 0;
-        size_t part_begin = 0;
-        bool parse_ok = true;
-        for (size_t i = 0; i <= payload.size(); ++i) {
-            const bool at_end = (i == payload.size());
-            const char ch = at_end ? '\0' : payload[i];
-            if (!at_end) {
-                if (ch == '<') ++arg_depth;
-                else if (ch == '>') --arg_depth;
-            }
-            if (at_end || (ch == ',' && arg_depth == 0)) {
-                const std::string part = trim_ws(std::string_view(payload).substr(part_begin, i - part_begin));
-                if (part.empty()) {
-                    parse_ok = false;
-                    break;
-                }
-                ty::TypeId arg_ty = ty::kInvalidType;
-                if (auto it = generic_named_type_cache_.find(part); it != generic_named_type_cache_.end()) {
-                    arg_ty = it->second;
-                } else {
-                    arg_ty = types_.intern_ident(ast_.add_owned_string(part));
-                    generic_named_type_cache_[part] = arg_ty;
-                }
-                cache_entry.args.push_back(arg_ty);
-                part_begin = i + 1;
-            }
-        }
-        cache_entry.parsed = parse_ok && !cache_entry.args.empty();
-        if (!cache_entry.parsed) {
-            cache_entry.args.clear();
-        }
-
-        generic_named_split_cache_.emplace(t, cache_entry);
-        out_base = cache_entry.base;
-        out_args = cache_entry.args;
-        return cache_entry.parsed;
+        return !out_args.empty();
     }
 
     std::vector<std::string> TypeChecker::collect_decl_generic_param_names_(const ast::Stmt& decl) const {
@@ -601,51 +513,45 @@ namespace parus::tyck {
         const auto& tt = types_.get(src);
         switch (tt.kind) {
             case ty::Kind::kNamedUser: {
-                const std::string name = types_.to_string(src);
-                auto it = subst.find(name);
-                if (it != subst.end()) return it->second;
-                const size_t sep = name.rfind("::");
-                if (sep != std::string::npos && sep + 2 < name.size()) {
-                    const std::string tail = name.substr(sep + 2);
-                    auto tail_it = subst.find(tail);
-                    if (tail_it != subst.end()) return tail_it->second;
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (!types_.decompose_named_user(src, path, args) || path.empty()) {
+                    return src;
                 }
 
-                std::string base;
-                std::vector<ty::TypeId> args;
-                if (split_generic_applied_named_type_(src, base, args) && !args.empty()) {
-                    bool changed = false;
-                    std::vector<ty::TypeId> sub_args;
-                    sub_args.reserve(args.size());
-                    std::string cache_key = "$inst$";
-                    cache_key += base;
-                    cache_key += "<";
-                    for (size_t i = 0; i < args.size(); ++i) {
-                        const ty::TypeId sub = substitute_generic_type_(args[i], subst);
-                        if (sub != args[i]) changed = true;
-                        sub_args.push_back(sub);
-                        if (i) cache_key += ",";
-                        cache_key += std::to_string(sub);
+                if (args.empty()) {
+                    if (path.size() == 1) {
+                        auto it = subst.find(std::string(path.front()));
+                        if (it != subst.end()) return it->second;
                     }
-                    cache_key += ">";
-                    if (changed) {
-                        if (auto it = generic_named_type_cache_.find(cache_key);
-                            it != generic_named_type_cache_.end()) {
-                            return it->second;
-                        }
-                        std::string rebuilt = base;
-                        rebuilt += "<";
-                        for (size_t i = 0; i < sub_args.size(); ++i) {
-                            if (i) rebuilt += ",";
-                            rebuilt += types_.to_string(sub_args[i]);
-                        }
-                        rebuilt += ">";
-                        const ty::TypeId applied = types_.intern_ident(ast_.add_owned_string(std::move(rebuilt)));
-                        generic_named_type_cache_[cache_key] = applied;
-                        return applied;
+                    const std::string full = types_.to_string(src);
+                    if (auto it = subst.find(full); it != subst.end()) {
+                        return it->second;
                     }
+                    if (!path.empty()) {
+                        const std::string tail(path.back());
+                        if (auto tail_it = subst.find(tail); tail_it != subst.end()) {
+                            return tail_it->second;
+                        }
+                    }
+                    return src;
                 }
-                return src;
+
+                bool changed = false;
+                std::vector<ty::TypeId> sub_args{};
+                sub_args.reserve(args.size());
+                for (const auto arg : args) {
+                    const ty::TypeId sub = substitute_generic_type_(arg, subst);
+                    if (sub != arg) changed = true;
+                    sub_args.push_back(sub);
+                }
+                if (!changed) return src;
+                return types_.intern_named_path_with_args(
+                    path.data(),
+                    static_cast<uint32_t>(path.size()),
+                    sub_args.data(),
+                    static_cast<uint32_t>(sub_args.size())
+                );
             }
             case ty::Kind::kBorrow: {
                 const ty::TypeId elem = substitute_generic_type_(tt.elem, subst);
@@ -810,6 +716,15 @@ namespace parus::tyck {
                 e.call_type_arg_begin = 0;
                 e.call_type_arg_count = 0;
             }
+        }
+
+        if (old_e.field_init_type_node != ast::k_invalid_type_node &&
+            (size_t)old_e.field_init_type_node < ast_.type_nodes().size()) {
+            ast::TypeNode tn = ast_.type_node(old_e.field_init_type_node);
+            if (tn.resolved_type != ty::kInvalidType) {
+                tn.resolved_type = substitute_generic_type_(tn.resolved_type, subst);
+            }
+            e.field_init_type_node = ast_.add_type_node(tn);
         }
 
         if (e.cast_type != ty::kInvalidType) {
@@ -1168,7 +1083,7 @@ namespace parus::tyck {
 
         std::string base;
         std::vector<ty::TypeId> args;
-        const bool is_generic_applied = split_generic_applied_named_type_(proto_type, base, args);
+        const bool is_generic_applied = decompose_named_user_type_(proto_type, base, args);
         if (!is_generic_applied) {
             return std::nullopt;
         }
@@ -1189,6 +1104,31 @@ namespace parus::tyck {
             }
         }
 
+        auto kind_name = [](passes::GenericTemplateKind k) -> const char* {
+            switch (k) {
+                case passes::GenericTemplateKind::kFn: return "fn";
+                case passes::GenericTemplateKind::kClass: return "class";
+                case passes::GenericTemplateKind::kProto: return "proto";
+                case passes::GenericTemplateKind::kActs: return "acts";
+                case passes::GenericTemplateKind::kStruct: return "struct";
+            }
+            return "unknown";
+        };
+
+        if (templ_sid == ast::k_invalid_stmt && generic_prep_ != nullptr) {
+            if (auto it = generic_prep_->templates.find(base_key); it != generic_prep_->templates.end()) {
+                if (it->second.kind == passes::GenericTemplateKind::kProto) {
+                    templ_sid = it->second.sid;
+                } else {
+                    if (out_typed_path_failure) *out_typed_path_failure = true;
+                    diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span,
+                          base_key, "proto", kind_name(it->second.kind));
+                    err_(use_span, "generic type path target kind mismatch");
+                    return std::nullopt;
+                }
+            }
+        }
+
         if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
             if (out_typed_path_failure) *out_typed_path_failure = true;
             diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
@@ -1199,7 +1139,7 @@ namespace parus::tyck {
         const auto& templ = ast_.stmt(templ_sid);
         if (templ.kind != ast::StmtKind::kProtoDecl) {
             if (out_typed_path_failure) *out_typed_path_failure = true;
-            diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
+            diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span, base_key, "proto", "non-proto");
             err_(use_span, "generic type path target is not proto: " + base_key);
             return std::nullopt;
         }
@@ -1455,7 +1395,7 @@ namespace parus::tyck {
 
         std::string base;
         std::vector<ty::TypeId> args;
-        if (!split_generic_applied_named_type_(maybe_generic_field_type, base, args) || args.empty()) {
+        if (!decompose_named_user_type_(maybe_generic_field_type, base, args) || args.empty()) {
             return std::nullopt;
         }
 
@@ -1873,7 +1813,7 @@ namespace parus::tyck {
 
         std::string owner_base;
         std::vector<ty::TypeId> owner_generic_params;
-        if (!split_generic_applied_named_type_(templ.acts_target_type, owner_base, owner_generic_params)) {
+        if (!decompose_named_user_type_(templ.acts_target_type, owner_base, owner_generic_params)) {
             return template_sid;
         }
         if (owner_generic_params.size() != concrete_args.size()) {
@@ -2045,7 +1985,7 @@ namespace parus::tyck {
 
         std::string owner_base;
         std::vector<ty::TypeId> owner_args;
-        if (!split_generic_applied_named_type_(concrete_owner_type, owner_base, owner_args)) {
+        if (!decompose_named_user_type_(concrete_owner_type, owner_base, owner_args)) {
             return;
         }
 
@@ -2053,6 +1993,16 @@ namespace parus::tyck {
         templates.reserve(generic_acts_template_sid_set_.size());
         for (const auto sid : generic_acts_template_sid_set_) {
             templates.push_back(sid);
+        }
+        if (templates.empty()) {
+            for (ast::StmtId sid = 0; sid < static_cast<ast::StmtId>(ast_.stmts().size()); ++sid) {
+                const auto& cand = ast_.stmt(sid);
+                if (cand.kind != ast::StmtKind::kActsDecl || !cand.acts_is_for) continue;
+                std::string tmp_base;
+                std::vector<ty::TypeId> tmp_args;
+                if (!decompose_named_user_type_(cand.acts_target_type, tmp_base, tmp_args)) continue;
+                templates.push_back(sid);
+            }
         }
         std::sort(templates.begin(), templates.end());
 
@@ -2063,7 +2013,7 @@ namespace parus::tyck {
 
             std::string templ_base;
             std::vector<ty::TypeId> templ_args;
-            if (!split_generic_applied_named_type_(templ.acts_target_type, templ_base, templ_args)) continue;
+            if (!decompose_named_user_type_(templ.acts_target_type, templ_base, templ_args)) continue;
             if (templ_base != owner_base) continue;
             if (templ_args.size() != owner_args.size()) continue;
 
@@ -2724,12 +2674,12 @@ namespace parus::tyck {
                 auto normalize_self_type = [&](ty::TypeId t) -> ty::TypeId {
                     if (t == ty::kInvalidType || class_ty == ty::kInvalidType) return t;
                     const auto& tt = types_.get(t);
-                    if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+                    if (tt.kind == ty::Kind::kNamedUser && is_self_named_type_(t)) {
                         return class_ty;
                     }
                     if (tt.kind == ty::Kind::kBorrow) {
                         const auto& et = types_.get(tt.elem);
-                        if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                        if (et.kind == ty::Kind::kNamedUser && is_self_named_type_(tt.elem)) {
                             return types_.make_borrow(class_ty, tt.borrow_is_mut);
                         }
                     }
@@ -2878,12 +2828,12 @@ namespace parus::tyck {
                 auto normalize_self_type = [&](ty::TypeId t) -> ty::TypeId {
                     if (t == ty::kInvalidType || actor_ty == ty::kInvalidType) return t;
                     const auto& tt = types_.get(t);
-                    if (tt.kind == ty::Kind::kNamedUser && types_.to_string(t) == "Self") {
+                    if (tt.kind == ty::Kind::kNamedUser && is_self_named_type_(t)) {
                         return actor_ty;
                     }
                     if (tt.kind == ty::Kind::kBorrow) {
                         const auto& et = types_.get(tt.elem);
-                        if (et.kind == ty::Kind::kNamedUser && types_.to_string(tt.elem) == "Self") {
+                        if (et.kind == ty::Kind::kNamedUser && is_self_named_type_(tt.elem)) {
                             return types_.make_borrow(actor_ty, tt.borrow_is_mut);
                         }
                     }
@@ -2971,11 +2921,20 @@ namespace parus::tyck {
             if (s.kind == ast::StmtKind::kActsDecl) {
                 const std::string qname = qualify_decl_name_(s.name);
                 acts_qualified_name_by_stmt_[sid] = qname;
-                if (s.acts_is_for &&
-                    s.acts_target_type_node != ast::k_invalid_type_node &&
-                    (size_t)s.acts_target_type_node < ast_.type_nodes().size()) {
-                    const auto& owner_tn = ast_.type_node(s.acts_target_type_node);
-                    if (owner_tn.kind == ast::TypeNodeKind::kNamedPath && owner_tn.generic_arg_count > 0) {
+                if (s.acts_is_for) {
+                    bool generic_owner = false;
+                    if (s.acts_target_type_node != ast::k_invalid_type_node &&
+                        (size_t)s.acts_target_type_node < ast_.type_nodes().size()) {
+                        const auto& owner_tn = ast_.type_node(s.acts_target_type_node);
+                        generic_owner =
+                            (owner_tn.kind == ast::TypeNodeKind::kNamedPath && owner_tn.generic_arg_count > 0);
+                    }
+                    if (!generic_owner) {
+                        std::string owner_base;
+                        std::vector<ty::TypeId> owner_args;
+                        generic_owner = decompose_named_user_type_(s.acts_target_type, owner_base, owner_args);
+                    }
+                    if (generic_owner) {
                         generic_acts_template_sid_set_.insert(sid);
                     }
                 }
@@ -3658,12 +3617,18 @@ namespace parus::tyck {
         if (owner == ty::kInvalidType || actual == ty::kInvalidType) return false;
         if (owner == actual) return true;
         const auto& at = types.get(actual);
-        if (at.kind == ty::Kind::kNamedUser && types.to_string(actual) == "Self") {
+        auto is_self_named = [&](ty::TypeId t) -> bool {
+            std::vector<std::string_view> path{};
+            std::vector<ty::TypeId> args{};
+            if (!types.decompose_named_user(t, path, args)) return false;
+            return path.size() == 1 && path[0] == "Self" && args.empty();
+        };
+        if (at.kind == ty::Kind::kNamedUser && is_self_named(actual)) {
             return true;
         }
         if (at.kind == ty::Kind::kBorrow) {
             const auto& elem = types.get(at.elem);
-            if (elem.kind == ty::Kind::kNamedUser && types.to_string(at.elem) == "Self") {
+            if (elem.kind == ty::Kind::kNamedUser && is_self_named(at.elem)) {
                 return true;
             }
             return at.elem == owner;

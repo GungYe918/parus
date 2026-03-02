@@ -2381,7 +2381,7 @@ namespace {
                     resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
 
                     if (!bag.has_error()) {
-                        parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve);
+                        parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pass_res.generic_prep);
                         if (!popt.name_resolve.current_bundle_name.empty() ||
                             !popt.name_resolve.external_exports.empty()) {
                             tc.set_seed_symbol_table(&pass_res.sym);

@@ -1,0 +1,23 @@
+proto Holder<T> {
+  def get(self) -> T;
+};
+
+class Box<T>: Holder<T> {
+  value: T;
+  init(v: T) { self.value = v; }
+
+  def get(self) -> T {
+    return self.value;
+  }
+}
+
+acts for Box<T> {
+  def pick(self) -> T {
+    return self.value;
+  }
+}
+
+def main() -> i32 {
+  set b = Box<i32>(v: 5i32);
+  return b.pick() + b.get();
+}
