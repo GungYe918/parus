@@ -143,23 +143,10 @@ namespace parus {
 
         using K = syntax::TokenKind;
 
-        // NOTE:
-        // 기존 구현은 prefix_info가 있는 토큰을 재귀로 계속 먹어 단항 체인을 만들었고,
-        // 그 과정에서 "&&&a" 같은 케이스가
-        //   kAmpAmp("&&") + kAmp("&") 로 토큰이 분리되더라도
-        // "연속된 & 문자(run)" 검사가 없어서 에러 없이 통과했다.
-        //
-        // 여기서는 prefix 토큰들을 먼저 수집한 뒤(반복),
-        // '&' / '&&' 가 연속으로 등장하는 경우를 "문자 개수" 기준으로 누적한다:
-        //   '&'  => +1
-        //   '&&' => +2
-        // 연속 run이 3 이상이면(예: &&& , &&&& 등) 모호하므로 파싱 단계에서 진단한다.
-        //
-        // 괄호로 명시적으로 끊으면(run이 끊기므로) 허용:
-        //   &&(&a)  // 토큰: &&, (, &, a, )
-        //
-        // (추가로, spec상 '&&'의 의미 제약(escape는 place만 / borrow에는 불가 등)은
-        //  이후 semantic/pass에서 더 엄격히 체크하는 게 좋다. 여기선 "&&&" 모호성만 차단.)
+        // prefix unary chain:
+        // - borrow: & / &mut
+        // - escape: ^&
+        // (legacy && is not a prefix operator anymore)
 
         struct PrefixOp {
             K kind{};
@@ -169,42 +156,6 @@ namespace parus {
 
         std::vector<PrefixOp> ops;
         ops.reserve(4);
-
-        // Track adjacency amp-run to forbid "&&&" style.
-        bool saw_ambiguous_amp_run = false;
-        int  amp_run_chars = 0;          // consecutive '&' chars from adjacent prefix tokens
-        bool prev_was_amp_token = false; // previous prefix token was & or &&
-
-        Span amp_run_start{};
-        Span amp_run_end{};
-
-        auto bump_amp_run = [&](const Token& amp_tok) {
-            int add = 0;
-            if (amp_tok.kind == K::kAmp) add = 1;
-            else if (amp_tok.kind == K::kAmpAmp) add = 2;
-
-            if (prev_was_amp_token) {
-                amp_run_chars += add;
-                amp_run_end = amp_tok.span;
-            } else {
-                amp_run_chars = add;
-                amp_run_start = amp_tok.span;
-                amp_run_end = amp_tok.span;
-            }
-
-            prev_was_amp_token = true;
-
-            if (amp_run_chars >= 3) {
-                saw_ambiguous_amp_run = true;
-            }
-        };
-
-        auto break_amp_run = [&]() {
-            prev_was_amp_token = false;
-            amp_run_chars = 0;
-            amp_run_start = {};
-            amp_run_end = {};
-        };
 
         // 1) collect prefix ops
         while (true) {
@@ -224,17 +175,6 @@ namespace parus {
             }
 
             ops.push_back(p);
-
-            if (op.kind == K::kAmp || op.kind == K::kAmpAmp) {
-                bump_amp_run(op);
-                if (has_mut_suffix) {
-                    // "mut" token breaks "& adjacency" intentionally.
-                    break_amp_run();
-                }
-            } else {
-                // other prefix ops break "& run"
-                break_amp_run();
-            }
         }
 
         // 2) parse operand (postfix binds tighter than prefix)
@@ -250,22 +190,6 @@ namespace parus {
             e.a = rhs;
             e.span = span_join(ops[(size_t)i].span, ast_.expr(rhs).span);
             rhs = ast_.add_expr(e);
-        }
-
-        // 4) emit diagnostic for ambiguous "&&&" run
-        if (saw_ambiguous_amp_run) {
-            Span sp = amp_run_start;
-            if (amp_run_end.hi) sp = span_join(amp_run_start, amp_run_end);
-
-            diag_report(diag::Code::kAmbiguousAmpPrefixChain, sp);
-
-            // 파서는 최대한 AST를 유지하되, 이후 단계에서 확실히 막고 싶다면
-            // 여기서 Error 노드로 감싸도 된다. (지금은 진단만 발생시키고 rhs 반환)
-            // ast::Expr err{};
-            // err.kind = ast::ExprKind::kError;
-            // err.span = sp;
-            // err.text = "ambiguous_amp_prefix_chain";
-            // return ast_.add_expr(err);
         }
 
         return rhs;
@@ -1044,7 +968,7 @@ namespace parus {
         auto is_type_start = [&](K k) -> bool {
             switch (k) {
                 case K::kAmp:
-                case K::kAmpAmp:
+                case K::kCaretAmp:
                 case K::kKwFn:
                 case K::kLParen:
                 case K::kLBracket:

@@ -6,7 +6,7 @@ actor Counter {
   init() = default;
 
   def pub leak() -> i32 {
-    set h = &&draft;
+    set h = ^&draft;
     commit;
     return 0i32;
   }

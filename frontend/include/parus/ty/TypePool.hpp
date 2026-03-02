@@ -590,9 +590,9 @@ namespace parus::ty {
                 }
 
                 case Kind::kEscape: {
-                    if (t.elem == kInvalidType) { out += "&&<invalid>"; return; }
+                    if (t.elem == kInvalidType) { out += "^&<invalid>"; return; }
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
-                    out += "&&";
+                    out += "^&";
                     if (needs_parens_for_prefix_(ek)) out += "(";
                     render_into_export_(out, t.elem);
                     if (needs_parens_for_prefix_(ek)) out += ")";
@@ -721,11 +721,11 @@ namespace parus::ty {
                 }
 
                 case Kind::kEscape: {
-                    if (t.elem == kInvalidType) { out += "&&<invalid>"; return; }
+                    if (t.elem == kInvalidType) { out += "^&<invalid>"; return; }
 
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
 
-                    out += "&&";
+                    out += "^&";
                     if (needs_parens_for_prefix_(ek)) out += "(";
                     render_into_(out, t.elem, RenderCtx::kTop);
                     if (needs_parens_for_prefix_(ek)) out += ")";

@@ -29,7 +29,7 @@ namespace parus::cap {
             std::vector<SymbolId> activated_shared_borrows;
         };
 
-        /// @brief `& / &mut / &&` capability 규칙을 함수 단위로 검사한다.
+        /// @brief `& / &mut / ^&` capability 규칙을 함수 단위로 검사한다.
         class CapabilityChecker {
         public:
             CapabilityChecker(
@@ -183,7 +183,7 @@ namespace parus::cap {
                 return use == ExprUse::kReturnValue || use == ExprUse::kCallArg;
             }
 
-            /// @brief SymbolId가 `&&`로 move-out 되었는지 확인한다.
+            /// @brief SymbolId가 `^&`로 move-out 되었는지 확인한다.
             bool is_symbol_moved_(SymbolId sym) const {
                 auto it = moved_by_escape_.find(sym);
                 if (it == moved_by_escape_.end()) return false;
@@ -475,7 +475,7 @@ namespace parus::cap {
                             return;
                         }
 
-                        if (e.op == syntax::TokenKind::kAmpAmp) {
+                        if (e.op == syntax::TokenKind::kCaretAmp) {
                             walk_expr_(e.a, ExprUse::kEscapeOperand);
 
                             if (!is_place_expr_(e.a)) {

@@ -1,9 +1,9 @@
-// 허용 케이스: &&를 call-arg boundary로 직접 전달
-def take(h: &&i32) -> i32 {
+// 허용 케이스: ^&를 call-arg boundary로 직접 전달
+def take(h: ^&i32) -> i32 {
   return 0i32;
 }
 
 def main() -> i32 {
   let mut x: i32 = 1i32;
-  return take(h: &&x);
+  return take(h: ^&x);
 }

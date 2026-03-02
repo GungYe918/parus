@@ -1453,13 +1453,13 @@ namespace {
                 deinit() = default;
             }
 
-            def sink(v: &&Resource) -> i32 {
+            def sink(v: ^&Resource) -> i32 {
                 return 0i32;
             }
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: &&r);
+                sink(v: ^&r);
                 return 0i32;
             }
         )";

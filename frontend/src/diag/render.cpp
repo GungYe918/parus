@@ -297,7 +297,7 @@ namespace parus::diag {
             case Code::kUnexpectedEof:  return "unexpected end of file; expected {0}";
             case Code::kTooManyErrors:  return "too many errors emitted; parsing stopped";
             case Code::kNestedTernaryNotAllowed: return "nested ternary operator is not allowed";
-            case Code::kAmbiguousAmpPrefixChain: return "ambiguous '&' prefix chain (3+ consecutive '&'); use parentheses (e.g. &&(&x) or &(&&x))";
+            case Code::kAmbiguousAmpPrefixChain: return "ambiguous '&' prefix chain (3+ consecutive '&'); use parentheses (e.g. ^&(&x) or &(^&x))";
             case Code::kArraySizeExpectedIntLiteral: return "array size must be an integer literal (use T[N] or T[])";
             case Code::kArraySizeInvalidLiteral: return "invalid array size literal '{0}' (expected decimal u32 range)";
             case Code::kMacroNoMatch: return "no matching macro arm for call '{0}'";
@@ -371,7 +371,7 @@ namespace parus::diag {
             case Code::kActorCommitOnlyInPub: return "commit is only allowed inside actor pub methods";
             case Code::kActorRecastOnlyInSub: return "recast is only allowed inside actor sub methods";
             case Code::kActorPubMissingTopLevelCommit: return "actor pub method must contain at least one top-level commit statement";
-            case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft cannot be moved with &&";
+            case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft cannot be moved with ^&";
             case Code::kTypeFnSignatureExpected: return "type-context 'def' must be followed by '('";
             case Code::kTypeNameExpected: return "type name expected";
             case Code::kTypeArrayMissingRBracket: return "array type suffix requires closing ']'";
@@ -412,9 +412,9 @@ namespace parus::diag {
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "only 'case'/'default' clauses are allowed inside switch body";
             case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after declaration keyword (e.g., 'let mut x: T', 'set mut x = ...', 'static mut x: T = ...')";
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
-            case Code::kEscapeOperandMustBePlace: return "&& operand must be a place expression";
-            case Code::kEscapeSubplaceMoveNotAllowed: return "&& only supports root identifier move in v0 (subplace move-out is not allowed)";
-            case Code::kEscapeOperandMustNotBeBorrow: return "&& cannot be applied to a borrow operand";
+            case Code::kEscapeOperandMustBePlace: return "^& operand must be a place expression";
+            case Code::kEscapeSubplaceMoveNotAllowed: return "^& only supports root identifier move in v0 (subplace move-out is not allowed)";
+            case Code::kEscapeOperandMustNotBeBorrow: return "^& cannot be applied to a borrow operand";
             case Code::kBorrowMutRequiresMutablePlace: return "&mut requires a mutable place";
             case Code::kBorrowMutConflict: return "cannot create borrow: an active mutable borrow already exists for this place";
             case Code::kBorrowSharedConflictWithMut: return "cannot create shared borrow '&': an active '&mut' borrow exists for this place";
@@ -423,11 +423,11 @@ namespace parus::diag {
             case Code::kBorrowSharedWriteConflict: return "cannot write to this place while active shared borrow(s) exist";
             case Code::kBorrowEscapeFromReturn: return "borrow value cannot be returned (non-escaping rule)";
             case Code::kBorrowEscapeToStorage: return "borrow value cannot be stored in an escaping/long-lived storage";
-            case Code::kUseAfterEscapeMove: return "value was moved by '&&' and cannot be used afterwards";
-            case Code::kEscapeWhileMutBorrowActive: return "cannot apply '&&' while an active '&mut' borrow exists for this place";
-            case Code::kEscapeWhileBorrowActive: return "cannot apply '&&' while an active borrow exists for this place";
-            case Code::kEscapeRequiresStaticOrBoundary: return "escaping '&&' requires static storage or direct return/call-argument boundary";
-            case Code::kSirUseAfterEscapeMove: return "use-after-move detected in SIR capability analysis ('&&' moved value)";
+            case Code::kUseAfterEscapeMove: return "value was moved by '^&' and cannot be used afterwards";
+            case Code::kEscapeWhileMutBorrowActive: return "cannot apply '^&' while an active '&mut' borrow exists for this place";
+            case Code::kEscapeWhileBorrowActive: return "cannot apply '^&' while an active borrow exists for this place";
+            case Code::kEscapeRequiresStaticOrBoundary: return "escaping '^&' requires static storage or direct return/call-argument boundary";
+            case Code::kSirUseAfterEscapeMove: return "use-after-move detected in SIR capability analysis ('^&' moved value)";
             case Code::kSirEscapeBoundaryViolation: return "SIR capability analysis: escape value must be consumed at return/call boundary or originate from static storage";
             case Code::kSirEscapeMustNotMaterialize: return "SIR capability analysis: escape handle cannot be materialized into non-static bindings";
 
@@ -476,7 +476,7 @@ namespace parus::diag {
             case Code::kTypeBinaryOperandsMustMatch:return "binary arithmetic requires both operands to have the same type (lhs={0}, rhs={1})";
             case Code::kTypeCompareOperandsMustMatch:return "comparison requires both operands to have the same type (lhs={0}, rhs={1})";
             case Code::kTypeBorrowNotAllowedInPureComptime:return "borrow '&' is not allowed in pure/comptime functions";
-            case Code::kTypeEscapeNotAllowedInPureComptime:return "escape '&&' is not allowed in pure/comptime functions";
+            case Code::kTypeEscapeNotAllowedInPureComptime:return "escape '^&' is not allowed in pure/comptime functions";
             case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "type mismatch: expected {0}, got {1}";
             case Code::kTypeNotCallable: /* args[0]=got_type */ return "cannot call non-function type {0}";
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "condition must be bool (got {0})";
@@ -560,7 +560,7 @@ namespace parus::diag {
             case Code::kUnexpectedEof:  return "예상치 못한 파일 끝(EOF)입니다; {0}이(가) 필요합니다";
             case Code::kTooManyErrors:  return "오류가 너무 많아 파싱을 중단합니다";
             case Code::kNestedTernaryNotAllowed: return "삼항 연산자 중첩은 허용되지 않습니다";
-            case Code::kAmbiguousAmpPrefixChain: return "'&' 접두사 체인이 모호합니다(연속 '&' 3개 이상). 괄호로 명시하세요(예: &&(&x), &(&&x))";
+            case Code::kAmbiguousAmpPrefixChain: return "'&' 접두사 체인이 모호합니다(연속 '&' 3개 이상). 괄호로 명시하세요(예: ^&(&x), &(^&x))";
             case Code::kArraySizeExpectedIntLiteral: return "배열 크기는 정수 리터럴이어야 합니다(T[N] 또는 T[] 사용)";
             case Code::kArraySizeInvalidLiteral: return "배열 크기 리터럴 '{0}'이(가) 유효하지 않습니다(10진 u32 범위 필요)";
             case Code::kMacroNoMatch: return "매크로 호출 '{0}'과(와) 일치하는 arm을 찾지 못했습니다";
@@ -634,7 +634,7 @@ namespace parus::diag {
             case Code::kActorCommitOnlyInPub: return "commit은 actor pub 메서드 내부에서만 사용할 수 있습니다";
             case Code::kActorRecastOnlyInSub: return "recast는 actor sub 메서드 내부에서만 사용할 수 있습니다";
             case Code::kActorPubMissingTopLevelCommit: return "actor pub 메서드에는 최상위 commit 문이 최소 1개 필요합니다";
-            case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft는 &&로 move할 수 없습니다";
+            case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft는 ^&로 move할 수 없습니다";
             case Code::kTypeFnSignatureExpected: return "타입 문맥의 'def' 뒤에는 '('이(가) 필요합니다";
             case Code::kTypeNameExpected: return "타입 이름(ident)이 필요합니다";
             case Code::kTypeArrayMissingRBracket: return "배열 타입 접미사 '[]'를 닫는 ']'이(가) 필요합니다";
@@ -678,9 +678,9 @@ namespace parus::diag {
             case Code::kVarMutMustFollowKw: return "'mut'는 선언 키워드 바로 뒤에만 올 수 있습니다 (예: let mut x: T, set mut x = ..., static mut x: T = ...)";
 
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
-            case Code::kEscapeOperandMustBePlace: return "'&&'의 피연산자는 place expression이어야 합니다";
-            case Code::kEscapeSubplaceMoveNotAllowed: return "v0에서 '&&'는 루트 식별자만 이동할 수 있습니다(subplace move-out 금지)";
-            case Code::kEscapeOperandMustNotBeBorrow: return "'&&'는 borrow('& ...')에 적용할 수 없습니다";
+            case Code::kEscapeOperandMustBePlace: return "'^&'의 피연산자는 place expression이어야 합니다";
+            case Code::kEscapeSubplaceMoveNotAllowed: return "v0에서 '^&'는 루트 식별자만 이동할 수 있습니다(subplace move-out 금지)";
+            case Code::kEscapeOperandMustNotBeBorrow: return "'^&'는 borrow('& ...')에 적용할 수 없습니다";
             case Code::kBorrowMutRequiresMutablePlace: return "'&mut'는 mutable place에만 적용할 수 있습니다";
             case Code::kBorrowMutConflict: return "이미 활성화된 '&mut' borrow가 있어 추가 borrow를 만들 수 없습니다";
             case Code::kBorrowSharedConflictWithMut: return "활성 '&mut' borrow가 있는 동안에는 shared borrow('&')를 만들 수 없습니다";
@@ -689,11 +689,11 @@ namespace parus::diag {
             case Code::kBorrowSharedWriteConflict: return "활성 shared borrow가 있는 동안에는 해당 place에 쓰기할 수 없습니다";
             case Code::kBorrowEscapeFromReturn: return "borrow 값은 반환할 수 없습니다(비탈출 규칙)";
             case Code::kBorrowEscapeToStorage: return "borrow 값은 탈출/장수명 저장소에 저장할 수 없습니다";
-            case Code::kUseAfterEscapeMove: return "'&&'로 move된 값은 이후 사용할 수 없습니다";
-            case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
-            case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '&&'를 적용할 수 없습니다";
-            case Code::kEscapeRequiresStaticOrBoundary: return "'&&' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";
-            case Code::kSirUseAfterEscapeMove: return "SIR capability 분석에서 use-after-move가 감지되었습니다('&&'로 move된 값 사용)";
+            case Code::kUseAfterEscapeMove: return "'^&'로 move된 값은 이후 사용할 수 없습니다";
+            case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '^&'를 적용할 수 없습니다";
+            case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '^&'를 적용할 수 없습니다";
+            case Code::kEscapeRequiresStaticOrBoundary: return "'^&' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";
+            case Code::kSirUseAfterEscapeMove: return "SIR capability 분석에서 use-after-move가 감지되었습니다('^&'로 move된 값 사용)";
             case Code::kSirEscapeBoundaryViolation: return "SIR capability 분석: escape 값은 return/호출 인자 경계에서 소비되거나 static 저장소 기원이어야 합니다";
             case Code::kSirEscapeMustNotMaterialize: return "SIR capability 분석: escape handle은 non-static 바인딩으로 물질화할 수 없습니다";
 
@@ -742,7 +742,7 @@ namespace parus::diag {
             case Code::kTypeBinaryOperandsMustMatch:return "산술 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
             case Code::kTypeCompareOperandsMustMatch:return "비교 연산의 양쪽 피연산자 타입이 같아야 합니다(lhs={0}, rhs={1})";
             case Code::kTypeBorrowNotAllowedInPureComptime:return "pure/comptime 함수에서는 '&'를 사용할 수 없습니다";
-            case Code::kTypeEscapeNotAllowedInPureComptime:return "pure/comptime 함수에서는 '&&'를 사용할 수 없습니다";
+            case Code::kTypeEscapeNotAllowedInPureComptime:return "pure/comptime 함수에서는 '^&'를 사용할 수 없습니다";
             case Code::kTypeMismatch: /* args[0]=expected, args[1]=got */ return "타입이 일치하지 않습니다: 기대 {0}, 실제 {1}";
             case Code::kTypeNotCallable: /* args[0]=got_type */ return "함수가 아닌 타입 {0}은(는) 호출할 수 없습니다";
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";

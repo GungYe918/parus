@@ -1,7 +1,7 @@
-// 비허용 케이스: &&는 borrow 값에 적용할 수 없다.
+// 비허용 케이스: ^&는 borrow 값에 적용할 수 없다.
 def main() -> void {
   let mut x: i32 = 1i32;
   set r = &x;
-  set h = &&r;
+  set h = ^&r;
   return;
 }

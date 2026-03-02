@@ -508,7 +508,7 @@ bool test_check_capability_diagnostic_surface() {
     const std::string pr_src =
         "def main() -> i32 {\n"
         "  let x: i32 = 1i32;\n"
-        "  let h: &&i32 = &&x;\n"
+        "  let h: ^&i32 = ^&x;\n"
         "  return 0i32;\n"
         "}\n";
 

@@ -34,7 +34,7 @@ namespace parus::sir {
         uint32_t materialized_handle_count = 0;
     };
 
-    /// @brief SIR 단계에서 `&`, `&mut`, `&&` capability 규칙을 정밀 분석한다.
+    /// @brief SIR 단계에서 `&`, `&mut`, `^&` capability 규칙을 정밀 분석한다.
     CapabilityAnalysisResult analyze_capabilities(
         Module& m,
         const ty::TypePool& types,

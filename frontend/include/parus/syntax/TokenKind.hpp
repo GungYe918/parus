@@ -116,7 +116,8 @@ namespace parus::syntax {
         kCaret,    // ^
 
         kAmp,      // &
-        kAmpAmp,   // &&
+        kAmpAmp,   // && (legacy, no language meaning)
+        kCaretAmp, // ^& (escape)
         kPipePipe, // ||
 
         kEqEq,     // ==
@@ -243,6 +244,7 @@ namespace parus::syntax {
             case TokenKind::kBang: return "!";
             case TokenKind::kCaret: return "^";
             case TokenKind::kAmpAmp: return "&&";
+            case TokenKind::kCaretAmp: return "^&";
             case TokenKind::kAmp:    return "&";
             case TokenKind::kPipePipe: return "||";
 

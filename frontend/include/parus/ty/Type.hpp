@@ -44,7 +44,7 @@ namespace parus::ty {
         kNamedUser, // user-defined type name (NOW: path slice)
 
         kBorrow,    // &T / &mut T
-        kEscape,    // &&T
+        kEscape,    // ^&T
         kPtr,       // ptr T / ptr mut T
 
         kFn,        // def(T1, T2, ...) -> R

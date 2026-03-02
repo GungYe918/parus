@@ -25,7 +25,7 @@ namespace parus::diag {
         kUnexpectedEof,
         kTooManyErrors,      
         kNestedTernaryNotAllowed,
-        kAmbiguousAmpPrefixChain,      // ambiguous '&' prefix chain (e.g. &&&x)
+        kAmbiguousAmpPrefixChain,      // deprecated: ambiguous '&' prefix chain diagnostic
         kArraySizeExpectedIntLiteral,  // array suffix requires integer literal (T[N])
         kArraySizeInvalidLiteral,      // array size literal is malformed/out of range
         kMacroNoMatch,                 // macro arm/group matching failed
@@ -108,7 +108,7 @@ namespace parus::diag {
         kActorCommitOnlyInPub,            // commit is only allowed in actor pub methods
         kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
         kActorPubMissingTopLevelCommit,   // actor pub method needs at least one top-level commit
-        kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by &&
+        kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by ^&
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration
@@ -164,7 +164,7 @@ namespace parus::diag {
         // ---- var parsing ----
         kVarMutMustFollowKw,        // mut must appear right after declaration keyword (let/set/static)
 
-        // ---- &, &&관련 ----
+        // ---- &, ^& 관련 ----
         kBorrowOperandMustBePlace,
         kEscapeOperandMustBePlace,
         kEscapeSubplaceMoveNotAllowed,

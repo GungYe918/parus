@@ -84,7 +84,7 @@ namespace parus::sir::detail {
                     v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
                     break;
                 }
-                if (e.op == parus::syntax::TokenKind::kAmpAmp) {
+                if (e.op == parus::syntax::TokenKind::kCaretAmp) {
                     v.kind = ValueKind::kEscape;
                     v.op = (uint32_t)e.op;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);

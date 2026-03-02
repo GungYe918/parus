@@ -1,5 +1,5 @@
-// 비허용 케이스: do-while 조건에서도 && 이동 효과는 루프 이후까지 반영되어야 함
-def consume(h: &&i32) -> bool {
+// 비허용 케이스: do-while 조건에서도 ^& 이동 효과는 루프 이후까지 반영되어야 함
+def consume(h: ^&i32) -> bool {
   return false;
 }
 
@@ -7,6 +7,6 @@ def main() -> i32 {
   set x = 1i32;
   do {
     set y = 0i32;
-  } while (consume(h: &&x));
+  } while (consume(h: ^&x));
   return x;
 }

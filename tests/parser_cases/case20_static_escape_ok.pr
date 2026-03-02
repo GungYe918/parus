@@ -1,6 +1,6 @@
-// 허용 케이스: static place는 경계 외 문맥에서도 && 가능
+// 허용 케이스: static place는 경계 외 문맥에서도 ^& 가능
 static G: i32 = 7i32;
-static mut HG: &&i32 = &&G;
+static mut HG: ^&i32 = ^&G;
 
 def main() -> i32 {
   return 0i32;

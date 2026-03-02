@@ -8,6 +8,6 @@ def main() -> i32 {
     x: 1i32,
     y: 2i32,
   };
-  set m = &&v.x;
+  set m = ^&v.x;
   return 0i32;
 }

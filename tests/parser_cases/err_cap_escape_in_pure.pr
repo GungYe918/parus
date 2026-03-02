@@ -1,5 +1,5 @@
-// 비허용 케이스: pure 함수에서는 &&를 사용할 수 없다.
-def pure bad() -> &&i32 {
+// 비허용 케이스: pure 함수에서는 ^&를 사용할 수 없다.
+def pure bad() -> ^&i32 {
   let mut x: i32 = 1i32;
-  return &&x;
+  return ^&x;
 }

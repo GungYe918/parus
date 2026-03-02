@@ -40,7 +40,7 @@ namespace parus::passes {
     }
 
     static void check_unary_place_rules(const ast::AstArena& ast, const ast::Expr& u, diag::Bag& bag) {
-        // & / && 는 operand가 place여야 함
+        // & / ^& 는 operand가 place여야 함
         if (u.op == syntax::TokenKind::kAmp) {
             if (!is_place_expr(ast, u.a)) {
                 report(bag, diag::Code::kBorrowOperandMustBePlace, u.span);
@@ -48,15 +48,15 @@ namespace parus::passes {
             return;
         }
 
-        if (u.op == syntax::TokenKind::kAmpAmp) {
+        if (u.op == syntax::TokenKind::kCaretAmp) {
             // 1) place여야 함
             if (!is_place_expr(ast, u.a)) {
                 report(bag, diag::Code::kEscapeOperandMustBePlace, u.span);
                 return;
             }
 
-            // 2) "borrow에는 적용 불가" (&&(&x) 같은 형태를 금지하고 싶다면)
-            //    - 현재 AST에선 &&의 operand가 &x 라면 operand는 Unary(&)이고 place가 아니므로 위에서 이미 걸림.
+            // 2) "borrow에는 적용 불가" (^&(&x) 같은 형태를 금지하고 싶다면)
+            //    - 현재 AST에선 ^&의 operand가 &x 라면 operand는 Unary(&)이고 place가 아니므로 위에서 이미 걸림.
             //    - 그래도 혹시 place 판정이 확장되면(예: deref 등) 대비용으로 한 번 더 방어.
             const auto& opnd = ast.expr(u.a);
             if (is_borrow_unary(opnd)) {

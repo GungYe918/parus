@@ -63,7 +63,7 @@ namespace parus {
         //      PrefixType
         //
         //  PrefixType :=
-        //      ( '&' ['mut'] | '&&' )* SuffixType
+        //      ( '&' ['mut'] | '^&' )* SuffixType
         //
         //  SuffixType :=
         //      PrimaryType ( '?' | '[]' )*
@@ -74,28 +74,10 @@ namespace parus {
         //    | '(' Type ')'
         //
         // precedence (tight -> loose):
-        //   Primary  >  Suffix(?,[])  >  Prefix(&,&&)
+        //   Primary  >  Suffix(?,[])  >  Prefix(&,^&)
         //
-        // so: &&int?  == &&(int?)
-        // and user can override by parentheses: (&&int)? , &&(int?) , etc.
-        //
-        // EXTRA RULE (requested):
-        //   To avoid visually/semantically ambiguous chains like "&&&T" or "&&&&T",
-        //   we forbid 3 or more consecutive '&' characters that come from adjacent
-        //   prefix tokens without parentheses separation.
-        //
-        //   Allowed examples:
-        //     &&( &T )
-        //     (&(&T))          // uses parentheses to make intent explicit
-        //     &mut &&T         // "mut" breaks adjacency visually, allowed by default
-        //
-        //   Forbidden examples:
-        //     &&&T
-        //     &&&&T
-        //     &&&T?
-        //
-        // If forbidden pattern appears, we emit an error and return error type
-        // (but still try to recover by parsing the rest).
+        // so: ^&int?  == ^&(int?)
+        // and user can override by parentheses: (^&int)? , ^&(int?) , etc.
 
         auto parse_primary = [&]() -> ParsedType {
             const Token s = cursor_.peek();
@@ -467,51 +449,13 @@ namespace parus {
             return base;
         };
 
-        // ---- prefix chain: (& ['mut'] | &&)* ----
+        // ---- prefix chain: (& ['mut'] | ^&)* ----
         // NOTE: suffix binds tighter than prefix.
-        // so: &&int? == &&(int?) by default.
+        // so: ^&int? == ^&(int?) by default.
         struct PrefixOp {
             enum class Kind : uint8_t { kBorrow, kEscape } kind;
             bool is_mut = false; // only for borrow
             Token tok{};
-        };
-
-        // Track adjacency amp-run to forbid "&&&" style.
-        // We count how many '&' characters appear consecutively from adjacent prefix tokens.
-        // 'mut' breaks adjacency (it is a separate token), so "&mut&&T" is not considered "&&&".
-        bool saw_ambiguous_amp_run = false;
-        int  amp_run_chars = 0;       // consecutive '&' chars from adjacent prefix tokens
-        bool prev_was_amp_token = false;
-
-        Span amp_run_start{};
-        Span amp_run_end{};
-
-        auto bump_amp_run = [&](const Token& amp_tok) {
-            int add = 0;
-            if (amp_tok.kind == K::kAmp) add = 1;
-            else if (amp_tok.kind == K::kAmpAmp) add = 2;
-
-            if (prev_was_amp_token) {
-                amp_run_chars += add;
-                amp_run_end = amp_tok.span;
-            } else {
-                amp_run_chars = add;
-                amp_run_start = amp_tok.span;
-                amp_run_end = amp_tok.span;
-            }
-
-            prev_was_amp_token = true;
-
-            if (amp_run_chars >= 3) {
-                saw_ambiguous_amp_run = true;
-            }
-        };
-
-        auto break_amp_run = [&]() {
-            prev_was_amp_token = false;
-            amp_run_chars = 0;
-            amp_run_start = {};
-            amp_run_end = {};
         };
 
         std::vector<PrefixOp> ops;
@@ -520,50 +464,34 @@ namespace parus {
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kBorrow;
                 op.tok = cursor_.bump(); // '&'
-                bump_amp_run(op.tok);
 
                 // optional 'mut'
                 if (cursor_.at(K::kKwMut)) {
                     cursor_.bump();
                     op.is_mut = true;
-
-                    // "mut" visually/lexically breaks "&" adjacency, so reset run here.
-                    break_amp_run();
                 }
 
                 ops.push_back(op);
                 continue;
             }
 
-            if (cursor_.at(K::kAmpAmp)) {
+            if (cursor_.at(K::kCaretAmp)) {
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kEscape;
-                op.tok = cursor_.bump(); // '&&'
-                bump_amp_run(op.tok);
+                op.tok = cursor_.bump(); // '^&'
 
                 ops.push_back(op);
                 continue;
             }
 
-            // any other token breaks adjacency
-            break_amp_run();
             break;
-        }
-
-        // If we saw "&&&" (or worse) as an adjacent prefix run, force parentheses usage.
-        // We still parse the suffix to recover, but the resulting type becomes error.
-        if (saw_ambiguous_amp_run) {
-            Span sp = amp_run_start;
-            if (amp_run_end.hi) sp = span_join(amp_run_start, amp_run_end);
-
-            diag_report(diag::Code::kAmbiguousAmpPrefixChain, sp);
         }
 
         // operand is suffix-type (so suffix is tighter than prefix)
         auto out = parse_suffix();
         if (out.id == ty::kInvalidType) out.id = types_.error();
 
-        // apply prefixes from right-to-left: && &mut & T  => &&(&mut(&T))
+        // apply prefixes from right-to-left: ^& &mut & T  => ^&(&mut(&T))
         for (int i = (int)ops.size() - 1; i >= 0; --i) {
             const auto& op = ops[(size_t)i];
             if (op.kind == PrefixOp::Kind::kBorrow) {
@@ -587,15 +515,6 @@ namespace parus {
                 out.node = ast_.add_type_node(n);
                 out.id = n.resolved_type;
                 out.span = sp;
-            }
-        }
-
-        if (saw_ambiguous_amp_run) {
-            // Force error type id, but keep the best-effort span.
-            out.id = types_.error();
-            if (out.node != ast::k_invalid_type_node &&
-                static_cast<size_t>(out.node) < ast_.type_nodes().size()) {
-                ast_.type_node_mut(out.node).resolved_type = out.id;
             }
         }
 

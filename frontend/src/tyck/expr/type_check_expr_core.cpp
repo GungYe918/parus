@@ -1001,7 +1001,7 @@ namespace parus::tyck {
     // --------------------
     ty::TypeId TypeChecker::check_expr_unary_(const ast::Expr& e) {
         // NOTE:
-        // - '&' / '&mut' / '&&' 의 의미 규칙(place, escape, conflict 등)은
+        // - '&' / '&mut' / '^&' 의 의미 규칙(place, escape, conflict 등)은
         //   capability 단계에서 독립적으로 검사한다.
         // - tyck는 여기서 "결과 타입 계산"만 수행한다.
         if (e.op == K::kAmp) {
@@ -1025,12 +1025,12 @@ namespace parus::tyck {
             return types_.make_borrow(at, /*is_mut=*/e.unary_is_mut);
         }
 
-        if (e.op == K::kAmpAmp) {
+        if (e.op == K::kCaretAmp) {
             if (in_actor_method_ && e.a != ast::k_invalid_expr) {
                 const auto& opnd = ast_.expr(e.a);
                 if (opnd.kind == ast::ExprKind::kIdent && opnd.text == "draft") {
                     diag_(diag::Code::kActorEscapeDraftMoveNotAllowed, e.span);
-                    err_(e.span, "actor draft cannot be moved with '&&'");
+                    err_(e.span, "actor draft cannot be moved with '^&'");
                     return types_.error();
                 }
             }

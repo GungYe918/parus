@@ -617,11 +617,11 @@ namespace {
     static bool test_oir_gate_rejects_invalid_escape_handle() {
         const std::string src = R"(
             static G: i32 = 7i32;
-            def sink(h: &&i32) -> i32 {
+            def sink(h: ^&i32) -> i32 {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: &&G);
+                return sink(h: ^&G);
             }
         )";
 
@@ -1223,7 +1223,7 @@ namespace {
         return ok;
     }
 
-    /// @brief `&&`로 이동된 class 로컬은 스코프 종료 deinit 대상에서 제외되어야 한다.
+    /// @brief `^&`로 이동된 class 로컬은 스코프 종료 deinit 대상에서 제외되어야 한다.
     static bool test_class_raii_escape_move_skips_deinit_call_ok() {
         const std::string src = R"(
             class Resource {
@@ -1231,13 +1231,13 @@ namespace {
                 deinit() = default;
             }
 
-            def sink(v: &&Resource) -> i32 {
+            def sink(v: ^&Resource) -> i32 {
                 return 0i32;
             }
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: &&r);
+                sink(v: ^&r);
                 return 0i32;
             }
         )";

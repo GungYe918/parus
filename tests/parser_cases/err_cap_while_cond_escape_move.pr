@@ -1,11 +1,11 @@
-// 비허용 케이스: while 조건에서 &&로 이동된 값을 이후 사용하면 UAF(move-after-use) 오류
-def consume(h: &&i32) -> bool {
+// 비허용 케이스: while 조건에서 ^&로 이동된 값을 이후 사용하면 UAF(move-after-use) 오류
+def consume(h: ^&i32) -> bool {
   return false;
 }
 
 def main() -> i32 {
   set x = 1i32;
-  while (consume(h: &&x)) {
+  while (consume(h: ^&x)) {
     break;
   }
   return x;
