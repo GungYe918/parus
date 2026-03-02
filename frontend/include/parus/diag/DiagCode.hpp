@@ -259,7 +259,6 @@ namespace parus::diag {
         kGenericTypePathArityMismatch, // generic-applied type path arity mismatch
         kGenericTypePathTemplateNotFound, // generic-applied type path target template not found
         kGenericActsOverlap, // acts coherence overlap
-        kGenericFieldNotSupportedV1, // generic field declaration is not supported in v1
         kGenericActorDeclNotSupportedV1, // generic actor declaration is not supported in v1
 
         // ---- place requirement (tyck) ----

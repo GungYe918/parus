@@ -48,9 +48,11 @@ namespace parus::tyck {
         generic_class_template_sid_set_.clear();
         generic_proto_template_sid_set_.clear();
         generic_acts_template_sid_set_.clear();
+        generic_field_template_sid_set_.clear();
         generic_class_instance_cache_.clear();
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
+        generic_field_instance_cache_.clear();
         generic_named_split_cache_.clear();
         generic_named_type_cache_.clear();
         generic_decl_checked_instances_.clear();
@@ -60,6 +62,7 @@ namespace parus::tyck {
         generic_instantiated_class_sids_.clear();
         generic_instantiated_proto_sids_.clear();
         generic_instantiated_acts_sids_.clear();
+        generic_instantiated_field_sids_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
         namespace_stack_.clear();
@@ -263,6 +266,7 @@ namespace parus::tyck {
         result_.generic_instantiated_class_sids = generic_instantiated_class_sids_;
         result_.generic_instantiated_proto_sids = generic_instantiated_proto_sids_;
         result_.generic_instantiated_acts_sids = generic_instantiated_acts_sids_;
+        result_.generic_instantiated_field_sids = generic_instantiated_field_sids_;
         result_.generic_acts_template_sids.assign(
             generic_acts_template_sid_set_.begin(),
             generic_acts_template_sid_set_.end()
@@ -426,6 +430,8 @@ namespace parus::tyck {
 
     void TypeChecker::check_c_abi_global_decl_(const ast::Stmt& s) {
         if (s.link_abi != ast::LinkAbi::kC) return;
+
+        (void)ensure_generic_field_instance_from_type_(s.type, s.span);
 
         if (!s.is_static) {
             diag_(diag::Code::kAbiCGlobalMustBeStatic, s.span, s.name);
@@ -1241,6 +1247,236 @@ namespace parus::tyck {
             }
         }
         return std::nullopt;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_field_instance_(
+        ast::StmtId template_sid,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span use_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kFieldDecl || templ.decl_generic_param_count == 0) {
+            return template_sid;
+        }
+
+        const auto generic_names = collect_decl_generic_param_names_(templ);
+        if (generic_names.size() != concrete_args.size()) {
+            std::string base_qname = std::string(templ.name);
+            if (templ.type != ty::kInvalidType) {
+                base_qname = types_.to_string(templ.type);
+            }
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  base_qname,
+                  std::to_string(generic_names.size()),
+                  std::to_string(concrete_args.size()));
+            err_(use_span, "generic struct arity mismatch");
+            return std::nullopt;
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+        if (auto it = generic_field_instance_cache_.find(cache_key);
+            it != generic_field_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size());
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+
+        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
+            if (raw.empty()) return std::nullopt;
+            std::string key(raw);
+            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
+            auto it = proto_decl_by_name_.find(key);
+            if (it != proto_decl_by_name_.end()) return it->second;
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) return pit->second;
+            }
+            return std::nullopt;
+        };
+
+        auto proto_all_default_impl = [&](ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = ps.stmt_begin;
+            const uint64_t end = begin + ps.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return false;
+            if (ps.stmt_count == 0) return true;
+            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
+                const ast::StmtId msid = kids[ps.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) return false;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl || m.a == ast::k_invalid_stmt) return false;
+            }
+            return true;
+        };
+
+        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
+            if (proto_sid == ast::k_invalid_stmt) return false;
+            if (proto_all_default_impl(proto_sid)) return true;
+
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
+                owner_sid = cit->second;
+            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
+                owner_sid = fit->second.sid;
+            }
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
+            const auto& owner = ast_.stmt(owner_sid);
+            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
+                    if (*psid == proto_sid) return true;
+                }
+            }
+            return false;
+        };
+
+        for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
+            const uint32_t idx = templ.decl_constraint_begin + ci;
+            if (idx >= ast_.fn_constraint_decls().size()) break;
+            const auto& cc = ast_.fn_constraint_decls()[idx];
+
+            auto bit = subst.find(std::string(cc.type_param));
+            if (bit == subst.end()) {
+                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
+                err_(cc.span, "struct declaration constraint references unknown generic parameter");
+                return std::nullopt;
+            }
+
+            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
+            if (!proto_sid.has_value()) {
+                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
+                err_(cc.span, "struct declaration constraint references unknown proto");
+                return std::nullopt;
+            }
+            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
+                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                      cc.type_param, proto_path, types_.to_string(bit->second));
+                err_(cc.span, "struct declaration generic constraint unsatisfied");
+                return std::nullopt;
+            }
+        }
+
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        const ast::StmtId inst_sid = clone_stmt_with_type_subst_(
+            template_sid, subst, expr_clone_map, stmt_clone_map);
+        if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        auto& inst = ast_.stmt_mut(inst_sid);
+        inst.decl_generic_param_begin = 0;
+        inst.decl_generic_param_count = 0;
+        inst.decl_constraint_begin = 0;
+        inst.decl_constraint_count = 0;
+
+        std::string base_qname = std::string(templ.name);
+        if (templ.type != ty::kInvalidType) {
+            base_qname = types_.to_string(templ.type);
+        }
+        std::ostringstream qn;
+        qn << base_qname << "<";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) qn << ",";
+            qn << types_.to_string(concrete_args[i]);
+        }
+        qn << ">";
+        const std::string inst_qname = qn.str();
+        const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
+        inst.name = ast_.add_owned_string(inst_qname);
+        inst.type = inst_type;
+
+        if (auto existing = sym_.lookup_in_current(inst_qname)) {
+            (void)sym_.update_declared_type(*existing, inst_type);
+        } else {
+            (void)sym_.insert(sema::SymbolKind::kField, inst_qname, inst_type, inst.span);
+        }
+
+        field_abi_meta_by_type_[inst_type] = FieldAbiMeta{
+            .sid = inst_sid,
+            .layout = inst.field_layout,
+            .align = inst.field_align,
+        };
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+
+        generic_field_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_field_sids_.push_back(inst_sid);
+        if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
+            pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_decl_instance_queue_.push_back(inst_sid);
+        }
+        return inst_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_field_instance_from_type_(
+        ty::TypeId maybe_generic_field_type,
+        Span use_span
+    ) {
+        if (maybe_generic_field_type == ty::kInvalidType) return std::nullopt;
+
+        std::string base;
+        std::vector<ty::TypeId> args;
+        if (!split_generic_applied_named_type_(maybe_generic_field_type, base, args) || args.empty()) {
+            return std::nullopt;
+        }
+
+        std::string base_key = base;
+        if (auto rewritten = rewrite_imported_path_(base_key)) {
+            base_key = *rewritten;
+        }
+
+        auto sym_sid = lookup_symbol_(base_key);
+        if (!sym_sid.has_value()) return std::nullopt;
+        const auto& ss = sym_.symbol(*sym_sid);
+        if (ss.kind != sema::SymbolKind::kField || ss.declared_type == ty::kInvalidType) {
+            return std::nullopt;
+        }
+
+        auto fit = field_abi_meta_by_type_.find(ss.declared_type);
+        if (fit == field_abi_meta_by_type_.end()) {
+            return std::nullopt;
+        }
+        const ast::StmtId templ_sid = fit->second.sid;
+        if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const auto& templ = ast_.stmt(templ_sid);
+        if (templ.kind != ast::StmtKind::kFieldDecl) {
+            return std::nullopt;
+        }
+        if (templ.decl_generic_param_count == 0) {
+            return templ_sid;
+        }
+        return ensure_generic_field_instance_(templ_sid, args, use_span);
     }
 
     std::optional<ast::StmtId> TypeChecker::ensure_generic_class_instance_(
@@ -2272,6 +2508,7 @@ namespace parus::tyck {
                     if (ret_ty == ty::kInvalidType && sig != ty::kInvalidType && types_.get(sig).kind == ty::Kind::kFn) {
                         ret_ty = types_.get(sig).ret;
                     }
+                    (void)ensure_generic_field_instance_from_type_(ret_ty, s.span);
                     if (!is_c_abi_safe_type_(ret_ty, /*allow_void=*/true)) {
                         diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("return type of '") + std::string(s.name) + "'", types_.to_string(ret_ty));
                         err_(s.span, "C ABI return type is not FFI-safe: " + types_.to_string(ret_ty));
@@ -2279,6 +2516,7 @@ namespace parus::tyck {
 
                     for (uint32_t pi = 0; pi < s.param_count; ++pi) {
                         const auto& p = ast_.params()[s.param_begin + pi];
+                        (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                         if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
                             diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span, std::string("parameter '") + std::string(p.name) + "'", types_.to_string(p.type));
                             err_(p.span, "C ABI parameter type is not FFI-safe: " + std::string(p.name));
@@ -2321,6 +2559,9 @@ namespace parus::tyck {
             }
 
             if (s.kind == ast::StmtKind::kFieldDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    generic_field_template_sid_set_.insert(sid);
+                }
                 const std::string qname = qualify_decl_name_(s.name);
                 ty::TypeId field_ty = s.type;
                 if (field_ty == ty::kInvalidType && !qname.empty()) {

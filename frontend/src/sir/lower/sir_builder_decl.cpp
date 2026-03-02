@@ -401,6 +401,9 @@ namespace parus::sir {
             }
 
             if (s.kind == ast::StmtKind::kFieldDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    return;
+                }
                 (void)lower_field_decl_(m, ast, sym, nres, sid);
                 return;
             }
@@ -577,6 +580,10 @@ namespace parus::sir {
             (void)lower_fn_once(inst_sid, /*is_acts_member=*/false, k_invalid_acts);
         }
 
+        for (const auto inst_sid : tyck.generic_instantiated_field_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            lower_stmt_recursive(lower_stmt_recursive, inst_sid);
+        }
         for (const auto inst_sid : tyck.generic_instantiated_proto_sids) {
             if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
             lower_stmt_recursive(lower_stmt_recursive, inst_sid);

@@ -1,0 +1,16 @@
+proto NeedEq {
+  def eq(self, rhs: &Self) -> bool;
+} with require(true);
+
+struct Bad {
+  x: i32;
+}
+
+struct Wrap<T> with [T: NeedEq] {
+  value: T;
+}
+
+def main() -> i32 {
+  let w: Wrap<Bad> = Wrap<Bad>{ value: Bad{ x: 1i32 } };
+  return 0i32;
+}

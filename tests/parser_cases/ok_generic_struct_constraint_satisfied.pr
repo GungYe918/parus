@@ -1,0 +1,14 @@
+proto Marker {
+  def mark(self) -> i32 {
+    return 1i32;
+  }
+};
+
+struct Holder<T> with [T: Marker] {
+  value: T;
+}
+
+def main() -> i32 {
+  let h: Holder<i32> = Holder<i32>{ value: 1i32 };
+  return 0i32;
+}

@@ -154,7 +154,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. generic 함수 호출/추론/인스턴스화 완성
 1. generic class/proto/acts(owner-only) 선언 및 concrete 사용 가능
-1. generic struct/actor 선언은 v1 비지원으로 명시 진단 제공
+1. generic struct 선언은 v1에서 지원하고, generic actor 선언은 v1 비지원으로 명시 진단 제공
 1. SIR/OIR/LLVM까지 인스턴스 lowering 연결
 
 구현 항목:

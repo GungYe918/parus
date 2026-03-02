@@ -615,6 +615,7 @@ namespace parus::tyck {
                 err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
             }
 
+            (void)ensure_generic_field_instance_from_type_(ret, s.span);
             if (!is_c_abi_safe_type_(ret, /*allow_void=*/true)) {
                 diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span,
                     std::string("return type of '") + std::string(s.name) + "'",
@@ -624,6 +625,7 @@ namespace parus::tyck {
 
             for (uint32_t i = 0; i < s.param_count; ++i) {
                 const auto& p = ast_.params()[s.param_begin + i];
+                (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                 if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
                     diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span,
                         std::string("parameter '") + std::string(p.name) + "'",
@@ -1529,11 +1531,9 @@ namespace parus::tyck {
     /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.
     void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
-        if (s.decl_generic_param_count > 0) {
-            diag_(diag::Code::kGenericFieldNotSupportedV1, s.span, s.name);
-            err_(s.span, "generic field declaration is not supported in v1");
-            return;
-        }
+        const bool is_generic_template =
+            (s.decl_generic_param_count > 0) &&
+            (generic_field_template_sid_set_.find(sid) != generic_field_template_sid_set_.end());
 
         if (s.field_align != 0) {
             if ((s.field_align & (s.field_align - 1u)) != 0u) {
@@ -1548,6 +1548,10 @@ namespace parus::tyck {
         if (begin > ast_.field_members().size() || end > ast_.field_members().size() || begin > end) {
             diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);
             err_(s.span, "invalid field member range");
+            return;
+        }
+
+        if (is_generic_template) {
             return;
         }
 

@@ -377,6 +377,61 @@ namespace {
         return ok;
     }
 
+    /// @brief generic struct 인스턴스가 materialize되고 concrete 레이아웃만 OIR로 내려가는지 검사한다.
+    static bool test_generic_struct_materialization_oir_lowering_ok() {
+        const std::string src = R"(
+            struct Pair<T> {
+                first: T;
+                second: T;
+            }
+
+            def sum(p: Pair<i32>) -> i32 {
+                return p.first + p.second;
+            }
+
+            def main() -> i32 {
+                let p: Pair<i32> = Pair<i32>{ first: 1i32, second: 2i32 };
+                return sum(p: p);
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic struct source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic struct source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic struct source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_field_sids.empty(),
+                       "generic struct use must materialize at least one concrete struct instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic struct source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic struct source");
+        if (!ok) return false;
+
+        bool has_pair_i32_layout = false;
+        bool has_template_pair_layout = false;
+        for (const auto& f : oir.mod.fields) {
+            if (f.name.find("Pair") != std::string::npos &&
+                f.name.find("i32") != std::string::npos &&
+                f.members.size() == 2) {
+                has_pair_i32_layout = true;
+            }
+            if (f.name == "Pair") {
+                has_template_pair_layout = true;
+            }
+        }
+
+        ok &= require_(has_pair_i32_layout, "OIR must contain concrete generic struct layout metadata for Pair<i32>");
+        ok &= require_(!has_template_pair_layout, "generic struct template layout must not be lowered into OIR");
+        return ok;
+    }
+
     /// @brief OIR pass가 상수 폴딩과 dead pure inst 제거를 수행하는지 검사한다.
     static bool test_oir_const_fold_and_dce() {
         parus::oir::Module m;
@@ -1327,6 +1382,7 @@ int main() {
         {"generic_class_materialization_oir_lowering_ok", test_generic_class_materialization_oir_lowering_ok},
         {"generic_proto_default_materialization_oir_lowering_ok", test_generic_proto_default_materialization_oir_lowering_ok},
         {"generic_acts_owner_materialization_oir_lowering_ok", test_generic_acts_owner_materialization_oir_lowering_ok},
+        {"generic_struct_materialization_oir_lowering_ok", test_generic_struct_materialization_oir_lowering_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},

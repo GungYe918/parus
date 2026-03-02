@@ -1,0 +1,13 @@
+struct Pair<T> {
+  first: T;
+  second: T;
+}
+
+def sum(p: Pair<i32>) -> i32 {
+  return p.first + p.second;
+}
+
+def main() -> i32 {
+  let p: Pair<i32> = Pair<i32>{ first: 1i32, second: 2i32 };
+  return sum(p: p);
+}

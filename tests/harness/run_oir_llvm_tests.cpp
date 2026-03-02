@@ -1092,6 +1092,59 @@ namespace {
         return ok;
     }
 
+    /// @brief generic struct 인스턴스가 concrete 레이아웃으로 materialize되어 LLVM에 하향되는지 검사한다.
+    static bool test_generic_struct_materialization_llvm_symbols_() {
+        const std::string src = R"(
+            struct Pair<T> {
+                first: T;
+                second: T;
+            }
+
+            def main() -> i32 {
+                let p: Pair<i32> = Pair<i32>{ first: 1i32, second: 2i32 };
+                return p.second;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "generic struct source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool has_pair_i32_layout = false;
+        bool has_template_pair_layout = false;
+        for (const auto& f : p->oir.mod.fields) {
+            if (f.name.find("Pair") != std::string::npos &&
+                f.name.find("i32") != std::string::npos &&
+                f.members.size() == 2) {
+                has_pair_i32_layout = true;
+            }
+            if (f.name == "Pair") {
+                has_template_pair_layout = true;
+            }
+        }
+        ok &= require_(has_pair_i32_layout,
+                       "OIR must include concrete generic struct layout metadata for Pair<i32>");
+        ok &= require_(!has_template_pair_layout,
+                       "generic struct template layout must not be lowered into OIR");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for generic struct source must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("getelementptr i8") != std::string::npos &&
+                       lowered.llvm_ir.find("i64 4") != std::string::npos,
+                       "generic struct member access must lower with byte-offset GEP");
+        ok &= require_(lowered.llvm_ir.find("Pair$") == std::string::npos,
+                       "generic struct template symbol must not be lowered into LLVM IR");
+        return ok;
+    }
+
     /// @brief class/proto(default body) 멤버가 LLVM IR 함수로 출력되는지 검사한다.
     static bool test_class_proto_default_member_llvm_symbols_() {
         const std::string src = R"(
@@ -1619,6 +1672,7 @@ int main() {
         {"generic_class_materialization_llvm_symbols", test_generic_class_materialization_llvm_symbols_},
         {"generic_proto_default_materialization_llvm_symbols", test_generic_proto_default_materialization_llvm_symbols_},
         {"generic_acts_owner_materialization_llvm_symbols", test_generic_acts_owner_materialization_llvm_symbols_},
+        {"generic_struct_materialization_llvm_symbols", test_generic_struct_materialization_llvm_symbols_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"proto_override_call_prefers_class_symbol", test_proto_override_call_prefers_class_symbol_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},

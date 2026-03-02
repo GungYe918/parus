@@ -1,0 +1,13 @@
+struct Pair<T> {
+  first: T;
+  second: T;
+}
+
+def first_of_i32(p: Pair<i32>) -> i32 {
+  return p.first;
+}
+
+def main() -> i32 {
+  let p: Pair<i32> = Pair<i32>{ first: 3i32, second: 4i32 };
+  return first_of_i32(p: p);
+}

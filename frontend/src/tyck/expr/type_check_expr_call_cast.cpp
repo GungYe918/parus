@@ -285,6 +285,7 @@ namespace parus::tyck {
                         }
                     }
 
+                    (void)ensure_generic_field_instance_from_type_(owner_t, rhs.span);
                     ensure_generic_acts_for_owner_(owner_t, rhs.span);
 
                     auto resolve_owner_type_in_map = [&](auto& method_map, ty::TypeId t) -> ty::TypeId {

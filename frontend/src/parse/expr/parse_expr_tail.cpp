@@ -124,6 +124,81 @@ namespace parus {
         return true;
     }
 
+    bool Parser::parse_expr_try_literal_type_args(uint32_t& out_begin, uint32_t& out_count) {
+        using K = syntax::TokenKind;
+        out_begin = 0;
+        out_count = 0;
+
+        if (!cursor_.at(K::kLt)) return false;
+
+        // speculative pre-scan:
+        // accept only if balanced angle-bracket segment is immediately followed by '{'.
+        size_t i = cursor_.pos();
+        int angle = 0;
+        int paren = 0;
+        int bracket = 0;
+        bool closed = false;
+        while (true) {
+            const Token t = cursor_.peek(i - cursor_.pos());
+            if (t.kind == K::kEof) return false;
+
+            if (t.kind == K::kLt) {
+                ++angle;
+                ++i;
+                continue;
+            }
+            if (t.kind == K::kGt) {
+                --angle;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
+                continue;
+            }
+
+            if (t.kind == K::kLParen) { ++paren; ++i; continue; }
+            if (t.kind == K::kRParen) { --paren; ++i; if (paren < 0) return false; continue; }
+            if (t.kind == K::kLBracket) { ++bracket; ++i; continue; }
+            if (t.kind == K::kRBracket) { --bracket; ++i; if (bracket < 0) return false; continue; }
+
+            if (t.kind == K::kPlus || t.kind == K::kMinus || t.kind == K::kStar ||
+                t.kind == K::kSlash || t.kind == K::kPercent || t.kind == K::kEqEq ||
+                t.kind == K::kBangEq || t.kind == K::kPipePipe ||
+                t.kind == K::kPipeFwd || t.kind == K::kPipeRev ||
+                t.kind == K::kKwAnd || t.kind == K::kKwOr) {
+                return false;
+            }
+
+            ++i;
+        }
+
+        if (!closed) return false;
+        if (cursor_.peek(i - cursor_.pos()).kind != K::kLBrace) return false;
+
+        // real parse
+        if (!cursor_.eat(K::kLt)) return false;
+        out_begin = static_cast<uint32_t>(ast_.type_args().size());
+        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+            auto ty = parse_type();
+            ast_.add_type_arg(ty.id);
+            ++out_count;
+            if (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kGt)) break;
+                continue;
+            }
+            break;
+        }
+
+        if (!cursor_.eat(K::kGt)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+            recover_to_delim(K::kGt, K::kLBrace, K::kSemicolon);
+            cursor_.eat(K::kGt);
+        }
+        return true;
+    }
+
     ast::ExprId Parser::parse_expr_call(ast::ExprId callee,
                                         const Token& lparen_tok,
                                         int ternary_depth,

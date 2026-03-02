@@ -42,6 +42,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_class_sids; // concrete generic class instantiations
         std::vector<ast::StmtId> generic_instantiated_proto_sids; // concrete generic proto instantiations
         std::vector<ast::StmtId> generic_instantiated_acts_sids; // concrete generic acts instantiations
+        std::vector<ast::StmtId> generic_instantiated_field_sids; // concrete generic struct instantiations
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
         std::vector<TyError> errors;
     };
@@ -398,6 +399,15 @@ namespace parus::tyck {
             const std::vector<ty::TypeId>& concrete_args,
             Span use_span
         );
+        std::optional<ast::StmtId> ensure_generic_field_instance_(
+            ast::StmtId template_sid,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
+        std::optional<ast::StmtId> ensure_generic_field_instance_from_type_(
+            ty::TypeId maybe_generic_field_type,
+            Span use_span
+        );
         std::optional<ast::StmtId> ensure_generic_proto_instance_(
             ast::StmtId template_sid,
             const std::vector<ty::TypeId>& concrete_args,
@@ -465,9 +475,11 @@ namespace parus::tyck {
         std::unordered_set<ast::StmtId> generic_class_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_proto_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_acts_template_sid_set_;
+        std::unordered_set<ast::StmtId> generic_field_template_sid_set_;
         std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> generic_field_instance_cache_;
         struct GenericNamedSplitCacheEntry {
             bool parsed = false;
             std::string base{};
@@ -482,6 +494,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_class_sids_;
         std::vector<ast::StmtId> generic_instantiated_proto_sids_;
         std::vector<ast::StmtId> generic_instantiated_acts_sids_;
+        std::vector<ast::StmtId> generic_instantiated_field_sids_;
 
     };
 

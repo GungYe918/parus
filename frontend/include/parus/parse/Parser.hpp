@@ -113,6 +113,7 @@ namespace parus {
                                     uint32_t call_type_arg_begin = 0,
                                     uint32_t call_type_arg_count = 0);
         bool parse_expr_try_call_type_args(uint32_t& out_begin, uint32_t& out_count);
+        bool parse_expr_try_literal_type_args(uint32_t& out_begin, uint32_t& out_count);
 
         //  index 파싱
         ast::ExprId parse_expr_index(ast::ExprId base, const Token& lbracket_tok, int ternary_depth);

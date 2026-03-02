@@ -1133,11 +1133,16 @@ namespace parus::tyck {
 
             auto meta_it = field_abi_meta_by_type_.find(base_t);
             if (meta_it == field_abi_meta_by_type_.end()) {
+                (void)ensure_generic_field_instance_from_type_(base_t, e.span);
+                meta_it = field_abi_meta_by_type_.find(base_t);
+            }
+            if (meta_it == field_abi_meta_by_type_.end()) {
                 const auto& bt = types_.get(base_t);
                 if (bt.kind == ty::Kind::kNamedUser) {
                     if (auto sid = lookup_symbol_(types_.to_string(base_t))) {
                         const auto& ss = sym_.symbol(*sid);
-                        if (ss.kind == sema::SymbolKind::kField) {
+                        if (ss.kind == sema::SymbolKind::kField && ss.declared_type != ty::kInvalidType) {
+                            (void)ensure_generic_field_instance_from_type_(ss.declared_type, e.span);
                             meta_it = field_abi_meta_by_type_.find(ss.declared_type);
                         }
                     }
@@ -1685,22 +1690,33 @@ namespace parus::tyck {
     }
 
     ty::TypeId TypeChecker::check_expr_field_init_(const ast::Expr& e) {
-        auto type_sym = lookup_symbol_(e.text);
-        if (!type_sym) {
+        ty::TypeId field_ty = ty::kInvalidType;
+        if (auto type_sym = lookup_symbol_(e.text)) {
+            const auto& sym = sym_.symbol(*type_sym);
+            if (sym.kind == sema::SymbolKind::kField && sym.declared_type != ty::kInvalidType) {
+                field_ty = sym.declared_type;
+            }
+        }
+        if (field_ty == ty::kInvalidType) {
+            const ty::TypeId literal_head_ty = types_.intern_ident(e.text);
+            if (auto inst_sid = ensure_generic_field_instance_from_type_(literal_head_ty, e.span)) {
+                const auto& inst = ast_.stmt(*inst_sid);
+                if (inst.kind == ast::StmtKind::kFieldDecl && inst.type != ty::kInvalidType) {
+                    field_ty = inst.type;
+                }
+            }
+        }
+        if (field_ty == ty::kInvalidType) {
             diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
-            err_(e.span, "field initializer head is not a known field type");
+            err_(e.span, "field initializer head must resolve to a struct type");
             return types_.error();
         }
 
-        const auto& sym = sym_.symbol(*type_sym);
-        if (sym.kind != sema::SymbolKind::kField || sym.declared_type == ty::kInvalidType) {
-            diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
-            err_(e.span, "field initializer head must resolve to a field type");
-            return types_.error();
-        }
-
-        const ty::TypeId field_ty = sym.declared_type;
         auto meta_it = field_abi_meta_by_type_.find(field_ty);
+        if (meta_it == field_abi_meta_by_type_.end()) {
+            (void)ensure_generic_field_instance_from_type_(field_ty, e.span);
+            meta_it = field_abi_meta_by_type_.find(field_ty);
+        }
         if (meta_it == field_abi_meta_by_type_.end()) {
             diag_(diag::Code::kFieldInitTypeExpected, e.span, e.text);
             err_(e.span, "field initializer target has no field metadata");
@@ -1715,6 +1731,11 @@ namespace parus::tyck {
         }
 
         const auto& fs = ast_.stmt(meta.sid);
+        if (fs.decl_generic_param_count > 0) {
+            diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, e.text);
+            err_(e.span, "generic struct literal requires explicit type arguments");
+            return types_.error();
+        }
         const uint64_t member_begin = fs.field_member_begin;
         const uint64_t member_end = member_begin + fs.field_member_count;
         if (member_begin > ast_.field_members().size() || member_end > ast_.field_members().size()) {

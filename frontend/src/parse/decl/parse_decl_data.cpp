@@ -289,14 +289,7 @@ namespace parus {
 
         uint32_t decl_generic_begin = 0;
         uint32_t decl_generic_count = 0;
-        const Token generic_clause_tok = cursor_.peek();
         (void)parse_decl_generic_param_clause(decl_generic_begin, decl_generic_count);
-        if (decl_generic_count > 0) {
-            diag_report(diag::Code::kGenericFieldNotSupportedV1, generic_clause_tok.span,
-                        name.empty() ? std::string_view("<anonymous>") : name);
-            decl_generic_begin = 0;
-            decl_generic_count = 0;
-        }
 
         const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
         uint32_t impl_count = 0;

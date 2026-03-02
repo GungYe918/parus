@@ -796,9 +796,32 @@ namespace parus {
                 has_path_tail = true;
             }
 
-            const std::string_view path_text = has_path_tail
+            std::string_view path_text = has_path_tail
                 ? ast_.add_owned_string(std::move(joined))
                 : t.lexeme;
+
+            uint32_t literal_type_arg_begin = 0;
+            uint32_t literal_type_arg_count = 0;
+            if (cursor_.at(syntax::TokenKind::kLt) &&
+                parse_expr_try_literal_type_args(literal_type_arg_begin, literal_type_arg_count)) {
+                if (cursor_.prev().kind == syntax::TokenKind::kGt) {
+                    path_sp = span_join(path_sp, cursor_.prev().span);
+                }
+                std::string typed_path(path_text);
+                typed_path += "<";
+                const auto& targs = ast_.type_args();
+                for (uint32_t i = 0; i < literal_type_arg_count; ++i) {
+                    if (i) typed_path += ",";
+                    const uint32_t tidx = literal_type_arg_begin + i;
+                    if (tidx < targs.size()) {
+                        typed_path += types_.to_string(targs[tidx]);
+                    } else {
+                        typed_path += "<error>";
+                    }
+                }
+                typed_path += ">";
+                path_text = ast_.add_owned_string(std::move(typed_path));
+            }
 
             // Field literal primary:
             //   TypePath{ name: expr, ... }
