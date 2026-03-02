@@ -71,6 +71,16 @@ namespace parus {
                 ++i;
                 continue;
             }
+            if (t.kind == K::kShiftRight) {
+                angle -= 2;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
+                continue;
+            }
             if (t.kind == K::kGt) {
                 --angle;
                 ++i;
@@ -105,21 +115,21 @@ namespace parus {
         // real parse
         if (!cursor_.eat(K::kLt)) return false;
         out_begin = static_cast<uint32_t>(ast_.type_args().size());
-        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+        while (!at_generic_type_arg_close() && !cursor_.at(K::kEof)) {
             auto ty = parse_type();
             ast_.add_type_arg(ty.id);
             ++out_count;
             if (cursor_.eat(K::kComma)) {
-                if (cursor_.at(K::kGt)) break;
+                if (at_generic_type_arg_close()) break;
                 continue;
             }
             break;
         }
 
-        if (!cursor_.eat(K::kGt)) {
+        if (!eat_generic_type_arg_close()) {
             diag_report(diag::Code::kGenericCallTypeArgParseAmbiguous, cursor_.peek().span);
-            recover_to_delim(K::kGt, K::kLParen, K::kSemicolon);
-            cursor_.eat(K::kGt);
+            recover_to_delim(K::kGt, K::kShiftRight, K::kLParen);
+            (void)eat_generic_type_arg_close();
         }
         return true;
     }
@@ -145,6 +155,16 @@ namespace parus {
             if (t.kind == K::kLt) {
                 ++angle;
                 ++i;
+                continue;
+            }
+            if (t.kind == K::kShiftRight) {
+                angle -= 2;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
                 continue;
             }
             if (t.kind == K::kGt) {
@@ -180,21 +200,21 @@ namespace parus {
         // real parse
         if (!cursor_.eat(K::kLt)) return false;
         out_begin = static_cast<uint32_t>(ast_.type_args().size());
-        while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+        while (!at_generic_type_arg_close() && !cursor_.at(K::kEof)) {
             auto ty = parse_type();
             ast_.add_type_arg(ty.id);
             ++out_count;
             if (cursor_.eat(K::kComma)) {
-                if (cursor_.at(K::kGt)) break;
+                if (at_generic_type_arg_close()) break;
                 continue;
             }
             break;
         }
 
-        if (!cursor_.eat(K::kGt)) {
+        if (!eat_generic_type_arg_close()) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-            recover_to_delim(K::kGt, K::kLBrace, K::kSemicolon);
-            cursor_.eat(K::kGt);
+            recover_to_delim(K::kGt, K::kShiftRight, K::kLBrace);
+            (void)eat_generic_type_arg_close();
         }
         return true;
     }

@@ -325,20 +325,20 @@ namespace parus {
 
                 std::vector<ParsedType> generic_args{};
                 if (cursor_.eat(K::kLt)) {
-                    while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof)) {
+                    while (!at_generic_type_arg_close() && !cursor_.at(K::kEof)) {
                         ParsedType at = parse_type();
                         generic_args.push_back(at);
                         if (cursor_.eat(K::kComma)) {
-                            if (cursor_.at(K::kGt)) break;
+                            if (at_generic_type_arg_close()) break;
                             continue;
                         }
                         break;
                     }
 
-                    if (!cursor_.eat(K::kGt)) {
+                    if (!eat_generic_type_arg_close()) {
                         diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
-                        recover_to_delim(K::kGt, K::kQuestion, K::kLBracket);
-                        cursor_.eat(K::kGt);
+                        recover_to_delim(K::kGt, K::kShiftRight, K::kQuestion);
+                        (void)eat_generic_type_arg_close();
                     }
                     last_span = cursor_.prev().span;
                 }

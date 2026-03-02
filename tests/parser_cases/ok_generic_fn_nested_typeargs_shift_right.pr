@@ -1,0 +1,13 @@
+def id<T>(x: T) -> T {
+    return x;
+}
+
+struct Box<T> {
+    v: T;
+}
+
+def main() -> i32 {
+    let b: Box<i32> = Box<i32>{ v: 1i32 };
+    let x: Box<i32> = id<Box<i32>>(x: b);
+    return x.v;
+}

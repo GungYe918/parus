@@ -256,6 +256,16 @@ namespace parus::tyck {
         }
 
         // 결과 반영
+        auto sort_unique_sid_vec = [](std::vector<ast::StmtId>& v) {
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+        };
+        sort_unique_sid_vec(generic_instantiated_fn_sids_);
+        sort_unique_sid_vec(generic_instantiated_class_sids_);
+        sort_unique_sid_vec(generic_instantiated_proto_sids_);
+        sort_unique_sid_vec(generic_instantiated_acts_sids_);
+        sort_unique_sid_vec(generic_instantiated_field_sids_);
+
         result_.expr_types = expr_type_cache_;
         result_.expr_overload_target = expr_overload_target_cache_;
         result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;

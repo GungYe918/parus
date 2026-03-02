@@ -185,6 +185,28 @@ namespace parus {
         }
     }
 
+    bool Parser::at_generic_type_arg_close() const {
+        using K = syntax::TokenKind;
+        if (generic_gt_pending_ > 0) return true;
+        const auto k = cursor_.peek().kind;
+        return k == K::kGt || k == K::kShiftRight;
+    }
+
+    bool Parser::eat_generic_type_arg_close() {
+        using K = syntax::TokenKind;
+        if (generic_gt_pending_ > 0) {
+            --generic_gt_pending_;
+            return true;
+        }
+        if (cursor_.eat(K::kGt)) return true;
+        if (cursor_.eat(K::kShiftRight)) {
+            // consume one '>' now and preserve one virtual '>' for outer generic context.
+            generic_gt_pending_ = 1;
+            return true;
+        }
+        return false;
+    }
+
     bool Parser::parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span) {
         using K = syntax::TokenKind;
         out_path_begin = static_cast<uint32_t>(ast_.path_segs().size());

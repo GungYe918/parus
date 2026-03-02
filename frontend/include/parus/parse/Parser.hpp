@@ -261,6 +261,10 @@ namespace parus {
         void recover_to_delim(syntax::TokenKind stop0,
                               syntax::TokenKind stop1 = syntax::TokenKind::kError,
                               syntax::TokenKind stop2 = syntax::TokenKind::kError);
+        // Generic type argument parsing helper:
+        // treat lexer token '>>' as two consecutive generic closers.
+        bool at_generic_type_arg_close() const;
+        bool eat_generic_type_arg_close();
 
         Cursor cursor_;
         ast::AstArena& ast_;
@@ -281,6 +285,7 @@ namespace parus {
         bool seen_file_nest_directive_ = false;
         uint32_t macro_scope_depth_ = 0;
         bool in_actor_member_context_ = false;
+        uint8_t generic_gt_pending_ = 0;
         ParserFeatureFlags parser_features_{};
     };
 

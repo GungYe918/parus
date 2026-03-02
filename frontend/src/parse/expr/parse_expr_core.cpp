@@ -1047,6 +1047,7 @@ namespace parus {
             // generic call type args + call
             if (t.kind == K::kLt) {
                 const size_t save = cursor_.pos();
+                const uint8_t save_pending_gt = generic_gt_pending_;
                 uint32_t type_arg_begin = 0;
                 uint32_t type_arg_count = 0;
                 const bool parsed_type_args = parse_expr_try_call_type_args(type_arg_begin, type_arg_count);
@@ -1056,6 +1057,7 @@ namespace parus {
                     continue;
                 }
                 cursor_.rewind(save);
+                generic_gt_pending_ = save_pending_gt;
             }
 
             // call
