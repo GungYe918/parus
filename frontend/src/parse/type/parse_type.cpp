@@ -460,6 +460,12 @@ namespace parus {
 
         std::vector<PrefixOp> ops;
         for (;;) {
+            if (cursor_.at(K::kAmpAmp)) {
+                const Token legacy = cursor_.bump();
+                diag_report(diag::Code::kUnexpectedToken, legacy.span, "&&");
+                continue;
+            }
+
             if (cursor_.at(K::kAmp)) {
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kBorrow;

@@ -166,6 +166,7 @@ namespace parus::diag {
 
         // ---- &, ^& 관련 ----
         kBorrowOperandMustBePlace,
+        kBorrowOperandMustBeOwnedPlace,
         kEscapeOperandMustBePlace,
         kEscapeSubplaceMoveNotAllowed,
         kEscapeOperandMustNotBeBorrow,

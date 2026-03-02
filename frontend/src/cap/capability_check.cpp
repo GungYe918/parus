@@ -220,6 +220,13 @@ namespace parus::cap {
                 return types_.get(t).borrow_is_mut;
             }
 
+            /// @brief 타입이 escape(`^&T`)인지 확인한다.
+            bool is_escape_type_(ty::TypeId t) const {
+                if (t == ty::kInvalidType) return false;
+                if (t >= types_.count()) return false;
+                return types_.get(t).kind == ty::Kind::kEscape;
+            }
+
             /// @brief range 식(`a..b`, `a..:b`)인지 확인한다.
             bool is_range_expr_(ast::ExprId eid) const {
                 if (eid == ast::k_invalid_expr) return false;
@@ -471,6 +478,11 @@ namespace parus::cap {
                                 if (e.unary_is_mut && !is_symbol_mutable_(*sid)) {
                                     report_(diag::Code::kBorrowMutRequiresMutablePlace, e.span);
                                 }
+                            }
+
+                            const ty::TypeId at = expr_type_(e.a);
+                            if (is_borrow_type_(at) || is_escape_type_(at)) {
+                                report_(diag::Code::kBorrowOperandMustBeOwnedPlace, e.span);
                             }
                             return;
                         }

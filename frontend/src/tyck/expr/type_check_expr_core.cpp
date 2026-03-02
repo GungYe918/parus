@@ -761,6 +761,13 @@ namespace parus::tyck {
         const auto& dt = types_.get(dst);
         const auto& st = types_.get(src);
 
+        // read-only coercion: &mut T -> &T
+        if (dt.kind == ty::Kind::kBorrow && st.kind == ty::Kind::kBorrow) {
+            if (!dt.borrow_is_mut && st.borrow_is_mut && dt.elem == st.elem) {
+                return true;
+            }
+        }
+
         // array assignability (v0)
         // - elem type must be assignable
         // - dst T[] accepts src T[] and src T[N]
@@ -1022,6 +1029,14 @@ namespace parus::tyck {
             }
 
             ty::TypeId at = check_expr_(e.a);
+            if (!is_error_(at)) {
+                const auto& atv = types_.get(at);
+                if (atv.kind == ty::Kind::kBorrow || atv.kind == ty::Kind::kEscape) {
+                    diag_(diag::Code::kBorrowOperandMustBeOwnedPlace, e.span);
+                    err_(e.span, "borrow '&' can only be created from owned place values");
+                    return types_.error();
+                }
+            }
             return types_.make_borrow(at, /*is_mut=*/e.unary_is_mut);
         }
 

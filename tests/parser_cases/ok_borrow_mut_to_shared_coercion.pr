@@ -1,0 +1,9 @@
+// 허용 케이스: 읽기 문맥에서 &mut T -> &T 암시 코어션
+def sink(x: &i32) -> i32 {
+  return x + 0i32;
+}
+
+def main() -> i32 {
+  set mut a = 1i32;
+  return sink(x: &mut a);
+}

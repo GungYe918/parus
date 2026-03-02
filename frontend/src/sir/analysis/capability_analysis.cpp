@@ -139,7 +139,7 @@ namespace parus::sir {
                 return types_.get(t).kind == ty::Kind::kBorrow;
             }
 
-            /// @brief `T`가 escape(`&&T`)인지 확인한다.
+            /// @brief `T`가 escape(`^&T`)인지 확인한다.
             bool is_escape_type_(TypeId t) const {
                 if (t == k_invalid_type || t >= types_.count()) return false;
                 return types_.get(t).kind == ty::Kind::kEscape;
@@ -447,7 +447,7 @@ namespace parus::sir {
                 return false;
             }
 
-            /// @brief `&&` move-out된 심볼인지 확인한다.
+            /// @brief `^&` move-out된 심볼인지 확인한다.
             bool is_moved_(SymbolId sym) const {
                 auto it = moved_by_escape_.find(sym);
                 if (it == moved_by_escape_.end()) return false;
@@ -600,7 +600,7 @@ namespace parus::sir {
                 }
             }
 
-            /// @brief `&&` 값에 대한 EscapeHandle 메타를 등록/업데이트한다.
+            /// @brief `^&` 값에 대한 EscapeHandle 메타를 등록/업데이트한다.
             void register_escape_handle_(
                 ValueId escape_vid,
                 const Value& escape_value,
@@ -885,6 +885,10 @@ namespace parus::sir {
                         const bool place_ok = is_place_value_(v.a) || is_slice_borrow_operand_(v.a);
                         if (!place_ok) {
                             report_(diag::Code::kBorrowOperandMustBePlace, v.span);
+                            return;
+                        }
+                        if (is_borrow_type_(value_type_(v.a)) || is_escape_type_(value_type_(v.a))) {
+                            report_(diag::Code::kBorrowOperandMustBeOwnedPlace, v.span);
                             return;
                         }
 

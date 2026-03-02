@@ -45,6 +45,14 @@ namespace parus::passes {
             if (!is_place_expr(ast, u.a)) {
                 report(bag, diag::Code::kBorrowOperandMustBePlace, u.span);
             }
+            // syntactic fast-path: &(&x), &(^&x) 형태는 v0 규칙에서 금지
+            if (u.a != ast::k_invalid_expr) {
+                const auto& opnd = ast.expr(u.a);
+                if (opnd.kind == ast::ExprKind::kUnary &&
+                    (opnd.op == syntax::TokenKind::kAmp || opnd.op == syntax::TokenKind::kCaretAmp)) {
+                    report(bag, diag::Code::kBorrowOperandMustBeOwnedPlace, u.span);
+                }
+            }
             return;
         }
 

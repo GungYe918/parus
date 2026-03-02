@@ -153,6 +153,7 @@ namespace parus::diag {
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "SwitchOnlyCaseOrDefaultAllowed";
             case Code::kVarMutMustFollowKw: return "VarMutMustFollowKw";
             case Code::kBorrowOperandMustBePlace: return "BorrowOperandMustBePlace";
+            case Code::kBorrowOperandMustBeOwnedPlace: return "BorrowOperandMustBeOwnedPlace";
             case Code::kEscapeOperandMustBePlace: return "EscapeOperandMustBePlace";
             case Code::kEscapeSubplaceMoveNotAllowed: return "EscapeSubplaceMoveNotAllowed";
             case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
@@ -412,6 +413,7 @@ namespace parus::diag {
             case Code::kSwitchOnlyCaseOrDefaultAllowed: return "only 'case'/'default' clauses are allowed inside switch body";
             case Code::kVarMutMustFollowKw: return "'mut' must appear immediately after declaration keyword (e.g., 'let mut x: T', 'set mut x = ...', 'static mut x: T = ...')";
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
+            case Code::kBorrowOperandMustBeOwnedPlace: return "&/&mut operand must be an owned place (cannot borrow from borrow/escape value)";
             case Code::kEscapeOperandMustBePlace: return "^& operand must be a place expression";
             case Code::kEscapeSubplaceMoveNotAllowed: return "^& only supports root identifier move in v0 (subplace move-out is not allowed)";
             case Code::kEscapeOperandMustNotBeBorrow: return "^& cannot be applied to a borrow operand";
@@ -678,6 +680,7 @@ namespace parus::diag {
             case Code::kVarMutMustFollowKw: return "'mut'는 선언 키워드 바로 뒤에만 올 수 있습니다 (예: let mut x: T, set mut x = ..., static mut x: T = ...)";
 
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
+            case Code::kBorrowOperandMustBeOwnedPlace: return "'&'/'&mut'의 피연산자는 owned place여야 합니다(borrow/escape 값 재참조 금지)";
             case Code::kEscapeOperandMustBePlace: return "'^&'의 피연산자는 place expression이어야 합니다";
             case Code::kEscapeSubplaceMoveNotAllowed: return "v0에서 '^&'는 루트 식별자만 이동할 수 있습니다(subplace move-out 금지)";
             case Code::kEscapeOperandMustNotBeBorrow: return "'^&'는 borrow('& ...')에 적용할 수 없습니다";

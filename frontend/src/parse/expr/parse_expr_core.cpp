@@ -71,6 +71,7 @@ namespace parus {
             e.text = "aborted";
             return ast_.add_expr(e);
         }
+        using K = syntax::TokenKind;
 
         ast::ExprId lhs = parse_expr_prefix(ternary_depth);
         lhs = parse_expr_postfix(lhs, ternary_depth);
@@ -78,6 +79,17 @@ namespace parus {
         
         while (1) {
             const auto& tok = cursor_.peek();
+
+            // legacy logical tokens (&&, ||) are not language operators in v0.
+            // Consume here to avoid cascading "expected ';'" recovery at stmt level.
+            if (tok.kind == K::kAmpAmp || tok.kind == K::kPipePipe) {
+                diag_report(diag::Code::kUnexpectedToken, tok.span, token_display(tok));
+                cursor_.bump();
+                ast::ExprId rhs = parse_expr_pratt(0, ternary_depth);
+                rhs = parse_expr_postfix(rhs, ternary_depth);
+                lhs = rhs;
+                continue;
+            }
 
             // ternary ?: (non-nestable)
             if (tok.kind == syntax::TokenKind::kQuestion) {

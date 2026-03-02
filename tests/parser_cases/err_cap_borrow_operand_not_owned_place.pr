@@ -1,0 +1,7 @@
+// 비허용 케이스: &/&mut 피연산자는 owned place여야 한다.
+def main() -> i32 {
+  let x: i32 = 1i32;
+  set r = &x;
+  set rr = &r;
+  return rr + 0i32;
+}
