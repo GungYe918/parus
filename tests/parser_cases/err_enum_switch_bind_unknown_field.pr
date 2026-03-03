@@ -1,0 +1,13 @@
+enum E {
+    case A(x: i32),
+}
+
+def main() -> i32 {
+    set e = E::A(x: 1i32);
+    switch (e) {
+    case E::A(y: v): {
+        return v;
+    }
+    }
+    return 0i32;
+}

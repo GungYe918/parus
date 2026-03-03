@@ -109,6 +109,16 @@ namespace parus::diag {
         kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
         kActorPubMissingTopLevelCommit,   // actor pub method needs at least one top-level commit
         kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by ^&
+        kEnumVariantDuplicate,            // enum variant name is duplicated
+        kEnumCtorArgMismatch,             // enum constructor arguments mismatch
+        kEnumCtorLabelMismatch,           // enum constructor label mismatch
+        kEnumCtorTypeMismatch,            // enum constructor argument type mismatch
+        kEnumDotFieldAccessForbidden,     // direct dot field access on enum value is forbidden
+        kEnumLayoutCPayloadNotAllowed,    // layout(c) enum must be tag-only (no payload)
+        kEnumDiscriminantNonCForbidden,   // discriminant assignment is only allowed on layout(c) tag-only enum
+        kEnumSwitchBindUnknownField,      // enum switch bind references unknown payload field
+        kEnumProtoRequiresDefaultOnly,    // enum can only implement default-only proto in v0
+        kEnumCAbiDirectSignatureForbidden,// enum direct C ABI signature is forbidden in v0
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration

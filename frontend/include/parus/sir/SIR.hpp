@@ -66,6 +66,7 @@ namespace parus::sir {
         kAssign,        // place = value (or compound assigns lowered later)
         kPostfixInc,    // place++
         kCall,
+        kEnumCtor,
         kIndex,
         kField,         // place/value: a.b (future)
 
@@ -144,6 +145,9 @@ namespace parus::sir {
         uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
         bool call_is_ctor = false; // true when this call is lowered from `Class(...)` ctor expression
         TypeId ctor_owner_type = k_invalid_type; // owner class type for ctor call, invalid when call_is_ctor=false
+        bool call_is_enum_ctor = false; // true when lowered from `Enum::Variant(...)`
+        uint32_t enum_ctor_variant_index = 0xFFFF'FFFFu;
+        int64_t enum_ctor_tag_value = 0;
 
         // root symbol for capability expressions (kBorrow/kEscape)
         SymbolId origin_sym = k_invalid_symbol;
@@ -251,12 +255,27 @@ namespace parus::sir {
         kBool,
         kNull,
         kIdent,
+        kEnumVariant,
+    };
+
+    struct SwitchEnumBind {
+        std::string_view field_name{};
+        std::string_view bind_name{};
+        std::string_view storage_name{};
+        TypeId bind_type = k_invalid_type;
+        SymbolId bind_sym = k_invalid_symbol;
+        parus::Span span{};
     };
 
     struct SwitchCase {
         bool is_default = false;
         SwitchCasePatKind pat_kind = SwitchCasePatKind::kError;
         std::string_view pat_text{};
+        TypeId enum_type = k_invalid_type;
+        std::string_view enum_variant_name{};
+        int64_t enum_tag_value = 0;
+        uint32_t enum_bind_begin = 0;
+        uint32_t enum_bind_count = 0;
         BlockId body = k_invalid_block;
         parus::Span span{};
     };
@@ -453,6 +472,7 @@ namespace parus::sir {
         std::vector<ActsDecl> acts;
         std::vector<GlobalVarDecl> globals;
         std::vector<SwitchCase> switch_cases;
+        std::vector<SwitchEnumBind> switch_enum_binds;
         std::vector<EscapeHandleMeta> escape_handles;
 
         // helpers
@@ -470,6 +490,7 @@ namespace parus::sir {
         ActsId add_acts(const ActsDecl& a)              { acts.push_back(a); return (ActsId)acts.size() - 1; }
         uint32_t add_global(const GlobalVarDecl& g)     { globals.push_back(g); return (uint32_t)globals.size() - 1; }
         uint32_t add_switch_case(const SwitchCase& c)   { switch_cases.push_back(c); return (uint32_t)switch_cases.size() - 1; }
+        uint32_t add_switch_enum_bind(const SwitchEnumBind& b) { switch_enum_binds.push_back(b); return (uint32_t)switch_enum_binds.size() - 1; }
         uint32_t add_escape_handle(const EscapeHandleMeta& h) {
             escape_handles.push_back(h);
             return (uint32_t)escape_handles.size() - 1;

@@ -315,6 +315,7 @@ namespace parus::ast {
                 }
 
                 case StmtKind::kActsDecl:
+                case StmtKind::kEnumDecl:
                 case StmtKind::kBlock: {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;

@@ -1272,6 +1272,59 @@ namespace parus::oir {
                 return emit_call(v.type, callee, std::move(args), direct_callee);
             }
 
+            case parus::sir::ValueKind::kEnumCtor: {
+                const TypeId enum_ty =
+                    (v.ctor_owner_type != parus::sir::k_invalid_type)
+                        ? (TypeId)v.ctor_owner_type
+                        : (TypeId)v.type;
+                if (enum_ty == kInvalidId) {
+                    report_lowering_error("enum constructor lowering failed: invalid owner type");
+                    return emit_const_null(v.type);
+                }
+
+                ValueId enum_slot = emit_alloca(enum_ty);
+                const FieldLayoutDecl* layout = find_field_layout_(enum_ty);
+                if (layout == nullptr) {
+                    report_lowering_error("enum constructor lowering failed: missing enum layout");
+                    return enum_slot;
+                }
+
+                auto field_type_of = [&](std::string_view name) -> TypeId {
+                    for (const auto& m : layout->members) {
+                        if (m.name == name) return m.type;
+                    }
+                    return kInvalidId;
+                };
+
+                const TypeId tag_ty = field_type_of("__tag");
+                if (tag_ty != kInvalidId) {
+                    ValueId tag_v = emit_const_int(tag_ty, std::to_string(v.enum_ctor_tag_value));
+                    ValueId tag_p = emit_field(tag_ty, enum_slot, "__tag");
+                    emit_store(tag_p, tag_v);
+                }
+
+                const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                if (arg_end <= (uint64_t)sir->args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto& a = sir->args[v.arg_begin + i];
+                        if (a.value == parus::sir::k_invalid_value) continue;
+
+                        const std::string storage_name =
+                            std::string("__v") + std::to_string(v.enum_ctor_variant_index) +
+                            "_" + std::string(a.label);
+                        TypeId member_ty = field_type_of(storage_name);
+                        if (member_ty == kInvalidId) continue;
+
+                        ValueId rhs = lower_value(a.value);
+                        rhs = coerce_value_for_target(member_ty, rhs);
+                        ValueId place = emit_field(member_ty, enum_slot, storage_name);
+                        emit_store(place, rhs);
+                    }
+                }
+
+                return enum_slot;
+            }
+
             case parus::sir::ValueKind::kIndex: {
                 ValueId base = lower_value(v.a);
                 ValueId idx = lower_value(v.b);
@@ -1621,9 +1674,44 @@ namespace parus::oir {
                         }
                         case parus::sir::SwitchCasePatKind::kString:
                         case parus::sir::SwitchCasePatKind::kIdent:
+                        case parus::sir::SwitchCasePatKind::kEnumVariant:
                         case parus::sir::SwitchCasePatKind::kError:
                         default:
                             return emit_const_bool(bool_ty, false);
+                    }
+                };
+
+                const auto emit_enum_tag_match_cond = [&](ValueId enum_value, const parus::sir::SwitchCase& c) -> ValueId {
+                    TypeId tag_ty =
+                        (types != nullptr)
+                            ? (TypeId)types->builtin(parus::ty::Builtin::kI32)
+                            : kInvalidId;
+                    if (const auto* layout = find_field_layout_(c.enum_type)) {
+                        for (const auto& m : layout->members) {
+                            if (m.name == "__tag") {
+                                tag_ty = m.type;
+                                break;
+                            }
+                        }
+                    }
+                    ValueId tag_place = emit_field(tag_ty, enum_value, "__tag");
+                    ValueId tag_value = emit_load(tag_ty, tag_place);
+                    ValueId pat = emit_const_int(tag_ty, std::to_string(c.enum_tag_value));
+                    return emit_binop(bool_ty, Effect::Pure, BinOp::Eq, tag_value, pat);
+                };
+
+                const auto bind_enum_case_payload = [&](ValueId enum_value, const parus::sir::SwitchCase& c) {
+                    const uint64_t bb = c.enum_bind_begin;
+                    const uint64_t be = bb + c.enum_bind_count;
+                    if (bb > sir->switch_enum_binds.size() || be > sir->switch_enum_binds.size()) return;
+                    for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
+                        const auto& b = sir->switch_enum_binds[bi];
+                        if (b.bind_sym == parus::sir::k_invalid_symbol || b.bind_type == parus::sir::k_invalid_type) {
+                            continue;
+                        }
+                        ValueId place = emit_field((TypeId)b.bind_type, enum_value, std::string(b.storage_name));
+                        ValueId bound = emit_load((TypeId)b.bind_type, place);
+                        bind(b.bind_sym, Binding{false, false, bound, kInvalidId});
                     }
                 };
 
@@ -1640,13 +1728,52 @@ namespace parus::oir {
 
                         const BlockId match_bb = new_block();
                         const BlockId next_bb = new_block();
+                        if (c.pat_kind == parus::sir::SwitchCasePatKind::kEnumVariant &&
+                            c.enum_type != kInvalidId) {
+                            bool scrut_is_optional_enum = false;
+                            if (types != nullptr && scrut_ty != kInvalidId) {
+                                const auto& st = types->get(scrut_ty);
+                                scrut_is_optional_enum =
+                                    (st.kind == parus::ty::Kind::kOptional && st.elem == c.enum_type);
+                            }
 
-                        const ValueId cond = emit_case_match_cond(c);
-                        condbr(cond, match_bb, {}, next_bb, {});
+                            if (scrut_ty == c.enum_type) {
+                                const ValueId cond = emit_enum_tag_match_cond(scrut, c);
+                                condbr(cond, match_bb, {}, next_bb, {});
+                            } else if (scrut_is_optional_enum) {
+                                const BlockId tag_check_bb = new_block();
+                                const ValueId null_pat = emit_const_null(scrut_ty);
+                                const ValueId non_null = emit_binop(bool_ty, Effect::Pure, BinOp::Ne, scrut, null_pat);
+                                condbr(non_null, tag_check_bb, {}, next_bb, {});
+
+                                def->blocks.push_back(tag_check_bb);
+                                cur_bb = tag_check_bb;
+                                const ValueId narrowed = emit_cast(c.enum_type, Effect::MayTrap, CastKind::AsB, c.enum_type, scrut);
+                                const ValueId cond = emit_enum_tag_match_cond(narrowed, c);
+                                condbr(cond, match_bb, {}, next_bb, {});
+                            } else {
+                                const ValueId cond = emit_const_bool(bool_ty, false);
+                                condbr(cond, match_bb, {}, next_bb, {});
+                            }
+                        } else {
+                            const ValueId cond = emit_case_match_cond(c);
+                            condbr(cond, match_bb, {}, next_bb, {});
+                        }
 
                         def->blocks.push_back(match_bb);
                         cur_bb = match_bb;
                         push_scope();
+                        if (c.pat_kind == parus::sir::SwitchCasePatKind::kEnumVariant &&
+                            c.enum_type != kInvalidId) {
+                            ValueId enum_value = scrut;
+                            if (types != nullptr && scrut_ty != kInvalidId) {
+                                const auto& st = types->get(scrut_ty);
+                                if (st.kind == parus::ty::Kind::kOptional && st.elem == c.enum_type) {
+                                    enum_value = emit_cast(c.enum_type, Effect::MayTrap, CastKind::AsB, c.enum_type, scrut);
+                                }
+                            }
+                            bind_enum_case_payload(enum_value, c);
+                        }
                         lower_block(c.body);
                         pop_scope();
                         if (!has_term()) br(exit_bb, {});

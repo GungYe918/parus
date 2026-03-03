@@ -14,6 +14,7 @@ namespace parus::sir::detail {
             case A::kBool:   return SwitchCasePatKind::kBool;
             case A::kNull:   return SwitchCasePatKind::kNull;
             case A::kIdent:  return SwitchCasePatKind::kIdent;
+            case A::kEnumVariant: return SwitchCasePatKind::kEnumVariant;
             case A::kError:
             default:
                 return SwitchCasePatKind::kError;
@@ -233,6 +234,20 @@ namespace parus::sir::detail {
             case parus::ast::ExprKind::kCall:
             case parus::ast::ExprKind::kSpawn: {
                 v.kind = ValueKind::kCall;
+                if ((size_t)eid < tyck.expr_enum_ctor_owner_type.size()) {
+                    const auto owner_ty = tyck.expr_enum_ctor_owner_type[eid];
+                    if (owner_ty != parus::ty::kInvalidType) {
+                        v.kind = ValueKind::kEnumCtor;
+                        v.call_is_enum_ctor = true;
+                        v.ctor_owner_type = owner_ty;
+                        if ((size_t)eid < tyck.expr_enum_ctor_variant_index.size()) {
+                            v.enum_ctor_variant_index = tyck.expr_enum_ctor_variant_index[eid];
+                        }
+                        if ((size_t)eid < tyck.expr_enum_ctor_tag_value.size()) {
+                            v.enum_ctor_tag_value = tyck.expr_enum_ctor_tag_value[eid];
+                        }
+                    }
+                }
                 if ((size_t)eid < tyck.expr_ctor_owner_type.size()) {
                     const auto owner_ty = tyck.expr_ctor_owner_type[eid];
                     if (owner_ty != parus::ty::kInvalidType) {
@@ -271,7 +286,9 @@ namespace parus::sir::detail {
                 }
 
                 // callee
-                if (overload_sid != ast::k_invalid_stmt) {
+                if (v.kind == ValueKind::kEnumCtor) {
+                    v.a = k_invalid_value;
+                } else if (overload_sid != ast::k_invalid_stmt) {
                     v.a = k_invalid_value;
                 } else {
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -460,6 +477,14 @@ namespace parus::sir::detail {
                 join_child(v.a);
                 break;
 
+            case ValueKind::kEnumCtor:
+                if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        join_child(m.args[v.arg_begin + i].value);
+                    }
+                }
+                break;
+
             case ValueKind::kArrayLit:
             case ValueKind::kFieldInit:
                 if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
@@ -610,6 +635,28 @@ namespace parus::sir::detail {
                         sc.is_default = ac.is_default;
                         sc.pat_kind = lower_switch_pat_kind_(ac.pat_kind);
                         sc.pat_text = ac.pat_text;
+                        sc.enum_type = ac.enum_type;
+                        sc.enum_variant_name = ac.enum_variant_name;
+                        sc.enum_tag_value = ac.enum_tag_value;
+                        sc.enum_bind_begin = (uint32_t)m.switch_enum_binds.size();
+                        sc.enum_bind_count = 0;
+
+                        const uint64_t ebb = ac.enum_bind_begin;
+                        const uint64_t ebe = ebb + ac.enum_bind_count;
+                        if (ebb <= ast.switch_enum_binds().size() && ebe <= ast.switch_enum_binds().size()) {
+                            for (uint32_t bi = ac.enum_bind_begin; bi < ac.enum_bind_begin + ac.enum_bind_count; ++bi) {
+                                const auto& ab = ast.switch_enum_binds()[bi];
+                                SwitchEnumBind sb{};
+                                sb.field_name = ab.field_name;
+                                sb.bind_name = ab.bind_name;
+                                sb.storage_name = ab.storage_name;
+                                sb.bind_type = ab.bind_type;
+                                sb.bind_sym = ab.resolved_symbol;
+                                sb.span = ab.span;
+                                m.add_switch_enum_bind(sb);
+                                sc.enum_bind_count++;
+                            }
+                        }
                         sc.span = ac.span;
                         if (ac.body != parus::ast::k_invalid_stmt) {
                             sc.body = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, ac.body);

@@ -1004,7 +1004,8 @@ namespace parus::sir {
                         return;
                     }
 
-                    case ValueKind::kCall: {
+                    case ValueKind::kCall:
+                    case ValueKind::kEnumCtor: {
                         analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
 
                         // call 인자에서 만들어진 임시 borrow는 call 식 종료와 함께 정리한다.

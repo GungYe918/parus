@@ -1,0 +1,22 @@
+enum Status {
+    case Ok,
+    case Err(code: i32),
+}
+
+acts for Status {
+    def is_ok(self) -> bool {
+        switch (self) {
+        case Status::Ok: { return true; }
+        case Status::Err(code: c): { return false; }
+        }
+        return false;
+    }
+}
+
+def main() -> i32 {
+    set s = Status::Ok();
+    if (s.is_ok()) {
+        return 1i32;
+    }
+    return 0i32;
+}

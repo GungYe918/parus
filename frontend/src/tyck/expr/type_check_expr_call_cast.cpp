@@ -30,6 +30,18 @@ namespace parus::tyck {
             current_expr_id_ < expr_ctor_owner_type_cache_.size()) {
             expr_ctor_owner_type_cache_[current_expr_id_] = ty::kInvalidType;
         }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_enum_ctor_owner_type_cache_.size()) {
+            expr_enum_ctor_owner_type_cache_[current_expr_id_] = ty::kInvalidType;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_enum_ctor_variant_index_cache_.size()) {
+            expr_enum_ctor_variant_index_cache_[current_expr_id_] = 0xFFFF'FFFFu;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_enum_ctor_tag_value_cache_.size()) {
+            expr_enum_ctor_tag_value_cache_[current_expr_id_] = 0;
+        }
 
         // Snapshot call-site args before any generic instantiation can mutate AST storage.
         std::vector<ast::Arg> call_args;
@@ -461,6 +473,208 @@ namespace parus::tyck {
         // ------------------------------------------------------------
         if (!is_dot_method_call) {
             const ast::Expr& callee_expr = ast_.expr(e.a);
+
+            if (!is_spawn_expr && callee_expr.kind == ast::ExprKind::kIdent) {
+                const std::string callee_text(callee_expr.text);
+                const size_t split = callee_text.rfind("::");
+                if (split != std::string::npos && split > 0 && split + 2 < callee_text.size()) {
+                    const std::string owner_text = callee_text.substr(0, split);
+                    const std::string variant_text = callee_text.substr(split + 2);
+
+                    ty::TypeId enum_owner_type = ty::kInvalidType;
+                    ast::StmtId enum_owner_sid = ast::k_invalid_stmt;
+
+                    auto resolve_plain_enum_owner = [&](const std::string& raw_name) -> ast::StmtId {
+                        std::string key = raw_name;
+                        if (auto rewritten = rewrite_imported_path_(key)) {
+                            key = *rewritten;
+                        }
+
+                        // 1) exact enum-decl name key lookup
+                        auto it = enum_decl_by_name_.find(key);
+                        if (it != enum_decl_by_name_.end()) return it->second;
+
+                        // 1.5) suffix lookup for qualified names (e.g. pkg::Token)
+                        {
+                            ast::StmtId found = ast::k_invalid_stmt;
+                            const std::string suffix = "::" + key;
+                            for (const auto& kv : enum_decl_by_name_) {
+                                const std::string& q = kv.first;
+                                if (q == key) {
+                                    found = kv.second;
+                                    break;
+                                }
+                                if (q.size() > suffix.size() &&
+                                    q.compare(q.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                                    if (found != ast::k_invalid_stmt && found != kv.second) {
+                                        found = ast::k_invalid_stmt;
+                                        break;
+                                    }
+                                    found = kv.second;
+                                }
+                            }
+                            if (found != ast::k_invalid_stmt) return found;
+                        }
+
+                        // 2) direct type-id lookup by the text key
+                        const ty::TypeId key_ty = types_.intern_ident(key);
+                        if (key_ty != ty::kInvalidType) {
+                            auto eit = enum_decl_by_type_.find(key_ty);
+                            if (eit != enum_decl_by_type_.end()) return eit->second;
+                        }
+
+                        // 3) symbol table fallback
+                        if (auto sym_sid = lookup_symbol_(key)) {
+                            const auto& ss = sym_.symbol(*sym_sid);
+                            if (ss.kind == sema::SymbolKind::kType &&
+                                ss.declared_type != ty::kInvalidType) {
+                                auto eit2 = enum_decl_by_type_.find(ss.declared_type);
+                                if (eit2 != enum_decl_by_type_.end()) return eit2->second;
+                            }
+                            auto eit = enum_decl_by_name_.find(ss.name);
+                            if (eit != enum_decl_by_name_.end()) return eit->second;
+                        }
+                        return ast::k_invalid_stmt;
+                    };
+
+                    std::string owner_base;
+                    std::vector<ty::TypeId> owner_args;
+                    const ty::TypeId owner_maybe_generic = types_.intern_ident(owner_text);
+                    if (decompose_named_user_type_(owner_maybe_generic, owner_base, owner_args) && !owner_args.empty()) {
+                        std::string base_lookup = owner_base;
+                        if (auto rewritten = rewrite_imported_path_(base_lookup)) {
+                            base_lookup = *rewritten;
+                        }
+                        auto bit = enum_decl_by_name_.find(base_lookup);
+                        if (bit != enum_decl_by_name_.end()) {
+                            const auto& templ = ast_.stmt(bit->second);
+                            if (templ.kind == ast::StmtKind::kEnumDecl &&
+                                templ.decl_generic_param_count > 0) {
+                                if (auto inst_sid = ensure_generic_enum_instance_(bit->second, owner_args, callee_expr.span)) {
+                                    enum_owner_sid = *inst_sid;
+                                    enum_owner_type = ast_.stmt(*inst_sid).type;
+                                }
+                            } else if (templ.kind == ast::StmtKind::kEnumDecl &&
+                                       templ.decl_generic_param_count == 0) {
+                                diag_(diag::Code::kGenericArityMismatch, callee_expr.span,
+                                      "0", std::to_string(owner_args.size()));
+                                err_(callee_expr.span, "non-generic enum constructor path does not accept type arguments");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                        }
+                    } else {
+                        enum_owner_sid = resolve_plain_enum_owner(owner_text);
+                        if (enum_owner_sid != ast::k_invalid_stmt &&
+                            (size_t)enum_owner_sid < ast_.stmts().size()) {
+                            const auto& decl = ast_.stmt(enum_owner_sid);
+                            if (decl.kind == ast::StmtKind::kEnumDecl &&
+                                decl.decl_generic_param_count > 0) {
+                                diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_expr.span, owner_text);
+                                err_(callee_expr.span, "generic enum constructor requires explicit owner type arguments");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                            enum_owner_type = decl.type;
+                        }
+                    }
+
+                    if (enum_owner_sid != ast::k_invalid_stmt &&
+                        (size_t)enum_owner_sid < ast_.stmts().size() &&
+                        enum_owner_type != ty::kInvalidType) {
+                        if (enum_abi_meta_by_type_.find(enum_owner_type) == enum_abi_meta_by_type_.end()) {
+                            check_stmt_enum_decl_(enum_owner_sid);
+                        }
+
+                        auto mit = enum_abi_meta_by_type_.find(enum_owner_type);
+                        if (mit == enum_abi_meta_by_type_.end()) {
+                            diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, "failed to build enum metadata");
+                            err_(callee_expr.span, "failed to build enum metadata");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        const auto& meta = mit->second;
+                        auto vit = meta.variant_index_by_name.find(variant_text);
+                        if (vit == meta.variant_index_by_name.end()) {
+                            diag_(diag::Code::kTypeErrorGeneric, callee_expr.span,
+                                  std::string("unknown enum constructor variant '") + variant_text + "'");
+                            err_(callee_expr.span, "unknown enum constructor variant");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+                        const auto& vm = meta.variants[vit->second];
+
+                        if (!outside_positional.empty()) {
+                            diag_(diag::Code::kEnumCtorArgMismatch, e.span, callee_text);
+                            err_(e.span, "enum constructor only accepts labeled payload arguments");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        bool ctor_ok = true;
+                        if (outside_labeled.size() != vm.fields.size()) {
+                            diag_(diag::Code::kEnumCtorArgMismatch, e.span, callee_text);
+                            err_(e.span, "enum constructor payload argument count mismatch");
+                            ctor_ok = false;
+                        }
+
+                        std::unordered_set<std::string> used_labels;
+                        used_labels.reserve(outside_labeled.size());
+                        for (const auto* arg : outside_labeled) {
+                            auto fit = vm.field_index_by_name.find(std::string(arg->label));
+                            if (fit == vm.field_index_by_name.end()) {
+                                diag_(diag::Code::kEnumCtorLabelMismatch, arg->span, arg->label);
+                                err_(arg->span, "unknown enum constructor payload label");
+                                ctor_ok = false;
+                                continue;
+                            }
+                            if (!used_labels.insert(std::string(arg->label)).second) {
+                                diag_(diag::Code::kEnumCtorLabelMismatch, arg->span, arg->label);
+                                err_(arg->span, "duplicate enum constructor payload label");
+                                ctor_ok = false;
+                                continue;
+                            }
+                            const auto& field = vm.fields[fit->second];
+                            if (arg->expr == ast::k_invalid_expr) {
+                                diag_(diag::Code::kEnumCtorArgMismatch, arg->span, callee_text);
+                                err_(arg->span, "missing enum constructor payload value");
+                                ctor_ok = false;
+                                continue;
+                            }
+                            const CoercionPlan plan = classify_assign_with_coercion_(
+                                AssignSite::CallArg, field.type, arg->expr, arg->span);
+                            if (!plan.ok) {
+                                diag_(diag::Code::kEnumCtorTypeMismatch, arg->span,
+                                      field.name, types_.to_string(field.type),
+                                      type_for_user_diag_(plan.src_after, arg->expr));
+                                err_(arg->span, "enum constructor payload type mismatch");
+                                ctor_ok = false;
+                            }
+                        }
+
+                        if (!ctor_ok) {
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        if (current_expr_id_ != ast::k_invalid_expr &&
+                            current_expr_id_ < expr_enum_ctor_owner_type_cache_.size()) {
+                            expr_enum_ctor_owner_type_cache_[current_expr_id_] = enum_owner_type;
+                        }
+                        if (current_expr_id_ != ast::k_invalid_expr &&
+                            current_expr_id_ < expr_enum_ctor_variant_index_cache_.size()) {
+                            expr_enum_ctor_variant_index_cache_[current_expr_id_] = vm.index;
+                        }
+                        if (current_expr_id_ != ast::k_invalid_expr &&
+                            current_expr_id_ < expr_enum_ctor_tag_value_cache_.size()) {
+                            expr_enum_ctor_tag_value_cache_[current_expr_id_] = vm.tag;
+                        }
+                        return enum_owner_type;
+                    }
+                }
+            }
+
             if (callee_expr.kind == ast::ExprKind::kIdent) {
                 ExplicitActsPath explicit_acts{};
                 if (parse_explicit_acts_path(callee_expr.text, explicit_acts)) {
@@ -483,7 +697,8 @@ namespace parus::tyck {
                     }
 
                     const auto& owner_sym = sym_.symbol(*owner_sid);
-                    if (owner_sym.kind != sema::SymbolKind::kField) {
+                    if (owner_sym.kind != sema::SymbolKind::kField &&
+                        owner_sym.kind != sema::SymbolKind::kType) {
                         std::ostringstream oss;
                         oss << "acts path owner must be a type path (use T::acts(...), not value::acts(...))";
                         diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
@@ -494,7 +709,7 @@ namespace parus::tyck {
                     ty::TypeId owner_t = canonicalize_acts_owner_type_(owner_sym.declared_type);
                     if (owner_t == ty::kInvalidType) {
                         std::ostringstream oss;
-                        oss << "acts path owner must resolve to a field/class type in v0, got '"
+                        oss << "acts path owner must resolve to a struct/class/enum type in v0, got '"
                             << owner_sym.name << "'";
                         diag_(diag::Code::kTypeErrorGeneric, callee_expr.span, oss.str());
                         err_(callee_expr.span, oss.str());

@@ -1,0 +1,14 @@
+proto Marker {
+    def tag(self) -> i32 {
+        return 1i32;
+    }
+};
+
+enum E: Marker {
+    case A,
+}
+
+def main() -> i32 {
+    set e = E::A();
+    return 0i32;
+}

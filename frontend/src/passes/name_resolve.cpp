@@ -359,6 +359,7 @@ namespace parus::passes {
 
         if ((s.kind == ast::StmtKind::kFnDecl ||
              s.kind == ast::StmtKind::kFieldDecl ||
+             s.kind == ast::StmtKind::kEnumDecl ||
              s.kind == ast::StmtKind::kProtoDecl ||
              s.kind == ast::StmtKind::kClassDecl ||
              s.kind == ast::StmtKind::kActorDecl ||
@@ -567,6 +568,29 @@ namespace parus::passes {
                     // false positive UndefinedName이 발생하므로 여기서 제외한다.
                     if (is_explicit_acts_path_expr_(e.text)) {
                         break;
+                    }
+
+                    // v0: enum constructor candidate
+                    //   Type::Variant(...)
+                    // 는 tyck에서 enum ctor/path-call 정책으로 최종 판정한다.
+                    // 여기서 강제 lookup하면 false positive UndefinedName이 생길 수 있다.
+                    if (e.text.find("::") != std::string_view::npos) {
+                        const std::string_view full = e.text;
+                        const size_t split = full.rfind("::");
+                        if (split != std::string_view::npos && split > 0 && split + 2 < full.size()) {
+                            std::string owner(full.substr(0, split));
+                            // Strip owner generic args for lookup: Token<i32> -> Token
+                            const size_t lt = owner.find('<');
+                            if (lt != std::string::npos) owner.resize(lt);
+
+                            auto owner_sid = lookup_symbol_(sym, owner, namespace_stack, import_aliases);
+                            if (owner_sid.has_value()) {
+                                const auto& owner_sym = sym.symbol(*owner_sid);
+                                if (owner_sym.kind == sema::SymbolKind::kType) {
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     auto sid = lookup_symbol_(sym, e.text, namespace_stack, import_aliases);
@@ -928,6 +952,22 @@ namespace parus::passes {
                 return;
             }
 
+            case ast::StmtKind::kEnumDecl: {
+                const std::string qname = qualify_name_(namespace_stack, s.name);
+                uint32_t enum_sym = sema::SymbolTable::kNoScope;
+                if (auto sid = sym.lookup(qname)) {
+                    enum_sym = *sid;
+                } else {
+                    auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                    enum_sym = ins.symbol_id;
+                }
+                if (enum_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, enum_sym, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+                return;
+            }
+
             case ast::StmtKind::kProtoDecl: {
                 const std::string qname = qualify_name_(namespace_stack, s.name);
                 uint32_t proto_sym = sema::SymbolTable::kNoScope;
@@ -1190,6 +1230,20 @@ namespace parus::passes {
                 if (cb < r.switch_case_count && ce <= r.switch_case_count) {
                     const auto& cs = ast.switch_cases();
                     for (uint32_t i = cb; i < ce; ++i) {
+                        ScopeGuard case_scope(sym);
+                        if (cs[i].pat_kind == ast::CasePatKind::kEnumVariant &&
+                            cs[i].enum_bind_count > 0) {
+                            auto& binds = const_cast<ast::AstArena&>(ast).switch_enum_binds_mut();
+                            const uint64_t bb = cs[i].enum_bind_begin;
+                            const uint64_t be = bb + cs[i].enum_bind_count;
+                            if (bb <= binds.size() && be <= binds.size()) {
+                                for (uint32_t bi = cs[i].enum_bind_begin; bi < cs[i].enum_bind_begin + cs[i].enum_bind_count; ++bi) {
+                                    auto& b = binds[bi];
+                                    auto ins = declare_(sema::SymbolKind::kVar, b.bind_name, ast::k_invalid_type, b.span, sym, bag, opt);
+                                    b.resolved_symbol = ins.symbol_id;
+                                }
+                            }
+                        }
                         walk_stmt(ast, r, cs[i].body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                 }
@@ -1407,6 +1461,23 @@ namespace parus::passes {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             if (!sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kField, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
+                }
+            }
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kEnumDecl) {
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (!sym.lookup(qname)) {
+                auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
                     se.decl_file_id = s.span.file_id;

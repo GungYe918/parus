@@ -44,6 +44,7 @@ namespace parusc::dump {
             case K::kAssign: return "Assign";
             case K::kPostfixInc: return "PostfixInc";
             case K::kCall: return "Call";
+            case K::kEnumCtor: return "EnumCtor";
             case K::kIndex: return "Index";
             case K::kField: return "Field";
             case K::kIfExpr: return "IfExpr";
@@ -66,6 +67,8 @@ namespace parusc::dump {
             case K::kDoScopeStmt: return "DoScopeStmt";
             case K::kDoWhileStmt: return "DoWhileStmt";
             case K::kManualStmt: return "ManualStmt";
+            case K::kCommitStmt: return "CommitStmt";
+            case K::kRecastStmt: return "RecastStmt";
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
@@ -222,10 +225,14 @@ namespace parusc::dump {
             case K::kReturn: return "Return";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
+            case K::kCommitStmt: return "CommitStmt";
+            case K::kRecastStmt: return "RecastStmt";
             case K::kFnDecl: return "FnDecl";
             case K::kFieldDecl: return "FieldDecl";
+            case K::kEnumDecl: return "EnumDecl";
             case K::kProtoDecl: return "ProtoDecl";
             case K::kClassDecl: return "ClassDecl";
+            case K::kActorDecl: return "ActorDecl";
             case K::kActsDecl: return "ActsDecl";
             case K::kSwitch: return "Switch";
             case K::kError: return "Error";
@@ -252,6 +259,7 @@ namespace parusc::dump {
             case K::kBinary: return "Binary";
             case K::kTernary: return "Ternary";
             case K::kCall: return "Call";
+            case K::kSpawn: return "Spawn";
             case K::kIndex: return "Index";
             case K::kMacroCall: return "MacroCall";
             case K::kError: return "Error";
@@ -338,6 +346,7 @@ namespace parusc::dump {
                 break;
 
             case ValueKind::kCall:
+            case ValueKind::kEnumCtor:
                 push_value(v.a);
                 if ((uint64_t)v.arg_begin + (uint64_t)v.arg_count <= (uint64_t)m.args.size()) {
                     for (uint32_t i = 0; i < v.arg_count; ++i) {
@@ -630,7 +639,10 @@ namespace parusc::dump {
                 std::cout << " borrow_mut=" << (v.borrow_is_mut ? "true" : "false");
             }
 
-            if (v.kind == sir::ValueKind::kCall || v.kind == sir::ValueKind::kArrayLit) {
+            if (v.kind == sir::ValueKind::kCall ||
+                v.kind == sir::ValueKind::kEnumCtor ||
+                v.kind == sir::ValueKind::kArrayLit ||
+                v.kind == sir::ValueKind::kFieldInit) {
                 std::cout << " arg_begin=" << v.arg_begin
                         << " arg_count=" << v.arg_count;
             }

@@ -38,6 +38,7 @@ namespace parus::tyck {
         acts_selection_scope_stack_.clear();
         acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
+        enum_abi_meta_by_type_.clear();
         generic_fn_template_sid_set_.clear();
         generic_fn_instance_cache_.clear();
         generic_fn_checked_instances_.clear();
@@ -49,10 +50,12 @@ namespace parus::tyck {
         generic_proto_template_sid_set_.clear();
         generic_acts_template_sid_set_.clear();
         generic_field_template_sid_set_.clear();
+        generic_enum_template_sid_set_.clear();
         generic_class_instance_cache_.clear();
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
         generic_field_instance_cache_.clear();
+        generic_enum_instance_cache_.clear();
         generic_decl_checked_instances_.clear();
         generic_decl_checking_instances_.clear();
         pending_generic_decl_instance_queue_.clear();
@@ -61,6 +64,7 @@ namespace parus::tyck {
         generic_instantiated_proto_sids_.clear();
         generic_instantiated_acts_sids_.clear();
         generic_instantiated_field_sids_.clear();
+        generic_instantiated_enum_sids_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
         namespace_stack_.clear();
@@ -78,6 +82,8 @@ namespace parus::tyck {
         actor_method_map_.clear();
         actor_member_fn_sid_set_.clear();
         proto_member_fn_sid_set_.clear();
+        enum_decl_by_name_.clear();
+        enum_decl_by_type_.clear();
         block_depth_ = 0;
         in_actor_method_ = false;
         in_actor_pub_method_ = false;
@@ -96,11 +102,17 @@ namespace parus::tyck {
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_overload_target_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_ctor_owner_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_enum_ctor_owner_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_enum_ctor_variant_index_cache_.assign(ast_.exprs().size(), 0xFFFF'FFFFu);
+        expr_enum_ctor_tag_value_cache_.assign(ast_.exprs().size(), 0);
         expr_resolved_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
         result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
+        result_.expr_enum_ctor_owner_type = expr_enum_ctor_owner_type_cache_;
+        result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
+        result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
@@ -263,10 +275,14 @@ namespace parus::tyck {
         sort_unique_sid_vec(generic_instantiated_proto_sids_);
         sort_unique_sid_vec(generic_instantiated_acts_sids_);
         sort_unique_sid_vec(generic_instantiated_field_sids_);
+        sort_unique_sid_vec(generic_instantiated_enum_sids_);
 
         result_.expr_types = expr_type_cache_;
         result_.expr_overload_target = expr_overload_target_cache_;
         result_.expr_ctor_owner_type = expr_ctor_owner_type_cache_;
+        result_.expr_enum_ctor_owner_type = expr_enum_ctor_owner_type_cache_;
+        result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
+        result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
@@ -275,6 +291,7 @@ namespace parus::tyck {
         result_.generic_instantiated_proto_sids = generic_instantiated_proto_sids_;
         result_.generic_instantiated_acts_sids = generic_instantiated_acts_sids_;
         result_.generic_instantiated_field_sids = generic_instantiated_field_sids_;
+        result_.generic_instantiated_enum_sids = generic_instantiated_enum_sids_;
         result_.generic_acts_template_sids.assign(
             generic_acts_template_sid_set_.begin(),
             generic_acts_template_sid_set_.end()
@@ -834,6 +851,28 @@ namespace parus::tyck {
                 for (uint32_t i = 0; i < old_s.case_count; ++i) {
                     ast::SwitchCase c = src_cases[i];
                     c.body = clone_stmt_with_type_subst_(c.body, subst, expr_map, stmt_map);
+                    if (c.enum_bind_count > 0) {
+                        const auto& binds = ast_.switch_enum_binds();
+                        const uint64_t bb = c.enum_bind_begin;
+                        const uint64_t be = bb + c.enum_bind_count;
+                        if (bb <= binds.size() && be <= binds.size()) {
+                            std::vector<ast::SwitchEnumBind> src_binds;
+                            src_binds.reserve(c.enum_bind_count);
+                            for (uint32_t bi = 0; bi < c.enum_bind_count; ++bi) {
+                                src_binds.push_back(binds[c.enum_bind_begin + bi]);
+                            }
+                            c.enum_bind_begin = static_cast<uint32_t>(ast_.switch_enum_binds().size());
+                            for (auto b : src_binds) {
+                                if (b.bind_type != ty::kInvalidType) {
+                                    b.bind_type = substitute_generic_type_(b.bind_type, subst);
+                                }
+                                ast_.add_switch_enum_bind(b);
+                            }
+                        } else {
+                            c.enum_bind_begin = 0;
+                            c.enum_bind_count = 0;
+                        }
+                    }
                     cloned_cases.push_back(c);
                 }
                 s.case_begin = static_cast<uint32_t>(ast_.switch_cases().size());
@@ -867,6 +906,77 @@ namespace parus::tyck {
             } else {
                 s.field_member_begin = 0;
                 s.field_member_count = 0;
+            }
+        }
+
+        if (old_s.enum_variant_count > 0) {
+            const auto& variants = ast_.enum_variant_decls();
+            const uint64_t begin = old_s.enum_variant_begin;
+            const uint64_t end = begin + old_s.enum_variant_count;
+            if (begin <= variants.size() && end <= variants.size()) {
+                std::vector<ast::EnumVariantDecl> src_variants;
+                src_variants.reserve(old_s.enum_variant_count);
+                for (uint32_t i = 0; i < old_s.enum_variant_count; ++i) {
+                    src_variants.push_back(variants[old_s.enum_variant_begin + i]);
+                }
+
+                bool has_payload_block = false;
+                uint32_t payload_src_begin = 0;
+                uint32_t payload_src_end = 0;
+                for (const auto& v : src_variants) {
+                    if (v.payload_count == 0) continue;
+                    const uint32_t vb = v.payload_begin;
+                    const uint32_t ve = v.payload_begin + v.payload_count;
+                    if (!has_payload_block) {
+                        has_payload_block = true;
+                        payload_src_begin = vb;
+                        payload_src_end = ve;
+                    } else {
+                        payload_src_begin = std::min(payload_src_begin, vb);
+                        payload_src_end = std::max(payload_src_end, ve);
+                    }
+                }
+
+                uint32_t payload_dst_begin = 0;
+                if (has_payload_block) {
+                    const auto& members = ast_.field_members();
+                    if (payload_src_begin <= members.size() &&
+                        payload_src_end <= members.size() &&
+                        payload_src_begin <= payload_src_end) {
+                        std::vector<ast::FieldMember> src_members;
+                        src_members.reserve(payload_src_end - payload_src_begin);
+                        for (uint32_t i = payload_src_begin; i < payload_src_end; ++i) {
+                            src_members.push_back(members[i]);
+                        }
+                        payload_dst_begin = static_cast<uint32_t>(ast_.field_members().size());
+                        for (auto m : src_members) {
+                            m.type = substitute_generic_type_(m.type, subst);
+                            ast_.add_field_member(m);
+                        }
+                    } else {
+                        has_payload_block = false;
+                    }
+                }
+
+                s.enum_variant_begin = static_cast<uint32_t>(ast_.enum_variant_decls().size());
+                s.enum_variant_count = old_s.enum_variant_count;
+                for (auto v : src_variants) {
+                    if (v.payload_count > 0) {
+                        if (has_payload_block &&
+                            v.payload_begin >= payload_src_begin &&
+                            v.payload_begin + v.payload_count <= payload_src_end) {
+                            const uint32_t rel = v.payload_begin - payload_src_begin;
+                            v.payload_begin = payload_dst_begin + rel;
+                        } else {
+                            v.payload_begin = 0;
+                            v.payload_count = 0;
+                        }
+                    }
+                    ast_.add_enum_variant_decl(v);
+                }
+            } else {
+                s.enum_variant_begin = 0;
+                s.enum_variant_count = 0;
             }
         }
 
@@ -1025,6 +1135,15 @@ namespace parus::tyck {
         }
         if (expr_ctor_owner_type_cache_.size() < expr_size) {
             expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) {
+            expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) {
+            expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        }
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) {
+            expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         }
         if (expr_resolved_symbol_cache_.size() < expr_size) {
             expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
@@ -1374,6 +1493,9 @@ namespace parus::tyck {
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -1427,6 +1549,147 @@ namespace parus::tyck {
             return templ_sid;
         }
         return ensure_generic_field_instance_(templ_sid, args, use_span);
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_enum_instance_(
+        ast::StmtId template_sid,
+        const std::vector<ty::TypeId>& concrete_args,
+        Span use_span
+    ) {
+        if (template_sid == ast::k_invalid_stmt || (size_t)template_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const ast::Stmt templ = ast_.stmt(template_sid);
+        if (templ.kind != ast::StmtKind::kEnumDecl || templ.decl_generic_param_count == 0) {
+            return template_sid;
+        }
+
+        const auto generic_names = collect_decl_generic_param_names_(templ);
+        if (generic_names.size() != concrete_args.size()) {
+            std::string base_qname = std::string(templ.name);
+            if (templ.type != ty::kInvalidType) {
+                base_qname = types_.to_string(templ.type);
+            }
+            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                  base_qname,
+                  std::to_string(generic_names.size()),
+                  std::to_string(concrete_args.size()));
+            err_(use_span, "generic enum arity mismatch");
+            return std::nullopt;
+        }
+
+        std::ostringstream key_oss;
+        key_oss << template_sid << "|";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) key_oss << ",";
+            key_oss << concrete_args[i];
+        }
+        const std::string cache_key = key_oss.str();
+        if (auto it = generic_enum_instance_cache_.find(cache_key);
+            it != generic_enum_instance_cache_.end()) {
+            return it->second;
+        }
+
+        std::unordered_map<std::string, ty::TypeId> subst;
+        subst.reserve(generic_names.size());
+        for (size_t i = 0; i < generic_names.size(); ++i) {
+            subst.emplace(generic_names[i], concrete_args[i]);
+        }
+
+        std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
+        std::unordered_map<ast::StmtId, ast::StmtId> stmt_clone_map;
+        const ast::StmtId inst_sid = clone_stmt_with_type_subst_(
+            template_sid, subst, expr_clone_map, stmt_clone_map);
+        if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        auto& inst = ast_.stmt_mut(inst_sid);
+        inst.decl_generic_param_begin = 0;
+        inst.decl_generic_param_count = 0;
+        inst.decl_constraint_begin = 0;
+        inst.decl_constraint_count = 0;
+
+        std::string base_qname = std::string(templ.name);
+        if (templ.type != ty::kInvalidType) {
+            base_qname = types_.to_string(templ.type);
+        }
+        std::ostringstream qn;
+        qn << base_qname << "<";
+        for (size_t i = 0; i < concrete_args.size(); ++i) {
+            if (i) qn << ",";
+            qn << types_.to_string(concrete_args[i]);
+        }
+        qn << ">";
+        const std::string inst_qname = qn.str();
+        const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
+        inst.name = ast_.add_owned_string(inst_qname);
+        inst.type = inst_type;
+
+        enum_decl_by_name_[inst_qname] = inst_sid;
+        enum_decl_by_type_[inst_type] = inst_sid;
+
+        if (auto existing = sym_.lookup_in_current(inst_qname)) {
+            (void)sym_.update_declared_type(*existing, inst_type);
+        } else {
+            (void)sym_.insert(sema::SymbolKind::kType, inst_qname, inst_type, inst.span);
+        }
+
+        const size_t expr_size = ast_.exprs().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        const size_t param_size = ast_.params().size();
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+
+        generic_enum_instance_cache_[cache_key] = inst_sid;
+        generic_instantiated_enum_sids_.push_back(inst_sid);
+        if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
+            pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
+            pending_generic_decl_instance_queue_.push_back(inst_sid);
+        }
+        return inst_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_enum_instance_from_type_(
+        ty::TypeId maybe_generic_enum_type,
+        Span use_span
+    ) {
+        if (maybe_generic_enum_type == ty::kInvalidType) return std::nullopt;
+
+        std::string base;
+        std::vector<ty::TypeId> args;
+        if (!decompose_named_user_type_(maybe_generic_enum_type, base, args) || args.empty()) {
+            auto it = enum_decl_by_type_.find(maybe_generic_enum_type);
+            if (it != enum_decl_by_type_.end()) return it->second;
+            return std::nullopt;
+        }
+
+        std::string base_key = base;
+        if (auto rewritten = rewrite_imported_path_(base_key)) {
+            base_key = *rewritten;
+        }
+
+        auto templ_it = enum_decl_by_name_.find(base_key);
+        if (templ_it == enum_decl_by_name_.end()) {
+            return std::nullopt;
+        }
+        const ast::StmtId templ_sid = templ_it->second;
+        if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const auto& templ = ast_.stmt(templ_sid);
+        if (templ.kind != ast::StmtKind::kEnumDecl) {
+            return std::nullopt;
+        }
+        if (templ.decl_generic_param_count == 0) {
+            return templ_sid;
+        }
+        return ensure_generic_enum_instance_(templ_sid, args, use_span);
     }
 
     std::optional<ast::StmtId> TypeChecker::ensure_generic_class_instance_(
@@ -1658,6 +1921,9 @@ namespace parus::tyck {
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -1783,6 +2049,9 @@ namespace parus::tyck {
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -1966,6 +2235,9 @@ namespace parus::tyck {
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -2282,6 +2554,7 @@ namespace parus::tyck {
 
             if ((s.kind == ast::StmtKind::kFnDecl ||
                  s.kind == ast::StmtKind::kFieldDecl ||
+                 s.kind == ast::StmtKind::kEnumDecl ||
                  s.kind == ast::StmtKind::kProtoDecl ||
                  s.kind == ast::StmtKind::kClassDecl ||
                  s.kind == ast::StmtKind::kActorDecl ||
@@ -2551,6 +2824,41 @@ namespace parus::tyck {
                     meta.layout = s.field_layout;
                     meta.align = s.field_align;
                     field_abi_meta_by_type_[field_ty] = meta;
+                }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kEnumDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    generic_enum_template_sid_set_.insert(sid);
+                }
+
+                const std::string qname = qualify_decl_name_(s.name);
+                ty::TypeId enum_ty = s.type;
+                if (enum_ty == ty::kInvalidType && !qname.empty()) {
+                    enum_ty = types_.intern_ident(qname);
+                    ast_.stmt_mut(sid).type = enum_ty;
+                }
+
+                enum_decl_by_name_[qname] = sid;
+                if (enum_ty != ty::kInvalidType) {
+                    enum_decl_by_type_[enum_ty] = sid;
+                }
+
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kType) {
+                        err_(s.span, "duplicate symbol (enum): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (enum_ty != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, enum_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, enum_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (enum): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
                 }
                 return;
             }

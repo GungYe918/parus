@@ -283,6 +283,69 @@ namespace parus::sir::detail {
         return m.add_field(f);
     }
 
+    /// @brief AST enum 선언의 내부 레이아웃 메타를 SIR field 메타로 lower한다.
+    FieldId lower_enum_field_decl_(
+        Module& m,
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const parus::ty::TypePool& types,
+        parus::ast::StmtId sid
+    ) {
+        const auto& s = ast.stmt(sid);
+        if (s.kind != ast::StmtKind::kEnumDecl) {
+            return k_invalid_field;
+        }
+        auto& ast_mut = const_cast<parus::ast::AstArena&>(ast);
+
+        FieldDecl f{};
+        f.span = s.span;
+        f.is_export = s.is_export;
+        f.sym = resolve_symbol_from_stmt(nres, sid);
+        if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+            f.name = sym.symbol(f.sym).name;
+        } else {
+            f.name = s.name;
+        }
+        f.layout = lower_field_layout(s.field_layout);
+        f.align = s.field_align;
+        f.self_type = s.type;
+        f.member_begin = (uint32_t)m.field_members.size();
+        f.member_count = 0;
+
+        // Every enum uses an internal tag lane.
+        FieldMember tag{};
+        tag.name = "__tag";
+        tag.type = types.builtin(parus::ty::Builtin::kI32);
+        tag.span = s.span;
+        m.add_field_member(tag);
+        f.member_count++;
+
+        const uint64_t vb = s.enum_variant_begin;
+        const uint64_t ve = vb + s.enum_variant_count;
+        if (vb <= ast.enum_variant_decls().size() && ve <= ast.enum_variant_decls().size()) {
+            for (uint32_t vi = 0; vi < s.enum_variant_count; ++vi) {
+                const auto& v = ast.enum_variant_decls()[s.enum_variant_begin + vi];
+                const uint64_t pb = v.payload_begin;
+                const uint64_t pe = pb + v.payload_count;
+                if (pb > ast.field_members().size() || pe > ast.field_members().size()) continue;
+                for (uint32_t mi = v.payload_begin; mi < v.payload_begin + v.payload_count; ++mi) {
+                    const auto& am = ast.field_members()[mi];
+                    FieldMember sm{};
+                    // Unique per-variant storage lane name.
+                    sm.name = ast_mut.add_owned_string(
+                        std::string("__v") + std::to_string(vi) + "_" + std::string(am.name));
+                    sm.type = am.type;
+                    sm.span = am.span;
+                    m.add_field_member(sm);
+                    f.member_count++;
+                }
+            }
+        }
+
+        return m.add_field(f);
+    }
+
     /// @brief AST var 선언 1개를 SIR global 메타로 lower한다.
     void lower_global_var_decl_(
         Module& m,
@@ -429,6 +492,17 @@ namespace parus::sir {
                         (void)lower_fn_once(member_sid, /*is_acts_member=*/false, k_invalid_acts);
                     }
                 }
+                return;
+            }
+
+            if (s.kind == ast::StmtKind::kEnumDecl) {
+                if (s.decl_generic_param_count > 0) {
+                    return;
+                }
+                if (!lowered_decl_stmt_ids.insert(sid).second) {
+                    return;
+                }
+                (void)lower_enum_field_decl_(m, ast, sym, nres, types, sid);
                 return;
             }
 
@@ -593,6 +667,10 @@ namespace parus::sir {
             lower_stmt_recursive(lower_stmt_recursive, inst_sid);
         }
         for (const auto inst_sid : tyck.generic_instantiated_acts_sids) {
+            if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
+            lower_stmt_recursive(lower_stmt_recursive, inst_sid);
+        }
+        for (const auto inst_sid : tyck.generic_instantiated_enum_sids) {
             if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast.stmts().size()) continue;
             lower_stmt_recursive(lower_stmt_recursive, inst_sid);
         }

@@ -48,6 +48,69 @@ namespace parus {
                 return false;
         }
     }
+
+    static bool scan_generic_angle_clause_followed_by(
+        const Cursor& cursor,
+        syntax::TokenKind follow_kind
+    ) {
+        using K = syntax::TokenKind;
+        if (!cursor.at(K::kLt)) return false;
+
+        size_t i = cursor.pos();
+        int angle = 0;
+        int paren = 0;
+        int bracket = 0;
+        bool closed = false;
+        while (true) {
+            const Token t = cursor.peek(i - cursor.pos());
+            if (t.kind == K::kEof) return false;
+
+            if (t.kind == K::kLt) {
+                ++angle;
+                ++i;
+                continue;
+            }
+            if (t.kind == K::kShiftRight) {
+                angle -= 2;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
+                continue;
+            }
+            if (t.kind == K::kGt) {
+                --angle;
+                ++i;
+                if (angle == 0) {
+                    closed = true;
+                    break;
+                }
+                if (angle < 0) return false;
+                continue;
+            }
+
+            if (t.kind == K::kLParen) { ++paren; ++i; continue; }
+            if (t.kind == K::kRParen) { --paren; ++i; if (paren < 0) return false; continue; }
+            if (t.kind == K::kLBracket) { ++bracket; ++i; continue; }
+            if (t.kind == K::kRBracket) { --bracket; ++i; if (bracket < 0) return false; continue; }
+
+            if (t.kind == K::kPlus || t.kind == K::kMinus || t.kind == K::kStar ||
+                t.kind == K::kSlash || t.kind == K::kPercent || t.kind == K::kEqEq ||
+                t.kind == K::kBangEq || t.kind == K::kPipePipe ||
+                t.kind == K::kPipeFwd || t.kind == K::kPipeRev ||
+                t.kind == K::kKwAnd || t.kind == K::kKwOr) {
+                return false;
+            }
+
+            ++i;
+        }
+
+        if (!closed) return false;
+        return cursor.peek(i - cursor.pos()).kind == follow_kind;
+    }
+
     ast::ExprId Parser::parse_expr() {
         return parse_expr_pratt(/*min_prec=*/0, /*ternary_depth=*/0);
     }
@@ -746,6 +809,8 @@ namespace parus {
             uint32_t literal_type_arg_count = 0;
             std::vector<ast::TypeNodeId> literal_type_arg_nodes{};
             if (cursor_.at(syntax::TokenKind::kLt) &&
+                (scan_generic_angle_clause_followed_by(cursor_, syntax::TokenKind::kLBrace) ||
+                 scan_generic_angle_clause_followed_by(cursor_, syntax::TokenKind::kColonColon)) &&
                 parse_expr_try_literal_type_args(literal_type_arg_begin, literal_type_arg_count, &literal_type_arg_nodes)) {
                 if (cursor_.prev().kind == syntax::TokenKind::kGt) {
                     path_sp = span_join(path_sp, cursor_.prev().span);
@@ -764,6 +829,26 @@ namespace parus {
                 }
                 typed_path += ">";
                 path_text = ast_.add_owned_string(std::move(typed_path));
+            }
+
+            // typed path tail:
+            //   Token<i32>::Named
+            while (literal_type_arg_count > 0 && eat_coloncolon()) {
+                const Token seg = cursor_.peek();
+                if (seg.kind != syntax::TokenKind::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier (path segment)");
+                    break;
+                }
+                cursor_.bump();
+
+                std::string rebuilt(path_text);
+                rebuilt += "::";
+                rebuilt.append(seg.lexeme.data(), seg.lexeme.size());
+                path_text = ast_.add_owned_string(std::move(rebuilt));
+
+                path_sp = span_join(path_sp, seg.span);
+                has_path_tail = true;
+                path_segments.push_back(seg.lexeme);
             }
 
             // Field literal primary:

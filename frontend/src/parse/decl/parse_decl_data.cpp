@@ -429,6 +429,241 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
+    /// @brief `enum Name [: ProtoA, ...] with [...] { case A, case B(x: T), ... }`
+    ast::StmtId Parser::parse_decl_enum() {
+        using K = syntax::TokenKind;
+
+        const Token start_tok = cursor_.peek();
+        Span start = start_tok.span;
+
+        bool is_export = false;
+        if (cursor_.at(K::kKwExport)) {
+            is_export = true;
+            start = cursor_.bump().span;
+        }
+
+        if (cursor_.at(K::kKwExtern)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "'extern' is not allowed on enum declarations");
+            cursor_.bump();
+        }
+
+        if (!cursor_.eat(K::kKwEnum)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "enum");
+            stmt_sync_to_boundary();
+            if (cursor_.at(K::kSemicolon)) cursor_.bump();
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kError;
+            s.span = span_join(start, cursor_.prev().span);
+            return ast_.add_stmt(s);
+        }
+
+        ast::FieldLayout enum_layout = ast::FieldLayout::kNone;
+        if (cursor_.at(K::kKwLayout) ||
+            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "layout")) {
+            cursor_.bump();
+            if (!cursor_.eat(K::kLParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            }
+            const Token arg = cursor_.peek();
+            if (arg.kind == K::kIdent && arg.lexeme == "c") {
+                enum_layout = ast::FieldLayout::kC;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kUnexpectedToken, arg.span, "only layout(c) is supported");
+                if (arg.kind != K::kRParen && arg.kind != K::kEof) cursor_.bump();
+            }
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kLBrace, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+        }
+
+        std::string_view name{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            name = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
+        }
+
+        uint32_t decl_generic_begin = 0;
+        uint32_t decl_generic_count = 0;
+        (void)parse_decl_generic_param_clause(decl_generic_begin, decl_generic_count);
+
+        const uint32_t impl_begin = static_cast<uint32_t>(ast_.path_refs().size());
+        uint32_t impl_count = 0;
+        if (cursor_.eat(K::kColon)) {
+            while (!cursor_.at(K::kLBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+                ast::PathRef pr{};
+                if (!parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true) || pr.path_count == 0) {
+                    recover_to_delim(K::kComma, K::kLBrace, K::kSemicolon);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+                ast_.add_path_ref(pr);
+                ++impl_count;
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
+        }
+
+        uint32_t decl_constraint_begin = 0;
+        uint32_t decl_constraint_count = 0;
+        (void)parse_decl_fn_constraint_clause(decl_constraint_begin, decl_constraint_count);
+
+        if (!cursor_.eat(K::kLBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
+            recover_to_delim(K::kLBrace, K::kSemicolon, K::kRBrace);
+            cursor_.eat(K::kLBrace);
+        }
+
+        const uint32_t variant_begin = static_cast<uint32_t>(ast_.enum_variant_decls().size());
+        uint32_t variant_count = 0;
+        while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
+            if (cursor_.eat(K::kSemicolon)) continue;
+
+            if (!cursor_.eat(K::kKwCase)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "case");
+                recover_to_delim(K::kComma, K::kRBrace, K::kSemicolon);
+                if (cursor_.eat(K::kComma) || cursor_.eat(K::kSemicolon)) continue;
+                break;
+            }
+
+            const Token vname_tok = cursor_.peek();
+            std::string_view vname{};
+            if (vname_tok.kind == K::kIdent) {
+                vname = vname_tok.lexeme;
+                cursor_.bump();
+            } else {
+                diag_report(diag::Code::kUnexpectedToken, vname_tok.span, "enum variant identifier");
+            }
+
+            const uint32_t payload_begin = static_cast<uint32_t>(ast_.field_members().size());
+            uint32_t payload_count = 0;
+            if (cursor_.eat(K::kLParen)) {
+                while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof) && !is_aborted()) {
+                    if (cursor_.eat(K::kComma)) {
+                        if (cursor_.at(K::kRParen)) break;
+                        continue;
+                    }
+
+                    const Token fname_tok = cursor_.peek();
+                    std::string_view fname{};
+                    if (fname_tok.kind == K::kIdent) {
+                        fname = fname_tok.lexeme;
+                        cursor_.bump();
+                    } else {
+                        diag_report(diag::Code::kFieldMemberNameExpected, fname_tok.span);
+                        recover_to_delim(K::kComma, K::kRParen, K::kSemicolon);
+                        if (cursor_.eat(K::kComma)) continue;
+                        break;
+                    }
+
+                    if (!cursor_.eat(K::kColon)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                        recover_to_delim(K::kComma, K::kRParen, K::kSemicolon);
+                        if (cursor_.eat(K::kComma)) continue;
+                        break;
+                    }
+
+                    auto ty = parse_type();
+                    ast::FieldMember fm{};
+                    fm.name = fname;
+                    fm.type = ty.id;
+                    fm.type_node = ty.node;
+                    fm.span = span_join(fname_tok.span, ty.span);
+                    ast_.add_field_member(fm);
+                    ++payload_count;
+
+                    if (cursor_.eat(K::kComma)) {
+                        if (cursor_.at(K::kRParen)) break;
+                        continue;
+                    }
+                    break;
+                }
+
+                if (!cursor_.eat(K::kRParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    recover_to_delim(K::kRParen, K::kComma, K::kRBrace);
+                    cursor_.eat(K::kRParen);
+                }
+            }
+
+            bool has_discriminant = false;
+            int64_t discriminant = 0;
+            if (cursor_.eat(K::kAssign)) {
+                has_discriminant = true;
+                const Token lit = cursor_.peek();
+                if (lit.kind == K::kIntLit) {
+                    int64_t v = 0;
+                    bool saw = false;
+                    for (const char ch : lit.lexeme) {
+                        if (ch == '_') continue;
+                        if (ch < '0' || ch > '9') break;
+                        saw = true;
+                        v = (v * 10) + (ch - '0');
+                    }
+                    if (saw) discriminant = v;
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kUnexpectedToken, lit.span, "integer literal");
+                }
+            }
+
+            ast::EnumVariantDecl ev{};
+            ev.name = vname;
+            ev.payload_begin = payload_begin;
+            ev.payload_count = payload_count;
+            ev.has_discriminant = has_discriminant;
+            ev.discriminant = discriminant;
+            ev.span = vname_tok.span;
+            ast_.add_enum_variant_decl(ev);
+            ++variant_count;
+
+            if (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kRBrace)) break;
+                continue;
+            }
+
+            if (!cursor_.at(K::kRBrace)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ",");
+                recover_to_delim(K::kComma, K::kRBrace, K::kSemicolon);
+                if (cursor_.eat(K::kComma)) continue;
+            }
+        }
+
+        if (!cursor_.eat(K::kRBrace)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+            recover_to_delim(K::kRBrace, K::kSemicolon);
+            cursor_.eat(K::kRBrace);
+        }
+        Span end_sp = cursor_.prev().span;
+        if (cursor_.at(K::kSemicolon)) {
+            end_sp = cursor_.bump().span;
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kEnumDecl;
+        s.span = span_join(start, end_sp);
+        s.name = name;
+        s.is_export = is_export;
+        s.type = name.empty() ? ty::kInvalidType : types_.intern_ident(name);
+        s.field_layout = enum_layout;
+        s.enum_variant_begin = variant_begin;
+        s.enum_variant_count = variant_count;
+        s.decl_path_ref_begin = impl_begin;
+        s.decl_path_ref_count = impl_count;
+        s.decl_generic_param_begin = decl_generic_begin;
+        s.decl_generic_param_count = decl_generic_count;
+        s.decl_constraint_begin = decl_constraint_begin;
+        s.decl_constraint_count = decl_constraint_count;
+        return ast_.add_stmt(s);
+    }
+
     /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } [with require(expr)];`
     ast::StmtId Parser::parse_decl_proto() {
         using K = syntax::TokenKind;

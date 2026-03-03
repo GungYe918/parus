@@ -402,6 +402,7 @@ namespace parus {
             t.kind = syntax::TokenKind::kKwField;
             return t;
         }
+        if (t.lexeme == "enum")     { t.kind = syntax::TokenKind::kKwEnum;     return t; }
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
         if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
         if (t.lexeme == "actor")   { t.kind = syntax::TokenKind::kKwActor;   return t; }

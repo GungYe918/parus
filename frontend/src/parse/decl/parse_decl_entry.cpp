@@ -12,6 +12,7 @@ namespace parus {
             || k == K::kKwExtern
             || k == K::kKwFn
             || k == K::kKwField
+            || k == K::kKwEnum
             || k == K::kKwProto
             || k == K::kKwClass
             || k == K::kKwActor
@@ -48,6 +49,9 @@ namespace parus {
         if (t.kind == K::kKwField) {
             return parse_decl_field();
         }
+        if (t.kind == K::kKwEnum) {
+            return parse_decl_enum();
+        }
         if (t.kind == K::kKwProto) {
             return parse_decl_proto();
         }
@@ -66,12 +70,13 @@ namespace parus {
             const auto k1 = cursor_.peek(1).kind;
             const auto k2 = cursor_.peek(2).kind;
             if (k1 == K::kKwField) return parse_decl_field();
+            if (k1 == K::kKwEnum) return parse_decl_enum();
             if (k1 == K::kKwProto) return parse_decl_proto();
             if (k1 == K::kKwClass) return parse_decl_class();
             if (k1 == K::kKwActor) return parse_decl_actor();
             if (k1 == K::kKwActs)  return parse_decl_acts();
             if (k1 == K::kKwNest)  return parse_decl_nest();
-            if (k1 == K::kStringLit && (k2 == K::kKwField || k2 == K::kKwProto || k2 == K::kKwClass || k2 == K::kKwActor || k2 == K::kKwActs || k2 == K::kKwNest)) {
+            if (k1 == K::kStringLit && (k2 == K::kKwField || k2 == K::kKwEnum || k2 == K::kKwProto || k2 == K::kKwClass || k2 == K::kKwActor || k2 == K::kKwActs || k2 == K::kKwNest)) {
                 // `export "C"`는 함수/전역 심볼 선언용이므로 data-decl에는 허용하지 않는다.
                 diag_report(diag::Code::kUnexpectedToken, cursor_.peek(1).span,
                             "'export \"C\"' is only allowed on def/global symbol declarations");

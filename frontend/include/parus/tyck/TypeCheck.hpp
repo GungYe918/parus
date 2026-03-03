@@ -36,6 +36,9 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_types; // ast.exprs() index에 대응
         std::vector<ast::StmtId> expr_overload_target; // expr index -> selected decl (call/operator), invalid if builtin path
         std::vector<ty::TypeId> expr_ctor_owner_type; // expr index -> class ctor owner type, invalid if not ctor-call expr
+        std::vector<ty::TypeId> expr_enum_ctor_owner_type; // expr index -> enum ctor owner type, invalid if not enum-ctor expr
+        std::vector<uint32_t> expr_enum_ctor_variant_index; // expr index -> enum variant index, invalid if not enum-ctor expr
+        std::vector<int64_t> expr_enum_ctor_tag_value; // expr index -> enum tag value, valid on enum-ctor expr
         std::vector<uint32_t> expr_resolved_symbol; // expr index -> resolved symbol id (tyck fallback for cloned generic nodes)
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
@@ -44,6 +47,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_proto_sids; // concrete generic proto instantiations
         std::vector<ast::StmtId> generic_instantiated_acts_sids; // concrete generic acts instantiations
         std::vector<ast::StmtId> generic_instantiated_field_sids; // concrete generic struct instantiations
+        std::vector<ast::StmtId> generic_instantiated_enum_sids; // concrete generic enum instantiations
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
         std::vector<TyError> errors;
     };
@@ -161,6 +165,7 @@ namespace parus::tyck {
         void check_stmt_class_decl_(ast::StmtId sid);
         void check_stmt_actor_decl_(ast::StmtId sid);
         void check_stmt_field_decl_(ast::StmtId sid);
+        void check_stmt_enum_decl_(ast::StmtId sid);
         void check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s);
 
         // expr
@@ -258,6 +263,9 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_type_cache_;
         std::vector<ast::StmtId> expr_overload_target_cache_;
         std::vector<ty::TypeId> expr_ctor_owner_type_cache_;
+        std::vector<ty::TypeId> expr_enum_ctor_owner_type_cache_;
+        std::vector<uint32_t> expr_enum_ctor_variant_index_cache_;
+        std::vector<int64_t> expr_enum_ctor_tag_value_cache_;
         std::vector<uint32_t> expr_resolved_symbol_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
@@ -335,6 +343,8 @@ namespace parus::tyck {
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> actor_method_map_;
         std::unordered_set<ast::StmtId> actor_member_fn_sid_set_;
         std::unordered_set<ast::StmtId> proto_member_fn_sid_set_;
+        std::unordered_map<std::string, ast::StmtId> enum_decl_by_name_;
+        std::unordered_map<ty::TypeId, ast::StmtId> enum_decl_by_type_;
         std::vector<std::string> namespace_stack_;
         std::unordered_map<std::string, std::string> import_alias_to_path_;
         std::unordered_set<std::string> known_namespace_paths_;
@@ -414,8 +424,17 @@ namespace parus::tyck {
             const std::vector<ty::TypeId>& concrete_args,
             Span use_span
         );
+        std::optional<ast::StmtId> ensure_generic_enum_instance_(
+            ast::StmtId template_sid,
+            const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
         std::optional<ast::StmtId> ensure_generic_field_instance_from_type_(
             ty::TypeId maybe_generic_field_type,
+            Span use_span
+        );
+        std::optional<ast::StmtId> ensure_generic_enum_instance_from_type_(
+            ty::TypeId maybe_generic_enum_type,
             Span use_span
         );
         std::optional<ast::StmtId> ensure_generic_proto_instance_(
@@ -474,7 +493,32 @@ namespace parus::tyck {
             uint32_t align = 0;
         };
 
+        struct EnumVariantFieldMeta {
+            std::string name{};
+            std::string storage_name{};
+            ty::TypeId type = ty::kInvalidType;
+            Span span{};
+        };
+
+        struct EnumVariantMeta {
+            std::string name{};
+            uint32_t index = 0;
+            int64_t tag = 0;
+            bool has_discriminant = false;
+            std::vector<EnumVariantFieldMeta> fields{};
+            std::unordered_map<std::string, uint32_t> field_index_by_name{};
+        };
+
+        struct EnumAbiMeta {
+            ast::StmtId sid = ast::k_invalid_stmt;
+            ast::FieldLayout layout = ast::FieldLayout::kNone;
+            bool is_layout_c = false;
+            std::vector<EnumVariantMeta> variants{};
+            std::unordered_map<std::string, uint32_t> variant_index_by_name{};
+        };
+
         std::unordered_map<ty::TypeId, FieldAbiMeta> field_abi_meta_by_type_;
+        std::unordered_map<ty::TypeId, EnumAbiMeta> enum_abi_meta_by_type_;
         std::unordered_set<ast::StmtId> generic_fn_template_sid_set_;
         std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
         std::unordered_set<ast::StmtId> generic_fn_checked_instances_;
@@ -486,10 +530,12 @@ namespace parus::tyck {
         std::unordered_set<ast::StmtId> generic_proto_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_acts_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_field_template_sid_set_;
+        std::unordered_set<ast::StmtId> generic_enum_template_sid_set_;
         std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_field_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> generic_enum_instance_cache_;
         std::unordered_set<ast::StmtId> generic_decl_checked_instances_;
         std::unordered_set<ast::StmtId> generic_decl_checking_instances_;
         std::deque<ast::StmtId> pending_generic_decl_instance_queue_;
@@ -498,6 +544,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_proto_sids_;
         std::vector<ast::StmtId> generic_instantiated_acts_sids_;
         std::vector<ast::StmtId> generic_instantiated_field_sids_;
+        std::vector<ast::StmtId> generic_instantiated_enum_sids_;
 
     };
 

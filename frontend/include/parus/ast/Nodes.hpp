@@ -101,6 +101,7 @@ namespace parus::ast {
         // decl-like
         kFnDecl,
         kFieldDecl,
+        kEnumDecl,
         kProtoDecl,
         kClassDecl,
         kActorDecl,
@@ -179,6 +180,25 @@ namespace parus::ast {
         kBool,
         kNull,
         kIdent,
+        kEnumVariant,
+    };
+
+    struct SwitchEnumBind {
+        std::string_view field_name{}; // payload field label in variant
+        std::string_view bind_name{};  // identifier bound in case pattern
+        std::string_view storage_name{}; // lowered storage field label (tyck-filled)
+        TypeId bind_type = k_invalid_type; // bind variable type (tyck-filled)
+        uint32_t resolved_symbol = 0xFFFF'FFFFu; // name-resolve symbol id
+        Span span{};
+    };
+
+    struct EnumVariantDecl {
+        std::string_view name{};
+        uint32_t payload_begin = 0; // slice in AstArena::field_members_
+        uint32_t payload_count = 0;
+        bool has_discriminant = false;
+        int64_t discriminant = 0;
+        Span span{};
     };
 
     struct SwitchCase {
@@ -186,6 +206,14 @@ namespace parus::ast {
 
         CasePatKind pat_kind = CasePatKind::kError;
         std::string_view pat_text{}; // literal/ident 원문 저장
+        // enum pattern metadata (when pat_kind == kEnumVariant)
+        TypeNodeId enum_type_node = k_invalid_type_node;
+        TypeId enum_type = k_invalid_type;
+        std::string_view enum_variant_name{};
+        uint32_t enum_variant_index = 0xFFFF'FFFFu;
+        int64_t enum_tag_value = 0;
+        uint32_t enum_bind_begin = 0; // slice in AstArena::switch_enum_binds_
+        uint32_t enum_bind_count = 0;
 
         StmtId body = k_invalid_stmt; // 항상 block
         Span span{};
@@ -524,6 +552,8 @@ namespace parus::ast {
         uint32_t field_align = 0; // 0 means unspecified
         uint32_t field_member_begin = 0;
         uint32_t field_member_count = 0;
+        uint32_t enum_variant_begin = 0;
+        uint32_t enum_variant_count = 0;
         uint32_t decl_path_ref_begin = 0; // proto inherit / field/class implements path refs
         uint32_t decl_path_ref_count = 0;
         bool proto_has_require = false;
@@ -595,10 +625,18 @@ namespace parus::ast {
         uint32_t add_param(const Param& p) {  params_.push_back(p); return static_cast<uint32_t>(params_.size() - 1);  }
 
         uint32_t add_switch_case(const SwitchCase& c) {  switch_cases_.push_back(c); return (uint32_t)switch_cases_.size() - 1;  }
+        uint32_t add_switch_enum_bind(const SwitchEnumBind& b) {
+            switch_enum_binds_.push_back(b);
+            return static_cast<uint32_t>(switch_enum_binds_.size() - 1);
+        }
 
         uint32_t add_field_member(const FieldMember& f) {
             field_members_.push_back(f);
             return (uint32_t)field_members_.size() - 1;
+        }
+        uint32_t add_enum_variant_decl(const EnumVariantDecl& v) {
+            enum_variant_decls_.push_back(v);
+            return static_cast<uint32_t>(enum_variant_decls_.size() - 1);
         }
 
         uint32_t add_field_init_entry(const FieldInitEntry& f) {
@@ -686,9 +724,13 @@ namespace parus::ast {
 
         const std::vector<SwitchCase>& switch_cases() const {  return switch_cases_;  }
         std::vector<SwitchCase>& switch_cases_mut() {  return switch_cases_;  }  
+        const std::vector<SwitchEnumBind>& switch_enum_binds() const { return switch_enum_binds_; }
+        std::vector<SwitchEnumBind>& switch_enum_binds_mut() { return switch_enum_binds_; }
 
         const std::vector<FieldMember>& field_members() const { return field_members_; }
         std::vector<FieldMember>& field_members_mut() { return field_members_; }
+        const std::vector<EnumVariantDecl>& enum_variant_decls() const { return enum_variant_decls_; }
+        std::vector<EnumVariantDecl>& enum_variant_decls_mut() { return enum_variant_decls_; }
 
         const std::vector<FieldInitEntry>& field_init_entries() const { return field_init_entries_; }
         std::vector<FieldInitEntry>& field_init_entries_mut() { return field_init_entries_; }
@@ -730,7 +772,9 @@ namespace parus::ast {
         std::vector<Param> params_;
 
         std::vector<SwitchCase> switch_cases_;
+        std::vector<SwitchEnumBind> switch_enum_binds_;
         std::vector<FieldMember> field_members_;
+        std::vector<EnumVariantDecl> enum_variant_decls_;
         std::vector<FieldInitEntry> field_init_entries_;
         std::vector<PathRef> path_refs_;
         std::vector<GenericParamDecl> generic_param_decls_;

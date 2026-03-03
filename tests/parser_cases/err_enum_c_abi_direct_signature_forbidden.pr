@@ -1,0 +1,10 @@
+enum layout(c) E {
+    case A = 1,
+    case B = 2,
+}
+
+extern "C" def f(x: E) -> i32;
+
+def main() -> i32 {
+    return 0i32;
+}

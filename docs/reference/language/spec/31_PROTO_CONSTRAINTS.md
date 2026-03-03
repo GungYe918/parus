@@ -43,16 +43,18 @@ proto ProtoName [: BaseProto, ...] {
 
 1. `class Name : ProtoA, ...` 선언으로 proto 제약을 부착할 수 있다.
 2. `struct Name : ProtoA, ...` 선언도 허용된다.
-3. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
+3. `enum Name : ProtoA, ...` 선언도 허용되지만 v0에서는 default-only proto만 허용된다.
+4. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
 
 ## 19.5 구현 충족 검사
 
-1. 구현체(`class`/`struct`)는 proto가 요구한 필수 시그니처를 충족해야 한다.
+1. 구현체(`class`/`struct`/`enum`)는 proto가 요구한 규칙을 충족해야 한다.
 2. 기본 구현이 있는 proto 멤버는 구현체가 생략할 수 있다.
 3. proto 상속이 있으면 상위 proto의 필수 시그니처까지 포함해 검사한다.
 4. 시그니처 매칭은 `Self`/`&Self`를 구현체 타입 기준으로 정규화해 비교한다.
 5. class에서 proto 기본 구현을 사용하는 dot 호출은 첫 파라미터 `self`가 있는 멤버만 허용한다.
 6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
+7. enum은 값 타입이므로 proto 필수 멤버(본문 없는 멤버)를 요구하는 구현은 허용하지 않는다.
 
 예시:
 

@@ -155,7 +155,10 @@ namespace parus {
         if (out_nodes) out_nodes->clear();
 
         if (!cursor_.at(K::kLt)) return false;
-        if (!scan_generic_angle_clause_followed_by(cursor_, K::kLBrace)) return false;
+        const bool followed_by_lbrace = scan_generic_angle_clause_followed_by(cursor_, K::kLBrace);
+        const bool followed_by_coloncolon =
+            scan_generic_angle_clause_followed_by(cursor_, K::kColonColon);
+        if (!followed_by_lbrace && !followed_by_coloncolon) return false;
 
         // real parse
         if (!cursor_.eat(K::kLt)) return false;

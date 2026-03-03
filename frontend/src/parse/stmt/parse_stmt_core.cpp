@@ -735,6 +735,26 @@ namespace parus {
         uint32_t case_count = 0;
         bool has_default = false;
 
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.eat(K::kColonColon)) return true;
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
+
+        auto has_coloncolon_before_case_delim = [&]() -> bool {
+            for (uint32_t off = 0; off < 64; ++off) {
+                const auto tk = cursor_.peek(off).kind;
+                if (tk == K::kColonColon) return true;
+                if (tk == K::kColon && cursor_.peek(off + 1).kind == K::kColon) return true;
+                if (tk == K::kEof || tk == K::kColon || tk == K::kLBrace || tk == K::kRBrace) break;
+            }
+            return false;
+        };
+
         auto parse_case_body_block = [&](std::string_view /*ctx*/) -> ast::StmtId {
             if (!cursor_.at(K::kLBrace)) {
                 diag_report(diag::Code::kSwitchCaseBodyExpectedBlock, cursor_.peek().span);
@@ -757,12 +777,134 @@ namespace parus {
             if (t.kind == K::kKwCase) {
                 const Token case_kw = cursor_.bump();
 
+                ast::SwitchCase c{};
+                c.is_default = false;
+                c.pat_kind = ast::CasePatKind::kError;
+
                 const Token pat = cursor_.peek();
-                if (!detail::is_case_pattern_tok(pat.kind)) {
-                    diag_report(diag::Code::kSwitchCaseExpectedPattern, pat.span);
-                    recover_to_delim(K::kColon, K::kKwCase, K::kKwDefault);
-                } else {
-                    cursor_.bump();
+                bool parsed_pattern = false;
+
+                if (pat.kind == K::kIdent && has_coloncolon_before_case_delim()) {
+                    const auto cp = save_parse_checkpoint_();
+                    ast::PathRef enum_path{};
+                    if (parse_type_path_ref(enum_path, /*allow_leading_coloncolon=*/false) &&
+                        enum_path.path_count > 0) {
+                        std::string_view variant_name{};
+                        Span variant_span{};
+                        bool have_variant = false;
+
+                        // Preferred form: EnumType::Variant(...)
+                        if (eat_coloncolon()) {
+                            const Token vtok = cursor_.peek();
+                            if (vtok.kind == K::kIdent) {
+                                cursor_.bump();
+                                variant_name = vtok.lexeme;
+                                variant_span = vtok.span;
+                                have_variant = true;
+                            }
+                        } else {
+                            // Legacy parse_type_path_ref greedily consumes `Token::Eof` when no
+                            // generic args are present. In switch-case enum pattern context,
+                            // reinterpret the last path segment as variant.
+                            const auto& tn = ast_.type_node(enum_path.type_node);
+                            if (tn.kind == ast::TypeNodeKind::kNamedPath &&
+                                tn.generic_arg_count == 0 &&
+                                enum_path.path_count >= 2) {
+                                const auto& segs = ast_.path_segs();
+                                variant_name = segs[enum_path.path_begin + enum_path.path_count - 1];
+                                variant_span = pat.span;
+
+                                ast::TypeNode prefix_tn = tn;
+                                prefix_tn.path_count -= 1;
+                                prefix_tn.resolved_type =
+                                    types_.intern_path(&segs[prefix_tn.path_begin], prefix_tn.path_count);
+                                enum_path.type_node = ast_.add_type_node(prefix_tn);
+                                enum_path.type = prefix_tn.resolved_type;
+                                have_variant = true;
+                            }
+                        }
+
+                        if (have_variant) {
+                            c.pat_kind = ast::CasePatKind::kEnumVariant;
+                            c.enum_type_node = enum_path.type_node;
+                            c.enum_type = enum_path.type;
+                            c.enum_variant_name = variant_name;
+                            c.pat_text = variant_name;
+                            c.span = span_join(case_kw.span, variant_span);
+
+                            const uint32_t bind_begin =
+                                static_cast<uint32_t>(ast_.switch_enum_binds().size());
+                            uint32_t bind_count = 0;
+                            if (cursor_.eat(K::kLParen)) {
+                                while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof) && !is_aborted()) {
+                                    if (cursor_.eat(K::kComma)) {
+                                        if (cursor_.at(K::kRParen)) break;
+                                        continue;
+                                    }
+
+                                    const Token field_tok = cursor_.peek();
+                                    if (field_tok.kind != K::kIdent) {
+                                        diag_report(diag::Code::kFieldMemberNameExpected, field_tok.span);
+                                        recover_to_delim(K::kComma, K::kRParen, K::kColon);
+                                        if (cursor_.eat(K::kComma)) continue;
+                                        break;
+                                    }
+                                    cursor_.bump();
+
+                                    if (!cursor_.eat(K::kColon)) {
+                                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                                        recover_to_delim(K::kComma, K::kRParen, K::kColon);
+                                        if (cursor_.eat(K::kComma)) continue;
+                                        break;
+                                    }
+
+                                    const Token bind_tok = cursor_.peek();
+                                    if (bind_tok.kind != K::kIdent) {
+                                        diag_report(diag::Code::kVarDeclNameExpected, bind_tok.span);
+                                        recover_to_delim(K::kComma, K::kRParen, K::kColon);
+                                        if (cursor_.eat(K::kComma)) continue;
+                                        break;
+                                    }
+                                    cursor_.bump();
+
+                                    ast::SwitchEnumBind b{};
+                                    b.field_name = field_tok.lexeme;
+                                    b.bind_name = bind_tok.lexeme;
+                                    b.span = span_join(field_tok.span, bind_tok.span);
+                                    ast_.add_switch_enum_bind(b);
+                                    ++bind_count;
+
+                                    if (cursor_.eat(K::kComma)) {
+                                        if (cursor_.at(K::kRParen)) break;
+                                        continue;
+                                    }
+                                    break;
+                                }
+                                if (!cursor_.eat(K::kRParen)) {
+                                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                                    recover_to_delim(K::kRParen, K::kColon, K::kComma);
+                                    cursor_.eat(K::kRParen);
+                                }
+                            }
+                            c.enum_bind_begin = bind_begin;
+                            c.enum_bind_count = bind_count;
+                            parsed_pattern = true;
+                        }
+                    }
+                    if (!parsed_pattern) {
+                        restore_parse_checkpoint_(cp);
+                    }
+                }
+
+                if (!parsed_pattern) {
+                    if (!detail::is_case_pattern_tok(pat.kind)) {
+                        diag_report(diag::Code::kSwitchCaseExpectedPattern, pat.span);
+                        recover_to_delim(K::kColon, K::kKwCase, K::kKwDefault);
+                    } else {
+                        cursor_.bump();
+                        c.pat_kind = detail::case_pat_kind_from_tok(pat);
+                        c.pat_text = pat.lexeme;
+                    }
                 }
 
                 if (!cursor_.eat(K::kColon)) {
@@ -773,10 +915,6 @@ namespace parus {
 
                 ast::StmtId body = parse_case_body_block("case");
 
-                ast::SwitchCase c{};
-                c.is_default = false;
-                c.pat_kind = detail::case_pat_kind_from_tok(pat);
-                c.pat_text = pat.lexeme;
                 c.body = body;
                 c.span = span_join(case_kw.span, ast_.stmt(body).span);
 

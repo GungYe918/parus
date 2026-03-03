@@ -1132,6 +1132,7 @@ namespace parus::tyck {
         if (e.op == K::kDot) {
             ty::TypeId base_t = check_expr_(e.a);
             base_t = read_decay_borrow_(types_, base_t);
+            (void)ensure_generic_enum_instance_from_type_(base_t, e.span);
 
             if (e.b == ast::k_invalid_expr) {
                 diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member on '.' access");
@@ -1143,6 +1144,12 @@ namespace parus::tyck {
             if (rhs.kind != ast::ExprKind::kIdent) {
                 diag_(diag::Code::kTypeErrorGeneric, rhs.span, "member access requires identifier rhs");
                 err_(rhs.span, "member access requires identifier rhs");
+                return types_.error();
+            }
+
+            if (enum_abi_meta_by_type_.find(base_t) != enum_abi_meta_by_type_.end()) {
+                diag_(diag::Code::kEnumDotFieldAccessForbidden, rhs.span);
+                err_(rhs.span, "enum payload field access is only allowed via switch pattern binding");
                 return types_.error();
             }
 

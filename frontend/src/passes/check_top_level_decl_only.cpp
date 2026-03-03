@@ -28,6 +28,7 @@ namespace parus::passes {
         switch (s.kind) {
             case ast::StmtKind::kFnDecl:
             case ast::StmtKind::kFieldDecl:
+            case ast::StmtKind::kEnumDecl:
             case ast::StmtKind::kProtoDecl:
             case ast::StmtKind::kClassDecl:
             case ast::StmtKind::kActorDecl:

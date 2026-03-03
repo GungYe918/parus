@@ -1,0 +1,19 @@
+proto EqDefault {
+    def eq(self, rhs: &Self) -> bool {
+        return true;
+    }
+};
+
+enum Token<T> {
+    case Eof,
+    case Value(value: T),
+}
+
+def main() -> i32 {
+    set t = Token<i32>::Value(value: 1i32);
+    switch (t) {
+    case Token<i32>::Eof: { return 0i32; }
+    case Token<i32>::Value(value: v): { return v; }
+    }
+    return -1i32;
+}

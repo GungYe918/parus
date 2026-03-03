@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 
 namespace parus::tyck {
@@ -120,6 +121,10 @@ namespace parus::tyck {
 
             case ast::StmtKind::kFieldDecl:
                 check_stmt_field_decl_(sid);
+                return;
+
+            case ast::StmtKind::kEnumDecl:
+                check_stmt_enum_decl_(sid);
                 return;
 
             case ast::StmtKind::kProtoDecl:
@@ -558,13 +563,139 @@ namespace parus::tyck {
     }
 
     void TypeChecker::check_stmt_switch_(const ast::Stmt& s) {
-        // v0: switch(expr){ case ... {block} ... }
+        ty::TypeId scrut_t = ty::kInvalidType;
         if (s.expr != ast::k_invalid_expr) {
-            (void)check_expr_(s.expr);
+            scrut_t = check_expr_(s.expr);
         }
-        // case body는 항상 block
+
+        // Switch pattern matching is value-based. If scrutinee is a borrow, match on its element.
+        ty::TypeId scrut_match_t = scrut_t;
+        if (scrut_match_t != ty::kInvalidType) {
+            const auto& sm = types_.get(scrut_match_t);
+            if (sm.kind == ty::Kind::kBorrow) {
+                scrut_match_t = sm.elem;
+            }
+        }
+
+        const bool scrut_is_optional = is_optional_(scrut_match_t);
+        ty::TypeId scrut_enum_t = scrut_is_optional ? optional_elem_(scrut_match_t) : scrut_match_t;
+        if (scrut_enum_t != ty::kInvalidType) {
+            (void)ensure_generic_enum_instance_from_type_(scrut_enum_t, s.span);
+        }
+
         for (uint32_t i = 0; i < s.case_count; ++i) {
-            const auto& c = ast_.switch_cases()[s.case_begin + i];
+            const uint32_t cidx = s.case_begin + i;
+            if ((size_t)cidx >= ast_.switch_cases().size()) break;
+            auto& c = ast_.switch_cases_mut()[cidx];
+
+            if (c.pat_kind == ast::CasePatKind::kNull && !scrut_is_optional) {
+                diag_(diag::Code::kTypeErrorGeneric, c.span, "case null is only valid for optional scrutinee");
+                err_(c.span, "switch case null requires optional scrutinee type");
+            }
+
+            if (c.pat_kind == ast::CasePatKind::kEnumVariant) {
+                ty::TypeId case_enum_t = c.enum_type;
+                if (case_enum_t != ty::kInvalidType) {
+                    (void)ensure_generic_enum_instance_from_type_(case_enum_t, c.span);
+                }
+                if (case_enum_t == ty::kInvalidType) {
+                    std::string enum_path = "<enum>";
+                    if (c.enum_type_node != ast::k_invalid_type_node &&
+                        (size_t)c.enum_type_node < ast_.type_nodes().size()) {
+                        enum_path = types_.to_string(ast_.type_node(c.enum_type_node).resolved_type);
+                    }
+                    diag_(diag::Code::kTypeErrorGeneric, c.span,
+                          std::string("invalid enum pattern target: ") + enum_path);
+                    err_(c.span, "invalid enum switch pattern target");
+                } else if (scrut_enum_t != ty::kInvalidType && scrut_enum_t != case_enum_t) {
+                    diag_(diag::Code::kTypeMismatch, c.span,
+                          types_.to_string(scrut_enum_t), types_.to_string(case_enum_t));
+                    err_(c.span, "enum case pattern type does not match switch scrutinee");
+                }
+
+                auto meta_it = enum_abi_meta_by_type_.find(case_enum_t);
+                if (meta_it == enum_abi_meta_by_type_.end()) {
+                    if (auto sid = ensure_generic_enum_instance_from_type_(case_enum_t, c.span)) {
+                        check_stmt_enum_decl_(*sid);
+                    }
+                    meta_it = enum_abi_meta_by_type_.find(case_enum_t);
+                }
+
+                bool bind_scope_opened = false;
+                if (meta_it == enum_abi_meta_by_type_.end()) {
+                    diag_(diag::Code::kTypeErrorGeneric, c.span, "enum pattern requires a known enum type");
+                    err_(c.span, "enum pattern requires known enum metadata");
+                } else {
+                    const auto& meta = meta_it->second;
+                    auto vit = meta.variant_index_by_name.find(std::string(c.enum_variant_name));
+                    if (vit == meta.variant_index_by_name.end()) {
+                        diag_(diag::Code::kTypeErrorGeneric, c.span,
+                              std::string("unknown enum variant '") + std::string(c.enum_variant_name) + "'");
+                        err_(c.span, "unknown enum variant in switch case");
+                    } else {
+                        const auto& vm = meta.variants[vit->second];
+                        c.enum_variant_index = vm.index;
+                        c.enum_tag_value = vm.tag;
+
+                        std::unordered_set<std::string> seen_fields;
+                        std::unordered_set<std::string> seen_binds;
+
+                        const uint64_t bb = c.enum_bind_begin;
+                        const uint64_t be = bb + c.enum_bind_count;
+                        auto& binds = ast_.switch_enum_binds_mut();
+                        if (bb > binds.size() || be > binds.size()) {
+                            diag_(diag::Code::kTypeErrorGeneric, c.span, "invalid enum pattern bind slice");
+                            err_(c.span, "invalid enum pattern bind slice");
+                        } else {
+                            for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
+                                auto& b = binds[bi];
+                                if (!seen_fields.insert(std::string(b.field_name)).second) {
+                                    diag_(diag::Code::kDuplicateDecl, b.span, b.field_name);
+                                    err_(b.span, "duplicate enum bind field label");
+                                    continue;
+                                }
+                                if (!seen_binds.insert(std::string(b.bind_name)).second) {
+                                    diag_(diag::Code::kDuplicateDecl, b.span, b.bind_name);
+                                    err_(b.span, "duplicate enum bind variable name");
+                                    continue;
+                                }
+                                auto fit = vm.field_index_by_name.find(std::string(b.field_name));
+                                if (fit == vm.field_index_by_name.end()) {
+                                    diag_(diag::Code::kTypeErrorGeneric, b.span,
+                                          std::string("unknown enum payload field '") + std::string(b.field_name) + "'");
+                                    err_(b.span, "unknown enum payload field in switch bind");
+                                    continue;
+                                }
+                                const auto& fm = vm.fields[fit->second];
+                                b.bind_type = fm.type;
+                                b.storage_name = ast_.add_owned_string(fm.storage_name);
+                            }
+
+                            sym_.push_scope();
+                            bind_scope_opened = true;
+                            for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
+                                const auto& b = binds[bi];
+                                if (b.bind_type == ty::kInvalidType) continue;
+                                auto ins = sym_.insert(sema::SymbolKind::kVar, b.bind_name, b.bind_type, b.span);
+                                if (!ins.ok && ins.is_duplicate) {
+                                    diag_(diag::Code::kDuplicateDecl, b.span, b.bind_name);
+                                    err_(b.span, "duplicate switch bind variable");
+                                } else if (ins.ok) {
+                                    sym_is_mut_[ins.symbol_id] = false;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (c.body != ast::k_invalid_stmt) check_stmt_(c.body);
+                if (bind_scope_opened) {
+                    sym_.pop_scope();
+                }
+                continue;
+            }
+
+            // case body는 항상 block
             if (c.body != ast::k_invalid_stmt) check_stmt_(c.body);
         }
     }
@@ -610,11 +741,20 @@ namespace parus::tyck {
         }
 
         if (s.link_abi == ast::LinkAbi::kC) {
+            auto check_enum_direct_c_abi = [&](ty::TypeId t, Span sp, std::string_view what) {
+                (void)ensure_generic_enum_instance_from_type_(t, sp);
+                if (enum_abi_meta_by_type_.find(t) != enum_abi_meta_by_type_.end()) {
+                    diag_(diag::Code::kEnumCAbiDirectSignatureForbidden, sp, what);
+                    err_(sp, "enum direct type in C ABI signature is forbidden in v0; cast at boundary (as i32)");
+                }
+            };
+
             if (s.has_named_group || s.positional_param_count != s.param_count) {
                 diag_(diag::Code::kAbiCNamedGroupNotAllowed, s.span, s.name);
                 err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
             }
 
+            check_enum_direct_c_abi(ret, s.span, std::string("return type of '") + std::string(s.name) + "'");
             (void)ensure_generic_field_instance_from_type_(ret, s.span);
             if (!is_c_abi_safe_type_(ret, /*allow_void=*/true)) {
                 diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span,
@@ -625,6 +765,7 @@ namespace parus::tyck {
 
             for (uint32_t i = 0; i < s.param_count; ++i) {
                 const auto& p = ast_.params()[s.param_begin + i];
+                check_enum_direct_c_abi(p.type, p.span, std::string("parameter '") + std::string(p.name) + "'");
                 (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                 if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
                     diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span,
@@ -1671,6 +1812,154 @@ namespace parus::tyck {
         }
     }
 
+    void TypeChecker::check_stmt_enum_decl_(ast::StmtId sid) {
+        const ast::Stmt& s = ast_.stmt(sid);
+        const bool is_generic_template =
+            (s.decl_generic_param_count > 0) &&
+            (generic_enum_template_sid_set_.find(sid) != generic_enum_template_sid_set_.end());
+
+        const uint32_t vb = s.enum_variant_begin;
+        const uint32_t ve = s.enum_variant_begin + s.enum_variant_count;
+        if (vb > ast_.enum_variant_decls().size() || ve > ast_.enum_variant_decls().size() || vb > ve) {
+            diag_(diag::Code::kTypeErrorGeneric, s.span, "invalid enum variant range");
+            err_(s.span, "invalid enum variant range");
+            return;
+        }
+
+        ty::TypeId self_ty = s.type;
+        if (self_ty == ty::kInvalidType && !s.name.empty()) {
+            self_ty = types_.intern_ident(s.name);
+        }
+        if (self_ty == ty::kInvalidType) {
+            diag_(diag::Code::kTypeErrorGeneric, s.span, "enum type id is invalid");
+            err_(s.span, "enum type id is invalid");
+            return;
+        }
+
+        if (is_generic_template) {
+            return;
+        }
+
+        EnumAbiMeta meta{};
+        meta.sid = sid;
+        meta.layout = s.field_layout;
+        meta.is_layout_c = (s.field_layout == ast::FieldLayout::kC);
+        meta.variants.reserve(s.enum_variant_count);
+
+        int64_t next_tag = 0;
+        std::unordered_set<std::string> seen_variant_names;
+        seen_variant_names.reserve(s.enum_variant_count);
+
+        for (uint32_t i = 0; i < s.enum_variant_count; ++i) {
+            const auto& v = ast_.enum_variant_decls()[s.enum_variant_begin + i];
+            const std::string vname(v.name);
+            if (!seen_variant_names.insert(vname).second) {
+                diag_(diag::Code::kEnumVariantDuplicate, v.span, v.name);
+                err_(v.span, "duplicate enum variant name: " + vname);
+                continue;
+            }
+
+            if (s.field_layout == ast::FieldLayout::kC && v.payload_count > 0) {
+                diag_(diag::Code::kEnumLayoutCPayloadNotAllowed, v.span);
+                err_(v.span, "layout(c) enum variant must not contain payload");
+            }
+            if (s.field_layout != ast::FieldLayout::kC && v.has_discriminant) {
+                diag_(diag::Code::kEnumDiscriminantNonCForbidden, v.span);
+                err_(v.span, "enum discriminant assignment is only allowed on layout(c) tag-only enum");
+            }
+
+            EnumVariantMeta vm{};
+            vm.name = vname;
+            vm.index = i;
+            vm.has_discriminant = v.has_discriminant;
+            vm.tag = v.has_discriminant ? v.discriminant : next_tag;
+            next_tag = vm.tag + 1;
+
+            const uint64_t pb = v.payload_begin;
+            const uint64_t pe = pb + v.payload_count;
+            if (pb > ast_.field_members().size() || pe > ast_.field_members().size() || pb > pe) {
+                diag_(diag::Code::kTypeFieldMemberRangeInvalid, v.span);
+                err_(v.span, "invalid enum variant payload range");
+            } else {
+                std::unordered_set<std::string> seen_payload_fields;
+                for (uint32_t mi = v.payload_begin; mi < v.payload_begin + v.payload_count; ++mi) {
+                    const auto& m = ast_.field_members()[mi];
+                    if (!seen_payload_fields.insert(std::string(m.name)).second) {
+                        diag_(diag::Code::kDuplicateDecl, m.span, m.name);
+                        err_(m.span, "duplicate enum payload field: " + std::string(m.name));
+                        continue;
+                    }
+
+                    const auto& mt = types_.get(m.type);
+                    if (mt.kind == ty::Kind::kBorrow || mt.kind == ty::Kind::kEscape || mt.kind == ty::Kind::kFn) {
+                        diag_(diag::Code::kTypeErrorGeneric, m.span,
+                              std::string("unsupported enum payload type for field '") + std::string(m.name) + "'");
+                        err_(m.span, "unsupported enum payload type");
+                    }
+
+                    if (class_decl_by_type_.find(m.type) != class_decl_by_type_.end() ||
+                        actor_decl_by_type_.find(m.type) != actor_decl_by_type_.end()) {
+                        diag_(diag::Code::kTypeErrorGeneric, m.span,
+                              std::string("enum payload field '") + std::string(m.name) +
+                              "' cannot use class/actor type in v0");
+                        err_(m.span, "enum payload class/actor type is not supported in v0");
+                    }
+
+                    EnumVariantFieldMeta fm{};
+                    fm.name = std::string(m.name);
+                    fm.storage_name = "__v" + std::to_string(vm.index) + "_" + std::string(m.name);
+                    fm.type = m.type;
+                    fm.span = m.span;
+                    vm.field_index_by_name[fm.name] = static_cast<uint32_t>(vm.fields.size());
+                    vm.fields.push_back(std::move(fm));
+                }
+            }
+
+            meta.variant_index_by_name[vm.name] = static_cast<uint32_t>(meta.variants.size());
+            meta.variants.push_back(std::move(vm));
+        }
+
+        enum_abi_meta_by_type_[self_ty] = std::move(meta);
+        enum_decl_by_type_[self_ty] = sid;
+
+        // enum + proto policy: v0 only supports default-only proto attachment.
+        const auto& refs = ast_.path_refs();
+        const uint32_t rb = s.decl_path_ref_begin;
+        const uint32_t re = s.decl_path_ref_begin + s.decl_path_ref_count;
+        if (rb <= refs.size() && re <= refs.size()) {
+            for (uint32_t i = rb; i < re; ++i) {
+                bool typed_path_failure = false;
+                const auto proto_sid = resolve_proto_decl_from_path_ref_(refs[i], refs[i].span, &typed_path_failure);
+                if (!proto_sid.has_value()) {
+                    if (!typed_path_failure) {
+                        const std::string p = path_ref_display_(refs[i]);
+                        diag_(diag::Code::kProtoImplTargetNotSupported, refs[i].span, p);
+                        err_(refs[i].span, "unknown proto target: " + p);
+                    }
+                    continue;
+                }
+
+                const auto& ps = ast_.stmt(*proto_sid);
+                if (ps.kind != ast::StmtKind::kProtoDecl) continue;
+                const auto& kids = ast_.stmt_children();
+                const uint64_t mb = ps.stmt_begin;
+                const uint64_t me = mb + ps.stmt_count;
+                if (mb > kids.size() || me > kids.size()) continue;
+                for (uint32_t ki = ps.stmt_begin; ki < ps.stmt_begin + ps.stmt_count; ++ki) {
+                    const ast::StmtId msid = kids[ki];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind != ast::StmtKind::kFnDecl) continue;
+                    if (m.a == ast::k_invalid_stmt) {
+                        diag_(diag::Code::kEnumProtoRequiresDefaultOnly, m.span, ps.name);
+                        err_(m.span, "enum can only attach default-only proto in v0");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
     void TypeChecker::check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s) {
         if (sid != ast::k_invalid_stmt &&
@@ -1685,7 +1974,8 @@ namespace parus::tyck {
             const ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
             if (owner_type != ty::kInvalidType) {
                 if (class_decl_by_type_.find(owner_type) != class_decl_by_type_.end() ||
-                    field_abi_meta_by_type_.find(owner_type) != field_abi_meta_by_type_.end()) {
+                    field_abi_meta_by_type_.find(owner_type) != field_abi_meta_by_type_.end() ||
+                    enum_abi_meta_by_type_.find(owner_type) != enum_abi_meta_by_type_.end()) {
                     owner_ok = true;
                 } else {
                     const auto& owner_ty = types_.get(owner_type);

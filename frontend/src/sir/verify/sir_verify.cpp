@@ -203,6 +203,15 @@ namespace parus::sir {
                                 << " has invalid body block id " << c.body;
                             push_error_(errs, oss.str());
                         }
+                        if (c.pat_kind == SwitchCasePatKind::kEnumVariant) {
+                            const uint64_t bend = (uint64_t)c.enum_bind_begin + (uint64_t)c.enum_bind_count;
+                            if (bend > (uint64_t)m.switch_enum_binds.size()) {
+                                std::ostringstream oss;
+                                oss << "stmt #" << sid << " switch case #" << i
+                                    << " has out-of-range enum bind slice";
+                                push_error_(errs, oss.str());
+                            }
+                        }
                     }
                     break;
                 }
@@ -313,6 +322,26 @@ namespace parus::sir {
                         if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
                             std::ostringstream oss;
                             oss << "value #" << vid << " call arg has invalid value id " << a.value;
+                            push_error_(errs, oss.str());
+                        }
+                    }
+                    break;
+                }
+
+                case ValueKind::kEnumCtor: {
+                    const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                    if (arg_end > (uint64_t)m.args.size()) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid << " enum ctor has out-of-range args slice";
+                        push_error_(errs, oss.str());
+                        break;
+                    }
+
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto& a = m.args[v.arg_begin + i];
+                        if (a.value != k_invalid_value && !valid_value_id_(m, a.value)) {
+                            std::ostringstream oss;
+                            oss << "value #" << vid << " enum ctor arg has invalid value id " << a.value;
                             push_error_(errs, oss.str());
                         }
                     }

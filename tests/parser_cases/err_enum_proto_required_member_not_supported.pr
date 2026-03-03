@@ -1,0 +1,11 @@
+proto P {
+    def need(self) -> i32;
+}
+
+enum E: P {
+    case A,
+}
+
+def main() -> i32 {
+    return 0i32;
+}

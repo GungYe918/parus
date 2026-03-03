@@ -382,6 +382,7 @@ namespace parus::cap {
                     }
 
                     case ast::StmtKind::kFieldDecl:
+                    case ast::StmtKind::kEnumDecl:
                     case ast::StmtKind::kProtoDecl:
                     case ast::StmtKind::kUse:
                     case ast::StmtKind::kNestDecl:
