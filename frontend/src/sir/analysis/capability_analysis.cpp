@@ -734,6 +734,33 @@ namespace parus::sir {
                         return;
                     }
 
+                    case StmtKind::kThrowStmt:
+                        analyze_value_(s.expr, ValueUse::kValue);
+                        return;
+
+                    case StmtKind::kTryCatchStmt: {
+                        const FlowState in = capture_flow_state_();
+                        const FlowState try_out = analyze_block_with_flow_(s.a, in);
+
+                        bool has_catch = false;
+                        FlowState merged = try_out;
+                        if ((uint64_t)s.catch_clause_begin + (uint64_t)s.catch_clause_count <=
+                            (uint64_t)m_.try_catch_clauses.size()) {
+                            for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                                const auto& c = m_.try_catch_clauses[s.catch_clause_begin + i];
+                                const FlowState catch_out = analyze_block_with_flow_(c.body, in);
+                                if (!has_catch) {
+                                    merged = merge_flow_state_(try_out, catch_out);
+                                    has_catch = true;
+                                } else {
+                                    merged = merge_flow_state_(merged, catch_out);
+                                }
+                            }
+                        }
+                        restore_flow_state_(has_catch ? merged : try_out);
+                        return;
+                    }
+
                     case StmtKind::kIfStmt:
                         analyze_value_(s.expr, ValueUse::kValue);
                         {

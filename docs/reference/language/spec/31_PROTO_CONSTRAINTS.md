@@ -115,3 +115,19 @@ class IntHolder: Holder<i32> {
 12. `GenericActsOverlap`
 13. `ActsGenericClauseRemoved`
 14. `GenericActorDeclNotSupportedV1`
+
+## 19.8 예외 채널 마커 proto (v0)
+
+예외 채널 분류는 아래 마커 proto를 사용한다.
+
+```parus
+proto Recoverable {}
+proto Unrecoverable {}
+```
+
+규칙:
+
+1. `throw` payload 타입은 `Recoverable`을 만족해야 한다.
+2. panic/foreign fault로 분류되는 payload 타입은 `Unrecoverable`을 만족해야 한다.
+3. 하나의 타입에 `Recoverable`와 `Unrecoverable`를 동시에 부착하는 것은 금지한다.
+4. 권장 구현: 에러 payload는 `enum`/`struct` 값 타입으로 선언한다.

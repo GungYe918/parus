@@ -147,10 +147,18 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 
 ## 8. 예외/언와인드 경계
 
-FFI 경계에서 예외/언와인드는 넘기지 않는다.
+Parus v0는 예외 채널을 2개로 분리한다.
 
-1. `extern "C"` 호출로 들어온 경계에서 언와인드가 외부로 전파되면 안 된다
-2. `export "C"` 함수도 C ABI 경계 밖으로 언와인드를 전파하지 않는다
+1. Recoverable 채널 (`throw` 기반): 값 전달 채널(비-언와인딩)
+2. Unrecoverable 채널 (panic/foreign fault): 스택 언와인딩 채널
+
+언와인딩 런타임은 코어 필수이며, 내부 경로에서는 Unrecoverable 채널을 처리할 수 있어야 한다.
+단, FFI 경계 밖으로는 언와인드를 전파하지 않는다.
+
+1. `extern "C"` 호출로 들어온 경계에서 언와인드가 외부로 전파되면 안 된다.
+2. `export "C"` 함수도 C ABI 경계 밖으로 언와인드를 전파하지 않는다.
+3. C/C++ 경계에서는 foreign unwind를 반드시 포획/변환해 ABI-safe 결과로 반환해야 한다.
+4. Recoverable(`throw`)는 ABI 경계에서 값으로 변환하거나 명시 반환 채널로 브리지해야 한다.
 
 ---
 

@@ -31,7 +31,11 @@ namespace parus::oir {
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
             const std::unordered_map<TypeId, FuncId>* class_deinit_map = nullptr;
+            const std::unordered_set<FuncId>* throwing_funcs = nullptr;
             std::vector<parus::sir::VerifyError>* build_errors = nullptr;
+            uint32_t exc_active_global = kInvalidId;
+            uint32_t exc_type_global = kInvalidId;
+            bool fn_is_throwing = false;
 
             Function* def = nullptr;
             BlockId cur_bb = kInvalidId;
@@ -69,8 +73,17 @@ namespace parus::oir {
                 bool cleaned = false;
             };
 
+            struct TryContext {
+                BlockId dispatch_bb = kInvalidId;
+                BlockId after_bb = kInvalidId;
+                size_t scope_depth_base = 0;
+                uint32_t clause_begin = 0;
+                uint32_t clause_count = 0;
+            };
+
             std::vector<ScopeFrame> env_stack;
             std::vector<CleanupItem> cleanup_items;
+            std::vector<TryContext> try_stack;
 
             const FieldLayoutDecl* find_field_layout_(TypeId t) const {
                 if (out == nullptr) return nullptr;
@@ -440,6 +453,101 @@ namespace parus::oir {
                 emit_inst(inst);
             }
 
+            bool has_exception_globals_() const {
+                return exc_active_global != kInvalidId &&
+                       exc_type_global != kInvalidId;
+            }
+
+            ValueId emit_exc_active_ptr_() {
+                if (!has_exception_globals_()) return kInvalidId;
+                return emit_global_ref(exc_active_global, "__parus_exc_active");
+            }
+
+            ValueId emit_exc_type_ptr_() {
+                if (!has_exception_globals_()) return kInvalidId;
+                return emit_global_ref(exc_type_global, "__parus_exc_type");
+            }
+
+            TypeId bool_type_() const {
+                return (types != nullptr)
+                    ? (TypeId)types->builtin(parus::ty::Builtin::kBool)
+                    : kInvalidId;
+            }
+
+            TypeId i64_type_() const {
+                return (types != nullptr)
+                    ? (TypeId)types->builtin(parus::ty::Builtin::kI64)
+                    : kInvalidId;
+            }
+
+            void emit_set_exc_active_(bool active) {
+                if (!has_exception_globals_()) return;
+                const ValueId ptr = emit_exc_active_ptr_();
+                if (ptr == kInvalidId) return;
+                const ValueId vv = emit_const_bool(bool_type_(), active);
+                emit_store(ptr, vv);
+            }
+
+            void emit_set_exc_type_(TypeId payload_ty) {
+                if (!has_exception_globals_()) return;
+                const ValueId ptr = emit_exc_type_ptr_();
+                if (ptr == kInvalidId) return;
+                const uint32_t raw = (payload_ty == kInvalidId) ? 0u : (uint32_t)payload_ty;
+                const ValueId vv = emit_const_int(i64_type_(), std::to_string(raw));
+                emit_store(ptr, vv);
+            }
+
+            ValueId emit_load_exc_active_() {
+                if (!has_exception_globals_()) return emit_const_bool(bool_type_(), false);
+                const ValueId ptr = emit_exc_active_ptr_();
+                if (ptr == kInvalidId) return emit_const_bool(bool_type_(), false);
+                return emit_load(bool_type_(), ptr);
+            }
+
+            ValueId emit_load_exc_type_() {
+                if (!has_exception_globals_()) return emit_const_int(i64_type_(), "0");
+                const ValueId ptr = emit_exc_type_ptr_();
+                if (ptr == kInvalidId) return emit_const_int(i64_type_(), "0");
+                return emit_load(i64_type_(), ptr);
+            }
+
+            ValueId emit_default_value_for_type_(TypeId t) {
+                if (t == kInvalidId) return emit_const_null(kInvalidId);
+                return emit_const_null(t);
+            }
+
+            void emit_return_default_for_current_fn_() {
+                if (def == nullptr || def->ret_ty == kInvalidId) {
+                    ret_void();
+                    return;
+                }
+                ret(emit_default_value_for_type_(def->ret_ty));
+            }
+
+            void emit_propagate_throw_(size_t cleanup_keep_depth) {
+                emit_cleanups_to_depth(cleanup_keep_depth);
+                emit_return_default_for_current_fn_();
+            }
+
+            void emit_stmt_boundary_throw_check_() {
+                if (!fn_is_throwing) return;
+                if (!try_stack.empty()) return;
+                if (!has_exception_globals_()) return;
+                if (has_term()) return;
+
+                const ValueId active = emit_load_exc_active_();
+                const BlockId throw_bb = new_block();
+                const BlockId cont_bb = new_block();
+                condbr(active, throw_bb, {}, cont_bb, {});
+
+                def->blocks.push_back(throw_bb);
+                cur_bb = throw_bb;
+                emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+
+                def->blocks.push_back(cont_bb);
+                cur_bb = cont_bb;
+            }
+
             void set_term(const Terminator& t) {
                 auto& b = out->blocks[cur_bb];
                 b.term = t;
@@ -489,6 +597,7 @@ namespace parus::oir {
             ValueId lower_value(parus::sir::ValueId vid);
             void    lower_stmt(uint32_t stmt_index);
             void    lower_block(parus::sir::BlockId bid);
+            void    lower_block_with_try_guard(parus::sir::BlockId bid, const TryContext& tc);
             ValueId lower_block_expr(parus::sir::ValueId block_expr_vid);
             ValueId lower_if_expr(parus::sir::ValueId if_vid);
 
@@ -1104,6 +1213,47 @@ namespace parus::oir {
             case parus::sir::ValueKind::kUnary: {
                 ValueId src = lower_value(v.a);
                 auto tk = static_cast<parus::syntax::TokenKind>(v.op);
+                if (tk == parus::syntax::TokenKind::kKwTry) {
+                    // try expr: capture throwing-call state as nullable.
+                    // - if exception flag is set -> null optional
+                    // - else -> optional-some(src)
+                    const ValueId active = emit_load_exc_active_();
+                    const BlockId fail_bb = new_block();
+                    const BlockId succ_bb = new_block();
+                    const BlockId join_bb = new_block();
+                    const ValueId join_param = add_block_param(join_bb, v.type);
+                    condbr(active, fail_bb, {}, succ_bb, {});
+
+                    def->blocks.push_back(fail_bb);
+                    cur_bb = fail_bb;
+                    emit_set_exc_active_(false);
+                    emit_set_exc_type_(kInvalidId);
+                    {
+                        const ValueId null_opt = emit_const_null(v.type);
+                        br(join_bb, {null_opt});
+                    }
+
+                    def->blocks.push_back(succ_bb);
+                    cur_bb = succ_bb;
+                    {
+                        ValueId some_opt = src;
+                        TypeId src_ty = kInvalidId;
+                        if (src != kInvalidId && out != nullptr && (size_t)src < out->values.size()) {
+                            src_ty = out->values[src].ty;
+                        }
+                        if (types != nullptr && v.type != kInvalidId) {
+                            const auto& tt = types->get(v.type);
+                            if (!(tt.kind == parus::ty::Kind::kOptional && tt.elem != kInvalidId && tt.elem == src_ty)) {
+                                some_opt = emit_cast(v.type, Effect::Pure, CastKind::As, v.type, src);
+                            }
+                        }
+                        br(join_bb, {some_opt});
+                    }
+
+                    def->blocks.push_back(join_bb);
+                    cur_bb = join_bb;
+                    return join_param;
+                }
                 auto op = map_unary(tk);
                 if (!op.has_value()) {
                     report_lowering_error(
@@ -1246,6 +1396,11 @@ namespace parus::oir {
                     callee = lower_value(v.a);
                 }
 
+                bool direct_callee_throwing = false;
+                if (direct_callee != kInvalidId && throwing_funcs != nullptr) {
+                    direct_callee_throwing = (throwing_funcs->find(direct_callee) != throwing_funcs->end());
+                }
+
                 if (direct_callee != kInvalidId && (size_t)direct_callee < out->funcs.size()) {
                     const auto& f = out->funcs[direct_callee];
                     if (f.entry != kInvalidId && (size_t)f.entry < out->blocks.size()) {
@@ -1257,6 +1412,12 @@ namespace parus::oir {
                             args[ai] = coerce_value_for_target(out->values[p].ty, args[ai]);
                         }
                     }
+                }
+
+                if (direct_callee_throwing) {
+                    // call-site starts with a clean exception flag.
+                    emit_set_exc_active_(false);
+                    emit_set_exc_type_(kInvalidId);
                 }
 
                 if (ctor_call) {
@@ -1490,6 +1651,137 @@ namespace parus::oir {
                 return;
             }
 
+            case parus::sir::StmtKind::kThrowStmt: {
+                const ValueId payload = (s.expr != parus::sir::k_invalid_value)
+                    ? lower_value(s.expr)
+                    : kInvalidId;
+                TypeId payload_ty = kInvalidId;
+                if (payload != kInvalidId && (size_t)payload < out->values.size()) {
+                    payload_ty = out->values[payload].ty;
+                }
+
+                emit_set_exc_type_(payload_ty);
+                emit_set_exc_active_(true);
+
+                if (!try_stack.empty()) {
+                    const auto& tc = try_stack.back();
+                    emit_cleanups_to_depth(tc.scope_depth_base);
+                    br(tc.dispatch_bb, {});
+                    return;
+                }
+
+                emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                return;
+            }
+
+            case parus::sir::StmtKind::kTryCatchStmt: {
+                const BlockId dispatch_bb = new_block();
+                const BlockId after_bb = new_block();
+                const size_t scope_base = env_stack.size();
+
+                TryContext tc{};
+                tc.dispatch_bb = dispatch_bb;
+                tc.after_bb = after_bb;
+                tc.scope_depth_base = scope_base;
+                tc.clause_begin = s.catch_clause_begin;
+                tc.clause_count = s.catch_clause_count;
+
+                try_stack.push_back(tc);
+                push_scope();
+                lower_block_with_try_guard(s.a, tc);
+                pop_scope();
+                try_stack.pop_back();
+
+                if (!has_term()) {
+                    br(after_bb, {});
+                }
+
+                def->blocks.push_back(dispatch_bb);
+                cur_bb = dispatch_bb;
+
+                BlockId no_throw_or_next = after_bb;
+                if (s.catch_clause_count > 0) {
+                    no_throw_or_next = new_block();
+                }
+
+                const ValueId active = emit_load_exc_active_();
+                condbr(active, no_throw_or_next, {}, after_bb, {});
+
+                if (s.catch_clause_count > 0) {
+                    def->blocks.push_back(no_throw_or_next);
+                    cur_bb = no_throw_or_next;
+                }
+
+                const uint64_t cb = s.catch_clause_begin;
+                const uint64_t ce = cb + s.catch_clause_count;
+                if (cb <= sir->try_catch_clauses.size() && ce <= sir->try_catch_clauses.size()) {
+                    for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                        const auto& cc = sir->try_catch_clauses[s.catch_clause_begin + i];
+                        const BlockId catch_bb = new_block();
+                        BlockId next_bb = kInvalidId;
+
+                        if (cc.has_typed_bind) {
+                            next_bb = new_block();
+                            const ValueId throw_ty = emit_load_exc_type_();
+                            const ValueId want_ty = emit_const_int(i64_type_(), std::to_string((uint32_t)cc.bind_type));
+                            const ValueId cond = emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, throw_ty, want_ty);
+                            condbr(cond, catch_bb, {}, next_bb, {});
+                        } else {
+                            br(catch_bb, {});
+                        }
+
+                        def->blocks.push_back(catch_bb);
+                        cur_bb = catch_bb;
+                        const ValueId thrown_type_for_bind = emit_load_exc_type_();
+                        emit_set_exc_active_(false);
+                        emit_set_exc_type_(kInvalidId);
+
+                        push_scope();
+                        if (cc.bind_sym != parus::sir::k_invalid_symbol) {
+                            ValueId bind_v = kInvalidId;
+                            if (cc.has_typed_bind && cc.bind_type != kInvalidId) {
+                                bind_v = emit_const_null(cc.bind_type);
+                            } else {
+                                bind_v = thrown_type_for_bind;
+                            }
+                            bind(cc.bind_sym, Binding{false, false, bind_v, kInvalidId});
+                        }
+                        lower_block(cc.body);
+                        pop_scope();
+                        if (!has_term()) {
+                            br(after_bb, {});
+                        }
+
+                        if (next_bb != kInvalidId) {
+                            def->blocks.push_back(next_bb);
+                            cur_bb = next_bb;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                if (!has_term()) {
+                    if (!try_stack.empty()) {
+                        const auto& outer = try_stack.back();
+                        const ValueId throw_ty = emit_load_exc_type_();
+                        emit_set_exc_active_(true);
+                        const ValueId outer_type_ptr = emit_exc_type_ptr_();
+                        if (outer_type_ptr != kInvalidId) {
+                            emit_store(outer_type_ptr, throw_ty);
+                        }
+                        emit_cleanups_to_depth(outer.scope_depth_base);
+                        br(outer.dispatch_bb, {});
+                    } else {
+                        emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                    }
+                }
+
+                def->blocks.push_back(after_bb);
+                cur_bb = after_bb;
+                return;
+            }
+
             case parus::sir::StmtKind::kExprStmt:
                 if (s.expr != parus::sir::k_invalid_value) (void)lower_value(s.expr);
                 return;
@@ -1508,11 +1800,43 @@ namespace parus::oir {
                     if (def != nullptr && def->ret_ty != kInvalidId) {
                         rv = coerce_value_for_target(def->ret_ty, rv);
                     }
-                    emit_cleanups_to_depth(/*keep_depth=*/0);
-                    ret(rv);
+                    if (fn_is_throwing && has_exception_globals_()) {
+                        const ValueId active = emit_load_exc_active_();
+                        const BlockId throw_bb = new_block();
+                        const BlockId ret_bb = new_block();
+                        condbr(active, throw_bb, {}, ret_bb, {});
+
+                        def->blocks.push_back(throw_bb);
+                        cur_bb = throw_bb;
+                        emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+
+                        def->blocks.push_back(ret_bb);
+                        cur_bb = ret_bb;
+                        emit_cleanups_to_depth(/*keep_depth=*/0);
+                        ret(rv);
+                    } else {
+                        emit_cleanups_to_depth(/*keep_depth=*/0);
+                        ret(rv);
+                    }
                 } else {
-                    emit_cleanups_to_depth(/*keep_depth=*/0);
-                    ret_void();
+                    if (fn_is_throwing && has_exception_globals_()) {
+                        const ValueId active = emit_load_exc_active_();
+                        const BlockId throw_bb = new_block();
+                        const BlockId ret_bb = new_block();
+                        condbr(active, throw_bb, {}, ret_bb, {});
+
+                        def->blocks.push_back(throw_bb);
+                        cur_bb = throw_bb;
+                        emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+
+                        def->blocks.push_back(ret_bb);
+                        cur_bb = ret_bb;
+                        emit_cleanups_to_depth(/*keep_depth=*/0);
+                        ret_void();
+                    } else {
+                        emit_cleanups_to_depth(/*keep_depth=*/0);
+                        ret_void();
+                    }
                 }
                 return;
 
@@ -1840,6 +2164,34 @@ namespace parus::oir {
                 uint32_t si = b.stmt_begin + i;
                 if (has_term()) break;
                 lower_stmt(si);
+                if (has_term()) break;
+                emit_stmt_boundary_throw_check_();
+            }
+        }
+
+        void FuncBuild::lower_block_with_try_guard(parus::sir::BlockId bid, const TryContext& tc) {
+            if (bid == parus::sir::k_invalid_block) return;
+
+            const auto& b = sir->blocks[bid];
+            for (uint32_t i = 0; i < b.stmt_count; i++) {
+                const uint32_t si = b.stmt_begin + i;
+                if (has_term()) break;
+                lower_stmt(si);
+                if (has_term()) break;
+
+                if (!has_exception_globals_()) continue;
+                const ValueId active = emit_load_exc_active_();
+                const BlockId cleanup_bb = new_block();
+                const BlockId cont_bb = new_block();
+                condbr(active, cleanup_bb, {}, cont_bb, {});
+
+                def->blocks.push_back(cleanup_bb);
+                cur_bb = cleanup_bb;
+                emit_cleanups_to_depth(tc.scope_depth_base);
+                br(tc.dispatch_bb, {});
+
+                def->blocks.push_back(cont_bb);
+                cur_bb = cont_bb;
             }
         }
 
@@ -2052,6 +2404,35 @@ namespace parus::oir {
             }
         }
 
+        bool has_throwing_function = false;
+        for (const auto& sf : sir_.funcs) {
+            if (sf.is_throwing) {
+                has_throwing_function = true;
+                break;
+            }
+        }
+        uint32_t exc_active_gid = kInvalidId;
+        uint32_t exc_type_gid = kInvalidId;
+        if (has_throwing_function) {
+            GlobalDecl g_active{};
+            g_active.name = "__parus_exc_active";
+            g_active.type = (TypeId)ty_.builtin(parus::ty::Builtin::kBool);
+            g_active.abi = FunctionAbi::Parus;
+            g_active.is_extern = false;
+            g_active.is_mut = true;
+            g_active.is_export = false;
+            exc_active_gid = out.mod.add_global(g_active);
+
+            GlobalDecl g_type{};
+            g_type.name = "__parus_exc_type";
+            g_type.type = (TypeId)ty_.builtin(parus::ty::Builtin::kI64);
+            g_type.abi = FunctionAbi::Parus;
+            g_type.is_extern = false;
+            g_type.is_mut = true;
+            g_type.is_export = false;
+            exc_type_gid = out.mod.add_global(g_type);
+        }
+
         std::vector<std::pair<parus::sir::SymbolId, uint32_t>> sorted_globals{};
         sorted_globals.reserve(global_symbol_to_global.size());
         for (const auto& kv : global_symbol_to_global) {
@@ -2074,6 +2455,7 @@ namespace parus::oir {
         std::unordered_map<parus::sir::SymbolId, FuncId> fn_symbol_to_func;
         std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>> fn_symbol_to_funcs;
         std::unordered_map<uint32_t, FuncId> fn_decl_to_func;
+        std::unordered_set<FuncId> throwing_func_ids;
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
@@ -2097,6 +2479,9 @@ namespace parus::oir {
             const FuncId fid = out.mod.add_func(f);
             sir_to_oir_func[i] = fid;
             sir_to_entry[i] = entry;
+            if (sf.is_throwing) {
+                throwing_func_ids.insert(fid);
+            }
 
             if (sf.sym != parus::sir::k_invalid_symbol) {
                 fn_symbol_to_func[sf.sym] = fid;
@@ -2152,7 +2537,11 @@ namespace parus::oir {
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;
+            fb.throwing_funcs = &throwing_func_ids;
             fb.build_errors = &out.gate_errors;
+            fb.exc_active_global = exc_active_gid;
+            fb.exc_type_global = exc_type_gid;
+            fb.fn_is_throwing = sf.is_throwing;
             fb.def = &out.mod.funcs[fid];
             fb.cur_bb = entry;
 
@@ -2165,6 +2554,10 @@ namespace parus::oir {
             }
 
             fb.push_scope();
+            if (exc_active_gid != kInvalidId) {
+                fb.emit_set_exc_active_(false);
+                fb.emit_set_exc_type_(kInvalidId);
+            }
             // 함수 파라미터를 entry block parameter로 시드하고 심볼 바인딩을 연결한다.
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
             if (pend <= (uint64_t)sir_.params.size()) {
@@ -2235,7 +2628,11 @@ namespace parus::oir {
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;
+            fb.throwing_funcs = &throwing_func_ids;
             fb.build_errors = &out.gate_errors;
+            fb.exc_active_global = exc_active_gid;
+            fb.exc_type_global = exc_type_gid;
+            fb.fn_is_throwing = false;
             fb.def = &out.mod.funcs[init_fid];
             fb.cur_bb = init_entry;
 

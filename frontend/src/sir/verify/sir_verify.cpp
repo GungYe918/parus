@@ -140,6 +140,39 @@ namespace parus::sir {
                 case StmtKind::kVarDecl:
                     need_value(s.init, "init");
                     break;
+                case StmtKind::kThrowStmt:
+                    need_value(s.expr, "throw payload");
+                    break;
+                case StmtKind::kTryCatchStmt: {
+                    if (!valid_block_id_(m, s.a)) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " try body has invalid block id " << s.a;
+                        push_error_(errs, oss.str());
+                    }
+                    const uint64_t cend = (uint64_t)s.catch_clause_begin + (uint64_t)s.catch_clause_count;
+                    if (cend > (uint64_t)m.try_catch_clauses.size()) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " has out-of-range try-catch clause slice";
+                        push_error_(errs, oss.str());
+                        break;
+                    }
+                    if (s.catch_clause_count == 0) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " try-catch has zero catch clauses";
+                        push_error_(errs, oss.str());
+                        break;
+                    }
+                    for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                        const auto& c = m.try_catch_clauses[s.catch_clause_begin + i];
+                        if (!valid_block_id_(m, c.body)) {
+                            std::ostringstream oss;
+                            oss << "stmt #" << sid << " catch clause #" << i
+                                << " has invalid body block id " << c.body;
+                            push_error_(errs, oss.str());
+                        }
+                    }
+                    break;
+                }
                 case StmtKind::kIfStmt:
                     need_value(s.expr, "cond");
                     if (!valid_block_id_(m, s.a)) {

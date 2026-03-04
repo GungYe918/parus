@@ -178,6 +178,8 @@ namespace parus {
 
         //  return 파싱
         ast::StmtId parse_stmt_return();
+        ast::StmtId parse_stmt_throw();
+        ast::StmtId parse_stmt_try_catch();
 
         //  break 파싱
         ast::StmtId parse_stmt_break();

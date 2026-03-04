@@ -119,6 +119,15 @@ namespace parus::diag {
         kEnumSwitchBindUnknownField,      // enum switch bind references unknown payload field
         kEnumProtoRequiresDefaultOnly,    // enum can only implement default-only proto in v0
         kEnumCAbiDirectSignatureForbidden,// enum direct C ABI signature is forbidden in v0
+        kThrowOnlyInThrowingFn,           // throw is only allowed in throwing ('?') function
+        kTryCatchOnlyInThrowingFn,        // try-catch is only allowed in throwing ('?') function
+        kTryExprOperandMustBeThrowingCall,// try expr operand must be throwing call expression
+        kThrowPayloadTypeNotAllowed,      // throw payload must be enum/struct value
+        kThrowPayloadMustBeRecoverable,   // throw payload must satisfy Recoverable proto
+        kTryCatchNeedsAtLeastOneCatch,    // try block requires at least one catch clause
+        kCatchBinderNameExpected,         // catch (...) binder name expected
+        kTryCatchExpectedCatchClause,     // try block must be followed by catch clause(s)
+        kExceptionLoweringDeferredV0,     // exception lowering is deferred in v0
 
         // def body parsing rule
         kFnReturnTypeRequired, // missing '-> ReturnType' in function declaration

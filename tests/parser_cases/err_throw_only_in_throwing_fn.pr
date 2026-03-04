@@ -1,0 +1,10 @@
+proto Recoverable {} with require(true);
+
+enum E: Recoverable {
+    case Fail,
+}
+
+def run() -> i32 {
+    throw E::Fail();
+    return 0i32;
+}

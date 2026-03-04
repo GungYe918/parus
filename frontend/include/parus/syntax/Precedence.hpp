@@ -106,6 +106,7 @@ namespace parus::syntax {
             case TokenKind::kMinus:
             case TokenKind::kPlusPlus:
             case TokenKind::kAmp:
+            case TokenKind::kKwTry:
             case TokenKind::kCaretAmp:
                 return PrefixInfo{95};
             default:

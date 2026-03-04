@@ -886,6 +886,31 @@ namespace parus::tyck {
             }
         }
 
+        if (old_s.catch_clause_count > 0) {
+            const auto& clauses = ast_.try_catch_clauses();
+            const uint64_t begin = old_s.catch_clause_begin;
+            const uint64_t end = begin + old_s.catch_clause_count;
+            if (begin <= clauses.size() && end <= clauses.size()) {
+                std::vector<ast::TryCatchClause> src_clauses;
+                src_clauses.reserve(old_s.catch_clause_count);
+                for (uint32_t i = 0; i < old_s.catch_clause_count; ++i) {
+                    src_clauses.push_back(clauses[old_s.catch_clause_begin + i]);
+                }
+                s.catch_clause_begin = static_cast<uint32_t>(ast_.try_catch_clauses().size());
+                s.catch_clause_count = old_s.catch_clause_count;
+                for (auto c : src_clauses) {
+                    if (c.bind_type != ty::kInvalidType) {
+                        c.bind_type = substitute_generic_type_(c.bind_type, subst);
+                    }
+                    c.body = clone_stmt_with_type_subst_(c.body, subst, expr_map, stmt_map);
+                    ast_.add_try_catch_clause(c);
+                }
+            } else {
+                s.catch_clause_begin = 0;
+                s.catch_clause_count = 0;
+            }
+        }
+
         if (old_s.field_member_count > 0) {
             const auto& members = ast_.field_members();
             const uint64_t begin = old_s.field_member_begin;

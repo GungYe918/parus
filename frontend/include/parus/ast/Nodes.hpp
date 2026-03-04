@@ -90,8 +90,10 @@ namespace parus::ast {
         kDoWhile,     // do { ... } while (cond);
         kManual,      // manual[perm,...] { ... }
         kReturn,
+        kThrow,
         kBreak,
         kContinue,
+        kTryCatch,
         kCommitStmt,
         kRecastStmt,
 
@@ -199,6 +201,16 @@ namespace parus::ast {
         bool has_discriminant = false;
         int64_t discriminant = 0;
         Span span{};
+    };
+
+    struct TryCatchClause {
+        std::string_view bind_name{};
+        bool has_typed_bind = false;
+        TypeId bind_type = k_invalid_type;
+        TypeNodeId bind_type_node = k_invalid_type_node;
+        StmtId body = k_invalid_stmt; // always block
+        Span span{};
+        uint32_t resolved_symbol = 0xFFFF'FFFFu; // name-resolve symbol id
     };
 
     struct SwitchCase {
@@ -546,6 +558,8 @@ namespace parus::ast {
         uint32_t case_begin = 0;
         uint32_t case_count = 0;
         bool has_default = false;
+        uint32_t catch_clause_begin = 0;
+        uint32_t catch_clause_count = 0;
 
         // ---- field decl ----
         FieldLayout field_layout = FieldLayout::kNone;
@@ -628,6 +642,10 @@ namespace parus::ast {
         uint32_t add_switch_enum_bind(const SwitchEnumBind& b) {
             switch_enum_binds_.push_back(b);
             return static_cast<uint32_t>(switch_enum_binds_.size() - 1);
+        }
+        uint32_t add_try_catch_clause(const TryCatchClause& c) {
+            try_catch_clauses_.push_back(c);
+            return static_cast<uint32_t>(try_catch_clauses_.size() - 1);
         }
 
         uint32_t add_field_member(const FieldMember& f) {
@@ -726,6 +744,8 @@ namespace parus::ast {
         std::vector<SwitchCase>& switch_cases_mut() {  return switch_cases_;  }  
         const std::vector<SwitchEnumBind>& switch_enum_binds() const { return switch_enum_binds_; }
         std::vector<SwitchEnumBind>& switch_enum_binds_mut() { return switch_enum_binds_; }
+        const std::vector<TryCatchClause>& try_catch_clauses() const { return try_catch_clauses_; }
+        std::vector<TryCatchClause>& try_catch_clauses_mut() { return try_catch_clauses_; }
 
         const std::vector<FieldMember>& field_members() const { return field_members_; }
         std::vector<FieldMember>& field_members_mut() { return field_members_; }
@@ -773,6 +793,7 @@ namespace parus::ast {
 
         std::vector<SwitchCase> switch_cases_;
         std::vector<SwitchEnumBind> switch_enum_binds_;
+        std::vector<TryCatchClause> try_catch_clauses_;
         std::vector<FieldMember> field_members_;
         std::vector<EnumVariantDecl> enum_variant_decls_;
         std::vector<FieldInitEntry> field_init_entries_;

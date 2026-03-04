@@ -1011,6 +1011,51 @@ namespace parus::tyck {
         // - '&' / '&mut' / '^&' 의 의미 규칙(place, escape, conflict 등)은
         //   capability 단계에서 독립적으로 검사한다.
         // - tyck는 여기서 "결과 타입 계산"만 수행한다.
+        if (e.op == K::kKwTry) {
+            if (e.a == ast::k_invalid_expr || (size_t)e.a >= ast_.exprs().size()) {
+                diag_(diag::Code::kTryExprOperandMustBeThrowingCall, e.span);
+                err_(e.span, "try operand must be a throwing function call expression");
+                fn_ctx_.has_exception_construct = true;
+                return types_.error();
+            }
+
+            const auto& operand = ast_.expr(e.a);
+            if (operand.kind != ast::ExprKind::kCall) {
+                (void)check_expr_(e.a);
+                diag_(diag::Code::kTryExprOperandMustBeThrowingCall, e.span);
+                err_(e.span, "try operand must be a throwing function call expression");
+                fn_ctx_.has_exception_construct = true;
+                return types_.error();
+            }
+
+            const bool saved_try_ctx = in_try_expr_context_;
+            in_try_expr_context_ = true;
+            ty::TypeId at = check_expr_(e.a);
+            in_try_expr_context_ = saved_try_ctx;
+
+            bool is_throwing_call = false;
+            if ((size_t)e.a < expr_overload_target_cache_.size()) {
+                const ast::StmtId target_sid = expr_overload_target_cache_[e.a];
+                if (target_sid != ast::k_invalid_stmt && (size_t)target_sid < ast_.stmts().size()) {
+                    const auto& target = ast_.stmt(target_sid);
+                    if (target.kind == ast::StmtKind::kFnDecl && target.is_throwing) {
+                        is_throwing_call = true;
+                    }
+                }
+            }
+            if (!is_throwing_call) {
+                diag_(diag::Code::kTryExprOperandMustBeThrowingCall, e.span);
+                err_(e.span, "try operand must be a throwing ('?') function call");
+                fn_ctx_.has_exception_construct = true;
+                return types_.error();
+            }
+
+            fn_ctx_.has_exception_construct = true;
+            if (is_error_(at)) return types_.error();
+            if (is_optional_(at)) return at;
+            return types_.make_optional(at);
+        }
+
         if (e.op == K::kAmp) {
             // slice borrow: &x[a..b], &mut x[a..:b]
             if (e.a != ast::k_invalid_expr) {

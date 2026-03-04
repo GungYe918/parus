@@ -1,0 +1,8 @@
+def plain() -> i32 {
+    return 1i32;
+}
+
+def run() -> i32 {
+    set v = try plain();
+    return v;
+}

@@ -62,6 +62,8 @@ namespace parusc::dump {
             case K::kError: return "Error";
             case K::kExprStmt: return "ExprStmt";
             case K::kVarDecl: return "VarDecl";
+            case K::kThrowStmt: return "ThrowStmt";
+            case K::kTryCatchStmt: return "TryCatchStmt";
             case K::kIfStmt: return "IfStmt";
             case K::kWhileStmt: return "WhileStmt";
             case K::kDoScopeStmt: return "DoScopeStmt";
@@ -223,8 +225,10 @@ namespace parusc::dump {
             case K::kUse:  return "Use";
             case K::kNestDecl: return "NestDecl";
             case K::kReturn: return "Return";
+            case K::kThrow: return "Throw";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";
+            case K::kTryCatch: return "TryCatch";
             case K::kCommitStmt: return "CommitStmt";
             case K::kRecastStmt: return "RecastStmt";
             case K::kFnDecl: return "FnDecl";

@@ -159,6 +159,8 @@ namespace parus::tyck {
         void check_stmt_do_while_(const ast::Stmt& s);
         void check_stmt_manual_(const ast::Stmt& s);
         void check_stmt_return_(const ast::Stmt& s);
+        void check_stmt_throw_(const ast::Stmt& s);
+        void check_stmt_try_catch_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
         void check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s);
         void check_stmt_proto_decl_(ast::StmtId sid);
@@ -247,10 +249,13 @@ namespace parus::tyck {
             bool in_fn = false;
             bool is_pure = false;
             bool is_comptime = false;
+            bool is_throwing = false;
+            bool has_exception_construct = false;
             ty::TypeId ret = ty::kInvalidType;
         };
         FnCtx fn_ctx_{};
         std::vector<ast::StmtId> fn_sid_stack_;
+        bool in_try_expr_context_ = false;
 
         // 심볼 테이블
         sema::SymbolTable sym_;

@@ -32,6 +32,7 @@ namespace parus::ast {
         kVarInit,
         kVarExpr,
         kReturnExpr,
+        kThrowExpr,
         kIfCond,
         kIfThen,
         kIfElse,
@@ -43,6 +44,8 @@ namespace parus::ast {
         kManualBody,
         kSwitchCond,
         kSwitchCaseBody,
+        kTryBody,
+        kCatchBody,
         kFnParamDefault,
         kFnBody,
         kBlockChild,
@@ -228,6 +231,10 @@ namespace parus::ast {
                     visit_expr_inner(ast, s.expr, v);
                     break;
 
+                case StmtKind::kThrow:
+                    visit_expr_inner(ast, s.expr, v);
+                    break;
+
                 case StmtKind::kCommitStmt:
                 case StmtKind::kRecastStmt:
                     break;
@@ -269,6 +276,26 @@ namespace parus::ast {
                                 s,
                                 StmtChildRole::kSwitchCaseBody,
                                 cases[s.case_begin + i].body,
+                                v
+                            );
+                        }
+                    }
+                    break;
+                }
+
+                case StmtKind::kTryCatch: {
+                    visit_stmt_child_if_(ast, id, s, StmtChildRole::kTryBody, s.a, v);
+                    const auto& clauses = ast.try_catch_clauses();
+                    const uint64_t begin = s.catch_clause_begin;
+                    const uint64_t end = begin + s.catch_clause_count;
+                    if (begin <= clauses.size() && end <= clauses.size()) {
+                        for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                            visit_stmt_child_if_(
+                                ast,
+                                id,
+                                s,
+                                StmtChildRole::kCatchBody,
+                                clauses[s.catch_clause_begin + i].body,
                                 v
                             );
                         }

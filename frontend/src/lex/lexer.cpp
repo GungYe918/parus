@@ -381,6 +381,9 @@ namespace parus {
         if (t.lexeme == "break")    { t.kind = syntax::TokenKind::kKwBreak;    return t; }
         if (t.lexeme == "continue") { t.kind = syntax::TokenKind::kKwContinue; return t; }
         if (t.lexeme == "manual")   { t.kind = syntax::TokenKind::kKwManual;   return t; }
+        if (t.lexeme == "throw")    { t.kind = syntax::TokenKind::kKwThrow;    return t; }
+        if (t.lexeme == "try")      { t.kind = syntax::TokenKind::kKwTry;      return t; }
+        if (t.lexeme == "catch")    { t.kind = syntax::TokenKind::kKwCatch;    return t; }
 
         if (t.lexeme == "switch")   { t.kind = syntax::TokenKind::kKwSwitch;    return t; }
         if (t.lexeme == "case")     { t.kind = syntax::TokenKind::kKwCase;      return t; }

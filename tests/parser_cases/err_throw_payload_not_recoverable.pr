@@ -1,0 +1,8 @@
+struct NotRecoverable {
+    code: i32;
+}
+
+def run?() -> i32 {
+    throw NotRecoverable { code: 1i32 };
+    return 0i32;
+}

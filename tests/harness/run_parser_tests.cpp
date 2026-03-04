@@ -1302,6 +1302,100 @@ namespace {
         return n;
     }
 
+    static bool test_try_catch_ast_shape_parsed() {
+        const std::string src = R"(
+            def run?() -> i32 {
+                try {
+                    return 1i32;
+                } catch (e) {
+                    return 2i32;
+                } catch (e2: i32) {
+                    return 3i32;
+                }
+            }
+        )";
+
+        auto p = parse_program(src);
+
+        bool found = false;
+        bool shape_ok = false;
+        for (const auto& s : p.ast.stmts()) {
+            if (s.kind != parus::ast::StmtKind::kTryCatch) continue;
+            found = true;
+
+            const auto& clauses = p.ast.try_catch_clauses();
+            const uint64_t begin = s.catch_clause_begin;
+            const uint64_t end = begin + s.catch_clause_count;
+            if (begin <= clauses.size() && end <= clauses.size() && s.catch_clause_count == 2) {
+                const auto& c0 = clauses[begin + 0];
+                const auto& c1 = clauses[begin + 1];
+                shape_ok =
+                    !c0.has_typed_bind &&
+                    c1.has_typed_bind &&
+                    c0.bind_name == "e" &&
+                    c1.bind_name == "e2";
+            }
+            break;
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "try-catch source must parse without diagnostics");
+        ok &= require_(found, "AST must include TryCatch stmt");
+        ok &= require_(shape_ok, "TryCatch AST must preserve catch clause slice/typed binder info");
+        return ok;
+    }
+
+    static bool test_try_expr_is_unary_try() {
+        const std::string src = R"(
+            def load?() -> i32 {
+                return 1i32;
+            }
+
+            def boot() -> i32 {
+                set v = try load();
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+
+        bool found_try_unary = false;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind == parus::ast::ExprKind::kUnary &&
+                e.op == parus::syntax::TokenKind::kKwTry) {
+                found_try_unary = true;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "try-expr source must parse without diagnostics");
+        ok &= require_(found_try_unary, "try expr must be represented as unary(kKwTry)");
+        return ok;
+    }
+
+    static bool test_try_expr_operand_must_be_throwing_call_single_core() {
+        const std::string src = R"(
+            def plain() -> i32 {
+                return 1i32;
+            }
+
+            def run() -> i32 {
+                set v = try plain();
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kTryExprOperandMustBeThrowingCall) == 1,
+            "try expr over non-throwing call must emit TryExprOperandMustBeThrowingCall exactly once");
+        return ok;
+    }
+
     static bool test_generic_proto_target_arity_reports_once() {
         const std::string src = R"(
             proto Holder<T> {
@@ -1434,6 +1528,9 @@ int main() {
         {"field_export_disallowed", test_field_export_disallowed},
         {"var_mut_prefix_forbidden_on_set", test_var_mut_prefix_forbidden_on_set},
         {"var_mut_prefix_forbidden_on_static", test_var_mut_prefix_forbidden_on_static},
+        {"try_catch_ast_shape_parsed", test_try_catch_ast_shape_parsed},
+        {"try_expr_is_unary_try", test_try_expr_is_unary_try},
+        {"try_expr_operand_must_be_throwing_call_single_core", test_try_expr_operand_must_be_throwing_call_single_core},
         {"generic_proto_target_arity_reports_once", test_generic_proto_target_arity_reports_once},
         {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
         {"file_cases_directory", test_file_cases_directory},

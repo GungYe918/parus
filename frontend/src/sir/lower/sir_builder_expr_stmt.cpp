@@ -564,6 +564,42 @@ namespace parus::sir::detail {
                 break;
             }
 
+            case parus::ast::StmtKind::kThrow:
+                out.kind = StmtKind::kThrowStmt;
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                break;
+
+            case parus::ast::StmtKind::kTryCatch: {
+                out.kind = StmtKind::kTryCatchStmt;
+                if (s.a != parus::ast::k_invalid_stmt) {
+                    out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                }
+
+                out.catch_clause_begin = static_cast<uint32_t>(m.try_catch_clauses.size());
+                out.catch_clause_count = 0;
+
+                const auto& clauses = ast.try_catch_clauses();
+                const uint64_t cb = s.catch_clause_begin;
+                const uint64_t ce = cb + s.catch_clause_count;
+                if (cb <= clauses.size() && ce <= clauses.size()) {
+                    for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                        const auto& ac = clauses[s.catch_clause_begin + i];
+                        TryCatchClause sc{};
+                        sc.bind_name = ac.bind_name;
+                        sc.has_typed_bind = ac.has_typed_bind;
+                        sc.bind_type = ac.bind_type;
+                        sc.bind_sym = ac.resolved_symbol;
+                        sc.span = ac.span;
+                        if (ac.body != parus::ast::k_invalid_stmt) {
+                            sc.body = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, ac.body);
+                        }
+                        (void)m.add_try_catch_clause(sc);
+                        out.catch_clause_count++;
+                    }
+                }
+                break;
+            }
+
             case parus::ast::StmtKind::kIf:
                 out.kind = StmtKind::kIfStmt;
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);

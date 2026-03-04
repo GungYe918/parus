@@ -1,0 +1,5 @@
+def run?() -> i32 {
+    set v = 1i32;
+    throw &v;
+    return 0i32;
+}

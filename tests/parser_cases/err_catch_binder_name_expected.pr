@@ -1,0 +1,7 @@
+def run?() -> i32 {
+    try {
+        return 1i32;
+    } catch (: i32) {
+        return 0i32;
+    }
+}

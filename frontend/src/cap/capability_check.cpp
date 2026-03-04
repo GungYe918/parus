@@ -351,6 +351,12 @@ namespace parus::cap {
                         return;
                     }
 
+                    case ast::StmtKind::kThrow:
+                        if (s.expr != ast::k_invalid_expr) {
+                            walk_expr_(s.expr, ExprUse::kValue);
+                        }
+                        return;
+
                     case ast::StmtKind::kBreak:
                         if (s.expr != ast::k_invalid_expr) walk_expr_(s.expr, ExprUse::kValue);
                         return;
@@ -377,6 +383,20 @@ namespace parus::cap {
                         const auto& cs = ast_.switch_cases();
                         for (uint32_t i = 0; i < s.case_count; ++i) {
                             walk_stmt_(cs[s.case_begin + i].body);
+                        }
+                        return;
+                    }
+
+                    case ast::StmtKind::kTryCatch: {
+                        walk_stmt_(s.a);
+                        const auto& clauses = ast_.try_catch_clauses();
+                        const uint64_t begin = s.catch_clause_begin;
+                        const uint64_t end = begin + s.catch_clause_count;
+                        if (begin > clauses.size() || end > clauses.size()) return;
+                        for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                            enter_scope_();
+                            walk_stmt_(clauses[s.catch_clause_begin + i].body);
+                            leave_scope_();
                         }
                         return;
                     }

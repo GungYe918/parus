@@ -234,6 +234,8 @@ namespace parus::sir {
         kError,
         kExprStmt,
         kVarDecl,   // let/set
+        kThrowStmt,
+        kTryCatchStmt,
         kIfStmt,
         kWhileStmt,
         kDoScopeStmt,
@@ -280,6 +282,15 @@ namespace parus::sir {
         parus::Span span{};
     };
 
+    struct TryCatchClause {
+        std::string_view bind_name{};
+        bool has_typed_bind = false;
+        TypeId bind_type = k_invalid_type;
+        SymbolId bind_sym = k_invalid_symbol;
+        BlockId body = k_invalid_block;
+        parus::Span span{};
+    };
+
     struct Stmt {
         StmtKind kind = StmtKind::kError;
         parus::Span span{};
@@ -310,6 +321,10 @@ namespace parus::sir {
         uint32_t case_begin = 0;
         uint32_t case_count = 0;
         bool has_default = false;
+
+        // try-catch
+        uint32_t catch_clause_begin = 0;
+        uint32_t catch_clause_count = 0;
     };
 
     struct Block {
@@ -473,6 +488,7 @@ namespace parus::sir {
         std::vector<GlobalVarDecl> globals;
         std::vector<SwitchCase> switch_cases;
         std::vector<SwitchEnumBind> switch_enum_binds;
+        std::vector<TryCatchClause> try_catch_clauses;
         std::vector<EscapeHandleMeta> escape_handles;
 
         // helpers
@@ -491,6 +507,7 @@ namespace parus::sir {
         uint32_t add_global(const GlobalVarDecl& g)     { globals.push_back(g); return (uint32_t)globals.size() - 1; }
         uint32_t add_switch_case(const SwitchCase& c)   { switch_cases.push_back(c); return (uint32_t)switch_cases.size() - 1; }
         uint32_t add_switch_enum_bind(const SwitchEnumBind& b) { switch_enum_binds.push_back(b); return (uint32_t)switch_enum_binds.size() - 1; }
+        uint32_t add_try_catch_clause(const TryCatchClause& c) { try_catch_clauses.push_back(c); return (uint32_t)try_catch_clauses.size() - 1; }
         uint32_t add_escape_handle(const EscapeHandleMeta& h) {
             escape_handles.push_back(h);
             return (uint32_t)escape_handles.size() - 1;

@@ -59,6 +59,10 @@ namespace parus::tyck {
                 check_stmt_return_(s);
                 return;
 
+            case ast::StmtKind::kThrow:
+                check_stmt_throw_(s);
+                return;
+
             case ast::StmtKind::kBreak: {
                 // break expr? 는 loop 결과 타입을 만든다.
                 if (!in_loop_()) {
@@ -113,6 +117,10 @@ namespace parus::tyck {
 
             case ast::StmtKind::kSwitch:
                 check_stmt_switch_(s);
+                return;
+
+            case ast::StmtKind::kTryCatch:
+                check_stmt_try_catch_(s);
                 return;
 
             case ast::StmtKind::kFnDecl:
@@ -562,6 +570,192 @@ namespace parus::tyck {
         }
     }
 
+    void TypeChecker::check_stmt_throw_(const ast::Stmt& s) {
+        if (!fn_ctx_.in_fn || !fn_ctx_.is_throwing) {
+            diag_(diag::Code::kThrowOnlyInThrowingFn, s.span);
+            err_(s.span, "throw is only allowed inside throwing ('?') functions");
+        }
+
+        if (s.expr == ast::k_invalid_expr) {
+            diag_(diag::Code::kThrowPayloadTypeNotAllowed, s.span, "<missing>");
+            err_(s.span, "throw payload expression is required");
+            fn_ctx_.has_exception_construct = true;
+            return;
+        }
+
+        ty::TypeId payload_t = check_expr_(s.expr, Slot::kValue);
+        (void)ensure_generic_field_instance_from_type_(payload_t, s.span);
+        (void)ensure_generic_enum_instance_from_type_(payload_t, s.span);
+
+        const bool is_struct_payload = (field_abi_meta_by_type_.find(payload_t) != field_abi_meta_by_type_.end());
+        const bool is_enum_payload = (enum_abi_meta_by_type_.find(payload_t) != enum_abi_meta_by_type_.end());
+        if (!is_struct_payload && !is_enum_payload) {
+            diag_(diag::Code::kThrowPayloadTypeNotAllowed, s.span, types_.to_string(payload_t));
+            err_(s.span, "throw payload must be enum/struct value in v0");
+            fn_ctx_.has_exception_construct = true;
+            return;
+        }
+
+        auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
+            std::string key = "Recoverable";
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
+                return it->second;
+            }
+            if (auto sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sid);
+                if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
+                    return pit->second;
+                }
+            }
+            return std::nullopt;
+        };
+
+        auto satisfies_recoverable = [&](ty::TypeId t, ast::StmtId recoverable_sid) -> bool {
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) {
+                owner_sid = it->second;
+            } else if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) {
+                owner_sid = it->second.sid;
+            }
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
+                return false;
+            }
+            const auto& owner = ast_.stmt(owner_sid);
+            const auto& refs = ast_.path_refs();
+            const uint64_t begin = owner.decl_path_ref_begin;
+            const uint64_t end = begin + owner.decl_path_ref_count;
+            if (begin > refs.size() || end > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], s.span)) {
+                    if (*psid == recoverable_sid) return true;
+                }
+            }
+            return false;
+        };
+
+        const auto recoverable_sid = resolve_recoverable_proto();
+        if (!recoverable_sid.has_value() || !satisfies_recoverable(payload_t, *recoverable_sid)) {
+            diag_(diag::Code::kThrowPayloadMustBeRecoverable, s.span, types_.to_string(payload_t));
+            err_(s.span, "throw payload must satisfy Recoverable proto");
+        }
+
+        fn_ctx_.has_exception_construct = true;
+    }
+
+    void TypeChecker::check_stmt_try_catch_(const ast::Stmt& s) {
+        if (!fn_ctx_.in_fn || !fn_ctx_.is_throwing) {
+            diag_(diag::Code::kTryCatchOnlyInThrowingFn, s.span);
+            err_(s.span, "try-catch is only allowed inside throwing ('?') functions");
+        }
+
+        if (s.catch_clause_count == 0) {
+            diag_(diag::Code::kTryCatchNeedsAtLeastOneCatch, s.span);
+            err_(s.span, "try-catch requires at least one catch clause");
+        }
+
+        if (s.a != ast::k_invalid_stmt) {
+            check_stmt_(s.a);
+        }
+
+        const auto& clauses = ast_.try_catch_clauses();
+        const uint64_t begin = s.catch_clause_begin;
+        const uint64_t end = begin + s.catch_clause_count;
+        if (begin > clauses.size() || end > clauses.size()) {
+            diag_(diag::Code::kTypeErrorGeneric, s.span, "invalid try-catch clause range");
+            err_(s.span, "invalid try-catch clause range");
+            fn_ctx_.has_exception_construct = true;
+            return;
+        }
+
+        auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
+            std::string key = "Recoverable";
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
+                return it->second;
+            }
+            if (auto sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sid);
+                if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
+                    return pit->second;
+                }
+            }
+            return std::nullopt;
+        };
+
+        auto satisfies_recoverable = [&](ty::TypeId t, ast::StmtId recoverable_sid, Span sp) -> bool {
+            ast::StmtId owner_sid = ast::k_invalid_stmt;
+            if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) {
+                owner_sid = it->second;
+            } else if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) {
+                owner_sid = it->second.sid;
+            }
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
+                return false;
+            }
+            const auto& owner = ast_.stmt(owner_sid);
+            const auto& refs = ast_.path_refs();
+            const uint64_t rb = owner.decl_path_ref_begin;
+            const uint64_t re = rb + owner.decl_path_ref_count;
+            if (rb > refs.size() || re > refs.size()) return false;
+            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], sp)) {
+                    if (*psid == recoverable_sid) return true;
+                }
+            }
+            return false;
+        };
+
+        const auto recoverable_sid = resolve_recoverable_proto();
+
+        for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+            const auto& cc = clauses[s.catch_clause_begin + i];
+            sym_.push_scope();
+
+            ty::TypeId bind_t = types_.error();
+            if (cc.has_typed_bind) {
+                bind_t = cc.bind_type;
+                (void)ensure_generic_field_instance_from_type_(bind_t, cc.span);
+                (void)ensure_generic_enum_instance_from_type_(bind_t, cc.span);
+                const bool is_struct_payload = (field_abi_meta_by_type_.find(bind_t) != field_abi_meta_by_type_.end());
+                const bool is_enum_payload = (enum_abi_meta_by_type_.find(bind_t) != enum_abi_meta_by_type_.end());
+                if (!is_struct_payload && !is_enum_payload) {
+                    diag_(diag::Code::kThrowPayloadTypeNotAllowed, cc.span, types_.to_string(bind_t));
+                    err_(cc.span, "typed catch binder must be enum/struct value in v0");
+                    bind_t = types_.error();
+                } else if (!recoverable_sid.has_value() ||
+                           !satisfies_recoverable(bind_t, *recoverable_sid, cc.span)) {
+                    diag_(diag::Code::kThrowPayloadMustBeRecoverable, cc.span, types_.to_string(bind_t));
+                    err_(cc.span, "typed catch binder must satisfy Recoverable proto");
+                }
+            }
+
+            if (cc.bind_name.empty()) {
+                diag_(diag::Code::kCatchBinderNameExpected, cc.span);
+                err_(cc.span, "catch binder name is required");
+            } else {
+                auto ins = sym_.insert(sema::SymbolKind::kVar, cc.bind_name, bind_t, cc.span);
+                if (!ins.ok && ins.is_duplicate) {
+                    diag_(diag::Code::kDuplicateDecl, cc.span, cc.bind_name);
+                    err_(cc.span, "duplicate catch binder name");
+                } else if (ins.ok) {
+                    sym_is_mut_[ins.symbol_id] = false;
+                }
+            }
+
+            if (cc.body != ast::k_invalid_stmt) {
+                check_stmt_(cc.body);
+            }
+            sym_.pop_scope();
+        }
+
+        fn_ctx_.has_exception_construct = true;
+    }
+
     void TypeChecker::check_stmt_switch_(const ast::Stmt& s) {
         ty::TypeId scrut_t = ty::kInvalidType;
         if (s.expr != ast::k_invalid_expr) {
@@ -833,6 +1027,8 @@ namespace parus::tyck {
         fn_ctx_.in_fn = true;
         fn_ctx_.is_pure = s.is_pure;
         fn_ctx_.is_comptime = s.is_comptime;
+        fn_ctx_.is_throwing = s.is_throwing;
+        fn_ctx_.has_exception_construct = false;
         fn_ctx_.ret = (ret == ty::kInvalidType) ? types_.error() : ret;
         fn_sid_stack_.push_back(sid);
 
@@ -927,6 +1123,7 @@ namespace parus::tyck {
 
                 switch (st.kind) {
                     case ast::StmtKind::kReturn:
+                    case ast::StmtKind::kThrow:
                         return true;
 
                     case ast::StmtKind::kBlock: {
@@ -947,6 +1144,23 @@ namespace parus::tyck {
                     case ast::StmtKind::kDoScope:
                     case ast::StmtKind::kManual:
                         return (st.a != ast::k_invalid_stmt) ? self(self, st.a) : false;
+
+                    case ast::StmtKind::kTryCatch: {
+                        // v0 정책: try body와 모든 catch body가 return하면 always-return으로 본다.
+                        if (st.a == ast::k_invalid_stmt) return false;
+                        if (!self(self, st.a)) return false;
+                        if (st.catch_clause_count == 0) return false;
+                        const auto& catches = ast_.try_catch_clauses();
+                        const uint32_t cb = st.catch_clause_begin;
+                        const uint32_t ce = st.catch_clause_begin + st.catch_clause_count;
+                        if (ce > catches.size()) return false;
+                        for (uint32_t i = cb; i < ce; ++i) {
+                            const auto& cc = catches[i];
+                            if (cc.body == ast::k_invalid_stmt) return false;
+                            if (!self(self, cc.body)) return false;
+                        }
+                        return true;
+                    }
 
                     // while/loop/switch 등은 v0에서 보수적으로 false
                     case ast::StmtKind::kWhile:

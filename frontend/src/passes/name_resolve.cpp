@@ -880,11 +880,44 @@ namespace parus::passes {
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
+            case ast::StmtKind::kThrow:
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                return;
+
             case ast::StmtKind::kBreak:
             case ast::StmtKind::kContinue:
             case ast::StmtKind::kCommitStmt:
             case ast::StmtKind::kRecastStmt:
                 return;
+
+            case ast::StmtKind::kTryCatch: {
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+
+                const auto& clauses = ast.try_catch_clauses();
+                const uint64_t begin = s.catch_clause_begin;
+                const uint64_t end = begin + s.catch_clause_count;
+                if (begin > clauses.size() || end > clauses.size()) {
+                    return;
+                }
+
+                for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                    const auto& cc = clauses[s.catch_clause_begin + i];
+                    ScopeGuard g(sym);
+                    AliasScopeGuard ag(import_aliases);
+
+                    if (cc.bind_name.empty()) {
+                        report(bag, diag::Severity::kError, diag::Code::kCatchBinderNameExpected, cc.span);
+                    } else {
+                        auto ins = declare_(sema::SymbolKind::kVar, cc.bind_name, cc.bind_type, cc.span, sym, bag, opt);
+                        if (ins.ok && !ins.is_duplicate) {
+                            (void)add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, cc.span);
+                        }
+                    }
+
+                    walk_stmt(ast, r, cc.body, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                }
+                return;
+            }
 
             case ast::StmtKind::kFnDecl: {
                 const std::string qname = qualify_name_(namespace_stack, s.name);

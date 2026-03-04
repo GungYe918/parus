@@ -201,6 +201,22 @@ namespace parus::sir::detail {
                 join_value(s.expr);
                 break;
 
+            case StmtKind::kThrowStmt:
+                join_value(s.expr);
+                eff = join_effect_(eff, EffectClass::kUnknown);
+                break;
+
+            case StmtKind::kTryCatchStmt:
+                if (s.a != k_invalid_block) join_block(s.a);
+                if ((uint64_t)s.catch_clause_begin + (uint64_t)s.catch_clause_count <=
+                    (uint64_t)m.try_catch_clauses.size()) {
+                    for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                        const auto& c = m.try_catch_clauses[s.catch_clause_begin + i];
+                        if (c.body != k_invalid_block) join_block(c.body);
+                    }
+                }
+                break;
+
             case StmtKind::kVarDecl:
                 join_value(s.init);
                 break;

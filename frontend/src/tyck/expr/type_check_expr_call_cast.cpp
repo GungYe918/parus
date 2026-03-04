@@ -1919,6 +1919,20 @@ namespace parus::tyck {
             return types_.error();
         }
 
+        if (selected_decl_sid != ast::k_invalid_stmt && (size_t)selected_decl_sid < ast_.stmts().size()) {
+            const auto& selected_decl = ast_.stmt(selected_decl_sid);
+            if (selected_decl.kind == ast::StmtKind::kFnDecl &&
+                selected_decl.is_throwing &&
+                !in_try_expr_context_ &&
+                !fn_ctx_.is_throwing) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                      "direct call to throwing function is not allowed here; wrap the call with 'try <call>'");
+                err_(e.span, "non-throwing function must use try expression for throwing call");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+        }
+
         const auto check_arg_against_param_final = [&](const ast::Arg& a, const ParamInfo& p) {
             if (a.expr == ast::k_invalid_expr) {
                 diag_(diag::Code::kTypeArgTypeMismatch, a.span,

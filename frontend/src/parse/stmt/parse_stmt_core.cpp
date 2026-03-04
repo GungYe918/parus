@@ -129,8 +129,10 @@ namespace parus {
         if (tok.kind == K::kKwDo)       return parse_stmt_do();
         if (tok.kind == K::kKwManual)   return parse_stmt_manual();
         if (tok.kind == K::kKwReturn)   return parse_stmt_return();
+        if (tok.kind == K::kKwThrow)    return parse_stmt_throw();
         if (tok.kind == K::kKwBreak)    return parse_stmt_break();
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();
+        if (tok.kind == K::kKwTry && cursor_.peek(1).kind == K::kLBrace) return parse_stmt_try_catch();
         if (tok.kind == K::kKwCommit || is_context_keyword(tok, "commit")) return parse_stmt_commit();
         if (tok.kind == K::kKwRecast || is_context_keyword(tok, "recast")) return parse_stmt_recast();
         if (tok.kind == K::kKwSwitch)   return parse_stmt_switch();
@@ -652,6 +654,93 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
+    ast::StmtId Parser::parse_stmt_throw() {
+        const Token kw = cursor_.bump();
+
+        ast::ExprId payload = ast::k_invalid_expr;
+        Span fallback = kw.span;
+
+        if (cursor_.at(syntax::TokenKind::kSemicolon)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "throw payload expression");
+        } else {
+            payload = parse_expr();
+            fallback = ast_.expr(payload).span;
+        }
+
+        const Span term_end = stmt_consume_semicolon_or_recover(fallback);
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kThrow;
+        s.expr = payload;
+        s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_stmt_try_catch() {
+        using K = syntax::TokenKind;
+
+        const Token try_kw = cursor_.bump(); // try
+        ast::StmtId try_body = parse_stmt_required_block("try");
+
+        const uint32_t catch_begin = static_cast<uint32_t>(ast_.try_catch_clauses().size());
+        uint32_t catch_count = 0;
+
+        while (cursor_.at(K::kKwCatch)) {
+            const Token catch_kw = cursor_.bump();
+            ast::TryCatchClause clause{};
+            clause.span = catch_kw.span;
+
+            if (!cursor_.eat(K::kLParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                recover_to_delim(K::kLParen, K::kRParen, K::kLBrace);
+                cursor_.eat(K::kLParen);
+            }
+
+            const Token bind_tok = cursor_.peek();
+            if (bind_tok.kind != K::kIdent) {
+                diag_report(diag::Code::kCatchBinderNameExpected, bind_tok.span);
+            } else {
+                cursor_.bump();
+                clause.bind_name = bind_tok.lexeme;
+            }
+
+            if (cursor_.eat(K::kColon)) {
+                auto pty = parse_type();
+                clause.has_typed_bind = true;
+                clause.bind_type = pty.id;
+                clause.bind_type_node = pty.node;
+            }
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kLBrace, K::kKwCatch);
+                cursor_.eat(K::kRParen);
+            }
+
+            clause.body = parse_stmt_required_block("catch");
+            if (clause.body != ast::k_invalid_stmt) {
+                clause.span = span_join(catch_kw.span, ast_.stmt(clause.body).span);
+            }
+
+            ast_.add_try_catch_clause(clause);
+            ++catch_count;
+        }
+
+        if (catch_count == 0) {
+            diag_report(diag::Code::kTryCatchExpectedCatchClause, cursor_.peek().span);
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kTryCatch;
+        s.a = try_body;
+        s.catch_clause_begin = catch_begin;
+        s.catch_clause_count = catch_count;
+        s.span = (catch_count > 0)
+            ? span_join(try_kw.span, ast_.try_catch_clauses()[catch_begin + catch_count - 1].span)
+            : span_join(try_kw.span, ast_.stmt(try_body).span);
+        return ast_.add_stmt(s);
+    }
+
     // break 파싱
     ast::StmtId Parser::parse_stmt_break() {
         const Token kw = cursor_.bump();
@@ -999,6 +1088,7 @@ namespace parus {
             || k == K::kKwElse
             || k == K::kKwElif
             || k == K::kKwCase
+            || k == K::kKwCatch
             || k == K::kKwDefault) {
             return fallback_end;
         }
