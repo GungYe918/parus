@@ -16,8 +16,10 @@
 
 이 문서는 장기 목표(Phase2+ 포함)와 현재 구현 기준(Phase1.5)을 함께 기록한다.
 
-1. 현재 라운드는 `typed macro(expr/stmt/item/type)`를 실사용 기준으로 고정한다.
-1. `with token`은 기본 비활성 상태이며, 실험 플래그를 켜도 확장기는 미구현 진단으로 종료한다.
+1. 현재 라운드는 `typed macro(expr/stmt/item/type)`와 `with token`을 모두 실사용 기준으로 고정한다.
+1. `with token`은 기본 활성화이며 별도 실험 플래그가 없다.
+1. token matcher는 `literal/capture/group/repeat($(...)*+?, separator)`를 지원한다.
+1. token capture fragment는 `tt/expr/stmt/item/type/path/ident/block`을 지원한다.
 1. 위생성은 binder 중심으로 제한한다(`let/set/def param/loop binder`).
 1. `$sizeof` 같은 표준 매크로는 빌트인 계약점/표준 라이브러리 체계 확정 이후로 이월한다.
 1. 매크로 예산은 기본값 + 사용자 조정 + 하드 상한 clamp 정책으로 동작한다.
@@ -27,7 +29,7 @@
 1. 문서 범위는 전체 설계 + EBNF로 고정한다.
 1. 매크로 호출 문법은 `$foo(...)`만 허용한다.
 1. `with token`의 장기 목표는 `macro_rules!` 코어급 표현력(반복/재귀 포함)이다.
-1. Phase1.5 구현에서는 `with token`을 실험 플래그로만 노출하고 확장은 미지원으로 고정한다.
+1. 현재 구현에서는 `with token` 코어 기능(패턴 매칭/반복/치환)이 활성화되어 있다.
 1. 안전성 우선 정책을 적용한다. 증명 불가능한 경우 보수적으로 실패/진단한다.
 
 ## 3. 비목표
@@ -94,11 +96,11 @@ MacroCall      := "$" Path "(" ArgTokenStream? ")" ;
 1. variadic 포워딩(`tt...`, `$n...`)
 1. 리터럴 토큰 매칭(키워드/연산자/구두점)
 
-Phase1.5 현재 상태:
+현재 상태:
 
-1. 기본값은 비활성이다.
-1. `-Xparus -macro-token-experimental` 또는 LSP 초기화 옵션으로만 선언 파싱을 허용한다.
-1. 확장기는 token-group arm을 만나면 결정적 미구현 진단(`kMacroTokenUnimplemented`)으로 실패한다.
+1. 기본값은 활성이다.
+1. 실험 플래그/초기화 옵션 없이 선언/확장/재파싱이 동작한다.
+1. repeat empty-progress, variadic 길이 불일치, 반복 문맥 외 variadic 사용은 전용 진단으로 차단한다.
 
 ## 6. 위생성(Hygiene) 모델
 
@@ -238,9 +240,9 @@ positional 규칙:
 
 `with token`:
 
-1. 플래그 OFF에서 선언 차단 진단
-1. 플래그 ON에서 선언 파싱 허용
-1. 확장 시 미구현 진단으로 결정적 실패
+1. 플래그 없이 선언/확장 가능
+1. 반복(`* + ?`, separator) 동작 검증
+1. token fragment(`tt/expr/stmt/item/type/path/ident/block`) 매칭 검증
 
 위생성:
 
@@ -272,7 +274,7 @@ positional:
 
 1. binder 중심 hygiene(`let/set/def param/loop binder`) 고정
 1. 예산 기본값(AOT/JIT) + 하드 상한 clamp + 경고 정책 고정
-1. `with token` 실험 플래그 게이팅 및 미구현 확장 진단 고정
+1. `with token` 코어 matcher/substitution 안정화
 
 ### Phase 2
 

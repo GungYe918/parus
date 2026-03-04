@@ -43,7 +43,6 @@ namespace parusc::cli {
 
         bool emit_llvm_ir = false;
         bool emit_object = false;
-        bool macro_token_experimental = false;
     };
 
     /// @brief bundle-aware compile context for LEI orchestration.

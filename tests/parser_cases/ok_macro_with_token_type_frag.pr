@@ -1,0 +1,12 @@
+macro pick_ty -> {
+    with token {
+        ($t: type) => type {
+            $t
+        };
+    }
+}
+
+def main() -> i32 {
+    let v: $pick_ty(i32) = 1i32;
+    return v;
+}

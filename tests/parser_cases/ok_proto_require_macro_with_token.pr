@@ -1,0 +1,21 @@
+macro always_true_tok -> {
+    with token {
+        ($x: tt) => expr {
+            true
+        };
+    }
+}
+
+proto P {
+    def f(self) -> i32;
+} with require($always_true_tok(Self) == true);
+
+class A: P {
+    init() = default;
+    def f(self) -> i32 { return 1i32; }
+}
+
+def main() -> i32 {
+    set a = A();
+    return a.f();
+}

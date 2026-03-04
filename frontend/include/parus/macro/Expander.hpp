@@ -5,6 +5,7 @@
 #include <parus/ty/TypePool.hpp>
 
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace parus::macro {
@@ -34,6 +35,43 @@ namespace parus::macro {
         uint32_t steps = 0;
         std::vector<Span> stack{};
     };
+
+    struct MacroTokenRange {
+        uint32_t begin = 0;
+        uint32_t count = 0;
+    };
+
+    struct MacroCaptureBinding {
+        std::string_view name{};
+        bool variadic = false;
+        std::vector<MacroTokenRange> ranges{};
+    };
+
+    enum class TokenArmMatchStatus : uint8_t {
+        kNoMatch = 0,
+        kMatch,
+        kError,
+    };
+
+    TokenArmMatchStatus match_token_arm(
+        ast::AstArena& ast,
+        ty::TypePool& types,
+        const ast::MacroArm& arm,
+        uint32_t arg_begin,
+        uint32_t arg_count,
+        Span call_span,
+        diag::Bag& diags,
+        std::vector<MacroCaptureBinding>& out_captures
+    );
+
+    bool substitute_token_template(
+        ast::AstArena& ast,
+        const ast::MacroArm& arm,
+        const std::vector<MacroCaptureBinding>& captures,
+        Span call_span,
+        diag::Bag& diags,
+        std::vector<Token>& out_tokens
+    );
 
     ExpansionBudget default_budget_aot();
     ExpansionBudget default_budget_jit();

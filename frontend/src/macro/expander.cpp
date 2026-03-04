@@ -23,20 +23,9 @@ namespace parus::macro {
             kType,
         };
 
-        struct TokenRange {
-            uint32_t begin = 0;
-            uint32_t count = 0;
-        };
-
-        struct CaptureBinding {
-            std::string_view name{};
-            bool variadic = false;
-            std::vector<TokenRange> ranges{};
-        };
-
         struct ArmMatchResult {
             bool ok = false;
-            std::vector<CaptureBinding> captures{};
+            std::vector<MacroCaptureBinding> captures{};
         };
 
         struct ExpandResult {
@@ -122,12 +111,12 @@ namespace parus::macro {
             return out;
         }
 
-        static std::vector<TokenRange> split_top_level_args_(
+        static std::vector<MacroTokenRange> split_top_level_args_(
             const ast::AstArena& ast,
             uint32_t begin,
             uint32_t count
         ) {
-            std::vector<TokenRange> out{};
+            std::vector<MacroTokenRange> out{};
             if (count == 0) return out;
 
             const auto& toks = ast.macro_tokens();
@@ -150,19 +139,19 @@ namespace parus::macro {
                 if (k == K::kComma && paren == 0 && brace == 0 && bracket == 0) {
                     const uint32_t seg_count = (i > cur_begin) ? (i - cur_begin) : 0;
                     if (seg_count > 0) {
-                        out.push_back(TokenRange{cur_begin, seg_count});
+                        out.push_back(MacroTokenRange{cur_begin, seg_count});
                     }
                     cur_begin = i + 1;
                 }
             }
 
             if (cur_begin < end) {
-                out.push_back(TokenRange{cur_begin, end - cur_begin});
+                out.push_back(MacroTokenRange{cur_begin, end - cur_begin});
             }
             return out;
         }
 
-        static bool is_path_tokens_(const ast::AstArena& ast, TokenRange r) {
+        static bool is_path_tokens_(const ast::AstArena& ast, MacroTokenRange r) {
             const auto& toks = ast.macro_tokens();
             if (r.count == 0) return false;
             bool expect_ident = true;
@@ -194,7 +183,7 @@ namespace parus::macro {
 
         static bool validate_fragment_(
             const ast::AstArena& ast,
-            TokenRange r,
+            MacroTokenRange r,
             ast::MacroFragKind frag,
             Span call_span
         ) {
@@ -256,14 +245,14 @@ namespace parus::macro {
                 return out;
             }
 
-            std::vector<CaptureBinding> binds{};
+            std::vector<MacroCaptureBinding> binds{};
             binds.reserve(capture_vec.size());
             if (variadic_idx < 0) {
                 if (args.size() != capture_vec.size()) return out;
                 for (uint32_t i = 0; i < capture_vec.size(); ++i) {
                     const auto& c = capture_vec[i];
                     if (!validate_fragment_(ast, args[i], c.frag, call_span)) return out;
-                    CaptureBinding b{};
+                    MacroCaptureBinding b{};
                     b.name = c.name;
                     b.variadic = false;
                     b.ranges.push_back(args[i]);
@@ -275,13 +264,13 @@ namespace parus::macro {
                 for (uint32_t i = 0; i < fixed; ++i) {
                     const auto& c = capture_vec[i];
                     if (!validate_fragment_(ast, args[i], c.frag, call_span)) return out;
-                    CaptureBinding b{};
+                    MacroCaptureBinding b{};
                     b.name = c.name;
                     b.variadic = false;
                     b.ranges.push_back(args[i]);
                     binds.push_back(std::move(b));
                 }
-                CaptureBinding vb{};
+                MacroCaptureBinding vb{};
                 vb.name = capture_vec[fixed].name;
                 vb.variadic = true;
                 for (uint32_t i = fixed; i < args.size(); ++i) {
@@ -339,7 +328,7 @@ namespace parus::macro {
         static bool substitute_template_(
             ast::AstArena& ast,
             const ast::MacroArm& arm,
-            const std::vector<CaptureBinding>& captures,
+            const std::vector<MacroCaptureBinding>& captures,
             Span call_span,
             std::vector<Token>& out_tokens
         ) {
@@ -350,7 +339,7 @@ namespace parus::macro {
             const size_t begin = arm.template_token_begin;
             const size_t end = arm.template_token_begin + arm.template_token_count;
 
-            auto emit_range = [&](TokenRange r) {
+            auto emit_range = [&](MacroTokenRange r) {
                 for (uint32_t i = 0; i < r.count; ++i) {
                     const uint32_t idx = r.begin + i;
                     if (idx >= arg_toks.size()) break;
@@ -457,20 +446,40 @@ namespace parus::macro {
             for (const auto gi : group_order) {
                 if (gi >= ctx.ast.macro_groups().size()) continue;
                 const auto& group = ctx.ast.macro_groups()[gi];
-                if (group.phase2_token_group || group.match_kind == ast::MacroMatchKind::kToken) {
-                    add_diag_(ctx.diags, diag::Code::kMacroTokenUnimplemented, call_span);
-                    return false;
-                }
+                const bool token_group = (group.match_kind == ast::MacroMatchKind::kToken);
                 for (uint32_t i = 0; i < group.arm_count; ++i) {
                     const auto ai = group.arm_begin + i;
                     if (ai >= arms.size()) break;
                     const auto& arm = arms[ai];
-                    const auto match = match_typed_arm_(ctx.ast, arm, arg_begin, arg_count, call_span);
-                    if (!match.ok) continue;
+
+                    std::vector<MacroCaptureBinding> captures{};
+                    if (token_group) {
+                        auto st = match_token_arm(
+                            ctx.ast,
+                            ctx.types,
+                            arm,
+                            arg_begin,
+                            arg_count,
+                            call_span,
+                            ctx.diags,
+                            captures
+                        );
+                        if (st == TokenArmMatchStatus::kError) return false;
+                        if (st != TokenArmMatchStatus::kMatch) continue;
+                    } else {
+                        const auto match = match_typed_arm_(ctx.ast, arm, arg_begin, arg_count, call_span);
+                        if (!match.ok) continue;
+                        captures = match.captures;
+                    }
 
                     std::vector<Token> sub{};
-                    if (!substitute_template_(ctx.ast, arm, match.captures, call_span, sub)) {
-                        add_diag_(ctx.diags, diag::Code::kMacroReparseFail, call_span, macro_name);
+                    const bool sub_ok = token_group
+                        ? substitute_token_template(ctx.ast, arm, captures, call_span, ctx.diags, sub)
+                        : substitute_template_(ctx.ast, arm, captures, call_span, sub);
+                    if (!sub_ok) {
+                        if (!token_group) {
+                            add_diag_(ctx.diags, diag::Code::kMacroReparseFail, call_span, macro_name);
+                        }
                         return false;
                     }
                     if (sub.size() > ctx.budget.max_output_tokens) {

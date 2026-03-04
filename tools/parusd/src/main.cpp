@@ -909,13 +909,6 @@ namespace {
             set_budget_field("maxOutputTokens", cfg.budget.max_output_tokens);
         }
 
-        if (const auto* exp_cfg = obj_get_(*root, "experimental");
-            exp_cfg != nullptr && exp_cfg->kind == JsonValue::Kind::kObject) {
-            if (const auto v = as_bool_(obj_get_(*exp_cfg, "macroWithToken")); v.has_value()) {
-                cfg.parser_features.macro_with_token = *v;
-            }
-        }
-
         const auto before = cfg.budget;
         const auto clamped = parus::macro::clamp_budget(cfg.budget);
         if (clamped.depth) {

@@ -1,0 +1,15 @@
+macro zip_sum -> {
+    with token {
+        ($( $x: expr ),* ; $( $y: expr ),*) => expr {
+            {
+                set mut acc = 0i32;
+                $( acc = acc + $x + $y; )*
+                acc
+            }
+        };
+    }
+}
+
+def main() -> i32 {
+    return $zip_sum(1i32, 2i32; 3i32);
+}

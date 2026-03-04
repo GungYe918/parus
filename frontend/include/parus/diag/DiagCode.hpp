@@ -33,8 +33,9 @@ namespace parus::diag {
         kMacroRepeatEmpty,             // repetition body can match empty
         kMacroRecursionBudget,         // expansion recursion/steps budget exceeded
         kMacroReparseFail,             // expanded output failed to reparse for OutKind
-        kMacroTokenExperimentalRequired, // with token requires explicit experimental flag
-        kMacroTokenUnimplemented,      // with token expansion path is not implemented yet
+        kMacroTokenPatternInvalid,     // with token pattern/template syntax is invalid
+        kMacroTokenRepeatLengthMismatch, // token-template repetition capture length mismatch
+        kMacroTokenVariadicOutsideRepeat, // variadic capture used outside repetition context
 
         // pipe + hole rules
         kPipeRhsMustBeCall,

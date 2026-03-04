@@ -125,18 +125,8 @@ namespace parus {
             const uint32_t arm_begin = static_cast<uint32_t>(ast_.macro_arms().size());
             uint32_t arm_count = 0;
 
-            const bool token_group_enabled = parser_features_.macro_with_token;
-            if (mk == ast::MacroMatchKind::kToken && !token_group_enabled) {
-                diag_report(diag::Code::kMacroTokenExperimentalRequired, mk_tok.span);
-            }
-
             while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
-                if (mk == ast::MacroMatchKind::kToken && !token_group_enabled) {
-                    recover_to_delim(K::kRBrace, K::kSemicolon);
-                    if (cursor_.eat(K::kSemicolon)) continue;
-                    break;
-                }
-
+                const Token pat_lparen = cursor_.peek();
                 if (!cursor_.eat(K::kLParen)) {
                     diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
                     recover_to_delim(K::kSemicolon, K::kRBrace);
@@ -146,70 +136,97 @@ namespace parus {
 
                 const uint32_t cap_begin = static_cast<uint32_t>(ast_.macro_captures().size());
                 uint32_t cap_count = 0;
-                while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
-                    if (mk == ast::MacroMatchKind::kToken) {
-                        (void)cursor_.eat(K::kDollar);
-                    }
-
-                    const Token cap_name = cursor_.peek();
-                    if (cap_name.kind != K::kIdent) {
-                        diag_report(diag::Code::kUnexpectedToken, cap_name.span, "capture name");
-                        recover_to_delim(K::kRParen, K::kComma);
-                        if (cursor_.eat(K::kComma)) continue;
-                        break;
-                    }
-                    cursor_.bump();
-
-                    if (!cursor_.eat(K::kColon)) {
-                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
-                        recover_to_delim(K::kRParen, K::kComma);
-                        if (cursor_.eat(K::kComma)) continue;
-                        break;
-                    }
-
-                    bool fk_ok = false;
-                    const Token fk_tok = cursor_.peek();
-                    const auto fk = parse_frag_kind_(fk_tok, fk_ok);
-                    if (!fk_ok) {
-                        diag_report(diag::Code::kUnexpectedToken, fk_tok.span, "fragment kind");
-                        recover_to_delim(K::kRParen, K::kComma);
-                        if (cursor_.eat(K::kComma)) continue;
-                        break;
-                    }
-                    cursor_.bump();
-
-                    bool variadic = false;
-                    if (is_variadic_marker_(cursor_)) {
-                        variadic = true;
-                        if (cursor_.peek().kind == K::kDotDot) {
-                            cursor_.bump();
-                            cursor_.bump();
-                        } else {
-                            cursor_.bump();
-                            cursor_.bump();
-                            cursor_.bump();
+                uint32_t pat_begin = 0;
+                uint32_t pat_count = 0;
+                if (mk == ast::MacroMatchKind::kToken) {
+                    pat_begin = static_cast<uint32_t>(ast_.macro_tokens().size());
+                    int paren_depth = 1;
+                    while (!cursor_.at(K::kEof) && paren_depth > 0) {
+                        const Token t = cursor_.peek();
+                        if (t.kind == K::kLParen) {
+                            ++paren_depth;
+                            ast_.add_macro_token(cursor_.bump());
+                            ++pat_count;
+                            continue;
                         }
+                        if (t.kind == K::kRParen) {
+                            --paren_depth;
+                            if (paren_depth == 0) {
+                                cursor_.bump(); // consume pattern ')'
+                                break;
+                            }
+                            ast_.add_macro_token(cursor_.bump());
+                            ++pat_count;
+                            continue;
+                        }
+                        ast_.add_macro_token(cursor_.bump());
+                        ++pat_count;
+                    }
+                    if (paren_depth != 0) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    }
+                } else {
+                    while (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+                        const Token cap_name = cursor_.peek();
+                        if (cap_name.kind != K::kIdent) {
+                            diag_report(diag::Code::kUnexpectedToken, cap_name.span, "capture name");
+                            recover_to_delim(K::kRParen, K::kComma);
+                            if (cursor_.eat(K::kComma)) continue;
+                            break;
+                        }
+                        cursor_.bump();
+
+                        if (!cursor_.eat(K::kColon)) {
+                            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
+                            recover_to_delim(K::kRParen, K::kComma);
+                            if (cursor_.eat(K::kComma)) continue;
+                            break;
+                        }
+
+                        bool fk_ok = false;
+                        const Token fk_tok = cursor_.peek();
+                        const auto fk = parse_frag_kind_(fk_tok, fk_ok);
+                        if (!fk_ok) {
+                            diag_report(diag::Code::kUnexpectedToken, fk_tok.span, "fragment kind");
+                            recover_to_delim(K::kRParen, K::kComma);
+                            if (cursor_.eat(K::kComma)) continue;
+                            break;
+                        }
+                        cursor_.bump();
+
+                        bool variadic = false;
+                        if (is_variadic_marker_(cursor_)) {
+                            variadic = true;
+                            if (cursor_.peek().kind == K::kDotDot) {
+                                cursor_.bump();
+                                cursor_.bump();
+                            } else {
+                                cursor_.bump();
+                                cursor_.bump();
+                                cursor_.bump();
+                            }
+                        }
+
+                        ast::MacroTypedCapture cap{};
+                        cap.name = cap_name.lexeme;
+                        cap.frag = fk;
+                        cap.variadic = variadic;
+                        cap.span = span_join(cap_name.span, cursor_.prev().span);
+                        ast_.add_macro_capture(cap);
+                        ++cap_count;
+
+                        if (cursor_.eat(K::kComma)) {
+                            if (cursor_.at(K::kRParen)) break;
+                            continue;
+                        }
+                        break;
                     }
 
-                    ast::MacroTypedCapture cap{};
-                    cap.name = cap_name.lexeme;
-                    cap.frag = fk;
-                    cap.variadic = variadic;
-                    cap.span = span_join(cap_name.span, cursor_.prev().span);
-                    ast_.add_macro_capture(cap);
-                    ++cap_count;
-
-                    if (cursor_.eat(K::kComma)) {
-                        if (cursor_.at(K::kRParen)) break;
-                        continue;
+                    if (!cursor_.eat(K::kRParen)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                        recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
+                        cursor_.eat(K::kRParen);
                     }
-                    break;
-                }
-
-                if (!cursor_.eat(K::kRParen)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-                    recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
-                    cursor_.eat(K::kRParen);
                 }
 
                 if (!cursor_.eat(K::kAssign)) {
@@ -234,7 +251,6 @@ namespace parus {
                     cursor_.eat(K::kLBrace);
                 }
 
-                const Token body_lb = cursor_.prev();
                 const uint32_t tpl_begin = static_cast<uint32_t>(ast_.macro_tokens().size());
                 uint32_t tpl_count = 0;
                 int depth = 1;
@@ -271,11 +287,12 @@ namespace parus {
                 ast::MacroArm arm{};
                 arm.capture_begin = cap_begin;
                 arm.capture_count = cap_count;
+                arm.pattern_token_begin = pat_begin;
+                arm.pattern_token_count = pat_count;
                 arm.out_kind = out_kind;
                 arm.template_token_begin = tpl_begin;
                 arm.template_token_count = tpl_count;
-                arm.token_pattern = (mk == ast::MacroMatchKind::kToken);
-                arm.span = span_join(body_lb.span, cursor_.prev().span);
+                arm.span = span_join(pat_lparen.span, cursor_.prev().span);
                 ast_.add_macro_arm(arm);
                 ++arm_count;
             }
@@ -290,7 +307,6 @@ namespace parus {
             g.match_kind = mk;
             g.arm_begin = arm_begin;
             g.arm_count = arm_count;
-            g.phase2_token_group = (mk == ast::MacroMatchKind::kToken);
             g.span = span_join(with_kw.span, cursor_.prev().span);
             ast_.add_macro_group(g);
             ++group_count;

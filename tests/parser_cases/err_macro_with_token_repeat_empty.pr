@@ -1,0 +1,11 @@
+macro bad_repeat -> {
+    with token {
+        ($( ),*) => expr {
+            0i32
+        };
+    }
+}
+
+def main() -> i32 {
+    return $bad_repeat();
+}

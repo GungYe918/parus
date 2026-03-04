@@ -14,7 +14,6 @@
 namespace parus {
 
     struct ParserFeatureFlags {
-        bool macro_with_token = false;
     };
 
     class Parser {

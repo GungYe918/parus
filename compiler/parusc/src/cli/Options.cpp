@@ -37,10 +37,6 @@ namespace parusc::cli {
                 out.internal.emit_object = true;
                 return true;
             }
-            if (token == "-macro-token-experimental") {
-                out.internal.macro_token_experimental = true;
-                return true;
-            }
             return false;
         }
 
@@ -407,7 +403,6 @@ namespace parusc::cli {
             << "  -Xparus -oir-dump\n"
             << "  -Xparus -emit-llvm-ir\n"
             << "  -Xparus -emit-object\n"
-            << "  -Xparus -macro-token-experimental\n"
             << "\n"
             << "LSP mode:\n"
             << "  parusc lsp --stdio\n";

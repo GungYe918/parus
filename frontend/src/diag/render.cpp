@@ -48,8 +48,9 @@ namespace parus::diag {
             case Code::kMacroRepeatEmpty: return "MacroRepeatEmpty";
             case Code::kMacroRecursionBudget: return "MacroRecursionBudget";
             case Code::kMacroReparseFail: return "MacroReparseFail";
-            case Code::kMacroTokenExperimentalRequired: return "MacroTokenExperimentalRequired";
-            case Code::kMacroTokenUnimplemented: return "MacroTokenUnimplemented";
+            case Code::kMacroTokenPatternInvalid: return "MacroTokenPatternInvalid";
+            case Code::kMacroTokenRepeatLengthMismatch: return "MacroTokenRepeatLengthMismatch";
+            case Code::kMacroTokenVariadicOutsideRepeat: return "MacroTokenVariadicOutsideRepeat";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
             case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
@@ -332,8 +333,9 @@ namespace parus::diag {
             case Code::kMacroRepeatEmpty: return "macro repetition body can match empty token stream";
             case Code::kMacroRecursionBudget: return "macro expansion budget exceeded for '{0}'";
             case Code::kMacroReparseFail: return "expanded macro output failed to parse as expected kind '{0}'";
-            case Code::kMacroTokenExperimentalRequired: return "'with token' requires '-Xparus -macro-token-experimental'";
-            case Code::kMacroTokenUnimplemented: return "'with token' group expansion is not implemented yet";
+            case Code::kMacroTokenPatternInvalid: return "invalid 'with token' pattern/template: {0}";
+            case Code::kMacroTokenRepeatLengthMismatch: return "token repetition capture length mismatch: {0}";
+            case Code::kMacroTokenVariadicOutsideRepeat: return "variadic capture '{0}' must be expanded with repetition context";
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
             case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
@@ -622,8 +624,9 @@ namespace parus::diag {
             case Code::kMacroRepeatEmpty: return "매크로 반복 본문이 빈 토큰 스트림과 매칭될 수 없습니다";
             case Code::kMacroRecursionBudget: return "매크로 '{0}' 확장 예산(깊이/단계)을 초과했습니다";
             case Code::kMacroReparseFail: return "매크로 확장 결과를 기대 kind '{0}'로 다시 파싱할 수 없습니다";
-            case Code::kMacroTokenExperimentalRequired: return "'with token'은 '-Xparus -macro-token-experimental' 옵션이 필요합니다";
-            case Code::kMacroTokenUnimplemented: return "'with token' 그룹 확장은 아직 구현되지 않았습니다";
+            case Code::kMacroTokenPatternInvalid: return "'with token' 패턴/템플릿이 올바르지 않습니다: {0}";
+            case Code::kMacroTokenRepeatLengthMismatch: return "token 반복 캡처 길이가 일치하지 않습니다: {0}";
+            case Code::kMacroTokenVariadicOutsideRepeat: return "variadic 캡처 '{0}'는 반복 문맥에서만 단일 항목으로 사용할 수 있습니다";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";

@@ -359,12 +359,13 @@ namespace parus::ast {
     };
 
     struct MacroArm {
-        uint32_t capture_begin = 0; // slice in AstArena::macro_captures_
-        uint32_t capture_count = 0;
+        uint32_t capture_begin = 0; // typed-group captures (slice in AstArena::macro_captures_)
+        uint32_t capture_count = 0; // typed-group captures count
+        uint32_t pattern_token_begin = 0; // token-group pattern tokens (slice in AstArena::macro_tokens_)
+        uint32_t pattern_token_count = 0; // token-group pattern token count
         MacroOutKind out_kind = MacroOutKind::kExpr;
         uint32_t template_token_begin = 0; // slice in AstArena::macro_tokens_
         uint32_t template_token_count = 0;
-        bool token_pattern = false; // reserved for Phase2
         Span span{};
     };
 
@@ -372,7 +373,6 @@ namespace parus::ast {
         MacroMatchKind match_kind = MacroMatchKind::kExpr;
         uint32_t arm_begin = 0; // slice in AstArena::macro_arms_
         uint32_t arm_count = 0;
-        bool phase2_token_group = false; // true when `with token` used
         Span span{};
     };
 

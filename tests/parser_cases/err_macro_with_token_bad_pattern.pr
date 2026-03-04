@@ -1,0 +1,11 @@
+macro bad_pattern -> {
+    with token {
+        ($x) => expr {
+            $x
+        };
+    }
+}
+
+def main() -> i32 {
+    return $bad_pattern(1i32);
+}

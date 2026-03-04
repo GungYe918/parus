@@ -1111,7 +1111,6 @@ namespace parusc::p0 {
         parus::ast::AstArena ast;
         parus::ty::TypePool types;
         parus::ParserFeatureFlags parser_flags{};
-        parser_flags.macro_with_token = opt.internal.macro_token_experimental;
         parus::Parser parser(tokens, ast, types, &bag, opt.max_errors, parser_flags);
         auto root = parser.parse_program();
 

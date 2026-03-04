@@ -11,6 +11,7 @@ add_library(parus_frontend STATIC
 
     ${PARUS_PARSE_SOURCES}
     src/macro/expander.cpp
+    src/macro/matcher_token.cpp
     src/macro/matcher_typed.cpp
     src/macro/hygiene.cpp
     src/type/type_resolve.cpp

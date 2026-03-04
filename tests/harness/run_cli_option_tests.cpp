@@ -89,7 +89,7 @@ namespace {
         return ok;
     }
 
-    static bool test_macro_token_experimental_flag_() {
+    static bool test_macro_token_experimental_removed_() {
         const auto opt = parse_({
             "-Xparus",
             "-macro-token-experimental",
@@ -97,11 +97,10 @@ namespace {
         });
 
         bool ok = true;
-        ok &= require_(opt.ok, "option parse must succeed");
-        ok &= require_(opt.has_xparus, "has_xparus must be set when internal option is used");
+        ok &= require_(!opt.ok, "removed option must fail parsing");
         ok &= require_(
-            opt.internal.macro_token_experimental,
-            "internal macro token experimental flag must be enabled");
+            opt.error.find("unknown -Xparus argument") != std::string::npos,
+            "removed option must report unknown -Xparus argument");
         return ok;
     }
 
@@ -117,7 +116,7 @@ int main() {
         {"macro_budget_parse", test_macro_budget_parse_},
         {"macro_budget_clamp_hard_max", test_macro_budget_clamp_hard_max_},
         {"macro_budget_clamp_zero_or_negative", test_macro_budget_clamp_zero_or_negative_},
-        {"macro_token_experimental_flag", test_macro_token_experimental_flag_},
+        {"macro_token_experimental_removed", test_macro_token_experimental_removed_},
     };
 
     int failed = 0;

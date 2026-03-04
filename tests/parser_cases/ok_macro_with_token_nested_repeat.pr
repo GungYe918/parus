@@ -1,0 +1,14 @@
+macro sum_nested -> {
+    with token {
+        ($( $x: expr ),*) => stmt {
+            {
+                $( $( $x; )? )*
+            }
+        };
+    }
+}
+
+def main() -> i32 {
+    $sum_nested(1i32, 2i32, 3i32);
+    return 0i32;
+}
