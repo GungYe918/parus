@@ -1357,6 +1357,11 @@ namespace parus::tyck {
 
         auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
             if (proto_sid == ast::k_invalid_stmt) return false;
+            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, e.span,
+                                                  /*emit_unsatisfied_diag=*/false,
+                                                  /*emit_shape_diag=*/false)) {
+                return false;
+            }
             if (proto_all_default_impl(proto_sid)) return true;
 
             ast::StmtId owner_sid = ast::k_invalid_stmt;

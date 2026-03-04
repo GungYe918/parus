@@ -1,0 +1,18 @@
+macro rone -> {
+    with expr {
+        () => expr { 1i32 };
+    }
+}
+
+proto P {
+    def f(self) -> i32;
+} with require($rone());
+
+class A: P {
+    init() = default;
+    def f(self) -> i32 { return 1i32; }
+}
+
+def main() -> i32 {
+    return 0i32;
+}

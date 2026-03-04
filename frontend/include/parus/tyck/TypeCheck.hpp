@@ -470,6 +470,20 @@ namespace parus::tyck {
             bool* out_typed_path_failure = nullptr
         );
         std::string path_ref_display_(const ast::PathRef& pr) const;
+        enum class ProtoRequireEvalResult : uint8_t {
+            kTrue = 0,
+            kFalse,
+            kTypeNotBool,
+            kTooComplex,
+        };
+        ProtoRequireEvalResult eval_proto_require_const_bool_(ast::ExprId expr_id) const;
+        bool evaluate_proto_require_at_apply_(
+            ast::StmtId proto_sid,
+            ty::TypeId owner_type,
+            Span apply_span,
+            bool emit_unsatisfied_diag = true,
+            bool emit_shape_diag = true
+        );
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
@@ -555,6 +569,8 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_acts_sids_;
         std::vector<ast::StmtId> generic_instantiated_field_sids_;
         std::vector<ast::StmtId> generic_instantiated_enum_sids_;
+        std::unordered_set<ast::ExprId> proto_require_type_diag_emitted_;
+        std::unordered_set<ast::ExprId> proto_require_complex_diag_emitted_;
 
     };
 

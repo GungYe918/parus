@@ -30,14 +30,18 @@ proto ProtoName [: BaseProto, ...] {
 ## 19.3 require 식 규칙 (v1)
 
 1. 파서는 `require(...)`에 일반 표현식을 허용한다.
-2. 타입체커는 현재 v1에서 단순 컴파일타임 bool 식만 허용한다.
+2. `require(...)` 안에서는 사용자 매크로 호출(`$name(...)`)을 사용할 수 있다.
+3. 내장 프레디킷 매크로(`$is_plain_data`, `$implements` 등)는 이번 라운드에 도입하지 않는다.
+4. 타입체커는 현재 v1에서 단순 컴파일타임 bool 식만 허용한다.
+5. `require` 식의 참/거짓 최종 판정은 proto 선언 시점이 아니라 적용 시점에서 수행한다.
 3. v1 허용식:
 4. `true`, `false`
 5. `not expr` 또는 `!expr`
 6. `expr and expr`
 7. `expr or expr`
-8. 괄호
+8. `expr == expr`, `expr != expr` (양변이 bool 상수식으로 접히는 경우)
 9. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
+10. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
 
 ## 19.4 적용 대상
 
@@ -45,6 +49,7 @@ proto ProtoName [: BaseProto, ...] {
 2. `struct Name : ProtoA, ...` 선언도 허용된다.
 3. `enum Name : ProtoA, ...` 선언도 허용되지만 v0에서는 default-only proto만 허용된다.
 4. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
+5. 적용 시점에 `require(...) == false`이면 `ProtoConstraintUnsatisfied`로 실패한다.
 
 ## 19.5 구현 충족 검사
 

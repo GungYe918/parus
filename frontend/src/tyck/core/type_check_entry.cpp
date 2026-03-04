@@ -775,6 +775,7 @@ namespace parus::tyck {
 
         s.expr = clone_expr_with_type_subst_(old_s.expr, subst, expr_map, stmt_map);
         s.init = clone_expr_with_type_subst_(old_s.init, subst, expr_map, stmt_map);
+        s.proto_require_expr = clone_expr_with_type_subst_(old_s.proto_require_expr, subst, expr_map, stmt_map);
         s.a = clone_stmt_with_type_subst_(old_s.a, subst, expr_map, stmt_map);
         s.b = clone_stmt_with_type_subst_(old_s.b, subst, expr_map, stmt_map);
 
@@ -1423,6 +1424,11 @@ namespace parus::tyck {
 
         auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
             if (proto_sid == ast::k_invalid_stmt) return false;
+            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
+                                                  /*emit_unsatisfied_diag=*/false,
+                                                  /*emit_shape_diag=*/false)) {
+                return false;
+            }
             if (proto_all_default_impl(proto_sid)) return true;
 
             ast::StmtId owner_sid = ast::k_invalid_stmt;
@@ -1826,6 +1832,11 @@ namespace parus::tyck {
 
         auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
             if (proto_sid == ast::k_invalid_stmt) return false;
+            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
+                                                  /*emit_unsatisfied_diag=*/false,
+                                                  /*emit_shape_diag=*/false)) {
+                return false;
+            }
             if (proto_all_default_impl(proto_sid)) return true;
 
             ast::StmtId owner_sid = ast::k_invalid_stmt;
@@ -2178,6 +2189,11 @@ namespace parus::tyck {
 
         auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
             if (proto_sid == ast::k_invalid_stmt) return false;
+            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
+                                                  /*emit_unsatisfied_diag=*/false,
+                                                  /*emit_shape_diag=*/false)) {
+                return false;
+            }
             if (proto_all_default_impl(proto_sid)) return true;
 
             ast::StmtId owner_sid = ast::k_invalid_stmt;

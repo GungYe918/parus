@@ -645,7 +645,12 @@ namespace parus::tyck {
             if (begin > refs.size() || end > refs.size()) return false;
             for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
                 if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], s.span)) {
-                    if (*psid == recoverable_sid) return true;
+                    if (*psid == recoverable_sid) {
+                        return evaluate_proto_require_at_apply_(
+                            recoverable_sid, t, s.span,
+                            /*emit_unsatisfied_diag=*/false,
+                            /*emit_shape_diag=*/false);
+                    }
                 }
             }
             return false;
@@ -719,7 +724,12 @@ namespace parus::tyck {
             if (rb > refs.size() || re > refs.size()) return false;
             for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
                 if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], sp)) {
-                    if (*psid == recoverable_sid) return true;
+                    if (*psid == recoverable_sid) {
+                        return evaluate_proto_require_at_apply_(
+                            recoverable_sid, t, sp,
+                            /*emit_unsatisfied_diag=*/false,
+                            /*emit_shape_diag=*/false);
+                    }
                 }
             }
             return false;
@@ -1215,6 +1225,131 @@ namespace parus::tyck {
         sym_.pop_scope();
     }
 
+    TypeChecker::ProtoRequireEvalResult TypeChecker::eval_proto_require_const_bool_(ast::ExprId expr_id) const {
+        if (expr_id == ast::k_invalid_expr || (size_t)expr_id >= ast_.exprs().size()) {
+            return ProtoRequireEvalResult::kTooComplex;
+        }
+
+        struct Fold {
+            enum class Kind : uint8_t {
+                kBoolConst = 0,
+                kNonBool,
+                kTooComplex,
+            };
+            Kind kind = Kind::kTooComplex;
+            bool value = false;
+        };
+
+        auto eval = [&](auto&& self, ast::ExprId eid) -> Fold {
+            if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) {
+                return {Fold::Kind::kTooComplex, false};
+            }
+            const auto& e = ast_.expr(eid);
+            switch (e.kind) {
+                case ast::ExprKind::kBoolLit:
+                    return {Fold::Kind::kBoolConst, e.text == "true"};
+
+                case ast::ExprKind::kUnary: {
+                    if (e.op != K::kBang && e.op != K::kKwNot) {
+                        return {Fold::Kind::kTooComplex, false};
+                    }
+                    const Fold inner = self(self, e.a);
+                    if (inner.kind == Fold::Kind::kBoolConst) {
+                        return {Fold::Kind::kBoolConst, !inner.value};
+                    }
+                    return inner;
+                }
+
+                case ast::ExprKind::kBinary: {
+                    const Fold lhs = self(self, e.a);
+                    const Fold rhs = self(self, e.b);
+                    if (lhs.kind == Fold::Kind::kTooComplex || rhs.kind == Fold::Kind::kTooComplex) {
+                        return {Fold::Kind::kTooComplex, false};
+                    }
+                    if (lhs.kind != Fold::Kind::kBoolConst || rhs.kind != Fold::Kind::kBoolConst) {
+                        return {Fold::Kind::kNonBool, false};
+                    }
+                    if (e.op == K::kKwAnd) {
+                        return {Fold::Kind::kBoolConst, lhs.value && rhs.value};
+                    }
+                    if (e.op == K::kKwOr) {
+                        return {Fold::Kind::kBoolConst, lhs.value || rhs.value};
+                    }
+                    if (e.op == K::kEqEq) {
+                        return {Fold::Kind::kBoolConst, lhs.value == rhs.value};
+                    }
+                    if (e.op == K::kBangEq) {
+                        return {Fold::Kind::kBoolConst, lhs.value != rhs.value};
+                    }
+                    return {Fold::Kind::kTooComplex, false};
+                }
+
+                case ast::ExprKind::kIntLit:
+                case ast::ExprKind::kFloatLit:
+                case ast::ExprKind::kStringLit:
+                case ast::ExprKind::kCharLit:
+                case ast::ExprKind::kNullLit:
+                case ast::ExprKind::kArrayLit:
+                case ast::ExprKind::kFieldInit:
+                    return {Fold::Kind::kNonBool, false};
+
+                default:
+                    return {Fold::Kind::kTooComplex, false};
+            }
+        };
+
+        const Fold folded = eval(eval, expr_id);
+        if (folded.kind == Fold::Kind::kBoolConst) {
+            return folded.value ? ProtoRequireEvalResult::kTrue : ProtoRequireEvalResult::kFalse;
+        }
+        if (folded.kind == Fold::Kind::kNonBool) {
+            return ProtoRequireEvalResult::kTypeNotBool;
+        }
+        return ProtoRequireEvalResult::kTooComplex;
+    }
+
+    bool TypeChecker::evaluate_proto_require_at_apply_(
+        ast::StmtId proto_sid,
+        ty::TypeId owner_type,
+        Span apply_span,
+        bool emit_unsatisfied_diag,
+        bool emit_shape_diag
+    ) {
+        (void)owner_type; // v1: reserved for Self-aware require evaluation.
+        if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return true;
+        const auto& ps = ast_.stmt(proto_sid);
+        if (ps.kind != ast::StmtKind::kProtoDecl) return true;
+        if (!ps.proto_has_require || ps.proto_require_expr == ast::k_invalid_expr) return true;
+
+        const ast::ExprId req_eid = ps.proto_require_expr;
+        const Span req_span = ((size_t)req_eid < ast_.exprs().size()) ? ast_.expr(req_eid).span : apply_span;
+        const ProtoRequireEvalResult status = eval_proto_require_const_bool_(req_eid);
+        switch (status) {
+            case ProtoRequireEvalResult::kTrue:
+                return true;
+            case ProtoRequireEvalResult::kFalse:
+                if (emit_unsatisfied_diag) {
+                    diag_(diag::Code::kProtoConstraintUnsatisfied, apply_span, std::string(ps.name));
+                    err_(apply_span, "proto require(...) evaluated to false at apply-site");
+                }
+                return false;
+            case ProtoRequireEvalResult::kTypeNotBool:
+                if (emit_shape_diag && proto_require_type_diag_emitted_.insert(req_eid).second) {
+                    diag_(diag::Code::kProtoRequireTypeNotBool, req_span);
+                    err_(req_span, "require(...) expression must be bool");
+                }
+                return false;
+            case ProtoRequireEvalResult::kTooComplex:
+                if (emit_shape_diag && proto_require_complex_diag_emitted_.insert(req_eid).second) {
+                    diag_(diag::Code::kProtoRequireExprTooComplex, req_span);
+                    err_(req_span,
+                         "require(...) supports only true/false/not/and/or/==/!= in v1");
+                }
+                return false;
+        }
+        return false;
+    }
+
     void TypeChecker::check_stmt_proto_decl_(ast::StmtId sid) {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
@@ -1264,47 +1399,12 @@ namespace parus::tyck {
         }
 
         if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
-            const ty::TypeId rt = check_expr_(s.proto_require_expr, Slot::kValue);
-            if (rt != types_.builtin(ty::Builtin::kBool)) {
-                diag_(diag::Code::kProtoRequireTypeNotBool, ast_.expr(s.proto_require_expr).span);
-                err_(ast_.expr(s.proto_require_expr).span, "require(...) expression must be bool");
-            } else {
-                auto eval_simple_bool = [&](auto&& self, ast::ExprId eid) -> std::optional<bool> {
-                    if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) return std::nullopt;
-                    const auto& e = ast_.expr(eid);
-                    switch (e.kind) {
-                        case ast::ExprKind::kBoolLit:
-                            return e.text == "true";
-                        case ast::ExprKind::kUnary: {
-                            if (e.op != K::kBang && e.op != K::kKwNot) return std::nullopt;
-                            auto v = self(self, e.a);
-                            if (!v.has_value()) return std::nullopt;
-                            return !(*v);
-                        }
-                        case ast::ExprKind::kBinary: {
-                            if (e.op != K::kKwAnd && e.op != K::kKwOr) return std::nullopt;
-                            auto lv = self(self, e.a);
-                            auto rv = self(self, e.b);
-                            if (!lv.has_value() || !rv.has_value()) return std::nullopt;
-                            if (e.op == K::kKwAnd) return (*lv) && (*rv);
-                            return (*lv) || (*rv);
-                        }
-                        default:
-                            return std::nullopt;
-                    }
-                };
-
-                auto v = eval_simple_bool(eval_simple_bool, s.proto_require_expr);
-                if (!v.has_value()) {
-                    diag_(diag::Code::kProtoRequireExprTooComplex, ast_.expr(s.proto_require_expr).span);
-                    err_(ast_.expr(s.proto_require_expr).span,
-                         "require(...) supports only true/false/not/and/or in v1");
-                } else if (!(*v)) {
-                    diag_(diag::Code::kProtoConstraintUnsatisfied, ast_.expr(s.proto_require_expr).span,
-                          std::string(s.name));
-                    err_(ast_.expr(s.proto_require_expr).span, "proto require(...) evaluated to false");
-                }
-            }
+            // Declaration-time check validates require expression shape only.
+            // Truth value is enforced at proto apply-site (class/struct/enum/generic concrete).
+            (void)evaluate_proto_require_at_apply_(
+                sid, ty::kInvalidType, s.span,
+                /*emit_unsatisfied_diag=*/false,
+                /*emit_shape_diag=*/true);
         }
 
         const auto& refs = ast_.path_refs();
@@ -1746,6 +1846,13 @@ namespace parus::tyck {
                     }
                     continue;
                 }
+                if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, pr.span,
+                                                      /*emit_unsatisfied_diag=*/true,
+                                                      /*emit_shape_diag=*/true)) {
+                    // When require(...) itself is not satisfied, suppress derived
+                    // member-missing diagnostics for this proto.
+                    continue;
+                }
 
                 std::vector<ast::StmtId> required;
                 std::unordered_set<ast::StmtId> visiting;
@@ -2035,6 +2142,11 @@ namespace parus::tyck {
                     err_(pr.span, "unknown proto target: " + proto_path);
                     continue;
                 }
+                if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, pr.span,
+                                                      /*emit_unsatisfied_diag=*/true,
+                                                      /*emit_shape_diag=*/true)) {
+                    continue;
+                }
 
                 std::vector<ast::StmtId> required;
                 std::unordered_set<ast::StmtId> visiting;
@@ -2173,6 +2285,11 @@ namespace parus::tyck {
                         diag_(diag::Code::kProtoImplTargetNotSupported, refs[i].span, p);
                         err_(refs[i].span, "unknown proto target: " + p);
                     }
+                    continue;
+                }
+                if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, refs[i].span,
+                                                      /*emit_unsatisfied_diag=*/true,
+                                                      /*emit_shape_diag=*/true)) {
                     continue;
                 }
 
