@@ -249,6 +249,7 @@ namespace parus::diag {
         kAbiCOverloadNotAllowed,// args[0]=def
         kAbiCNamedGroupNotAllowed, // args[0]=def
         kAbiCTypeNotFfiSafe,       // args[0]=entity, args[1]=type
+        kAbiCThrowingFnNotAllowed, // args[0]=def
         kAbiCGlobalMustBeStatic,   // args[0]=name
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)

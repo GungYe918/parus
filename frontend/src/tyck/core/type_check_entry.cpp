@@ -32,6 +32,7 @@ namespace parus::tyck {
         pending_int_expr_.clear();
         fn_sid_stack_.clear();
         sym_is_mut_.clear();
+        untyped_catch_binder_symbols_.clear();
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();

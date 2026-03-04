@@ -1,0 +1,5 @@
+extern "C" def danger?() -> i32;
+
+def main() -> i32 {
+    return 0i32;
+}

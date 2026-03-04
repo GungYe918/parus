@@ -1,0 +1,22 @@
+proto Recoverable {} with require(true);
+
+struct StoreErr: Recoverable {
+    code: i32;
+}
+
+def read?() -> i32 {
+    throw StoreErr { code: 7i32 };
+}
+
+def run?() -> i32 {
+    try {
+        return read();
+    } catch (e: StoreErr) {
+        return e.code;
+    }
+}
+
+def main() -> i32 {
+    set v = try run();
+    return v ?? -1i32;
+}

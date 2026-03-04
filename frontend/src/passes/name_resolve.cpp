@@ -893,7 +893,7 @@ namespace parus::passes {
             case ast::StmtKind::kTryCatch: {
                 walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
 
-                const auto& clauses = ast.try_catch_clauses();
+                auto& clauses = const_cast<ast::AstArena&>(ast).try_catch_clauses_mut();
                 const uint64_t begin = s.catch_clause_begin;
                 const uint64_t end = begin + s.catch_clause_count;
                 if (begin > clauses.size() || end > clauses.size()) {
@@ -901,15 +901,17 @@ namespace parus::passes {
                 }
 
                 for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
-                    const auto& cc = clauses[s.catch_clause_begin + i];
+                    auto& cc = clauses[s.catch_clause_begin + i];
                     ScopeGuard g(sym);
                     AliasScopeGuard ag(import_aliases);
+                    cc.resolved_symbol = sema::SymbolTable::kNoScope;
 
                     if (cc.bind_name.empty()) {
                         report(bag, diag::Severity::kError, diag::Code::kCatchBinderNameExpected, cc.span);
                     } else {
                         auto ins = declare_(sema::SymbolKind::kVar, cc.bind_name, cc.bind_type, cc.span, sym, bag, opt);
                         if (ins.ok && !ins.is_duplicate) {
+                            cc.resolved_symbol = ins.symbol_id;
                             (void)add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, cc.span);
                         }
                     }

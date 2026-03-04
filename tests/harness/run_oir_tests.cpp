@@ -1436,6 +1436,109 @@ namespace {
         return ok;
     }
 
+    /// @brief throw payload가 예외 전역 슬롯에 저장되고 typed catch에서 복원되며,
+    /// untyped catch의 `throw e` 재던지기가 dynamic type-id 경로로 내려가는지 검사한다.
+    static bool test_exception_payload_and_rethrow_lowering_ok() {
+        const std::string src = R"(
+            proto Recoverable {} with require(true);
+
+            struct E: Recoverable {
+                code: i32;
+            }
+
+            def leaf?() -> i32 {
+                throw E { code: 7i32 };
+            }
+
+            def wrap?() -> i32 {
+                try {
+                    return leaf();
+                } catch (e: E) {
+                    return e.code;
+                } catch (e) {
+                    throw e;
+                }
+            }
+
+            def main() -> i32 {
+                set v = try wrap();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "exception payload source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "exception payload source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "exception payload source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for exception payload source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for exception payload source");
+        if (!ok) return false;
+
+        bool has_exc_active_global = false;
+        bool has_exc_type_global = false;
+        bool has_exc_payload_global = false;
+        for (const auto& g : oir.mod.globals) {
+            if (g.name == "__parus_exc_active") has_exc_active_global = true;
+            if (g.name == "__parus_exc_type") has_exc_type_global = true;
+            if (g.name.find("__parus_exc_payload$") == 0) has_exc_payload_global = true;
+        }
+        ok &= require_(has_exc_active_global, "exception lowering must synthesize __parus_exc_active global");
+        ok &= require_(has_exc_type_global, "exception lowering must synthesize __parus_exc_type global");
+        ok &= require_(has_exc_payload_global, "exception lowering must synthesize typed payload global");
+        if (!ok) return false;
+
+        auto value_def_inst = [&](parus::oir::ValueId v) -> const parus::oir::Inst* {
+            if (v == parus::oir::kInvalidId || v >= oir.mod.values.size()) return nullptr;
+            const auto ida = oir.mod.values[v].def_a;
+            if (ida == parus::oir::kInvalidId || ida >= oir.mod.insts.size()) return nullptr;
+            return &oir.mod.insts[ida];
+        };
+        auto slot_is_global_named = [&](parus::oir::ValueId slot, std::string_view name_prefix) -> bool {
+            const auto* di = value_def_inst(slot);
+            if (di == nullptr) return false;
+            if (!std::holds_alternative<parus::oir::InstGlobalRef>(di->data)) return false;
+            const auto& gr = std::get<parus::oir::InstGlobalRef>(di->data);
+            return gr.name.find(name_prefix) == 0;
+        };
+
+        bool has_payload_store = false;
+        bool has_payload_load = false;
+        bool has_dynamic_exc_type_store = false;
+
+        for (const auto& inst : oir.mod.insts) {
+            if (const auto* st = std::get_if<parus::oir::InstStore>(&inst.data)) {
+                if (slot_is_global_named(st->slot, "__parus_exc_payload$")) {
+                    has_payload_store = true;
+                }
+                if (slot_is_global_named(st->slot, "__parus_exc_type")) {
+                    const auto* vdef = value_def_inst(st->value);
+                    if (vdef != nullptr && !std::holds_alternative<parus::oir::InstConstInt>(vdef->data)) {
+                        has_dynamic_exc_type_store = true;
+                    }
+                }
+            } else if (const auto* ld = std::get_if<parus::oir::InstLoad>(&inst.data)) {
+                if (slot_is_global_named(ld->slot, "__parus_exc_payload$")) {
+                    has_payload_load = true;
+                }
+            }
+        }
+
+        ok &= require_(has_payload_store, "throw payload must be stored to typed exception payload slot");
+        ok &= require_(has_payload_load, "typed catch must load payload from typed exception payload slot");
+        ok &= require_(has_dynamic_exc_type_store,
+                       "untyped catch rethrow must store dynamic exception type-id (non-constant path)");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -1468,6 +1571,7 @@ int main() {
         {"class_raii_scope_exit_deinit_call_ok", test_class_raii_scope_exit_deinit_call_ok},
         {"class_raii_escape_move_skips_deinit_call_ok", test_class_raii_escape_move_skips_deinit_call_ok},
         {"actor_spawn_and_markers_lowering_ok", test_actor_spawn_and_markers_lowering_ok},
+        {"exception_payload_and_rethrow_lowering_ok", test_exception_payload_and_rethrow_lowering_ok},
     };
 
     int failed = 0;

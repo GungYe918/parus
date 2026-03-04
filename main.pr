@@ -1,6 +1,0 @@
-def main() -> i32 {
-    set a = 10;
-    set b = copy a;
-    
-    return 42;
-}

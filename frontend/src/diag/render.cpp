@@ -229,6 +229,7 @@ namespace parus::diag {
             case Code::kAbiCOverloadNotAllowed:return "AbiCOverloadNotAllowed";
             case Code::kAbiCNamedGroupNotAllowed:return "AbiCNamedGroupNotAllowed";
             case Code::kAbiCTypeNotFfiSafe:return "AbiCTypeNotFfiSafe";
+            case Code::kAbiCThrowingFnNotAllowed:return "AbiCThrowingFnNotAllowed";
             case Code::kAbiCGlobalMustBeStatic:return "AbiCGlobalMustBeStatic";
             case Code::kTypeReturnOutsideFn:  return "TypeReturnOutsideFn";
             case Code::kTypeReturnExprRequired:return "TypeReturnExprRequired";
@@ -511,6 +512,7 @@ namespace parus::diag {
             case Code::kAbiCOverloadNotAllowed: return "C ABI function '{0}' must not be overloaded";
             case Code::kAbiCNamedGroupNotAllowed: return "C ABI function '{0}' must not use named-group parameters";
             case Code::kAbiCTypeNotFfiSafe: return "C ABI requires FFI-safe type for {0}; got '{1}'";
+            case Code::kAbiCThrowingFnNotAllowed: return "C ABI function '{0}' must not be throwing ('?'); convert exception channel at boundary";
             case Code::kAbiCGlobalMustBeStatic: return "C ABI global '{0}' must be declared with 'static'";
             case Code::kTypeReturnOutsideFn:  return "return outside of function";
             case Code::kTypeReturnExprRequired: return "return expression is required (function does not return void)";
@@ -800,6 +802,7 @@ namespace parus::diag {
             case Code::kAbiCOverloadNotAllowed: return "C ABI 함수 '{0}'는 오버로딩할 수 없습니다";
             case Code::kAbiCNamedGroupNotAllowed: return "C ABI 함수 '{0}'는 named-group 파라미터를 사용할 수 없습니다";
             case Code::kAbiCTypeNotFfiSafe: return "C ABI의 {0}에는 FFI-safe 타입만 허용됩니다. 현재 타입: '{1}'";
+            case Code::kAbiCThrowingFnNotAllowed: return "C ABI 함수 '{0}'는 throwing('?')일 수 없습니다. 경계에서 예외 채널을 변환하세요";
             case Code::kAbiCGlobalMustBeStatic: return "C ABI 전역 '{0}'는 반드시 'static'으로 선언해야 합니다";
             case Code::kTypeReturnOutsideFn:  return "함수 밖에서 return을 사용할 수 없습니다";
             case Code::kTypeReturnExprRequired:return "return에는 식이 필요합니다(현재 반환 타입이 void가 아닙니다)";

@@ -327,6 +327,9 @@ namespace parus::tyck {
         // Mut tracking (tyck-level)
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
+        // catch(e) untyped binder symbols:
+        // - used to allow `throw e` rethrow in v0.
+        std::unordered_set<uint32_t> untyped_catch_binder_symbols_;
 
         // qualified-name -> overloaded def decl stmt ids
         // NOTE: std::string을 key로 쓰는 이유:

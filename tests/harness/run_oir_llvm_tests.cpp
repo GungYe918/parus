@@ -689,6 +689,67 @@ namespace {
         return emit_object_for_test_case_(lowered.llvm_ir, "copy_clone_patterns");
     }
 
+    /// @brief 예외 payload 슬롯 저장/복원 및 untyped rethrow dynamic type-id 경로를 LLVM-IR에서 검증한다.
+    static bool test_exception_payload_and_rethrow_llvm_patterns_() {
+        const std::string src = R"(
+            proto Recoverable {} with require(true);
+
+            struct E: Recoverable {
+                code: i32;
+            }
+
+            def leaf?() -> i32 {
+                throw E { code: 7i32 };
+            }
+
+            def wrap?() -> i32 {
+                try {
+                    return leaf();
+                } catch (e: E) {
+                    return e.code;
+                } catch (e) {
+                    throw e;
+                }
+            }
+
+            def main() -> i32 {
+                set v = try wrap();
+                return v ?? -1i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "exception payload/rethrow case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "exception payload/rethrow LLVM text lowering must succeed");
+        if (!ok) return false;
+
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_active") != std::string::npos,
+                       "LLVM-IR must contain __parus_exc_active global");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_type") != std::string::npos,
+                       "LLVM-IR must contain __parus_exc_type global");
+        ok &= require_(lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
+                       "LLVM-IR must contain typed exception payload global");
+        ok &= require_(lowered.llvm_ir.find("store %") != std::string::npos &&
+                           lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
+                       "throw path must store payload into typed exception payload global");
+        ok &= require_(lowered.llvm_ir.find("load %") != std::string::npos &&
+                           lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
+                       "typed catch path must load payload from typed exception payload global");
+        // untyped rethrow must propagate dynamic type-id (not constant-only path).
+        ok &= require_(lowered.llvm_ir.find("load i64, ptr @__parus_exc_type") != std::string::npos,
+                       "rethrow path must read existing exception type-id dynamically");
+        return emit_object_for_test_case_(lowered.llvm_ir, "exception_payload_rethrow_patterns");
+    }
+
     /// @brief nest 경로 함수가 namespace 포함 맹글 심볼로 내려가고 direct call되는지 검사한다.
     static bool test_nest_path_mangling_and_direct_call_() {
         const std::string src = R"(
@@ -1744,6 +1805,7 @@ int main() {
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},
         {"copy_clone_operator_and_builtin_lowering_patterns", test_copy_clone_operator_and_builtin_lowering_patterns_},
+        {"exception_payload_and_rethrow_llvm_patterns", test_exception_payload_and_rethrow_llvm_patterns_},
         {"nest_path_mangling_and_direct_call", test_nest_path_mangling_and_direct_call_},
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},

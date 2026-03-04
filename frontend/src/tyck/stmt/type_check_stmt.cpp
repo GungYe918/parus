@@ -587,6 +587,21 @@ namespace parus::tyck {
         (void)ensure_generic_field_instance_from_type_(payload_t, s.span);
         (void)ensure_generic_enum_instance_from_type_(payload_t, s.span);
 
+        // catch(e)에서 바인딩된 untyped payload는 opaque rethrow 토큰으로 허용한다.
+        // v0에서는 `throw e` 패턴만 보장하고, 구조 분해/필드 접근은 지원하지 않는다.
+        bool is_untyped_catch_rethrow = false;
+        const auto& payload_expr = ast_.expr(s.expr);
+        if (payload_expr.kind == ast::ExprKind::kIdent) {
+            if (auto sid = lookup_symbol_(payload_expr.text)) {
+                is_untyped_catch_rethrow = (untyped_catch_binder_symbols_.find(*sid) !=
+                                            untyped_catch_binder_symbols_.end());
+            }
+        }
+        if (is_untyped_catch_rethrow) {
+            fn_ctx_.has_exception_construct = true;
+            return;
+        }
+
         const bool is_struct_payload = (field_abi_meta_by_type_.find(payload_t) != field_abi_meta_by_type_.end());
         const bool is_enum_payload = (enum_abi_meta_by_type_.find(payload_t) != enum_abi_meta_by_type_.end());
         if (!is_struct_payload && !is_enum_payload) {
@@ -744,6 +759,9 @@ namespace parus::tyck {
                     err_(cc.span, "duplicate catch binder name");
                 } else if (ins.ok) {
                     sym_is_mut_[ins.symbol_id] = false;
+                    if (!cc.has_typed_bind) {
+                        untyped_catch_binder_symbols_.insert(ins.symbol_id);
+                    }
                 }
             }
 
@@ -935,6 +953,11 @@ namespace parus::tyck {
         }
 
         if (s.link_abi == ast::LinkAbi::kC) {
+            if (s.is_throwing) {
+                diag_(diag::Code::kAbiCThrowingFnNotAllowed, s.span, s.name);
+                err_(s.span, "C ABI function must not be throwing ('?'); convert exception channel at boundary");
+            }
+
             auto check_enum_direct_c_abi = [&](ty::TypeId t, Span sp, std::string_view what) {
                 (void)ensure_generic_enum_instance_from_type_(t, sp);
                 if (enum_abi_meta_by_type_.find(t) != enum_abi_meta_by_type_.end()) {

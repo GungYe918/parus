@@ -31,6 +31,7 @@ namespace parus::oir {
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
             const std::unordered_map<TypeId, FuncId>* class_deinit_map = nullptr;
+            const std::unordered_map<TypeId, uint32_t>* exc_payload_globals = nullptr;
             const std::unordered_set<FuncId>* throwing_funcs = nullptr;
             std::vector<parus::sir::VerifyError>* build_errors = nullptr;
             uint32_t exc_active_global = kInvalidId;
@@ -84,6 +85,7 @@ namespace parus::oir {
             std::vector<ScopeFrame> env_stack;
             std::vector<CleanupItem> cleanup_items;
             std::vector<TryContext> try_stack;
+            std::unordered_set<parus::sir::SymbolId> untyped_catch_binder_symbols;
 
             const FieldLayoutDecl* find_field_layout_(TypeId t) const {
                 if (out == nullptr) return nullptr;
@@ -364,11 +366,14 @@ namespace parus::oir {
             }
 
             ValueId emit_global_ref(uint32_t gid, const std::string& name) {
-                const TypeId ptr_ty =
-                    (types != nullptr)
-                        ? (TypeId)types->builtin(parus::ty::Builtin::kNull)
-                        : kInvalidId;
-                ValueId r = make_value(ptr_ty, Effect::Pure);
+                TypeId slot_ty = kInvalidId;
+                if (out != nullptr && (size_t)gid < out->globals.size()) {
+                    slot_ty = out->globals[gid].type;
+                }
+                if (slot_ty == kInvalidId && types != nullptr) {
+                    slot_ty = (TypeId)types->builtin(parus::ty::Builtin::kNull);
+                }
+                ValueId r = make_value(slot_ty, Effect::Pure);
                 Inst inst{};
                 inst.data = InstGlobalRef{gid, name};
                 inst.eff = Effect::Pure;
@@ -468,6 +473,35 @@ namespace parus::oir {
                 return emit_global_ref(exc_type_global, "__parus_exc_type");
             }
 
+            bool has_exception_payload_global_for_(TypeId payload_ty) const {
+                if (exc_payload_globals == nullptr || payload_ty == kInvalidId) return false;
+                return exc_payload_globals->find(payload_ty) != exc_payload_globals->end();
+            }
+
+            bool value_is_address_like_(ValueId v) const {
+                if (out == nullptr || v == kInvalidId) return false;
+                if ((size_t)v >= out->values.size()) return false;
+                const auto& val = out->values[v];
+                // block params are SSA values, not address-producing instructions.
+                if (val.def_b != kInvalidId) return false;
+                if (val.def_a == kInvalidId || (size_t)val.def_a >= out->insts.size()) return false;
+                const auto& inst = out->insts[val.def_a];
+                return std::holds_alternative<InstAllocaLocal>(inst.data) ||
+                       std::holds_alternative<InstField>(inst.data) ||
+                       std::holds_alternative<InstIndex>(inst.data) ||
+                       std::holds_alternative<InstGlobalRef>(inst.data);
+            }
+
+            ValueId emit_exc_payload_ptr_(TypeId payload_ty) {
+                if (!has_exception_payload_global_for_(payload_ty)) return kInvalidId;
+                const auto it = exc_payload_globals->find(payload_ty);
+                if (it == exc_payload_globals->end()) return kInvalidId;
+                if (out != nullptr && (size_t)it->second < out->globals.size()) {
+                    return emit_global_ref(it->second, out->globals[it->second].name);
+                }
+                return emit_global_ref(it->second, "__parus_exc_payload");
+            }
+
             TypeId bool_type_() const {
                 return (types != nullptr)
                     ? (TypeId)types->builtin(parus::ty::Builtin::kBool)
@@ -495,6 +529,47 @@ namespace parus::oir {
                 const uint32_t raw = (payload_ty == kInvalidId) ? 0u : (uint32_t)payload_ty;
                 const ValueId vv = emit_const_int(i64_type_(), std::to_string(raw));
                 emit_store(ptr, vv);
+            }
+
+            void emit_set_exc_type_from_value_(ValueId dynamic_ty) {
+                if (!has_exception_globals_()) return;
+                const ValueId ptr = emit_exc_type_ptr_();
+                if (ptr == kInvalidId || dynamic_ty == kInvalidId) return;
+                ValueId store_v = dynamic_ty;
+                if (out != nullptr && (size_t)dynamic_ty < out->values.size()) {
+                    const TypeId vt = out->values[dynamic_ty].ty;
+                    const TypeId i64t = i64_type_();
+                    if (vt != kInvalidId && i64t != kInvalidId && vt != i64t) {
+                        store_v = emit_cast(i64t, Effect::Pure, CastKind::As, i64t, dynamic_ty);
+                    }
+                }
+                emit_store(ptr, store_v);
+            }
+
+            void emit_store_exc_payload_(TypeId payload_ty, ValueId payload) {
+                if (payload_ty == kInvalidId || payload == kInvalidId) return;
+                const ValueId ptr = emit_exc_payload_ptr_(payload_ty);
+                if (ptr == kInvalidId) return;
+                ValueId store_v = payload;
+                // Struct/enum literals are materialized as temporary slots in OIR.
+                // Exception payload globals expect value stores, not slot pointers.
+                if (value_is_address_like_(store_v)) {
+                    store_v = emit_load(payload_ty, store_v);
+                }
+                if (out != nullptr && (size_t)store_v < out->values.size()) {
+                    const TypeId vt = out->values[store_v].ty;
+                    if (vt != kInvalidId && vt != payload_ty) {
+                        store_v = coerce_value_for_target(payload_ty, store_v);
+                    }
+                }
+                emit_store(ptr, store_v);
+            }
+
+            ValueId emit_load_exc_payload_(TypeId payload_ty) {
+                if (payload_ty == kInvalidId) return emit_const_null(kInvalidId);
+                const ValueId ptr = emit_exc_payload_ptr_(payload_ty);
+                if (ptr == kInvalidId) return emit_const_null(payload_ty);
+                return emit_load(payload_ty, ptr);
             }
 
             ValueId emit_load_exc_active_() {
@@ -1662,11 +1737,28 @@ namespace parus::oir {
                     ? lower_value(s.expr)
                     : kInvalidId;
                 TypeId payload_ty = kInvalidId;
-                if (payload != kInvalidId && (size_t)payload < out->values.size()) {
+                bool dynamic_rethrow = false;
+                if (s.expr != parus::sir::k_invalid_value &&
+                    (size_t)s.expr < sir->values.size()) {
+                    const auto& sv = sir->values[s.expr];
+                    if (sv.kind == parus::sir::ValueKind::kLocal &&
+                        sv.sym != parus::sir::k_invalid_symbol &&
+                        untyped_catch_binder_symbols.find(sv.sym) != untyped_catch_binder_symbols.end()) {
+                        dynamic_rethrow = true;
+                    }
+                }
+                if (!dynamic_rethrow &&
+                    payload != kInvalidId &&
+                    (size_t)payload < out->values.size()) {
                     payload_ty = out->values[payload].ty;
                 }
 
-                emit_set_exc_type_(payload_ty);
+                if (dynamic_rethrow) {
+                    emit_set_exc_type_from_value_(payload);
+                } else {
+                    emit_store_exc_payload_(payload_ty, payload);
+                    emit_set_exc_type_(payload_ty);
+                }
                 emit_set_exc_active_(true);
 
                 if (!try_stack.empty()) {
@@ -1739,6 +1831,10 @@ namespace parus::oir {
                         def->blocks.push_back(catch_bb);
                         cur_bb = catch_bb;
                         const ValueId thrown_type_for_bind = emit_load_exc_type_();
+                        ValueId typed_payload_for_bind = kInvalidId;
+                        if (cc.has_typed_bind && cc.bind_type != kInvalidId) {
+                            typed_payload_for_bind = emit_load_exc_payload_(cc.bind_type);
+                        }
                         emit_set_exc_active_(false);
                         emit_set_exc_type_(kInvalidId);
 
@@ -1746,9 +1842,10 @@ namespace parus::oir {
                         if (cc.bind_sym != parus::sir::k_invalid_symbol) {
                             ValueId bind_v = kInvalidId;
                             if (cc.has_typed_bind && cc.bind_type != kInvalidId) {
-                                bind_v = emit_const_null(cc.bind_type);
+                                bind_v = typed_payload_for_bind;
                             } else {
                                 bind_v = thrown_type_for_bind;
+                                untyped_catch_binder_symbols.insert(cc.bind_sym);
                             }
                             bind(cc.bind_sym, Binding{false, false, bind_v, kInvalidId});
                         }
@@ -1814,7 +1911,13 @@ namespace parus::oir {
 
                         def->blocks.push_back(throw_bb);
                         cur_bb = throw_bb;
-                        emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                        if (!try_stack.empty()) {
+                            const auto& tc = try_stack.back();
+                            emit_cleanups_to_depth(tc.scope_depth_base);
+                            br(tc.dispatch_bb, {});
+                        } else {
+                            emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                        }
 
                         def->blocks.push_back(ret_bb);
                         cur_bb = ret_bb;
@@ -1833,7 +1936,13 @@ namespace parus::oir {
 
                         def->blocks.push_back(throw_bb);
                         cur_bb = throw_bb;
-                        emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                        if (!try_stack.empty()) {
+                            const auto& tc = try_stack.back();
+                            emit_cleanups_to_depth(tc.scope_depth_base);
+                            br(tc.dispatch_bb, {});
+                        } else {
+                            emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                        }
 
                         def->blocks.push_back(ret_bb);
                         cur_bb = ret_bb;
@@ -2419,6 +2528,7 @@ namespace parus::oir {
         }
         uint32_t exc_active_gid = kInvalidId;
         uint32_t exc_type_gid = kInvalidId;
+        std::unordered_map<TypeId, uint32_t> exc_payload_global_by_type{};
         if (has_throwing_function) {
             GlobalDecl g_active{};
             g_active.name = "__parus_exc_active";
@@ -2437,6 +2547,39 @@ namespace parus::oir {
             g_type.is_mut = true;
             g_type.is_export = false;
             exc_type_gid = out.mod.add_global(g_type);
+
+            std::vector<TypeId> throw_payload_types{};
+            throw_payload_types.reserve(8);
+            std::unordered_set<TypeId> seen_payload_types{};
+            for (size_t sid = 0; sid < sir_.stmts.size(); ++sid) {
+                const auto& st = sir_.stmts[sid];
+                if (st.kind != parus::sir::StmtKind::kThrowStmt) continue;
+                if (st.expr == parus::sir::k_invalid_value) continue;
+                if ((size_t)st.expr >= sir_.values.size()) continue;
+                const auto& sv = sir_.values[st.expr];
+                TypeId ty = sv.type;
+                if (ty == kInvalidId) continue;
+                const auto& tt = ty_.get(ty);
+                const bool is_payload_kind =
+                    (tt.kind == parus::ty::Kind::kNamedUser ||
+                     tt.kind == parus::ty::Kind::kOptional ||
+                     tt.kind == parus::ty::Kind::kArray);
+                if (!is_payload_kind) continue;
+                if (!seen_payload_types.insert(ty).second) continue;
+                throw_payload_types.push_back(ty);
+            }
+            std::sort(throw_payload_types.begin(), throw_payload_types.end());
+            for (const auto ty : throw_payload_types) {
+                GlobalDecl g_payload{};
+                g_payload.name = "__parus_exc_payload$" + std::to_string((uint32_t)ty);
+                g_payload.type = ty;
+                g_payload.abi = FunctionAbi::Parus;
+                g_payload.is_extern = false;
+                g_payload.is_mut = true;
+                g_payload.is_export = false;
+                const uint32_t gid = out.mod.add_global(g_payload);
+                exc_payload_global_by_type[ty] = gid;
+            }
         }
 
         std::vector<std::pair<parus::sir::SymbolId, uint32_t>> sorted_globals{};
@@ -2543,6 +2686,7 @@ namespace parus::oir {
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;
+            fb.exc_payload_globals = &exc_payload_global_by_type;
             fb.throwing_funcs = &throwing_func_ids;
             fb.build_errors = &out.gate_errors;
             fb.exc_active_global = exc_active_gid;
@@ -2634,6 +2778,7 @@ namespace parus::oir {
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;
+            fb.exc_payload_globals = &exc_payload_global_by_type;
             fb.throwing_funcs = &throwing_func_ids;
             fb.build_errors = &out.gate_errors;
             fb.exc_active_global = exc_active_gid;
