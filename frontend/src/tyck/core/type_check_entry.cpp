@@ -4146,6 +4146,58 @@ namespace parus::tyck {
         return def;
     }
 
+    /// @brief prefix operator(copy/clone 등)에 대응되는 기본 acts overload를 찾는다.
+    ast::StmtId TypeChecker::resolve_prefix_operator_overload_(
+        syntax::TokenKind op,
+        ty::TypeId lhs,
+        const ActiveActsSelection* forced_selection
+    ) const {
+        lhs = canonicalize_acts_owner_type_(lhs);
+        const uint64_t key = acts_operator_key_(lhs, op, /*is_postfix=*/false);
+        auto it = acts_default_operator_map_.find(key);
+        if (it == acts_default_operator_map_.end()) return ast::k_invalid_stmt;
+
+        auto match_one = [&](const ActsOperatorDecl& decl) -> bool {
+            const auto& def = ast_.stmt(decl.fn_sid);
+            if (def.kind != ast::StmtKind::kFnDecl) return false;
+            if (def.param_count != 1) return false;
+            const auto& p0 = ast_.params()[def.param_begin + 0];
+            return type_matches_acts_owner_(types_, lhs, p0.type);
+        };
+
+        auto select_from = [&](bool named_stage, ast::StmtId named_sid, bool& ambiguous) -> ast::StmtId {
+            ambiguous = false;
+            ast::StmtId selected = ast::k_invalid_stmt;
+            for (const auto& decl : it->second) {
+                if (named_stage) {
+                    if (!decl.from_named_set || decl.acts_decl_sid != named_sid) continue;
+                } else {
+                    if (decl.from_named_set) continue;
+                }
+                if (!match_one(decl)) continue;
+                if (selected != ast::k_invalid_stmt) {
+                    ambiguous = true;
+                    return ast::k_invalid_stmt;
+                }
+                selected = decl.fn_sid;
+            }
+            return selected;
+        };
+
+        const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(lhs);
+        if (active != nullptr && active->kind == ActiveActsSelectionKind::kNamed) {
+            bool amb_named = false;
+            const ast::StmtId named = select_from(/*named_stage=*/true, active->named_decl_sid, amb_named);
+            if (amb_named) return ast::k_invalid_stmt;
+            if (named != ast::k_invalid_stmt) return named;
+        }
+
+        bool amb_default = false;
+        const ast::StmtId def = select_from(/*named_stage=*/false, ast::k_invalid_stmt, amb_default);
+        if (amb_default) return ast::k_invalid_stmt;
+        return def;
+    }
+
     /// @brief postfix operator(++ 등)에 대응되는 기본 acts overload를 찾는다.
     ast::StmtId TypeChecker::resolve_postfix_operator_overload_(
         syntax::TokenKind op,

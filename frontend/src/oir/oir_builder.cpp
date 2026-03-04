@@ -1254,6 +1254,12 @@ namespace parus::oir {
                     cur_bb = join_bb;
                     return join_param;
                 }
+                if (tk == parus::syntax::TokenKind::kKwCopy ||
+                    tk == parus::syntax::TokenKind::kKwClone) {
+                    // copy/clone trivial builtin fast-path: value passthrough.
+                    // Non-trivial paths are already lowered as direct calls from SIR.
+                    return src;
+                }
                 auto op = map_unary(tk);
                 if (!op.has_value()) {
                     report_lowering_error(

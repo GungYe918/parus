@@ -1815,6 +1815,8 @@ namespace parus {
             case K::kLtEq:
             case K::kGt:
             case K::kGtEq:
+            case K::kKwCopy:
+            case K::kKwClone:
                 op_ok = true;
                 cursor_.bump();
                 break;

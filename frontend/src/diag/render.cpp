@@ -248,6 +248,9 @@ namespace parus::diag {
 
             case Code::kAssignLhsMustBePlace: return "AssignLhsMustBePlace";
             case Code::kPostfixOperandMustBePlace: return "PostfixOperandMustBePlace";
+            case Code::kCopyCloneOperandMustBePlace: return "CopyCloneOperandMustBePlace";
+            case Code::kCopyNotSupportedForType: return "CopyNotSupportedForType";
+            case Code::kCloneNotSupportedForType: return "CloneNotSupportedForType";
 
             case Code::kIntLiteralInvalid: return "IntLiteralInvalid";
             case Code::kIntLiteralOverflow: return "IntLiteralOverflow";
@@ -538,6 +541,9 @@ namespace parus::diag {
 
             case Code::kAssignLhsMustBePlace: return "assignment left-hand side must be a place expression (ident/index)";
             case Code::kPostfixOperandMustBePlace: return "postfix operator requires a place expression (ident/index)";
+            case Code::kCopyCloneOperandMustBePlace: return "copy/clone operand must be a place expression";
+            case Code::kCopyNotSupportedForType: return "copy is not supported for type '{0}' (define operator(copy) in acts for this type)";
+            case Code::kCloneNotSupportedForType: return "clone is not supported for type '{0}' (define operator(clone) in acts for this type)";
 
             case Code::kTypeParamTypeRequired: return "parameter '{0}' requires an explicit type";
             case Code::kTypeDuplicateParam: return "duplicate parameter name '{0}'";
@@ -827,6 +833,9 @@ namespace parus::diag {
 
             case Code::kAssignLhsMustBePlace: return "대입문의 왼쪽은 place expression(ident/index)이어야 합니다";
             case Code::kPostfixOperandMustBePlace: return "후위 연산자는 place expression(ident/index)에만 적용할 수 있습니다";
+            case Code::kCopyCloneOperandMustBePlace: return "copy/clone 피연산자는 place expression이어야 합니다";
+            case Code::kCopyNotSupportedForType: return "타입 '{0}'에는 copy를 사용할 수 없습니다(acts for 타입에 operator(copy)를 정의하세요)";
+            case Code::kCloneNotSupportedForType: return "타입 '{0}'에는 clone을 사용할 수 없습니다(acts for 타입에 operator(clone)를 정의하세요)";
 
             case Code::kTypeParamTypeRequired: return "파라미터 '{0}'에는 타입이 필요합니다";
             case Code::kTypeDuplicateParam: return "파라미터 이름 '{0}'이(가) 중복되었습니다";

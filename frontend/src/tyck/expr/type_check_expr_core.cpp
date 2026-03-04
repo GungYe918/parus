@@ -1007,10 +1007,80 @@ namespace parus::tyck {
     // unary / postfix unary
     // --------------------
     ty::TypeId TypeChecker::check_expr_unary_(const ast::Expr& e) {
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_overload_target_cache_.size()) {
+            expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
+        auto is_copy_clone_trivial_fast_path = [&](ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType || is_error_(t)) return false;
+            const auto& tv = types_.get(t);
+            if (tv.kind == ty::Kind::kBorrow) return true;
+            if (tv.kind != ty::Kind::kBuiltin) return false;
+            switch (tv.builtin) {
+                case ty::Builtin::kBool:
+                case ty::Builtin::kChar:
+                case ty::Builtin::kI8:
+                case ty::Builtin::kI16:
+                case ty::Builtin::kI32:
+                case ty::Builtin::kI64:
+                case ty::Builtin::kI128:
+                case ty::Builtin::kU8:
+                case ty::Builtin::kU16:
+                case ty::Builtin::kU32:
+                case ty::Builtin::kU64:
+                case ty::Builtin::kU128:
+                case ty::Builtin::kISize:
+                case ty::Builtin::kUSize:
+                case ty::Builtin::kF32:
+                case ty::Builtin::kF64:
+                case ty::Builtin::kF128:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
         // NOTE:
         // - '&' / '&mut' / '^&' 의 의미 규칙(place, escape, conflict 등)은
         //   capability 단계에서 독립적으로 검사한다.
         // - tyck는 여기서 "결과 타입 계산"만 수행한다.
+        if (e.op == K::kKwCopy || e.op == K::kKwClone) {
+            if (!is_place_expr_(e.a)) {
+                diag_(diag::Code::kCopyCloneOperandMustBePlace, e.span);
+                err_(e.span, "copy/clone operand must be a place expression");
+                return types_.error();
+            }
+
+            ty::TypeId at = check_expr_(e.a);
+            const ActiveActsSelection* forced_selection = nullptr;
+            if (auto sid = root_place_symbol_(e.a)) {
+                forced_selection = lookup_symbol_acts_selection_(*sid);
+            }
+
+            const ast::StmtId op_sid = resolve_prefix_operator_overload_(e.op, at, forced_selection);
+            if (op_sid != ast::k_invalid_stmt) {
+                if (current_expr_id_ != ast::k_invalid_expr &&
+                    current_expr_id_ < expr_overload_target_cache_.size()) {
+                    expr_overload_target_cache_[current_expr_id_] = op_sid;
+                }
+                return ast_.stmt(op_sid).fn_ret;
+            }
+
+            if (is_copy_clone_trivial_fast_path(at)) {
+                return at;
+            }
+
+            if (e.op == K::kKwCopy) {
+                diag_(diag::Code::kCopyNotSupportedForType, e.span, types_.to_string(at));
+                err_(e.span, "copy is not supported for this type without operator(copy)");
+            } else {
+                diag_(diag::Code::kCloneNotSupportedForType, e.span, types_.to_string(at));
+                err_(e.span, "clone is not supported for this type without operator(clone)");
+            }
+            return types_.error();
+        }
+
         if (e.op == K::kKwTry) {
             if (e.a == ast::k_invalid_expr || (size_t)e.a >= ast_.exprs().size()) {
                 diag_(diag::Code::kTryExprOperandMustBeThrowingCall, e.span);

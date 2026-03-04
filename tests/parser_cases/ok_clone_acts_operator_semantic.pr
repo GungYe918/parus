@@ -1,0 +1,15 @@
+struct Counter {
+    value: i32;
+}
+
+acts for Counter {
+    operator(clone)(self) -> Counter {
+        return Counter { value: self.value + 1i32 };
+    }
+}
+
+def main() -> i32 {
+    set c = Counter { value: 41i32 };
+    set d = clone c;
+    return d.value;
+}

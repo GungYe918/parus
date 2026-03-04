@@ -1,0 +1,13 @@
+acts Util {
+    operator(copy)(self) -> i32 {
+        return self;
+    }
+
+    operator(clone)(self) -> i32 {
+        return self;
+    }
+}
+
+def main() -> i32 {
+    return 0i32;
+}

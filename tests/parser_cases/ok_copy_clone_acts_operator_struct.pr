@@ -1,0 +1,20 @@
+struct Box {
+    value: i32;
+}
+
+acts for Box {
+    operator(copy)(self) -> Box {
+        return Box { value: self.value };
+    }
+
+    operator(clone)(self) -> Box {
+        return Box { value: self.value };
+    }
+}
+
+def main() -> i32 {
+    set b = Box { value: 7i32 };
+    set c = copy b;
+    set d = clone c;
+    return d.value;
+}

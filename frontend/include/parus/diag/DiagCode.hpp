@@ -285,6 +285,9 @@ namespace parus::diag {
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)
         kPostfixOperandMustBePlace, // (no args)
+        kCopyCloneOperandMustBePlace, // copy/clone requires place operand
+        kCopyNotSupportedForType,     // args[0]=type
+        kCloneNotSupportedForType,    // args[0]=type
 
         // ---- integer literal / inference ----
         kIntLiteralInvalid,          // args[0]=text

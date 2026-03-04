@@ -107,6 +107,8 @@ namespace parus::syntax {
             case TokenKind::kPlusPlus:
             case TokenKind::kAmp:
             case TokenKind::kKwTry:
+            case TokenKind::kKwCopy:
+            case TokenKind::kKwClone:
             case TokenKind::kCaretAmp:
                 return PrefixInfo{95};
             default:

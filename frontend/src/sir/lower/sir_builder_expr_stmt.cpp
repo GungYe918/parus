@@ -92,6 +92,24 @@ namespace parus::sir::detail {
                     v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
                     break;
                 }
+                if ((e.op == parus::syntax::TokenKind::kKwCopy ||
+                     e.op == parus::syntax::TokenKind::kKwClone) &&
+                    overload_sid != ast::k_invalid_stmt) {
+                    v.kind = ValueKind::kCall;
+                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_decl_stmt = overload_sid;
+                    v.a = k_invalid_value;
+                    v.arg_begin = (uint32_t)m.args.size();
+                    v.arg_count = 0;
+
+                    Arg a0{};
+                    a0.kind = ArgKind::kPositional;
+                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.span = ast.expr(e.a).span;
+                    m.add_arg(a0);
+                    v.arg_count = 1;
+                    break;
+                }
 
                 v.kind = ValueKind::kUnary;
                 v.op = (uint32_t)e.op;

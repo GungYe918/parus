@@ -413,6 +413,8 @@ namespace parus::tyck {
         void collect_acts_method_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
         ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs,
                                                       const ActiveActsSelection* forced_selection = nullptr) const;
+        ast::StmtId resolve_prefix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs,
+                                                      const ActiveActsSelection* forced_selection = nullptr) const;
         ast::StmtId resolve_postfix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs,
                                                        const ActiveActsSelection* forced_selection = nullptr) const;
         std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name,

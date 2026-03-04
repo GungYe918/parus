@@ -1,0 +1,6 @@
+def main() -> i32 {
+    set x = 10i32;
+    set y = copy x;
+    set z = clone y;
+    return z;
+}

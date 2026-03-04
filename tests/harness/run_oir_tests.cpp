@@ -438,6 +438,68 @@ namespace {
         return ok;
     }
 
+    /// @brief copy/clone 키워드가 builtin fast-path와 acts operator call-path로 모두 안정 하향되는지 검사한다.
+    static bool test_copy_clone_lowering_paths_ok() {
+        const std::string src = R"(
+            struct Box {
+                value: i32;
+            }
+
+            acts for Box {
+                operator(copy)(self) -> Box {
+                    return Box { value: self.value };
+                }
+
+                operator(clone)(self) -> Box {
+                    return Box { value: self.value };
+                }
+            }
+
+            def main() -> i32 {
+                set x = 10i32;
+                set y = copy x;
+                set z = clone y;
+
+                set b = Box { value: z };
+                set c = copy b;
+                set d = clone c;
+                return d.value;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "copy/clone source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "copy/clone source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "copy/clone source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for copy/clone source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for copy/clone source");
+        if (!ok) return false;
+
+        bool has_copy_call = false;
+        bool has_clone_call = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& f = oir.mod.funcs[c.direct_callee];
+            if (f.source_name.find("__op$copy$") != std::string::npos) has_copy_call = true;
+            if (f.source_name.find("__op$clone$") != std::string::npos) has_clone_call = true;
+        }
+
+        ok &= require_(has_copy_call, "non-trivial copy must lower through acts operator(copy) call");
+        ok &= require_(has_clone_call, "non-trivial clone must lower through acts operator(clone) call");
+        return ok;
+    }
+
     /// @brief OIR pass가 상수 폴딩과 dead pure inst 제거를 수행하는지 검사한다.
     static bool test_oir_const_fold_and_dce() {
         parus::oir::Module m;
@@ -1389,6 +1451,7 @@ int main() {
         {"generic_proto_default_materialization_oir_lowering_ok", test_generic_proto_default_materialization_oir_lowering_ok},
         {"generic_acts_owner_materialization_oir_lowering_ok", test_generic_acts_owner_materialization_oir_lowering_ok},
         {"generic_struct_materialization_oir_lowering_ok", test_generic_struct_materialization_oir_lowering_ok},
+        {"copy_clone_lowering_paths_ok", test_copy_clone_lowering_paths_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
         {"oir_verify_branch_param_mismatch", test_oir_verify_branch_param_mismatch},

@@ -613,6 +613,82 @@ namespace {
         return emit_object_for_test_case_(lowered.llvm_ir, "overload_operator_patterns");
     }
 
+    /// @brief copy/clone이 builtin fast-path + acts operator 호출 경로로 LLVM까지 안정 하향되는지 검사한다.
+    static bool test_copy_clone_operator_and_builtin_lowering_patterns_() {
+        const std::string src = R"(
+            struct Box {
+                value: i32;
+            }
+
+            acts for Box {
+                operator(copy)(self) -> Box {
+                    return Box { value: self.value };
+                }
+
+                operator(clone)(self) -> Box {
+                    return Box { value: self.value };
+                }
+            }
+
+            def main() -> i32 {
+                set x = 10i32;
+                set y = copy x;
+                set z = clone y;
+
+                set b = Box { value: z };
+                set c = copy b;
+                set d = clone c;
+                return d.value;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "copy/clone case must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "copy/clone LLVM text lowering must succeed");
+        if (!ok) return false;
+
+        const bool has_copy_symbol =
+            lowered.llvm_ir.find("__op$copy$") != std::string::npos ||
+            lowered.llvm_ir.find("__op_copy_") != std::string::npos;
+        const bool has_clone_symbol =
+            lowered.llvm_ir.find("__op$clone$") != std::string::npos ||
+            lowered.llvm_ir.find("__op_clone_") != std::string::npos;
+        auto has_symbol_call_line = [&](std::string_view a, std::string_view b) -> bool {
+            size_t pos = 0;
+            while (pos < lowered.llvm_ir.size()) {
+                const size_t end = lowered.llvm_ir.find('\n', pos);
+                const size_t len = (end == std::string::npos) ? (lowered.llvm_ir.size() - pos) : (end - pos);
+                const std::string_view line(lowered.llvm_ir.data() + pos, len);
+                if (line.find("call ") != std::string_view::npos &&
+                    (line.find(a) != std::string_view::npos || line.find(b) != std::string_view::npos)) {
+                    return true;
+                }
+                if (end == std::string::npos) break;
+                pos = end + 1;
+            }
+            return false;
+        };
+        const bool has_copy_call = has_symbol_call_line("__op$copy$", "__op_copy_");
+        const bool has_clone_call = has_symbol_call_line("__op$clone$", "__op_clone_");
+
+        ok &= require_(has_copy_symbol, "operator(copy) symbol must be present in LLVM-IR");
+        ok &= require_(has_clone_symbol, "operator(clone) symbol must be present in LLVM-IR");
+        ok &= require_(has_copy_call, "non-trivial copy must lower to direct operator(copy) call");
+        ok &= require_(has_clone_call, "non-trivial clone must lower to direct operator(clone) call");
+        ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
+                       "copy/clone lowering should not require dynamic call stub");
+        return emit_object_for_test_case_(lowered.llvm_ir, "copy_clone_patterns");
+    }
+
     /// @brief nest 경로 함수가 namespace 포함 맹글 심볼로 내려가고 direct call되는지 검사한다.
     static bool test_nest_path_mangling_and_direct_call_() {
         const std::string src = R"(
@@ -1667,6 +1743,7 @@ int main() {
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},
         {"overload_and_operator_lowering_patterns", test_overload_and_operator_lowering_patterns_},
+        {"copy_clone_operator_and_builtin_lowering_patterns", test_copy_clone_operator_and_builtin_lowering_patterns_},
         {"nest_path_mangling_and_direct_call", test_nest_path_mangling_and_direct_call_},
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
