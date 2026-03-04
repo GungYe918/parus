@@ -225,6 +225,7 @@ namespace parusc::dump {
             case K::kUse:  return "Use";
             case K::kNestDecl: return "NestDecl";
             case K::kReturn: return "Return";
+            case K::kRequire: return "Require";
             case K::kThrow: return "Throw";
             case K::kBreak: return "Break";
             case K::kContinue: return "Continue";

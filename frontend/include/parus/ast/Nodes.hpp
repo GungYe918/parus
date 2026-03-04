@@ -90,6 +90,7 @@ namespace parus::ast {
         kDoWhile,     // do { ... } while (cond);
         kManual,      // manual[perm,...] { ... }
         kReturn,
+        kRequire,     // compile-time assertion statement: require(expr);
         kThrow,
         kBreak,
         kContinue,

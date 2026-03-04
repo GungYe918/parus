@@ -658,6 +658,12 @@ namespace parus::sir::detail {
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 break;
 
+            case parus::ast::StmtKind::kRequire:
+                // compile-time assertion: keep as pure expr stmt placeholder (no runtime side-effect intent)
+                out.kind = StmtKind::kExprStmt;
+                out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                break;
+
             case parus::ast::StmtKind::kBreak:
                 out.kind = StmtKind::kBreak;
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);

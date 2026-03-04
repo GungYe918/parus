@@ -94,6 +94,9 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "ProtoImplTargetNotSupported";
             case Code::kProtoImplMissingMember: return "ProtoImplMissingMember";
             case Code::kProtoConstraintUnsatisfied: return "ProtoConstraintUnsatisfied";
+            case Code::kRequireExprTypeNotBool: return "RequireExprTypeNotBool";
+            case Code::kRequireExprTooComplex: return "RequireExprTooComplex";
+            case Code::kRequireUnsatisfied: return "RequireUnsatisfied";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "ClassLifecycleDefaultParamNotAllowed";
             case Code::kClassLifecycleSelfNotAllowed: return "ClassLifecycleSelfNotAllowed";
             case Code::kClassLifecycleDirectCallForbidden: return "ClassLifecycleDirectCallForbidden";
@@ -375,6 +378,9 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "implementation target is not a supported proto";
             case Code::kProtoImplMissingMember: return "proto implementation is missing a required member";
             case Code::kProtoConstraintUnsatisfied: return "proto constraint is not satisfied";
+            case Code::kRequireExprTypeNotBool: return "require(expr) must evaluate to bool";
+            case Code::kRequireExprTooComplex: return "require(expr) supports only simple boolean folding (true/false/not/and/or/==/!=) in v0";
+            case Code::kRequireUnsatisfied: return "require(expr) evaluated to false";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit cannot be called directly; lifecycle is compiler-managed";
@@ -662,6 +668,9 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "구현 대상으로 지정한 항목이 지원되는 proto가 아닙니다";
             case Code::kProtoImplMissingMember: return "proto 구현에 필요한 멤버가 누락되었습니다";
             case Code::kProtoConstraintUnsatisfied: return "proto 제약을 만족하지 못했습니다";
+            case Code::kRequireExprTypeNotBool: return "require(expr)는 bool로 평가되어야 합니다";
+            case Code::kRequireExprTooComplex: return "v0에서 require(expr)는 단순 bool 폴딩(true/false/not/and/or/==/!=)만 허용됩니다";
+            case Code::kRequireUnsatisfied: return "require(expr)가 false로 평가되었습니다";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle 멤버에는 self 리시버를 선언할 수 없습니다";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit 는 직접 호출할 수 없습니다. lifecycle 호출은 컴파일러가 관리합니다";

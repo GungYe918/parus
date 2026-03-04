@@ -129,6 +129,7 @@ namespace parus {
         if (tok.kind == K::kKwDo)       return parse_stmt_do();
         if (tok.kind == K::kKwManual)   return parse_stmt_manual();
         if (tok.kind == K::kKwReturn)   return parse_stmt_return();
+        if (tok.kind == K::kKwRequire)  return parse_stmt_require();
         if (tok.kind == K::kKwThrow)    return parse_stmt_throw();
         if (tok.kind == K::kKwBreak)    return parse_stmt_break();
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();
@@ -650,6 +651,38 @@ namespace parus {
         ast::Stmt s{};
         s.kind = ast::StmtKind::kReturn;
         s.expr = v;
+        s.span = span_join(kw.span, term_end);
+        return ast_.add_stmt(s);
+    }
+
+    ast::StmtId Parser::parse_stmt_require() {
+        using K = syntax::TokenKind;
+        const Token kw = cursor_.bump(); // require
+
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            recover_to_delim(K::kLParen, K::kSemicolon, K::kRParen);
+            (void)cursor_.eat(K::kLParen);
+        }
+
+        ast::ExprId expr = ast::k_invalid_expr;
+        Span fallback = kw.span;
+        if (!cursor_.at(K::kRParen) && !cursor_.at(K::kSemicolon)) {
+            expr = parse_expr();
+            fallback = ast_.expr(expr).span;
+        }
+
+        if (!cursor_.eat(K::kRParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+            recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRParen);
+        }
+
+        const Span term_end = stmt_consume_semicolon_or_recover(fallback);
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kRequire;
+        s.expr = expr;
         s.span = span_join(kw.span, term_end);
         return ast_.add_stmt(s);
     }

@@ -231,6 +231,10 @@ namespace parus::ast {
                     visit_expr_inner(ast, s.expr, v);
                     break;
 
+                case StmtKind::kRequire:
+                    visit_expr_inner(ast, s.expr, v);
+                    break;
+
                 case StmtKind::kThrow:
                     visit_expr_inner(ast, s.expr, v);
                     break;

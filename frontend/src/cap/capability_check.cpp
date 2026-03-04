@@ -351,6 +351,12 @@ namespace parus::cap {
                         return;
                     }
 
+                    case ast::StmtKind::kRequire:
+                        if (s.expr != ast::k_invalid_expr) {
+                            walk_expr_(s.expr, ExprUse::kValue);
+                        }
+                        return;
+
                     case ast::StmtKind::kThrow:
                         if (s.expr != ast::k_invalid_expr) {
                             walk_expr_(s.expr, ExprUse::kValue);

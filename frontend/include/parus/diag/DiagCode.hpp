@@ -88,6 +88,9 @@ namespace parus::diag {
         kProtoImplTargetNotSupported,     // implements target is not a known proto
         kProtoImplMissingMember,          // implementation type misses required proto member
         kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied
+        kRequireExprTypeNotBool,          // require(expr); must evaluate to bool
+        kRequireExprTooComplex,           // require(expr); only simple compile-time bool folding is supported
+        kRequireUnsatisfied,              // require(expr); folded to false
         kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
         kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
         kClassLifecycleDirectCallForbidden, // init/deinit direct calls are forbidden (compiler-managed lifecycle)

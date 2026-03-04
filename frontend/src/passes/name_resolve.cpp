@@ -880,6 +880,10 @@ namespace parus::passes {
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
+            case ast::StmtKind::kRequire:
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                return;
+
             case ast::StmtKind::kThrow:
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;

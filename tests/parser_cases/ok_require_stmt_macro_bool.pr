@@ -1,0 +1,10 @@
+macro rtrue -> {
+    with expr {
+        () => expr { true };
+    }
+}
+
+def main() -> i32 {
+    require($rtrue() == true);
+    return 0i32;
+}

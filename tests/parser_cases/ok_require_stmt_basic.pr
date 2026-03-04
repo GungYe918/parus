@@ -1,0 +1,4 @@
+def main() -> i32 {
+    require(true and not false);
+    return 0i32;
+}

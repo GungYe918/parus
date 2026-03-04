@@ -59,6 +59,10 @@ namespace parus::tyck {
                 check_stmt_return_(s);
                 return;
 
+            case ast::StmtKind::kRequire:
+                check_stmt_require_(s);
+                return;
+
             case ast::StmtKind::kThrow:
                 check_stmt_throw_(s);
                 return;
@@ -567,6 +571,36 @@ namespace parus::tyck {
             diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), type_for_user_diag_(v, s.expr));
 
             err_(s.span, "return mismatch"); // 저장만 수행, 출력은 위 diag_ 하나로 종결
+        }
+    }
+
+    void TypeChecker::check_stmt_require_(const ast::Stmt& s) {
+        if (s.expr == ast::k_invalid_expr) {
+            diag_(diag::Code::kRequireExprTypeNotBool, s.span);
+            err_(s.span, "require(expr) statement requires a bool expression");
+            return;
+        }
+
+        const ProtoRequireEvalResult status = eval_proto_require_const_bool_(s.expr);
+        switch (status) {
+            case ProtoRequireEvalResult::kTrue:
+                return;
+
+            case ProtoRequireEvalResult::kFalse:
+                diag_(diag::Code::kRequireUnsatisfied, ast_.expr(s.expr).span);
+                err_(ast_.expr(s.expr).span, "compile-time require(expr) evaluated to false");
+                return;
+
+            case ProtoRequireEvalResult::kTypeNotBool:
+                diag_(diag::Code::kRequireExprTypeNotBool, ast_.expr(s.expr).span);
+                err_(ast_.expr(s.expr).span, "require(expr) must evaluate to bool");
+                return;
+
+            case ProtoRequireEvalResult::kTooComplex:
+                diag_(diag::Code::kRequireExprTooComplex, ast_.expr(s.expr).span);
+                err_(ast_.expr(s.expr).span,
+                     "require(expr) supports only true/false/not/and/or/==/!= in v0");
+                return;
         }
     }
 

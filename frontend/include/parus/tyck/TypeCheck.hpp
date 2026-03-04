@@ -159,6 +159,7 @@ namespace parus::tyck {
         void check_stmt_do_while_(const ast::Stmt& s);
         void check_stmt_manual_(const ast::Stmt& s);
         void check_stmt_return_(const ast::Stmt& s);
+        void check_stmt_require_(const ast::Stmt& s);
         void check_stmt_throw_(const ast::Stmt& s);
         void check_stmt_try_catch_(const ast::Stmt& s);
         void check_stmt_switch_(const ast::Stmt& s);
