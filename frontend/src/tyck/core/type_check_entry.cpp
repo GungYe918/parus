@@ -36,6 +36,7 @@ namespace parus::tyck {
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();
+        acts_default_decl_by_owner_.clear();
         acts_selection_scope_stack_.clear();
         acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
@@ -3311,7 +3312,35 @@ namespace parus::tyck {
                 }
 
                 if (s.acts_is_for && s.acts_has_set_name && owner_type != ty::kInvalidType) {
-                    acts_named_decl_by_owner_and_name_[acts_named_decl_key_(owner_type, qname)] = sid;
+                    const std::string key = acts_named_decl_key_(owner_type, qname);
+                    auto it = acts_named_decl_by_owner_and_name_.find(key);
+                    if (it != acts_named_decl_by_owner_and_name_.end() && it->second != sid) {
+                        std::ostringstream oss;
+                        oss << "duplicate named acts declaration for type "
+                            << types_.to_string(owner_type)
+                            << " and set '" << qname << "'";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
+                        err_(s.span, oss.str());
+                    } else {
+                        acts_named_decl_by_owner_and_name_[key] = sid;
+                    }
+                }
+
+                if (s.acts_is_for && !s.acts_has_set_name && owner_type != ty::kInvalidType) {
+                    auto it = acts_default_decl_by_owner_.find(owner_type);
+                    if (it != acts_default_decl_by_owner_.end() && it->second != sid) {
+                        std::ostringstream oss;
+                        oss << "duplicate default acts declaration for type "
+                            << types_.to_string(owner_type);
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
+                        err_(s.span, oss.str());
+                    } else {
+                        acts_default_decl_by_owner_[owner_type] = sid;
+                    }
+                }
+
+                if (s.acts_is_for && owner_type != ty::kInvalidType) {
+                    (void)enforce_builtin_acts_policy_(sid, s, owner_type);
                 }
 
                 const auto& kids = ast_.stmt_children();
@@ -3765,6 +3794,146 @@ namespace parus::tyck {
         out += "::";
         out += std::string(set_qname);
         return out;
+    }
+
+    bool TypeChecker::is_intlike_builtin_(ty::Builtin b) {
+        using B = ty::Builtin;
+        switch (b) {
+            case B::kI8:
+            case B::kI16:
+            case B::kI32:
+            case B::kI64:
+            case B::kI128:
+            case B::kU8:
+            case B::kU16:
+            case B::kU32:
+            case B::kU64:
+            case B::kU128:
+            case B::kISize:
+            case B::kUSize:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool TypeChecker::is_float_builtin_(ty::Builtin b) {
+        return b == ty::Builtin::kF32 ||
+               b == ty::Builtin::kF64 ||
+               b == ty::Builtin::kF128;
+    }
+
+    bool TypeChecker::is_char_builtin_(ty::Builtin b) {
+        return b == ty::Builtin::kChar;
+    }
+
+    bool TypeChecker::is_text_builtin_(ty::Builtin b) {
+        return b == ty::Builtin::kText;
+    }
+
+    bool TypeChecker::is_bool_builtin_(ty::Builtin b) {
+        return b == ty::Builtin::kBool;
+    }
+
+    TypeChecker::BuiltinActsPolicy TypeChecker::builtin_acts_policy_(ty::Builtin b) {
+        BuiltinActsPolicy p{};
+        p.reserved_bundle = "core";
+
+        if (is_intlike_builtin_(b)) {
+            p.allow_default_acts = true;
+            p.allow_named_acts = false;
+            p.api_group = BuiltinActsApiGroup::IntLike;
+            return p;
+        }
+        if (is_float_builtin_(b)) {
+            p.allow_default_acts = true;
+            p.allow_named_acts = false;
+            p.api_group = BuiltinActsApiGroup::FloatLike;
+            return p;
+        }
+        if (is_bool_builtin_(b)) {
+            p.allow_default_acts = true;
+            p.allow_named_acts = false;
+            p.api_group = BuiltinActsApiGroup::BoolLike;
+            return p;
+        }
+        if (is_char_builtin_(b)) {
+            p.allow_default_acts = true;
+            p.allow_named_acts = false;
+            p.api_group = BuiltinActsApiGroup::CharLike;
+            return p;
+        }
+        if (is_text_builtin_(b)) {
+            p.allow_default_acts = true;
+            p.allow_named_acts = false;
+            p.api_group = BuiltinActsApiGroup::TextLike;
+            return p;
+        }
+
+        p.allow_default_acts = false;
+        p.allow_named_acts = false;
+        p.api_group = BuiltinActsApiGroup::Unsupported;
+        return p;
+    }
+
+    bool TypeChecker::is_builtin_owner_type_(ty::TypeId t, ty::Builtin* out_builtin) const {
+        if (t == ty::kInvalidType) return false;
+        const auto& tt = types_.get(t);
+        if (tt.kind != ty::Kind::kBuiltin) return false;
+        if (out_builtin != nullptr) *out_builtin = tt.builtin;
+        return true;
+    }
+
+    std::string TypeChecker::current_bundle_name_() const {
+        const auto& syms = sym_.symbols();
+        for (const auto& s : syms) {
+            if (s.is_external) continue;
+            if (!s.decl_bundle_name.empty()) return s.decl_bundle_name;
+        }
+        for (const auto& s : syms) {
+            if (!s.decl_bundle_name.empty()) return s.decl_bundle_name;
+        }
+        return {};
+    }
+
+    bool TypeChecker::enforce_builtin_acts_policy_(ast::StmtId sid, const ast::Stmt& acts_decl, ty::TypeId owner_type) {
+        if (!acts_decl.acts_is_for) return true;
+
+        ty::Builtin b = ty::Builtin::kNull;
+        if (!is_builtin_owner_type_(owner_type, &b)) return true;
+
+        const BuiltinActsPolicy policy = builtin_acts_policy_(b);
+        if (!policy.allow_default_acts) {
+            std::ostringstream oss;
+            oss << "acts for builtin type '" << types_.to_string(owner_type)
+                << "' is not supported";
+            diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
+            err_(acts_decl.span, oss.str());
+            return false;
+        }
+
+        if (acts_decl.acts_has_set_name && !policy.allow_named_acts) {
+            std::ostringstream oss;
+            oss << "named acts set is not allowed for builtin type '"
+                << types_.to_string(owner_type) << "'";
+            diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
+            err_(acts_decl.span, oss.str());
+            return false;
+        }
+
+        const std::string bundle = current_bundle_name_();
+        if (!policy.reserved_bundle.empty() && bundle != policy.reserved_bundle) {
+            std::ostringstream oss;
+            oss << "acts for builtin type '" << types_.to_string(owner_type)
+                << "' is reserved for bundle '" << policy.reserved_bundle
+                << "' (current bundle: '" << (bundle.empty() ? "<unknown>" : bundle) << "')";
+            diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
+            err_(acts_decl.span, oss.str());
+            return false;
+        }
+
+        (void)sid;
+        return true;
     }
 
     void TypeChecker::push_acts_selection_scope_() {

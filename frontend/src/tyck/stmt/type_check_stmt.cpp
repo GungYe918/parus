@@ -2361,6 +2361,10 @@ namespace parus::tyck {
             bool owner_ok = false;
             const ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
             if (owner_type != ty::kInvalidType) {
+                ty::Builtin builtin_kind = ty::Builtin::kNull;
+                if (is_builtin_owner_type_(owner_type, &builtin_kind)) {
+                    owner_ok = true;
+                }
                 if (class_decl_by_type_.find(owner_type) != class_decl_by_type_.end() ||
                     field_abi_meta_by_type_.find(owner_type) != field_abi_meta_by_type_.end() ||
                     enum_abi_meta_by_type_.find(owner_type) != enum_abi_meta_by_type_.end()) {
@@ -2380,7 +2384,7 @@ namespace parus::tyck {
 
             if (!owner_ok) {
                 std::ostringstream oss;
-                oss << "acts-for target must be a field/class type in v0, got "
+                oss << "acts-for target must be a field/class/enum/builtin type in v0, got "
                     << types_.to_string(owner_type);
                 diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
                 err_(s.span, oss.str());

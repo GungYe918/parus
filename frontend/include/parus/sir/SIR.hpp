@@ -356,6 +356,7 @@ namespace parus::sir {
     struct Func {
         parus::Span span{};
         std::string_view name{};
+        std::string external_link_name{};
         SymbolId sym = k_invalid_symbol;
 
         // signature types

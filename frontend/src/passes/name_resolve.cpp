@@ -481,6 +481,10 @@ namespace parus::passes {
                     if (nm != candidate) continue;
 
                     if (auto existing = sym.lookup(nm)) {
+                        if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty()) {
+                            auto& cur = sym.symbol_mut(*existing);
+                            if (cur.link_name.empty()) cur.link_name = ex.link_name;
+                        }
                         return *existing;
                     }
 
@@ -494,7 +498,8 @@ namespace parus::passes {
                         ex.is_export,
                         /*is_external=*/true,
                         ex.module_head,
-                        ex.decl_source_dir_norm
+                        ex.decl_source_dir_norm,
+                        ex.link_name
                     );
                     if (ins.ok || ins.is_duplicate) {
                         return ins.symbol_id;
@@ -1796,6 +1801,9 @@ namespace parus::passes {
                     const auto& old = sym.symbol(*existing);
                     if (old.kind != ex.kind) {
                         report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, nm);
+                    } else if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty()) {
+                        auto& cur = sym.symbol_mut(*existing);
+                        if (cur.link_name.empty()) cur.link_name = ex.link_name;
                     }
                     continue;
                 }
@@ -1816,6 +1824,7 @@ namespace parus::passes {
                 se.decl_bundle_name = ex.decl_bundle_name;
                 se.decl_module_head = ex.module_head;
                 se.decl_source_dir_norm = ex.decl_source_dir_norm;
+                se.link_name = ex.link_name;
                 se.is_export = ex.is_export;
                 se.is_external = true;
             }

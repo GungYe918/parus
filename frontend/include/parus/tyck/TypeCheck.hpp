@@ -382,6 +382,23 @@ namespace parus::tyck {
         };
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
+        std::unordered_map<ty::TypeId, ast::StmtId> acts_default_decl_by_owner_;
+
+        enum class BuiltinActsApiGroup : uint8_t {
+            IntLike = 0,
+            FloatLike,
+            BoolLike,
+            CharLike,
+            TextLike,
+            Unsupported,
+        };
+
+        struct BuiltinActsPolicy {
+            bool allow_default_acts = false;
+            bool allow_named_acts = false;
+            BuiltinActsApiGroup api_group = BuiltinActsApiGroup::Unsupported;
+            std::string_view reserved_bundle = "core";
+        };
 
         enum class ActiveActsSelectionKind : uint8_t {
             kDefaultOnly = 0,
@@ -400,7 +417,16 @@ namespace parus::tyck {
 
         static uint64_t acts_operator_key_(ty::TypeId owner_type, syntax::TokenKind op_token, bool is_postfix);
         static std::string acts_named_decl_key_(ty::TypeId owner_type, std::string_view set_qname);
+        static BuiltinActsPolicy builtin_acts_policy_(ty::Builtin b);
+        static bool is_intlike_builtin_(ty::Builtin b);
+        static bool is_float_builtin_(ty::Builtin b);
+        static bool is_char_builtin_(ty::Builtin b);
+        static bool is_text_builtin_(ty::Builtin b);
+        static bool is_bool_builtin_(ty::Builtin b);
         bool is_self_named_type_(ty::TypeId t) const;
+        bool is_builtin_owner_type_(ty::TypeId t, ty::Builtin* out_builtin = nullptr) const;
+        std::string current_bundle_name_() const;
+        bool enforce_builtin_acts_policy_(ast::StmtId sid, const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,
             std::string& out_base,

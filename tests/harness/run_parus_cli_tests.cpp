@@ -531,6 +531,275 @@ bool test_check_capability_diagnostic_surface() {
     return true;
 }
 
+bool test_cross_bundle_export_runtime_call() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cross-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "math/src", ec);
+    std::filesystem::create_directories(temp_root / "app/src", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto lib = temp_root / "math/src/lib.pr";
+    const auto app = temp_root / "app/src/main.pr";
+    const auto math_lei = temp_root / "math/math.lei";
+    const auto app_lei = temp_root / "app/app.lei";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string lib_src =
+        "nest math::arith;\n"
+        "export def add(a: i32, b: i32) -> i32 {\n"
+        "  return a + b;\n"
+        "}\n";
+
+    const std::string app_src =
+        "import math as m;\n"
+        "def main() -> i32 {\n"
+        "  return m::arith::add(5i32, 6i32);\n"
+        "}\n";
+
+    const std::string math_lei_src =
+        "export plan math_bundle = bundle & {\n"
+        "  name = \"math\";\n"
+        "  kind = \"lib\";\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      sources = [\"math/src/lib.pr\"];\n"
+        "      imports = [];\n"
+        "    },\n"
+        "  ];\n"
+        "  deps = [];\n"
+        "};\n";
+
+    const std::string app_lei_src =
+        "export plan app_bundle = bundle & {\n"
+        "  name = \"app\";\n"
+        "  kind = \"bin\";\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      sources = [\"app/src/main.pr\"];\n"
+        "      imports = [\"math\"];\n"
+        "    },\n"
+        "  ];\n"
+        "  deps = [\"math\"];\n"
+        "};\n";
+
+    const std::string lei_src =
+        "import math from \"./math/math.lei\";\n"
+        "import app from \"./app/app.lei\";\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"cross-runtime\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [math::math_bundle, app::app_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(lib, lib_src) ||
+        !write_text(app, app_src) ||
+        !write_text(math_lei, math_lei_src) ||
+        !write_text(app_lei, app_lei_src) ||
+        !write_text(lei, lei_src)) {
+        std::cerr << "failed to write cross runtime project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string build_cmd = "cd \"" + temp_root.string() + "\" && \"" + bin + "\" build config.lei";
+    auto [rc_build, out_build] = run_capture(build_cmd);
+    if (rc_build != 0) {
+        std::cerr << "cross runtime build failed\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string run_cmd =
+        "cd \"" + temp_root.string() + "\" && \".lei/out/bin/app\"; echo EXIT:$?";
+    auto [rc_run, out_run] = run_capture(run_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_run != 0) {
+        std::cerr << "cross runtime run command failed\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:11")) {
+        std::cerr << "cross runtime exit mismatch (expected 11)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_same_bundle_multi_module_runtime_call() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-same-bundle-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "util/src", ec);
+    std::filesystem::create_directories(temp_root / "app/src", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto util_src = temp_root / "util/src/lib.pr";
+    const auto app_src = temp_root / "app/src/main.pr";
+    const auto lei = temp_root / "config.lei";
+
+    const std::string util_pr =
+        "nest util;\n"
+        "export def helper() -> i32 {\n"
+        "  return 7i32;\n"
+        "}\n";
+
+    const std::string app_pr =
+        "import util as u;\n"
+        "def main() -> i32 {\n"
+        "  return u::helper();\n"
+        "}\n";
+
+    const std::string lei_src =
+        "plan util_module = module & {\n"
+        "  sources = [\"util/src/lib.pr\"];\n"
+        "  imports = [];\n"
+        "};\n"
+        "\n"
+        "plan app_module = module & {\n"
+        "  sources = [\"app/src/main.pr\"];\n"
+        "  imports = [\"util\"];\n"
+        "};\n"
+        "\n"
+        "plan app_bundle = bundle & {\n"
+        "  name = \"app\";\n"
+        "  kind = \"bin\";\n"
+        "  modules = [util_module, app_module];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"same-bundle-runtime\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [app_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+
+    if (!write_text(util_src, util_pr) ||
+        !write_text(app_src, app_pr) ||
+        !write_text(lei, lei_src)) {
+        std::cerr << "failed to write same bundle runtime project files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string build_cmd = "cd \"" + temp_root.string() + "\" && \"" + bin + "\" build config.lei";
+    auto [rc_build, out_build] = run_capture(build_cmd);
+    if (rc_build != 0) {
+        std::cerr << "same bundle runtime build failed\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string run_cmd =
+        "cd \"" + temp_root.string() + "\" && \".lei/out/bin/app\"; echo EXIT:$?";
+    auto [rc_run, out_run] = run_capture(run_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_run != 0) {
+        std::cerr << "same bundle runtime run command failed\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:7")) {
+        std::cerr << "same bundle runtime exit mismatch (expected 7)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_builtin_acts_policy_core_gate() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-builtin-acts";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto non_core = temp_root / "non_core.pr";
+    const auto core_ok = temp_root / "core_ok.pr";
+    const auto core_dup = temp_root / "core_dup.pr";
+
+    const std::string base_decl =
+        "acts for i32 {\n"
+        "  def size(self) -> i32 {\n"
+        "    return 4i32;\n"
+        "  }\n"
+        "};\n";
+
+    const std::string dup_decl =
+        "acts for i32 {\n"
+        "  def size(self) -> i32 {\n"
+        "    return 4i32;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "acts for i32 {\n"
+        "  def bits(self) -> i32 {\n"
+        "    return 32i32;\n"
+        "  }\n"
+        "};\n";
+
+    if (!write_text(non_core, base_decl) ||
+        !write_text(core_ok, base_decl) ||
+        !write_text(core_dup, dup_decl)) {
+        std::cerr << "failed to write builtin acts policy files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto run_tool = [&](const std::filesystem::path& pr,
+                        const std::string& bundle_name) -> std::pair<int, std::string> {
+        const std::string cmd =
+            "\"" + bin + "\" tool parusc -- \"" + pr.string() + "\" -fsyntax-only" +
+            " --bundle-name " + bundle_name +
+            " --bundle-root \"" + temp_root.string() + "\"" +
+            " --module-head " + bundle_name +
+            " --bundle-source \"" + pr.string() + "\"";
+        return run_capture(cmd);
+    };
+
+    auto [rc_non_core, out_non_core] = run_tool(non_core, "app");
+    if (rc_non_core == 0 || !contains(out_non_core, "reserved for bundle 'core'")) {
+        std::cerr << "non-core builtin acts should fail\n" << out_non_core;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_core_ok, out_core_ok] = run_tool(core_ok, "core");
+    if (rc_core_ok != 0) {
+        std::cerr << "core builtin acts should pass\n" << out_core_ok;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_core_dup, out_core_dup] = run_tool(core_dup, "core");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_core_dup == 0 || !contains(out_core_dup, "duplicate default acts declaration for type i32")) {
+        std::cerr << "core duplicate builtin acts should fail\n" << out_core_dup;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -545,8 +814,12 @@ int main() {
     const bool ok9 = test_bundle_dep_import_not_declared();
     const bool ok10 = test_cross_bundle_non_export_violation();
     const bool ok11 = test_check_capability_diagnostic_surface();
+    const bool ok12 = test_cross_bundle_export_runtime_call();
+    const bool ok13 = test_same_bundle_multi_module_runtime_call();
+    const bool ok14 = test_builtin_acts_policy_core_gate();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11) {
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
+        !ok12 || !ok13 || !ok14) {
         return 1;
     }
 

@@ -675,6 +675,67 @@ namespace parus::sir {
             lower_stmt_recursive(lower_stmt_recursive, inst_sid);
         }
 
+        // Inject externally imported function symbols into SIR so OIR can emit stable function refs
+        // for cross-module/cross-bundle calls without materializing null callee placeholders.
+        std::unordered_set<SymbolId> lowered_fn_symbols{};
+        lowered_fn_symbols.reserve(m.funcs.size());
+        for (const auto& f : m.funcs) {
+            if (f.sym != k_invalid_symbol) lowered_fn_symbols.insert(f.sym);
+        }
+
+        const auto& symbols = sym.symbols();
+        for (uint32_t sid = 0; sid < static_cast<uint32_t>(symbols.size()); ++sid) {
+            const auto& ss = symbols[sid];
+            if (!ss.is_external) continue;
+            if (ss.kind != sema::SymbolKind::kFn) continue;
+            if (!lowered_fn_symbols.insert(sid).second) continue;
+            if (ss.declared_type == k_invalid_type) continue;
+            if (!types.is_fn(ss.declared_type)) continue;
+
+            Func f{};
+            f.span = ss.decl_span;
+            f.name = ss.name;
+            f.external_link_name = ss.link_name;
+            f.sym = sid;
+            f.sig = ss.declared_type;
+            f.ret = types.get(ss.declared_type).ret;
+            f.is_export = ss.is_export;
+            f.is_extern = true;
+            f.fn_mode = FnMode::kNone;
+            f.abi = FuncAbi::kParus;
+            f.is_pure = false;
+            f.is_comptime = false;
+            f.is_commit = false;
+            f.is_recast = false;
+            f.is_throwing = false;
+            f.entry = k_invalid_block;
+            f.origin_stmt = 0xFFFF'FFFFu;
+            f.has_any_write = false;
+            f.is_acts_member = false;
+            f.owner_acts = k_invalid_acts;
+
+            const auto& sig = types.get(ss.declared_type);
+            f.param_begin = static_cast<uint32_t>(m.params.size());
+            f.param_count = 0;
+            f.positional_param_count = types.fn_positional_count(ss.declared_type);
+            f.has_named_group = (sig.param_count > f.positional_param_count);
+            for (uint32_t pi = 0; pi < sig.param_count; ++pi) {
+                Param p{};
+                p.name = types.fn_param_label_at(ss.declared_type, pi);
+                p.type = types.fn_param_at(ss.declared_type, pi);
+                p.is_mut = false;
+                p.has_default = types.fn_param_has_default_at(ss.declared_type, pi);
+                p.default_value = k_invalid_value;
+                p.is_named_group = (pi >= f.positional_param_count);
+                p.sym = k_invalid_symbol;
+                p.span = ss.decl_span;
+                (void)m.add_param(p);
+                f.param_count++;
+            }
+
+            (void)m.add_func(f);
+        }
+
         return m;
     }
 

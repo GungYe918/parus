@@ -32,6 +32,7 @@ namespace parus::passes {
         struct ExternalExport {
             sema::SymbolKind kind = sema::SymbolKind::kVar;
             std::string path{};
+            std::string link_name{};
             ty::TypeId declared_type = ty::kInvalidType;
             std::string declared_type_repr{};
             Span decl_span{};

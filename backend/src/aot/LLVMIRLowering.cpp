@@ -639,7 +639,8 @@ namespace parus::backend::aot {
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
                 const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
                 const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants,
-                const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks
+                const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks,
+                bool* saw_invalid_callee_call
             ) : m_(m),
                 types_(types),
                 fn_(def),
@@ -648,7 +649,8 @@ namespace parus::backend::aot {
                 named_layouts_(named_layouts),
                 field_offsets_(field_offsets),
                 text_constants_(text_constants),
-                drop_thunks_(drop_thunks) {
+                drop_thunks_(drop_thunks),
+                saw_invalid_callee_call_(saw_invalid_callee_call) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -719,6 +721,7 @@ namespace parus::backend::aot {
             const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
             const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
             const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks_ = nullptr;
+            bool* saw_invalid_callee_call_ = nullptr;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
@@ -811,6 +814,16 @@ namespace parus::backend::aot {
             bool is_value_slot_(parus::oir::ValueId v) const {
                 if (v == parus::oir::kInvalidId || static_cast<size_t>(v) >= value_uses_.size()) return false;
                 return value_uses_[v].as_slot;
+            }
+
+            /// @brief 값이 InstConstNull에서 만들어진 null callee인지 검사한다.
+            bool is_const_null_value_(parus::oir::ValueId v) const {
+                using namespace parus::oir;
+                if (v == kInvalidId || static_cast<size_t>(v) >= m_.values.size()) return false;
+                const auto& val = m_.values[v];
+                if (val.def_b != kInvalidId) return false;
+                if (val.def_a == kInvalidId || static_cast<size_t>(val.def_a) >= m_.insts.size()) return false;
+                return std::holds_alternative<InstConstNull>(m_.insts[val.def_a].data);
             }
 
             /// @brief InstCall이 direct callee를 가지면 함수 ID를 우선으로 direct-call 메타를 추출한다.
@@ -1634,6 +1647,17 @@ namespace parus::backend::aot {
                                 }
                             };
 
+                            if (!direct.has_value() &&
+                                (x.callee == kInvalidId || is_const_null_value_(x.callee))) {
+                                if (saw_invalid_callee_call_ != nullptr) {
+                                    *saw_invalid_callee_call_ = true;
+                                }
+                                need_call_stub_ = true;
+                                os << "  call void @parus_oir_call_stub()\n";
+                                emit_default_result();
+                                return;
+                            }
+
                             if (direct.has_value() && direct->param_tys.size() == arg_vals.size()) {
                                 if (direct->ret_ty == "void") {
                                     os << "  call void @" << direct->symbol << "(";
@@ -2142,6 +2166,7 @@ namespace parus::backend::aot {
             "parus_bundle_init__" + normalize_symbol_fragment_(bundle_name);
 
         bool need_call_stub = false;
+        bool saw_invalid_callee_call = false;
         bool has_raw_main_symbol = false;
         bool has_ambiguous_main_entry = false;
         std::unordered_set<std::string> defined_fn_symbols{};
@@ -2193,7 +2218,8 @@ namespace parus::backend::aot {
                 named_layouts,
                 field_offsets,
                 text_constants,
-                &drop_thunk_symbols
+                &drop_thunk_symbols,
+                &saw_invalid_callee_call
             );
             os << fe.emit(need_call_stub) << "\n";
         }
@@ -2271,6 +2297,13 @@ namespace parus::backend::aot {
             os << "entry:\n";
             os << "  ret void\n";
             os << "}\n";
+        }
+
+        if (saw_invalid_callee_call) {
+            out.messages.push_back(CompileMessage{
+                true,
+                "encountered invalid/null callee during LLVM lowering; emitted call stub and default result."
+            });
         }
 
         out.ok = true;

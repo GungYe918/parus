@@ -158,6 +158,7 @@ namespace parusc::p0 {
             parus::sema::SymbolKind kind = parus::sema::SymbolKind::kVar;
             std::string kind_text{};
             std::string path{};
+            std::string link_name{};
             std::string module_head{};
             std::string decl_dir{};
             std::string type_repr{};
@@ -403,6 +404,79 @@ namespace parusc::p0 {
             return std::string(top);
         }
 
+        std::string normalize_symbol_fragment_(std::string_view in) {
+            std::string out;
+            out.reserve(in.size());
+            for (const char c : in) {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (std::isalnum(u) || c == '_') out.push_back(c);
+                else out.push_back('_');
+            }
+            if (out.empty()) out = "_";
+            return out;
+        }
+
+        uint64_t fnv1a64_(std::string_view s) {
+            uint64_t h = 1469598103934665603ull;
+            for (const char c : s) {
+                h ^= static_cast<unsigned char>(c);
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        std::string build_function_link_name_(
+            std::string_view bundle_name,
+            std::string_view qname,
+            parus::ast::FnMode fn_mode,
+            std::string_view sig_repr,
+            bool is_c_abi
+        ) {
+            if (qname.empty()) return {};
+            if (is_c_abi) {
+                const size_t pos = qname.rfind("::");
+                return (pos == std::string_view::npos)
+                    ? std::string(qname)
+                    : std::string(qname.substr(pos + 2));
+            }
+
+            std::string path = "_";
+            std::string base = std::string(qname);
+            if (const size_t pos = base.rfind("::"); pos != std::string::npos) {
+                path = base.substr(0, pos);
+                base = base.substr(pos + 2);
+                size_t p = 0;
+                while ((p = path.find("::", p)) != std::string::npos) {
+                    path.replace(p, 2, "__");
+                    p += 2;
+                }
+            }
+
+            std::string mode = "none";
+            switch (fn_mode) {
+                case parus::ast::FnMode::kPub: mode = "pub"; break;
+                case parus::ast::FnMode::kSub: mode = "sub"; break;
+                case parus::ast::FnMode::kNone: default: mode = "none"; break;
+            }
+
+            const std::string bundle = bundle_name.empty() ? std::string("main") : std::string(bundle_name);
+            const std::string sig = sig_repr.empty() ? std::string("def(?)") : std::string(sig_repr);
+            const std::string canonical =
+                "bundle=" + bundle + "|path=" + path +
+                "|name=" + base +
+                "|mode=" + mode +
+                "|recv=none|sig=" + sig;
+
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(canonical);
+
+            return "p$" + normalize_symbol_fragment_(bundle) + "$" +
+                normalize_symbol_fragment_(path) + "$" +
+                normalize_symbol_fragment_(base) + "$M" +
+                normalize_symbol_fragment_(mode) + "$Rnone$S" +
+                normalize_symbol_fragment_(sig) + "$H" + hs.str();
+        }
+
         void collect_exports_stmt_(
             const parus::ast::AstArena& ast,
             parus::ast::StmtId sid,
@@ -473,12 +547,14 @@ namespace parusc::p0 {
                                    std::string qname,
                                    parus::ty::TypeId tid,
                                    bool is_export,
-                                   parus::Span span) {
+                                   parus::Span span,
+                                   std::string link_name = {}) {
                 if (qname.empty()) return;
                 ExportSurfaceEntry e{};
                 e.kind = kind;
                 e.kind_text = symbol_kind_to_text_(kind);
                 e.path = std::move(qname);
+                e.link_name = std::move(link_name);
                 e.module_head = module_head;
                 e.decl_dir = decl_dir;
                 if (tid != parus::ty::kInvalidType) {
@@ -494,7 +570,17 @@ namespace parusc::p0 {
             };
 
             if (s.kind == parus::ast::StmtKind::kFnDecl && !s.name.empty()) {
-                push_export(parus::sema::SymbolKind::kFn, qualify_name_(ns, s.name), s.type, s.is_export, s.span);
+                const std::string qname = qualify_name_(ns, s.name);
+                const std::string sig_repr =
+                    (s.type != parus::ty::kInvalidType) ? types.to_string(s.type) : std::string("def(?)");
+                const std::string link_name = build_function_link_name_(
+                    bundle_name,
+                    qname,
+                    s.fn_mode,
+                    sig_repr,
+                    s.link_abi == parus::ast::LinkAbi::kC
+                );
+                push_export(parus::sema::SymbolKind::kFn, qname, s.type, s.is_export, s.span, link_name);
                 return;
             }
 
@@ -530,7 +616,16 @@ namespace parusc::p0 {
                             std::string member_qname = acts_qname;
                             member_qname += "::";
                             member_qname += std::string(ms.name);
-                            push_export(parus::sema::SymbolKind::kFn, member_qname, ms.type, s.is_export, ms.span);
+                            const std::string sig_repr =
+                                (ms.type != parus::ty::kInvalidType) ? types.to_string(ms.type) : std::string("def(?)");
+                            const std::string link_name = build_function_link_name_(
+                                bundle_name,
+                                member_qname,
+                                ms.fn_mode,
+                                sig_repr,
+                                ms.link_abi == parus::ast::LinkAbi::kC
+                            );
+                            push_export(parus::sema::SymbolKind::kFn, member_qname, ms.type, s.is_export, ms.span, link_name);
                         }
                     }
                 }
@@ -675,13 +770,14 @@ namespace parusc::p0 {
             }
 
             ofs << "{\n";
-            ofs << "  \"version\": 3,\n";
+            ofs << "  \"version\": 4,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"exports\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
                 const auto& e = entries[i];
                 ofs << "    {\"kind\":\"" << json_escape_text_(e.kind_text)
                     << "\",\"path\":\"" << json_escape_text_(e.path)
+                    << "\",\"link_name\":\"" << json_escape_text_(e.link_name)
                     << "\",\"module_head\":\"" << json_escape_text_(e.module_head)
                     << "\",\"decl_dir\":\"" << json_escape_text_(e.decl_dir)
                     << "\",\"type_repr\":\"" << json_escape_text_(e.type_repr)
@@ -845,7 +941,7 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || version != 3) {
+            if (!parse_json_uint_field_(text, "version", version) || (version != 3 && version != 4)) {
                 out_err = "unsupported export-index version in: " + path;
                 return false;
             }
@@ -863,6 +959,7 @@ namespace parusc::p0 {
             for (const auto& obj : objects) {
                 std::string kind_s{};
                 std::string path_s{};
+                std::string link_name{};
                 std::string module_head{};
                 std::string decl_dir{};
                 std::string type_repr{};
@@ -878,6 +975,9 @@ namespace parusc::p0 {
                 if (!parse_json_string_field_(obj, "path", path_s)) {
                     out_err = "invalid export-index entry field 'path' in: " + path;
                     return false;
+                }
+                if (version >= 4) {
+                    (void)parse_json_string_field_(obj, "link_name", link_name);
                 }
                 if (!parse_json_string_field_(obj, "module_head", module_head)) {
                     out_err = "invalid export-index entry field 'module_head' in: " + path;
@@ -918,6 +1018,7 @@ namespace parusc::p0 {
                 e.kind = *kind;
                 e.kind_text = kind_s;
                 e.path = std::move(path_s);
+                e.link_name = std::move(link_name);
                 e.module_head = std::move(module_head);
                 e.decl_dir = std::move(decl_dir);
                 e.type_repr = std::move(type_repr);
@@ -1212,6 +1313,7 @@ namespace parusc::p0 {
             parus::passes::NameResolveOptions::ExternalExport x{};
             x.kind = e.kind;
             x.path = std::move(lookup_path);
+            x.link_name = e.link_name;
             x.declared_type = parse_type_repr_into_(e.type_repr, types);
             x.declared_type_repr = e.type_repr;
             x.decl_span = root_span;

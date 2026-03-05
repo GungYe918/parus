@@ -680,7 +680,18 @@ namespace parus::oir {
             ValueId read_local(parus::sir::SymbolId sym, TypeId want_ty) {
                 auto it = env.find(sym);
                 if (it == env.end()) {
-                    // unknown -> produce dummy (should not happen after name-resolve)
+                    // Fallback: unresolved local slot that is actually a function symbol.
+                    // This is required for external/imported functions that are not materialized
+                    // as local bindings in the current function environment.
+                    if (fn_symbol_to_func != nullptr && sym != parus::sir::k_invalid_symbol) {
+                        auto fit = fn_symbol_to_func->find(sym);
+                        if (fit != fn_symbol_to_func->end() &&
+                            out != nullptr &&
+                            (size_t)fit->second < out->funcs.size()) {
+                            return emit_func_ref(fit->second, out->funcs[fit->second].name);
+                        }
+                    }
+                    // unknown -> produce dummy (kept for error recovery)
                     return emit_const_null(want_ty);
                 }
                 if (!it->second.is_slot) return it->second.v;
@@ -1475,6 +1486,23 @@ namespace parus::oir {
 
                 if (callee == kInvalidId && direct_callee == kInvalidId) {
                     callee = lower_value(v.a);
+                }
+
+                if (direct_callee == kInvalidId) {
+                    if (callee == kInvalidId) {
+                        report_lowering_error("call lowering failed: unresolved callee value");
+                        return emit_const_null(v.type);
+                    }
+                    if (out != nullptr &&
+                        (size_t)callee < out->values.size()) {
+                        const auto& cv = out->values[callee];
+                        if (cv.def_a != kInvalidId &&
+                            (size_t)cv.def_a < out->insts.size() &&
+                            std::holds_alternative<InstConstNull>(out->insts[cv.def_a].data)) {
+                            report_lowering_error("call lowering failed: callee resolved to null value");
+                            return emit_const_null(v.type);
+                        }
+                    }
                 }
 
                 bool direct_callee_throwing = false;
@@ -2611,9 +2639,13 @@ namespace parus::oir {
 
             Function f{};
             // C ABI 함수는 심볼을 비맹글 기반으로 유지한다.
-            f.name = (sf.abi == parus::sir::FuncAbi::kC)
-                ? std::string(sf.name)
-                : mangle_func_name_(sf, ty_, sir_.bundle_name);
+            if (sf.is_extern && !sf.external_link_name.empty()) {
+                f.name = sf.external_link_name;
+            } else {
+                f.name = (sf.abi == parus::sir::FuncAbi::kC)
+                    ? std::string(sf.name)
+                    : mangle_func_name_(sf, ty_, sir_.bundle_name);
+            }
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
             f.is_extern = sf.is_extern;
