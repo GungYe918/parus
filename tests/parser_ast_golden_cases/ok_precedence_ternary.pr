@@ -1,0 +1,7 @@
+def main() -> i32 {
+    set a = 1i32 + 2i32 * 3i32;
+    set b = (1i32 + 2i32) * 3i32;
+    set c = a ?? b;
+    set d = a ? b : c;
+    return d;
+}

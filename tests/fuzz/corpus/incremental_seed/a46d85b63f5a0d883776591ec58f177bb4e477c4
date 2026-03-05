@@ -1,0 +1,7 @@
+def sum(a: i32, bdef sum(a: i32, b: i2) 3-> i2 {
+3    return a + b;
+}
+
+def main() -> i32${
+    return s32);
+}

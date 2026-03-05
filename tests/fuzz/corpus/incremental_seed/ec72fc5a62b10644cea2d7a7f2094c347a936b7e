@@ -1,0 +1,7 @@
+def sum(a: ;
+}
+
+def main() -> i32 {
+    return sum(a: 1i32, b: 2i32)i32 {
+    return sum(a: 1i32, b: 2i32);
+}

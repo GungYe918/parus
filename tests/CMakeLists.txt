@@ -3,6 +3,26 @@ add_executable(parus_parser_tests
     harness/run_parser_tests.cpp
 )
 
+add_executable(parus_frontend_integration_tests
+    harness/run_frontend_integration_tests.cpp
+)
+
+add_executable(parus_parser_stress_tests
+    harness/run_parser_stress_tests.cpp
+)
+
+add_executable(parus_parser_incremental_merge_tests
+    harness/run_parser_incremental_merge_tests.cpp
+)
+
+add_executable(parus_parser_crash_tests
+    harness/run_parser_crash_tests.cpp
+)
+
+add_executable(parus_parser_ast_golden_tests
+    harness/run_parser_ast_golden_tests.cpp
+)
+
 add_executable(parus_oir_tests
     harness/run_oir_tests.cpp
 )
@@ -27,6 +47,11 @@ if (TARGET parusd)
 endif()
 
 target_link_libraries(parus_parser_tests PRIVATE parus_compiler)
+target_link_libraries(parus_frontend_integration_tests PRIVATE parus_compiler)
+target_link_libraries(parus_parser_stress_tests PRIVATE parus_compiler)
+target_link_libraries(parus_parser_incremental_merge_tests PRIVATE parus_compiler)
+target_link_libraries(parus_parser_crash_tests PRIVATE parus_compiler)
+target_link_libraries(parus_parser_ast_golden_tests PRIVATE parus_compiler)
 target_link_libraries(parus_oir_tests PRIVATE parus_compiler)
 target_link_libraries(parusc_cli_option_tests PRIVATE parus_compiler)
 if (TARGET parus_cli_tests)
@@ -38,7 +63,13 @@ endif()
 if (TARGET parusd_lsp_tests)
     target_link_libraries(parusd_lsp_tests PRIVATE parus_compiler)
 endif()
+
 target_compile_features(parus_parser_tests PRIVATE cxx_std_23)
+target_compile_features(parus_frontend_integration_tests PRIVATE cxx_std_23)
+target_compile_features(parus_parser_stress_tests PRIVATE cxx_std_23)
+target_compile_features(parus_parser_incremental_merge_tests PRIVATE cxx_std_23)
+target_compile_features(parus_parser_crash_tests PRIVATE cxx_std_23)
+target_compile_features(parus_parser_ast_golden_tests PRIVATE cxx_std_23)
 target_compile_features(parus_oir_tests PRIVATE cxx_std_23)
 target_compile_features(parusc_cli_option_tests PRIVATE cxx_std_23)
 if (TARGET parus_cli_tests)
@@ -50,9 +81,11 @@ endif()
 if (TARGET parusd_lsp_tests)
     target_compile_features(parusd_lsp_tests PRIVATE cxx_std_23)
 endif()
+
 target_include_directories(parusc_cli_option_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/compiler/parusc/include
 )
+
 if (TARGET parus_cli_tests)
     target_compile_definitions(parus_cli_tests PRIVATE
         PARUS_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parus"
@@ -71,11 +104,40 @@ if (TARGET parusd_lsp_tests)
         PARUSC_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parusc"
     )
 endif()
+
 target_compile_definitions(parus_parser_tests PRIVATE
-    PARUS_TEST_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_cases"
+    PARUS_PARSER_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_cases"
 )
+
+target_compile_definitions(parus_frontend_integration_tests PRIVATE
+    PARUS_FRONTEND_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/frontend_cases"
+    PARUS_PARSER_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_cases"
+)
+
+target_compile_definitions(parus_parser_stress_tests PRIVATE
+    PARUS_PARSER_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_cases"
+    PARUS_FUZZ_INCREMENTAL_SEED_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fuzz/corpus/incremental_seed"
+)
+
+target_compile_definitions(parus_parser_incremental_merge_tests PRIVATE
+    PARUS_INCREMENTAL_MERGE_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/incremental_merge_cases"
+)
+
+target_compile_definitions(parus_parser_crash_tests PRIVATE
+    PARUS_PARSER_CRASH_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_crashes"
+)
+
+target_compile_definitions(parus_parser_ast_golden_tests PRIVATE
+    PARUS_PARSER_AST_GOLDEN_CASE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/parser_ast_golden_cases"
+)
+
 if (MSVC)
     target_compile_options(parus_parser_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_frontend_integration_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_parser_stress_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_parser_incremental_merge_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_parser_crash_tests PRIVATE /W4 /permissive-)
+    target_compile_options(parus_parser_ast_golden_tests PRIVATE /W4 /permissive-)
     target_compile_options(parus_oir_tests PRIVATE /W4 /permissive-)
     target_compile_options(parusc_cli_option_tests PRIVATE /W4 /permissive-)
     if (TARGET parus_cli_tests)
@@ -89,6 +151,11 @@ if (MSVC)
     endif()
 else()
     target_compile_options(parus_parser_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_frontend_integration_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_parser_stress_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_parser_incremental_merge_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_parser_crash_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    target_compile_options(parus_parser_ast_golden_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parus_oir_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     target_compile_options(parusc_cli_option_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
     if (TARGET parus_cli_tests)
@@ -148,8 +215,47 @@ if (TARGET parus_backend_parlib)
     endif()
 endif()
 
+if (PARUS_BUILD_FUZZERS)
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_executable(parus_fuzz_parser_smoke
+            fuzz/fuzz_parser_smoke.cpp
+        )
+        target_link_libraries(parus_fuzz_parser_smoke PRIVATE parus_compiler)
+        target_compile_features(parus_fuzz_parser_smoke PRIVATE cxx_std_23)
+        target_compile_options(parus_fuzz_parser_smoke PRIVATE
+            -fsanitize=fuzzer,address,undefined
+            -fno-omit-frame-pointer
+        )
+        target_link_options(parus_fuzz_parser_smoke PRIVATE
+            -fsanitize=fuzzer,address,undefined
+            -fno-omit-frame-pointer
+        )
+
+        add_executable(parus_fuzz_parser_incremental
+            fuzz/fuzz_parser_incremental.cpp
+        )
+        target_link_libraries(parus_fuzz_parser_incremental PRIVATE parus_compiler)
+        target_compile_features(parus_fuzz_parser_incremental PRIVATE cxx_std_23)
+        target_compile_options(parus_fuzz_parser_incremental PRIVATE
+            -fsanitize=fuzzer,address,undefined
+            -fno-omit-frame-pointer
+        )
+        target_link_options(parus_fuzz_parser_incremental PRIVATE
+            -fsanitize=fuzzer,address,undefined
+            -fno-omit-frame-pointer
+        )
+    else()
+        message(WARNING "PARUS_BUILD_FUZZERS=ON ignored: clang/libFuzzer toolchain is required")
+    endif()
+endif()
+
 enable_testing()
 add_test(NAME parus_parser_tests COMMAND parus_parser_tests)
+add_test(NAME parus_frontend_integration_tests COMMAND parus_frontend_integration_tests)
+add_test(NAME parus_parser_stress_tests COMMAND parus_parser_stress_tests)
+add_test(NAME parus_parser_incremental_merge_tests COMMAND parus_parser_incremental_merge_tests)
+add_test(NAME parus_parser_crash_tests COMMAND parus_parser_crash_tests)
+add_test(NAME parus_parser_ast_golden_tests COMMAND parus_parser_ast_golden_tests)
 add_test(NAME parus_oir_tests COMMAND parus_oir_tests)
 add_test(NAME parusc_cli_option_tests COMMAND parusc_cli_option_tests)
 if (TARGET parus_cli_tests)

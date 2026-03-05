@@ -1,0 +1,2 @@
+def sum(a: i16, b: i32) -> i32 {
+    rt eun a+br ;def sum(a: i32, b: ma0) ->  i 

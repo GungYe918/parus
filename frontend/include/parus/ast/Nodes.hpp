@@ -686,7 +686,8 @@ namespace parus::ast {
         }
 
         uint32_t add_path_seg(std::string_view s) {
-            path_segs_.push_back(s);
+            const std::string_view owned = add_owned_string(std::string(s));
+            path_segs_.push_back(owned);
             return (uint32_t)path_segs_.size() - 1;
         }
 

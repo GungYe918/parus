@@ -1,0 +1,15 @@
+def one() -> i32 {
+    return 1i32;
+}
+
+def two() -> i32 {
+    return one();
+}
+
+def three() -> i32 {
+    return two();
+}
+
+def main() -> i32 {
+    return three();
+}

@@ -5,6 +5,7 @@
 #include <parus/syntax/TokenKind.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <utility>
 
@@ -13,6 +14,26 @@ namespace parus::parse {
     namespace {
 
         static constexpr uint32_t kInvalidU32 = std::numeric_limits<uint32_t>::max();
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+        static constexpr bool kDisableIncrementalMergeForAsan = true;
+#else
+        static constexpr bool kDisableIncrementalMergeForAsan = false;
+#endif
+#elif defined(__SANITIZE_ADDRESS__)
+        static constexpr bool kDisableIncrementalMergeForAsan = true;
+#else
+        static constexpr bool kDisableIncrementalMergeForAsan = false;
+#endif
+
+        bool incremental_merge_disabled_() {
+            if (kDisableIncrementalMergeForAsan) return true;
+            const char* env = std::getenv("PARUS_DISABLE_INCREMENTAL_MERGE");
+            if (!env || env[0] == '\0') return false;
+            if (env[0] == '0' && env[1] == '\0') return false;
+            return true;
+        }
 
         Span span_join_(Span a, Span b) {
             Span s = a;
@@ -147,6 +168,14 @@ namespace parus::parse {
                                                           uint32_t file_id,
                                                           std::span<const EditWindow> edits,
                                                           diag::Bag& bag) {
+        if (incremental_merge_disabled_()) {
+            (void)source;
+            (void)file_id;
+            (void)edits;
+            (void)bag;
+            return false;
+        }
+
         if (!ready_) return false;
         if (snapshot_.root == ast::k_invalid_stmt) return false;
         if (source_owners_.size() > 16) return false; // old source retention compact trigger

@@ -1,0 +1,3 @@
+def sum(a: i32, b: i32) ->turn a + b;
+: 1i b, b: 2i3");
+}

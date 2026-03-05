@@ -303,6 +303,8 @@ namespace parus {
         uint32_t macro_scope_depth_ = 0;
         bool in_actor_member_context_ = false;
         uint8_t generic_gt_pending_ = 0;
+        static constexpr uint32_t kMaxExprRecursionDepth = 512;
+        uint32_t expr_recursion_depth_ = 0;
         ParserFeatureFlags parser_features_{};
     };
 

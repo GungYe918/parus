@@ -15,6 +15,7 @@ if (NOT MSVC)
 endif()
 
 option(PARUS_BUILD_TESTS "Build Parus tests" ON)
+option(PARUS_BUILD_FUZZERS "Build parser fuzz targets (clang/libFuzzer only)" OFF)
 option(PARUS_BUILD_PARUSD "Build Parus standalone LSP server (parusd)" ON)
 option(PARUS_BUILD_LEI "Build LEI standalone DSL project under tools/Lei" ON)
 option(PARUS_BUILD_ORCHESTRATOR "Build Parus orchestrator CLI (parus)" ON)

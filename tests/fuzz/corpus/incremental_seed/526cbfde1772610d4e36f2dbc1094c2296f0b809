@@ -1,0 +1,3 @@
+def sem(a: i32, b: i32) -> i32 {
+ rn sui32 {1i b, b: 2i32);
+}

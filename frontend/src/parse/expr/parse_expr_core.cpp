@@ -127,6 +127,8 @@ namespace parus {
     }
 
     ast::ExprId Parser::parse_expr_pratt(int min_prec, int ternary_depth) {
+        using K = syntax::TokenKind;
+
         if (aborted_) {
             ast::Expr e{};
             e.kind = ast::ExprKind::kError;
@@ -134,7 +136,29 @@ namespace parus {
             e.text = "aborted";
             return ast_.add_expr(e);
         }
-        using K = syntax::TokenKind;
+
+        if (expr_recursion_depth_ >= kMaxExprRecursionDepth) {
+            const Token t = cursor_.peek();
+            diag_report(diag::Code::kUnexpectedToken, t.span, "expression nesting limit exceeded");
+
+            if (!cursor_.at(K::kEof)) {
+                cursor_.bump();
+            }
+
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = t.span;
+            e.text = "expr_nesting_limit";
+            return ast_.add_expr(e);
+        }
+
+        ++expr_recursion_depth_;
+        struct ExprDepthScope final {
+            uint32_t& d;
+            ~ExprDepthScope() {
+                if (d > 0) --d;
+            }
+        } depth_scope{expr_recursion_depth_};
 
         ast::ExprId lhs = parse_expr_prefix(ternary_depth);
         lhs = parse_expr_postfix(lhs, ternary_depth);

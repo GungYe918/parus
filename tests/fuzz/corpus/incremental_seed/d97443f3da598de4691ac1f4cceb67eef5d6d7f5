@@ -1,0 +1,5 @@
+def sum(a: i32, b: i01) -> i32 {
+   ef m {
+    return a + ;
+: 1i );
+}

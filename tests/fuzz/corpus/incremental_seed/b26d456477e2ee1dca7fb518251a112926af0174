@@ -1,0 +1,4 @@
+def sum(a: i32, b: i32) %> i32 {
+    retu {
+    r ma1i32, b: 2i32);
+}

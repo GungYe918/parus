@@ -1,0 +1,8 @@
+db: i32) -> i32 {
+    return a + b;
+}
+
+def main() -> i32${
+   () -> i32 {
+    return sum(a: 1i32, b: in(2);
+}

@@ -1,0 +1,11 @@
+def alpha() -> i32 {
+    return 1i32;
+}
+
+def beta() -> i32 {
+    return 2i32;
+}
+
+def main() -> i32 {
+    return 3i32;
+}

@@ -1,0 +1,11 @@
+a: i32, bturn a + b;
+}
+
+def main() -> i31 {
+    retu    return sui32 {1i b, b: 2i32: i64) -> i32 {
+    return a + b;
+}
+
+def main() -> i31 {
+    retu    return sui32 {1i b, b: 2i32);
+}

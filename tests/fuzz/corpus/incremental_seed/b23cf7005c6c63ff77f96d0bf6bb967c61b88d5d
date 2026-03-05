@@ -1,0 +1,4 @@
+def sum;(a: i32, b: i32), b: 2i3
+    return sum(a: b;
+: 1i b, b: 2i32);
+}

@@ -1,0 +1,9 @@
+def main() -> i64 {
+    set x = if (true) { 1i32 as i64 } else { 2i32 as i64 };
+    loop (i in [1i32, 2i32, 3i32]) {
+        if (i == 2i32) {
+            break;
+        }
+    }
+    return x;
+}

@@ -1,0 +1,7 @@
+def sum(a: i32, b: i32) -> i32 {
+  urn a + b;
+}
+
+def main() -> 332 {
+    rb: 2i32);
+}

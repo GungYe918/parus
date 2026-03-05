@@ -1,0 +1,6 @@
+def main() -> i32 {
+    set arr = [1i32, 2i32, 3i32];
+    set z = arr[1i32] as? i32;
+    set w = z as! i32;
+    return w;
+}

@@ -1,0 +1,5 @@
+def main() -> i32 {
+    set v = Pair{ left: 1i32, right: 2i32 };
+    set y = foo(v.left, label: v.right)[0i32];
+    return y;
+}

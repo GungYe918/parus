@@ -1,0 +1,8 @@
+def main( -> i32 {
+    set x = (((1 + 2);
+    return x;
+}
+
+def tail() -> i32 {
+    return 0i32;
+}
