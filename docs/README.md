@@ -22,6 +22,13 @@ Parus 문서는 역할별로 분리한다.
 1. internal 허브: `docs/internal/README.md`
 2. compiler 허브: `docs/internal/compiler/README.md`
 
+## 4. TODO 설계 동결 문서 (Design Freeze Track)
+
+1. const 모델: `docs/todo/CONST_MODEL.md`
+2. 제네릭 모델: `docs/todo/GENERICS_SYSTEM_MODEL.md`
+3. 매크로 모델: `docs/todo/MACRO_SYSTEM_MODEL.md`
+4. inline asm 모델: `docs/todo/INLINE_ASM_MODEL.md`
+
 ## 우선순위 규칙
 
 1. 주제별 normative 문서

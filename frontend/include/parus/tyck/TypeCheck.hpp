@@ -15,6 +15,7 @@
 #include <vector>
 #include <optional>
 #include <deque>
+#include <utility>
 #include <unordered_map> 
 #include <unordered_set>
 
@@ -29,6 +30,19 @@ namespace parus::tyck {
     struct TyError {
         Span span{};
         std::string message{};
+    };
+
+    enum class ConstInitKind : uint8_t {
+        kNone = 0,
+        kInt,
+        kFloat,
+        kBool,
+        kChar,
+    };
+
+    struct ConstInitData {
+        ConstInitKind kind = ConstInitKind::kNone;
+        std::string text{};
     };
 
     struct TyckResult {
@@ -49,6 +63,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_field_sids; // concrete generic struct instantiations
         std::vector<ast::StmtId> generic_instantiated_enum_sids; // concrete generic enum instantiations
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
+        std::unordered_map<uint32_t, ConstInitData> const_symbol_values; // SymbolId -> const initializer value
         std::vector<TyError> errors;
     };
 
@@ -69,6 +84,9 @@ namespace parus::tyck {
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
         void set_seed_symbol_table(const sema::SymbolTable* seed) { seed_sym_ = seed; }
+        void set_trusted_builtin_acts_decl_sids(std::unordered_set<ast::StmtId> sids) {
+            trusted_builtin_acts_decl_sids_ = std::move(sids);
+        }
 
         // program(StmtId) 하나를 타입체크
         TyckResult check_program(ast::StmtId program_stmt);
@@ -383,6 +401,7 @@ namespace parus::tyck {
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> acts_default_decl_by_owner_;
+        std::unordered_set<ast::StmtId> trusted_builtin_acts_decl_sids_;
 
         enum class BuiltinActsApiGroup : uint8_t {
             IntLike = 0,
@@ -511,6 +530,8 @@ namespace parus::tyck {
             bool emit_unsatisfied_diag = true,
             bool emit_shape_diag = true
         );
+        bool eval_const_expr_(ast::ExprId expr_id, ConstInitData& out, Span diag_span);
+        bool eval_const_symbol_(uint32_t symbol_id, ConstInitData& out, Span diag_span);
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
@@ -598,6 +619,9 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_enum_sids_;
         std::unordered_set<ast::ExprId> proto_require_type_diag_emitted_;
         std::unordered_set<ast::ExprId> proto_require_complex_diag_emitted_;
+        std::unordered_map<uint32_t, ast::StmtId> const_symbol_decl_sid_;
+        std::unordered_map<uint32_t, uint8_t> const_symbol_eval_state_;
+        std::unordered_set<uint32_t> const_cycle_diag_emitted_;
 
     };
 

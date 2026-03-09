@@ -41,6 +41,7 @@
 #include <sstream>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 namespace parusc::p0 {
@@ -1136,6 +1137,101 @@ namespace parusc::p0 {
             return getenv_string_("PARUS_SYSROOT");
         }
 
+        bool env_flag_truthy_(std::string_view s) {
+            if (s.empty()) return false;
+            std::string v(s);
+            std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            return v == "1" || v == "true" || v == "yes" || v == "on";
+        }
+
+        std::string resolve_core_prelude_path_(const cli::Options& opt) {
+            if (env_flag_truthy_(getenv_string_("PARUS_NO_CORE")) ||
+                env_flag_truthy_(getenv_string_("PARUS_FREESTANDING"))) {
+                return {};
+            }
+
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+
+            const std::string sysroot = select_sysroot_(opt);
+            if (sysroot.empty()) return {};
+
+            const fs::path prelude = fs::path(sysroot) / "core" / "src" / "prelude.pr";
+            const fs::path normalized = fs::weakly_canonical(prelude, ec);
+            if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
+                return parus::normalize_path(normalized.string());
+            }
+            ec.clear();
+            if (fs::exists(prelude, ec) && !ec && fs::is_regular_file(prelude, ec)) {
+                return parus::normalize_path(prelude.string());
+            }
+            return {};
+        }
+
+        void append_block_children_(const parus::ast::AstArena& ast,
+                                    parus::ast::StmtId root_sid,
+                                    std::vector<parus::ast::StmtId>& out_children) {
+            if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+                return;
+            }
+            const auto& s = ast.stmt(root_sid);
+            if (s.kind != parus::ast::StmtKind::kBlock) {
+                out_children.push_back(root_sid);
+                return;
+            }
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = s.stmt_begin;
+            const uint64_t end = begin + s.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return;
+            for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                out_children.push_back(kids[s.stmt_begin + i]);
+            }
+        }
+
+        parus::ast::StmtId merge_program_roots_(parus::ast::AstArena& ast,
+                                                parus::ast::StmtId user_root,
+                                                parus::ast::StmtId core_root,
+                                                parus::Span span) {
+            std::vector<parus::ast::StmtId> merged_children{};
+            append_block_children_(ast, user_root, merged_children);
+            append_block_children_(ast, core_root, merged_children);
+
+            parus::ast::Stmt merged{};
+            merged.kind = parus::ast::StmtKind::kBlock;
+            merged.span = span;
+            merged.stmt_begin = static_cast<uint32_t>(ast.stmt_children().size());
+            merged.stmt_count = 0;
+            for (const auto sid : merged_children) {
+                ast.add_stmt_child(sid);
+                merged.stmt_count++;
+            }
+            return ast.add_stmt(merged);
+        }
+
+        void collect_top_level_acts_decl_sids_(const parus::ast::AstArena& ast,
+                                               parus::ast::StmtId root_sid,
+                                               std::unordered_set<parus::ast::StmtId>& out) {
+            if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+                return;
+            }
+            const auto& root = ast.stmt(root_sid);
+            if (root.kind != parus::ast::StmtKind::kBlock) return;
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = root.stmt_begin;
+            const uint64_t end = begin + root.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return;
+            for (uint32_t i = 0; i < root.stmt_count; ++i) {
+                const auto sid = kids[root.stmt_begin + i];
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+                const auto& s = ast.stmt(sid);
+                if (s.kind == parus::ast::StmtKind::kActsDecl && s.acts_is_for) {
+                    out.insert(sid);
+                }
+            }
+        }
+
         std::string select_apple_sdk_root_(const cli::Options& opt) {
             if (!opt.apple_sdk_root.empty()) return opt.apple_sdk_root;
             return getenv_string_("PARUS_APPLE_SDK_ROOT");
@@ -1223,6 +1319,36 @@ namespace parusc::p0 {
 
         // 파싱/렉싱 단계에서 오류가 있으면 이후 단계 진단 폭주를 막기 위해
         // name-resolve/tyck/cap으로 진행하지 않는다.
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        std::unordered_set<parus::ast::StmtId> trusted_builtin_acts_decl_sids{};
+        const std::string core_prelude_path = resolve_core_prelude_path_(opt);
+        if (!core_prelude_path.empty() && core_prelude_path != current_norm) {
+            std::string core_src{};
+            std::string core_io_err{};
+            if (!parus::open_file(core_prelude_path, core_src, core_io_err)) {
+                parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, root_span);
+                std::ostringstream oss;
+                oss << "failed to load core prelude '" << core_prelude_path << "'";
+                if (!core_io_err.empty()) {
+                    oss << ": " << core_io_err;
+                }
+                d.add_arg(oss.str());
+                bag.add(std::move(d));
+            } else {
+                const uint32_t core_file_id = sm.add(core_prelude_path, core_src);
+                auto core_tokens = lex_with_sm_(sm, core_file_id, &bag);
+                parus::Parser core_parser(core_tokens, ast, types, &bag, opt.max_errors, parser_flags);
+                const auto core_root = core_parser.parse_program();
+                if (!bag.has_error()) {
+                    collect_top_level_acts_decl_sids_(ast, core_root, trusted_builtin_acts_decl_sids);
+                    root = merge_program_roots_(ast, root, core_root, root_span);
+                }
+            }
+        }
         if (bag.has_error()) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0) ? 1 : 0;
@@ -1366,6 +1492,9 @@ namespace parusc::p0 {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
             if (opt.bundle.enabled || !inv.load_export_index_paths.empty() || !inv.bundle_sources.empty()) {
                 tc.set_seed_symbol_table(&pres.sym);
+            }
+            if (!trusted_builtin_acts_decl_sids.empty()) {
+                tc.set_trusted_builtin_acts_decl_sids(std::move(trusted_builtin_acts_decl_sids));
             }
             tyck_res = tc.check_program(root);
         }

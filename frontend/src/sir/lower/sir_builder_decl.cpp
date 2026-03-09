@@ -74,6 +74,7 @@ namespace parus::sir::detail {
 
         f.is_pure = s.is_pure;
         f.is_comptime = s.is_comptime;
+        f.is_const = s.fn_is_const;
         f.is_commit = s.is_commit;
         f.is_recast = s.is_recast;
         f.is_throwing = s.is_throwing;
@@ -367,6 +368,7 @@ namespace parus::sir::detail {
         g.is_set = s.is_set;
         g.is_mut = s.is_mut;
         g.is_static = s.is_static;
+        g.is_const = s.is_const;
         g.is_export = s.is_export;
         g.is_extern = s.is_extern;
         g.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
@@ -396,6 +398,20 @@ namespace parus::sir::detail {
 
         if (s.init != ast::k_invalid_expr) {
             g.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
+        }
+
+        if (g.sym != k_invalid_symbol) {
+            if (auto it = tyck.const_symbol_values.find(g.sym); it != tyck.const_symbol_values.end()) {
+                switch (it->second.kind) {
+                    case tyck::ConstInitKind::kInt:   g.const_init.kind = ConstInitKind::kInt; break;
+                    case tyck::ConstInitKind::kFloat: g.const_init.kind = ConstInitKind::kFloat; break;
+                    case tyck::ConstInitKind::kBool:  g.const_init.kind = ConstInitKind::kBool; break;
+                    case tyck::ConstInitKind::kChar:  g.const_init.kind = ConstInitKind::kChar; break;
+                    case tyck::ConstInitKind::kNone:
+                    default:                          g.const_init.kind = ConstInitKind::kNone; break;
+                }
+                g.const_init.text = it->second.text;
+            }
         }
 
         (void)m.add_global(g);
@@ -705,6 +721,7 @@ namespace parus::sir {
             f.abi = FuncAbi::kParus;
             f.is_pure = false;
             f.is_comptime = false;
+            f.is_const = false;
             f.is_commit = false;
             f.is_recast = false;
             f.is_throwing = false;

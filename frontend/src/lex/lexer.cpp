@@ -366,6 +366,7 @@ namespace parus {
 
         if (t.lexeme == "mut") { t.kind = syntax::TokenKind::kKwMut; return t; }
         if (t.lexeme == "static") { t.kind = syntax::TokenKind::kKwStatic; return t; }
+        if (t.lexeme == "const") { t.kind = syntax::TokenKind::kKwConst; return t; }
 
         // stmt keywords
         if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }

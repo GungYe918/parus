@@ -1,0 +1,11 @@
+// sysroot/core/src/prelude.pr
+//
+// Minimal core prelude seed:
+// - attached method for builtin i32
+// - auto-loaded by parusc when sysroot is available
+
+acts for i32 {
+    def size(self) -> i32 {
+        return 42i32;
+    }
+};

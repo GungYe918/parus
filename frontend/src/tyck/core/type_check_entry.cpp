@@ -69,6 +69,9 @@ namespace parus::tyck {
         generic_instantiated_enum_sids_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
+        const_symbol_decl_sid_.clear();
+        const_symbol_eval_state_.clear();
+        const_cycle_diag_emitted_.clear();
         namespace_stack_.clear();
         import_alias_to_path_.clear();
         known_namespace_paths_.clear();
@@ -2610,7 +2613,7 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kVar) {
                 const bool is_global_decl =
-                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                    s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
                 if (!is_global_decl || s.name.empty()) return;
                 const std::string qname = qualify_with_ns_stack(s.name);
                 add_ns_prefixes_of_symbol(qname);
@@ -2804,26 +2807,36 @@ namespace parus::tyck {
 
             if (s.kind == ast::StmtKind::kVar) {
                 const bool is_global_decl =
-                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                    s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
                 if (is_global_decl) {
                     const std::string qname = qualify_decl_name_(s.name);
                     ty::TypeId decl_ty = s.type;
                     if (decl_ty == ty::kInvalidType) {
                         decl_ty = types_.error();
                     }
+                    uint32_t var_sym = sema::SymbolTable::kNoScope;
 
                     if (auto existing = sym_.lookup_in_current(qname)) {
                         const auto& existing_sym = sym_.symbol(*existing);
                         if (existing_sym.kind != sema::SymbolKind::kVar) {
                             err_(s.span, "duplicate symbol (global var): " + qname);
                             diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        } else {
+                            var_sym = *existing;
+                            (void)sym_.update_declared_type(*existing, decl_ty);
                         }
                     } else {
                         auto ins = sym_.insert(sema::SymbolKind::kVar, qname, decl_ty, s.span);
                         if (!ins.ok && ins.is_duplicate) {
                             err_(s.span, "duplicate symbol (global var): " + qname);
                             diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        } else if (ins.ok) {
+                            var_sym = ins.symbol_id;
                         }
+                    }
+
+                    if (s.is_const && var_sym != sema::SymbolTable::kNoScope) {
+                        const_symbol_decl_sid_[var_sym] = sid;
                     }
                 }
 
@@ -3053,6 +3066,7 @@ namespace parus::tyck {
 
                             ty::TypeId vt = ms.type;
                             if (vt == ty::kInvalidType) vt = types_.error();
+                            uint32_t var_sym = sema::SymbolTable::kNoScope;
 
                             if (auto existing = sym_.lookup_in_current(vqname)) {
                                 const auto& existing_sym = sym_.symbol(*existing);
@@ -3060,6 +3074,7 @@ namespace parus::tyck {
                                     err_(ms.span, "duplicate symbol (class static variable): " + vqname);
                                     diag_(diag::Code::kDuplicateDecl, ms.span, vqname);
                                 } else {
+                                    var_sym = *existing;
                                     (void)sym_.update_declared_type(*existing, vt);
                                 }
                             } else {
@@ -3067,7 +3082,12 @@ namespace parus::tyck {
                                 if (!vins.ok && vins.is_duplicate) {
                                     err_(ms.span, "duplicate symbol (class static variable): " + vqname);
                                     diag_(diag::Code::kDuplicateDecl, ms.span, vqname);
+                                } else if (vins.ok) {
+                                    var_sym = vins.symbol_id;
                                 }
+                            }
+                            if (ms.is_const && var_sym != sema::SymbolTable::kNoScope) {
+                                const_symbol_decl_sid_[var_sym] = msid;
                             }
                             continue;
                         }
@@ -3921,8 +3941,14 @@ namespace parus::tyck {
             return false;
         }
 
+        const bool trusted_core_decl =
+            (sid != ast::k_invalid_stmt) &&
+            (trusted_builtin_acts_decl_sids_.find(sid) != trusted_builtin_acts_decl_sids_.end());
+
         const std::string bundle = current_bundle_name_();
-        if (!policy.reserved_bundle.empty() && bundle != policy.reserved_bundle) {
+        if (!trusted_core_decl &&
+            !policy.reserved_bundle.empty() &&
+            bundle != policy.reserved_bundle) {
             std::ostringstream oss;
             oss << "acts for builtin type '" << types_.to_string(owner_type)
                 << "' is reserved for bundle '" << policy.reserved_bundle
@@ -3932,7 +3958,6 @@ namespace parus::tyck {
             return false;
         }
 
-        (void)sid;
         return true;
     }
 

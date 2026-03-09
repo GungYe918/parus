@@ -54,7 +54,11 @@ std::string to_file_uri(const std::filesystem::path& path) {
     return "file:///" + abs;
 }
 
-std::string run_lsp_session(const std::vector<std::string>& payloads, int& exit_code) {
+std::string run_lsp_session(
+    const std::vector<std::string>& payloads,
+    int& exit_code,
+    std::string_view env_prefix = {}
+) {
     const auto stamp = std::to_string(
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto in_path = std::filesystem::temp_directory_path() / ("parusd-lsp-in-" + stamp + ".txt");
@@ -69,8 +73,12 @@ std::string run_lsp_session(const std::vector<std::string>& payloads, int& exit_
         return "failed to write input stream";
     }
 
-    const std::string cmd =
-        "PARUSC=\"" + std::string(PARUSC_BUILD_BIN) + "\" "
+    std::string cmd;
+    if (!env_prefix.empty()) {
+        cmd += std::string(env_prefix);
+        cmd += " ";
+    }
+    cmd += "PARUSC=\"" + std::string(PARUSC_BUILD_BIN) + "\" "
         "\"" + std::string(PARUSD_BUILD_BIN) + "\" --stdio < \"" + in_path.string()
         + "\" > \"" + out_path.string() + "\" 2>&1";
     exit_code = std::system(cmd.c_str());
@@ -179,6 +187,60 @@ bool test_parus_regression_valid_pr() {
     }
     if (!contains(out, "\"uri\":\"" + uri + "\",\"version\":1,\"diagnostics\":[]")) {
         std::cerr << "expected empty diagnostics for valid parus file\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool test_parus_core_prelude_auto_loaded() {
+    const auto stamp = std::to_string(
+        static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto root = std::filesystem::temp_directory_path() / ("parusd-core-prelude-" + stamp);
+    const auto sysroot = root / "sysroot";
+    const auto prelude = sysroot / "core" / "src" / "prelude.pr";
+    const auto main_pr = root / "main.pr";
+
+    const std::string prelude_text =
+        "acts for i32 {\n"
+        "  def size(self) -> i32 {\n"
+        "    return 4i32;\n"
+        "  }\n"
+        "};\n";
+    const std::string main_text =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 10i32;\n"
+        "  x.size();\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(prelude, prelude_text) || !write_text(main_pr, main_text)) {
+        std::cerr << "failed to write core prelude fixture\n";
+        std::error_code ec{};
+        std::filesystem::remove_all(root, ec);
+        return false;
+    }
+
+    const std::string uri = to_file_uri(main_pr);
+    const std::string escaped_main = json_escape(main_text);
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":41,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + uri
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + escaped_main + "\"}}}",
+        R"({"jsonrpc":"2.0","id":42,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string env_prefix = "PARUS_SYSROOT=\"" + sysroot.string() + "\"";
+    const std::string out = run_lsp_session(payloads, rc, env_prefix);
+    std::error_code ec{};
+    std::filesystem::remove_all(root, ec);
+    if (rc != 0) {
+        std::cerr << "core prelude LSP session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"uri\":\"" + uri + "\",\"version\":1,\"diagnostics\":[]")) {
+        std::cerr << "expected empty diagnostics when core prelude is auto-loaded\n" << out << "\n";
         return false;
     }
     return true;
@@ -409,8 +471,9 @@ int main() {
     const bool ok5 = test_completion_keywords_parus_and_lei();
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_parus_module_first_bundle_context();
+    const bool ok8 = test_parus_core_prelude_auto_loaded();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

@@ -6,6 +6,12 @@
 #include "../common/type_check_literals.hpp"
 
 #include <algorithm>
+#include <cerrno>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
@@ -264,7 +270,7 @@ namespace parus::tyck {
         const ast::Stmt s = ast_.stmt(sid);
         const bool is_global_decl =
             (block_depth_ == 0) &&
-            (s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC));
+            (s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC));
         const std::string decl_name = is_global_decl
             ? qualify_decl_name_(s.name)
             : std::string(s.name);
@@ -318,6 +324,81 @@ namespace parus::tyck {
 
             if (var_sym != sema::SymbolTable::kNoScope) {
                 sym_is_mut_[var_sym] = s.is_mut;
+            }
+
+            ast_.stmt_mut(sid).type = vt;
+            check_c_abi_global_decl_(s);
+            return;
+        }
+
+        // ----------------------------------------
+        // const: immutable + compile-time evaluable initializer
+        // ----------------------------------------
+        if (s.is_const) {
+            if (s.type == ty::kInvalidType) {
+                diag_(diag::Code::kVarDeclTypeAnnotationRequired, s.span);
+                err_(s.span, "const requires an explicit declared type");
+            }
+            if (s.init == ast::k_invalid_expr) {
+                if (s.is_static) {
+                    diag_(diag::Code::kStaticVarRequiresInitializer, s.span);
+                } else {
+                    diag_(diag::Code::kVarDeclInitializerExpected, s.span);
+                }
+                err_(s.span, "const declaration requires initializer");
+            }
+
+            ty::TypeId init_t = ty::kInvalidType;
+            if (s.init != ast::k_invalid_expr) {
+                const CoercionPlan init_plan = classify_assign_with_coercion_(
+                    AssignSite::LetInit, s.type, s.init, s.span);
+                init_t = init_plan.src_after;
+                if (s.type != ty::kInvalidType && !init_plan.ok) {
+                    diag_(diag::Code::kTypeLetInitMismatch, s.span,
+                        s.name, types_.to_string(s.type), type_for_user_diag_(init_t, s.init));
+                    err_(s.span, "const init mismatch");
+                }
+            }
+
+            ty::TypeId vt = (s.type == ty::kInvalidType) ? types_.error() : s.type;
+            uint32_t var_sym = sema::SymbolTable::kNoScope;
+            if (is_global_decl) {
+                if (auto sid_existing = sym_.lookup(decl_name)) {
+                    const auto& existing = sym_.symbol(*sid_existing);
+                    if (existing.kind == sema::SymbolKind::kVar) {
+                        var_sym = *sid_existing;
+                    } else {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (const): " + decl_name);
+                    }
+                }
+            }
+
+            if (var_sym == sema::SymbolTable::kNoScope) {
+                auto ins = sym_.insert(sema::SymbolKind::kVar, decl_name, vt, s.span);
+                if (!ins.ok) {
+                    if (ins.is_duplicate) {
+                        diag_(diag::Code::kDuplicateDecl, s.span, decl_name);
+                        err_(s.span, "duplicate symbol (const): " + decl_name);
+                    } else if (ins.is_shadowing) {
+                        diag_(diag::Code::kShadowing, s.span, decl_name);
+                    }
+                } else {
+                    var_sym = ins.symbol_id;
+                }
+            } else {
+                (void)sym_.update_declared_type(var_sym, vt);
+            }
+
+            if (var_sym != sema::SymbolTable::kNoScope) {
+                sym_is_mut_[var_sym] = false;
+                const_symbol_decl_sid_[var_sym] = sid;
+                if (s.init != ast::k_invalid_expr) {
+                    ConstInitData init_value{};
+                    if (eval_const_symbol_(var_sym, init_value, s.span)) {
+                        result_.const_symbol_values[var_sym] = init_value;
+                    }
+                }
             }
 
             ast_.stmt_mut(sid).type = vt;
@@ -1259,6 +1340,523 @@ namespace parus::tyck {
         sym_.pop_scope();
     }
 
+    namespace {
+
+        struct ConstFoldValue {
+            enum class Kind : uint8_t {
+                kInvalid = 0,
+                kInt,
+                kFloat,
+                kBool,
+                kChar,
+            };
+
+            Kind kind = Kind::kInvalid;
+            int64_t i64 = 0;
+            double f64 = 0.0;
+            bool b = false;
+            uint32_t ch = 0;
+        };
+
+        static bool parse_char_literal_scalar_(std::string_view lit, uint32_t& out) {
+            if (lit.size() < 3 || lit.front() != '\'' || lit.back() != '\'') return false;
+            std::string_view body = lit.substr(1, lit.size() - 2);
+            if (body.empty()) return false;
+            if (body.size() == 1) {
+                out = static_cast<uint32_t>(static_cast<unsigned char>(body[0]));
+                return true;
+            }
+            if (body[0] != '\\' || body.size() != 2) return false;
+            switch (body[1]) {
+                case 'n': out = static_cast<uint32_t>('\n'); return true;
+                case 'r': out = static_cast<uint32_t>('\r'); return true;
+                case 't': out = static_cast<uint32_t>('\t'); return true;
+                case '\\': out = static_cast<uint32_t>('\\'); return true;
+                case '\'': out = static_cast<uint32_t>('\''); return true;
+                case '0': out = static_cast<uint32_t>('\0'); return true;
+                default: return false;
+            }
+        }
+
+        static bool parse_int_literal_i64_(std::string_view lit, int64_t& out, std::string& canonical) {
+            const ParsedIntLiteral p = parse_int_literal_(lit);
+            if (!p.ok || p.digits_no_sep.empty()) return false;
+
+            errno = 0;
+            char* end = nullptr;
+            const long long v = std::strtoll(p.digits_no_sep.c_str(), &end, 10);
+            if (errno == ERANGE || end == nullptr || *end != '\0') return false;
+            out = static_cast<int64_t>(v);
+            canonical = p.digits_no_sep;
+            return true;
+        }
+
+        static bool parse_float_literal_f64_(std::string_view lit, double& out, std::string& canonical) {
+            const ParsedFloatLiteral pf = parse_float_literal_(lit);
+            if (!pf.ok) return false;
+
+            size_t i = 0;
+            while (i < lit.size()) {
+                const unsigned char u = static_cast<unsigned char>(lit[i]);
+                if (std::isdigit(u) || lit[i] == '_') {
+                    ++i;
+                    continue;
+                }
+                break;
+            }
+            if (i < lit.size() && lit[i] == '.') {
+                ++i;
+                while (i < lit.size()) {
+                    const unsigned char u = static_cast<unsigned char>(lit[i]);
+                    if (std::isdigit(u) || lit[i] == '_') {
+                        ++i;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            std::string body;
+            body.reserve(i);
+            for (size_t j = 0; j < i; ++j) {
+                if (lit[j] == '_') continue;
+                body.push_back(lit[j]);
+            }
+            if (body.empty()) return false;
+
+            errno = 0;
+            char* end = nullptr;
+            const double v = std::strtod(body.c_str(), &end);
+            if (errno == ERANGE || end == nullptr || *end != '\0') return false;
+            out = v;
+            canonical = body;
+            return true;
+        }
+
+        static std::string format_const_float_(double v) {
+            std::ostringstream oss;
+            oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
+            oss << std::setprecision(17) << v;
+            return oss.str();
+        }
+
+        static bool const_init_to_fold_(const ConstInitData& in, ConstFoldValue& out) {
+            switch (in.kind) {
+                case ConstInitKind::kInt: {
+                    errno = 0;
+                    char* end = nullptr;
+                    const long long v = std::strtoll(in.text.c_str(), &end, 10);
+                    if (errno == ERANGE || end == nullptr || *end != '\0') return false;
+                    out.kind = ConstFoldValue::Kind::kInt;
+                    out.i64 = static_cast<int64_t>(v);
+                    return true;
+                }
+                case ConstInitKind::kFloat: {
+                    errno = 0;
+                    char* end = nullptr;
+                    const double v = std::strtod(in.text.c_str(), &end);
+                    if (errno == ERANGE || end == nullptr || *end != '\0') return false;
+                    out.kind = ConstFoldValue::Kind::kFloat;
+                    out.f64 = v;
+                    return true;
+                }
+                case ConstInitKind::kBool:
+                    out.kind = ConstFoldValue::Kind::kBool;
+                    out.b = (in.text == "true");
+                    return true;
+                case ConstInitKind::kChar: {
+                    errno = 0;
+                    char* end = nullptr;
+                    const unsigned long v = std::strtoul(in.text.c_str(), &end, 10);
+                    if (errno == ERANGE || end == nullptr || *end != '\0') return false;
+                    out.kind = ConstFoldValue::Kind::kChar;
+                    out.ch = static_cast<uint32_t>(v);
+                    return true;
+                }
+                case ConstInitKind::kNone:
+                default:
+                    return false;
+            }
+        }
+
+        static bool fold_to_const_init_(const ConstFoldValue& in, ConstInitData& out) {
+            switch (in.kind) {
+                case ConstFoldValue::Kind::kInt:
+                    out.kind = ConstInitKind::kInt;
+                    out.text = std::to_string(in.i64);
+                    return true;
+                case ConstFoldValue::Kind::kFloat:
+                    out.kind = ConstInitKind::kFloat;
+                    out.text = format_const_float_(in.f64);
+                    return true;
+                case ConstFoldValue::Kind::kBool:
+                    out.kind = ConstInitKind::kBool;
+                    out.text = in.b ? "true" : "false";
+                    return true;
+                case ConstFoldValue::Kind::kChar:
+                    out.kind = ConstInitKind::kChar;
+                    out.text = std::to_string(in.ch);
+                    return true;
+                case ConstFoldValue::Kind::kInvalid:
+                default:
+                    return false;
+            }
+        }
+
+    } // namespace
+
+    bool TypeChecker::eval_const_expr_(ast::ExprId expr_id, ConstInitData& out, Span diag_span) {
+        auto fail_not_evaluable = [&](Span sp, std::string_view reason) -> bool {
+            diag_(diag::Code::kConstExprNotEvaluable, sp, reason);
+            err_(sp, std::string("const expression is not evaluable: ") + std::string(reason));
+            return false;
+        };
+        auto fail_call_not_supported = [&](Span sp) -> bool {
+            diag_(diag::Code::kConstExprCallNotSupported, sp);
+            err_(sp, "function call is not supported in const expression");
+            return false;
+        };
+
+        auto eval = [&](auto&& self, ast::ExprId eid, ConstFoldValue& outv) -> bool {
+            if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) {
+                return fail_not_evaluable(diag_span, "invalid expression");
+            }
+
+            const auto& e = ast_.expr(eid);
+            switch (e.kind) {
+                case ast::ExprKind::kIntLit: {
+                    int64_t v = 0;
+                    std::string canonical;
+                    if (!parse_int_literal_i64_(e.text, v, canonical)) {
+                        return fail_not_evaluable(e.span, "invalid integer literal for const expression");
+                    }
+                    outv.kind = ConstFoldValue::Kind::kInt;
+                    outv.i64 = v;
+                    return true;
+                }
+                case ast::ExprKind::kFloatLit: {
+                    double v = 0.0;
+                    std::string canonical;
+                    if (!parse_float_literal_f64_(e.text, v, canonical)) {
+                        return fail_not_evaluable(e.span, "invalid float literal for const expression");
+                    }
+                    outv.kind = ConstFoldValue::Kind::kFloat;
+                    outv.f64 = v;
+                    return true;
+                }
+                case ast::ExprKind::kBoolLit:
+                    outv.kind = ConstFoldValue::Kind::kBool;
+                    outv.b = (e.text == "true");
+                    return true;
+                case ast::ExprKind::kCharLit: {
+                    uint32_t ch = 0;
+                    if (!parse_char_literal_scalar_(e.text, ch)) {
+                        return fail_not_evaluable(e.span, "invalid char literal for const expression");
+                    }
+                    outv.kind = ConstFoldValue::Kind::kChar;
+                    outv.ch = ch;
+                    return true;
+                }
+                case ast::ExprKind::kIdent: {
+                    auto sid = lookup_symbol_(e.text);
+                    if (!sid.has_value()) {
+                        return fail_not_evaluable(e.span, "unresolved identifier in const expression");
+                    }
+                    if (auto it = result_.const_symbol_values.find(*sid); it != result_.const_symbol_values.end()) {
+                        if (!const_init_to_fold_(it->second, outv)) {
+                            return fail_not_evaluable(e.span, "failed to decode referenced const value");
+                        }
+                        return true;
+                    }
+                    if (const_symbol_decl_sid_.find(*sid) != const_symbol_decl_sid_.end()) {
+                        ConstInitData cv{};
+                        if (!eval_const_symbol_(*sid, cv, e.span)) return false;
+                        if (!const_init_to_fold_(cv, outv)) {
+                            return fail_not_evaluable(e.span, "failed to decode const symbol value");
+                        }
+                        return true;
+                    }
+                    return fail_not_evaluable(e.span, "reference to non-const symbol in const expression");
+                }
+                case ast::ExprKind::kUnary: {
+                    ConstFoldValue in{};
+                    if (!self(self, e.a, in)) return false;
+                    if (e.op == K::kPlus) {
+                        if (in.kind == ConstFoldValue::Kind::kInt ||
+                            in.kind == ConstFoldValue::Kind::kFloat ||
+                            in.kind == ConstFoldValue::Kind::kChar) {
+                            outv = in;
+                            return true;
+                        }
+                        return fail_not_evaluable(e.span, "unary '+' requires numeric const operand");
+                    }
+                    if (e.op == K::kMinus) {
+                        if (in.kind == ConstFoldValue::Kind::kInt) {
+                            outv.kind = ConstFoldValue::Kind::kInt;
+                            outv.i64 = -in.i64;
+                            return true;
+                        }
+                        if (in.kind == ConstFoldValue::Kind::kFloat) {
+                            outv.kind = ConstFoldValue::Kind::kFloat;
+                            outv.f64 = -in.f64;
+                            return true;
+                        }
+                        if (in.kind == ConstFoldValue::Kind::kChar) {
+                            outv.kind = ConstFoldValue::Kind::kInt;
+                            outv.i64 = -static_cast<int64_t>(in.ch);
+                            return true;
+                        }
+                        return fail_not_evaluable(e.span, "unary '-' requires numeric const operand");
+                    }
+                    if (e.op == K::kBang || e.op == K::kKwNot) {
+                        if (in.kind != ConstFoldValue::Kind::kBool) {
+                            return fail_not_evaluable(e.span, "logical not requires bool const operand");
+                        }
+                        outv.kind = ConstFoldValue::Kind::kBool;
+                        outv.b = !in.b;
+                        return true;
+                    }
+                    return fail_not_evaluable(e.span, "unsupported unary operator in const expression");
+                }
+                case ast::ExprKind::kBinary: {
+                    ConstFoldValue lhs{};
+                    ConstFoldValue rhs{};
+                    if (!self(self, e.a, lhs)) return false;
+                    if (!self(self, e.b, rhs)) return false;
+
+                    auto is_numeric = [](ConstFoldValue::Kind k) {
+                        return k == ConstFoldValue::Kind::kInt ||
+                               k == ConstFoldValue::Kind::kFloat ||
+                               k == ConstFoldValue::Kind::kChar;
+                    };
+                    auto as_i64 = [](const ConstFoldValue& v, int64_t& out_i) -> bool {
+                        if (v.kind == ConstFoldValue::Kind::kInt) {
+                            out_i = v.i64;
+                            return true;
+                        }
+                        if (v.kind == ConstFoldValue::Kind::kChar) {
+                            out_i = static_cast<int64_t>(v.ch);
+                            return true;
+                        }
+                        return false;
+                    };
+                    auto as_f64 = [&](const ConstFoldValue& v, double& out_f) -> bool {
+                        if (v.kind == ConstFoldValue::Kind::kFloat) {
+                            out_f = v.f64;
+                            return true;
+                        }
+                        int64_t iv = 0;
+                        if (as_i64(v, iv)) {
+                            out_f = static_cast<double>(iv);
+                            return true;
+                        }
+                        return false;
+                    };
+
+                    auto eval_rel = [&](auto cmp) -> bool {
+                        if (!is_numeric(lhs.kind) || !is_numeric(rhs.kind)) {
+                            return fail_not_evaluable(e.span, "relational operator requires numeric const operands");
+                        }
+                        if (lhs.kind == ConstFoldValue::Kind::kFloat || rhs.kind == ConstFoldValue::Kind::kFloat) {
+                            double lf = 0.0;
+                            double rf = 0.0;
+                            if (!as_f64(lhs, lf) || !as_f64(rhs, rf)) {
+                                return fail_not_evaluable(e.span, "failed numeric conversion in const comparison");
+                            }
+                            outv.kind = ConstFoldValue::Kind::kBool;
+                            outv.b = cmp(lf, rf);
+                            return true;
+                        }
+                        int64_t li = 0;
+                        int64_t ri = 0;
+                        if (!as_i64(lhs, li) || !as_i64(rhs, ri)) {
+                            return fail_not_evaluable(e.span, "failed integer conversion in const comparison");
+                        }
+                        outv.kind = ConstFoldValue::Kind::kBool;
+                        outv.b = cmp(li, ri);
+                        return true;
+                    };
+
+                    switch (e.op) {
+                        case K::kPlus:
+                        case K::kMinus:
+                        case K::kStar:
+                        case K::kSlash: {
+                            if (!is_numeric(lhs.kind) || !is_numeric(rhs.kind)) {
+                                return fail_not_evaluable(e.span, "arithmetic operator requires numeric const operands");
+                            }
+                            if (lhs.kind == ConstFoldValue::Kind::kFloat || rhs.kind == ConstFoldValue::Kind::kFloat) {
+                                double lf = 0.0;
+                                double rf = 0.0;
+                                if (!as_f64(lhs, lf) || !as_f64(rhs, rf)) {
+                                    return fail_not_evaluable(e.span, "failed numeric conversion in const arithmetic");
+                                }
+                                if (e.op == K::kSlash && rf == 0.0) {
+                                    return fail_not_evaluable(e.span, "division by zero in const expression");
+                                }
+                                outv.kind = ConstFoldValue::Kind::kFloat;
+                                if (e.op == K::kPlus) outv.f64 = lf + rf;
+                                else if (e.op == K::kMinus) outv.f64 = lf - rf;
+                                else if (e.op == K::kStar) outv.f64 = lf * rf;
+                                else outv.f64 = lf / rf;
+                                return true;
+                            }
+                            int64_t li = 0;
+                            int64_t ri = 0;
+                            if (!as_i64(lhs, li) || !as_i64(rhs, ri)) {
+                                return fail_not_evaluable(e.span, "failed integer conversion in const arithmetic");
+                            }
+                            if (e.op == K::kSlash && ri == 0) {
+                                return fail_not_evaluable(e.span, "division by zero in const expression");
+                            }
+                            outv.kind = ConstFoldValue::Kind::kInt;
+                            if (e.op == K::kPlus) outv.i64 = li + ri;
+                            else if (e.op == K::kMinus) outv.i64 = li - ri;
+                            else if (e.op == K::kStar) outv.i64 = li * ri;
+                            else outv.i64 = li / ri;
+                            return true;
+                        }
+                        case K::kPercent: {
+                            int64_t li = 0;
+                            int64_t ri = 0;
+                            if (!as_i64(lhs, li) || !as_i64(rhs, ri)) {
+                                return fail_not_evaluable(e.span, "modulo requires integer const operands");
+                            }
+                            if (ri == 0) {
+                                return fail_not_evaluable(e.span, "modulo by zero in const expression");
+                            }
+                            outv.kind = ConstFoldValue::Kind::kInt;
+                            outv.i64 = li % ri;
+                            return true;
+                        }
+                        case K::kEqEq:
+                        case K::kBangEq: {
+                            bool eq = false;
+                            if (lhs.kind == ConstFoldValue::Kind::kBool && rhs.kind == ConstFoldValue::Kind::kBool) {
+                                eq = (lhs.b == rhs.b);
+                            } else if (is_numeric(lhs.kind) && is_numeric(rhs.kind)) {
+                                if (lhs.kind == ConstFoldValue::Kind::kFloat || rhs.kind == ConstFoldValue::Kind::kFloat) {
+                                    double lf = 0.0;
+                                    double rf = 0.0;
+                                    if (!as_f64(lhs, lf) || !as_f64(rhs, rf)) {
+                                        return fail_not_evaluable(e.span, "failed numeric conversion in const equality");
+                                    }
+                                    eq = (lf == rf);
+                                } else {
+                                    int64_t li = 0;
+                                    int64_t ri = 0;
+                                    if (!as_i64(lhs, li) || !as_i64(rhs, ri)) {
+                                        return fail_not_evaluable(e.span, "failed integer conversion in const equality");
+                                    }
+                                    eq = (li == ri);
+                                }
+                            } else {
+                                return fail_not_evaluable(e.span, "equality requires compatible const operands");
+                            }
+                            outv.kind = ConstFoldValue::Kind::kBool;
+                            outv.b = (e.op == K::kEqEq) ? eq : !eq;
+                            return true;
+                        }
+                        case K::kLt:
+                            return eval_rel([](auto l, auto r) { return l < r; });
+                        case K::kLtEq:
+                            return eval_rel([](auto l, auto r) { return l <= r; });
+                        case K::kGt:
+                            return eval_rel([](auto l, auto r) { return l > r; });
+                        case K::kGtEq:
+                            return eval_rel([](auto l, auto r) { return l >= r; });
+                        case K::kKwAnd:
+                        case K::kKwOr: {
+                            if (lhs.kind != ConstFoldValue::Kind::kBool || rhs.kind != ConstFoldValue::Kind::kBool) {
+                                return fail_not_evaluable(e.span, "logical operator requires bool const operands");
+                            }
+                            outv.kind = ConstFoldValue::Kind::kBool;
+                            outv.b = (e.op == K::kKwAnd) ? (lhs.b && rhs.b) : (lhs.b || rhs.b);
+                            return true;
+                        }
+                        default:
+                            return fail_not_evaluable(e.span, "unsupported binary operator in const expression");
+                    }
+                }
+                case ast::ExprKind::kCall:
+                case ast::ExprKind::kSpawn:
+                    return fail_call_not_supported(e.span);
+                default:
+                    return fail_not_evaluable(e.span, "unsupported expression kind in const expression");
+            }
+        };
+
+        ConstFoldValue value{};
+        if (!eval(eval, expr_id, value)) return false;
+        if (!fold_to_const_init_(value, out)) {
+            return fail_not_evaluable(diag_span, "failed to materialize const value");
+        }
+        return true;
+    }
+
+    bool TypeChecker::eval_const_symbol_(uint32_t symbol_id, ConstInitData& out, Span diag_span) {
+        if (auto it = result_.const_symbol_values.find(symbol_id); it != result_.const_symbol_values.end()) {
+            out = it->second;
+            return true;
+        }
+
+        const uint8_t state = const_symbol_eval_state_[symbol_id];
+        if (state == 1u) {
+            if (const_cycle_diag_emitted_.insert(symbol_id).second) {
+                diag_(diag::Code::kConstExprCycle, diag_span);
+                err_(diag_span, "cyclic const reference detected");
+            }
+            return false;
+        }
+        if (state == 2u) {
+            if (auto it = result_.const_symbol_values.find(symbol_id); it != result_.const_symbol_values.end()) {
+                out = it->second;
+                return true;
+            }
+            return false;
+        }
+        if (state == 3u) {
+            return false;
+        }
+
+        auto dit = const_symbol_decl_sid_.find(symbol_id);
+        if (dit == const_symbol_decl_sid_.end()) {
+            diag_(diag::Code::kConstExprNotEvaluable, diag_span,
+                  "symbol has no const declaration for compile-time evaluation");
+            err_(diag_span, "const symbol declaration is missing for evaluation");
+            const_symbol_eval_state_[symbol_id] = 3u;
+            return false;
+        }
+
+        const ast::StmtId sid = dit->second;
+        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) {
+            diag_(diag::Code::kConstExprNotEvaluable, diag_span, "invalid const declaration statement");
+            err_(diag_span, "invalid const declaration statement");
+            const_symbol_eval_state_[symbol_id] = 3u;
+            return false;
+        }
+
+        const auto& s = ast_.stmt(sid);
+        if (s.kind != ast::StmtKind::kVar || s.init == ast::k_invalid_expr) {
+            diag_(diag::Code::kConstExprNotEvaluable, s.span, "const declaration requires initializer");
+            err_(s.span, "const declaration requires initializer");
+            const_symbol_eval_state_[symbol_id] = 3u;
+            return false;
+        }
+
+        const_symbol_eval_state_[symbol_id] = 1u;
+        ConstInitData value{};
+        const bool ok = eval_const_expr_(s.init, value, s.span);
+        if (!ok) {
+            const_symbol_eval_state_[symbol_id] = 3u;
+            return false;
+        }
+
+        result_.const_symbol_values[symbol_id] = value;
+        out = value;
+        const_symbol_eval_state_[symbol_id] = 2u;
+        return true;
+    }
+
     TypeChecker::ProtoRequireEvalResult TypeChecker::eval_proto_require_const_bool_(ast::ExprId expr_id) const {
         if (expr_id == ast::k_invalid_expr || (size_t)expr_id >= ast_.exprs().size()) {
             return ProtoRequireEvalResult::kTooComplex;
@@ -1781,6 +2379,12 @@ namespace parus::tyck {
                 } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
                     ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
                     auto ins = sym_.insert(sema::SymbolKind::kVar, m.name, vt, m.span);
+                    if (ins.ok && m.is_const) {
+                        // class body const-eval에서 bare member 식별자(`A + 1`)가
+                        // 현재 스코프의 사전등록 심볼로 먼저 해석되므로,
+                        // 로컬 predecl 심볼도 const decl 맵에 연결해야 한다.
+                        const_symbol_decl_sid_[ins.symbol_id] = msid;
+                    }
                     if (!ins.ok && ins.is_duplicate) {
                         diag_(diag::Code::kDuplicateDecl, m.span, m.name);
                         err_(m.span, "duplicate class member name");
@@ -1797,6 +2401,14 @@ namespace parus::tyck {
                 const auto& m = ast_.stmt(msid);
                 (void)sym_.insert(sema::SymbolKind::kFn, ent.first, m.type, m.span);
             }
+
+            const std::string class_qname = [&]() -> std::string {
+                if (auto it = class_qualified_name_by_stmt_.find(sid);
+                    it != class_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                return std::string(s.name);
+            }();
 
             for (uint32_t i = begin; i < end; ++i) {
                 const ast::StmtId msid = kids[i];
@@ -1816,6 +2428,28 @@ namespace parus::tyck {
                             diag_(diag::Code::kTypeLetInitMismatch, m.span,
                                   m.name, types_.to_string(m.type), type_for_user_diag_(init_t, m.init));
                             err_(m.span, "class static init mismatch");
+                        }
+                    }
+
+                    if (m.is_const) {
+                        std::string vqname = class_qname;
+                        if (!vqname.empty()) vqname += "::";
+                        vqname += std::string(m.name);
+                        uint32_t global_sym = sema::SymbolTable::kNoScope;
+                        if (auto sid_existing = sym_.lookup(vqname)) {
+                            const auto& existing = sym_.symbol(*sid_existing);
+                            if (existing.kind == sema::SymbolKind::kVar) {
+                                global_sym = *sid_existing;
+                            }
+                        }
+                        if (global_sym != sema::SymbolTable::kNoScope) {
+                            const_symbol_decl_sid_[global_sym] = msid;
+                            if (m.init != ast::k_invalid_expr) {
+                                ConstInitData init_value{};
+                                if (eval_const_symbol_(global_sym, init_value, m.span)) {
+                                    result_.const_symbol_values[global_sym] = init_value;
+                                }
+                            }
                         }
                     }
                 }

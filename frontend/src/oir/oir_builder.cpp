@@ -2529,15 +2529,32 @@ namespace parus::oir {
             g.type = sg.declared_type;
             g.abi = map_func_abi_(sg.abi);
             g.is_extern = sg.is_extern;
+            g.is_const = sg.is_const;
+            switch (sg.const_init.kind) {
+                case parus::sir::ConstInitKind::kInt:   g.const_init.kind = ConstInitKind::Int; break;
+                case parus::sir::ConstInitKind::kFloat: g.const_init.kind = ConstInitKind::Float; break;
+                case parus::sir::ConstInitKind::kBool:  g.const_init.kind = ConstInitKind::Bool; break;
+                case parus::sir::ConstInitKind::kChar:  g.const_init.kind = ConstInitKind::Char; break;
+                case parus::sir::ConstInitKind::kNone:
+                default:                                g.const_init.kind = ConstInitKind::None; break;
+            }
+            g.const_init.text = sg.const_init.text;
             // runtime init path(module/bundle init) uses store; keep writable in IR.
-            g.is_mut = sg.is_mut || (!sg.is_extern && sg.init != parus::sir::k_invalid_value);
+            g.is_mut = g.is_const
+                ? false
+                : (sg.is_mut || (!sg.is_extern && sg.init != parus::sir::k_invalid_value));
             g.is_export = sg.is_export;
 
             const uint32_t gid = out.mod.add_global(g);
             if (sg.sym != parus::sir::k_invalid_symbol) {
                 global_symbol_to_global[sg.sym] = gid;
             }
-            if (!sg.is_extern && sg.init != parus::sir::k_invalid_value) {
+            if (g.is_const && !g.is_extern && g.const_init.kind == ConstInitKind::None) {
+                out.gate_errors.push_back(parus::sir::VerifyError{
+                    "const global lowering failed: missing const initializer for '" + g.name + "'"
+                });
+            }
+            if (!g.is_const && !sg.is_extern && sg.init != parus::sir::k_invalid_value) {
                 global_init_items.push_back(GlobalInitItem{
                     .sym = sg.sym,
                     .gid = gid,
@@ -2651,6 +2668,7 @@ namespace parus::oir {
             f.is_extern = sf.is_extern;
             f.is_pure = sf.is_pure;
             f.is_comptime = sf.is_comptime;
+            f.is_const = sf.is_const;
             f.ret_ty = (TypeId)sf.ret;
 
             const BlockId entry = out.mod.add_block(Block{});
@@ -2786,6 +2804,7 @@ namespace parus::oir {
             init_fn.is_extern = false;
             init_fn.is_pure = false;
             init_fn.is_comptime = false;
+            init_fn.is_const = false;
             init_fn.ret_ty = unit_ty;
             const BlockId init_entry = out.mod.add_block(Block{});
             init_fn.entry = init_entry;

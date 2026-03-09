@@ -897,6 +897,43 @@ namespace {
         return ok;
     }
 
+    /// @brief static const global은 constant로 내려가고 module init store 경로에서 제외되는지 검사한다.
+    static bool test_static_const_global_constant_emission_() {
+        const std::string src = R"(
+            static const G_CONST: i32 = 7i32;
+            static G_MUT: i32 = 9i32;
+
+            def main() -> i32 {
+                return G_CONST + G_MUT;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "static const global source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "static const global lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("constant i32 7") != std::string::npos,
+                       "static const global must be emitted as LLVM constant with folded init");
+        ok &= require_(lowered.llvm_ir.find("store i32 7, ptr @") == std::string::npos,
+                       "module init must not emit runtime store for static const global");
+        ok &= require_(lowered.llvm_ir.find("global i32 zeroinitializer") != std::string::npos,
+                       "mutable static global must keep zeroinitializer declaration");
+        const bool has_runtime_global_store =
+            lowered.llvm_ir.find("store i32") != std::string::npos &&
+            lowered.llvm_ir.find("ptr @") != std::string::npos;
+        ok &= require_(has_runtime_global_store,
+                       "mutable static global must still be initialized via runtime global store path");
+        return ok;
+    }
+
     /// @brief struct literal 생성/수정/읽기가 LLVM struct 주소 계산 경로로 내려가는지 검사한다.
     static bool test_field_literal_lowering_() {
         const std::string src = R"(
@@ -1501,6 +1538,11 @@ namespace {
     /// @brief class static def/var 경로 사용이 LLVM IR 함수/글로벌 심볼로 남는지 검사한다.
     static bool test_class_static_member_llvm_symbols_() {
         const std::string src = R"(
+            class Consts {
+                static const A: i32 = 1i32;
+                static const B: i32 = A + 1i32;
+            }
+
             class Counter {
                 init() = default;
                 static count: i32 = 7i32;
@@ -1511,7 +1553,7 @@ namespace {
             }
 
             def main() -> i32 {
-                return Counter::add(a: Counter::count, b: 1i32);
+                return Counter::add(a: Counter::count, b: Consts::B);
             }
         )";
 
@@ -1534,6 +1576,10 @@ namespace {
                        (lowered.llvm_ir.find("zeroinitializer") != std::string::npos &&
                         lowered.llvm_ir.find("@") != std::string::npos),
                        "LLVM IR must include static class variable global definition");
+        ok &= require_(count_substr_(lowered.llvm_ir, "@Consts__A$g = internal constant i32 1") == 1,
+                       "class static const A must be emitted exactly once");
+        ok &= require_(count_substr_(lowered.llvm_ir, "@Consts__B$g = internal constant i32 2") == 1,
+                       "class static const B must be emitted exactly once");
         return ok;
     }
 
@@ -1810,6 +1856,7 @@ int main() {
         {"import_alias_path_resolution_to_llvm", test_import_alias_path_resolution_to_llvm_},
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
         {"global_field_member_chain_lowering", test_global_field_member_chain_lowering_},
+        {"static_const_global_constant_emission", test_static_const_global_constant_emission_},
         {"field_literal_lowering", test_field_literal_lowering_},
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},

@@ -150,10 +150,10 @@ namespace parus {
         if (k == K::kSemicolon) return true;
 
         // 확실한 stmt 키워드
-        if (k == K::kKwLet || k == K::kKwSet || k == K::kKwStatic)          return true;
+        if (k == K::kKwLet || k == K::kKwSet || k == K::kKwStatic || k == K::kKwConst) return true;
         if (k == K::kKwMut) {
             const auto k1 = cursor_.peek(1).kind;
-            if (k1 == K::kKwLet || k1 == K::kKwSet || k1 == K::kKwStatic) return true;
+            if (k1 == K::kKwLet || k1 == K::kKwSet || k1 == K::kKwStatic || k1 == K::kKwConst) return true;
         }
         if (k == K::kKwReturn || k == K::kKwBreak || k == K::kKwContinue)   return true;
         if (k == K::kKwThrow || k == K::kKwTry || k == K::kKwRequire)       return true;

@@ -41,10 +41,10 @@ namespace parus::passes {
                 if (scope == ItemScope::kTopLevel) {
                     // Top-level variable declarations remain declaration items only for static/ABI globals.
                     // let/set local declarations are block-local only.
-                    return s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                    return s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
                 }
                 // nest body allows item declarations only; variable item requires static storage.
-                return s.is_static;
+                return s.is_static || s.is_const;
 
             default:
                 return false;
@@ -73,11 +73,11 @@ namespace parus::passes {
                         s.span,
                         "top-level variable declaration must be static/global (let/set declarations are local-only)"
                     );
-                } else if (scope == ItemScope::kNestBody && s.kind == ast::StmtKind::kVar && !s.is_static) {
+                } else if (scope == ItemScope::kNestBody && s.kind == ast::StmtKind::kVar && !(s.is_static || s.is_const)) {
                     report_msg(
                         bag,
                         s.span,
-                        "variables in nest body must be static (const will be introduced later)"
+                        "variables in nest body must be static or const"
                     );
                 } else if (scope == ItemScope::kNestBody) {
                     report_msg(bag, s.span, "nest body allows item declarations only");

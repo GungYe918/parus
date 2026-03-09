@@ -306,6 +306,7 @@ namespace parus::sir {
         bool is_set = false;   // let=false, set=true
         bool is_mut = false;
         bool is_static = false;
+        bool is_const = false;
         // manual stmt permission bitset (get/set/abi)
         uint8_t manual_perm_mask = 0;
         std::string_view name{};
@@ -371,6 +372,7 @@ namespace parus::sir {
 
         bool is_pure = false;
         bool is_comptime = false;
+        bool is_const = false;
 
         // reserved qualifiers (future)
         bool is_commit = false;
@@ -432,20 +434,35 @@ namespace parus::sir {
         uint32_t func_count = 0;
     };
 
+    enum class ConstInitKind : uint8_t {
+        kNone = 0,
+        kInt,
+        kFloat,
+        kBool,
+        kChar,
+    };
+
+    struct ConstInitData {
+        ConstInitKind kind = ConstInitKind::kNone;
+        std::string text{};
+    };
+
     struct GlobalVarDecl {
         parus::Span span{};
-        std::string_view name{};
+        std::string name{};
         SymbolId sym = k_invalid_symbol;
 
         bool is_set = false;
         bool is_mut = false;
         bool is_static = false;
+        bool is_const = false;
         bool is_export = false;
         bool is_extern = false;
         FuncAbi abi = FuncAbi::kParus;
 
         TypeId declared_type = k_invalid_type;
         ValueId init = k_invalid_value; // lowered initializer expression for runtime module/bundle init
+        ConstInitData const_init{};
     };
 
     /// @brief `^&` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).

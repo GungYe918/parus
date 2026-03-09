@@ -1,0 +1,5 @@
+const G: i32 = 3i32;
+
+def main() -> i32 {
+    return G;
+}

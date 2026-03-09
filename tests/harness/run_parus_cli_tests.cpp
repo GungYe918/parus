@@ -800,6 +800,67 @@ bool test_builtin_acts_policy_core_gate() {
     return true;
 }
 
+bool test_auto_core_prelude_for_single_pr() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-auto-core";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "sysroot/core/src", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto prelude = temp_root / "sysroot/core/src/prelude.pr";
+    const auto main_pr = temp_root / "main.pr";
+    const auto out_bin = temp_root / "app";
+
+    const std::string prelude_src =
+        "acts for i32 {\n"
+        "  def size(self) -> i32 {\n"
+        "    return 4i32;\n"
+        "  }\n"
+        "};\n";
+
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 123i32;\n"
+        "  return x.size();\n"
+        "}\n";
+
+    if (!write_text(prelude, prelude_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write auto core test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string compile_cmd =
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " -o \"" + out_bin.string() + "\"";
+    auto [rc_compile, out_compile] = run_capture(compile_cmd);
+    if (rc_compile != 0) {
+        std::cerr << "auto core compile failed\n" << out_compile;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string run_cmd =
+        "cd \"" + temp_root.string() + "\" && \"./app\"; echo EXIT:$?";
+    auto [rc_run, out_run] = run_capture(run_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_run != 0) {
+        std::cerr << "auto core run command failed\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:4")) {
+        std::cerr << "auto core exit mismatch (expected 4)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -817,9 +878,10 @@ int main() {
     const bool ok12 = test_cross_bundle_export_runtime_call();
     const bool ok13 = test_same_bundle_multi_module_runtime_call();
     const bool ok14 = test_builtin_acts_policy_core_gate();
+    const bool ok15 = test_auto_core_prelude_for_single_pr();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
-        !ok12 || !ok13 || !ok14) {
+        !ok12 || !ok13 || !ok14 || !ok15) {
         return 1;
     }
 

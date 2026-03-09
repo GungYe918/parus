@@ -576,6 +576,7 @@ namespace parus {
         s.link_abi = ast::LinkAbi::kNone;
         s.fn_mode = ast::FnMode::kNone;
         s.is_throwing = is_throwing;
+        s.fn_is_const = false;
         s.is_pure = false;
         s.is_comptime = false;
         s.is_commit = false;
@@ -606,6 +607,12 @@ namespace parus {
         // 1) @attribute*
         auto [attr_begin, attr_count] = parse_decl_fn_attr_list();
 
+        bool fn_is_const = false;
+        if (cursor_.at(K::kKwConst)) {
+            fn_is_const = true;
+            cursor_.bump();
+        }
+
         // 2) linkage prefix (export / extern)
         bool is_export = false;
         bool is_extern = false;
@@ -629,6 +636,11 @@ namespace parus {
             } else if (is_extern) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "\"C\"");
             }
+        }
+
+        if (cursor_.at(K::kKwConst)) {
+            fn_is_const = true;
+            cursor_.bump();
         }
 
         // 3) def
@@ -784,6 +796,7 @@ namespace parus {
         s.fn_mode = ast::FnMode::kNone;
 
         s.is_throwing = is_throwing;
+        s.fn_is_const = fn_is_const;
         s.is_pure = is_pure_kw;
         s.is_comptime = is_comptime_kw;
         s.is_commit = is_commit;

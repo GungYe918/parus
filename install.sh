@@ -208,6 +208,9 @@ fi
 mkdir -p "${ROOT_DIR}/sysroot/std/src"
 mkdir -p "${SYSROOT_DIR}/std/src"
 cp -R "${ROOT_DIR}/sysroot/std/src/." "${SYSROOT_DIR}/std/src/"
+mkdir -p "${ROOT_DIR}/sysroot/core/src"
+mkdir -p "${SYSROOT_DIR}/core/src"
+cp -R "${ROOT_DIR}/sysroot/core/src/." "${SYSROOT_DIR}/core/src/"
 
 to_u64_hash() {
   local hex="$1"

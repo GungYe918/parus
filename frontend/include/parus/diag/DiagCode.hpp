@@ -286,6 +286,9 @@ namespace parus::diag {
         kGenericTypePathTemplateKindMismatch, // generic-applied type path target kind mismatch
         kGenericActsOverlap, // acts coherence overlap
         kGenericActorDeclNotSupportedV1, // generic actor declaration is not supported in v1
+        kConstExprNotEvaluable, // args[0]=reason
+        kConstExprCallNotSupported, // function call is not allowed in const expression (v1)
+        kConstExprCycle, // const declaration cycle detected
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)

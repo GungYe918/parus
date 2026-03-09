@@ -506,6 +506,7 @@ namespace parus::ast {
         bool is_set = false;          // false=let, true=set
         bool is_mut = false;
         bool is_static = false;
+        bool is_const = false;
         bool is_extern = false;
         LinkAbi link_abi = LinkAbi::kNone;
         std::string_view name{};
@@ -532,6 +533,7 @@ namespace parus::ast {
         bool is_recast = false;
 
         bool is_throwing = false;     // name?
+        bool fn_is_const = false;
 
         uint32_t param_begin = 0;
         uint32_t param_count = 0;

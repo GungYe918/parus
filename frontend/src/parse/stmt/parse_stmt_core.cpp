@@ -97,10 +97,10 @@ namespace parus {
         /// @brief `static/let/set` 또는 잘못된 `mut <...>` 패턴이 변수 선언 시작인지 lookahead로 판정한다.
         const auto is_var_stmt_start_lookahead = [&](uint32_t off) -> bool {
             const K k = cursor_.peek(off).kind;
-            if (k == K::kKwStatic || k == K::kKwLet || k == K::kKwSet) return true;
+            if (k == K::kKwStatic || k == K::kKwConst || k == K::kKwLet || k == K::kKwSet) return true;
             if (k == K::kKwMut) {
                 const K k1 = cursor_.peek(off + 1).kind;
-                return (k1 == K::kKwStatic || k1 == K::kKwLet || k1 == K::kKwSet);
+                return (k1 == K::kKwStatic || k1 == K::kKwConst || k1 == K::kKwLet || k1 == K::kKwSet);
             }
             return false;
         };
@@ -140,7 +140,9 @@ namespace parus {
         if (tok.kind == K::kKwUse)      return parse_stmt_use();
         if (tok.kind == K::kKwImport)   return parse_stmt_import();
 
+        if (tok.kind == K::kKwConst && cursor_.peek(1).kind == K::kKwFn) return parse_decl_fn();
         if (tok.kind == K::kKwStatic) return parse_stmt_var();
+        if (tok.kind == K::kKwConst) return parse_stmt_var();
         if (tok.kind == K::kKwLet || tok.kind == K::kKwSet) return parse_stmt_var();
         if (tok.kind == K::kKwMut && is_var_stmt_start_lookahead(/*off=*/0)) return parse_stmt_var();
 
@@ -294,15 +296,43 @@ namespace parus {
         bool is_static = false;
         bool is_mut = false;
         bool is_set = false;
+        bool is_const = false;
 
         // -------- declaration keyword --------
-        if (cursor_.at(K::kKwStatic)) {
+        if (cursor_.at(K::kKwConst)) {
+            is_const = true;
+            cursor_.bump(); // const
+
+            if (cursor_.at(K::kKwMut)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "const declaration cannot use 'mut'");
+                cursor_.bump();
+            }
+
+            if (cursor_.at(K::kKwStatic)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "use 'static const ...' order (not 'const static ...')");
+                is_static = true;
+                cursor_.bump(); // static
+            }
+        } else if (cursor_.at(K::kKwStatic)) {
             is_static = true;
             cursor_.bump(); // static
 
+            if (cursor_.at(K::kKwConst)) {
+                is_const = true;
+                cursor_.bump(); // static const
+            }
+
             if (cursor_.at(K::kKwMut)) {
-                is_mut = true;
-                cursor_.bump(); // static mut
+                if (is_const) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                                "const declaration cannot use 'mut'");
+                    cursor_.bump();
+                } else {
+                    is_mut = true;
+                    cursor_.bump(); // static mut
+                }
             }
 
             // 구문 정리: static은 let/set을 수반하지 않는다.
@@ -327,7 +357,7 @@ namespace parus {
                 cursor_.bump();
             }
         } else {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'static', 'let' or 'set'");
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "'const', 'static', 'let' or 'set'");
             stmt_sync_to_boundary();
             if (cursor_.at(K::kSemicolon)) cursor_.bump();
 
@@ -335,6 +365,29 @@ namespace parus {
             s.kind = ast::StmtKind::kError;
             s.span = span_join(start_tok.span, cursor_.prev().span);
             return ast_.add_stmt(s);
+        }
+
+        if (is_const) {
+            if (is_set) {
+                diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                            "const declaration cannot use 'set'");
+                is_set = false;
+            }
+            if (is_mut) {
+                diag_report(diag::Code::kUnexpectedToken, start_tok.span,
+                            "const declaration cannot use 'mut'");
+                is_mut = false;
+            }
+            if (cursor_.at(K::kKwLet) || cursor_.at(K::kKwSet)) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "remove 'let/set' from const declaration (use: const name: T = expr;)");
+                cursor_.bump();
+                if (cursor_.at(K::kKwMut)) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                                "const declaration cannot use 'mut'");
+                    cursor_.bump();
+                }
+            }
         }
 
         // prefix 'mut'가 있었더라도 선언 자체는 계속 파싱하여 연쇄 오류를 줄인다.
@@ -364,7 +417,7 @@ namespace parus {
         ast::TypeId type_id = ast::k_invalid_type;
         ast::TypeNodeId type_node = ast::k_invalid_type_node;
 
-        if (is_static || !is_set) {
+        if (is_const || is_static || !is_set) {
             // let: ':' required
             if (!cursor_.eat(K::kColon)) {
                 diag_report(diag::Code::kVarDeclTypeAnnotationRequired, cursor_.peek().span);
@@ -501,6 +554,9 @@ namespace parus {
                 diag_report(diag::Code::kStaticVarRequiresInitializer, cursor_.peek().span);
                 static_init_diag_emitted = true;
                 recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+            } else if (is_const) {
+                diag_report(diag::Code::kVarDeclInitializerExpected, cursor_.peek().span);
+                recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
             } else if (is_set) {
                 diag_report(diag::Code::kSetInitializerRequired, cursor_.peek().span);
                 // recovery: ';' or '}' 까지 맞춰서 이후 stmt들이 안 꼬이게 한다.
@@ -523,6 +579,7 @@ namespace parus {
         s.is_set = is_set;
         s.is_mut = is_mut;
         s.is_static = is_static;
+        s.is_const = is_const;
         s.name = name;
         s.type = type_id;
         s.type_node = type_node;

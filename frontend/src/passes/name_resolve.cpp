@@ -372,7 +372,7 @@ namespace parus::passes {
 
         if (s.kind == ast::StmtKind::kVar) {
             const bool is_global_decl =
-                s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
             if (!is_global_decl || s.name.empty()) return;
             const std::string qname = qualify_name_(namespace_stack, s.name);
             add_namespace_prefixes_of_symbol_path_(qname, known_namespace_paths);
@@ -826,7 +826,7 @@ namespace parus::passes {
                 }
 
                 const bool is_global_decl =
-                    s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                    s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
                 const std::string decl_name = is_global_decl
                     ? qualify_name_(namespace_stack, s.name)
                     : std::string(s.name);
@@ -1153,6 +1153,16 @@ namespace parus::passes {
                         const auto& ms = ast.stmt(msid);
                         if (ms.kind != ast::StmtKind::kFnDecl || ms.name.empty()) continue;
                         (void)declare_(sema::SymbolKind::kFn, ms.name, ms.type, ms.span, sym, bag, opt);
+                    }
+
+                    // predeclare class static members so static init expressions can reference
+                    // sibling members with bare names (e.g., `static const B = A + 1;`).
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const ast::StmtId msid = kids[s.stmt_begin + i];
+                        if (!is_valid_stmt_id_(r, msid)) continue;
+                        const auto& ms = ast.stmt(msid);
+                        if (ms.kind != ast::StmtKind::kVar || !ms.is_static || ms.name.empty()) continue;
+                        (void)declare_(sema::SymbolKind::kVar, ms.name, ms.type, ms.span, sym, bag, opt);
                     }
 
                     // predeclare proto default members so class member bodies can call them unqualified.
@@ -1691,7 +1701,7 @@ namespace parus::passes {
 
         if (s.kind == ast::StmtKind::kVar) {
             const bool is_global_decl =
-                s.is_static || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
+                s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);
             if (!is_global_decl) return;
 
             const std::string qname = qualify_name_(namespace_stack, s.name);

@@ -50,6 +50,8 @@ Parus 기본 설치 루트:
         libexec/
         sysroot/
           manifest.json
+          core/
+            src/
           std/
             src/
           targets/
@@ -109,11 +111,11 @@ Parus 기본 설치 루트:
 표준 라이브러리 위치는 다음으로 고정한다.
 
 1. 소스: `sysroot/std/src` (프로젝트) / `.../toolchains/<id>/sysroot/std/src` (설치본)
-2. target별 파생 산출물:
+2. core prelude 소스: `sysroot/core/src` (프로젝트) / `.../toolchains/<id>/sysroot/core/src` (설치본)
+3. target별 파생 산출물:
    - `.../targets/<triple>/std/parlib`
    - `.../targets/<triple>/std/obj`
-3. 기본 링크 라이브러리:
+4. 기본 링크 라이브러리:
    - `.../targets/<triple>/lib/libpcore.a`
    - `.../targets/<triple>/lib/libprt.a`
    - `.../targets/<triple>/lib/libpstd.a`
-

@@ -735,6 +735,15 @@ namespace parus {
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             if (cursor_.eat(K::kSemicolon)) continue;
 
+            if (cursor_.at(K::kKwConst) && cursor_.peek(1).kind == K::kKwFn) {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                            "const def is not allowed in proto member signatures");
+                cursor_.bump(); // const
+                const ast::StmtId msid = parse_decl_proto_member_sig();
+                if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                continue;
+            }
+
             if (cursor_.at(K::kKwFn)) {
                 const ast::StmtId msid = parse_decl_proto_member_sig();
                 if (msid != ast::k_invalid_stmt) members.push_back(msid);
@@ -968,6 +977,7 @@ namespace parus {
         s.link_abi = ast::LinkAbi::kNone;
         s.fn_mode = ast::FnMode::kNone;
         s.is_throwing = false;
+        s.fn_is_const = false;
         s.is_pure = false;
         s.is_comptime = false;
         s.is_commit = false;
@@ -1114,6 +1124,7 @@ namespace parus {
         s.link_abi = ast::LinkAbi::kNone;
         s.fn_mode = ast::FnMode::kNone;
         s.is_throwing = false;
+        s.fn_is_const = false;
         s.is_pure = false;
         s.is_comptime = false;
         s.is_commit = false;
@@ -1234,7 +1245,8 @@ namespace parus {
 
                 const auto sk = cursor_.peek().kind;
                 const bool static_fn_start =
-                    (sk == K::kAt || sk == K::kKwFn || sk == K::kKwExport || sk == K::kKwExtern);
+                    (sk == K::kAt || sk == K::kKwFn || sk == K::kKwExport || sk == K::kKwExtern ||
+                    (sk == K::kKwConst && cursor_.peek(1).kind == K::kKwFn));
                 if (static_fn_start) {
                     ast::StmtId mid = parse_decl_fn();
                     auto& ms = ast_.stmt_mut(mid);
@@ -1254,6 +1266,18 @@ namespace parus {
                     }
                     members.push_back(mid);
                     continue;
+                }
+
+                bool member_is_const = false;
+                if (cursor_.at(K::kKwConst)) {
+                    member_is_const = true;
+                    cursor_.bump();
+                }
+
+                if (cursor_.at(K::kKwMut)) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                                "const declaration cannot use 'mut'");
+                    cursor_.bump();
                 }
 
                 std::string_view member_name{};
@@ -1294,6 +1318,7 @@ namespace parus {
                 ms.is_set = false;
                 ms.is_mut = false;
                 ms.is_static = true;
+                ms.is_const = member_is_const;
                 ms.name = member_name;
                 ms.type = type_id;
                 ms.type_node = type_node;
@@ -1309,7 +1334,9 @@ namespace parus {
                 continue;
             }
 
-            const bool fn_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
+            const bool fn_start =
+                (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern ||
+                (k == K::kKwConst && cursor_.peek(1).kind == K::kKwFn));
             if (fn_start) {
                 ast::StmtId mid = parse_decl_fn();
                 auto& ms = ast_.stmt_mut(mid);
@@ -1583,6 +1610,7 @@ namespace parus {
             fs.is_extern = false;
             fs.link_abi = ast::LinkAbi::kNone;
             fs.is_throwing = false;
+            fs.fn_is_const = false;
             fs.is_pure = false;
             fs.is_comptime = false;
             fs.is_commit = false;
@@ -1688,6 +1716,14 @@ namespace parus {
                 const ast::StmtId bad_sid = parse_decl_class_lifecycle_member();
                 auto& bad = ast_.stmt_mut(bad_sid);
                 bad.kind = ast::StmtKind::kError;
+                continue;
+            }
+
+            if (t.kind == K::kKwConst && cursor_.peek(1).kind == K::kKwFn) {
+                diag_report(diag::Code::kUnexpectedToken, t.span,
+                            "const def is not allowed in actor methods");
+                cursor_.bump(); // const
+                members.push_back(parse_actor_method_member());
                 continue;
             }
 
@@ -1917,6 +1953,7 @@ namespace parus {
         s.is_export = false;
         s.fn_mode = ast::FnMode::kNone;
         s.is_throwing = false;
+        s.fn_is_const = false;
         s.is_pure = false;
         s.is_comptime = false;
         s.is_commit = false;
@@ -2043,7 +2080,9 @@ namespace parus {
             }
 
             const auto k = cursor_.peek().kind;
-            const bool is_fn_member_start = (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern);
+            const bool is_fn_member_start =
+                (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern ||
+                (k == K::kKwConst && cursor_.peek(1).kind == K::kKwFn));
             if (is_fn_member_start) {
                 ast::StmtId mid = parse_decl_fn();
                 auto& ms = ast_.stmt_mut(mid);

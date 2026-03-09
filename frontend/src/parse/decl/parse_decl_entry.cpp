@@ -10,6 +10,7 @@ namespace parus {
         return k == K::kAt
             || k == K::kKwExport
             || k == K::kKwExtern
+            || k == K::kKwConst
             || k == K::kKwFn
             || k == K::kKwField
             || k == K::kKwEnum
@@ -46,6 +47,12 @@ namespace parus {
         }
 
         // direct decl keywords
+        if (t.kind == K::kKwConst) {
+            if (cursor_.peek(1).kind == K::kKwFn) {
+                return parse_decl_fn();
+            }
+            return parse_stmt_var();
+        }
         if (t.kind == K::kKwField) {
             return parse_decl_field();
         }

@@ -308,6 +308,9 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "GenericTypePathTemplateKindMismatch";
             case Code::kGenericActsOverlap: return "GenericActsOverlap";
             case Code::kGenericActorDeclNotSupportedV1: return "GenericActorDeclNotSupportedV1";
+            case Code::kConstExprNotEvaluable: return "ConstExprNotEvaluable";
+            case Code::kConstExprCallNotSupported: return "ConstExprCallNotSupported";
+            case Code::kConstExprCycle: return "ConstExprCycle";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -600,6 +603,9 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "generic type path '{0}' points to a template of different kind (expected {1}, got {2})";
             case Code::kGenericActsOverlap: return "generic acts overlap detected for owner '{0}' and member '{1}'";
             case Code::kGenericActorDeclNotSupportedV1: return "generic actor declaration is not supported in v1: '{0}'";
+            case Code::kConstExprNotEvaluable: return "const expression is not evaluable: {0}";
+            case Code::kConstExprCallNotSupported: return "function calls are not supported in const expressions (v1)";
+            case Code::kConstExprCycle: return "const declaration cycle detected";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -897,6 +903,9 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "제네릭 타입 경로 '{0}'가 다른 종류의 템플릿을 가리킵니다: 기대 {1}, 실제 {2}";
             case Code::kGenericActsOverlap: return "owner '{0}'와 멤버 '{1}'에서 제네릭 acts 중복(coherence overlap)이 발생했습니다";
             case Code::kGenericActorDeclNotSupportedV1: return "v1에서는 제네릭 actor 선언을 지원하지 않습니다: '{0}'";
+            case Code::kConstExprNotEvaluable: return "const 식을 평가할 수 없습니다: {0}";
+            case Code::kConstExprCallNotSupported: return "v1 const 식에서는 함수 호출을 지원하지 않습니다";
+            case Code::kConstExprCycle: return "const 선언 간 순환 참조가 감지되었습니다";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

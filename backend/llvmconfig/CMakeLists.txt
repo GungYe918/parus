@@ -158,7 +158,7 @@ target_compile_definitions(parus_llvmconfig
 )
 
 if(_parus_llvm_toolchain_ok)
-    target_include_directories(parus_llvmconfig INTERFACE "${_parus_llvm_include_dir}")
+    target_include_directories(parus_llvmconfig SYSTEM INTERFACE "${_parus_llvm_include_dir}")
     target_link_directories(parus_llvmconfig INTERFACE ${_parus_llvm_link_dirs})
     target_link_libraries(parus_llvmconfig INTERFACE ${_parus_llvm_libfiles} ${_parus_llvm_system_libs})
     target_link_options(parus_llvmconfig INTERFACE ${_parus_llvm_ldflags})

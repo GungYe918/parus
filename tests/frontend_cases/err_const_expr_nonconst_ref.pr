@@ -1,0 +1,2 @@
+static DATA: i32 = 9i32;
+const BAD: i32 = DATA;

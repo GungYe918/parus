@@ -1,0 +1,2 @@
+const A = 1i32;
+const B: i32;

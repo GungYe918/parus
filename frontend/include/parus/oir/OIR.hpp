@@ -218,6 +218,7 @@ namespace parus::oir {
         bool is_extern = false;
         bool is_pure = false;
         bool is_comptime = false;
+        bool is_const = false;
 
         // return type (used by builder/dumper)
         TypeId ret_ty = kInvalidId;
@@ -243,13 +244,28 @@ namespace parus::oir {
         std::vector<FieldMemberLayout> members{};
     };
 
+    enum class ConstInitKind : uint8_t {
+        None = 0,
+        Int,
+        Float,
+        Bool,
+        Char,
+    };
+
+    struct ConstInitData {
+        ConstInitKind kind = ConstInitKind::None;
+        std::string text{};
+    };
+
     struct GlobalDecl {
         std::string name;
         TypeId type = kInvalidId;
         FunctionAbi abi = FunctionAbi::Parus;
         bool is_extern = false;
         bool is_mut = false;
+        bool is_const = false;
         bool is_export = false;
+        ConstInitData const_init{};
     };
 
     /// @brief OIR에서 추적하는 escape-handle 힌트(런타임 객체가 아닌 최적화 메타).

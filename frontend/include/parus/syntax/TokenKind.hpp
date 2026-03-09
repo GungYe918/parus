@@ -31,6 +31,7 @@ namespace parus::syntax {
 
         kKwMut,
         kKwStatic,
+        kKwConst,
         // NOTE(스펙 변경): ref 토큰은 삭제됨.
 
         // stmt keywords
@@ -170,6 +171,7 @@ namespace parus::syntax {
             case TokenKind::kKwXor: return "xor";
             case TokenKind::kKwMut: return "mut";
             case TokenKind::kKwStatic: return "static";
+            case TokenKind::kKwConst: return "const";
 
             case TokenKind::kKwFn: return "def";
             case TokenKind::kKwExport: return "export";

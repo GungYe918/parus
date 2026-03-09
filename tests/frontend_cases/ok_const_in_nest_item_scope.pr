@@ -1,0 +1,12 @@
+nest math {
+    const BASE: i32 = 2i32;
+    const SCALE: i32 = BASE * 5i32;
+
+    def value() -> i32 {
+        return SCALE;
+    }
+}
+
+def main() -> i32 {
+    return math::value();
+}

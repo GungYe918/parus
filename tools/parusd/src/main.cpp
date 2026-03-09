@@ -3,6 +3,7 @@
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
 #include <parus/macro/Expander.hpp>
+#include <parus/os/File.hpp>
 #include <parus/parse/IncrementalParse.hpp>
 #include <parus/parse/Parser.hpp>
 #include <parus/passes/Passes.hpp>
@@ -1729,6 +1730,174 @@ namespace {
         return an == bn;
     }
 
+    bool env_flag_truthy_(std::string_view s) {
+        if (s.empty()) return false;
+        std::string v(s);
+        std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return v == "1" || v == "true" || v == "yes" || v == "on";
+    }
+
+    std::string getenv_string_(const char* key) {
+        if (key == nullptr || *key == '\0') return {};
+        if (const char* v = std::getenv(key); v != nullptr && *v != '\0') {
+            return std::string(v);
+        }
+        return {};
+    }
+
+    std::string resolve_lsp_sysroot_() {
+        std::string sysroot = getenv_string_("PARUS_SYSROOT");
+        if (!sysroot.empty()) return sysroot;
+
+        const std::string toolchain_root = getenv_string_("PARUS_TOOLCHAIN_ROOT");
+        if (!toolchain_root.empty()) {
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+            fs::path p = fs::path(toolchain_root) / "sysroot";
+            const fs::path canonical = fs::weakly_canonical(p, ec);
+            if (!ec) return canonical.string();
+            return p.lexically_normal().string();
+        }
+        return {};
+    }
+
+    std::string resolve_core_prelude_path_() {
+        if (env_flag_truthy_(getenv_string_("PARUS_NO_CORE")) ||
+            env_flag_truthy_(getenv_string_("PARUS_FREESTANDING"))) {
+            return {};
+        }
+
+        namespace fs = std::filesystem;
+        std::error_code ec{};
+
+        const std::string sysroot = resolve_lsp_sysroot_();
+        if (sysroot.empty()) return {};
+
+        const fs::path prelude = fs::path(sysroot) / "core" / "src" / "prelude.pr";
+        const fs::path normalized = fs::weakly_canonical(prelude, ec);
+        if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
+            return normalize_host_path_(normalized.string());
+        }
+        ec.clear();
+        if (fs::exists(prelude, ec) && !ec && fs::is_regular_file(prelude, ec)) {
+            return normalize_host_path_(prelude.string());
+        }
+        return {};
+    }
+
+    void append_block_children_(const parus::ast::AstArena& ast,
+                                parus::ast::StmtId root_sid,
+                                std::vector<parus::ast::StmtId>& out_children) {
+        if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+            return;
+        }
+        const auto& s = ast.stmt(root_sid);
+        if (s.kind != parus::ast::StmtKind::kBlock) {
+            out_children.push_back(root_sid);
+            return;
+        }
+        const auto& kids = ast.stmt_children();
+        const uint64_t begin = s.stmt_begin;
+        const uint64_t end = begin + s.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return;
+        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+            out_children.push_back(kids[s.stmt_begin + i]);
+        }
+    }
+
+    parus::ast::StmtId merge_program_roots_(parus::ast::AstArena& ast,
+                                            parus::ast::StmtId primary_root,
+                                            parus::ast::StmtId injected_root,
+                                            parus::Span span) {
+        std::vector<parus::ast::StmtId> merged_children{};
+        append_block_children_(ast, primary_root, merged_children);
+        append_block_children_(ast, injected_root, merged_children);
+
+        parus::ast::Stmt merged{};
+        merged.kind = parus::ast::StmtKind::kBlock;
+        merged.span = span;
+        merged.stmt_begin = static_cast<uint32_t>(ast.stmt_children().size());
+        merged.stmt_count = 0;
+        for (const auto sid : merged_children) {
+            ast.add_stmt_child(sid);
+            merged.stmt_count++;
+        }
+        return ast.add_stmt(merged);
+    }
+
+    void collect_top_level_acts_decl_sids_(const parus::ast::AstArena& ast,
+                                           parus::ast::StmtId root_sid,
+                                           std::unordered_set<parus::ast::StmtId>& out) {
+        if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+            return;
+        }
+        const auto& root = ast.stmt(root_sid);
+        if (root.kind != parus::ast::StmtKind::kBlock) return;
+        const auto& kids = ast.stmt_children();
+        const uint64_t begin = root.stmt_begin;
+        const uint64_t end = begin + root.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return;
+        for (uint32_t i = 0; i < root.stmt_count; ++i) {
+            const auto sid = kids[root.stmt_begin + i];
+            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+            const auto& s = ast.stmt(sid);
+            if (s.kind == parus::ast::StmtKind::kActsDecl && s.acts_is_for) {
+                out.insert(sid);
+            }
+        }
+    }
+
+    bool inject_core_prelude_for_lsp_(
+        std::string_view current_uri,
+        uint32_t current_file_id,
+        parus::SourceManager& sm,
+        parus::ast::AstArena& ast,
+        parus::ty::TypePool& types,
+        parus::ast::StmtId& root,
+        parus::diag::Bag& bag,
+        const parus::ParserFeatureFlags& parser_features,
+        std::unordered_set<parus::ast::StmtId>& out_trusted_builtin_acts_decl_sids
+    ) {
+        const std::string core_prelude_path = resolve_core_prelude_path_();
+        if (core_prelude_path.empty()) return true;
+
+        if (const auto current_path = uri_to_file_path_(current_uri); current_path.has_value()) {
+            if (same_file_path_(std::filesystem::path(*current_path), std::filesystem::path(core_prelude_path))) {
+                return true;
+            }
+        }
+
+        std::string core_src{};
+        std::string core_io_err{};
+        if (!parus::open_file(core_prelude_path, core_src, core_io_err)) {
+            const parus::Span span{current_file_id, 0, 0};
+            parus::diag::Diagnostic d(
+                parus::diag::Severity::kError,
+                parus::diag::Code::kTypeErrorGeneric,
+                span
+            );
+            std::string msg = "failed to load core prelude '" + core_prelude_path + "'";
+            if (!core_io_err.empty()) msg += ": " + core_io_err;
+            d.add_arg(msg);
+            bag.add(std::move(d));
+            return false;
+        }
+
+        const uint32_t core_file_id = sm.add(core_prelude_path, core_src);
+        parus::Lexer core_lexer(sm.content(core_file_id), core_file_id, &bag);
+        auto core_tokens = core_lexer.lex_all();
+        parus::Parser core_parser(core_tokens, ast, types, &bag, /*max_errors=*/256, parser_features);
+        const auto core_root = core_parser.parse_program();
+        if (bag.has_error()) return false;
+
+        collect_top_level_acts_decl_sids_(ast, core_root, out_trusted_builtin_acts_decl_sids);
+        const parus::Span span{current_file_id, 0, 0};
+        root = merge_program_roots_(ast, root, core_root, span);
+        return true;
+    }
+
     bool is_under_root_(const std::filesystem::path& path, const std::filesystem::path& root) {
         const auto p = normalize_host_path_(path.string());
         const auto r = normalize_host_path_(root.string());
@@ -2317,11 +2486,28 @@ namespace {
 
         out.parse_mode = doc.parse_session.last_mode();
 
-        auto& snapshot = doc.parse_session.mutable_snapshot();
-        auto& ast = snapshot.ast;
-        auto& types = snapshot.types;
-        const auto root = snapshot.root;
+        // Incremental parser snapshot은 다음 reparse의 정본으로 유지해야 한다.
+        // (macro/type-check 단계에서 snapshot을 직접 변형하면 didChange 이후 진단이 불안정해진다.)
+        const auto& snapshot = doc.parse_session.snapshot();
+        auto ast = snapshot.ast;
+        auto types = snapshot.types;
+        auto root = snapshot.root;
         const auto& toks = snapshot.tokens;
+
+        std::unordered_set<parus::ast::StmtId> trusted_builtin_acts_decl_sids{};
+        if (!bag.has_error()) {
+            if (!inject_core_prelude_for_lsp_(uri,
+                                              file_id,
+                                              sm,
+                                              ast,
+                                              types,
+                                              root,
+                                              bag,
+                                              doc.parse_session.feature_flags(),
+                                              trusted_builtin_acts_decl_sids)) {
+                // diagnostics는 bag에 누적되어 아래 경로로 자연스럽게 publish된다.
+            }
+        }
 
         std::unordered_map<uint64_t, SemClass> resolved_map;
         parus::passes::PassResults pass_res{};
@@ -2378,6 +2564,9 @@ namespace {
                         if (!popt.name_resolve.current_bundle_name.empty() ||
                             !popt.name_resolve.external_exports.empty()) {
                             tc.set_seed_symbol_table(&pass_res.sym);
+                        }
+                        if (!trusted_builtin_acts_decl_sids.empty()) {
+                            tc.set_trusted_builtin_acts_decl_sids(std::move(trusted_builtin_acts_decl_sids));
                         }
                         const auto ty = tc.check_program(root);
 

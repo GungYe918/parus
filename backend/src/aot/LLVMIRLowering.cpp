@@ -1902,7 +1902,32 @@ namespace parus::backend::aot {
             os << "\n";
         }
 
+        auto render_global_const_init_ = [](
+            const parus::oir::GlobalDecl& g,
+            std::string& out_init
+        ) -> bool {
+            switch (g.const_init.kind) {
+                case parus::oir::ConstInitKind::None:
+                    return false;
+                case parus::oir::ConstInitKind::Int:
+                case parus::oir::ConstInitKind::Char:
+                    out_init = g.const_init.text;
+                    return true;
+                case parus::oir::ConstInitKind::Bool:
+                    if (g.const_init.text == "true" || g.const_init.text == "false") {
+                        out_init = g.const_init.text;
+                        return true;
+                    }
+                    return false;
+                case parus::oir::ConstInitKind::Float:
+                    out_init = g.const_init.text;
+                    return !out_init.empty();
+            }
+            return false;
+        };
+
         if (!oir.globals.empty()) {
+            bool global_emit_error = false;
             for (const auto& g : oir.globals) {
                 const std::string sym = sanitize_symbol_(g.name);
                 const std::string gty = map_type_(types, g.type, &named_layouts);
@@ -1915,10 +1940,30 @@ namespace parus::backend::aot {
                 if (g.is_extern) {
                     os << "@" << sym << " = external global " << gty;
                 } else {
+                    if (g.is_const && g.is_mut) {
+                        global_emit_error = true;
+                        out.messages.push_back(CompileMessage{
+                            true,
+                            "OIR->LLVM lowering error: const global '" + g.name + "' cannot be mutable"
+                        });
+                    }
+                    if (g.is_const && g.const_init.kind == parus::oir::ConstInitKind::None) {
+                        global_emit_error = true;
+                        out.messages.push_back(CompileMessage{
+                            true,
+                            "OIR->LLVM lowering error: const global '" + g.name + "' is missing const initializer"
+                        });
+                    }
+
                     const char* kind = g.is_mut ? "global" : "constant";
                     os << "@" << sym << " = ";
                     if (is_internal) os << "internal ";
-                    os << kind << " " << gty << " zeroinitializer";
+                    std::string init_text{};
+                    if (!g.is_mut && render_global_const_init_(g, init_text)) {
+                        os << "constant " << gty << " " << init_text;
+                    } else {
+                        os << kind << " " << gty << " zeroinitializer";
+                    }
                 }
 
                 if (g.type != parus::ty::kInvalidType && types.get(g.type).kind == parus::ty::Kind::kNamedUser) {
@@ -1930,6 +1975,11 @@ namespace parus::backend::aot {
                 os << "\n";
             }
             os << "\n";
+            if (global_emit_error) {
+                out.ok = false;
+                out.llvm_ir = os.str();
+                return out;
+            }
         }
 
         const auto value_types = build_value_type_table_(oir, types, named_layouts);
