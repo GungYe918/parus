@@ -21,7 +21,7 @@ namespace parus {
             || k == K::kKwUse
             || k == K::kKwImport
             || k == K::kKwNest
-            || is_macro_decl_start();
+            || k == K::kKwMacro;
     }
 
     // decl 엔트리.

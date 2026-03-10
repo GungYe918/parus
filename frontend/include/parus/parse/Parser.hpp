@@ -75,7 +75,6 @@ namespace parus {
 
         //  현재 토큰이 "decl 시작"인지 판정 (v0: @attr, export/extern, def, field/proto/class/actor/acts)
         bool is_decl_start(syntax::TokenKind k) const;
-        bool is_context_keyword(const Token& t, std::string_view kw) const;
         bool is_macro_decl_start() const;
 
         bool is_unambiguous_stmt_start(syntax::TokenKind k) const;

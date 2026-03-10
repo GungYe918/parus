@@ -80,7 +80,8 @@ namespace parus::macro {
     void apply_binder_hygiene(
         ast::AstArena& ast,
         std::vector<Token>& tokens,
-        const std::vector<uint8_t>& generated_mask
+        const std::vector<uint8_t>& generated_mask,
+        uint64_t hygiene_seed = 0
     );
 
     bool expand_program(

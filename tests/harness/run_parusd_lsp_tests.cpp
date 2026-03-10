@@ -306,7 +306,8 @@ bool test_completion_keywords_parus_and_lei() {
 
     if (!contains(out, "\"id\":22") || !contains(out, "\"label\":\"return\"")
         || !contains(out, "\"label\":\"require\"") || !contains(out, "\"label\":\"proto\"")
-        || !contains(out, "\"label\":\"actor\"")) {
+        || !contains(out, "\"label\":\"actor\"") || !contains(out, "\"label\":\"macro\"")
+        || !contains(out, "\"label\":\"const\"") || !contains(out, "\"label\":\"spawn\"")) {
         std::cerr << "parus completion result must include v0 keywords\n" << out << "\n";
         return false;
     }

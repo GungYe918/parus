@@ -216,8 +216,7 @@ namespace parus {
 
         // qualifier loop: layout(c) / align(n)
         while (!is_aborted()) {
-            if (cursor_.at(K::kKwLayout) ||
-                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "layout")) {
+            if (cursor_.at(K::kKwLayout)) {
                 const Token qtok = cursor_.bump();
                 if (seen_layout) {
                     diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated layout(...) in struct declaration");
@@ -245,8 +244,7 @@ namespace parus {
                 continue;
             }
 
-            if (cursor_.at(K::kKwAlign) ||
-                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "align")) {
+            if (cursor_.at(K::kKwAlign)) {
                 const Token qtok = cursor_.bump();
                 if (seen_align) {
                     diag_report(diag::Code::kUnexpectedToken, qtok.span, "duplicated align(...) in struct declaration");
@@ -456,8 +454,7 @@ namespace parus {
         }
 
         ast::FieldLayout enum_layout = ast::FieldLayout::kNone;
-        if (cursor_.at(K::kKwLayout) ||
-            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "layout")) {
+        if (cursor_.at(K::kKwLayout)) {
             cursor_.bump();
             if (!cursor_.eat(K::kLParen)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
@@ -774,8 +771,7 @@ namespace parus {
         bool has_require = true;
         ast::ExprId require_expr = make_bool_lit("true", default_require_span);
         const auto is_require_token = [&]() -> bool {
-            return cursor_.at(K::kKwRequire) ||
-                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "require");
+            return cursor_.at(K::kKwRequire);
         };
         const auto parse_require_clause = [&]() -> ast::ExprId {
             if (!is_require_token()) {
@@ -802,9 +798,7 @@ namespace parus {
             }
             return expr_id;
         };
-        const bool has_with =
-            cursor_.at(K::kKwWith) ||
-            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
+        const bool has_with = cursor_.at(K::kKwWith);
         if (has_with) {
             cursor_.bump(); // with
             ast::ExprId folded = parse_require_clause();
@@ -871,8 +865,8 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
-        const bool is_init = is_context_keyword(start_tok, "init");
-        const bool is_deinit = is_context_keyword(start_tok, "deinit");
+        const bool is_init = (start_tok.kind == K::kKwInit);
+        const bool is_deinit = (start_tok.kind == K::kKwDeinit);
         if (!is_init && !is_deinit) {
             diag_report(diag::Code::kExpectedToken, start_tok.span, "init/deinit");
             ast::Stmt s{};
@@ -962,7 +956,7 @@ namespace parus {
 
             if (!cursor_.eat(K::kKwDefault)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "default");
-                if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "default") {
+                if (cursor_.peek().kind == K::kKwDefault) {
                     cursor_.bump();
                 }
             }
@@ -1034,7 +1028,7 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
-        if (!is_context_keyword(start_tok, "init")) {
+        if (start_tok.kind != K::kKwInit) {
             diag_report(diag::Code::kExpectedToken, start_tok.span, "init");
             ast::Stmt s{};
             s.kind = ast::StmtKind::kError;
@@ -1114,7 +1108,7 @@ namespace parus {
         if (cursor_.eat(K::kAssign)) {
             if (!cursor_.eat(K::kKwDefault)) {
                 diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "default");
-                if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "default") {
+                if (cursor_.peek().kind == K::kKwDefault) {
                     cursor_.bump();
                 }
             }
@@ -1132,7 +1126,10 @@ namespace parus {
 
             end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
         } else {
+            const bool prev_actor_ctx = in_actor_member_context_;
+            in_actor_member_context_ = true;
             body = parse_stmt_required_block("actor init");
+            in_actor_member_context_ = prev_actor_ctx;
             end_sp = ast_.stmt(body).span;
             if (cursor_.at(K::kSemicolon)) {
                 end_sp = cursor_.bump().span;
@@ -1250,8 +1247,8 @@ namespace parus {
 
             const auto k = cursor_.peek().kind;
             const bool lifecycle_start =
-                is_context_keyword(cursor_.peek(), "init") ||
-                is_context_keyword(cursor_.peek(), "deinit");
+                cursor_.peek().kind == K::kKwInit ||
+                cursor_.peek().kind == K::kKwDeinit;
             if (lifecycle_start) {
                 members.push_back(parse_decl_class_lifecycle_member());
                 continue;
@@ -1528,12 +1525,8 @@ namespace parus {
 
             ast::FnMode mode = ast::FnMode::kNone;
             const Token mode_tok = cursor_.peek();
-            const bool is_sub =
-                (mode_tok.kind == K::kKwSub) ||
-                (mode_tok.kind == K::kIdent && mode_tok.lexeme == "sub");
-            const bool is_pub =
-                (mode_tok.kind == K::kKwPub) ||
-                (mode_tok.kind == K::kIdent && mode_tok.lexeme == "pub");
+            const bool is_sub = (mode_tok.kind == K::kKwSub);
+            const bool is_pub = (mode_tok.kind == K::kKwPub);
             if (is_sub) {
                 mode = ast::FnMode::kSub;
                 cursor_.bump();
@@ -1581,7 +1574,10 @@ namespace parus {
             }
             auto ret_ty = parse_type();
 
+            const bool prev_actor_ctx = in_actor_member_context_;
+            in_actor_member_context_ = true;
             ast::StmtId body = parse_stmt_required_block("actor def");
+            in_actor_member_context_ = prev_actor_ctx;
             Span end_sp = ast_.stmt(body).span;
             if (cursor_.at(K::kSemicolon)) {
                 end_sp = cursor_.bump().span;
@@ -1721,7 +1717,7 @@ namespace parus {
             if (cursor_.eat(K::kSemicolon)) continue;
 
             const Token t = cursor_.peek();
-            if (is_context_keyword(t, "draft")) {
+            if (t.kind == K::kKwDraft) {
                 if (seen_draft) {
                     diag_report(diag::Code::kActorRequiresSingleDraft, t.span);
                     parse_draft_block(/*accept_members=*/false);
@@ -1732,12 +1728,12 @@ namespace parus {
                 continue;
             }
 
-            if (is_context_keyword(t, "init")) {
+            if (t.kind == K::kKwInit) {
                 members.push_back(parse_decl_actor_init_member());
                 continue;
             }
 
-            if (is_context_keyword(t, "deinit")) {
+            if (t.kind == K::kKwDeinit) {
                 diag_report(diag::Code::kActorDeinitNotAllowed, t.span);
                 const ast::StmtId bad_sid = parse_decl_class_lifecycle_member();
                 auto& bad = ast_.stmt_mut(bad_sid);

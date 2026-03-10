@@ -387,6 +387,7 @@ namespace parus {
         if (t.lexeme == "catch")    { t.kind = syntax::TokenKind::kKwCatch;    return t; }
         if (t.lexeme == "copy")     { t.kind = syntax::TokenKind::kKwCopy;     return t; }
         if (t.lexeme == "clone")    { t.kind = syntax::TokenKind::kKwClone;    return t; }
+        if (t.lexeme == "spawn")    { t.kind = syntax::TokenKind::kKwSpawn;    return t; }
 
         if (t.lexeme == "switch")   { t.kind = syntax::TokenKind::kKwSwitch;    return t; }
         if (t.lexeme == "case")     { t.kind = syntax::TokenKind::kKwCase;      return t; }
@@ -402,8 +403,11 @@ namespace parus {
 
         if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }
+        if (t.lexeme == "pub")      { t.kind = syntax::TokenKind::kKwPub;      return t; }
+        if (t.lexeme == "sub")      { t.kind = syntax::TokenKind::kKwSub;      return t; }
 
         if (t.lexeme == "def")       { t.kind = syntax::TokenKind::kKwFn;       return t; }
+        if (t.lexeme == "macro")     { t.kind = syntax::TokenKind::kKwMacro;    return t; }
         if (t.lexeme == "struct" || t.lexeme == "field") {
             t.kind = syntax::TokenKind::kKwField;
             return t;
@@ -412,6 +416,9 @@ namespace parus {
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
         if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
         if (t.lexeme == "actor")   { t.kind = syntax::TokenKind::kKwActor;   return t; }
+        if (t.lexeme == "init")     { t.kind = syntax::TokenKind::kKwInit;     return t; }
+        if (t.lexeme == "deinit")   { t.kind = syntax::TokenKind::kKwDeinit;   return t; }
+        if (t.lexeme == "draft")    { t.kind = syntax::TokenKind::kKwDraft;    return t; }
         if (t.lexeme == "acts")     { t.kind = syntax::TokenKind::kKwActs;     return t; }
         if (t.lexeme == "export")   { t.kind = syntax::TokenKind::kKwExport;   return t; }
         if (t.lexeme == "extern")   { t.kind = syntax::TokenKind::kKwExtern;   return t; }

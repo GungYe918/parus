@@ -1,0 +1,6 @@
+def main() -> i32 {
+  let init: i32 = 1i32;
+  let deinit: i32 = 2i32;
+  let draft: i32 = 3i32;
+  return init + deinit + draft;
+}

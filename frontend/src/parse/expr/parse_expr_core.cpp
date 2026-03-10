@@ -344,7 +344,7 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token spawn_tok = cursor_.peek();
-        if (!is_context_keyword(spawn_tok, "spawn")) {
+        if (spawn_tok.kind != K::kKwSpawn) {
             diag_report(diag::Code::kExpectedToken, spawn_tok.span, "spawn");
             ast::Expr err{};
             err.kind = ast::ExprKind::kError;
@@ -719,8 +719,17 @@ namespace parus {
             return ast_.add_expr(e);
         }
 
-        if (is_context_keyword(t, "spawn")) {
+        if (t.kind == syntax::TokenKind::kKwSpawn) {
             return parse_expr_spawn(ternary_depth);
+        }
+
+        if (t.kind == syntax::TokenKind::kKwDraft && in_actor_member_context_) {
+            cursor_.bump();
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kIdent;
+            e.span = t.span;
+            e.text = std::string_view("draft");
+            return ast_.add_expr(e);
         }
 
         if (t.kind == syntax::TokenKind::kIdent) {

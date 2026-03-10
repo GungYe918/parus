@@ -166,13 +166,8 @@ namespace parus {
         return false;
     }
 
-    bool Parser::is_context_keyword(const Token& t, std::string_view kw) const {
-        if (t.kind != syntax::TokenKind::kIdent) return false;
-        return t.lexeme == kw;
-    }
-
     bool Parser::is_macro_decl_start() const {
-        return is_context_keyword(cursor_.peek(), "macro");
+        return cursor_.peek().kind == syntax::TokenKind::kKwMacro;
     }
 
     bool Parser::is_expr_with_block_kind(ast::ExprKind k) {

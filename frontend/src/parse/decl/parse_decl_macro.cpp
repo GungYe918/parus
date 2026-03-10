@@ -66,7 +66,7 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token macro_kw = cursor_.peek();
-        if (!is_context_keyword(macro_kw, "macro")) {
+        if (macro_kw.kind != K::kKwMacro) {
             diag_report(diag::Code::kExpectedToken, macro_kw.span, "macro");
             return false;
         }
@@ -95,10 +95,7 @@ namespace parus {
 
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             const Token with_kw = cursor_.peek();
-            const bool is_with_kw =
-                with_kw.kind == K::kKwWith ||
-                is_context_keyword(with_kw, "with");
-            if (!is_with_kw) {
+            if (with_kw.kind != K::kKwWith) {
                 diag_report(diag::Code::kUnexpectedToken, with_kw.span, "with");
                 recover_to_delim(K::kRBrace, K::kSemicolon);
                 if (cursor_.eat(K::kSemicolon)) continue;

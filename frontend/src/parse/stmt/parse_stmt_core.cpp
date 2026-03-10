@@ -134,8 +134,8 @@ namespace parus {
         if (tok.kind == K::kKwBreak)    return parse_stmt_break();
         if (tok.kind == K::kKwContinue) return parse_stmt_continue();
         if (tok.kind == K::kKwTry && cursor_.peek(1).kind == K::kLBrace) return parse_stmt_try_catch();
-        if (tok.kind == K::kKwCommit || is_context_keyword(tok, "commit")) return parse_stmt_commit();
-        if (tok.kind == K::kKwRecast || is_context_keyword(tok, "recast")) return parse_stmt_recast();
+        if (tok.kind == K::kKwCommit) return parse_stmt_commit();
+        if (tok.kind == K::kKwRecast) return parse_stmt_recast();
         if (tok.kind == K::kKwSwitch)   return parse_stmt_switch();
         if (tok.kind == K::kKwUse)      return parse_stmt_use();
         if (tok.kind == K::kKwImport)   return parse_stmt_import();
@@ -459,7 +459,7 @@ namespace parus {
         std::string_view var_acts_set_name{};
 
         const auto is_with_token = [](const Token& tok) -> bool {
-            return tok.kind == K::kKwWith || (tok.kind == K::kIdent && tok.lexeme == "with");
+            return tok.kind == K::kKwWith;
         };
         const auto parse_with_acts_clause = [&](bool record_binding, bool allow_assign_recovery) {
             if (!(is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs)) return false;

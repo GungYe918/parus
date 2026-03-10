@@ -765,7 +765,11 @@ namespace parus::macro {
                 const uint32_t begin = arm_.template_token_begin;
                 const uint32_t end = arm_.template_token_begin + arm_.template_token_count;
                 if (!expand_range_(begin, end)) return false;
-                apply_binder_hygiene(ast_, out_tokens_, generated_mask_);
+                const uint64_t hygiene_seed =
+                    (static_cast<uint64_t>(call_span_.file_id) << 48) ^
+                    (static_cast<uint64_t>(call_span_.lo) << 16) ^
+                    static_cast<uint64_t>(call_span_.hi);
+                apply_binder_hygiene(ast_, out_tokens_, generated_mask_, hygiene_seed);
                 out_tokens = std::move(out_tokens_);
                 return true;
             }

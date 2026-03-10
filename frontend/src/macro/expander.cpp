@@ -401,7 +401,11 @@ namespace parus::macro {
                 }
             }
 
-            apply_binder_hygiene(ast, out_tokens, generated_mask);
+            const uint64_t hygiene_seed =
+                (static_cast<uint64_t>(call_span.file_id) << 48) ^
+                (static_cast<uint64_t>(call_span.lo) << 16) ^
+                static_cast<uint64_t>(call_span.hi);
+            apply_binder_hygiene(ast, out_tokens, generated_mask, hygiene_seed);
             return true;
         }
 

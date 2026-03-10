@@ -1,0 +1,20 @@
+macro emit_catch -> {
+    with stmt {
+        () => stmt {
+            try {
+                return 1i32;
+            } catch (err) {
+                return 2i32;
+            }
+        };
+    }
+}
+
+def probe?() -> i32 {
+    let err: i32 = 7i32;
+    $emit_catch();
+}
+
+def main() -> i32 {
+    return 0i32;
+}

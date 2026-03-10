@@ -51,6 +51,7 @@ namespace parus::syntax {
         kKwCatch,
         kKwCopy,
         kKwClone,
+        kKwSpawn,
 
         // ---- keywords (decl / control) ----
         kKwExport,
@@ -58,11 +59,15 @@ namespace parus::syntax {
         kKwLayout,
         kKwAlign,
         kKwFn,
+        kKwMacro,
         kKwField, // source keyword: struct
         kKwEnum,
         kKwProto,
         kKwClass,
         kKwActor,
+        kKwInit,
+        kKwDeinit,
+        kKwDraft,
         kKwActs,
         kKwSwitch,
         kKwCase,
@@ -179,9 +184,13 @@ namespace parus::syntax {
             case TokenKind::kKwLayout: return "layout";
             case TokenKind::kKwAlign: return "align";
             case TokenKind::kKwField: return "struct";
+            case TokenKind::kKwMacro: return "macro";
             case TokenKind::kKwEnum: return "enum";
             case TokenKind::kKwProto: return "proto";
             case TokenKind::kKwActs: return "acts";
+            case TokenKind::kKwInit: return "init";
+            case TokenKind::kKwDeinit: return "deinit";
+            case TokenKind::kKwDraft: return "draft";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
             case TokenKind::kKwIf:  return "if";
@@ -200,6 +209,7 @@ namespace parus::syntax {
             case TokenKind::kKwCatch: return "catch";
             case TokenKind::kKwCopy: return "copy";
             case TokenKind::kKwClone: return "clone";
+            case TokenKind::kKwSpawn: return "spawn";
 
             case TokenKind::kKwSwitch: return "switch";
             case TokenKind::kKwCase: return "case";

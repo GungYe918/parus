@@ -567,14 +567,14 @@ namespace {
         "static",
     };
 
-    constexpr std::array<std::string_view, 45> kParusCompletionKeywords = {
-        "def", "struct", "proto", "class", "actor", "acts",
-        "let", "set", "mut", "static", "if", "elif", "else",
+    constexpr std::array<std::string_view, 51> kParusCompletionKeywords = {
+        "def", "macro", "struct", "proto", "class", "actor", "acts",
+        "let", "set", "mut", "static", "const", "if", "elif", "else",
         "while", "do", "loop", "in", "return", "break", "continue",
         "true", "false", "null", "and", "or", "not", "xor",
         "export", "extern", "layout", "align", "switch", "case", "default",
         "import", "module", "use", "nest", "as", "with", "require",
-        "spawn", "commit", "recast", "manual"
+        "spawn", "commit", "recast", "manual", "init", "deinit", "draft"
     };
 
     constexpr std::array<std::string_view, 20> kLeiCompletionKeywords = {
@@ -1102,6 +1102,7 @@ namespace {
             case K::kKwXor:
             case K::kKwMut:
             case K::kKwStatic:
+            case K::kKwConst:
             case K::kKwLet:
             case K::kKwSet:
             case K::kKwIf:
@@ -1113,16 +1114,21 @@ namespace {
             case K::kKwBreak:
             case K::kKwContinue:
             case K::kKwManual:
+            case K::kKwSpawn:
             case K::kKwExport:
             case K::kKwExtern:
             case K::kKwLayout:
             case K::kKwAlign:
             case K::kKwFn:
+            case K::kKwMacro:
             case K::kKwField:
             case K::kKwActs:
             case K::kKwClass:
             case K::kKwProto:
             case K::kKwActor:
+            case K::kKwInit:
+            case K::kKwDeinit:
+            case K::kKwDraft:
             case K::kKwSwitch:
             case K::kKwCase:
             case K::kKwDefault:

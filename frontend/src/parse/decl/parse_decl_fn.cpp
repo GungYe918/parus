@@ -397,9 +397,7 @@ namespace parus {
         out_begin = static_cast<uint32_t>(ast_.fn_constraint_decls().size());
         out_count = 0;
 
-        const bool has_with =
-            cursor_.at(K::kKwWith) ||
-            (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
+        const bool has_with = cursor_.at(K::kKwWith);
         if (!has_with) return false;
 
         cursor_.bump(); // with
