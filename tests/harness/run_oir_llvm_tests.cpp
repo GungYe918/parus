@@ -60,7 +60,7 @@ namespace {
             }
             if (end == std::string::npos) break;
             pos = end + 1;
-        }
+        };
         return false;
     }
 
@@ -177,7 +177,7 @@ namespace {
             struct layout(c) align(16) Vec2 {
                 x: f32;
                 y: f32;
-            }
+            };
 
             extern "C" static mut g_vec: Vec2;
 
@@ -211,7 +211,7 @@ namespace {
             struct layout(c) Vec2 {
                 x: i32;
                 y: i32;
-            }
+            };
 
             extern "C" def takes(v: Vec2) -> i32;
 
@@ -618,7 +618,7 @@ namespace {
         const std::string src = R"(
             struct Box {
                 value: i32;
-            }
+            };
 
             acts for Box {
                 operator(copy)(self) -> Box {
@@ -628,7 +628,7 @@ namespace {
                 operator(clone)(self) -> Box {
                     return Box { value: self.value };
                 }
-            }
+            };
 
             def main() -> i32 {
                 set x = 10i32;
@@ -696,7 +696,7 @@ namespace {
 
             struct E: Recoverable {
                 code: i32;
-            }
+            };
 
             def leaf?() -> i32 {
                 throw E { code: 7i32 };
@@ -864,7 +864,7 @@ namespace {
             struct layout(c) Vec2 {
                 x: i32;
                 y: i32;
-            }
+            };
 
             extern "C" static mut g_vec: Vec2;
 
@@ -940,7 +940,7 @@ namespace {
             struct Vec2 {
                 x: i32;
                 y: i32;
-            }
+            };
 
             def main() -> i32 {
                 let mut v: Vec2 = Vec2{ x: 1i32, y: 2i32 };
@@ -1158,7 +1158,7 @@ namespace {
                 value: T;
                 init(v: T) { self.value = v; }
                 def get(self) -> T { return self.value; }
-            }
+            };
 
             def main() -> i32 {
                 set b = Box<i32>(v: 1i32);
@@ -1200,7 +1200,7 @@ namespace {
 
             class EchoUser: Echo<i32> {
                 init() = default;
-            }
+            };
 
             def main() -> i32 {
                 set u = EchoUser();
@@ -1235,13 +1235,13 @@ namespace {
             class Vec<T> {
                 data: T;
                 init(v: T) { self.data = v; }
-            }
+            };
 
             acts for Vec<T> {
                 def get(self) -> T {
                     return self.data;
                 }
-            }
+            };
 
             def main() -> i32 {
                 set v = Vec<i32>(v: 1i32);
@@ -1278,7 +1278,7 @@ namespace {
             struct Pair<T> {
                 first: T;
                 second: T;
-            }
+            };
 
             def main() -> i32 {
                 let p: Pair<i32> = Pair<i32>{ first: 1i32, second: 2i32 };
@@ -1340,7 +1340,7 @@ namespace {
                 def tap(self) -> i32 {
                     return 3i32;
                 }
-            }
+            };
 
             def main() -> i32 {
                 return 0i32;
@@ -1380,7 +1380,7 @@ namespace {
                 def value(self) -> i32 {
                     return 2i32;
                 }
-            }
+            };
 
             def main() -> i32 {
                 set c = Counter();
@@ -1431,7 +1431,7 @@ namespace {
                 def id(self) -> i32 {
                     return 1i32;
                 }
-            }
+            };
 
             def main() -> i32 {
                 set u = User();
@@ -1474,7 +1474,7 @@ namespace {
                 def id(self) -> i32 {
                     return 3i32;
                 }
-            }
+            };
 
             def main() -> i32 {
                 return User().id();
@@ -1509,7 +1509,7 @@ namespace {
                 x: i32;
                 y: i32;
                 init() = default;
-            }
+            };
 
             def main() -> i32 {
                 set v = Vec2();
@@ -1541,7 +1541,7 @@ namespace {
             class Consts {
                 static const A: i32 = 1i32;
                 static const B: i32 = A + 1i32;
-            }
+            };
 
             class Counter {
                 init() = default;
@@ -1550,7 +1550,7 @@ namespace {
                 static def add(a: i32, b: i32) -> i32 {
                     return a + b;
                 }
-            }
+            };
 
             def main() -> i32 {
                 return Counter::add(a: Counter::count, b: Consts::B);
@@ -1605,7 +1605,7 @@ namespace {
             class Resource {
                 init() = default;
                 deinit() = default;
-            }
+            };
 
             def main() -> i32 {
                 do {
@@ -1634,7 +1634,7 @@ namespace {
             class Resource {
                 init() = default;
                 deinit() = default;
-            }
+            };
 
             def sink(v: ^&Resource) -> i32 {
                 return 0i32;
@@ -1736,7 +1736,7 @@ namespace {
                     commit;
                     return draft.value;
                 }
-            }
+            };
 
             def main() -> i32 {
                 set c = spawn Counter(seed: 5i32);

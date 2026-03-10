@@ -1,0 +1,436 @@
+    ty::TypeId TypeChecker::check_expr_ternary_(const ast::Expr& e) {
+        // a ? b : c
+        ty::TypeId ct = check_expr_(e.a);
+        if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+            diag_(diag::Code::kTypeTernaryCondMustBeBool, e.span, types_.to_string(ct));
+            err_(e.span, "ternary condition must be bool");
+        }
+        ty::TypeId t1 = check_expr_(e.b);
+        ty::TypeId t2 = check_expr_(e.c);
+        return unify_(t1, t2);
+    }
+
+    // --------------------
+    // call / array / index
+    // --------------------
+    ty::TypeId TypeChecker::check_expr_array_lit_(const ast::Expr& e) {
+        // Array literal uses ast.args() slice: e.arg_begin..e.arg_begin+e.arg_count
+        if (e.arg_count == 0) {
+            diag_(diag::Code::kTypeArrayLiteralEmptyNeedsContext, e.span);
+            err_(e.span, "empty array literal requires a contextual type (v0)");
+            return types_.make_array(types_.error(), /*has_size=*/true, /*size=*/0);
+        }
+
+        const auto& args = ast_.args();
+        const uint32_t end = e.arg_begin + e.arg_count;
+        if (e.arg_begin >= args.size() || end > args.size()) {
+            err_(e.span, "array literal element range is out of AST bounds");
+            return types_.error();
+        }
+
+        ty::TypeId elem = ty::kInvalidType;
+        bool has_error = false;
+
+        for (uint32_t i = 0; i < e.arg_count; ++i) {
+            const auto& a = args[e.arg_begin + i];
+            if (a.expr == ast::k_invalid_expr) {
+                has_error = true;
+                continue;
+            }
+
+            ty::TypeId t = check_expr_(a.expr);
+            if (is_error_(t)) {
+                has_error = true;
+                continue;
+            }
+
+            if (elem == ty::kInvalidType) {
+                elem = t;
+                continue;
+            }
+
+            if (elem == t) continue;
+
+            const auto& et = types_.get(elem);
+            const auto& tt = types_.get(t);
+            const bool elem_is_infer = (et.kind == ty::Kind::kBuiltin && et.builtin == ty::Builtin::kInferInteger);
+            const bool t_is_infer = (tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger);
+
+            if (elem_is_infer && is_index_int_type_(t)) {
+                (void)resolve_infer_int_in_context_(args[e.arg_begin].expr, t);
+                elem = t;
+                continue;
+            }
+
+            if (t_is_infer && is_index_int_type_(elem)) {
+                (void)resolve_infer_int_in_context_(a.expr, elem);
+                continue;
+            }
+
+            diag_(diag::Code::kTypeBinaryOperandsMustMatch, a.span, types_.to_string(elem), types_.to_string(t));
+            err_(a.span, "array literal elements must have one unified type");
+            has_error = true;
+        }
+
+        if (elem == ty::kInvalidType) elem = types_.error();
+        if (has_error) elem = types_.error();
+
+        return types_.make_array(elem, /*has_size=*/true, e.arg_count);
+    }
+
+    ty::TypeId TypeChecker::check_expr_field_init_(const ast::Expr& e) {
+        std::string literal_head = e.text.empty()
+            ? std::string("<field-init>")
+            : std::string(e.text);
+        ty::TypeId field_ty = ty::kInvalidType;
+        if (e.field_init_type_node != ast::k_invalid_type_node &&
+            (size_t)e.field_init_type_node < ast_.type_nodes().size()) {
+            const auto& head = ast_.type_node(e.field_init_type_node);
+            if (head.resolved_type != ty::kInvalidType) {
+                field_ty = head.resolved_type;
+                literal_head = types_.to_string(field_ty);
+            }
+        }
+
+        if (field_ty == ty::kInvalidType && !e.text.empty()) {
+            if (auto type_sym = lookup_symbol_(e.text)) {
+                const auto& sym = sym_.symbol(*type_sym);
+                if (sym.kind == sema::SymbolKind::kField && sym.declared_type != ty::kInvalidType) {
+                    field_ty = sym.declared_type;
+                }
+            }
+            if (field_ty == ty::kInvalidType) {
+                const ty::TypeId literal_head_ty = types_.intern_ident(e.text);
+                if (auto inst_sid = ensure_generic_field_instance_from_type_(literal_head_ty, e.span)) {
+                    const auto& inst = ast_.stmt(*inst_sid);
+                    if (inst.kind == ast::StmtKind::kFieldDecl && inst.type != ty::kInvalidType) {
+                        field_ty = inst.type;
+                    }
+                }
+            }
+        }
+
+        if (field_ty == ty::kInvalidType) {
+            diag_(diag::Code::kFieldInitTypeExpected, e.span, literal_head);
+            err_(e.span, "field initializer head must resolve to a struct type");
+            return types_.error();
+        }
+
+        auto meta_it = field_abi_meta_by_type_.find(field_ty);
+        if (meta_it == field_abi_meta_by_type_.end()) {
+            (void)ensure_generic_field_instance_from_type_(field_ty, e.span);
+            meta_it = field_abi_meta_by_type_.find(field_ty);
+        }
+        if (meta_it == field_abi_meta_by_type_.end()) {
+            diag_(diag::Code::kFieldInitTypeExpected, e.span, literal_head);
+            err_(e.span, "field initializer target has no field metadata");
+            return types_.error();
+        }
+
+        const auto& meta = meta_it->second;
+        if (meta.sid == ast::k_invalid_stmt || meta.sid >= ast_.stmts().size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "invalid field metadata statement id");
+            return types_.error();
+        }
+
+        const auto& fs = ast_.stmt(meta.sid);
+        if (fs.decl_generic_param_count > 0) {
+            diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, literal_head);
+            err_(e.span, "generic struct literal requires explicit type arguments");
+            return types_.error();
+        }
+        const uint64_t member_begin = fs.field_member_begin;
+        const uint64_t member_end = member_begin + fs.field_member_count;
+        if (member_begin > ast_.field_members().size() || member_end > ast_.field_members().size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "invalid field member range");
+            return types_.error();
+        }
+
+        if (e.field_init_count == 0 && fs.field_member_count != 0) {
+            diag_(diag::Code::kFieldInitEmptyNotAllowed, e.span, types_.to_string(field_ty));
+            err_(e.span, "empty field initializer is only allowed for zero-member field");
+        }
+
+        const auto& inits = ast_.field_init_entries();
+        const uint64_t init_begin = e.field_init_begin;
+        const uint64_t init_end = init_begin + e.field_init_count;
+        if (init_begin > inits.size() || init_end > inits.size()) {
+            diag_(diag::Code::kTypeFieldMemberRangeInvalid, e.span);
+            err_(e.span, "field initializer entry range is out of AST bounds");
+            return types_.error();
+        }
+
+        std::unordered_map<std::string_view, uint32_t> member_index_by_name;
+        member_index_by_name.reserve(fs.field_member_count);
+        for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+            member_index_by_name[ast_.field_members()[i].name] = i;
+        }
+
+        std::unordered_set<std::string_view> seen_members;
+        seen_members.reserve(e.field_init_count);
+
+        for (uint32_t i = 0; i < e.field_init_count; ++i) {
+            const auto& ent = inits[e.field_init_begin + i];
+
+            const bool inserted = seen_members.insert(ent.name).second;
+            if (!inserted) {
+                diag_(diag::Code::kFieldInitDuplicateMember, ent.span, ent.name);
+                err_(ent.span, "duplicate member in field initializer: " + std::string(ent.name));
+                if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+                continue;
+            }
+
+            auto mit = member_index_by_name.find(ent.name);
+            if (mit == member_index_by_name.end()) {
+                diag_(diag::Code::kFieldInitUnknownMember, ent.span, types_.to_string(field_ty), ent.name);
+                err_(ent.span, "unknown member in field initializer: " + std::string(ent.name));
+                if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+                continue;
+            }
+
+            const auto& member = ast_.field_members()[mit->second];
+            const CoercionPlan plan = classify_assign_with_coercion_(
+                AssignSite::FieldInit, member.type, ent.expr, ent.span);
+            ty::TypeId rhs_t = plan.src_after;
+
+            if (is_null_(rhs_t) && !is_optional_(member.type)) {
+                diag_(diag::Code::kFieldInitNonOptionalNull, ent.span, member.name, types_.to_string(member.type));
+                err_(ent.span, "null is only allowed for optional field members");
+                continue;
+            }
+
+            if (!plan.ok) {
+                diag_(diag::Code::kTypeAssignMismatch, ent.span, types_.to_string(member.type), type_for_user_diag_(rhs_t, ent.expr));
+                err_(ent.span, "field initializer member type mismatch");
+            }
+        }
+
+        for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
+            const auto& member = ast_.field_members()[i];
+            if (seen_members.find(member.name) != seen_members.end()) continue;
+            diag_(diag::Code::kFieldInitMissingMember, e.span, types_.to_string(field_ty), member.name);
+            err_(e.span, "missing member in field initializer: " + std::string(member.name));
+        }
+
+        return field_ty;
+    }
+
+    ty::TypeId TypeChecker::check_expr_index_(const ast::Expr& e) {
+        // e.a = base, e.b = index expr
+        ty::TypeId base_t = check_expr_(e.a);
+        ty::TypeId arr_t = base_t;
+
+        const auto& bt = types_.get(base_t);
+        if (bt.kind == ty::Kind::kBorrow) {
+            const auto& inner = types_.get(bt.elem);
+            if (inner.kind == ty::Kind::kArray) {
+                arr_t = bt.elem;
+            }
+        }
+
+        const auto& t = types_.get(arr_t);
+        if (t.kind != ty::Kind::kArray) {
+            diag_(diag::Code::kTypeIndexNonArray, e.span, types_.to_string(base_t));
+            err_(e.span, "indexing is only supported on array types (T[] / T[N]) in v0");
+            return types_.error();
+        }
+
+        // slice range: x[a..b], x[a..:b]
+        if (is_range_expr_(e.b)) {
+            const auto& r = ast_.expr(e.b);
+            auto check_bound = [&](ast::ExprId bid) {
+                if (bid == ast::k_invalid_expr) return;
+                ty::TypeId bt = check_expr_(bid);
+                if (is_error_(bt)) return;
+
+                const auto& btt = types_.get(bt);
+                if (btt.kind == ty::Kind::kBuiltin && btt.builtin == ty::Builtin::kInferInteger) {
+                    (void)resolve_infer_int_in_context_(bid, types_.builtin(ty::Builtin::kUSize));
+                    bt = check_expr_(bid);
+                }
+
+                if (!is_index_int_type_(bt)) {
+                    diag_(diag::Code::kTypeIndexMustBeUSize, ast_.expr(bid).span, types_.to_string(bt));
+                    err_(e.span, "slice bounds must be integer type in v0");
+                }
+            };
+
+            check_bound(r.a);
+            check_bound(r.b);
+
+            // slicing result is unsized element view (T[])
+            return types_.make_array(t.elem);
+        }
+
+        ty::TypeId it = check_expr_(e.b);
+        if (!is_error_(it)) {
+            const auto& itt = types_.get(it);
+            if (itt.kind == ty::Kind::kBuiltin && itt.builtin == ty::Builtin::kInferInteger) {
+                (void)resolve_infer_int_in_context_(e.b, types_.builtin(ty::Builtin::kUSize));
+                it = check_expr_(e.b);
+            }
+        }
+
+        // index는 정수 타입만 허용(v0)
+        if (!is_error_(it) && !is_index_int_type_(it)) {
+            diag_(diag::Code::kTypeIndexMustBeUSize, ast_.expr(e.b).span, types_.to_string(it));
+            err_(e.span, "index expression must be integer type in v0");
+        }
+
+        return t.elem;
+    }
+
+    // --------------------
+    // if-expr / block-expr / loop-expr
+    // --------------------
+    ty::TypeId TypeChecker::check_expr_if_(const ast::Expr& e) {
+        return check_expr_if_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_if_(const ast::Expr& e, Slot slot) {
+        ty::TypeId ct = check_expr_(e.a, Slot::kValue);
+        if (ct != types_.builtin(ty::Builtin::kBool) && !is_error_(ct)) {
+            diag_(diag::Code::kTypeCondMustBeBool, ast_.expr(e.a).span, types_.to_string(ct));
+            err_(e.span, "if-expr condition must be bool");
+        }
+
+        // branches are always value-checked as expressions
+        ty::TypeId t_then = check_expr_(e.b, Slot::kValue);
+        ty::TypeId t_else = check_expr_(e.c, Slot::kValue);
+
+        (void)slot; // currently result type doesn't depend on slot
+        return unify_(t_then, t_else);
+    }
+
+    ty::TypeId TypeChecker::check_expr_block_(const ast::Expr& e) {
+        return check_expr_block_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_block_(const ast::Expr& e, Slot slot) {
+        const ast::StmtId block_sid = e.block_stmt;
+        if (block_sid == ast::k_invalid_stmt) {
+            err_(e.span, "block-expr has no block stmt id");
+            return types_.error();
+        }
+
+        const ast::Stmt& bs = ast_.stmt(block_sid);
+        if (bs.kind != ast::StmtKind::kBlock) {
+            err_(e.span, "block-expr target is not a block stmt");
+            return types_.error();
+        }
+
+        // block expr introduces a scope (like block stmt)
+        sym_.push_scope();
+
+        // all child statements are checked in statement context
+        for (uint32_t i = 0; i < bs.stmt_count; ++i) {
+            const ast::StmtId cid = ast_.stmt_children()[bs.stmt_begin + i];
+            check_stmt_(cid);
+        }
+
+        // tail
+        ty::TypeId out = types_.builtin(ty::Builtin::kNull);
+        if (e.block_tail != ast::k_invalid_expr) {
+            out = check_expr_(e.block_tail, Slot::kValue);
+        } else {
+            // tail absent => null
+            out = types_.builtin(ty::Builtin::kNull);
+
+            // Slot::Value에서는 tail 요구 (v0 안전 정책)
+            if (slot == Slot::kValue) {
+                diag_(diag::Code::kBlockExprValueExpected, e.span);
+                err_(e.span, "value expected: block-expr in value context must have a tail expression");
+            }
+        }
+
+        sym_.pop_scope();
+        return out;
+    }
+
+    ty::TypeId TypeChecker::check_expr_loop_(const ast::Expr& e) {
+        return check_expr_loop_(e, Slot::kValue);
+    }
+
+    ty::TypeId TypeChecker::check_expr_loop_(const ast::Expr& e, Slot /*slot*/) {
+        // loop result type comes ONLY from breaks, plus optional null if:
+        // - break; exists, or
+        // - iter-loop can naturally end
+
+        LoopCtx lc{};
+        lc.may_natural_end = e.loop_has_header; // iter loop => natural end => null
+        lc.joined_value = ty::kInvalidType;
+
+        // loop scope: variable binding + body scope
+        sym_.push_scope();
+
+        // header: loop (v in xs) { ... }
+        if (e.loop_has_header) {
+            // v0: loop var type unknown => error (until iter protocol exists)
+            if (!e.loop_var.empty()) {
+                sym_.insert(sema::SymbolKind::kVar, e.loop_var, types_.error(), e.span);
+            }
+            if (e.loop_iter != ast::k_invalid_expr) {
+                (void)check_expr_(e.loop_iter, Slot::kValue);
+            }
+        }
+
+        // push loop ctx
+        loop_stack_.push_back(lc);
+
+        // body is a block stmt
+        if (e.loop_body != ast::k_invalid_stmt) {
+            ++stmt_loop_depth_;
+            check_stmt_(e.loop_body);
+            if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+        } else {
+            err_(e.span, "loop has no body");
+        }
+
+        // pop loop ctx
+        LoopCtx done = loop_stack_.back();
+        loop_stack_.pop_back();
+
+        sym_.pop_scope();
+
+        // Decide loop type:
+        // 1) no breaks:
+        //   - iter loop: natural end => null
+        //   - infinite loop: never
+        if (!done.has_any_break) {
+            if (done.may_natural_end) {
+                return types_.builtin(ty::Builtin::kNull);
+            }
+            return types_.builtin(ty::Builtin::kNever);
+        }
+
+        // 2) breaks exist:
+        // 2-a) no value breaks => only break; (and/or natural end) => null
+        if (!done.has_value_break) {
+            return types_.builtin(ty::Builtin::kNull);
+        }
+
+        // 2-b) value breaks exist => base type = joined_value
+        ty::TypeId base = done.joined_value;
+        if (base == ty::kInvalidType) base = types_.error();
+
+        // If null is mixed in (break; or natural end), result becomes optional
+        const bool has_null = done.has_null_break || done.may_natural_end;
+
+        if (!has_null) {
+            return base;
+        }
+
+        // base already optional? keep it. if base is null, keep null.
+        if (is_null_(base)) return base;
+        if (is_optional_(base)) return base;
+
+        return types_.make_optional(base);
+    }
+
+    // --------------------
+    // cast
+    // --------------------
+
+} // namespace parus::tyck

@@ -676,7 +676,7 @@ namespace {
                     set y = 1i32;
                 } else {
                     2i32
-                };
+                }
                 return x;
             }
         )";
@@ -1097,30 +1097,38 @@ namespace {
         ok &= require_(mod.funcs.size() >= 3, "expected at least 3 lowered functions");
         if (!ok) return false;
 
-        auto check_entry_stmt_kinds = [&](size_t fi, std::vector<parus::sir::StmtKind> expected) {
-            if (fi >= mod.funcs.size()) return false;
-            const auto& def = mod.funcs[fi];
-            if (def.entry == parus::sir::k_invalid_block || (size_t)def.entry >= mod.blocks.size()) return false;
-            const auto& b = mod.blocks[def.entry];
-            if (b.stmt_count != expected.size()) return false;
-            for (uint32_t i = 0; i < b.stmt_count; ++i) {
-                const uint32_t sid = b.stmt_begin + i;
-                if ((size_t)sid >= mod.stmts.size()) return false;
-                if (mod.stmts[sid].kind != expected[i]) return false;
+        auto find_func_by_name = [&](std::string_view name) -> const parus::sir::Func* {
+            for (const auto& f : mod.funcs) {
+                if (f.name == name) return &f;
             }
-            return true;
+            return nullptr;
         };
 
+        auto check_entry_stmt_kinds =
+            [&](std::string_view fn_name, std::vector<parus::sir::StmtKind> expected) {
+                const auto* def = find_func_by_name(fn_name);
+                if (def == nullptr) return false;
+                if (def->entry == parus::sir::k_invalid_block || (size_t)def->entry >= mod.blocks.size()) return false;
+                const auto& b = mod.blocks[def->entry];
+                if (b.stmt_count != expected.size()) return false;
+                for (uint32_t i = 0; i < b.stmt_count; ++i) {
+                    const uint32_t sid = b.stmt_begin + i;
+                    if ((size_t)sid >= mod.stmts.size()) return false;
+                    if (mod.stmts[sid].kind != expected[i]) return false;
+                }
+                return true;
+            };
+
         ok &= require_(
-            check_entry_stmt_kinds(0, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kWhileStmt, parus::sir::StmtKind::kReturn}),
+            check_entry_stmt_kinds("f1", {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kWhileStmt, parus::sir::StmtKind::kReturn}),
             "f1 entry block stmt order must be [VarDecl, WhileStmt, Return]"
         );
         ok &= require_(
-            check_entry_stmt_kinds(1, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kReturn}),
+            check_entry_stmt_kinds("f2", {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kReturn}),
             "f2 entry block stmt order must be [VarDecl, Return]"
         );
         ok &= require_(
-            check_entry_stmt_kinds(2, {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kIfStmt}),
+            check_entry_stmt_kinds("f3", {parus::sir::StmtKind::kVarDecl, parus::sir::StmtKind::kIfStmt}),
             "f3 entry block stmt order must be [VarDecl, IfStmt]"
         );
         return ok;
@@ -1246,7 +1254,7 @@ namespace {
             export struct layout(c) Vec2 {
                 x: f32;
                 y: f32;
-            };
+            }
             def main() -> i32 { return 0i32; }
         )";
 

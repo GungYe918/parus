@@ -39,8 +39,6 @@ add_library(parus_frontend STATIC
     src/oir/oir_verify.cpp
 )
 
-# Backward-compatible alias (temporary migration path)
-add_library(parus_compiler ALIAS parus_frontend)
 
 target_include_directories(parus_frontend
     PUBLIC
