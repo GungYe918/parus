@@ -1,0 +1,15 @@
+class Buf {
+  init() = default;
+  deinit() = default;
+};
+
+def main(flag: bool) -> i32 {
+  set mut a = Buf();
+  if (flag) {
+    set moved = a;
+  } else {
+    a = Buf();
+  }
+  a;
+  return 0i32;
+}

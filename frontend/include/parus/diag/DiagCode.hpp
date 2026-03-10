@@ -107,9 +107,8 @@ namespace parus::diag {
         kActorDeinitNotAllowed,           // actor does not support deinit
         kActorMethodModeRequired,         // actor method must declare sub/pub mode
         kActorLifecycleDirectCallForbidden, // actor init/deinit direct call is forbidden
-        kActorSpawnTargetMustBeActor,     // spawn target must be actor type
-        kActorSpawnMissingInit,           // spawn target requires init overload
-        kActorCtorStyleCallNotAllowed,    // actor must be created with spawn
+        kActorCtorMissingInit,            // actor constructor call requires init overload
+        kActorNotAvailableInNoStd,        // actor runtime is unavailable in -fno-std profile
         kActorPathCallRemoved,            // actor member path call is removed (dot only)
         kActorCommitOnlyInPub,            // commit is only allowed in actor pub methods
         kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
@@ -204,6 +203,10 @@ namespace parus::diag {
         kBorrowEscapeFromReturn,
         kBorrowEscapeToStorage,
         kUseAfterEscapeMove,
+        kUseAfterMove,
+        kMaybeUninitializedMoveOnlyUse,
+        kMoveFromNonRootPlaceNotAllowed,
+        kMoveFromGlobalOrStaticForbidden,
         kEscapeWhileMutBorrowActive,
         kEscapeWhileBorrowActive,
         kEscapeRequiresStaticOrBoundary,

@@ -104,6 +104,41 @@ namespace {
         return ok;
     }
 
+    static bool test_runtime_profile_flags_parse_() {
+        const auto freestanding = parse_({
+            "-ffreestanding",
+            "main.pr",
+        });
+        const auto no_std = parse_({
+            "-fno-std",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(freestanding.ok, "-ffreestanding parse must succeed");
+        ok &= require_(freestanding.freestanding, "-ffreestanding flag must set freestanding profile");
+        ok &= require_(!freestanding.no_std, "-ffreestanding must not imply -fno-std");
+        ok &= require_(no_std.ok, "-fno-std parse must succeed");
+        ok &= require_(no_std.no_std, "-fno-std flag must set no_std profile");
+        ok &= require_(!no_std.freestanding, "-fno-std must not imply -ffreestanding");
+        return ok;
+    }
+
+    static bool test_runtime_profile_conflict_() {
+        const auto opt = parse_({
+            "-ffreestanding",
+            "-fno-std",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(!opt.ok, "conflicting runtime profile flags must fail parsing");
+        ok &= require_(
+            opt.error.find("cannot be combined") != std::string::npos,
+            "conflicting runtime profile flags must explain the conflict");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -117,6 +152,8 @@ int main() {
         {"macro_budget_clamp_hard_max", test_macro_budget_clamp_hard_max_},
         {"macro_budget_clamp_zero_or_negative", test_macro_budget_clamp_zero_or_negative_},
         {"macro_token_experimental_removed", test_macro_token_experimental_removed_},
+        {"runtime_profile_flags_parse", test_runtime_profile_flags_parse_},
+        {"runtime_profile_conflict", test_runtime_profile_conflict_},
     };
 
     int failed = 0;

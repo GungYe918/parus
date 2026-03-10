@@ -400,6 +400,10 @@ namespace parus::sir {
         // acts 소속 함수 여부 (일반 top-level def이면 false)
         bool is_acts_member = false;
         ActsId owner_acts = k_invalid_acts;
+
+        bool is_actor_member = false;
+        bool is_actor_init = false;
+        TypeId actor_owner_type = k_invalid_type;
     };
 
     struct FieldMember {
@@ -508,6 +512,7 @@ namespace parus::sir {
         std::vector<SwitchEnumBind> switch_enum_binds;
         std::vector<TryCatchClause> try_catch_clauses;
         std::vector<EscapeHandleMeta> escape_handles;
+        std::vector<TypeId> actor_types;
 
         // helpers
         ValueId add_value(const Value& v)   {  values.push_back(v); return (ValueId)values.size() - 1;  }

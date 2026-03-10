@@ -51,7 +51,6 @@ namespace parus::syntax {
         kKwCatch,
         kKwCopy,
         kKwClone,
-        kKwSpawn,
 
         // ---- keywords (decl / control) ----
         kKwExport,
@@ -210,7 +209,6 @@ namespace parus::syntax {
             case TokenKind::kKwCatch: return "catch";
             case TokenKind::kKwCopy: return "copy";
             case TokenKind::kKwClone: return "clone";
-            case TokenKind::kKwSpawn: return "spawn";
 
             case TokenKind::kKwSwitch: return "switch";
             case TokenKind::kKwCase: return "case";

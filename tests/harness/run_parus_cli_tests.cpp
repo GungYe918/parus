@@ -861,6 +861,107 @@ bool test_auto_core_prelude_for_single_pr() {
     return true;
 }
 
+bool test_actor_rejected_in_no_std_profile() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-actor-no-std";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "actor Counter {\n"
+        "  draft {\n"
+        "    value: i32;\n"
+        "  }\n"
+        "\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write actor no-std test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only -fno-std";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "actor no-std compile should fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ActorNotAvailableInNoStd")) {
+        std::cerr << "actor no-std failure did not report ActorNotAvailableInNoStd\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_actor_allowed_in_freestanding_profile() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-actor-freestanding";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "actor Counter {\n"
+        "  draft {\n"
+        "    value: i32;\n"
+        "  }\n"
+        "\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "\n"
+        "  def sub get() -> i32 {\n"
+        "    recast;\n"
+        "    return draft.value;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return c.get();\n"
+        "}\n";
+
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write actor freestanding test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only -ffreestanding";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc != 0) {
+        std::cerr << "actor freestanding syntax-only compile should pass\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -879,9 +980,11 @@ int main() {
     const bool ok13 = test_same_bundle_multi_module_runtime_call();
     const bool ok14 = test_builtin_acts_policy_core_gate();
     const bool ok15 = test_auto_core_prelude_for_single_pr();
+    const bool ok16 = test_actor_rejected_in_no_std_profile();
+    const bool ok17 = test_actor_allowed_in_freestanding_profile();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
-        !ok12 || !ok13 || !ok14 || !ok15) {
+        !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17) {
         return 1;
     }
 

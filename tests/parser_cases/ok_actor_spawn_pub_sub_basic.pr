@@ -20,7 +20,7 @@ actor Counter {
 };
 
 def main() -> i32 {
-  set c = spawn Counter(seed: 10i32);
+  set c = Counter(seed: 10i32);
   set x = c.get();
   set y = c.add(delta: 2i32);
   return x + y;

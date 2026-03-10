@@ -296,11 +296,20 @@
             err_(e.span, "if-expr condition must be bool");
         }
 
+        const OwnershipStateMap before = capture_ownership_state_();
+
         // branches are always value-checked as expressions
+        restore_ownership_state_(before);
         ty::TypeId t_then = check_expr_(e.b, Slot::kValue);
+        const OwnershipStateMap then_state = capture_ownership_state_();
+
+        restore_ownership_state_(before);
         ty::TypeId t_else = check_expr_(e.c, Slot::kValue);
+        const OwnershipStateMap else_state = capture_ownership_state_();
 
         (void)slot; // currently result type doesn't depend on slot
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, {then_state, else_state}, /*include_before_as_fallthrough=*/e.c == ast::k_invalid_expr);
         return unify_(t_then, t_else);
     }
 
@@ -363,6 +372,7 @@
         lc.joined_value = ty::kInvalidType;
 
         // loop scope: variable binding + body scope
+        const OwnershipStateMap before = capture_ownership_state_();
         sym_.push_scope();
 
         // header: loop (v in xs) { ... }
@@ -392,7 +402,10 @@
         LoopCtx done = loop_stack_.back();
         loop_stack_.pop_back();
 
+        const OwnershipStateMap after_body = capture_ownership_state_();
         sym_.pop_scope();
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, {after_body}, /*include_before_as_fallthrough=*/e.loop_has_header);
 
         // Decide loop type:
         // 1) no breaks:

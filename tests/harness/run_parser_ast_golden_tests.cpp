@@ -120,7 +120,6 @@ static const char* expr_kind_name_(parus::ast::ExprKind k) {
         case K::kAssign: return "Assign";
         case K::kTernary: return "Ternary";
         case K::kCall: return "Call";
-        case K::kSpawn: return "Spawn";
         case K::kIndex: return "Index";
         case K::kMacroCall: return "MacroCall";
         case K::kLoop: return "Loop";
@@ -492,8 +491,7 @@ static void dump_expr_(
             dump_expr_ref_(ast, e.c, depth + 1, out, state, "else");
             break;
 
-        case parus::ast::ExprKind::kCall:
-        case parus::ast::ExprKind::kSpawn: {
+        case parus::ast::ExprKind::kCall: {
             dump_expr_ref_(ast, e.a, depth + 1, out, state, "callee");
             const auto& args = ast.args();
             const uint64_t b = e.arg_begin;

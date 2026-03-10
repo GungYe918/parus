@@ -133,7 +133,10 @@ namespace parus::sir::detail {
         const tyck::TyckResult& tyck,
         parus::ast::StmtId sid,
         bool is_acts_member,
-        ActsId owner_acts
+        ActsId owner_acts,
+        bool is_actor_member = false,
+        bool is_actor_init = false,
+        TypeId actor_owner_type = k_invalid_type
     );
 
     /// @brief AST field 선언을 SIR field 메타로 lower한다.

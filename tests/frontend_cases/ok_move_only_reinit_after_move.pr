@@ -1,0 +1,13 @@
+class Buf {
+  init() = default;
+  deinit() = default;
+};
+
+def main() -> i32 {
+  set mut a = Buf();
+  set b = a;
+  a = Buf();
+  b;
+  a;
+  return 0i32;
+}

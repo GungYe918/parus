@@ -72,6 +72,8 @@ namespace parusc::cli {
         bool allow_link_fallback = true;
         bool syntax_only = false;
         bool emit_object = false;
+        bool freestanding = false;
+        bool no_std = false;
         DiagFormat diag_format = DiagFormat::kText;
 
         bool has_xparus = false;

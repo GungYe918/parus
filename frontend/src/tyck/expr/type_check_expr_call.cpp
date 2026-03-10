@@ -21,7 +21,6 @@ namespace parus::tyck {
 
     ty::TypeId TypeChecker::check_expr_call_(ast::Expr e) {
         // e.a = callee, args slice in e.arg_begin/e.arg_count
-        const bool is_spawn_expr = (e.kind == ast::ExprKind::kSpawn);
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
@@ -474,7 +473,7 @@ namespace parus::tyck {
         if (!is_dot_method_call) {
             const ast::Expr& callee_expr = ast_.expr(e.a);
 
-            if (!is_spawn_expr && callee_expr.kind == ast::ExprKind::kIdent) {
+            if (callee_expr.kind == ast::ExprKind::kIdent) {
                 const std::string callee_text(callee_expr.text);
                 const size_t split = callee_text.rfind("::");
                 if (split != std::string::npos && split > 0 && split + 2 < callee_text.size()) {
@@ -802,14 +801,7 @@ namespace parus::tyck {
                             const bool is_actor_type =
                                 (actor_decl_by_name_.find(sym.name) != actor_decl_by_name_.end());
 
-                            if (is_spawn_expr) {
-                                if (!is_actor_type) {
-                                    diag_(diag::Code::kActorSpawnTargetMustBeActor, callee_expr.span, sym.name);
-                                    err_(callee_expr.span, "spawn target must be actor type");
-                                    check_all_arg_exprs_only();
-                                    return types_.error();
-                                }
-
+                            if (is_actor_type) {
                                 is_ctor_call = true;
                                 ctor_owner_type = sym.declared_type;
                                 fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
@@ -822,16 +814,11 @@ namespace parus::tyck {
                                     overload_decl_ids = fit->second;
                                 }
                                 if (overload_decl_ids.empty()) {
-                                    diag_(diag::Code::kActorSpawnMissingInit, callee_expr.span, sym.name);
-                                    err_(callee_expr.span, "actor spawn requires init overload");
+                                    diag_(diag::Code::kActorCtorMissingInit, callee_expr.span, sym.name);
+                                    err_(callee_expr.span, "actor constructor call requires init overload");
                                     check_all_arg_exprs_only();
                                     return types_.error();
                                 }
-                            } else if (is_actor_type) {
-                                diag_(diag::Code::kActorCtorStyleCallNotAllowed, callee_expr.span, sym.name);
-                                err_(callee_expr.span, "actor construction requires spawn");
-                                check_all_arg_exprs_only();
-                                return types_.error();
                             } else if (is_class_type) {
                                 ast::StmtId class_sid = ast::k_invalid_stmt;
                                 if (auto it = class_decl_by_name_.find(sym.name); it != class_decl_by_name_.end()) {
@@ -909,7 +896,7 @@ namespace parus::tyck {
                                     return types_.error();
                                 }
                             }
-                        } else if (!is_spawn_expr && sym.kind == sema::SymbolKind::kFn) {
+                        } else if (sym.kind == sema::SymbolKind::kFn) {
                             callee_name = sym.name;
                             auto it = fn_decl_by_name_.find(callee_name);
                             if (it != fn_decl_by_name_.end()) {
@@ -917,13 +904,6 @@ namespace parus::tyck {
                             }
                         }
                     }
-                }
-
-                if (is_spawn_expr && !is_ctor_call) {
-                    diag_(diag::Code::kActorSpawnTargetMustBeActor, callee_expr.span);
-                    err_(callee_expr.span, "spawn target must be actor type");
-                    check_all_arg_exprs_only();
-                    return types_.error();
                 }
 
                 if (!is_ctor_call) {
@@ -943,7 +923,6 @@ namespace parus::tyck {
 
             if (!is_explicit_acts_path_call &&
                 !is_ctor_call &&
-                !is_spawn_expr &&
                 callee_expr.kind == ast::ExprKind::kIdent &&
                 std::string_view(callee_expr.text).find("::") != std::string_view::npos &&
                 !overload_decl_ids.empty()) {
@@ -1985,7 +1964,56 @@ namespace parus::tyck {
             }
         }
 
+        const auto consume_arg_if_moved = [&](const ast::Arg* arg, const ParamInfo& p) {
+            if (arg == nullptr || arg->expr == ast::k_invalid_expr) return;
+            mark_expr_move_consumed_(arg->expr, p.type, arg->span);
+        };
+
+        if (form == CallForm::kPositionalOnly) {
+            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
+                consume_arg_if_moved(outside_positional[i], selected.positional[i]);
+            }
+        } else if (form == CallForm::kLabeledOnly) {
+            for (const auto& p : selected.positional) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
+                    consume_arg_if_moved(it->second, p);
+                }
+            }
+            for (const auto& p : selected.named) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
+                    consume_arg_if_moved(it->second, p);
+                }
+            }
+        } else if (form == CallForm::kPositionalThenLabeled) {
+            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
+                consume_arg_if_moved(outside_positional[i], selected.positional[i]);
+            }
+            for (const auto& p : selected.named) {
+                auto it = labeled_by_label.find(p.name);
+                if (it != labeled_by_label.end()) {
+                    consume_arg_if_moved(it->second, p);
+                }
+            }
+        }
+
+        if (selected.inject_receiver &&
+            selected.receiver_decl_index != 0xFFFF'FFFFu &&
+            selected_decl_sid != ast::k_invalid_stmt &&
+            (size_t)selected_decl_sid < ast_.stmts().size()) {
+            const auto& decl = ast_.stmt(selected_decl_sid);
+            const auto& callee_expr = ast_.expr(e.a);
+            if (decl.kind == ast::StmtKind::kFnDecl &&
+                selected.receiver_decl_index < decl.param_count) {
+                const auto& recv = ast_.params()[decl.param_begin + selected.receiver_decl_index];
+                if (recv.is_self && recv.self_kind == ast::SelfReceiverKind::kMove &&
+                    callee_expr.kind == ast::ExprKind::kBinary &&
+                    callee_expr.a != ast::k_invalid_expr) {
+                    mark_expr_move_consumed_(callee_expr.a, recv.type, callee_expr.span);
+                }
+            }
+        }
+
         return selected.ret;
     }
-
-

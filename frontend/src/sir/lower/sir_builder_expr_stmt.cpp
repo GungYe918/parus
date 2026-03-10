@@ -257,8 +257,7 @@ namespace parus::sir::detail {
                 break;
             }
 
-            case parus::ast::ExprKind::kCall:
-            case parus::ast::ExprKind::kSpawn: {
+            case parus::ast::ExprKind::kCall: {
                 v.kind = ValueKind::kCall;
                 if ((size_t)eid < tyck.expr_enum_ctor_owner_type.size()) {
                     const auto owner_ty = tyck.expr_enum_ctor_owner_type[eid];

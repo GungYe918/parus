@@ -559,8 +559,7 @@ namespace parus::cap {
                         walk_expr_(e.c, ExprUse::kValue);
                         return;
 
-                    case ast::ExprKind::kCall:
-                    case ast::ExprKind::kSpawn: {
+                    case ast::ExprKind::kCall: {
                         // call 인자에서 생성된 임시 borrow는 call 식 범위에서 정리한다.
                         enter_scope_();
                         walk_expr_(e.a, ExprUse::kValue);

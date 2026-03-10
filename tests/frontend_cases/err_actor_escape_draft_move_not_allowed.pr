@@ -13,6 +13,6 @@ actor Counter {
 };
 
 def main() -> i32 {
-  set c = spawn Counter();
+  set c = Counter();
   return c.leak();
 }

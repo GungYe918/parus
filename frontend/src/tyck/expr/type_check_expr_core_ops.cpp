@@ -4,33 +4,17 @@
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
 
-        auto is_copy_clone_trivial_fast_path = [&](ty::TypeId t) -> bool {
-            if (t == ty::kInvalidType || is_error_(t)) return false;
-            const auto& tv = types_.get(t);
-            if (tv.kind == ty::Kind::kBorrow) return true;
-            if (tv.kind != ty::Kind::kBuiltin) return false;
-            switch (tv.builtin) {
-                case ty::Builtin::kBool:
-                case ty::Builtin::kChar:
-                case ty::Builtin::kI8:
-                case ty::Builtin::kI16:
-                case ty::Builtin::kI32:
-                case ty::Builtin::kI64:
-                case ty::Builtin::kI128:
-                case ty::Builtin::kU8:
-                case ty::Builtin::kU16:
-                case ty::Builtin::kU32:
-                case ty::Builtin::kU64:
-                case ty::Builtin::kU128:
-                case ty::Builtin::kISize:
-                case ty::Builtin::kUSize:
-                case ty::Builtin::kF32:
-                case ty::Builtin::kF64:
-                case ty::Builtin::kF128:
-                    return true;
-                default:
-                    return false;
+        auto is_actor_handle_type = [&](ty::TypeId t) -> bool {
+            while (t != ty::kInvalidType && !is_error_(t)) {
+                const auto& tt = types_.get(t);
+                if (tt.kind == ty::Kind::kBorrow) {
+                    t = tt.elem;
+                    continue;
+                }
+                return tt.kind == ty::Kind::kNamedUser &&
+                       actor_decl_by_type_.find(t) != actor_decl_by_type_.end();
             }
+            return false;
         };
 
         // NOTE:
@@ -59,7 +43,16 @@
                 return ast_.stmt(op_sid).fn_ret;
             }
 
-            if (is_copy_clone_trivial_fast_path(at)) {
+            if (is_trivial_copy_clone_type_(at)) {
+                return at;
+            }
+
+            if (is_actor_handle_type(at)) {
+                if (e.op == K::kKwCopy) {
+                    diag_(diag::Code::kCopyNotSupportedForType, e.span, types_.to_string(at));
+                    err_(e.span, "actor handles do not support 'copy'; use 'clone'");
+                    return types_.error();
+                }
                 return at;
             }
 
@@ -157,6 +150,9 @@
                 }
             }
             ty::TypeId at = check_expr_(e.a);
+            if (!is_error_(at)) {
+                mark_expr_move_consumed_(e.a, at, e.span);
+            }
             return types_.make_escape(at);
         }
 
@@ -741,6 +737,12 @@
                 return types_.error();
             }
 
+            if (auto sid = root_place_symbol_(e.a)) {
+                const auto& lhs = ast_.expr(e.a);
+                if (lhs.kind == ast::ExprKind::kIdent) {
+                    mark_symbol_initialized_(*sid);
+                }
+            }
             return lhs_target;
         }
 
@@ -753,13 +755,22 @@
             err_(e.span, "assignment lhs must be a place expression (ident/index)");
         }
 
-        ty::TypeId lt = check_expr_(e.a);
+        ty::TypeId lt = (e.op == K::kAssign) ? check_expr_place_no_read_(e.a) : check_expr_(e.a);
         ty::TypeId lhs_target = lt;
         {
             ty::TypeId elem = ty::kInvalidType;
             bool is_mut_borrow = false;
             if (borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow) {
                 lhs_target = elem; // &mut T place에는 T를 대입한다.
+            }
+        }
+
+        if (e.op == K::kAssign) {
+            if (auto sid = root_place_symbol_(e.a)) {
+                const auto& lhs = ast_.expr(e.a);
+                if (lhs.kind != ast::ExprKind::kIdent) {
+                    (void)ensure_symbol_readable_(*sid, lhs.span);
+                }
             }
         }
 
@@ -788,6 +799,15 @@
                 types_.to_string(lhs_target), type_for_user_diag_(rt, e.b)
             );
             err_(e.span, "assign mismatch");
+        }
+        if (assign_plan.ok) {
+            mark_expr_move_consumed_(e.b, lhs_target, e.span);
+            if (auto sid = root_place_symbol_(e.a)) {
+                const auto& lhs = ast_.expr(e.a);
+                if (lhs.kind == ast::ExprKind::kIdent) {
+                    mark_symbol_initialized_(*sid);
+                }
+            }
         }
         return lhs_target;
     }

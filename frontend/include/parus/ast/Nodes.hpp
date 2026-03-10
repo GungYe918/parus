@@ -60,7 +60,6 @@ namespace parus::ast {
 
         // postfix
         kCall,
-        kSpawn,
         kIndex,
         kMacroCall,
 

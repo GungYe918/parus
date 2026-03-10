@@ -159,18 +159,7 @@ cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
 
 cmake --build "${BUILD_DIR}" --target parus_stage1 -j16
 cmake --build "${BUILD_DIR}" --target parus_stage2 -j16
-cmake --build "${BUILD_DIR}" --target \
-  parus_parser_tests \
-  parus_frontend_integration_tests \
-  parus_parser_stress_tests \
-  parus_parser_crash_tests \
-  parus_oir_tests \
-  parus_cli_tests \
-  parus_config_tests \
-  parus_oir_llvm_tests \
-  parus_ffi_tests \
-  parus_parlib_tests \
-  -j16
+cmake --build "${BUILD_DIR}" -j16
 
 echo ""
 echo "vscode-parus npm validation"

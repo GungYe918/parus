@@ -1,0 +1,15 @@
+actor Counter {
+  draft {
+    value: i32;
+  }
+
+  init(seed: i32) {
+    draft.value = seed;
+  }
+};
+
+def main() -> i32 {
+  set a = Counter(seed: 1i32);
+  set b = copy a;
+  return 0i32;
+}

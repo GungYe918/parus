@@ -11,7 +11,6 @@ const PARUS_FALLBACK_KEYWORDS = [
   "use",
   "with",
   "require",
-  "spawn",
   "commit",
   "recast",
   "init",

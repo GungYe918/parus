@@ -567,14 +567,14 @@ namespace {
         "static",
     };
 
-    constexpr std::array<std::string_view, 51> kParusCompletionKeywords = {
+    constexpr std::array<std::string_view, 50> kParusCompletionKeywords = {
         "def", "macro", "struct", "proto", "class", "actor", "acts",
         "let", "set", "mut", "static", "const", "if", "elif", "else",
         "while", "do", "loop", "in", "return", "break", "continue",
         "true", "false", "null", "and", "or", "not", "xor",
         "export", "extern", "layout", "align", "switch", "case", "default",
         "import", "module", "use", "nest", "as", "with", "require",
-        "spawn", "commit", "recast", "manual", "init", "deinit", "draft"
+        "commit", "recast", "manual", "init", "deinit", "draft"
     };
 
     constexpr std::array<std::string_view, 20> kLeiCompletionKeywords = {
@@ -1114,7 +1114,6 @@ namespace {
             case K::kKwBreak:
             case K::kKwContinue:
             case K::kKwManual:
-            case K::kKwSpawn:
             case K::kKwExport:
             case K::kKwExtern:
             case K::kKwLayout:

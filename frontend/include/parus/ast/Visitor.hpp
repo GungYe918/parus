@@ -175,7 +175,6 @@ namespace parus::ast {
                     break;
 
                 case ExprKind::kCall:
-                case ExprKind::kSpawn:
                     visit_expr_child_if_(ast, id, e, ExprChildRole::kCallCallee, e.a, v);
                     visit_call_args_inner(ast, id, e, v);
                     break;

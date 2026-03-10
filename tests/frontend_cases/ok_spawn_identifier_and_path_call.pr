@@ -1,0 +1,13 @@
+nest thread {
+  def spawn() -> i32 {
+    return 4i32;
+  }
+}
+
+def spawn() -> i32 {
+  return 3i32;
+}
+
+def main() -> i32 {
+  return spawn() + thread::spawn();
+}

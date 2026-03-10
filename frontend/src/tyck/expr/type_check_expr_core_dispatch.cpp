@@ -612,6 +612,9 @@ namespace parus::tyck {
                     if (eid < expr_resolved_symbol_cache_.size()) {
                         expr_resolved_symbol_cache_[eid] = *id;
                     }
+                    if (!suppress_ownership_read_) {
+                        (void)ensure_symbol_readable_(*id, e.span);
+                    }
                     t = sym_.symbol(*id).declared_type;
                     if (t == ty::kInvalidType) t = types_.error();
 
@@ -653,10 +656,6 @@ namespace parus::tyck {
                 break;
 
             case ast::ExprKind::kCall:
-                t = check_expr_call_(e);
-                break;
-
-            case ast::ExprKind::kSpawn:
                 t = check_expr_call_(e);
                 break;
 
@@ -954,6 +953,244 @@ namespace parus::tyck {
         auto it = sym_is_mut_.find(sym_id);
         if (it == sym_is_mut_.end()) return false;
         return it->second;
+    }
+
+    bool TypeChecker::is_global_like_symbol_(uint32_t sym_id) const {
+        if (sym_id == sema::SymbolTable::kNoScope || sym_id >= sym_.symbols().size()) return false;
+        return sym_.symbol(sym_id).owner_scope == 0;
+    }
+
+    bool TypeChecker::class_has_user_deinit_(ty::TypeId t) const {
+        auto it = class_decl_by_type_.find(t);
+        if (it == class_decl_by_type_.end()) return false;
+        const ast::StmtId sid = it->second;
+        if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return false;
+        const auto& cls = ast_.stmt(sid);
+        const auto& kids = ast_.stmt_children();
+        const uint64_t begin = cls.stmt_begin;
+        const uint64_t end = begin + cls.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return false;
+        for (uint32_t i = cls.stmt_begin; i < cls.stmt_begin + cls.stmt_count; ++i) {
+            const ast::StmtId msid = kids[i];
+            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+            const auto& m = ast_.stmt(msid);
+            if (m.kind == ast::StmtKind::kFnDecl && m.name == "deinit") return true;
+        }
+        return false;
+    }
+
+    bool TypeChecker::type_needs_drop_(ty::TypeId t) const {
+        std::unordered_set<ty::TypeId> visiting{};
+        auto rec = [&](auto&& self, ty::TypeId cur) -> bool {
+            if (cur == ty::kInvalidType || is_error_(cur)) return false;
+            if (!visiting.insert(cur).second) return false;
+
+            const auto& tt = types_.get(cur);
+            switch (tt.kind) {
+                case ty::Kind::kBuiltin:
+                case ty::Kind::kBorrow:
+                case ty::Kind::kEscape:
+                case ty::Kind::kPtr:
+                case ty::Kind::kFn:
+                case ty::Kind::kError:
+                    return false;
+
+                case ty::Kind::kOptional:
+                    return tt.elem != ty::kInvalidType && self(self, tt.elem);
+
+                case ty::Kind::kArray:
+                    if (!tt.array_has_size) return false;
+                    return tt.elem != ty::kInvalidType && self(self, tt.elem);
+
+                case ty::Kind::kNamedUser: {
+                    if (actor_decl_by_type_.find(cur) != actor_decl_by_type_.end()) return true;
+
+                    if (field_abi_meta_by_type_.find(cur) != field_abi_meta_by_type_.end()) {
+                        const auto& layout = field_abi_meta_by_type_.at(cur);
+                        const ast::StmtId sid = layout.sid;
+                        if (sid != ast::k_invalid_stmt && (size_t)sid < ast_.stmts().size()) {
+                            const auto& s = ast_.stmt(sid);
+                            const uint64_t begin = s.field_member_begin;
+                            const uint64_t end = begin + s.field_member_count;
+                            if (begin <= ast_.field_members().size() && end <= ast_.field_members().size()) {
+                                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                                    if (self(self, ast_.field_members()[i].type)) return true;
+                                }
+                            }
+                        }
+                    }
+
+                    auto eit = enum_abi_meta_by_type_.find(cur);
+                    if (eit != enum_abi_meta_by_type_.end()) {
+                        for (const auto& variant : eit->second.variants) {
+                            for (const auto& field : variant.fields) {
+                                if (self(self, field.type)) return true;
+                            }
+                        }
+                    }
+
+                    if (class_has_user_deinit_(cur)) return true;
+                    return false;
+                }
+            }
+            return false;
+        };
+        return rec(rec, t);
+    }
+
+    bool TypeChecker::is_move_only_type_(ty::TypeId t) const {
+        return type_needs_drop_(t);
+    }
+
+    bool TypeChecker::is_trivial_copy_clone_type_(ty::TypeId t) const {
+        if (t == ty::kInvalidType || is_error_(t)) return false;
+        const auto& tv = types_.get(t);
+        if (tv.kind == ty::Kind::kBorrow) return true;
+        if (tv.kind != ty::Kind::kBuiltin) return false;
+        switch (tv.builtin) {
+            case ty::Builtin::kBool:
+            case ty::Builtin::kChar:
+            case ty::Builtin::kI8:
+            case ty::Builtin::kI16:
+            case ty::Builtin::kI32:
+            case ty::Builtin::kI64:
+            case ty::Builtin::kI128:
+            case ty::Builtin::kU8:
+            case ty::Builtin::kU16:
+            case ty::Builtin::kU32:
+            case ty::Builtin::kU64:
+            case ty::Builtin::kU128:
+            case ty::Builtin::kISize:
+            case ty::Builtin::kUSize:
+            case ty::Builtin::kF32:
+            case ty::Builtin::kF64:
+            case ty::Builtin::kF128:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    TypeChecker::OwnershipState TypeChecker::ownership_state_of_(uint32_t sym_id) const {
+        auto it = ownership_state_.find(sym_id);
+        if (it == ownership_state_.end()) return OwnershipState::kInitialized;
+        return it->second;
+    }
+
+    bool TypeChecker::ensure_symbol_readable_(uint32_t sym_id, Span use_span) {
+        const auto it = ownership_state_.find(sym_id);
+        if (it == ownership_state_.end()) return true;
+
+        switch (it->second) {
+            case OwnershipState::kInitialized:
+                return true;
+
+            case OwnershipState::kMovedUninitialized:
+                diag_(diag::Code::kUseAfterMove, use_span, sym_.symbol(sym_id).name);
+                err_(use_span, "value was moved and must be reinitialized before use");
+                return false;
+
+            case OwnershipState::kMaybeUninitialized:
+                diag_(diag::Code::kMaybeUninitializedMoveOnlyUse, use_span, sym_.symbol(sym_id).name);
+                err_(use_span, "value may be uninitialized after move on some control-flow path");
+                return false;
+        }
+        return true;
+    }
+
+    void TypeChecker::mark_symbol_initialized_(uint32_t sym_id) {
+        if (sym_id == sema::SymbolTable::kNoScope) return;
+        if (!is_move_only_type_(sym_.symbol(sym_id).declared_type)) return;
+        ownership_state_[sym_id] = OwnershipState::kInitialized;
+    }
+
+    void TypeChecker::mark_symbol_moved_(uint32_t sym_id) {
+        if (sym_id == sema::SymbolTable::kNoScope) return;
+        if (!is_move_only_type_(sym_.symbol(sym_id).declared_type)) return;
+        ownership_state_[sym_id] = OwnershipState::kMovedUninitialized;
+    }
+
+    void TypeChecker::mark_expr_move_consumed_(ast::ExprId expr_id, ty::TypeId expected_type, Span diag_span) {
+        if (!is_move_only_type_(expected_type)) return;
+        if (expr_id == ast::k_invalid_expr) return;
+
+        const auto root = root_place_symbol_(expr_id);
+        if (!root.has_value()) return;
+
+        if (is_global_like_symbol_(*root)) {
+            diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, diag_span, sym_.symbol(*root).name);
+            err_(diag_span, "move from global/static storage is not allowed in v1");
+            return;
+        }
+
+        const auto& e = ast_.expr(expr_id);
+        if (e.kind != ast::ExprKind::kIdent) {
+            diag_(diag::Code::kMoveFromNonRootPlaceNotAllowed, diag_span);
+            err_(diag_span, "partial move from non-root place is not supported in v1");
+            return;
+        }
+
+        if (!ensure_symbol_readable_(*root, e.span)) return;
+        ownership_state_[*root] = OwnershipState::kMovedUninitialized;
+    }
+
+    TypeChecker::OwnershipStateMap TypeChecker::capture_ownership_state_() const {
+        return ownership_state_;
+    }
+
+    void TypeChecker::restore_ownership_state_(const OwnershipStateMap& state) {
+        ownership_state_ = state;
+    }
+
+    void TypeChecker::merge_ownership_state_from_branches_(
+        const OwnershipStateMap& before,
+        const std::vector<OwnershipStateMap>& branches,
+        bool include_before_as_fallthrough
+    ) {
+        OwnershipStateMap merged = before;
+        std::unordered_set<uint32_t> keys{};
+        for (const auto& [sym, _] : before) keys.insert(sym);
+        for (const auto& branch : branches) {
+            for (const auto& [sym, _] : branch) keys.insert(sym);
+        }
+
+        auto get_state = [](const OwnershipStateMap& map, uint32_t sym) {
+            auto it = map.find(sym);
+            return (it == map.end()) ? OwnershipState::kInitialized : it->second;
+        };
+        auto merge_pair = [](OwnershipState a, OwnershipState b) {
+            if (a == b) return a;
+            return OwnershipState::kMaybeUninitialized;
+        };
+
+        for (const uint32_t sym : keys) {
+            OwnershipState state = get_state(before, sym);
+            bool seeded = include_before_as_fallthrough;
+            if (!seeded && !branches.empty()) {
+                state = get_state(branches.front(), sym);
+                seeded = true;
+            }
+            if (!seeded) {
+                merged[sym] = state;
+                continue;
+            }
+
+            size_t begin = include_before_as_fallthrough ? 0u : 1u;
+            for (size_t i = begin; i < branches.size(); ++i) {
+                state = merge_pair(state, get_state(branches[i], sym));
+            }
+            merged[sym] = state;
+        }
+
+        ownership_state_ = std::move(merged);
+    }
+
+    ty::TypeId TypeChecker::check_expr_place_no_read_(ast::ExprId eid) {
+        const bool saved = suppress_ownership_read_;
+        suppress_ownership_read_ = true;
+        ty::TypeId out = check_expr_(eid);
+        suppress_ownership_read_ = saved;
+        return out;
     }
 
     /// @brief range 식(`a..b`, `a..:b`)인지 확인한다.

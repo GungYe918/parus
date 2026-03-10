@@ -76,6 +76,12 @@ if [ -x "${BUILD_DIR}/tools/Lei/lei" ]; then
   LEI_BIN="${BUILD_DIR}/tools/Lei/lei"
 fi
 
+echo "[install] ensure prt runtime archives are built"
+if ! cmake --build "${BUILD_DIR}" --target parus_backend_prt_hosted parus_backend_prt_freestanding -j16; then
+  echo "install.sh: failed to build prt runtime targets" >&2
+  exit 1
+fi
+
 if [ ! -x "${PARUSC_BIN}" ]; then
   echo "install.sh: missing built parusc binary: ${PARUSC_BIN}" >&2
   exit 1
@@ -211,6 +217,15 @@ cp -R "${ROOT_DIR}/sysroot/std/src/." "${SYSROOT_DIR}/std/src/"
 mkdir -p "${ROOT_DIR}/sysroot/core/src"
 mkdir -p "${SYSROOT_DIR}/core/src"
 cp -R "${ROOT_DIR}/sysroot/core/src/." "${SYSROOT_DIR}/core/src/"
+
+PRT_HOSTED_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_hosted.a"
+PRT_FREESTANDING_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_freestanding.a"
+if [ ! -f "${PRT_HOSTED_ARCHIVE}" ] || [ ! -f "${PRT_FREESTANDING_ARCHIVE}" ]; then
+  echo "install.sh: missing built prt runtime archives under ${BUILD_DIR}/backend/src/prt" >&2
+  exit 1
+fi
+cp -f "${PRT_HOSTED_ARCHIVE}" "${TARGET_SYSROOT_DIR}/lib/libprt_hosted.a"
+cp -f "${PRT_FREESTANDING_ARCHIVE}" "${TARGET_SYSROOT_DIR}/lib/libprt_freestanding.a"
 
 to_u64_hash() {
   local hex="$1"

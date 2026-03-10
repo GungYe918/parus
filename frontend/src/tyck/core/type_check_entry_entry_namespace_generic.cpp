@@ -302,6 +302,18 @@ namespace parus::tyck {
             generic_acts_template_sid_set_.end()
         );
         std::sort(result_.generic_acts_template_sids.begin(), result_.generic_acts_template_sids.end());
+        result_.actor_type_ids.clear();
+        result_.actor_type_ids.reserve(actor_decl_by_type_.size());
+        for (const auto& kv : actor_decl_by_type_) {
+            if (kv.first != ty::kInvalidType) {
+                result_.actor_type_ids.push_back(kv.first);
+            }
+        }
+        std::sort(result_.actor_type_ids.begin(), result_.actor_type_ids.end());
+        result_.actor_type_ids.erase(
+            std::unique(result_.actor_type_ids.begin(), result_.actor_type_ids.end()),
+            result_.actor_type_ids.end()
+        );
         return result_;
     }
 

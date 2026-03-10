@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -1390,8 +1391,8 @@ namespace {
         return ok;
     }
 
-    /// @brief actor spawn/pub/sub가 OIR에 내려가고 commit/recast 마커 inst가 생성되는지 검사한다.
-    static bool test_actor_spawn_and_markers_lowering_ok() {
+    /// @brief actor ctor/pub/sub가 runtime ABI enter/leave와 commit/recast ctx inst로 내려가는지 검사한다.
+    static bool test_actor_ctor_and_runtime_lowering_ok() {
         const std::string src = R"(
             actor Counter {
                 draft {
@@ -1415,7 +1416,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set c = spawn Counter(seed: 1i32);
+                set c = Counter(seed: 1i32);
                 set x = c.get();
                 set y = c.add(delta: 2i32);
                 return x + y;
@@ -1441,25 +1442,32 @@ namespace {
 
         bool has_commit = false;
         bool has_recast = false;
+        bool has_commit_ctx = false;
+        bool has_recast_ctx = false;
         bool has_ctor_init_call = false;
-        bool has_pub_mode_symbol = false;
-        bool has_sub_mode_symbol = false;
-
-        for (const auto& f : oir.mod.funcs) {
-            if (f.name.find("Mpub") != std::string::npos) has_pub_mode_symbol = true;
-            if (f.name.find("Msub") != std::string::npos) has_sub_mode_symbol = true;
-        }
+        bool has_runtime_new = false;
+        bool has_runtime_enter = false;
+        bool has_runtime_draft_ptr = false;
+        bool has_runtime_leave = false;
 
         for (const auto& inst : oir.mod.insts) {
             if (std::holds_alternative<parus::oir::InstActorCommit>(inst.data)) {
                 has_commit = true;
+                const auto& x = std::get<parus::oir::InstActorCommit>(inst.data);
+                has_commit_ctx = (x.ctx != parus::oir::kInvalidId);
             } else if (std::holds_alternative<parus::oir::InstActorRecast>(inst.data)) {
                 has_recast = true;
+                const auto& x = std::get<parus::oir::InstActorRecast>(inst.data);
+                has_recast_ctx = (x.ctx != parus::oir::kInvalidId);
             } else if (std::holds_alternative<parus::oir::InstCall>(inst.data)) {
                 const auto& c = std::get<parus::oir::InstCall>(inst.data);
                 if (c.direct_callee != parus::oir::kInvalidId &&
                     c.direct_callee < oir.mod.funcs.size()) {
                     const auto& callee = oir.mod.funcs[c.direct_callee];
+                    if (callee.name == "__parus_actor_new") has_runtime_new = true;
+                    if (callee.name == "__parus_actor_enter") has_runtime_enter = true;
+                    if (callee.name == "__parus_actor_draft_ptr") has_runtime_draft_ptr = true;
+                    if (callee.name == "__parus_actor_leave") has_runtime_leave = true;
                     if (callee.source_name.find("init") != std::string::npos) {
                         has_ctor_init_call = true;
                     }
@@ -1469,9 +1477,79 @@ namespace {
 
         ok &= require_(has_commit, "actor pub must lower commit statement to InstActorCommit");
         ok &= require_(has_recast, "actor sub must lower recast statement to InstActorRecast");
-        ok &= require_(has_ctor_init_call, "spawn must lower to direct init call");
-        ok &= require_(has_pub_mode_symbol, "actor pub function must keep mode marker in OIR symbol");
-        ok &= require_(has_sub_mode_symbol, "actor sub function must keep mode marker in OIR symbol");
+        ok &= require_(has_commit_ctx, "actor commit inst must carry runtime context operand");
+        ok &= require_(has_recast_ctx, "actor recast inst must carry runtime context operand");
+        ok &= require_(has_runtime_new, "actor ctor must lower to __parus_actor_new");
+        ok &= require_(has_runtime_enter, "actor calls must lower to __parus_actor_enter");
+        ok &= require_(has_runtime_draft_ptr, "actor calls must lower to __parus_actor_draft_ptr");
+        ok &= require_(has_runtime_leave, "actor calls must lower to __parus_actor_leave");
+        ok &= require_(has_ctor_init_call, "actor ctor must still lower through direct init call");
+        return ok;
+    }
+
+    /// @brief actor handle clone/drop가 runtime clone/release ABI 호출로 내려가는지 검사한다.
+    static bool test_actor_handle_clone_release_lowering_ok() {
+        const std::string src = R"(
+            actor Counter {
+                draft {
+                    value: i32;
+                }
+
+                init(seed: i32) {
+                    draft.value = seed;
+                }
+
+                def sub get() -> i32 {
+                    recast;
+                    return draft.value;
+                }
+            };
+
+            def main() -> i32 {
+                set a = Counter(seed: 1i32);
+                set b = clone a;
+                return b.get();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "actor clone source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "actor clone source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "actor clone source must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for actor clone source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for actor clone source");
+        if (!ok) return false;
+
+        bool has_clone = false;
+        bool has_actor_drop = false;
+        std::unordered_set<parus::ty::TypeId> actor_types(
+            oir.mod.actor_types.begin(), oir.mod.actor_types.end()
+        );
+        for (const auto& inst : oir.mod.insts) {
+            if (std::holds_alternative<parus::oir::InstCall>(inst.data)) {
+                const auto& c = std::get<parus::oir::InstCall>(inst.data);
+                if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+                const auto& callee = oir.mod.funcs[c.direct_callee];
+                if (callee.name == "__parus_actor_clone") has_clone = true;
+            } else if (std::holds_alternative<parus::oir::InstDrop>(inst.data)) {
+                const auto& d = std::get<parus::oir::InstDrop>(inst.data);
+                if (actor_types.find(d.owner_ty) != actor_types.end()) {
+                    has_actor_drop = true;
+                }
+            }
+        }
+
+        ok &= require_(has_clone, "actor handle clone must lower to __parus_actor_clone");
+        ok &= require_(has_actor_drop, "actor handle cleanup must remain as InstDrop until LLVM lowering");
         return ok;
     }
 
@@ -1610,7 +1688,8 @@ int main() {
         {"class_static_members_lowering_ok", test_class_static_members_lowering_ok},
         {"class_raii_scope_exit_deinit_call_ok", test_class_raii_scope_exit_deinit_call_ok},
         {"class_raii_escape_move_skips_deinit_call_ok", test_class_raii_escape_move_skips_deinit_call_ok},
-        {"actor_spawn_and_markers_lowering_ok", test_actor_spawn_and_markers_lowering_ok},
+        {"actor_ctor_and_runtime_lowering_ok", test_actor_ctor_and_runtime_lowering_ok},
+        {"actor_handle_clone_release_lowering_ok", test_actor_handle_clone_release_lowering_ok},
         {"exception_payload_and_rethrow_lowering_ok", test_exception_payload_and_rethrow_lowering_ok},
     };
 

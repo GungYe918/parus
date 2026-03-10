@@ -130,6 +130,7 @@
         // ----------------------------
         // 1) 함수 스코프 진입 + def ctx 설정
         // ----------------------------
+        const OwnershipStateMap saved_ownership = capture_ownership_state_();
         sym_.push_scope();
 
         FnCtx saved = fn_ctx_;
@@ -162,6 +163,7 @@
                 const bool param_is_mut = p.is_mut ||
                     (p.is_self && p.self_kind == ast::SelfReceiverKind::kMut);
                 sym_is_mut_[ins.symbol_id] = param_is_mut;
+                mark_symbol_initialized_(ins.symbol_id);
             }
 
             // POLICY CHANGE:
@@ -299,6 +301,7 @@
             fn_sid_stack_.pop_back();
         }
         sym_.pop_scope();
+        restore_ownership_state_(saved_ownership);
     }
 
     namespace {
@@ -747,7 +750,6 @@
                     }
                 }
                 case ast::ExprKind::kCall:
-                case ast::ExprKind::kSpawn:
                     return fail_call_not_supported(e.span);
                 default:
                     return fail_not_evaluable(e.span, "unsupported expression kind in const expression");

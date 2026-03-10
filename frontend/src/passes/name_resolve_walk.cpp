@@ -241,8 +241,7 @@
                     break;
                 }
 
-                case ast::ExprKind::kCall:
-                case ast::ExprKind::kSpawn: {
+                case ast::ExprKind::kCall: {
                     if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
 
                     const uint32_t arg_end = e.arg_begin + e.arg_count;

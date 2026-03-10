@@ -63,6 +63,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_field_sids; // concrete generic struct instantiations
         std::vector<ast::StmtId> generic_instantiated_enum_sids; // concrete generic enum instantiations
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
+        std::vector<ty::TypeId> actor_type_ids; // known actor nominal types
         std::unordered_map<uint32_t, ConstInitData> const_symbol_values; // SymbolId -> const initializer value
         std::vector<TyError> errors;
     };
@@ -227,6 +228,7 @@ namespace parus::tyck {
 
         std::optional<uint32_t> root_place_symbol_(ast::ExprId place) const;
         bool is_mutable_symbol_(uint32_t sym_id) const;
+        bool is_global_like_symbol_(uint32_t sym_id) const;
 
         bool is_place_expr_(ast::ExprId eid) const;
         bool is_range_expr_(ast::ExprId eid) const;
@@ -237,9 +239,30 @@ namespace parus::tyck {
 
         bool is_null_(ty::TypeId t) const;
         bool is_error_(ty::TypeId t) const;
+        bool class_has_user_deinit_(ty::TypeId t) const;
+        bool type_needs_drop_(ty::TypeId t) const;
+        bool is_move_only_type_(ty::TypeId t) const;
+        bool is_trivial_copy_clone_type_(ty::TypeId t) const;
 
         bool in_loop_() const { return !loop_stack_.empty() || stmt_loop_depth_ != 0; }
         void note_break_(ty::TypeId t, bool is_value_break);
+        enum class OwnershipState : uint8_t {
+            kInitialized = 0,
+            kMovedUninitialized,
+            kMaybeUninitialized,
+        };
+        using OwnershipStateMap = std::unordered_map<uint32_t, OwnershipState>;
+        OwnershipState ownership_state_of_(uint32_t sym_id) const;
+        bool ensure_symbol_readable_(uint32_t sym_id, Span use_span);
+        void mark_symbol_initialized_(uint32_t sym_id);
+        void mark_symbol_moved_(uint32_t sym_id);
+        void mark_expr_move_consumed_(ast::ExprId expr_id, ty::TypeId expected_type, Span diag_span);
+        OwnershipStateMap capture_ownership_state_() const;
+        void restore_ownership_state_(const OwnershipStateMap& state);
+        void merge_ownership_state_from_branches_(const OwnershipStateMap& before,
+                                                 const std::vector<OwnershipStateMap>& branches,
+                                                 bool include_before_as_fallthrough);
+        ty::TypeId check_expr_place_no_read_(ast::ExprId eid);
 
         // "대입/초기화" 호환성:
         // - exact match OK
@@ -346,6 +369,8 @@ namespace parus::tyck {
         // Mut tracking (tyck-level)
         // ----------------------------------------
         std::unordered_map<uint32_t, bool> sym_is_mut_; // SymbolId -> is_mut
+        OwnershipStateMap ownership_state_;
+        bool suppress_ownership_read_ = false;
         // catch(e) untyped binder symbols:
         // - used to allow `throw e` rethrow in v0.
         std::unordered_set<uint32_t> untyped_catch_binder_symbols_;

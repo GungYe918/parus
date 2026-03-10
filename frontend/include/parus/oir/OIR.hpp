@@ -115,8 +115,8 @@ namespace parus::oir {
         // kInvalidId면 기존 callee 값 기반(함수 값/간접 호출) 경로를 사용한다.
         FuncId direct_callee = kInvalidId;
     };
-    struct InstActorCommit { };
-    struct InstActorRecast { };
+    struct InstActorCommit { ValueId ctx = kInvalidId; };
+    struct InstActorRecast { ValueId ctx = kInvalidId; };
     struct InstIndex      { ValueId base; ValueId index; };
     struct InstField      { ValueId base; std::string field; };
     struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
@@ -219,6 +219,10 @@ namespace parus::oir {
         bool is_pure = false;
         bool is_comptime = false;
         bool is_const = false;
+        bool is_actor_member = false;
+        bool is_actor_init = false;
+        TypeId actor_owner_type = kInvalidId;
+        uint32_t actor_ctx_param_index = kInvalidId;
 
         // return type (used by builder/dumper)
         TypeId ret_ty = kInvalidId;
@@ -310,6 +314,7 @@ namespace parus::oir {
         std::vector<FieldLayoutDecl> fields;
         std::vector<GlobalDecl> globals;
         std::vector<EscapeHandleHint> escape_hints;
+        std::vector<TypeId> actor_types;
         OptStats opt_stats{};
 
         // ---- add_* helpers (complete types required) ----

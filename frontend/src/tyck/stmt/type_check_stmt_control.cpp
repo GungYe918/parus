@@ -465,6 +465,14 @@ namespace parus::tyck {
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
             ast_.stmt_mut(sid).type = vt;
+            if (var_sym != sema::SymbolTable::kNoScope && !is_global_decl && is_move_only_type_(vt)) {
+                if (s.init != ast::k_invalid_expr) {
+                    mark_expr_move_consumed_(s.init, vt, s.span);
+                    mark_symbol_initialized_(var_sym);
+                } else {
+                    ownership_state_[var_sym] = OwnershipState::kMovedUninitialized;
+                }
+            }
             if (var_sym != sema::SymbolTable::kNoScope && s.var_has_acts_binding) {
                 (void)bind_symbol_acts_selection_(var_sym, vt, s, s.span);
             }
@@ -555,6 +563,10 @@ namespace parus::tyck {
 
         // (F) AST에 “추론된 타입” 기록
         ast_.stmt_mut(sid).type = inferred;
+        if (ins.ok && !is_global_decl && is_move_only_type_(inferred)) {
+            mark_expr_move_consumed_(s.init, inferred, s.span);
+            mark_symbol_initialized_(ins.symbol_id);
+        }
         if (ins.ok && s.var_has_acts_binding) {
             (void)bind_symbol_acts_selection_(ins.symbol_id, inferred, s, s.span);
         }
@@ -570,8 +582,20 @@ namespace parus::tyck {
                 err_(s.span, "if condition must be bool");
             }
         }
-        if (s.a != ast::k_invalid_stmt) check_stmt_(s.a);
-        if (s.b != ast::k_invalid_stmt) check_stmt_(s.b);
+        const OwnershipStateMap before = capture_ownership_state_();
+        std::vector<OwnershipStateMap> branches{};
+        if (s.a != ast::k_invalid_stmt) {
+            restore_ownership_state_(before);
+            check_stmt_(s.a);
+            branches.push_back(capture_ownership_state_());
+        }
+        if (s.b != ast::k_invalid_stmt) {
+            restore_ownership_state_(before);
+            check_stmt_(s.b);
+            branches.push_back(capture_ownership_state_());
+        }
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/s.b == ast::k_invalid_stmt);
     }
 
     void TypeChecker::check_stmt_while_(const ast::Stmt& s) {
@@ -582,11 +606,17 @@ namespace parus::tyck {
                 err_(s.span, "while condition must be bool");
             }
         }
+        const OwnershipStateMap before = capture_ownership_state_();
+        std::vector<OwnershipStateMap> branches{};
         if (s.a != ast::k_invalid_stmt) {
+            restore_ownership_state_(before);
             ++stmt_loop_depth_;
             check_stmt_(s.a);
             if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+            branches.push_back(capture_ownership_state_());
         }
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/true);
     }
 
     /// @brief `do { ... }` 문장을 타입체크한다.
@@ -599,7 +629,10 @@ namespace parus::tyck {
     /// @brief `do { ... } while (cond);` 문장을 타입체크한다.
     void TypeChecker::check_stmt_do_while_(const ast::Stmt& s) {
         // do-while도 반복문이므로 body 내부의 break/continue 문맥을 허용한다.
+        const OwnershipStateMap before = capture_ownership_state_();
+        std::vector<OwnershipStateMap> branches{};
         if (s.a != ast::k_invalid_stmt) {
+            restore_ownership_state_(before);
             ++stmt_loop_depth_;
             check_stmt_(s.a);
             if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
@@ -612,6 +645,9 @@ namespace parus::tyck {
                 err_(s.span, "do-while condition must be bool");
             }
         }
+        branches.push_back(capture_ownership_state_());
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/false);
     }
 
     /// @brief manual 블록은 타입 규칙 완화 없이 블록 본문만 검사한다.
@@ -652,7 +688,9 @@ namespace parus::tyck {
             diag_(diag::Code::kTypeMismatch, s.span, types_.to_string(rt), type_for_user_diag_(v, s.expr));
 
             err_(s.span, "return mismatch"); // 저장만 수행, 출력은 위 diag_ 하나로 종결
+            return;
         }
+        mark_expr_move_consumed_(s.expr, rt, s.span);
     }
 
     void TypeChecker::check_stmt_require_(const ast::Stmt& s) {
@@ -1036,4 +1074,3 @@ namespace parus::tyck {
             if (c.body != ast::k_invalid_stmt) check_stmt_(c.body);
         }
     }
-

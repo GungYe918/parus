@@ -162,6 +162,13 @@ namespace parusc::cli {
             return true;
         }
 
+        bool validate_runtime_profile_conflicts_(Options& out) {
+            if (!out.freestanding || !out.no_std) return true;
+            out.ok = false;
+            out.error = "-ffreestanding and -fno-std cannot be combined";
+            return false;
+        }
+
         bool parse_macro_budget_opt_(Options& out, std::string_view arg) {
             struct OptMap {
                 std::string_view prefix;
@@ -377,6 +384,8 @@ namespace parusc::cli {
             << "  --target <triple>     Override backend target triple\n"
             << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
             << "  --apple-sdk-root <path>  Explicit Apple SDK root for Darwin linking\n"
+            << "  -ffreestanding        Select freestanding runtime profile\n"
+            << "  -fno-std              Disable std runtime integration (core prelude stays enabled)\n"
             << "  -O0|-O1|-O2|-O3       Optimization level\n"
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
@@ -547,6 +556,16 @@ namespace parusc::cli {
                 continue;
             }
 
+            if (a == "-ffreestanding") {
+                out.freestanding = true;
+                continue;
+            }
+
+            if (a == "-fno-std") {
+                out.no_std = true;
+                continue;
+            }
+
             if (a == "-fsyntax-only") {
                 out.syntax_only = true;
                 continue;
@@ -657,6 +676,9 @@ namespace parusc::cli {
         }
 
         if (!validate_syntax_only_conflicts_(out)) {
+            return out;
+        }
+        if (!validate_runtime_profile_conflicts_(out)) {
             return out;
         }
         if (!validate_bundle_opts_(out)) {

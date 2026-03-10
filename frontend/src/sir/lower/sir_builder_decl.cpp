@@ -34,7 +34,10 @@ namespace parus::sir::detail {
         const tyck::TyckResult& tyck,
         parus::ast::StmtId sid,
         bool is_acts_member,
-        ActsId owner_acts
+        ActsId owner_acts,
+        bool is_actor_member,
+        bool is_actor_init,
+        TypeId actor_owner_type
     ) {
         const auto& s = ast.stmt(sid);
         if (s.kind != ast::StmtKind::kFnDecl) {
@@ -83,6 +86,9 @@ namespace parus::sir::detail {
         f.has_named_group = s.has_named_group;
         f.is_acts_member = is_acts_member;
         f.owner_acts = owner_acts;
+        f.is_actor_member = is_actor_member;
+        f.is_actor_init = is_actor_init;
+        f.actor_owner_type = actor_owner_type;
 
         // attrs slice
         f.attr_begin = (uint32_t)m.attrs.size();
@@ -450,14 +456,19 @@ namespace parus::sir {
 
         const auto lower_fn_once = [&](ast::StmtId fn_sid,
                                        bool is_acts_member,
-                                       ActsId owner_acts) -> FuncId {
+                                       ActsId owner_acts,
+                                       bool is_actor_member = false,
+                                       bool is_actor_init = false,
+                                       TypeId actor_owner_type = k_invalid_type) -> FuncId {
             if (fn_sid == ast::k_invalid_stmt || (size_t)fn_sid >= ast.stmts().size()) {
                 return k_invalid_func;
             }
             if (!lowered_fn_stmt_ids.insert(fn_sid).second) {
                 return k_invalid_func;
             }
-            return lower_func_decl_(m, ast, sym, nres, tyck, fn_sid, is_acts_member, owner_acts);
+            return lower_func_decl_(
+                m, ast, sym, nres, tyck, fn_sid, is_acts_member, owner_acts,
+                is_actor_member, is_actor_init, actor_owner_type);
         };
 
         // program root must be a block
@@ -571,6 +582,9 @@ namespace parus::sir {
 
             if (s.kind == ast::StmtKind::kActorDecl) {
                 (void)lower_actor_field_decl_(m, ast, sym, nres, sid);
+                if (s.type != k_invalid_type) {
+                    m.actor_types.push_back(s.type);
+                }
 
                 const uint32_t begin = s.stmt_begin;
                 const uint32_t end = s.stmt_begin + s.stmt_count;
@@ -583,7 +597,14 @@ namespace parus::sir {
                         if (member.kind != ast::StmtKind::kFnDecl) continue;
                         if (member.a == ast::k_invalid_stmt) continue;
                         if (member.fn_generic_param_count > 0) continue;
-                        (void)lower_fn_once(member_sid, /*is_acts_member=*/false, k_invalid_acts);
+                        (void)lower_fn_once(
+                            member_sid,
+                            /*is_acts_member=*/false,
+                            k_invalid_acts,
+                            member.fn_mode == ast::FnMode::kPub || member.fn_mode == ast::FnMode::kSub,
+                            member.name == "init",
+                            s.type
+                        );
                     }
                 }
                 return;
@@ -730,6 +751,9 @@ namespace parus::sir {
             f.has_any_write = false;
             f.is_acts_member = false;
             f.owner_acts = k_invalid_acts;
+            f.is_actor_member = false;
+            f.is_actor_init = false;
+            f.actor_owner_type = k_invalid_type;
 
             const auto& sig = types.get(ss.declared_type);
             f.param_begin = static_cast<uint32_t>(m.params.size());
@@ -751,6 +775,10 @@ namespace parus::sir {
             }
 
             (void)m.add_func(f);
+        }
+
+        if (!tyck.actor_type_ids.empty()) {
+            m.actor_types = tyck.actor_type_ids;
         }
 
         return m;

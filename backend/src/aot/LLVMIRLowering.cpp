@@ -168,7 +168,8 @@ namespace parus::backend::aot {
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
             uint32_t depth,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
+            const std::unordered_set<parus::ty::TypeId>* actor_types
         ) {
             if (tid == parus::ty::kInvalidType) return "i64";
             if (depth > 8) return "i64";
@@ -209,13 +210,13 @@ namespace parus::backend::aot {
                     return "i64";
 
                 case K::kOptional: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts);
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts, actor_types);
                     if (elem == "void") elem = "i8";
                     return "{ i1, " + elem + " }";
                 }
 
                 case K::kArray: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts);
+                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts, actor_types);
                     if (elem == "void") elem = "i8";
                     if (t.array_has_size) {
                         return "[" + std::to_string(t.array_size) + " x " + elem + "]";
@@ -231,6 +232,9 @@ namespace parus::backend::aot {
                     return "ptr";
 
                 case K::kNamedUser:
+                    if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
+                        return "ptr";
+                    }
                     if (named_layouts != nullptr) {
                         auto it = named_layouts->find(tid);
                         if (it != named_layouts->end()) {
@@ -248,9 +252,10 @@ namespace parus::backend::aot {
         std::string map_type_(
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr,
+            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr
         ) {
-            return map_type_rec_(types, tid, 0, named_layouts);
+            return map_type_rec_(types, tid, 0, named_layouts, actor_types);
         }
 
         /// @brief 타입의 대략적 바이트 크기를 계산한다.
@@ -258,7 +263,8 @@ namespace parus::backend::aot {
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
             uint32_t depth,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
+            const std::unordered_set<parus::ty::TypeId>* actor_types
         ) {
             if (tid == parus::ty::kInvalidType) return 8;
             if (depth > 8) return 8;
@@ -299,9 +305,9 @@ namespace parus::backend::aot {
                     }
                     return 8;
                 case K::kOptional:
-                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts));
+                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts, actor_types));
                 case K::kArray: {
-                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts));
+                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts, actor_types));
                     if (t.array_has_size) return elem * std::max<uint64_t>(1, t.array_size);
                     return 16; // {ptr,len}
                 }
@@ -311,6 +317,9 @@ namespace parus::backend::aot {
                 case K::kFn:
                     return 8;
                 case K::kNamedUser: {
+                    if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
+                        return 8;
+                    }
                     if (named_layouts != nullptr) {
                         auto it = named_layouts->find(tid);
                         if (it != named_layouts->end()) {
@@ -327,9 +336,10 @@ namespace parus::backend::aot {
         uint64_t type_size_bytes_(
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr,
+            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr
         ) {
-            return type_size_bytes_rec_(types, tid, 0, named_layouts);
+            return type_size_bytes_rec_(types, tid, 0, named_layouts, actor_types);
         }
 
         /// @brief OIR 모듈에서 value 사용 문맥(값/슬롯)을 수집한다.
@@ -368,7 +378,7 @@ namespace parus::backend::aot {
                         as_value(x.base);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstActorCommit> ||
                                          std::is_same_v<T, parus::oir::InstActorRecast>) {
-                        // no operand
+                        as_value(x.ctx);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstDrop>) {
                         as_slot(x.slot);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstLoad>) {
@@ -507,11 +517,12 @@ namespace parus::backend::aot {
         std::vector<std::string> build_value_type_table_(
             const parus::oir::Module& m,
             const parus::ty::TypePool& types,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
+            const std::unordered_set<parus::ty::TypeId>& actor_types
         ) {
             std::vector<std::string> out(m.values.size(), "i64");
             for (size_t i = 0; i < m.values.size(); ++i) {
-                out[i] = map_type_(types, m.values[i].ty, &named_layouts);
+                out[i] = map_type_(types, m.values[i].ty, &named_layouts, &actor_types);
                 if (out[i] == "void") {
                     // LLVM SSA value는 void 타입을 가질 수 없다.
                     out[i] = "i8";
@@ -548,7 +559,7 @@ namespace parus::backend::aot {
                 }
                 if (std::holds_alternative<parus::oir::InstCast>(inst.data)) {
                     const auto& c = std::get<parus::oir::InstCast>(inst.data);
-                    out[inst.result] = map_type_(types, c.to, &named_layouts);
+                    out[inst.result] = map_type_(types, c.to, &named_layouts, &actor_types);
                     if (is_aggregate_llvm_ty_(out[inst.result])) out[inst.result] = "ptr";
                 }
             }
@@ -637,6 +648,7 @@ namespace parus::backend::aot {
                 const std::vector<std::string>& value_types,
                 const std::vector<ValueUseInfo>& value_uses,
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
+                const std::unordered_set<parus::ty::TypeId>& actor_types,
                 const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
                 const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants,
                 const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks,
@@ -647,6 +659,7 @@ namespace parus::backend::aot {
                 value_types_(value_types),
                 value_uses_(value_uses),
                 named_layouts_(named_layouts),
+                actor_types_(actor_types),
                 field_offsets_(field_offsets),
                 text_constants_(text_constants),
                 drop_thunks_(drop_thunks),
@@ -658,7 +671,7 @@ namespace parus::backend::aot {
             /// @brief 함수 본문을 생성한다.
             std::string emit(bool& need_call_stub) {
                 std::ostringstream os;
-                const std::string ret_ty = map_type_(types_, fn_.ret_ty, &named_layouts_);
+                const std::string ret_ty = map_type_(types_, fn_.ret_ty, &named_layouts_, &actor_types_);
                 const std::string sym = sanitize_symbol_(fn_.name);
 
                 // extern 함수는 본문 없이 선언으로만 내린다.
@@ -718,6 +731,7 @@ namespace parus::backend::aot {
             const std::vector<std::string>& value_types_;
             const std::vector<ValueUseInfo>& value_uses_;
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts_;
+            const std::unordered_set<parus::ty::TypeId>& actor_types_;
             const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
             const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
             const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks_ = nullptr;
@@ -757,7 +771,7 @@ namespace parus::backend::aot {
                 }
 
                 const auto tid = value_type_id_(v);
-                std::string ty = map_type_(types_, tid, &named_layouts_);
+                std::string ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
                 if (ty == "void") ty = "i8";
                 return ty;
             }
@@ -858,7 +872,7 @@ namespace parus::backend::aot {
                 const auto& target = m_.funcs[target_fid];
                 DirectCalleeInfo info{};
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
-                info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_);
+                info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_);
                 info.abi = target.abi;
 
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
@@ -1132,7 +1146,7 @@ namespace parus::backend::aot {
                 const auto idx64 = coerce_value_(os, x.index, "i64");
 
                 const auto elem_ty_id = value_type_id_(inst.result);
-                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id, &named_layouts_));
+                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id, &named_layouts_, &actor_types_));
 
                 std::string byte_off = idx64;
                 if (elem_size != 1) {
@@ -1259,7 +1273,7 @@ namespace parus::backend::aot {
 
                 const auto it = text_constants_.find(iid);
                 const auto tid = value_type_id_(inst.result);
-                const std::string text_ty = map_type_(types_, tid, &named_layouts_);
+                const std::string text_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
 
                 const std::string slot = next_tmp_();
                 os << "  " << slot << " = alloca " << text_ty << "\n";
@@ -1371,7 +1385,7 @@ namespace parus::backend::aot {
 
                             const auto tid = value_type_id_(inst.result);
                             if (tid != parus::ty::kInvalidType) {
-                                const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
                                 if (is_aggregate_llvm_ty_(full_ty)) {
                                     const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
                                     address_ref_by_value_[inst.result] = slot;
@@ -1430,8 +1444,8 @@ namespace parus::backend::aot {
                                     const auto& lhs_tt = types_.get(lhs_tid);
                                     if (lhs_tt.kind == parus::ty::Kind::kOptional &&
                                         lhs_tt.elem != parus::ty::kInvalidType) {
-                                        const std::string opt_ty = map_type_(types_, lhs_tid, &named_layouts_);
-                                        std::string elem_ty = map_type_(types_, lhs_tt.elem, &named_layouts_);
+                                        const std::string opt_ty = map_type_(types_, lhs_tid, &named_layouts_, &actor_types_);
+                                        std::string elem_ty = map_type_(types_, lhs_tt.elem, &named_layouts_, &actor_types_);
                                         if (elem_ty == "void") elem_ty = "i8";
 
                                         const std::string lhs_ptr = slot_ptr_ref_(os, x.lhs);
@@ -1513,8 +1527,8 @@ namespace parus::backend::aot {
                                 const auto& to_tt = types_.get(x.to);
                                 if (to_tt.kind == parus::ty::Kind::kOptional &&
                                     to_tt.elem != parus::ty::kInvalidType) {
-                                    const std::string opt_ty = map_type_(types_, x.to, &named_layouts_);
-                                    std::string elem_ty = map_type_(types_, to_tt.elem, &named_layouts_);
+                                    const std::string opt_ty = map_type_(types_, x.to, &named_layouts_, &actor_types_);
+                                    std::string elem_ty = map_type_(types_, to_tt.elem, &named_layouts_, &actor_types_);
                                     if (elem_ty == "void") elem_ty = "i8";
 
                                     const std::string slot = next_tmp_();
@@ -1527,7 +1541,7 @@ namespace parus::backend::aot {
                                         const auto& src_tt = types_.get(src_tid);
                                         if (src_tt.kind == parus::ty::Kind::kOptional) {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.src);
-                                            const std::string src_agg_ty = map_type_(types_, src_tid, &named_layouts_);
+                                            const std::string src_agg_ty = map_type_(types_, src_tid, &named_layouts_, &actor_types_);
                                             const std::string src_loaded =
                                                 safe_load_aggregate_from_ptr_(os, src_agg_ty, src_ptr);
                                             std::string copied = src_loaded;
@@ -1626,7 +1640,7 @@ namespace parus::backend::aot {
                                 else if (rty == "ptr") {
                                     const auto tid = value_type_id_(inst.result);
                                     if (tid != parus::ty::kInvalidType) {
-                                        const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                        const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
                                         if (is_aggregate_llvm_ty_(full_ty)) {
                                             const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
                                             address_ref_by_value_[inst.result] = slot;
@@ -1719,14 +1733,16 @@ namespace parus::backend::aot {
                         } else if constexpr (std::is_same_v<T, InstField>) {
                             emit_field_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstActorCommit>) {
-                            os << "  call void @__parus_actor_commit_marker()\n";
+                            const std::string ctx = coerce_value_(os, x.ctx, "ptr");
+                            os << "  call void @__parus_actor_commit(ptr " << ctx << ")\n";
                         } else if constexpr (std::is_same_v<T, InstActorRecast>) {
-                            os << "  call void @__parus_actor_recast_marker()\n";
+                            const std::string ctx = coerce_value_(os, x.ctx, "ptr");
+                            os << "  call void @__parus_actor_recast(ptr " << ctx << ")\n";
                         } else if constexpr (std::is_same_v<T, InstDrop>) {
                             emit_drop_(os, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
-                            auto slot_ty = map_type_(types_, x.slot_ty, &named_layouts_);
+                            auto slot_ty = map_type_(types_, x.slot_ty, &named_layouts_, &actor_types_);
                             if (slot_ty == "void") slot_ty = "i8";
                             os << "  " << vref_(inst.result) << " = alloca " << slot_ty << "\n";
                             address_ref_by_value_[inst.result] = vref_(inst.result);
@@ -1737,7 +1753,7 @@ namespace parus::backend::aot {
 
                             const auto tid = value_type_id_(inst.result);
                             if (tid != parus::ty::kInvalidType) {
-                                const std::string full_ty = map_type_(types_, tid, &named_layouts_);
+                                const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
                                 if (is_aggregate_llvm_ty_(full_ty) && rty == "ptr") {
                                     const std::string val = safe_load_aggregate_from_ptr_(os, full_ty, ptr);
                                     const std::string tmp_slot = next_tmp_();
@@ -1755,11 +1771,11 @@ namespace parus::backend::aot {
 
                             const auto slot_tid = value_type_id_(x.slot);
                             if (slot_tid != parus::ty::kInvalidType) {
-                                const std::string slot_full_ty = map_type_(types_, slot_tid, &named_layouts_);
+                                const std::string slot_full_ty = map_type_(types_, slot_tid, &named_layouts_, &actor_types_);
                                 if (is_aggregate_llvm_ty_(slot_full_ty)) {
                                     const auto value_tid = value_type_id_(x.value);
                                     if (value_tid != parus::ty::kInvalidType) {
-                                        const std::string value_full_ty = map_type_(types_, value_tid, &named_layouts_);
+                                        const std::string value_full_ty = map_type_(types_, value_tid, &named_layouts_, &actor_types_);
                                         if (is_aggregate_llvm_ty_(value_full_ty) && value_ty_(x.value) == "ptr") {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.value);
                                             const std::string loaded =
@@ -1862,6 +1878,7 @@ namespace parus::backend::aot {
         os << "source_filename = \"parus.oir\"\n\n";
 
         std::unordered_map<parus::ty::TypeId, NamedLayoutInfo> named_layouts;
+        std::unordered_set<parus::ty::TypeId> actor_types(oir.actor_types.begin(), oir.actor_types.end());
         std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>> field_offsets;
         for (const auto& f : oir.fields) {
             if (f.self_type == parus::ty::kInvalidType) continue;
@@ -1929,7 +1946,7 @@ namespace parus::backend::aot {
             bool global_emit_error = false;
             for (const auto& g : oir.globals) {
                 const std::string sym = sanitize_symbol_(g.name);
-                const std::string gty = map_type_(types, g.type, &named_layouts);
+                const std::string gty = map_type_(types, g.type, &named_layouts, &actor_types);
 
                 bool is_internal = false;
                 if (!g.is_extern && g.abi == parus::oir::FunctionAbi::Parus && !g.is_export) {
@@ -1966,9 +1983,13 @@ namespace parus::backend::aot {
                 }
 
                 if (g.type != parus::ty::kInvalidType && types.get(g.type).kind == parus::ty::Kind::kNamedUser) {
-                    auto it = named_layouts.find(g.type);
-                    if (it != named_layouts.end() && it->second.align > 0) {
-                        os << ", align " << it->second.align;
+                    if (actor_types.find(g.type) != actor_types.end()) {
+                        os << ", align 8";
+                    } else {
+                        auto it = named_layouts.find(g.type);
+                        if (it != named_layouts.end() && it->second.align > 0) {
+                            os << ", align " << it->second.align;
+                        }
                     }
                 }
                 os << "\n";
@@ -1981,7 +2002,7 @@ namespace parus::backend::aot {
             }
         }
 
-        const auto value_types = build_value_type_table_(oir, types, named_layouts);
+        const auto value_types = build_value_type_table_(oir, types, named_layouts, actor_types);
         const auto value_uses = build_value_use_table_(oir);
         const auto phi_contract_errors = verify_phi_incoming_contract_(oir, value_types);
         if (!phi_contract_errors.empty()) {
@@ -2075,6 +2096,10 @@ namespace parus::backend::aot {
                     }
 
                     case parus::ty::Kind::kNamedUser: {
+                        if (actor_types.find(t) != actor_types.end()) {
+                            drop_types.insert(t);
+                            return true;
+                        }
                         bool needed = (user_deinit_symbol_by_type.find(t) != user_deinit_symbol_by_type.end());
                         if (const auto* fd = find_field_decl_by_type_(t); fd != nullptr) {
                             for (const auto& m : fd->members) {
@@ -2121,6 +2146,13 @@ namespace parus::backend::aot {
                 os << "entry:\n";
 
                 if (tt.kind == parus::ty::Kind::kNamedUser) {
+                    if (actor_types.find(t) != actor_types.end()) {
+                        os << "  %handle = load ptr, ptr %self\n";
+                        os << "  call void @__parus_actor_release(ptr %handle)\n";
+                        os << "  ret void\n";
+                        os << "}\n\n";
+                        continue;
+                    }
                     if (auto uit = user_deinit_symbol_by_type.find(t); uit != user_deinit_symbol_by_type.end()) {
                         os << "  call void @" << uit->second << "(ptr %self)\n";
                     }
@@ -2147,7 +2179,7 @@ namespace parus::backend::aot {
                 if (tt.kind == parus::ty::Kind::kOptional && tt.elem != parus::ty::kInvalidType) {
                     auto dit = drop_thunk_symbols.find(tt.elem);
                     if (dit != drop_thunk_symbols.end()) {
-                        const std::string opt_ty = map_type_(types, t, &named_layouts);
+                        const std::string opt_ty = map_type_(types, t, &named_layouts, &actor_types);
                         os << "  %tag.ptr = getelementptr " << opt_ty << ", ptr %self, i32 0, i32 0\n";
                         os << "  %tag = load i1, ptr %tag.ptr\n";
                         os << "  br i1 %tag, label %drop_payload, label %done\n";
@@ -2165,7 +2197,7 @@ namespace parus::backend::aot {
                 if (tt.kind == parus::ty::Kind::kArray && tt.array_has_size && tt.elem != parus::ty::kInvalidType) {
                     auto dit = drop_thunk_symbols.find(tt.elem);
                     if (dit != drop_thunk_symbols.end()) {
-                        const std::string arr_ty = map_type_(types, t, &named_layouts);
+                        const std::string arr_ty = map_type_(types, t, &named_layouts, &actor_types);
                         os << "  %idx.slot = alloca i64\n";
                         os << "  store i64 " << tt.array_size << ", ptr %idx.slot\n";
                         os << "  br label %loop.cond\n";
@@ -2248,7 +2280,7 @@ namespace parus::backend::aot {
                     static_cast<size_t>(def.entry) < oir.blocks.size()) {
                     is_zero_arity = oir.blocks[def.entry].params.empty();
                 }
-                const std::string ret_ty = map_type_(types, def.ret_ty, &named_layouts);
+                const std::string ret_ty = map_type_(types, def.ret_ty, &named_layouts, &actor_types);
                 if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
                     if (!main_entry_candidate.has_value()) {
                         main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
@@ -2265,6 +2297,7 @@ namespace parus::backend::aot {
                 value_types,
                 value_uses,
                 named_layouts,
+                actor_types,
                 field_offsets,
                 text_constants,
                 &drop_thunk_symbols,
@@ -2330,15 +2363,6 @@ namespace parus::backend::aot {
                 "emitted main entry wrapper for executable link."
             });
         }
-
-        os << "define internal void @__parus_actor_commit_marker() {\n";
-        os << "entry:\n";
-        os << "  ret void\n";
-        os << "}\n\n";
-        os << "define internal void @__parus_actor_recast_marker() {\n";
-        os << "entry:\n";
-        os << "  ret void\n";
-        os << "}\n\n";
 
         if (need_call_stub) {
             // 링크 단계에서 unresolved 심볼이 생기지 않도록 내부 no-op 스텁을 함께 생성한다.

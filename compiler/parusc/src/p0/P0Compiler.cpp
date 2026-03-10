@@ -1138,6 +1138,61 @@ namespace parusc::p0 {
             return getenv_string_("PARUS_SYSROOT");
         }
 
+        std::string read_manifest_default_target_triple_(const std::string& sysroot) {
+            namespace fs = std::filesystem;
+            if (sysroot.empty()) return {};
+            const fs::path manifest = fs::path(sysroot) / "manifest.json";
+            std::string text{};
+            std::string io_err{};
+            if (!parus::open_file(manifest.string(), text, io_err)) return {};
+
+            const std::string key = "\"default_target_triple\"";
+            const size_t key_pos = text.find(key);
+            if (key_pos == std::string::npos) return {};
+            const size_t colon = text.find(':', key_pos + key.size());
+            if (colon == std::string::npos) return {};
+            const size_t quote0 = text.find('"', colon + 1);
+            if (quote0 == std::string::npos) return {};
+            const size_t quote1 = text.find('"', quote0 + 1);
+            if (quote1 == std::string::npos || quote1 <= quote0 + 1) return {};
+            return text.substr(quote0 + 1, quote1 - quote0 - 1);
+        }
+
+        std::string effective_target_triple_(const cli::Options& opt) {
+            if (!opt.target_triple.empty()) return opt.target_triple;
+            return read_manifest_default_target_triple_(select_sysroot_(opt));
+        }
+
+        std::string resolve_prt_archive_path_(const cli::Options& opt) {
+            namespace fs = std::filesystem;
+            const std::string sysroot = select_sysroot_(opt);
+            const std::string target = effective_target_triple_(opt);
+            if (sysroot.empty() || target.empty()) return {};
+            const fs::path libdir = fs::path(sysroot) / "targets" / target / "lib";
+            const fs::path archive = libdir / (opt.freestanding ? "libprt_freestanding.a" : "libprt_hosted.a");
+            std::error_code ec{};
+            if (fs::exists(archive, ec) && !ec && fs::is_regular_file(archive, ec)) {
+                return archive.string();
+            }
+            return {};
+        }
+
+        bool program_uses_actor_runtime_(const parus::tyck::TyckResult& tyck_res) {
+            std::unordered_set<parus::ty::TypeId> actor_types(
+                tyck_res.actor_type_ids.begin(),
+                tyck_res.actor_type_ids.end()
+            );
+            if (!actor_types.empty()) return true;
+            auto has_actor_type = [&](const auto& vec) {
+                for (const auto ty : vec) {
+                    if (actor_types.find(ty) != actor_types.end()) return true;
+                }
+                return false;
+            };
+            return has_actor_type(tyck_res.expr_ctor_owner_type) ||
+                   has_actor_type(tyck_res.expr_types);
+        }
+
         bool env_flag_truthy_(std::string_view s) {
             if (s.empty()) return false;
             std::string v(s);
@@ -1148,8 +1203,8 @@ namespace parusc::p0 {
         }
 
         std::string resolve_core_prelude_path_(const cli::Options& opt) {
-            if (env_flag_truthy_(getenv_string_("PARUS_NO_CORE")) ||
-                env_flag_truthy_(getenv_string_("PARUS_FREESTANDING"))) {
+            (void)opt;
+            if (env_flag_truthy_(getenv_string_("PARUS_NO_CORE"))) {
                 return {};
             }
 
@@ -1504,6 +1559,18 @@ namespace parusc::p0 {
             return (diag_rc != 0 || !tyck_res.errors.empty()) ? 1 : 0;
         }
 
+        const bool actor_runtime_used = program_uses_actor_runtime_(tyck_res);
+        if (opt.no_std && actor_runtime_used) {
+            parus::diag::Diagnostic d(
+                parus::diag::Severity::kError,
+                parus::diag::Code::kActorNotAvailableInNoStd,
+                root_span
+            );
+            bag.add(std::move(d));
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
         const auto ast_cap_res = parus::cap::run_capability_check(
             ast, root, pres.name_resolve, tyck_res, types, bag
         );
@@ -1595,7 +1662,7 @@ namespace parusc::p0 {
         parus::backend::CompileOptions backend_opt{};
         backend_opt.opt_level = opt.opt_level;
         backend_opt.aot_engine = parus::backend::AOTEngine::kLlvm;
-        backend_opt.target_triple = opt.target_triple;
+        backend_opt.target_triple = effective_target_triple_(opt);
 
         const bool emit_object = opt.emit_object || (opt.has_xparus && opt.internal.emit_object);
         const bool emit_llvm_ir = (opt.has_xparus && opt.internal.emit_llvm_ir);
@@ -1627,7 +1694,7 @@ namespace parusc::p0 {
             parus::backend::link::LinkOptions link_opt{};
             link_opt.object_paths = {object_for_link};
             link_opt.output_path = final_exe_output;
-            link_opt.target_triple = opt.target_triple;
+            link_opt.target_triple = effective_target_triple_(opt);
             link_opt.sysroot_path = select_sysroot_(opt);
             link_opt.apple_sdk_root = select_apple_sdk_root_(opt);
             if (const auto h = expected_hash_from_env_("PARUS_EXPECTED_TOOLCHAIN_HASH"); h.has_value()) {
@@ -1638,6 +1705,17 @@ namespace parusc::p0 {
             }
             link_opt.mode = to_backend_linker_mode_(opt.linker_mode);
             link_opt.allow_fallback = opt.allow_link_fallback;
+
+            if (actor_runtime_used) {
+                const std::string prt_archive = resolve_prt_archive_path_(opt);
+                if (prt_archive.empty()) {
+                    std::cerr << "error: actor runtime archive is missing for target '"
+                              << link_opt.target_triple << "' under sysroot '"
+                              << link_opt.sysroot_path << "'.\n";
+                    return 1;
+                }
+                link_opt.object_paths.push_back(prt_archive);
+            }
 
             const auto link_res = parus::backend::link::link_executable(link_opt);
             const bool has_link_error = print_link_messages_(link_res);

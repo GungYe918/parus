@@ -215,6 +215,38 @@ if (TARGET parus_backend_parlib)
     endif()
 endif()
 
+if (TARGET parus_backend_prt_hosted)
+    add_executable(parus_prt_hosted_tests
+    harness/run_prt_tests.cpp
+    )
+    target_link_libraries(parus_prt_hosted_tests PRIVATE parus_backend_prt_hosted)
+    target_compile_features(parus_prt_hosted_tests PRIVATE cxx_std_23)
+    target_compile_definitions(parus_prt_hosted_tests PRIVATE
+    PARUS_PRT_VARIANT="hosted"
+    )
+    if (MSVC)
+    target_compile_options(parus_prt_hosted_tests PRIVATE /W4 /permissive-)
+    else()
+    target_compile_options(parus_prt_hosted_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    endif()
+endif()
+
+if (TARGET parus_backend_prt_freestanding)
+    add_executable(parus_prt_freestanding_tests
+    harness/run_prt_tests.cpp
+    )
+    target_link_libraries(parus_prt_freestanding_tests PRIVATE parus_backend_prt_freestanding)
+    target_compile_features(parus_prt_freestanding_tests PRIVATE cxx_std_23)
+    target_compile_definitions(parus_prt_freestanding_tests PRIVATE
+    PARUS_PRT_VARIANT="freestanding"
+    )
+    if (MSVC)
+    target_compile_options(parus_prt_freestanding_tests PRIVATE /W4 /permissive-)
+    else()
+    target_compile_options(parus_prt_freestanding_tests PRIVATE -Wall -Wextra -Wpedantic -Wno-trigraphs)
+    endif()
+endif()
+
 if (PARUS_BUILD_FUZZERS)
     if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         add_executable(parus_fuzz_parser_smoke
@@ -275,4 +307,10 @@ if (TARGET parus_ffi_tests)
 endif()
 if (TARGET parus_parlib_tests)
     add_test(NAME parus_parlib_tests COMMAND parus_parlib_tests)
+endif()
+if (TARGET parus_prt_hosted_tests)
+    add_test(NAME parus_prt_hosted_tests COMMAND parus_prt_hosted_tests)
+endif()
+if (TARGET parus_prt_freestanding_tests)
+    add_test(NAME parus_prt_freestanding_tests COMMAND parus_prt_freestanding_tests)
 endif()

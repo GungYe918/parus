@@ -113,9 +113,8 @@ namespace parus::diag {
             case Code::kActorDeinitNotAllowed: return "ActorDeinitNotAllowed";
             case Code::kActorMethodModeRequired: return "ActorMethodModeRequired";
             case Code::kActorLifecycleDirectCallForbidden: return "ActorLifecycleDirectCallForbidden";
-            case Code::kActorSpawnTargetMustBeActor: return "ActorSpawnTargetMustBeActor";
-            case Code::kActorSpawnMissingInit: return "ActorSpawnMissingInit";
-            case Code::kActorCtorStyleCallNotAllowed: return "ActorCtorStyleCallNotAllowed";
+            case Code::kActorCtorMissingInit: return "ActorCtorMissingInit";
+            case Code::kActorNotAvailableInNoStd: return "ActorNotAvailableInNoStd";
             case Code::kActorPathCallRemoved: return "ActorPathCallRemoved";
             case Code::kActorCommitOnlyInPub: return "ActorCommitOnlyInPub";
             case Code::kActorRecastOnlyInSub: return "ActorRecastOnlyInSub";
@@ -191,6 +190,10 @@ namespace parus::diag {
             case Code::kBorrowEscapeFromReturn: return "BorrowEscapeFromReturn";
             case Code::kBorrowEscapeToStorage: return "BorrowEscapeToStorage";
             case Code::kUseAfterEscapeMove: return "UseAfterEscapeMove";
+            case Code::kUseAfterMove: return "UseAfterMove";
+            case Code::kMaybeUninitializedMoveOnlyUse: return "MaybeUninitializedMoveOnlyUse";
+            case Code::kMoveFromNonRootPlaceNotAllowed: return "MoveFromNonRootPlaceNotAllowed";
+            case Code::kMoveFromGlobalOrStaticForbidden: return "MoveFromGlobalOrStaticForbidden";
             case Code::kEscapeWhileMutBorrowActive: return "EscapeWhileMutBorrowActive";
             case Code::kEscapeWhileBorrowActive: return "EscapeWhileBorrowActive";
             case Code::kEscapeRequiresStaticOrBoundary: return "EscapeRequiresStaticOrBoundary";
@@ -405,9 +408,8 @@ namespace parus::diag {
             case Code::kActorDeinitNotAllowed: return "actor does not support deinit() in v0";
             case Code::kActorMethodModeRequired: return "actor method must be declared as 'def sub' or 'def pub'";
             case Code::kActorLifecycleDirectCallForbidden: return "actor init/deinit cannot be called directly; lifecycle is runtime-managed";
-            case Code::kActorSpawnTargetMustBeActor: return "spawn target must be an actor type";
-            case Code::kActorSpawnMissingInit: return "spawn target requires at least one init overload";
-            case Code::kActorCtorStyleCallNotAllowed: return "actor construction must use 'spawn A(...)' (ctor-style 'A(...)' is class-only)";
+            case Code::kActorCtorMissingInit: return "actor constructor call '{0}(...)' requires at least one init(...) overload";
+            case Code::kActorNotAvailableInNoStd: return "actor runtime is not available under '-fno-std'";
             case Code::kActorPathCallRemoved: return "actor member path call is removed; use dot call on actor value";
             case Code::kActorCommitOnlyInPub: return "commit is only allowed inside actor pub methods";
             case Code::kActorRecastOnlyInSub: return "recast is only allowed inside actor sub methods";
@@ -485,6 +487,10 @@ namespace parus::diag {
             case Code::kBorrowEscapeFromReturn: return "borrow value cannot be returned (non-escaping rule)";
             case Code::kBorrowEscapeToStorage: return "borrow value cannot be stored in an escaping/long-lived storage";
             case Code::kUseAfterEscapeMove: return "value was moved by '~' and cannot be used afterwards";
+            case Code::kUseAfterMove: return "value '{0}' was moved and cannot be used until it is reinitialized";
+            case Code::kMaybeUninitializedMoveOnlyUse: return "value '{0}' may be uninitialized after move on some control-flow path";
+            case Code::kMoveFromNonRootPlaceNotAllowed: return "partial move from non-root place is not supported in v1";
+            case Code::kMoveFromGlobalOrStaticForbidden: return "move from global/static storage '{0}' is not allowed in v1";
             case Code::kEscapeWhileMutBorrowActive: return "cannot apply '~' while an active '&mut' borrow exists for this place";
             case Code::kEscapeWhileBorrowActive: return "cannot apply '~' while an active borrow exists for this place";
             case Code::kEscapeRequiresStaticOrBoundary: return "escaping '~' requires static storage or direct return/call-argument boundary";
@@ -703,9 +709,8 @@ namespace parus::diag {
             case Code::kActorDeinitNotAllowed: return "actor는 v0에서 deinit()을 지원하지 않습니다";
             case Code::kActorMethodModeRequired: return "actor 메서드는 'def sub' 또는 'def pub'로 선언해야 합니다";
             case Code::kActorLifecycleDirectCallForbidden: return "actor init/deinit은 직접 호출할 수 없습니다";
-            case Code::kActorSpawnTargetMustBeActor: return "spawn 대상은 actor 타입이어야 합니다";
-            case Code::kActorSpawnMissingInit: return "spawn 대상 actor에는 최소 1개 이상의 init 오버로드가 필요합니다";
-            case Code::kActorCtorStyleCallNotAllowed: return "actor 생성은 'spawn A(...)'만 허용됩니다";
+            case Code::kActorCtorMissingInit: return "actor 생성 호출 '{0}(...)'에는 최소 1개의 init(...) 오버로드가 필요합니다";
+            case Code::kActorNotAvailableInNoStd: return "actor 런타임은 '-fno-std' 프로파일에서 사용할 수 없습니다";
             case Code::kActorPathCallRemoved: return "actor 멤버 경로 호출은 제거되었습니다. actor 값에 대해 dot 호출을 사용하세요";
             case Code::kActorCommitOnlyInPub: return "commit은 actor pub 메서드 내부에서만 사용할 수 있습니다";
             case Code::kActorRecastOnlyInSub: return "recast는 actor sub 메서드 내부에서만 사용할 수 있습니다";
@@ -786,6 +791,10 @@ namespace parus::diag {
             case Code::kBorrowEscapeFromReturn: return "borrow 값은 반환할 수 없습니다(비탈출 규칙)";
             case Code::kBorrowEscapeToStorage: return "borrow 값은 탈출/장수명 저장소에 저장할 수 없습니다";
             case Code::kUseAfterEscapeMove: return "'~'로 move된 값은 이후 사용할 수 없습니다";
+            case Code::kUseAfterMove: return "값 '{0}'은(는) move되어 재초기화 전까지 사용할 수 없습니다";
+            case Code::kMaybeUninitializedMoveOnlyUse: return "값 '{0}'은(는) 일부 제어 흐름에서 move되어 미초기화 상태일 수 있습니다";
+            case Code::kMoveFromNonRootPlaceNotAllowed: return "v1에서는 non-root place에서의 partial move를 지원하지 않습니다";
+            case Code::kMoveFromGlobalOrStaticForbidden: return "global/static 저장소 '{0}'에서는 move를 수행할 수 없습니다";
             case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '~'를 적용할 수 없습니다";
             case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '~'를 적용할 수 없습니다";
             case Code::kEscapeRequiresStaticOrBoundary: return "'~' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";

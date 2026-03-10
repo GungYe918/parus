@@ -20,11 +20,30 @@ namespace parus::oir {
 
     namespace {
 
+        enum class ActorEnterMode : uint32_t {
+            kInit = 0,
+            kSub = 1,
+            kPub = 2,
+        };
+
+        struct ActorRuntimeFuncs {
+            FuncId new_fn = kInvalidId;
+            FuncId clone_fn = kInvalidId;
+            FuncId release_fn = kInvalidId;
+            FuncId enter_fn = kInvalidId;
+            FuncId draft_ptr_fn = kInvalidId;
+            FuncId commit_fn = kInvalidId;
+            FuncId recast_fn = kInvalidId;
+            FuncId leave_fn = kInvalidId;
+        };
+
         // OIR building state per function
         struct FuncBuild {
             Module* out = nullptr;
             const parus::sir::Module* sir = nullptr;
             const parus::ty::TypePool* types = nullptr;
+            const std::unordered_set<TypeId>* actor_types = nullptr;
+            const ActorRuntimeFuncs* actor_runtime = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
             const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
@@ -86,6 +105,7 @@ namespace parus::oir {
             std::vector<CleanupItem> cleanup_items;
             std::vector<TryContext> try_stack;
             std::unordered_set<parus::sir::SymbolId> untyped_catch_binder_symbols;
+            ValueId current_actor_ctx = kInvalidId;
 
             const FieldLayoutDecl* find_field_layout_(TypeId t) const {
                 if (out == nullptr) return nullptr;
@@ -117,6 +137,9 @@ namespace parus::oir {
                         return (tt.elem != kInvalidId) && type_needs_drop_rec_(tt.elem, visiting);
 
                     case parus::ty::Kind::kNamedUser: {
+                        if (actor_types != nullptr && actor_types->find(t) != actor_types->end()) {
+                            return true;
+                        }
                         FuncId deinit_fid = kInvalidId;
                         const bool has_user_deinit = lookup_user_deinit_for_class_(t, deinit_fid);
                         const FieldLayoutDecl* layout = find_field_layout_(t);
@@ -202,6 +225,24 @@ namespace parus::oir {
                 if (it == env.end()) return;
                 if (it->second.cleanup_id == kInvalidId || it->second.cleanup_id >= cleanup_items.size()) return;
                 cleanup_items[it->second.cleanup_id].moved = moved;
+            }
+
+            std::optional<parus::sir::SymbolId> movable_source_symbol_(parus::sir::ValueId vid) const {
+                if (sir == nullptr || vid == parus::sir::k_invalid_value) return std::nullopt;
+                if ((size_t)vid >= sir->values.size()) return std::nullopt;
+                const auto& sv = sir->values[vid];
+                if (sv.kind == parus::sir::ValueKind::kLocal &&
+                    sv.sym != parus::sir::k_invalid_symbol) {
+                    return sv.sym;
+                }
+                return std::nullopt;
+            }
+
+            void consume_owned_sir_value_(parus::sir::ValueId vid, TypeId expected_ty) {
+                if (!type_needs_drop_(expected_ty)) return;
+                auto sym = movable_source_symbol_(vid);
+                if (!sym.has_value()) return;
+                mark_symbol_moved(*sym, /*moved=*/true);
             }
 
             void drop_symbol_before_overwrite(parus::sir::SymbolId sym) {
@@ -392,6 +433,17 @@ namespace parus::oir {
                 return r;
             }
 
+            ValueId emit_direct_call(TypeId ty, FuncId direct_callee, std::vector<ValueId> args) {
+                if (direct_callee == kInvalidId ||
+                    out == nullptr ||
+                    (size_t)direct_callee >= out->funcs.size()) {
+                    report_lowering_error("direct call lowering failed: invalid callee id");
+                    return emit_const_null(ty);
+                }
+                const ValueId callee = emit_func_ref(direct_callee, out->funcs[direct_callee].name);
+                return emit_call(ty, callee, std::move(args), direct_callee);
+            }
+
             ValueId emit_index(TypeId ty, ValueId base, ValueId index) {
                 ValueId r = make_value(ty, Effect::MayReadMem);
                 Inst inst{};
@@ -444,7 +496,7 @@ namespace parus::oir {
 
             void emit_actor_commit_marker() {
                 Inst inst{};
-                inst.data = InstActorCommit{};
+                inst.data = InstActorCommit{current_actor_ctx};
                 inst.eff = Effect::MayWriteMem;
                 inst.result = kInvalidId;
                 emit_inst(inst);
@@ -452,7 +504,7 @@ namespace parus::oir {
 
             void emit_actor_recast_marker() {
                 Inst inst{};
-                inst.data = InstActorRecast{};
+                inst.data = InstActorRecast{current_actor_ctx};
                 inst.eff = Effect::MayReadMem;
                 inst.result = kInvalidId;
                 emit_inst(inst);
@@ -512,6 +564,38 @@ namespace parus::oir {
                 return (types != nullptr)
                     ? (TypeId)types->builtin(parus::ty::Builtin::kI64)
                     : kInvalidId;
+            }
+
+            TypeId u32_type_() const {
+                return (types != nullptr)
+                    ? (TypeId)types->builtin(parus::ty::Builtin::kU32)
+                    : kInvalidId;
+            }
+
+            TypeId u64_type_() const {
+                return (types != nullptr)
+                    ? (TypeId)types->builtin(parus::ty::Builtin::kU64)
+                    : kInvalidId;
+            }
+
+            TypeId ptr_type_() const {
+                return (types != nullptr)
+                    ? (TypeId)types->builtin(parus::ty::Builtin::kNull)
+                    : kInvalidId;
+            }
+
+            bool is_actor_handle_type_(TypeId t) const {
+                while (types != nullptr && t != kInvalidId) {
+                    const auto& tt = types->get(t);
+                    if (tt.kind == parus::ty::Kind::kBorrow) {
+                        t = tt.elem;
+                        continue;
+                    }
+                    return tt.kind == parus::ty::Kind::kNamedUser &&
+                           actor_types != nullptr &&
+                           actor_types->find(t) != actor_types->end();
+                }
+                return false;
             }
 
             void emit_set_exc_active_(bool active) {
@@ -1270,6 +1354,7 @@ namespace parus::oir {
                         rhs = coerce_value_for_target(member_ty, rhs);
                         ValueId place = emit_field(member_ty, obj_slot, std::string(a.label));
                         emit_store(place, rhs);
+                        consume_owned_sir_value_(a.value, member_ty);
                     }
                 }
 
@@ -1341,6 +1426,12 @@ namespace parus::oir {
                 }
                 if (tk == parus::syntax::TokenKind::kKwCopy ||
                     tk == parus::syntax::TokenKind::kKwClone) {
+                    if (tk == parus::syntax::TokenKind::kKwClone &&
+                        is_actor_handle_type_(v.type) &&
+                        actor_runtime != nullptr &&
+                        actor_runtime->clone_fn != kInvalidId) {
+                        return emit_direct_call(v.type, actor_runtime->clone_fn, {src});
+                    }
                     // copy/clone trivial builtin fast-path: value passthrough.
                     // Non-trivial paths are already lowered as direct calls from SIR.
                     return src;
@@ -1395,7 +1486,9 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kCall: {
                 std::vector<ValueId> args;
+                std::vector<parus::sir::ValueId> arg_value_ids;
                 args.reserve(v.arg_count);
+                arg_value_ids.reserve(v.arg_count);
 
                 uint32_t i = 0;
                 while (i < v.arg_count) {
@@ -1405,6 +1498,7 @@ namespace parus::oir {
 
                     if (!a.is_hole && a.value != parus::sir::k_invalid_value) {
                         args.push_back(lower_value(a.value));
+                        arg_value_ids.push_back(a.value);
                     }
                     ++i;
                 }
@@ -1412,13 +1506,7 @@ namespace parus::oir {
                 const bool ctor_call =
                     v.call_is_ctor &&
                     v.ctor_owner_type != parus::sir::k_invalid_type;
-                ValueId ctor_tmp_slot = kInvalidId;
-                if (ctor_call) {
-                    const TypeId owner_ty = (TypeId)v.ctor_owner_type;
-                    ctor_tmp_slot = emit_alloca(owner_ty);
-                    // lifecycle hidden self is appended as the last runtime argument.
-                    args.push_back(ctor_tmp_slot);
-                }
+                const TypeId ctor_owner_ty = ctor_call ? (TypeId)v.ctor_owner_type : kInvalidId;
 
                 ValueId callee = kInvalidId;
                 FuncId direct_callee = kInvalidId;
@@ -1509,24 +1597,131 @@ namespace parus::oir {
                     direct_callee_throwing = (throwing_funcs->find(direct_callee) != throwing_funcs->end());
                 }
 
-                if (direct_callee != kInvalidId && (size_t)direct_callee < out->funcs.size()) {
-                    const auto& f = out->funcs[direct_callee];
-                    if (f.entry != kInvalidId && (size_t)f.entry < out->blocks.size()) {
-                        const auto& entry = out->blocks[f.entry];
-                        const size_t n = std::min(entry.params.size(), args.size());
-                        for (size_t ai = 0; ai < n; ++ai) {
-                            const ValueId p = entry.params[ai];
-                            if ((size_t)p >= out->values.size()) continue;
-                            args[ai] = coerce_value_for_target(out->values[p].ty, args[ai]);
-                        }
-                    }
+                const Function* direct_target =
+                    (direct_callee != kInvalidId &&
+                     out != nullptr &&
+                     (size_t)direct_callee < out->funcs.size())
+                        ? &out->funcs[direct_callee]
+                        : nullptr;
+                ValueId ctor_tmp_slot = kInvalidId;
+                if (ctor_call && !(direct_target != nullptr && direct_target->is_actor_init)) {
+                    ctor_tmp_slot = emit_alloca(ctor_owner_ty);
+                    args.push_back(ctor_tmp_slot);
                 }
+
+                auto actor_mode_for_ = [](const Function& f) -> ActorEnterMode {
+                    if (f.is_actor_init) return ActorEnterMode::kInit;
+                    if (f.name.find("$Msub$") != std::string::npos) return ActorEnterMode::kSub;
+                    return ActorEnterMode::kPub;
+                };
+
+                auto coerce_args_for_direct_ = [&](std::vector<ValueId>& inout_args) {
+                    if (direct_target == nullptr) return;
+                    if (direct_target->entry == kInvalidId ||
+                        (size_t)direct_target->entry >= out->blocks.size()) {
+                        return;
+                    }
+                    const auto& entry = out->blocks[direct_target->entry];
+                    const size_t n = std::min(entry.params.size(), inout_args.size());
+                    for (size_t ai = 0; ai < n; ++ai) {
+                        const ValueId p = entry.params[ai];
+                        if ((size_t)p >= out->values.size()) continue;
+                        inout_args[ai] = coerce_value_for_target(out->values[p].ty, inout_args[ai]);
+                    }
+                };
+
+                auto consume_direct_owned_args_ = [&]() {
+                    if (direct_target == nullptr) return;
+                    if (direct_target->entry == kInvalidId ||
+                        (size_t)direct_target->entry >= out->blocks.size()) {
+                        return;
+                    }
+                    const auto& entry = out->blocks[direct_target->entry];
+                    const size_t n = std::min(entry.params.size(), arg_value_ids.size());
+                    for (size_t ai = 0; ai < n; ++ai) {
+                        if (direct_target->is_actor_member &&
+                            direct_target->actor_ctx_param_index != kInvalidId &&
+                            direct_target->actor_ctx_param_index > 0 &&
+                            ai == (size_t)(direct_target->actor_ctx_param_index - 1)) {
+                            continue;
+                        }
+                        const ValueId p = entry.params[ai];
+                        if ((size_t)p >= out->values.size()) continue;
+                        consume_owned_sir_value_(arg_value_ids[ai], out->values[p].ty);
+                    }
+                };
 
                 if (direct_callee_throwing) {
                     // call-site starts with a clean exception flag.
                     emit_set_exc_active_(false);
                     emit_set_exc_type_(kInvalidId);
                 }
+
+                if (direct_target != nullptr &&
+                    actor_runtime != nullptr &&
+                    ctor_call &&
+                    direct_target->is_actor_init) {
+                    const FieldLayoutDecl* layout = find_field_layout_(ctor_owner_ty);
+                    if (layout == nullptr) {
+                        report_lowering_error("actor constructor lowering failed: missing actor draft layout");
+                        return emit_const_null(v.type);
+                    }
+
+                    const ValueId type_tag = emit_const_int(u64_type_(), std::to_string((uint32_t)ctor_owner_ty));
+                    const ValueId draft_size = emit_const_int(u64_type_(), std::to_string(std::max<uint32_t>(1u, layout->size)));
+                    const ValueId draft_align = emit_const_int(u64_type_(), std::to_string(std::max<uint32_t>(1u, layout->align)));
+                    const ValueId handle = emit_direct_call(ctor_owner_ty, actor_runtime->new_fn, {type_tag, draft_size, draft_align});
+                    const ValueId mode = emit_const_int(u32_type_(), std::to_string((uint32_t)ActorEnterMode::kInit));
+                    const ValueId ctx = emit_direct_call(ptr_type_(), actor_runtime->enter_fn, {handle, mode});
+                    const ValueId draft = emit_direct_call(ctor_owner_ty, actor_runtime->draft_ptr_fn, {ctx});
+
+                    args.push_back(draft);
+                    args.push_back(ctx);
+                    coerce_args_for_direct_(args);
+                    consume_direct_owned_args_();
+
+                    const TypeId unit_ty =
+                        (types != nullptr)
+                            ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
+                            : kInvalidId;
+                    (void)emit_direct_call(unit_ty, direct_callee, std::move(args));
+                    (void)emit_direct_call(unit_ty, actor_runtime->leave_fn, {ctx});
+                    return handle;
+                }
+
+                if (direct_target != nullptr &&
+                    actor_runtime != nullptr &&
+                    direct_target->is_actor_member) {
+                    if (direct_target->actor_ctx_param_index == kInvalidId ||
+                        direct_target->actor_ctx_param_index == 0 ||
+                        direct_target->actor_ctx_param_index - 1 >= args.size()) {
+                        report_lowering_error("actor method lowering failed: missing hidden receiver");
+                        return emit_const_null(v.type);
+                    }
+
+                    const size_t receiver_index = direct_target->actor_ctx_param_index - 1;
+                    const ValueId handle = args[receiver_index];
+                    const ValueId mode = emit_const_int(
+                        u32_type_(),
+                        std::to_string((uint32_t)actor_mode_for_(*direct_target))
+                    );
+                    const ValueId ctx = emit_direct_call(ptr_type_(), actor_runtime->enter_fn, {handle, mode});
+                    const ValueId draft = emit_direct_call(direct_target->actor_owner_type, actor_runtime->draft_ptr_fn, {ctx});
+                    args[receiver_index] = draft;
+                    args.push_back(ctx);
+                    coerce_args_for_direct_(args);
+                    consume_direct_owned_args_();
+                    const ValueId result = emit_direct_call(v.type, direct_callee, std::move(args));
+                    const TypeId unit_ty =
+                        (types != nullptr)
+                            ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
+                            : kInvalidId;
+                    (void)emit_direct_call(unit_ty, actor_runtime->leave_fn, {ctx});
+                    return result;
+                }
+
+                coerce_args_for_direct_(args);
+                consume_direct_owned_args_();
 
                 if (ctor_call) {
                     const TypeId unit_ty =
@@ -1588,6 +1783,7 @@ namespace parus::oir {
                         rhs = coerce_value_for_target(member_ty, rhs);
                         ValueId place = emit_field(member_ty, enum_slot, storage_name);
                         emit_store(place, rhs);
+                        consume_owned_sir_value_(a.value, member_ty);
                     }
                 }
 
@@ -1635,6 +1831,7 @@ namespace parus::oir {
                     rhs = coerce_value_for_target(slot_elem_ty, rhs);
                     emit_store(slot, rhs);
                     mark_symbol_moved(place.sym, /*moved=*/false);
+                    consume_owned_sir_value_(v.b, slot_elem_ty);
                     return rhs; // assign expr result
                 }
 
@@ -1658,6 +1855,14 @@ namespace parus::oir {
                     rhs = coerce_value_for_target(out->values[place_v].ty, rhs);
                 }
                 emit_store(place_v, rhs);
+                if (place.kind == parus::sir::ValueKind::kField ||
+                    place.kind == parus::sir::ValueKind::kIndex) {
+                    const TypeId target_ty =
+                        (place_v != kInvalidId && (size_t)place_v < out->values.size())
+                            ? out->values[place_v].ty
+                            : kInvalidId;
+                    consume_owned_sir_value_(v.b, target_ty);
+                }
                 return rhs;
             }
 
@@ -1744,6 +1949,11 @@ namespace parus::oir {
                     emit_store(slot, init);
                     const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared);
                     bind(s.sym, Binding{true, false, slot, cleanup_id});
+                    if (s.init == parus::sir::k_invalid_value) {
+                        mark_symbol_moved(s.sym, /*moved=*/true);
+                    } else {
+                        consume_owned_sir_value_(s.init, declared);
+                    }
                     return;
                 }
 
@@ -1756,6 +1966,7 @@ namespace parus::oir {
                     // immutable let => SSA binding
                     bind(s.sym, Binding{false, false, init, kInvalidId});
                 }
+                consume_owned_sir_value_(s.init, declared);
                 return;
             }
 
@@ -1929,6 +2140,7 @@ namespace parus::oir {
                     ValueId rv = lower_value(s.expr);
                     if (def != nullptr && def->ret_ty != kInvalidId) {
                         rv = coerce_value_for_target(def->ret_ty, rv);
+                        consume_owned_sir_value_(s.expr, def->ret_ty);
                     }
                     if (fn_is_throwing && has_exception_globals_()) {
                         const ValueId active = emit_load_exc_active_();
@@ -2372,6 +2584,7 @@ namespace parus::oir {
         out.mod.bundle_name = sir_.bundle_name;
         out.mod.current_source_norm = sir_.current_source_norm;
         out.mod.bundle_sources_norm = sir_.bundle_sources_norm;
+        out.mod.actor_types = sir_.actor_types;
 
         // OIR 진입 게이트:
         // - handle 비물질화(materialize_count==0)
@@ -2385,6 +2598,7 @@ namespace parus::oir {
         }
 
         std::unordered_map<parus::ty::TypeId, std::pair<uint32_t, uint32_t>> named_layout_by_type;
+        std::unordered_set<TypeId> actor_type_set(sir_.actor_types.begin(), sir_.actor_types.end());
         auto type_size_align = [&](const auto& self, parus::ty::TypeId tid) -> std::pair<uint32_t, uint32_t> {
             using TK = parus::ty::Kind;
             using TB = parus::ty::Builtin;
@@ -2452,6 +2666,9 @@ namespace parus::oir {
                 }
 
                 case TK::kNamedUser: {
+                    if (actor_type_set.find(tid) != actor_type_set.end()) {
+                        return {8u, 8u};
+                    }
                     auto it = named_layout_by_type.find(tid);
                     if (it != named_layout_by_type.end()) return it->second;
                     return {8u, 8u};
@@ -2637,6 +2854,49 @@ namespace parus::oir {
                       return a.first < b.first;
                   });
 
+        auto add_block_param_oir = [&](BlockId bb, TypeId ty) -> ValueId {
+            auto& block = out.mod.blocks[bb];
+            Value v{};
+            v.ty = ty;
+            v.eff = Effect::Pure;
+            v.def_a = bb;
+            v.def_b = static_cast<uint32_t>(block.params.size());
+            const ValueId vid = out.mod.add_value(v);
+            block.params.push_back(vid);
+            return vid;
+        };
+
+        ActorRuntimeFuncs actor_runtime{};
+        auto add_runtime_decl_ = [&](std::string name, TypeId ret_ty, std::initializer_list<TypeId> params) -> FuncId {
+            Function f{};
+            f.name = std::move(name);
+            f.source_name = f.name;
+            f.abi = FunctionAbi::C;
+            f.is_extern = true;
+            f.ret_ty = ret_ty;
+            const BlockId entry = out.mod.add_block(Block{});
+            f.entry = entry;
+            f.blocks.push_back(entry);
+            const FuncId fid = out.mod.add_func(f);
+            for (const auto ty : params) {
+                (void)add_block_param_oir(entry, ty);
+            }
+            return fid;
+        };
+
+        const TypeId ptr_ty = (TypeId)ty_.builtin(parus::ty::Builtin::kNull);
+        const TypeId u32_ty = (TypeId)ty_.builtin(parus::ty::Builtin::kU32);
+        const TypeId u64_ty = (TypeId)ty_.builtin(parus::ty::Builtin::kU64);
+        const TypeId unit_ty = (TypeId)ty_.builtin(parus::ty::Builtin::kUnit);
+        actor_runtime.new_fn = add_runtime_decl_("__parus_actor_new", ptr_ty, {u64_ty, u64_ty, u64_ty});
+        actor_runtime.clone_fn = add_runtime_decl_("__parus_actor_clone", ptr_ty, {ptr_ty});
+        actor_runtime.release_fn = add_runtime_decl_("__parus_actor_release", unit_ty, {ptr_ty});
+        actor_runtime.enter_fn = add_runtime_decl_("__parus_actor_enter", ptr_ty, {ptr_ty, u32_ty});
+        actor_runtime.draft_ptr_fn = add_runtime_decl_("__parus_actor_draft_ptr", ptr_ty, {ptr_ty});
+        actor_runtime.commit_fn = add_runtime_decl_("__parus_actor_commit", unit_ty, {ptr_ty});
+        actor_runtime.recast_fn = add_runtime_decl_("__parus_actor_recast", unit_ty, {ptr_ty});
+        actor_runtime.leave_fn = add_runtime_decl_("__parus_actor_leave", unit_ty, {ptr_ty});
+
         // Build all functions in SIR module.
         // Strategy:
         // 1) 함수 쉘/엔트리 블록을 먼저 전부 생성해 심볼->FuncId를 고정한다.
@@ -2668,6 +2928,9 @@ namespace parus::oir {
             f.is_pure = sf.is_pure;
             f.is_comptime = sf.is_comptime;
             f.is_const = sf.is_const;
+            f.is_actor_member = sf.is_actor_member;
+            f.is_actor_init = sf.is_actor_init;
+            f.actor_owner_type = sf.actor_owner_type;
             f.ret_ty = (TypeId)sf.ret;
 
             const BlockId entry = out.mod.add_block(Block{});
@@ -2677,6 +2940,18 @@ namespace parus::oir {
             const FuncId fid = out.mod.add_func(f);
             sir_to_oir_func[i] = fid;
             sir_to_entry[i] = entry;
+            const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
+            if (pend <= (uint64_t)sir_.params.size()) {
+                for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
+                    const auto& sp = sir_.params[sf.param_begin + pidx];
+                    (void)add_block_param_oir(entry, (TypeId)sp.type);
+                }
+            }
+            if (sf.is_actor_member || sf.is_actor_init) {
+                out.mod.funcs[fid].actor_ctx_param_index =
+                    static_cast<uint32_t>(out.mod.blocks[entry].params.size());
+                (void)add_block_param_oir(entry, ptr_ty);
+            }
             if (sf.is_throwing) {
                 throwing_func_ids.insert(fid);
             }
@@ -2729,6 +3004,8 @@ namespace parus::oir {
             fb.out = &out.mod;
             fb.sir = &sir_;
             fb.types = &ty_;
+            fb.actor_types = &actor_type_set;
+            fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;
             fb.fn_symbol_to_func = &fn_symbol_to_func;
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
@@ -2762,7 +3039,8 @@ namespace parus::oir {
             if (pend <= (uint64_t)sir_.params.size()) {
                 for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
                     const auto& sp = sir_.params[sf.param_begin + pidx];
-                    ValueId pv = fb.add_block_param(entry, (TypeId)sp.type);
+                    if (pidx >= out.mod.blocks[entry].params.size()) continue;
+                    ValueId pv = out.mod.blocks[entry].params[pidx];
                     if (sp.sym == parus::sir::k_invalid_symbol) continue;
 
                     const bool needs_cleanup = fb.type_needs_drop_((TypeId)sp.type);
@@ -2779,6 +3057,11 @@ namespace parus::oir {
                         fb.bind(sp.sym, FuncBuild::Binding{false, false, pv, kInvalidId});
                     }
                 }
+            }
+            if ((sf.is_actor_member || sf.is_actor_init) &&
+                fb.def->actor_ctx_param_index != kInvalidId &&
+                (size_t)fb.def->actor_ctx_param_index < out.mod.blocks[entry].params.size()) {
+                fb.current_actor_ctx = out.mod.blocks[entry].params[fb.def->actor_ctx_param_index];
             }
 
             fb.lower_block(sf.entry);
@@ -2822,6 +3105,8 @@ namespace parus::oir {
             fb.out = &out.mod;
             fb.sir = &sir_;
             fb.types = &ty_;
+            fb.actor_types = &actor_type_set;
+            fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;
             fb.fn_symbol_to_func = &fn_symbol_to_func;
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;

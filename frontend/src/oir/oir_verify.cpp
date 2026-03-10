@@ -207,7 +207,7 @@ namespace parus::oir {
                     (void)check_value_id_(m, errs, iid, "inst(field base)", x.base);
                 } else if constexpr (std::is_same_v<T, InstActorCommit> ||
                                      std::is_same_v<T, InstActorRecast>) {
-                    // no operand
+                    (void)check_value_id_(m, errs, iid, "inst(actor ctx)", x.ctx);
                 } else if constexpr (std::is_same_v<T, InstDrop>) {
                     (void)check_value_id_(m, errs, iid, "inst(drop slot)", x.slot);
                     if (x.owner_ty == kInvalidId) {
@@ -278,7 +278,10 @@ namespace parus::oir {
                 }
 
                 const auto& b = m.blocks[bbid];
-                if (!b.has_term) {
+                if (f.is_extern) {
+                    // Extern decls may keep a signature-only entry block for parameter typing.
+                    // They do not own a body terminator in OIR.
+                } else if (!b.has_term) {
                     std::ostringstream oss;
                     oss << "block has no terminator: #" << bbid;
                     push_error_(errs, oss.str());
