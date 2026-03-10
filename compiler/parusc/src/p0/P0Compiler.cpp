@@ -942,7 +942,7 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || (version != 3 && version != 4)) {
+            if (!parse_json_uint_field_(text, "version", version) || version != 4) {
                 out_err = "unsupported export-index version in: " + path;
                 return false;
             }
@@ -977,8 +977,9 @@ namespace parusc::p0 {
                     out_err = "invalid export-index entry field 'path' in: " + path;
                     return false;
                 }
-                if (version >= 4) {
-                    (void)parse_json_string_field_(obj, "link_name", link_name);
+                if (!parse_json_string_field_(obj, "link_name", link_name)) {
+                    out_err = "invalid export-index entry field 'link_name' in: " + path;
+                    return false;
                 }
                 if (!parse_json_string_field_(obj, "module_head", module_head)) {
                     out_err = "invalid export-index entry field 'module_head' in: " + path;

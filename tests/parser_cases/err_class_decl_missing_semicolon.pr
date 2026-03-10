@@ -1,0 +1,9 @@
+class C {
+  x: i32;
+  init() = default;
+}
+
+def main() -> i32 {
+  set c = C();
+  return c.x;
+}

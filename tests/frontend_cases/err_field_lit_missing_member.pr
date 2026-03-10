@@ -1,7 +1,7 @@
 struct Vec2 {
     x: i32;
     y: i32;
-}
+};
 
 def main() -> i32 {
     let v: Vec2 = Vec2{ x: 1i32 };

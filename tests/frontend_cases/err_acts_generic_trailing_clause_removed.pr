@@ -1,13 +1,13 @@
 class Vec<T> {
   data: T;
   init(v: T) { self.data = v; }
-}
+};
 
 acts for Vec<T> <T> {
   def get(self) -> T {
     return self.data;
   }
-}
+};
 
 def main() -> i32 {
   return 0i32;

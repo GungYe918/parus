@@ -4,7 +4,7 @@ proto Equatable {
 
 class UserId : Equatable {
   value: i32;
-}
+};
 
 def main() -> i32 {
   return 0i32;

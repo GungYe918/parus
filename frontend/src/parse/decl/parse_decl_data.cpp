@@ -404,11 +404,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        Span end_sp = cursor_.prev().span;
-
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kFieldDecl;
@@ -641,10 +637,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        Span end_sp = cursor_.prev().span;
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kEnumDecl;
@@ -664,7 +657,7 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } [with require(expr)];`
+    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } [with require(expr) (, require(expr))*];`
     ast::StmtId Parser::parse_decl_proto() {
         using K = syntax::TokenKind;
 
@@ -780,29 +773,65 @@ namespace parus {
         const Span default_require_span = cursor_.prev().span.hi ? cursor_.prev().span : start;
         bool has_require = true;
         ast::ExprId require_expr = make_bool_lit("true", default_require_span);
+        const auto is_require_token = [&]() -> bool {
+            return cursor_.at(K::kKwRequire) ||
+                (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "require");
+        };
+        const auto parse_require_clause = [&]() -> ast::ExprId {
+            if (!is_require_token()) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "require");
+                return ast::k_invalid_expr;
+            }
+            cursor_.bump(); // require
+
+            if (!cursor_.eat(K::kLParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            }
+
+            ast::ExprId expr_id = ast::k_invalid_expr;
+            if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+                expr_id = parse_expr();
+            } else {
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "bool expression");
+            }
+
+            if (!cursor_.eat(K::kRParen)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                recover_to_delim(K::kRParen, K::kComma, K::kSemicolon);
+                cursor_.eat(K::kRParen);
+            }
+            return expr_id;
+        };
         const bool has_with =
             cursor_.at(K::kKwWith) ||
             (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "with");
         if (has_with) {
             cursor_.bump(); // with
-            if (!(cursor_.at(K::kKwRequire) ||
-                  (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "require"))) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "require");
-            } else {
-                cursor_.bump(); // require
-                if (!cursor_.eat(K::kLParen)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            ast::ExprId folded = parse_require_clause();
+            if (folded != ast::k_invalid_expr) {
+                require_expr = folded;
+            }
+
+            while (cursor_.eat(K::kComma)) {
+                if (cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof)) {
+                    diag_report(diag::Code::kProtoRequireTrailingCommaNotAllowed, cursor_.prev().span);
+                    break;
                 }
-                if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
-                    require_expr = parse_expr();
-                } else {
-                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "bool expression");
+
+                ast::ExprId next_clause = parse_require_clause();
+                if (next_clause == ast::k_invalid_expr) {
+                    recover_to_delim(K::kComma, K::kSemicolon, K::kRBrace);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
                 }
-                if (!cursor_.eat(K::kRParen)) {
-                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-                    recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
-                    cursor_.eat(K::kRParen);
-                }
+
+                ast::Expr and_expr{};
+                and_expr.kind = ast::ExprKind::kBinary;
+                and_expr.op = K::kKwAnd;
+                and_expr.a = require_expr;
+                and_expr.b = next_clause;
+                and_expr.span = span_join(ast_.expr(require_expr).span, ast_.expr(next_clause).span);
+                require_expr = ast_.add_expr(and_expr);
             }
         }
 
@@ -1398,10 +1427,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        Span end_sp = cursor_.prev().span;
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
         for (const auto sid : members) {
@@ -1758,10 +1784,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        Span end_sp = cursor_.prev().span;
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         if (!seen_draft) {
             diag_report(diag::Code::kActorRequiresSingleDraft, span_join(start, end_sp));
@@ -2111,11 +2134,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        Span end_sp = cursor_.prev().span;
-
-        if (cursor_.at(K::kSemicolon)) {
-            end_sp = cursor_.bump().span;
-        }
+        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
         const uint32_t member_begin = (uint32_t)ast_.stmt_children().size();
         for (auto sid : members) {

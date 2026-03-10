@@ -6,7 +6,7 @@ proto Echo<T> {
 
 class EchoUser: Echo<i32> {
   init() = default;
-}
+};
 
 def main() -> i32 {
   set u = EchoUser();

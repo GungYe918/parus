@@ -6,7 +6,7 @@ proto Identifiable {
 
 class A : Identifiable {
   init() = default;
-}
+};
 
 def main() -> i32 {
   set a = A();

@@ -1,6 +1,6 @@
 class A {
   init(x: i32) = default;
-}
+};
 
 def main() -> i32 {
   return 0i32;

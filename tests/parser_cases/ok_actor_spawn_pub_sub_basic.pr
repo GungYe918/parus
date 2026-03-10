@@ -17,7 +17,7 @@ actor Counter {
     commit;
     return draft.value;
   }
-}
+};
 
 def main() -> i32 {
   set c = spawn Counter(seed: 10i32);

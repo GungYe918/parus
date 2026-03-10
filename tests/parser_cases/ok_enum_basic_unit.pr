@@ -2,7 +2,7 @@ enum Color {
     case Red,
     case Green,
     case Blue,
-}
+};
 
 def main() -> i32 {
     set c = Color::Red();

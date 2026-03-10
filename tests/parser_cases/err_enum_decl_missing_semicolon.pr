@@ -1,0 +1,7 @@
+enum E {
+  case A,
+}
+
+def main() -> i32 {
+  return 0i32;
+}

@@ -86,6 +86,7 @@ namespace parus::diag {
         kProtoOperatorNotAllowed,         // operator declaration is forbidden inside proto
         kProtoRequireTypeNotBool,         // require(expr) must evaluate to bool
         kProtoRequireExprTooComplex,      // require(expr) supports simple boolean expression only (v1)
+        kProtoRequireTrailingCommaNotAllowed, // trailing comma is not allowed in proto require list
         kProtoImplTargetNotSupported,     // implements target is not a known proto
         kProtoImplMissingMember,          // implementation type misses required proto member
         kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied

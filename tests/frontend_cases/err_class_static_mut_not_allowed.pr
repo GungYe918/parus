@@ -1,7 +1,7 @@
 class A {
   static mut x: i32 = 0i32;
   init() = default;
-}
+};
 
 def main() -> i32 {
   return 0i32;

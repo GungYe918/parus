@@ -1,7 +1,7 @@
 class C {
     static const A: i32 = 1i32;
     static const B: i32 = A + 1i32;
-}
+};
 
 def main() -> i32 {
     return C::B;

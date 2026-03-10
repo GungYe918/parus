@@ -1,6 +1,6 @@
 struct Box {
     value: i32;
-}
+};
 
 def main() -> i32 {
     set b = Box { value: 1i32 };

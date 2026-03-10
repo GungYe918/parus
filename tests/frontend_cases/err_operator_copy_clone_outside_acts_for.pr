@@ -6,7 +6,7 @@ acts Util {
     operator(clone)(self) -> i32 {
         return self;
     }
-}
+};
 
 def main() -> i32 {
     return 0i32;

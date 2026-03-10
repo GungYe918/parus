@@ -6,7 +6,7 @@ proto Eq {
 
 class C : Eq {
   init() = default;
-}
+};
 
 def main() -> i32 {
   set c = C();

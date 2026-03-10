@@ -4,7 +4,7 @@ class Math {
   static def add(a: i32, b: i32) -> i32 {
     return a + b;
   }
-}
+};
 
 def main() -> i32 {
   return Math::add(a: 1i32, b: 2i32);

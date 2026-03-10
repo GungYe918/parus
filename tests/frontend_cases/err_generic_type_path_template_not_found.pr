@@ -1,6 +1,6 @@
 class MissingImpl: MissingProto<i32> {
   init() = default;
-}
+};
 
 def main() -> i32 {
   return 0i32;

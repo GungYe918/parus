@@ -6,7 +6,7 @@ class Vec2 {
   def sum(self) -> i32 {
     return self.x + self.y;
   }
-}
+};
 
 def main() -> i32 {
   set v = Vec2();

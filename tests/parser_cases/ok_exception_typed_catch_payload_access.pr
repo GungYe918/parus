@@ -2,7 +2,7 @@ proto Recoverable {} with require(true);
 
 struct StoreErr: Recoverable {
     code: i32;
-}
+};
 
 def read?() -> i32 {
     throw StoreErr { code: 7i32 };

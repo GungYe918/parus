@@ -1,7 +1,7 @@
 class Resource {
   init() = default;
   deinit() = default;
-}
+};
 
 def main() -> i32 {
   return 0i32;

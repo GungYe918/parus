@@ -1594,6 +1594,7 @@ namespace {
         std::unordered_set<std::string> allowed_import_heads{};
         std::vector<parus::passes::NameResolveOptions::ExternalExport> external_exports{};
         std::unordered_map<std::string, std::vector<ExternalDeclLocation>> external_decl_locs{};
+        std::vector<std::string> index_load_errors{};
     };
 
     struct BundleUnitsSnapshotCache {
@@ -2183,15 +2184,28 @@ namespace {
         std::string_view current_module_head,
         bool same_bundle,
         std::vector<parus::passes::NameResolveOptions::ExternalExport>& out_exports,
-        std::unordered_map<std::string, std::vector<ExternalDeclLocation>>* out_decl_locs = nullptr
+        std::unordered_map<std::string, std::vector<ExternalDeclLocation>>* out_decl_locs = nullptr,
+        std::string* out_err = nullptr
     ) {
+        auto fail = [&](std::string msg) {
+            if (out_err != nullptr) *out_err = std::move(msg);
+            return false;
+        };
+        if (out_err != nullptr) out_err->clear();
+
         std::string json{};
-        if (!read_text_file_(index_path, json)) return false;
+        if (!read_text_file_(index_path, json)) {
+            return fail("failed to read export-index: " + index_path.string());
+        }
 
         JsonValue root{};
         JsonParser parser(json);
-        if (!parser.parse(root)) return false;
-        if (root.kind != JsonValue::Kind::kObject) return false;
+        if (!parser.parse(root)) {
+            return fail("failed to parse export-index json: " + index_path.string());
+        }
+        if (root.kind != JsonValue::Kind::kObject) {
+            return fail("invalid export-index root object: " + index_path.string());
+        }
 
         std::string bundle_name(fallback_bundle_name);
         if (const auto b = as_string_(obj_get_(root, "bundle")); b.has_value() && !b->empty()) {
@@ -2199,16 +2213,21 @@ namespace {
         }
 
         const auto version = as_i64_(obj_get_(root, "version"));
-        if (!version.has_value() || *version != 3) return false;
+        if (!version.has_value() || *version != 4) {
+            return fail("unsupported export-index version (expected v4): " + index_path.string());
+        }
 
         const auto* exports_node = obj_get_(root, "exports");
-        if (exports_node == nullptr || exports_node->kind != JsonValue::Kind::kArray) return false;
+        if (exports_node == nullptr || exports_node->kind != JsonValue::Kind::kArray) {
+            return fail("invalid export-index exports array: " + index_path.string());
+        }
 
         for (const auto& ev : exports_node->array_v) {
             if (ev.kind != JsonValue::Kind::kObject) continue;
 
             const auto kind_s = as_string_(obj_get_(ev, "kind"));
             const auto path_s = as_string_(obj_get_(ev, "path"));
+            const auto link_name_s = as_string_(obj_get_(ev, "link_name"));
             const auto module_head_s = as_string_(obj_get_(ev, "module_head"));
             const auto decl_dir_s = as_string_(obj_get_(ev, "decl_dir"));
             const auto type_repr_s = as_string_(obj_get_(ev, "type_repr"));
@@ -2217,12 +2236,13 @@ namespace {
             if (!kind_s.has_value() ||
                 !path_s.has_value() ||
                 path_s->empty() ||
+                !link_name_s.has_value() ||
                 !module_head_s.has_value() ||
                 module_head_s->empty() ||
                 !decl_dir_s.has_value() ||
                 !type_repr_s.has_value() ||
                 !is_export_s.has_value()) {
-                return false;
+                return fail("invalid export-index entry schema: " + index_path.string());
             }
 
             const bool is_export = *is_export_s;
@@ -2250,6 +2270,7 @@ namespace {
             parus::passes::NameResolveOptions::ExternalExport ex{};
             ex.kind = *mapped_kind;
             ex.path = lookup_path;
+            ex.link_name = std::string(*link_name_s);
             ex.declared_type_repr = std::string(*type_repr_s);
             ex.decl_bundle_name = bundle_name;
             ex.module_head = std::move(module_head);
@@ -2413,15 +2434,19 @@ namespace {
 
             std::filesystem::path idx_path{};
             if (!ensure_bundle_export_index_(config_dir, *it->second, idx_path)) {
+                ctx.index_load_errors.push_back(
+                    "failed to generate export-index for bundle '" + std::string(bundle_name) + "'");
                 return;
             }
+            std::string first_err{};
             if (load_export_index_for_lint_(
                     idx_path,
                     bundle_name,
                     ctx.current_module_head,
                     same_bundle,
                     ctx.external_exports,
-                    &ctx.external_decl_locs)) {
+                    &ctx.external_decl_locs,
+                    &first_err)) {
                 return;
             }
 
@@ -2429,16 +2454,28 @@ namespace {
             std::error_code ec{};
             std::filesystem::remove(idx_path, ec);
             if (!ensure_bundle_export_index_(config_dir, *it->second, idx_path)) {
+                std::string msg =
+                    "failed to regenerate export-index for bundle '" + std::string(bundle_name) + "'";
+                if (!first_err.empty()) msg += " (first load error: " + first_err + ")";
+                ctx.index_load_errors.push_back(std::move(msg));
                 return;
             }
-            (void)load_export_index_for_lint_(
+            std::string retry_err{};
+            if (!load_export_index_for_lint_(
                 idx_path,
                 bundle_name,
                 ctx.current_module_head,
                 same_bundle,
                 ctx.external_exports,
-                &ctx.external_decl_locs
-            );
+                &ctx.external_decl_locs,
+                &retry_err
+            )) {
+                std::string msg =
+                    "failed to load export-index for bundle '" + std::string(bundle_name) + "'";
+                if (!first_err.empty()) msg += " (first: " + first_err + ")";
+                if (!retry_err.empty()) msg += " (retry: " + retry_err + ")";
+                ctx.index_load_errors.push_back(std::move(msg));
+            }
         };
 
         load_one_bundle(current_unit->bundle_name, /*same_bundle=*/true);
@@ -2553,25 +2590,36 @@ namespace {
                                 }
                             }
                         }
+                        for (const auto& err : lint_ctx->index_load_errors) {
+                            parus::diag::Diagnostic d(
+                                parus::diag::Severity::kError,
+                                parus::diag::Code::kExportIndexSchema,
+                                parus::Span{file_id, 0, 0}
+                            );
+                            d.add_arg(err);
+                            bag.add(std::move(d));
+                        }
                     }
 #endif
-                    pass_res = parus::passes::run_on_program(ast, root, bag, popt);
-                    has_pass_results = true;
-                    resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
-
                     if (!bag.has_error()) {
-                        parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pass_res.generic_prep);
-                        if (!popt.name_resolve.current_bundle_name.empty() ||
-                            !popt.name_resolve.external_exports.empty()) {
-                            tc.set_seed_symbol_table(&pass_res.sym);
-                        }
-                        if (!trusted_builtin_acts_decl_sids.empty()) {
-                            tc.set_trusted_builtin_acts_decl_sids(std::move(trusted_builtin_acts_decl_sids));
-                        }
-                        const auto ty = tc.check_program(root);
+                        pass_res = parus::passes::run_on_program(ast, root, bag, popt);
+                        has_pass_results = true;
+                        resolved_map = collect_resolved_semantic_map_(pass_res.name_resolve);
 
-                        if (!bag.has_error() && ty.errors.empty()) {
-                            (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
+                        if (!bag.has_error()) {
+                            parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pass_res.generic_prep);
+                            if (!popt.name_resolve.current_bundle_name.empty() ||
+                                !popt.name_resolve.external_exports.empty()) {
+                                tc.set_seed_symbol_table(&pass_res.sym);
+                            }
+                            if (!trusted_builtin_acts_decl_sids.empty()) {
+                                tc.set_trusted_builtin_acts_decl_sids(std::move(trusted_builtin_acts_decl_sids));
+                            }
+                            const auto ty = tc.check_program(root);
+
+                            if (!bag.has_error() && ty.errors.empty()) {
+                                (void)parus::cap::run_capability_check(ast, root, pass_res.name_resolve, ty, types, bag);
+                            }
                         }
                     }
                 }

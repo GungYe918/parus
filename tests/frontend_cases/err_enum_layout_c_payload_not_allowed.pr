@@ -1,6 +1,6 @@
 enum layout(c) E {
     case A(x: i32),
-}
+};
 
 def main() -> i32 {
     return 0i32;

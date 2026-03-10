@@ -1,7 +1,7 @@
 struct MaybePair {
     a: i32?;
     b: i32?;
-}
+};
 
 def main() -> i32 {
     let p: MaybePair = MaybePair{ a: null, b: null };

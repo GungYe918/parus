@@ -6,7 +6,7 @@ proto Marker {
 
 enum E: Marker {
     case A,
-}
+};
 
 def main() -> i32 {
     set e = E::A();

@@ -5,7 +5,7 @@ proto Eq {
 class Box<T> with [T: Eq] {
   value: T;
   init(v: T) { self.value = v; }
-}
+};
 
 def main() -> i32 {
   set b = Box<i32>(v: 1i32);

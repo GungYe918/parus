@@ -17,7 +17,7 @@ proto ProtoName [: BaseProto, ...] {
   def defaulted(self, ...) -> Ret {  // default-body
     ...
   }
-} [with require(<expr>)];
+} [with require(<expr>) (, require(<expr>))*];
 ```
 
 1. `proto` 멤버는 함수 선언만 허용한다.
@@ -26,6 +26,9 @@ proto ProtoName [: BaseProto, ...] {
 4. 전부 본문 있음: 모든 멤버는 기본 구현이며 구현체에서 재정의 가능하다.
 5. 일부만 본문 있는 혼합 형태는 오류다(`ProtoMemberBodyMixNotAllowed`).
 6. `with require(...)`는 생략 가능하며 생략 시 `require(true)`가 암묵 삽입된다.
+7. 여러 `require` 절은 `with require(a), require(b), ...;` 형태로 선언한다.
+8. 여러 절은 `a and b and ...`로 좌결합 평가된다.
+9. `with require(a),;` 같은 trailing comma는 허용하지 않는다.
 
 ## 19.3 require 식 규칙 (v1)
 
@@ -34,14 +37,14 @@ proto ProtoName [: BaseProto, ...] {
 3. 내장 프레디킷 매크로(`$is_plain_data`, `$implements` 등)는 이번 라운드에 도입하지 않는다.
 4. 타입체커는 현재 v1에서 단순 컴파일타임 bool 식만 허용한다.
 5. `require` 식의 참/거짓 최종 판정은 proto 선언 시점이 아니라 적용 시점에서 수행한다.
-3. v1 허용식:
-4. `true`, `false`
-5. `not expr` 또는 `!expr`
-6. `expr and expr`
-7. `expr or expr`
-8. `expr == expr`, `expr != expr` (양변이 bool 상수식으로 접히는 경우)
-9. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
-10. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
+6. v1 허용식:
+7. `true`, `false`
+8. `not expr` 또는 `!expr`
+9. `expr and expr`
+10. `expr or expr`
+11. `expr == expr`, `expr != expr` (양변이 bool 상수식으로 접히는 경우)
+12. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
+13. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
 
 ## 19.4 적용 대상
 
@@ -73,7 +76,7 @@ proto Identifiable {
 class User : Identifiable {
   id_value: i32;
   init() = default;
-}
+};
 
 def main() -> i32 {
   set u = User();
@@ -101,7 +104,7 @@ proto Holder<T> {
 class IntHolder: Holder<i32> {
   init() = default;
   def get(self) -> i32 { return 1i32; }
-}
+};
 ```
 
 ## 19.7 진단 코드
@@ -110,24 +113,25 @@ class IntHolder: Holder<i32> {
 2. `ProtoOperatorNotAllowed`
 3. `ProtoRequireTypeNotBool`
 4. `ProtoRequireExprTooComplex`
-5. `ProtoImplTargetNotSupported`
-6. `ProtoImplMissingMember`
-7. `ProtoConstraintUnsatisfied`
-8. `GenericTypePathArityMismatch`
-9. `GenericTypePathTemplateNotFound`
-10. `GenericDeclConstraintUnsatisfied`
-11. `GenericUnknownTypeParamInConstraint`
-12. `GenericActsOverlap`
-13. `ActsGenericClauseRemoved`
-14. `GenericActorDeclNotSupportedV1`
+5. `ProtoRequireTrailingCommaNotAllowed`
+6. `ProtoImplTargetNotSupported`
+7. `ProtoImplMissingMember`
+8. `ProtoConstraintUnsatisfied`
+9. `GenericTypePathArityMismatch`
+10. `GenericTypePathTemplateNotFound`
+11. `GenericDeclConstraintUnsatisfied`
+12. `GenericUnknownTypeParamInConstraint`
+13. `GenericActsOverlap`
+14. `ActsGenericClauseRemoved`
+15. `GenericActorDeclNotSupportedV1`
 
 ## 19.8 예외 채널 마커 proto (v0)
 
 예외 채널 분류는 아래 마커 proto를 사용한다.
 
 ```parus
-proto Recoverable {}
-proto Unrecoverable {}
+proto Recoverable {};
+proto Unrecoverable {};
 ```
 
 규칙:

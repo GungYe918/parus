@@ -1,0 +1,17 @@
+proto P {
+  def id(self) -> i32;
+} with require(true), require(true and not false);
+
+class A: P {
+  id_value: i32;
+  init() = default;
+
+  def id(self) -> i32 {
+    return 11i32;
+  }
+};
+
+def main() -> i32 {
+  set a = A();
+  return a.id();
+}

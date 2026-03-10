@@ -1,6 +1,6 @@
 enum E {
     case A(x: i32),
-}
+};
 
 def main() -> i32 {
     set e = E::A(x: 1i32);

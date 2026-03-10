@@ -13,7 +13,7 @@ proto P {
 class A: P {
     init() = default;
     def f(self) -> i32 { return 1i32; }
-}
+};
 
 def main() -> i32 {
     set a = A();

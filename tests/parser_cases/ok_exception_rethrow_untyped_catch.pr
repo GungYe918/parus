@@ -2,7 +2,7 @@ proto Recoverable {} with require(true);
 
 struct E: Recoverable {
     code: i32;
-}
+};
 
 def leaf?() -> i32 {
     throw E { code: 5i32 };

@@ -1,6 +1,6 @@
 struct layout(c) Wrap<T> {
   value: T;
-}
+};
 
 extern "C" def takes(v: Wrap<i32?>) -> i32;
 

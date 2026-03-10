@@ -1,0 +1,8 @@
+//@expect-error ProtoRequireTrailingCommaNotAllowed
+proto P {
+  def id(self) -> i32;
+} with require(true),;
+
+def main() -> i32 {
+  return 0i32;
+}

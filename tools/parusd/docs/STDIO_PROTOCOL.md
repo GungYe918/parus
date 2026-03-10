@@ -34,7 +34,7 @@
    - `*.lei`: LEI parse + evaluator lint 실행 (열린 LEI 문서는 메모리 오버레이로 반영)
 4. 변경 후 진단 publish
 5. `.lei` 파일 변경 notification 수신 시 같은 project root의 열린 `.pr` 문서를 재진단
-6. Parus lint는 module-first graph + export-index(v3) 기반으로 bundle prepass 컨텍스트를 구성
+6. Parus lint는 module-first graph + export-index(v4) 기반으로 bundle prepass 컨텍스트를 구성
 
 ## initialize 응답 capabilities
 
@@ -58,7 +58,7 @@
 ## definition 동작
 
 1. 현재 문서 로컬 심볼은 NameResolve 결과 기반으로 선언 위치를 반환한다.
-2. 번들 내부/의존 번들의 export-index(v3) `decl_span`이 있으면 해당 파일 위치로 이동한다.
+2. 번들 내부/의존 번들의 export-index(v4) `decl_span`이 있으면 해당 파일 위치로 이동한다.
 3. 결과는 단일 위치 또는 `Location[]`으로 반환된다.
 
 ## 코드 근거

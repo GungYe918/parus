@@ -8,7 +8,7 @@ def broken({ a: i32 = 0i32 }) -> i32 {
     set t = 2i32;
   }
   return x;
-}
+};
 
 def still_ok() -> i32 {
   return 1i32;

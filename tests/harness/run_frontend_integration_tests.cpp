@@ -630,7 +630,7 @@ namespace {
         const std::string src = R"(
             struct P {
                 i32;
-            }
+            };
         )";
 
         auto p = parse_program(src);
@@ -648,12 +648,12 @@ namespace {
         const std::string src = R"(
             struct I32Box {
                 v: i32;
-            }
+            };
 
             acts for I32Box {
                 def keep(self move) -> I32Box { return self; }
                 operator(+)(self move, rhs: I32Box) -> I32Box { return self; }
-            }
+            };
         )";
 
         auto p = parse_program(src);
@@ -1203,7 +1203,7 @@ namespace {
             struct layout(c) align(16) Vec2 {
                 x: f32;
                 y: f32;
-            }
+            };
 
             extern "C" def consume(v: Vec2) -> i32;
 
@@ -1225,7 +1225,7 @@ namespace {
             struct Vec2 {
                 x: f32;
                 y: f32;
-            }
+            };
 
             extern "C" def consume(v: Vec2) -> i32;
             def main() -> i32 { return 0i32; }
@@ -1246,7 +1246,7 @@ namespace {
             export struct layout(c) Vec2 {
                 x: f32;
                 y: f32;
-            }
+            };
             def main() -> i32 { return 0i32; }
         )";
 
@@ -1405,7 +1405,7 @@ namespace {
             class Bad: Holder<i32, i32> {
                 init() = default;
                 def get(self) -> i32 { return 1i32; }
-            }
+            };
 
             def main() -> i32 { return 0i32; }
         )";
@@ -1428,7 +1428,7 @@ namespace {
         const std::string src = R"(
             class MissingImpl: MissingProto<i32> {
                 init() = default;
-            }
+            };
 
             def main() -> i32 { return 0i32; }
         )";

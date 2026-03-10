@@ -92,6 +92,7 @@ namespace parus::diag {
             case Code::kProtoOperatorNotAllowed: return "ProtoOperatorNotAllowed";
             case Code::kProtoRequireTypeNotBool: return "ProtoRequireTypeNotBool";
             case Code::kProtoRequireExprTooComplex: return "ProtoRequireExprTooComplex";
+            case Code::kProtoRequireTrailingCommaNotAllowed: return "ProtoRequireTrailingCommaNotAllowed";
             case Code::kProtoImplTargetNotSupported: return "ProtoImplTargetNotSupported";
             case Code::kProtoImplMissingMember: return "ProtoImplMissingMember";
             case Code::kProtoConstraintUnsatisfied: return "ProtoConstraintUnsatisfied";
@@ -380,6 +381,7 @@ namespace parus::diag {
             case Code::kProtoOperatorNotAllowed: return "operator declarations are not allowed in proto";
             case Code::kProtoRequireTypeNotBool: return "require(...) expression must have type bool";
             case Code::kProtoRequireExprTooComplex: return "require(...) supports only simple boolean folding (true/false/not/and/or/==/!=) in v1";
+            case Code::kProtoRequireTrailingCommaNotAllowed: return "trailing comma is not allowed in proto require list";
             case Code::kProtoImplTargetNotSupported: return "implementation target is not a supported proto";
             case Code::kProtoImplMissingMember: return "proto implementation is missing a required member";
             case Code::kProtoConstraintUnsatisfied: return "proto constraint is not satisfied";
@@ -674,6 +676,7 @@ namespace parus::diag {
             case Code::kProtoOperatorNotAllowed: return "proto 내부에서는 operator 선언을 사용할 수 없습니다";
             case Code::kProtoRequireTypeNotBool: return "require(...) 식의 타입은 bool이어야 합니다";
             case Code::kProtoRequireExprTooComplex: return "v1에서 require(...)는 단순 bool 폴딩(true/false/not/and/or/==/!=)만 허용됩니다";
+            case Code::kProtoRequireTrailingCommaNotAllowed: return "proto require 목록에서는 trailing comma를 사용할 수 없습니다";
             case Code::kProtoImplTargetNotSupported: return "구현 대상으로 지정한 항목이 지원되는 proto가 아닙니다";
             case Code::kProtoImplMissingMember: return "proto 구현에 필요한 멤버가 누락되었습니다";
             case Code::kProtoConstraintUnsatisfied: return "proto 제약을 만족하지 못했습니다";

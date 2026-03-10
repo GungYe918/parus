@@ -12,13 +12,13 @@ class Box<T>: Echo<T> {
   def echo(self, v: T) -> T {
     return v;
   }
-}
+};
 
 acts for Box<T> {
   def get(self) -> T {
     return self.value;
   }
-}
+};
 
 def use_i32(b: Box<i32>) -> i32 {
   return b.get() + b.echo(v: 1i32);

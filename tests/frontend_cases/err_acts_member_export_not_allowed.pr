@@ -3,4 +3,4 @@ acts A {
   export def f() -> void {
     return;
   }
-}
+};

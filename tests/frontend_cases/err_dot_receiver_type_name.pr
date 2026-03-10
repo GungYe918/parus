@@ -6,7 +6,7 @@ proto EqProto {
 
 class A : EqProto {
   init() = default;
-}
+};
 
 def main() -> i32 {
   A.eq(10);

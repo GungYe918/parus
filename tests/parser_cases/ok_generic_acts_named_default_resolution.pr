@@ -1,7 +1,7 @@
 class Vec<T> {
   data: T;
   init(v: T) { self.data = v; }
-}
+};
 
 acts for Vec<T> {
   def pick(self, rhs: T) -> T {

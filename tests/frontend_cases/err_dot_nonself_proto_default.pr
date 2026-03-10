@@ -6,7 +6,7 @@ proto Arithmetic {
 
 class A : Arithmetic {
   init() = default;
-}
+};
 
 def main() -> i32 {
   set a = A();

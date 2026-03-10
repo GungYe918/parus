@@ -4,7 +4,7 @@ class User {
   def id(self) -> i32 {
     return 7i32;
   }
-}
+};
 
 def main() -> i32 {
   set u = User();

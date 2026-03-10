@@ -1,7 +1,7 @@
 // 라벨 인자 이후 위치 인자를 두면 문법 에러여야 한다.
 def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
     return a - b + clamp;
-}
+};
 
 def main() -> i32 {
     return sub(1, 2, clamp: 1, 3);

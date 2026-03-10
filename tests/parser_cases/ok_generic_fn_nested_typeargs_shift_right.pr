@@ -4,7 +4,7 @@ def id<T>(x: T) -> T {
 
 struct Box<T> {
     v: T;
-}
+};
 
 def main() -> i32 {
     let b: Box<i32> = Box<i32>{ v: 1i32 };

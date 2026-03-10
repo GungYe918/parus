@@ -1,0 +1,20 @@
+actor Counter {
+  draft {
+    value: i32;
+  }
+
+  init(seed: i32) {
+    draft.value = seed;
+    commit;
+  }
+
+  def pub get() -> i32 {
+    recast;
+    return draft.value;
+  }
+}
+
+def main() -> i32 {
+  set c = spawn Counter(seed: 1i32);
+  return c.get();
+}

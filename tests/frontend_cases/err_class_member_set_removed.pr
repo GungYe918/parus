@@ -1,7 +1,7 @@
 class A {
   set x = 1i32;
   init() = default;
-}
+};
 
 def main() -> i32 {
   return 0i32;
