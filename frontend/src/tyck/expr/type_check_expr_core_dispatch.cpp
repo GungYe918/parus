@@ -331,9 +331,14 @@ namespace parus::tyck {
                     out.f64 = -a.f64;
                     return true;
                 }
-                if ((e.op == K::kBang || e.op == K::kKwNot) && a.kind == FStringConstValue::Kind::kBool) {
+                if (e.op == K::kKwNot && a.kind == FStringConstValue::Kind::kBool) {
                     out.kind = FStringConstValue::Kind::kBool;
                     out.b = !a.b;
+                    return true;
+                }
+                if (e.op == K::kBang && a.kind == FStringConstValue::Kind::kInt) {
+                    out.kind = FStringConstValue::Kind::kInt;
+                    out.i64 = ~a.i64;
                     return true;
                 }
                 return fail("fstring interpolation: unsupported unary const expression");

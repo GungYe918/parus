@@ -34,7 +34,7 @@
         };
 
         // NOTE:
-        // - '&' / '&mut' / '^&' 의 의미 규칙(place, escape, conflict 등)은
+        // - '&' / '&mut' / '~' 의 의미 규칙(place, escape, conflict 등)은
         //   capability 단계에서 독립적으로 검사한다.
         // - tyck는 여기서 "결과 타입 계산"만 수행한다.
         if (e.op == K::kKwCopy || e.op == K::kKwClone) {
@@ -147,12 +147,12 @@
             return types_.make_borrow(at, /*is_mut=*/e.unary_is_mut);
         }
 
-        if (e.op == K::kCaretAmp) {
+        if (e.op == K::kTilde) {
             if (in_actor_method_ && e.a != ast::k_invalid_expr) {
                 const auto& opnd = ast_.expr(e.a);
                 if (opnd.kind == ast::ExprKind::kIdent && opnd.text == "draft") {
                     diag_(diag::Code::kActorEscapeDraftMoveNotAllowed, e.span);
-                    err_(e.span, "actor draft cannot be moved with '^&'");
+                    err_(e.span, "actor draft cannot be moved with '~'");
                     return types_.error();
                 }
             }
@@ -165,12 +165,48 @@
         at = read_decay_borrow_(types_, at);
 
         // 기타 unary: v0에서는 최소만
-        if (e.op == K::kBang || e.op == K::kKwNot) {
+        if (e.op == K::kKwNot) {
             if (at != types_.builtin(ty::Builtin::kBool) && !is_error_(at)) {
                 diag_(diag::Code::kTypeUnaryBangMustBeBool, e.span, types_.to_string(at));
                 err_(e.span, "operator 'not' requires bool");
             }
             return types_.builtin(ty::Builtin::kBool);
+        }
+
+        if (e.op == K::kBang) {
+            if (at == types_.builtin(ty::Builtin::kBool) && !is_error_(at)) {
+                diag_(diag::Code::kTypeBoolNegationUseNot, e.span, types_.to_string(at));
+                err_(e.span, "boolean negation must use 'not', not '!'");
+                return types_.error();
+            }
+
+            auto is_bitwise_int = [&](ty::TypeId t) -> bool {
+                if (t == ty::kInvalidType || is_error_(t)) return false;
+                const auto& tv = types_.get(t);
+                if (tv.kind != ty::Kind::kBuiltin) return false;
+                switch (tv.builtin) {
+                    case ty::Builtin::kI8:
+                    case ty::Builtin::kI16:
+                    case ty::Builtin::kI32:
+                    case ty::Builtin::kI64:
+                    case ty::Builtin::kU8:
+                    case ty::Builtin::kU16:
+                    case ty::Builtin::kU32:
+                    case ty::Builtin::kU64:
+                    case ty::Builtin::kISize:
+                    case ty::Builtin::kUSize:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
+            if (!is_bitwise_int(at) && !is_error_(at)) {
+                diag_(diag::Code::kTypeUnaryBitNotMustBeInteger, e.span, types_.to_string(at));
+                err_(e.span, "prefix '!' is bitwise not and requires a builtin integer type");
+                return types_.error();
+            }
+            return at;
         }
 
         if (e.op == K::kMinus || e.op == K::kPlus) {
@@ -185,6 +221,24 @@
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
+        }
+
+        if (e.op == K::kBang) {
+            ty::TypeId at = check_expr_(e.a);
+            at = read_decay_borrow_(types_, at);
+            if (is_error_(at)) return types_.error();
+            if (!is_optional_(at)) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                    std::string("postfix '!' requires an optional operand (got ") + types_.to_string(at) + ")");
+                err_(e.span, "postfix '!' requires an optional operand");
+                return types_.error();
+            }
+            const ty::TypeId elem = optional_elem_(at);
+            if (elem == ty::kInvalidType) {
+                err_(e.span, "optional elem type is invalid");
+                return types_.error();
+            }
+            return elem;
         }
 
         if (!is_place_expr_(e.a)) {
@@ -737,4 +791,3 @@
         }
         return lhs_target;
     }
-

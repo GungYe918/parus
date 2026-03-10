@@ -85,7 +85,7 @@ namespace parus::sir::detail {
                     v.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
                     break;
                 }
-                if (e.op == parus::syntax::TokenKind::kCaretAmp) {
+                if (e.op == parus::syntax::TokenKind::kTilde) {
                     v.kind = ValueKind::kEscape;
                     v.op = (uint32_t)e.op;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -118,6 +118,14 @@ namespace parus::sir::detail {
             }
 
             case parus::ast::ExprKind::kPostfixUnary: {
+                if (e.op == parus::syntax::TokenKind::kBang) {
+                    v.kind = ValueKind::kCast;
+                    v.op = (uint32_t)parus::ast::CastKind::kAsForce;
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    v.cast_to = type_of_ast_expr(tyck, eid);
+                    break;
+                }
+
                 // v0: postfix++ only
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;

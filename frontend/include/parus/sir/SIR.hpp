@@ -60,7 +60,7 @@ namespace parus::sir {
 
         // ops
         kBorrow,        // &x / &mut x
-        kEscape,        // ^&x
+        kEscape,        // ~x
         kUnary,
         kBinary,
         kAssign,        // place = value (or compound assigns lowered later)
@@ -100,7 +100,7 @@ namespace parus::sir {
         kUnknown,        // effect unknown (calls/ffi/etc.)
     };
 
-    /// @brief `^&` lowering 시 생성되는 escape handle의 storage kind를 나타낸다.
+    /// @brief `~` lowering 시 생성되는 escape handle의 storage kind를 나타낸다.
     enum class EscapeHandleKind : uint8_t {
         kTrivial = 0,
         kStackSlot,
@@ -465,7 +465,7 @@ namespace parus::sir {
         ConstInitData const_init{};
     };
 
-    /// @brief `^&` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).
+    /// @brief `~` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).
     struct EscapeHandleMeta {
         ValueId escape_value = k_invalid_value;
         Span span{};

@@ -15,7 +15,7 @@
 
 비범위:
 
-1. 타입 한정 `const`-correctness (`&const T`, `^&const T`)의 정식 도입
+1. 타입 한정 `const`-correctness (`&const T`, `~const T`)의 정식 도입
 2. `const` generic
 3. `const { ... }` 블록 문법 도입
 
@@ -27,7 +27,7 @@
 1. 상수 함수: `const fn f(...) -> T { ... }`
 1. 정적 상수: `static const NAME: T = EXPR;`
 1. `const` 비적용 위치(v1 금지):
-1. 타입 한정 `const`(`&const T`, `^&const T`)
+1. 타입 한정 `const`(`&const T`, `~const T`)
 1. `const { ... }` 블록
 1. `let const`, `mut const` 조합
 1. `const`와 `comptime`는 상호 대체하지 않는다.
@@ -165,7 +165,7 @@ v1에서 `ConstExpr`로 허용하는 최소 집합:
 1. `kConstFnCallsNonConstFn`: const fn이 non-const fn 호출
 1. `kConstFnHasSideEffect`: const fn에 부수효과 포함
 1. `kStaticConstOrderInvalid`: `const static` 등 비허용 순서
-1. `kConstTypeQualifierNotEnabled`: `&const T`, `^&const T` 사용
+1. `kConstTypeQualifierNotEnabled`: `&const T`, `~const T` 사용
 1. `kConstBlockNotSupported`: `const { ... }` 사용
 
 진단 정책:
@@ -269,7 +269,7 @@ def q(p: &const i32) -> i32 { return 0i32; }
 1. 비결정 연산 포함 const 초기화식 실패
 1. 순환 참조 실패
 1. `const {}` 사용 실패
-1. `&const T`, `^&const T` 사용 실패(draft-only)
+1. `&const T`, `~const T` 사용 실패(draft-only)
 
 ## 9.3 JIT/AOT 의미 일치 시나리오
 
@@ -281,7 +281,7 @@ def q(p: &const i32) -> i32 { return 0i32; }
 1. v1: `const item/local/fn/static const` 파싱 + 타입체크 + evaluator 최소 집합
 1. v1: SIR/OIR const-data 표현 + AOT/JIT 배치 계약 연결
 1. v1.1+: evaluator 확장(연산자/캐스트/진단 품질)
-1. v2+: 타입 한정 `const` (`&const T`, `^&const T`) 검토
+1. v2+: 타입 한정 `const` (`&const T`, `~const T`) 검토
 
 ## 11. 부록 A: 타입 한정 `const` 초안 (Draft-only, 비정본)
 
@@ -291,18 +291,18 @@ def q(p: &const i32) -> i32 { return 0i32; }
 
 ```ebnf
 TypeConstRef  := "&" "const" Type ;
-TypeConstEsc  := "^&" "const" Type ;
+TypeConstEsc  := "~" "const" Type ;
 ```
 
 보류 사유:
 
-1. borrow/escape 모델(`&`, `&mut`, `^&`)과 const-correctness 결합 규칙이 아직 고정되지 않았다.
+1. borrow/escape 모델(`&`, `&mut`, `~`)과 const-correctness 결합 규칙이 아직 고정되지 않았다.
 1. `self`, acts, class/proto 메서드 해석과 타입 한정 const의 상호작용 정의가 필요하다.
 1. API 표면에서 mutability/aliasing 진단 체계를 먼저 정비해야 한다.
 
 현재 고정:
 
-1. `&const T`, `^&const T`는 v1에서 파싱/의미론 모두 비활성이다.
+1. `&const T`, `~const T`는 v1에서 파싱/의미론 모두 비활성이다.
 1. 사용 시 "draft-only/not enabled" 진단을 발생시킨다.
 
 ## 12. 명시적 가정과 기본값

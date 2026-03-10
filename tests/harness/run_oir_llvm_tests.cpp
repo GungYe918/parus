@@ -934,6 +934,40 @@ namespace {
         return ok;
     }
 
+    /// @brief `not`와 prefix `!`가 LLVM에서 bool xor / integer xor(-1)로 구분 lowering되는지 검사한다.
+    static bool test_unary_not_and_bitnot_llvm_patterns_() {
+        const std::string src = R"(
+            def main(x: i32, flag: bool) -> i32 {
+                set mask = !x;
+                set cond = not flag;
+                if (cond) {
+                    return mask;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "unary LLVM source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "unary LLVM lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("xor i32") != std::string::npos &&
+                       lowered.llvm_ir.find(", -1") != std::string::npos,
+                       "prefix '!' on integer must lower to xor with -1");
+        ok &= require_(lowered.llvm_ir.find("xor i1") != std::string::npos &&
+                       lowered.llvm_ir.find(", true") != std::string::npos,
+                       "`not` on bool must lower to xor with true");
+        return ok;
+    }
+
     /// @brief struct literal 생성/수정/읽기가 LLVM struct 주소 계산 경로로 내려가는지 검사한다.
     static bool test_field_literal_lowering_() {
         const std::string src = R"(
@@ -1636,13 +1670,13 @@ namespace {
                 deinit() = default;
             };
 
-            def sink(v: ^&Resource) -> i32 {
+            def sink(v: ~Resource) -> i32 {
                 return 0i32;
             }
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: ^&r);
+                sink(v: ~r);
                 return 0i32;
             }
         )";
@@ -1857,6 +1891,7 @@ int main() {
         {"switch_stmt_lowering_cfg", test_switch_stmt_lowering_cfg_},
         {"global_field_member_chain_lowering", test_global_field_member_chain_lowering_},
         {"static_const_global_constant_emission", test_static_const_global_constant_emission_},
+        {"unary_not_and_bitnot_llvm_patterns", test_unary_not_and_bitnot_llvm_patterns_},
         {"field_literal_lowering", test_field_literal_lowering_},
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},

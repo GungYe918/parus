@@ -16,7 +16,7 @@ namespace parus::cap {
         uint32_t error_count = 0;
     };
 
-    /// @brief `&`, `&mut`, `^&` capability 규칙을 AST 단계에서 검사한다.
+    /// @brief `&`, `&mut`, `~` capability 규칙을 AST 단계에서 검사한다.
     CapabilityResult run_capability_check(
         const ast::AstArena& ast,
         ast::StmtId program_root,

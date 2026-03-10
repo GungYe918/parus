@@ -1,0 +1,6 @@
+//@expect-error LegacyEscapeCaretAmpUseTilde
+def main() -> i32 {
+  let mut x: i32 = 1i32;
+  set h = ^&x;
+  return 0i32;
+}

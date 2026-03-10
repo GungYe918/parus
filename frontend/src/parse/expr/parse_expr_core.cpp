@@ -244,7 +244,7 @@ namespace parus {
 
         // prefix unary chain:
         // - borrow: & / &mut
-        // - escape: ^&
+        // - escape: ~
         // (legacy && is not a prefix operator anymore)
 
         struct PrefixOp {
@@ -259,6 +259,15 @@ namespace parus {
         // 1) collect prefix ops
         while (true) {
             const Token t = cursor_.peek();
+            if (t.kind == K::kCaretAmp) {
+                diag_report(diag::Code::kLegacyEscapeCaretAmpUseTilde, t.span);
+                const Token op = cursor_.bump();
+                PrefixOp p{};
+                p.kind = K::kTilde;
+                p.span = op.span;
+                ops.push_back(p);
+                continue;
+            }
             if (!syntax::prefix_info(t.kind).has_value()) break;
 
             const Token op = cursor_.bump();
@@ -1098,6 +1107,7 @@ namespace parus {
         auto is_type_start = [&](K k) -> bool {
             switch (k) {
                 case K::kAmp:
+                case K::kTilde:
                 case K::kCaretAmp:
                 case K::kKwFn:
                 case K::kLParen:

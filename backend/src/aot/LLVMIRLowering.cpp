@@ -1413,7 +1413,6 @@ namespace parus::backend::aot {
                                     break;
                                 case U::Not:
                                     if (rty == "i1") os << "  " << vref_(inst.result) << " = xor i1 " << src << ", true\n";
-                                    else if (is_int_ty_(rty)) os << "  " << vref_(inst.result) << " = xor " << rty << " " << src << ", -1\n";
                                     else os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                                     break;
                                 case U::BitNot:

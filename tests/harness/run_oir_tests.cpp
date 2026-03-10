@@ -136,6 +136,45 @@ namespace {
         return ok;
     }
 
+    /// @brief `not`와 prefix `!`가 각각 OIR Not/BitNot로 구분 하향되는지 검사한다.
+    static bool test_unary_not_and_bitnot_lowering_ok() {
+        const std::string src = R"(
+            def main(x: i32, flag: bool) -> i32 {
+                set mask = !x;
+                set cond = not flag;
+                if (cond) {
+                    return mask;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "unary lowering seed must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "unary lowering seed must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "unary lowering seed must pass SIR capability");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for unary lowering source");
+        if (!ok) return false;
+
+        bool has_bitnot = false;
+        bool has_not = false;
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstUnary>(inst.data)) continue;
+            const auto& u = std::get<parus::oir::InstUnary>(inst.data);
+            has_bitnot |= (u.op == parus::oir::UnOp::BitNot);
+            has_not |= (u.op == parus::oir::UnOp::Not);
+        }
+
+        ok &= require_(has_bitnot, "prefix '!' on integer must lower to OIR BitNot");
+        ok &= require_(has_not, "`not` on bool must lower to OIR Not");
+        return ok;
+    }
+
     /// @brief generic 함수 인스턴스가 1회 materialize되고 direct call로 선택되는지 검사한다.
     static bool test_generic_fn_instantiation_oir_call_ok() {
         const std::string src = R"(
@@ -679,11 +718,11 @@ namespace {
     static bool test_oir_gate_rejects_invalid_escape_handle() {
         const std::string src = R"(
             static G: i32 = 7i32;
-            def sink(h: ^&i32) -> i32 {
+            def sink(h: ~i32) -> i32 {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ^&G);
+                return sink(h: ~G);
             }
         )";
 
@@ -1285,7 +1324,7 @@ namespace {
         return ok;
     }
 
-    /// @brief `^&`로 이동된 class 로컬은 스코프 종료 deinit 대상에서 제외되어야 한다.
+    /// @brief `~`로 이동된 class 로컬은 스코프 종료 deinit 대상에서 제외되어야 한다.
     static bool test_class_raii_escape_move_skips_deinit_call_ok() {
         const std::string src = R"(
             class Resource {
@@ -1293,13 +1332,13 @@ namespace {
                 deinit() = default;
             };
 
-            def sink(v: ^&Resource) -> i32 {
+            def sink(v: ~Resource) -> i32 {
                 return 0i32;
             }
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: ^&r);
+                sink(v: ~r);
                 return 0i32;
             }
         )";
@@ -1549,6 +1588,7 @@ int main() {
 
     const Case cases[] = {
         {"oir_call_lowering_ok", test_oir_call_lowering_ok},
+        {"unary_not_and_bitnot_lowering_ok", test_unary_not_and_bitnot_lowering_ok},
         {"generic_fn_instantiation_oir_call_ok", test_generic_fn_instantiation_oir_call_ok},
         {"generic_class_materialization_oir_lowering_ok", test_generic_class_materialization_oir_lowering_ok},
         {"generic_proto_default_materialization_oir_lowering_ok", test_generic_proto_default_materialization_oir_lowering_ok},

@@ -63,7 +63,7 @@ namespace parus {
         //      PrefixType
         //
         //  PrefixType :=
-        //      ( '&' ['mut'] | '^&' )* SuffixType
+        //      ( '&' ['mut'] | '~' )* SuffixType
         //
         //  SuffixType :=
         //      PrimaryType ( '?' | '[]' )*
@@ -74,10 +74,10 @@ namespace parus {
         //    | '(' Type ')'
         //
         // precedence (tight -> loose):
-        //   Primary  >  Suffix(?,[])  >  Prefix(&,^&)
+        //   Primary  >  Suffix(?,[])  >  Prefix(&,~)
         //
-        // so: ^&int?  == ^&(int?)
-        // and user can override by parentheses: (^&int)? , ^&(int?) , etc.
+        // so: ~int?  == ~(int?)
+        // and user can override by parentheses: (~int)? , ~(int?) , etc.
 
         auto parse_primary = [&]() -> ParsedType {
             const Token s = cursor_.peek();
@@ -449,9 +449,9 @@ namespace parus {
             return base;
         };
 
-        // ---- prefix chain: (& ['mut'] | ^&)* ----
+        // ---- prefix chain: (& ['mut'] | ~)* ----
         // NOTE: suffix binds tighter than prefix.
-        // so: ^&int? == ^&(int?) by default.
+        // so: ~int? == ~(int?) by default.
         struct PrefixOp {
             enum class Kind : uint8_t { kBorrow, kEscape } kind;
             bool is_mut = false; // only for borrow
@@ -482,9 +482,18 @@ namespace parus {
             }
 
             if (cursor_.at(K::kCaretAmp)) {
+                diag_report(diag::Code::kLegacyEscapeCaretAmpUseTilde, cursor_.peek().span);
                 PrefixOp op{};
                 op.kind = PrefixOp::Kind::kEscape;
-                op.tok = cursor_.bump(); // '^&'
+                op.tok = cursor_.bump(); // '^&' (legacy -> '~')
+                ops.push_back(op);
+                continue;
+            }
+
+            if (cursor_.at(K::kTilde)) {
+                PrefixOp op{};
+                op.kind = PrefixOp::Kind::kEscape;
+                op.tok = cursor_.bump(); // '~'
 
                 ops.push_back(op);
                 continue;
@@ -497,7 +506,7 @@ namespace parus {
         auto out = parse_suffix();
         if (out.id == ty::kInvalidType) out.id = types_.error();
 
-        // apply prefixes from right-to-left: ^& &mut & T  => ^&(&mut(&T))
+        // apply prefixes from right-to-left: ~ &mut & T  => ~(&mut(&T))
         for (int i = (int)ops.size() - 1; i >= 0; --i) {
             const auto& op = ops[(size_t)i];
             if (op.kind == PrefixOp::Kind::kBorrow) {

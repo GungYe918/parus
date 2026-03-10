@@ -1,0 +1,5 @@
+static G: i32 = 7i32;
+
+def make() -> ~i32 {
+  return ~G;
+}

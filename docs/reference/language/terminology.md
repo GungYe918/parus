@@ -111,7 +111,7 @@
 ### 4.3 borrow / escape
 
 * borrow: 소유권을 이전하지 않는 참조 관점
-* escape(`&&`): 소유권/수명 경계를 넘기는 핸들 관점
+* escape(`~`): 소유권/수명 경계를 넘기는 핸들 관점
 
 ### 4.4 layout(c), align(n)
 

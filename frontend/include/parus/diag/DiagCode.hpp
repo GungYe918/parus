@@ -26,6 +26,7 @@ namespace parus::diag {
         kTooManyErrors,      
         kNestedTernaryNotAllowed,
         kAmbiguousAmpPrefixChain,      // deprecated: ambiguous '&' prefix chain diagnostic
+        kLegacyEscapeCaretAmpUseTilde, // legacy '^&' escape syntax is removed; use '~'
         kArraySizeExpectedIntLiteral,  // array suffix requires integer literal (T[N])
         kArraySizeInvalidLiteral,      // array size literal is malformed/out of range
         kMacroNoMatch,                 // macro arm/group matching failed
@@ -113,7 +114,7 @@ namespace parus::diag {
         kActorCommitOnlyInPub,            // commit is only allowed in actor pub methods
         kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
         kActorPubMissingTopLevelCommit,   // actor pub method needs at least one top-level commit
-        kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by ^&
+        kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by ~
         kEnumVariantDuplicate,            // enum variant name is duplicated
         kEnumCtorArgMismatch,             // enum constructor arguments mismatch
         kEnumCtorLabelMismatch,           // enum constructor label mismatch
@@ -188,7 +189,7 @@ namespace parus::diag {
         // ---- var parsing ----
         kVarMutMustFollowKw,        // mut must appear right after declaration keyword (let/set/static)
 
-        // ---- &, ^& 관련 ----
+        // ---- &, ~ 관련 ----
         kBorrowOperandMustBePlace,
         kBorrowOperandMustBeOwnedPlace,
         kEscapeOperandMustBePlace,
@@ -259,7 +260,9 @@ namespace parus::diag {
         kTypeReturnOutsideFn,   // (no args)
         kTypeReturnExprRequired,// (no args)
         kTypeBreakValueOnlyInLoopExpr, // break value is only allowed in loop expression
-        kTypeUnaryBangMustBeBool,// args[0]=got
+        kTypeUnaryBangMustBeBool,// deprecated legacy slot
+        kTypeUnaryBitNotMustBeInteger,// args[0]=got
+        kTypeBoolNegationUseNot,// args[0]=got
         kTypeBinaryOperandsMustMatch,// args[0]=lhs, args[1]=rhs
         kTypeCompareOperandsMustMatch,// args[0]=lhs, args[1]=rhs
         kTypeBorrowNotAllowedInPureComptime, // (no args)

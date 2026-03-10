@@ -1,0 +1,4 @@
+def main() -> i64 {
+  let x: i32? = 7i32;
+  return x as! i64;
+}

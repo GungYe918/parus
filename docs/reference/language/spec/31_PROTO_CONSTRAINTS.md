@@ -39,12 +39,13 @@ proto ProtoName [: BaseProto, ...] {
 5. `require` 식의 참/거짓 최종 판정은 proto 선언 시점이 아니라 적용 시점에서 수행한다.
 6. v1 허용식:
 7. `true`, `false`
-8. `not expr` 또는 `!expr`
+8. `not expr`
 9. `expr and expr`
 10. `expr or expr`
 11. `expr == expr`, `expr != expr` (양변이 bool 상수식으로 접히는 경우)
-12. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
-13. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
+12. prefix `!expr`는 `require` bool 문맥에서 허용하지 않는다. `!`는 bitwise not이므로 `not`을 사용해야 한다.
+13. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
+14. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
 
 ## 19.4 적용 대상
 

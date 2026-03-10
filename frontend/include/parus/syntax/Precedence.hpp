@@ -106,10 +106,10 @@ namespace parus::syntax {
             case TokenKind::kMinus:
             case TokenKind::kPlusPlus:
             case TokenKind::kAmp:
+            case TokenKind::kTilde:
             case TokenKind::kKwTry:
             case TokenKind::kKwCopy:
             case TokenKind::kKwClone:
-            case TokenKind::kCaretAmp:
                 return PrefixInfo{95};
             default:
                 return std::nullopt;

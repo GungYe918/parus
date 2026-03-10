@@ -692,12 +692,12 @@ namespace {
     }
 
     static bool test_cap_escape_on_slice_borrow_rejected() {
-        // slice borrow 값에 ^&를 적용하면 금지되어야 한다.
+        // slice borrow 값에 ~를 적용하면 금지되어야 한다.
         const std::string src = R"(
             def main() -> i32 {
                 let arr: i32[3] = [1, 2, 3];
                 set s = &arr[0..:1];
-                set h = ^&s;
+                set h = ~s;
                 return 0i32;
             }
         )";
@@ -709,9 +709,9 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!sir.cap.ok, "^& on slice borrow must fail SIR capability check");
+        ok &= require_(!sir.cap.ok, "~ on slice borrow must fail SIR capability check");
         ok &= require_(p.bag.has_code(parus::diag::Code::kEscapeOperandMustNotBeBorrow),
-            "^& on slice borrow must emit EscapeOperandMustNotBeBorrow");
+            "~ on slice borrow must emit EscapeOperandMustNotBeBorrow");
         ok &= require_(cap.ok, "AST capability pass should stay as lightweight filter for this case");
         return ok;
     }
@@ -842,11 +842,11 @@ namespace {
     }
 
     static bool test_escape_requires_static_or_boundary() {
-        // ^&는 static place이거나 return/call-arg 경계에서만 허용되어야 한다.
+        // ~는 static place이거나 return/call-arg 경계에서만 허용되어야 한다.
         const std::string src = R"(
             def main() -> i32 {
                 set x = 1i32;
-                set h = ^&x;
+                set h = ~x;
                 return 0i32;
             }
         )";
@@ -858,18 +858,18 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!sir.cap.ok, "non-boundary ^& on non-static place must fail SIR capability check");
+        ok &= require_(!sir.cap.ok, "non-boundary ~ on non-static place must fail SIR capability check");
         ok &= require_(p.bag.has_code(parus::diag::Code::kSirEscapeBoundaryViolation),
-            "non-boundary ^& on non-static place must emit SirEscapeBoundaryViolation");
+            "non-boundary ~ on non-static place must emit SirEscapeBoundaryViolation");
         ok &= require_(cap.ok, "AST capability pass should keep lightweight behavior for boundary checks");
         return ok;
     }
 
     static bool test_static_allows_escape_storage() {
-        // static place는 non-boundary 문맥에서도 ^&를 허용해야 한다.
+        // static place는 non-boundary 문맥에서도 ~를 허용해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
-            static mut HG: ^&i32 = ^&G;
+            static mut HG: ~i32 = ~G;
             def main() -> i32 {
                 return 0i32;
             }
@@ -882,10 +882,10 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!p.bag.has_error(), "static + ^& source must not emit diagnostics");
-        ok &= require_(ty.errors.empty(), "static + ^& source must not emit tyck errors");
-        ok &= require_(cap.ok, "static + ^& source must pass capability check");
-        ok &= require_(sir.cap.ok, "static + ^& source must pass SIR capability check");
+        ok &= require_(!p.bag.has_error(), "static + ~ source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "static + ~ source must not emit tyck errors");
+        ok &= require_(cap.ok, "static + ~ source must pass capability check");
+        ok &= require_(sir.cap.ok, "static + ~ source must pass SIR capability check");
         return ok;
     }
 
@@ -893,11 +893,11 @@ namespace {
         // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
-            def sink(h: ^&i32) -> i32 {
+            def sink(h: ~i32) -> i32 {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ^&G);
+                return sink(h: ~G);
             }
         )";
 
@@ -933,11 +933,11 @@ namespace {
         // OIR lowering 진입 전 게이트는 escape-handle verify 실패 시 lowering을 중단해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
-            def sink(h: ^&i32) -> i32 {
+            def sink(h: ~i32) -> i32 {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ^&G);
+                return sink(h: ~G);
             }
         )";
 

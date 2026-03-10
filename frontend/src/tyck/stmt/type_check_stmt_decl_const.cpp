@@ -568,12 +568,20 @@
                         }
                         return fail_not_evaluable(e.span, "unary '-' requires numeric const operand");
                     }
-                    if (e.op == K::kBang || e.op == K::kKwNot) {
+                    if (e.op == K::kKwNot) {
                         if (in.kind != ConstFoldValue::Kind::kBool) {
                             return fail_not_evaluable(e.span, "logical not requires bool const operand");
                         }
                         outv.kind = ConstFoldValue::Kind::kBool;
                         outv.b = !in.b;
+                        return true;
+                    }
+                    if (e.op == K::kBang) {
+                        if (in.kind != ConstFoldValue::Kind::kInt) {
+                            return fail_not_evaluable(e.span, "bitwise not requires integer const operand");
+                        }
+                        outv.kind = ConstFoldValue::Kind::kInt;
+                        outv.i64 = ~in.i64;
                         return true;
                     }
                     return fail_not_evaluable(e.span, "unsupported unary operator in const expression");
@@ -843,7 +851,7 @@
                     return {Fold::Kind::kBoolConst, e.text == "true"};
 
                 case ast::ExprKind::kUnary: {
-                    if (e.op != K::kBang && e.op != K::kKwNot) {
+                    if (e.op != K::kKwNot) {
                         return {Fold::Kind::kTooComplex, false};
                     }
                     const Fold inner = self(self, e.a);
@@ -1508,4 +1516,3 @@
             }
         }
     }
-

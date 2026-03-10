@@ -787,9 +787,8 @@ namespace parus::oir {
             switch (k) {
                 case TK::kPlus:  return std::optional<UnOp>{UnOp::Plus};
                 case TK::kMinus: return std::optional<UnOp>{UnOp::Neg};
-                case TK::kBang:
                 case TK::kKwNot: return std::optional<UnOp>{UnOp::Not};
-                case TK::kCaret: return std::optional<UnOp>{UnOp::BitNot};
+                case TK::kBang:  return std::optional<UnOp>{UnOp::BitNot};
                 default:         return std::nullopt;
             }
         }

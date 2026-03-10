@@ -1,0 +1,5 @@
+const BAD: bool = !true;
+
+def main() -> i32 {
+  return 0i32;
+}
