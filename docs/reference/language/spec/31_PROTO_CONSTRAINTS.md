@@ -5,7 +5,7 @@
 ## 19.1 범위
 
 1. `proto`는 제약 선언 전용이다.
-2. `proto` 자체는 런타임 객체/디스패치 테이블을 만들지 않는다.
+2. `proto`는 런타임 객체/디스패치 테이블을 만들지 않는다.
 3. `dyn`은 런타임 다형성 경계 전용 키워드이며, ABI 확정 전까지 비구현이다.
 4. 연산자 의미 확장은 `acts` 전용이며 `proto`에서 `operator` 선언은 금지한다.
 
@@ -13,65 +13,52 @@
 
 ```parus
 proto ProtoName [: BaseProto, ...] {
-  def sig(self, ...) -> Ret;         // signature-only
-  def defaulted(self, ...) -> Ret {  // default-body
-    ...
-  }
-} [with require(<expr>) (, require(<expr>))*];
+  require struct(Path);
+  require acts(IOOps);
+  require hash(self) -> u64;
+  provide def id(self) -> i32 { return 0i32; }
+  provide const VERSION: i32 = 1i32;
+};
 ```
 
-1. `proto` 멤버는 함수 선언만 허용한다.
-2. 멤버 본문 규칙은 all-or-none이다.
-3. 전부 본문 없음: 모든 멤버는 구현체에서 필수 구현이다.
-4. 전부 본문 있음: 모든 멤버는 기본 구현이며 구현체에서 재정의 가능하다.
-5. 일부만 본문 있는 혼합 형태는 오류다(`ProtoMemberBodyMixNotAllowed`).
-6. `with require(...)`는 생략 가능하며 생략 시 `require(true)`가 암묵 삽입된다.
-7. 여러 `require` 절은 `with require(a), require(b), ...;` 형태로 선언한다.
-8. 여러 절은 `a and b and ...`로 좌결합 평가된다.
-9. `with require(a),;` 같은 trailing comma는 허용하지 않는다.
+1. `proto` 본문 항목은 `require` 또는 `provide`로 시작해야 한다.
+2. `proto ... with require(...)` 꼬리 문법은 제거되었다.
+3. `proto A: B, C`에서 `:` 뒤 대상은 `proto`만 허용한다.
+4. `require` 항목에는 `proto(...)`를 허용하지 않는다.
+5. `require` 함수 시그니처는 `def` 없이 `require foo(...) -> T;` 형태를 사용한다.
+6. `provide def`는 본문이 필수다.
+7. `provide const`만 변수 제공으로 허용한다.
+8. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
 
-## 19.3 require 식 규칙 (v1)
+## 19.3 require/provide 항목 의미론
 
-1. 파서는 `require(...)`에 일반 표현식을 허용한다.
-2. `require(...)` 안에서는 사용자 매크로 호출(`$name(...)`)을 사용할 수 있다.
-3. 내장 프레디킷 매크로(`$is_plain_data`, `$implements` 등)는 이번 라운드에 도입하지 않는다.
-4. 타입체커는 현재 v1에서 단순 컴파일타임 bool 식만 허용한다.
-5. `require` 식의 참/거짓 최종 판정은 proto 선언 시점이 아니라 적용 시점에서 수행한다.
-6. v1 허용식:
-7. `true`, `false`
-8. `not expr`
-9. `expr and expr`
-10. `expr or expr`
-11. `expr == expr`, `expr != expr` (양변이 bool 상수식으로 접히는 경우)
-12. prefix `!expr`는 `require` bool 문맥에서 허용하지 않는다. `!`는 bitwise not이므로 `not`을 사용해야 한다.
-13. 이 외 식은 `ProtoRequireExprTooComplex`로 진단한다.
-14. bool로 접히지 않는 식은 `ProtoRequireTypeNotBool`로 진단한다.
+1. `require struct/enum/class/actor/acts(Path);`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
+2. `require foo(...) -> T;`는 구현체가 충족해야 하는 함수 계약을 추가한다.
+3. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
+4. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
+5. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
 
-## 19.4 적용 대상
+## 19.4 상속/클로저 규칙
+
+1. `proto A: B, C`이면 `A`는 `B`, `C`의 요구사항을 모두 승계한다.
+2. 승계는 transitive closure로 계산한다.
+3. `child provide`가 `inherited require` 함수 시그니처를 만족하면 해당 요구는 충족된 것으로 본다.
+4. `effective required fn set = closure(require fn) - closure(provide fn)`을 사용한다.
+
+## 19.5 적용 대상과 충족 검사
 
 1. `class Name : ProtoA, ...` 선언으로 proto 제약을 부착할 수 있다.
-2. `struct Name : ProtoA, ...` 선언도 허용된다.
-3. `enum Name : ProtoA, ...` 선언도 허용되지만 v0에서는 default-only proto만 허용된다.
-4. 함수 제네릭 제약은 `with [T: ProtoName]`로 선언한다.
-5. 적용 시점에 `require(...) == false`이면 `ProtoConstraintUnsatisfied`로 실패한다.
-
-## 19.5 구현 충족 검사
-
-1. 구현체(`class`/`struct`/`enum`)는 proto가 요구한 규칙을 충족해야 한다.
-2. 기본 구현이 있는 proto 멤버는 구현체가 생략할 수 있다.
-3. proto 상속이 있으면 상위 proto의 필수 시그니처까지 포함해 검사한다.
-4. 시그니처 매칭은 `Self`/`&Self`를 구현체 타입 기준으로 정규화해 비교한다.
-5. class에서 proto 기본 구현을 사용하는 dot 호출은 첫 파라미터 `self`가 있는 멤버만 허용한다.
+2. `struct Name : ProtoA, ...`, `enum Name : ProtoA, ...`도 선언상 허용된다.
+3. `class`는 effective required fn set을 구현해야 한다.
+4. `struct/enum`은 함수 멤버를 가지지 않으므로 effective required fn set이 비어 있어야 한다.
+5. 시그니처 매칭은 `Self`를 구현체 concrete 타입으로 정규화해 비교한다.
 6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
-7. enum은 값 타입이므로 proto 필수 멤버(본문 없는 멤버)를 요구하는 구현은 허용하지 않는다.
 
 예시:
 
 ```parus
 proto Identifiable {
-  def id(self) -> i32 {
-    return 7i32;
-  }
+  provide def id(self) -> i32 { return 7i32; }
 };
 
 class User : Identifiable {
@@ -85,21 +72,26 @@ def main() -> i32 {
 }
 ```
 
-## 19.6 제네릭 결합 규칙 (v1)
+## 19.6 require 타깃 심볼 가시성
+
+1. 같은 파일 선언은 허용한다.
+2. 같은 모듈 타 파일 선언은 `export`된 심볼만 허용한다.
+3. 모듈 밖 선언은 `import/alias`로 반입된 경로 + `export`된 심볼만 허용한다.
+
+## 19.7 제네릭 결합 규칙 (v1)
 
 1. `proto` 선언은 제네릭 파라미터를 가질 수 있다.
 2. `class`는 `class A : Proto<i32>` 형태로 concrete proto를 구현할 수 있다.
 3. generic proto 멤버의 `Self`는 구현 class 기준 concrete 타입으로 정규화한다.
-4. proto default impl이 있을 때 class에서 멤버를 생략하면 default가 사용된다.
-5. `acts` 제네릭은 owner 타입 표기만 허용한다:
-6. 허용: `acts for Vec<T> with [T: Proto] { ... }`
-7. 금지: `acts for Vec<T> <T> { ... }`
+4. `acts` 제네릭은 owner 타입 표기만 허용한다.
+5. 허용: `acts for Vec<T> with [T: Proto] { ... }`
+6. 금지: `acts for Vec<T> <T> { ... }`
 
 예시:
 
 ```parus
 proto Holder<T> {
-  def get(self) -> T;
+  require get(self) -> T;
 };
 
 class IntHolder: Holder<i32> {
@@ -108,25 +100,22 @@ class IntHolder: Holder<i32> {
 };
 ```
 
-## 19.7 진단 코드
+## 19.8 진단 코드
 
-1. `ProtoMemberBodyMixNotAllowed`
-2. `ProtoOperatorNotAllowed`
-3. `ProtoRequireTypeNotBool`
-4. `ProtoRequireExprTooComplex`
-5. `ProtoRequireTrailingCommaNotAllowed`
-6. `ProtoImplTargetNotSupported`
-7. `ProtoImplMissingMember`
-8. `ProtoConstraintUnsatisfied`
-9. `GenericTypePathArityMismatch`
-10. `GenericTypePathTemplateNotFound`
-11. `GenericDeclConstraintUnsatisfied`
-12. `GenericUnknownTypeParamInConstraint`
-13. `GenericActsOverlap`
-14. `ActsGenericClauseRemoved`
-15. `GenericActorDeclNotSupportedV1`
+1. `ProtoOperatorNotAllowed`
+2. `ProtoMemberBodyNotAllowed`
+3. `ProtoImplTargetNotSupported`
+4. `ProtoImplMissingMember`
+5. `ProtoConstraintUnsatisfied`
+6. `GenericTypePathArityMismatch`
+7. `GenericTypePathTemplateNotFound`
+8. `GenericDeclConstraintUnsatisfied`
+9. `GenericUnknownTypeParamInConstraint`
+10. `GenericActsOverlap`
+11. `ActsGenericClauseRemoved`
+12. `GenericActorDeclNotSupportedV1`
 
-## 19.8 예외 채널 마커 proto (v0)
+## 19.9 예외 채널 마커 proto (v0)
 
 예외 채널 분류는 아래 마커 proto를 사용한다.
 
