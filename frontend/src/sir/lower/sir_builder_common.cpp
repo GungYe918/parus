@@ -53,6 +53,13 @@ namespace parus::sir::detail {
         }
         if (e.kind == parus::ast::ExprKind::kBinary &&
             e.op == parus::syntax::TokenKind::kDot) {
+            if (e.a != parus::ast::k_invalid_expr) {
+                const auto& lhs = ast.expr(e.a);
+                if (lhs.kind == parus::ast::ExprKind::kBinary &&
+                    lhs.op == parus::syntax::TokenKind::kArrow) {
+                    return k_invalid_symbol;
+                }
+            }
             return resolve_root_place_symbol_from_expr(ast, nres, tyck, e.a);
         }
         return k_invalid_symbol;
@@ -140,7 +147,17 @@ namespace parus::sir::detail {
                 return PlaceClass::kIndex;
             }
             case parus::ast::ExprKind::kBinary:
+                if (e.op == parus::syntax::TokenKind::kArrow) {
+                    return PlaceClass::kNotPlace;
+                }
                 if (e.op == parus::syntax::TokenKind::kDot) {
+                    if (e.a != parus::ast::k_invalid_expr) {
+                        const auto& lhs = ast.expr(e.a);
+                        if (lhs.kind == parus::ast::ExprKind::kBinary &&
+                            lhs.op == parus::syntax::TokenKind::kArrow) {
+                            return PlaceClass::kNotPlace;
+                        }
+                    }
                     return PlaceClass::kField;
                 }
                 return PlaceClass::kNotPlace;

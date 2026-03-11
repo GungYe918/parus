@@ -71,6 +71,7 @@ namespace parus::tyck {
         class_effective_method_map_.clear();
         const_symbol_decl_sid_.clear();
         const_symbol_eval_state_.clear();
+        const_symbol_runtime_values_.clear();
         const_cycle_diag_emitted_.clear();
         namespace_stack_.clear();
         import_alias_to_path_.clear();
@@ -153,6 +154,298 @@ namespace parus::tyck {
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
         first_pass_collect_top_level_(program_stmt);
+
+        // ---------------------------------------------------------
+        // PASS 1.5: proto/type/acts dependency cycle check
+        // ---------------------------------------------------------
+        {
+            std::vector<ast::StmtId> node_sids{};
+            node_sids.reserve(ast_.stmts().size());
+
+            auto is_cycle_node_kind = [&](ast::StmtKind k) -> bool {
+                switch (k) {
+                    case ast::StmtKind::kProtoDecl:
+                    case ast::StmtKind::kFieldDecl:
+                    case ast::StmtKind::kEnumDecl:
+                    case ast::StmtKind::kClassDecl:
+                    case ast::StmtKind::kActorDecl:
+                    case ast::StmtKind::kActsDecl:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
+            for (ast::StmtId sid = 0; (size_t)sid < ast_.stmts().size(); ++sid) {
+                if (is_cycle_node_kind(ast_.stmt(sid).kind)) {
+                    node_sids.push_back(sid);
+                }
+            }
+
+            std::unordered_map<ast::StmtId, size_t> node_index{};
+            node_index.reserve(node_sids.size());
+            for (size_t i = 0; i < node_sids.size(); ++i) {
+                node_index.emplace(node_sids[i], i);
+            }
+
+            std::vector<std::vector<size_t>> adj(node_sids.size());
+            std::vector<std::unordered_set<size_t>> adj_seen(node_sids.size());
+
+            auto add_edge = [&](ast::StmtId from_sid, ast::StmtId to_sid) {
+                auto fit = node_index.find(from_sid);
+                auto tit = node_index.find(to_sid);
+                if (fit == node_index.end() || tit == node_index.end()) return;
+                const size_t fi = fit->second;
+                const size_t ti = tit->second;
+                if (adj_seen[fi].insert(ti).second) {
+                    adj[fi].push_back(ti);
+                }
+            };
+
+            auto resolve_decl_sid_from_type = [&](ty::TypeId t) -> ast::StmtId {
+                if (t == ty::kInvalidType) return ast::k_invalid_stmt;
+                if (auto it = class_decl_by_type_.find(t); it != class_decl_by_type_.end()) return it->second;
+                if (auto it = actor_decl_by_type_.find(t); it != actor_decl_by_type_.end()) return it->second;
+                if (auto it = enum_decl_by_type_.find(t); it != enum_decl_by_type_.end()) return it->second;
+                if (auto it = field_abi_meta_by_type_.find(t); it != field_abi_meta_by_type_.end()) return it->second.sid;
+                return ast::k_invalid_stmt;
+            };
+
+            std::unordered_map<std::string, ast::StmtId> acts_decl_by_name{};
+            acts_decl_by_name.reserve(acts_qualified_name_by_stmt_.size());
+            for (const auto& kv : acts_qualified_name_by_stmt_) {
+                acts_decl_by_name[kv.second] = kv.first;
+            }
+
+            auto resolve_decl_sid_from_require_target = [&](const ast::Stmt& req_item) -> ast::StmtId {
+                if (req_item.proto_require_kind == ast::ProtoRequireKind::kNone) return ast::k_invalid_stmt;
+                const std::string raw_path = path_join_(req_item.proto_req_path_begin, req_item.proto_req_path_count);
+                if (raw_path.empty()) return ast::k_invalid_stmt;
+
+                std::string lookup = raw_path;
+                if (auto rewritten = rewrite_imported_path_(lookup)) {
+                    lookup = *rewritten;
+                }
+
+                auto sym_sid = lookup_symbol_(lookup);
+                if (!sym_sid.has_value()) return ast::k_invalid_stmt;
+                const auto& sym_obj = sym_.symbol(*sym_sid);
+
+                switch (req_item.proto_require_kind) {
+                    case ast::ProtoRequireKind::kStruct:
+                        if (sym_obj.kind == sema::SymbolKind::kField) {
+                            return resolve_decl_sid_from_type(sym_obj.declared_type);
+                        }
+                        break;
+
+                    case ast::ProtoRequireKind::kEnum:
+                        if (sym_obj.kind == sema::SymbolKind::kType) {
+                            if (auto it = enum_decl_by_name_.find(sym_obj.name); it != enum_decl_by_name_.end()) {
+                                return it->second;
+                            }
+                        }
+                        break;
+
+                    case ast::ProtoRequireKind::kClass:
+                        if (sym_obj.kind == sema::SymbolKind::kType) {
+                            if (auto it = class_decl_by_name_.find(sym_obj.name); it != class_decl_by_name_.end()) {
+                                return it->second;
+                            }
+                        }
+                        break;
+
+                    case ast::ProtoRequireKind::kActor:
+                        if (sym_obj.kind == sema::SymbolKind::kType) {
+                            if (auto it = actor_decl_by_name_.find(sym_obj.name); it != actor_decl_by_name_.end()) {
+                                return it->second;
+                            }
+                        }
+                        break;
+
+                    case ast::ProtoRequireKind::kActs:
+                        if (sym_obj.kind == sema::SymbolKind::kAct) {
+                            if (auto it = acts_decl_by_name.find(sym_obj.name); it != acts_decl_by_name.end()) {
+                                return it->second;
+                            }
+                        }
+                        break;
+
+                    case ast::ProtoRequireKind::kNone:
+                        break;
+                }
+                return ast::k_invalid_stmt;
+            };
+
+            auto resolve_proto_sid_no_diag = [&](const ast::PathRef& pr) -> std::optional<ast::StmtId> {
+                std::string key = path_join_(pr.path_begin, pr.path_count);
+                if (key.empty()) return std::nullopt;
+                if (auto rewritten = rewrite_imported_path_(key)) {
+                    key = *rewritten;
+                }
+
+                if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
+                    return it->second;
+                }
+
+                if (auto sid = lookup_symbol_(key)) {
+                    const auto& ss = sym_.symbol(*sid);
+                    auto pit = proto_decl_by_name_.find(ss.name);
+                    if (pit != proto_decl_by_name_.end()) {
+                        return pit->second;
+                    }
+                }
+                return std::nullopt;
+            };
+
+            for (const ast::StmtId sid : node_sids) {
+                const auto& s = ast_.stmt(sid);
+                if (s.kind == ast::StmtKind::kProtoDecl) {
+                    const auto& refs = ast_.path_refs();
+                    const uint64_t pb = s.decl_path_ref_begin;
+                    const uint64_t pe = pb + s.decl_path_ref_count;
+                    if (pb <= refs.size() && pe <= refs.size()) {
+                        for (uint32_t i = s.decl_path_ref_begin; i < s.decl_path_ref_begin + s.decl_path_ref_count; ++i) {
+                            if (auto psid = resolve_proto_sid_no_diag(refs[i])) {
+                                add_edge(sid, *psid);
+                            }
+                        }
+                    }
+
+                    const auto& kids = ast_.stmt_children();
+                    const uint64_t mb = s.stmt_begin;
+                    const uint64_t me = mb + s.stmt_count;
+                    if (mb <= kids.size() && me <= kids.size()) {
+                        for (uint32_t i = s.stmt_begin; i < s.stmt_begin + s.stmt_count; ++i) {
+                            const ast::StmtId msid = kids[i];
+                            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                            const auto& m = ast_.stmt(msid);
+                            if (m.kind != ast::StmtKind::kRequire ||
+                                m.proto_require_kind == ast::ProtoRequireKind::kNone) {
+                                continue;
+                            }
+                            const ast::StmtId target_sid = resolve_decl_sid_from_require_target(m);
+                            if (target_sid != ast::k_invalid_stmt) {
+                                add_edge(sid, target_sid);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if (s.kind == ast::StmtKind::kFieldDecl ||
+                    s.kind == ast::StmtKind::kEnumDecl ||
+                    s.kind == ast::StmtKind::kClassDecl ||
+                    s.kind == ast::StmtKind::kActorDecl) {
+                    const auto& refs = ast_.path_refs();
+                    const uint64_t pb = s.decl_path_ref_begin;
+                    const uint64_t pe = pb + s.decl_path_ref_count;
+                    if (pb <= refs.size() && pe <= refs.size()) {
+                        for (uint32_t i = s.decl_path_ref_begin; i < s.decl_path_ref_begin + s.decl_path_ref_count; ++i) {
+                            if (auto psid = resolve_proto_sid_no_diag(refs[i])) {
+                                add_edge(sid, *psid);
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                if (s.kind == ast::StmtKind::kActsDecl && s.acts_is_for) {
+                    const ty::TypeId owner_t = canonicalize_acts_owner_type_(s.acts_target_type);
+                    if (const ast::StmtId owner_sid = resolve_decl_sid_from_type(owner_t);
+                        owner_sid != ast::k_invalid_stmt) {
+                        add_edge(sid, owner_sid);
+                    }
+                }
+            }
+
+            auto node_label = [&](ast::StmtId sid) -> std::string {
+                if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return "<invalid>";
+                const auto& s = ast_.stmt(sid);
+                std::string kind;
+                switch (s.kind) {
+                    case ast::StmtKind::kProtoDecl: kind = "proto"; break;
+                    case ast::StmtKind::kFieldDecl: kind = "struct"; break;
+                    case ast::StmtKind::kEnumDecl: kind = "enum"; break;
+                    case ast::StmtKind::kClassDecl: kind = "class"; break;
+                    case ast::StmtKind::kActorDecl: kind = "actor"; break;
+                    case ast::StmtKind::kActsDecl: kind = "acts"; break;
+                    default: kind = "decl"; break;
+                }
+                return kind + " " + std::string(s.name);
+            };
+
+            std::vector<uint8_t> color(node_sids.size(), 0u);
+            std::vector<size_t> stack{};
+            std::vector<int32_t> stack_pos(node_sids.size(), -1);
+            std::unordered_set<std::string> reported_cycles{};
+
+            auto emit_cycle = [&](const std::vector<size_t>& cycle_nodes) {
+                if (cycle_nodes.empty()) return;
+                std::vector<ast::StmtId> cycle_sids;
+                cycle_sids.reserve(cycle_nodes.size());
+                for (const size_t idx : cycle_nodes) {
+                    cycle_sids.push_back(node_sids[idx]);
+                }
+
+                std::vector<ast::StmtId> key_sids = cycle_sids;
+                std::sort(key_sids.begin(), key_sids.end());
+                key_sids.erase(std::unique(key_sids.begin(), key_sids.end()), key_sids.end());
+
+                std::string key;
+                for (const ast::StmtId sid : key_sids) {
+                    key += std::to_string(sid);
+                    key.push_back('#');
+                }
+                if (!reported_cycles.insert(key).second) return;
+
+                std::ostringstream oss;
+                for (size_t i = 0; i < cycle_sids.size(); ++i) {
+                    if (i) oss << " -> ";
+                    oss << node_label(cycle_sids[i]);
+                }
+                if (cycle_sids.size() == 1) {
+                    oss << " -> " << node_label(cycle_sids.front());
+                }
+
+                const ast::StmtId head_sid = cycle_sids.front();
+                const Span sp = (head_sid != ast::k_invalid_stmt && (size_t)head_sid < ast_.stmts().size())
+                    ? ast_.stmt(head_sid).span
+                    : root.span;
+                diag_(diag::Code::kProtoDependencyCycle, sp, oss.str());
+                err_(sp, std::string("dependency cycle: ") + oss.str());
+            };
+
+            auto dfs = [&](auto&& self, size_t u) -> void {
+                color[u] = 1u;
+                stack_pos[u] = static_cast<int32_t>(stack.size());
+                stack.push_back(u);
+
+                for (const size_t v : adj[u]) {
+                    if (color[v] == 0u) {
+                        self(self, v);
+                    } else if (color[v] == 1u) {
+                        const int32_t pos = stack_pos[v];
+                        if (pos >= 0 && static_cast<size_t>(pos) < stack.size()) {
+                            std::vector<size_t> cyc{};
+                            for (size_t i = static_cast<size_t>(pos); i < stack.size(); ++i) {
+                                cyc.push_back(stack[i]);
+                            }
+                            emit_cycle(cyc);
+                        }
+                    }
+                }
+
+                stack.pop_back();
+                stack_pos[u] = -1;
+                color[u] = 2u;
+            };
+
+            for (size_t i = 0; i < node_sids.size(); ++i) {
+                if (color[i] == 0u) {
+                    dfs(dfs, i);
+                }
+            }
+        }
 
         // ---------------------------------------------------------
         // PASS 2: 실제 타입체크

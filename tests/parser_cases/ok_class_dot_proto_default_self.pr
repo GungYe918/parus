@@ -1,5 +1,5 @@
 proto Identifiable {
-  provide def id(self) -> i32 {
+  provide def id() -> i32 {
     return 9i32;
   }
 };
@@ -10,5 +10,5 @@ class A : Identifiable {
 
 def main() -> i32 {
   set a = A();
-  return a.id();
+  return a->id();
 }

@@ -508,6 +508,16 @@ namespace parus {
         bool has_named_group = false;
         parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
 
+        for (uint32_t i = 0; i < param_count; ++i) {
+            const auto& p = ast_.params()[param_begin + i];
+            if (!p.is_self) continue;
+            diag_report(
+                diag::Code::kProtoSelfParamForbidden,
+                p.span,
+                "proto require/provide function must not declare self parameter"
+            );
+        }
+
         uint32_t constraint_begin = 0;
         uint32_t constraint_count = 0;
         (void)parse_decl_fn_constraint_clause(constraint_begin, constraint_count);

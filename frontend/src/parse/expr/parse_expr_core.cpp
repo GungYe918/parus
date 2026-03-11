@@ -1043,15 +1043,20 @@ namespace parus {
         while (1) {
             const Token t = cursor_.peek();
 
-            // field/method access chain:
+            // member access chain:
             //   base.ident
+            //   base->ident
             //
             // 현재 AST에서는 전용 노드 대신 Binary(op='.')로 표현한다.
-            if (t.kind == K::kDot) {
-                const Token dot = cursor_.bump();
+            if (t.kind == K::kDot || t.kind == K::kArrow) {
+                const Token op = cursor_.bump();
                 const Token seg = cursor_.peek();
                 if (seg.kind != K::kIdent) {
-                    diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier after '.'");
+                    if (op.kind == K::kArrow) {
+                        diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier after '->'");
+                    } else {
+                        diag_report(diag::Code::kUnexpectedToken, seg.span, "identifier after '.'");
+                    }
                     recover_to_delim(K::kComma, K::kSemicolon, K::kRParen);
                     continue;
                 }
@@ -1065,11 +1070,10 @@ namespace parus {
 
                 ast::Expr e{};
                 e.kind = ast::ExprKind::kBinary;
-                e.op = K::kDot;
+                e.op = op.kind;
                 e.a = base;
                 e.b = rhs_id;
                 e.span = span_join(ast_.expr(base).span, seg.span);
-                (void)dot;
                 base = ast_.add_expr(e);
                 continue;
             }

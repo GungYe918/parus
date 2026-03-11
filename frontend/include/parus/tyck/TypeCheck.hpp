@@ -16,6 +16,7 @@
 #include <optional>
 #include <deque>
 #include <utility>
+#include <memory>
 #include <unordered_map> 
 #include <unordered_set>
 
@@ -555,8 +556,68 @@ namespace parus::tyck {
             bool emit_unsatisfied_diag = true,
             bool emit_shape_diag = true
         );
+        struct ConstObject;
+        struct ConstValue {
+            enum class Kind : uint8_t {
+                kInvalid = 0,
+                kInt,
+                kFloat,
+                kBool,
+                kChar,
+                kStruct,
+            };
+
+            Kind kind = Kind::kInvalid;
+            ty::TypeId type = ty::kInvalidType;
+            int64_t i64 = 0;
+            double f64 = 0.0;
+            bool b = false;
+            uint32_t ch = 0;
+            std::shared_ptr<ConstObject> object{};
+        };
+        struct ConstObject {
+            ty::TypeId type = ty::kInvalidType;
+            std::vector<std::string> field_names{};
+            std::vector<ConstValue> field_values{};
+        };
+        struct ConstBinding {
+            ConstValue value{};
+            bool is_mut = false;
+        };
+        struct ConstEvalContext {
+            uint32_t step_budget = 100000;
+            uint32_t step_count = 0;
+            uint32_t call_depth_budget = 128;
+            std::vector<ast::StmtId> call_stack{};
+        };
+
+        bool eval_const_expr_value_(ast::ExprId expr_id, ConstValue& out, Span diag_span);
+        bool eval_const_symbol_value_(uint32_t symbol_id, ConstValue& out, Span diag_span);
         bool eval_const_expr_(ast::ExprId expr_id, ConstInitData& out, Span diag_span);
         bool eval_const_symbol_(uint32_t symbol_id, ConstInitData& out, Span diag_span);
+        bool eval_const_expr_value_impl_(
+            ast::ExprId expr_id,
+            ConstValue& out,
+            Span diag_span,
+            ConstEvalContext& ctx,
+            std::unordered_map<std::string, ConstBinding>* local_env = nullptr
+        );
+        bool eval_const_symbol_value_impl_(
+            uint32_t symbol_id,
+            ConstValue& out,
+            Span diag_span,
+            ConstEvalContext& ctx
+        );
+        bool eval_const_fn_call_impl_(
+            ast::StmtId fn_sid,
+            const std::vector<ConstValue>& args,
+            ConstValue& out,
+            Span diag_span,
+            ConstEvalContext& ctx
+        );
+        bool const_value_to_scalar_init_(const ConstValue& in, ConstInitData& out) const;
+        bool const_value_type_matches_(const ConstValue& v, ty::TypeId expected) const;
+        bool const_value_is_composite_(const ConstValue& v) const;
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
@@ -646,6 +707,7 @@ namespace parus::tyck {
         std::unordered_set<ast::ExprId> proto_require_complex_diag_emitted_;
         std::unordered_map<uint32_t, ast::StmtId> const_symbol_decl_sid_;
         std::unordered_map<uint32_t, uint8_t> const_symbol_eval_state_;
+        std::unordered_map<uint32_t, ConstValue> const_symbol_runtime_values_;
         std::unordered_set<uint32_t> const_cycle_diag_emitted_;
 
     };

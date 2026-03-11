@@ -1,18 +1,20 @@
 proto P {
-  require id(self) -> i32;
-  require class(A);
+  require class(Anchor);
+  provide def id() -> i32 {
+    return 1i32;
+  }
+};
+
+class Anchor {
+  init() = default;
 };
 
 class A: P {
   id_value: i32;
   init() = default;
-
-  def id(self) -> i32 {
-    return 1i32;
-  }
 };
 
 def main() -> i32 {
   set a = A();
-  return a.id();
+  return a->id();
 }

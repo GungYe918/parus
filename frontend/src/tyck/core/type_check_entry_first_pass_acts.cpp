@@ -331,36 +331,68 @@
                         const ast::StmtId msid = kids[s.stmt_begin + i];
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
-                        if (ms.kind != ast::StmtKind::kFnDecl) continue;
-                        if (ms.fn_generic_param_count > 0) {
-                            generic_fn_template_sid_set_.insert(msid);
-                        }
-                        proto_member_fn_sid_set_.insert(msid);
+                        if (ms.kind == ast::StmtKind::kFnDecl) {
+                            if (ms.fn_generic_param_count > 0) {
+                                generic_fn_template_sid_set_.insert(msid);
+                            }
+                            proto_member_fn_sid_set_.insert(msid);
 
-                        std::string mqname = qname;
-                        if (!mqname.empty()) mqname += "::";
-                        mqname += std::string(ms.name);
-                        fn_qualified_name_by_stmt_[msid] = std::move(mqname);
+                            std::string mqname = qname;
+                            if (!mqname.empty()) mqname += "::";
+                            mqname += std::string(ms.name);
+                            fn_qualified_name_by_stmt_[msid] = std::move(mqname);
 
-                        if (ms.a != ast::k_invalid_stmt) {
-                            const std::string qfn = fn_qualified_name_by_stmt_[msid];
-                            if (auto existing = sym_.lookup_in_current(qfn)) {
-                                const auto& existing_sym = sym_.symbol(*existing);
-                                if (existing_sym.kind != sema::SymbolKind::kFn) {
-                                    err_(ms.span, "duplicate symbol (proto default function): " + qfn);
-                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                            if (ms.a != ast::k_invalid_stmt) {
+                                const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                                if (auto existing = sym_.lookup_in_current(qfn)) {
+                                    const auto& existing_sym = sym_.symbol(*existing);
+                                    if (existing_sym.kind != sema::SymbolKind::kFn) {
+                                        err_(ms.span, "duplicate symbol (proto default function): " + qfn);
+                                        diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                    } else {
+                                        (void)sym_.update_declared_type(*existing, ms.type);
+                                        fn_decl_by_name_[qfn].push_back(msid);
+                                    }
                                 } else {
-                                    (void)sym_.update_declared_type(*existing, ms.type);
-                                    fn_decl_by_name_[qfn].push_back(msid);
+                                    auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, ms.type, ms.span);
+                                    if (!fins.ok && fins.is_duplicate) {
+                                        err_(ms.span, "duplicate symbol (proto default function): " + qfn);
+                                        diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
+                                    } else {
+                                        fn_decl_by_name_[qfn].push_back(msid);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+
+                        if (ms.kind == ast::StmtKind::kVar && ms.var_is_proto_provide && ms.is_const) {
+                            std::string qvar = qname;
+                            if (!qvar.empty()) qvar += "::";
+                            qvar += std::string(ms.name);
+
+                            const ty::TypeId vt = (ms.type == ty::kInvalidType) ? types_.error() : ms.type;
+                            uint32_t var_sym = sema::SymbolTable::kNoScope;
+                            if (auto existing = sym_.lookup_in_current(qvar)) {
+                                const auto& existing_sym = sym_.symbol(*existing);
+                                if (existing_sym.kind != sema::SymbolKind::kVar) {
+                                    err_(ms.span, "duplicate symbol (proto provide const): " + qvar);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qvar);
+                                } else {
+                                    var_sym = *existing;
+                                    (void)sym_.update_declared_type(*existing, vt);
                                 }
                             } else {
-                                auto fins = sym_.insert(sema::SymbolKind::kFn, qfn, ms.type, ms.span);
-                                if (!fins.ok && fins.is_duplicate) {
-                                    err_(ms.span, "duplicate symbol (proto default function): " + qfn);
-                                    diag_(diag::Code::kDuplicateDecl, ms.span, qfn);
-                                } else {
-                                    fn_decl_by_name_[qfn].push_back(msid);
+                                auto vins = sym_.insert(sema::SymbolKind::kVar, qvar, vt, ms.span);
+                                if (!vins.ok && vins.is_duplicate) {
+                                    err_(ms.span, "duplicate symbol (proto provide const): " + qvar);
+                                    diag_(diag::Code::kDuplicateDecl, ms.span, qvar);
+                                } else if (vins.ok) {
+                                    var_sym = vins.symbol_id;
                                 }
+                            }
+                            if (var_sym != sema::SymbolTable::kNoScope) {
+                                const_symbol_decl_sid_[var_sym] = msid;
                             }
                         }
                     }

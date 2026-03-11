@@ -1,14 +1,23 @@
 proto Marker {
-  provide def mark(self) -> i32 {
+  provide def mark() -> i32 {
     return 1i32;
   }
 };
 
-struct Holder<T> with [T: Marker] {
+class Marked: Marker {
+  value: i32;
+  init() = default;
+};
+
+class Holder<T> with [T: Marker] {
   value: T;
+  init(v: T) {
+    self.value = v;
+  }
 };
 
 def main() -> i32 {
-  let h: Holder<i32> = Holder<i32>{ value: 1i32 };
-  return 0i32;
+  set m = Marked();
+  set h = Holder<Marked>(v: m);
+  return h.value->mark();
 }

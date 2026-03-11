@@ -1,13 +1,15 @@
 proto Widget {
-  provide def id(self) -> i32 {
+  provide def id() -> i32 {
     return 1i32;
   }
 };
 
 class Button : Widget {
   value: i32;
+  init() = default;
 };
 
 def main() -> i32 {
-  return 0i32;
+  set b = Button();
+  return b->id();
 }

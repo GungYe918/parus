@@ -1,5 +1,7 @@
 proto Echo<T> {
-  require echo(self, v: T) -> T;
+  provide def echo(v: T) -> T {
+    return v;
+  }
 };
 
 class Box<T>: Echo<T> {
@@ -7,10 +9,6 @@ class Box<T>: Echo<T> {
 
   init(v: T) {
     self.value = v;
-  }
-
-  def echo(self, v: T) -> T {
-    return v;
   }
 };
 
@@ -21,7 +19,7 @@ acts for Box<T> {
 };
 
 def use_i32(b: Box<i32>) -> i32 {
-  return b.get() + b.echo(v: 1i32);
+  return b.get() + b->echo(v: 1i32);
 }
 
 def main() -> i32 {

@@ -39,11 +39,11 @@
 
 현재 코드베이스 사실 기준:
 
-1. `const` 키워드는 lexer/parser에서 사용자 문법으로 활성화되어 있지 않다.
-1. `@pure`, `@comptime`는 `@` 뒤 식별자 속성으로 취급하며, 키워드형 qualifier는 고정하지 않았다.
-1. `require(expr)`는 컴파일타임 bool folding을 수행하지만 v0에서 허용 식 형태가 제한되어 있다.
-1. 현재 `require(expr)` 허용 최소 형태는 `true/false/not/and/or/==/!=` 중심의 단순 식이다.
-1. AST/Tyck/SIR/OIR에 `const item/local/fn/static const`를 위한 정식 전용 노드는 없다.
+1. `const`/`static const`/`const def` 문법은 파서에 활성화되어 있다.
+1. Tyck 단계에 const evaluator가 존재하며 const 선언 초기화식을 컴파일타임에 평가한다.
+1. v1 확장으로 `const def` 호출, `while` 기반 제어 흐름, `struct` const 값 평가를 지원한다.
+1. `loop expr`는 const 평가에서 금지한다(전용 진단).
+1. 복합(const struct) 값은 frontend 내부 모델에서 유지하며, 전역/static aggregate lowering은 v2 범위다.
 
 이 문서는 위 출발선을 기준으로 v1 도입 규칙을 고정한다.
 
@@ -92,6 +92,7 @@ v1에서 `ConstExpr`로 허용하는 최소 집합:
 1. 논리: `and or`
 1. 다른 `const item` 참조
 1. `const fn` 호출(모든 인자가 const-evaluable일 때)
+1. `struct` 리터럴 상수 (`Type{ field: expr, ... }`)
 1. 명시 캐스트(타입체커가 허용하는 안전/정의된 변환만)
 
 비허용:
@@ -117,9 +118,12 @@ v1에서 `ConstExpr`로 허용하는 최소 집합:
 ## 5.5 `const fn` 규칙
 
 1. `const fn` 본문은 const-evaluable 연산만 사용해야 한다.
+1. 허용 문: `block`, `let/set/const`(지역), `if/else`, `while`, `break`, `continue`, `return`, `expr stmt`.
+1. 금지 문: `throw`, `try/catch`, `switch`, `do/while`, `manual`, 선언류(item decl), actor 전용 문.
 1. `const fn` 내부에서 비`const fn` 호출은 금지한다.
+1. `loop expr`는 const 평가에서 금지한다(`while`만 허용).
 1. `const fn`의 부수효과(전역 쓰기, I/O, throw)는 금지한다.
-1. 재귀는 허용하되, 컴파일러 예산(깊이/스텝) 초과 시 컴파일 오류로 처리한다.
+1. 재귀는 허용하되, 컴파일러 예산(호출 깊이/스텝) 초과 시 컴파일 오류로 처리한다.
 
 ## 5.6 `static const` 규칙
 
@@ -161,9 +165,13 @@ v1에서 `ConstExpr`로 허용하는 최소 집합:
 
 1. `kConstInitializerRequired`: const 선언에 초기화식 없음
 1. `kConstExprNotEvaluable`: const 식에 비허용 연산 포함
-1. `kConstCycleDetected`: const 의존 순환
+1. `kConstExprCycle`: const 의존 순환
 1. `kConstFnCallsNonConstFn`: const fn이 non-const fn 호출
-1. `kConstFnHasSideEffect`: const fn에 부수효과 포함
+1. `kConstFnBodyUnsupportedStmt`: const fn 본문에 비허용 문 포함
+1. `kConstLoopExprNotSupported`: const 평가에서 loop 식 사용
+1. `kConstEvalCallDepthExceeded`: const 평가 호출 깊이 초과
+1. `kConstEvalStepLimitExceeded`: const 평가 스텝 예산 초과
+1. `kConstGlobalCompositeNotSupported`: v1에서 전역/static 복합 const 초기화 미지원
 1. `kStaticConstOrderInvalid`: `const static` 등 비허용 순서
 1. `kConstTypeQualifierNotEnabled`: `&const T`, `~const T` 사용
 1. `kConstBlockNotSupported`: `const { ... }` 사용

@@ -1,0 +1,9 @@
+def runtime_only(v: i32) -> i32 {
+    return v + 1i32;
+}
+
+const def bad(v: i32) -> i32 {
+    return runtime_only(v);
+}
+
+const X: i32 = bad(1i32);

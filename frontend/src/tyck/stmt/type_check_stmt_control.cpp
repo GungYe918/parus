@@ -401,9 +401,15 @@ namespace parus::tyck {
                 sym_is_mut_[var_sym] = false;
                 const_symbol_decl_sid_[var_sym] = sid;
                 if (s.init != ast::k_invalid_expr) {
-                    ConstInitData init_value{};
-                    if (eval_const_symbol_(var_sym, init_value, s.span)) {
-                        result_.const_symbol_values[var_sym] = init_value;
+                    ConstValue init_value{};
+                    if (eval_const_symbol_value_(var_sym, init_value, s.span)) {
+                        ConstInitData scalar_init{};
+                        if (const_value_to_scalar_init_(init_value, scalar_init)) {
+                            result_.const_symbol_values[var_sym] = scalar_init;
+                        } else if (is_global_decl) {
+                            diag_(diag::Code::kConstGlobalCompositeNotSupported, s.span, decl_name);
+                            err_(s.span, "global/static const composite initializer is not supported in v1");
+                        }
                     }
                 }
             }

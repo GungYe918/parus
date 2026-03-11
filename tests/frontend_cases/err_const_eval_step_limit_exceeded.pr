@@ -1,0 +1,9 @@
+const def heavy() -> i32 {
+    set mut i = 0i32;
+    while (i < 200000i32) {
+        i = i + 1i32;
+    }
+    return i;
+}
+
+const X: i32 = heavy();

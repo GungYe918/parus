@@ -1,0 +1,13 @@
+const def fact(n: i32) -> i32 {
+    if n <= 1i32 {
+        return 1i32;
+    } else {
+        return n * fact(n - 1i32);
+    }
+}
+
+const FACT5: i32 = fact(5i32);
+
+def main() -> i32 {
+    return FACT5;
+}

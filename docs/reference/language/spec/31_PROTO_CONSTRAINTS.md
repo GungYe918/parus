@@ -17,8 +17,8 @@
 proto ProtoName [: BaseProto, ...] {
   require struct(Path);
   require acts(IOOps);
-  require hash(self) -> u64;
-  provide def id(self) -> i32 { return 0i32; }
+  require hash(v: Self) -> u64;
+  provide def id() -> i32 { return 0i32; }
   provide const VERSION: i32 = 1i32;
 };
 ```
@@ -31,11 +31,12 @@ proto ProtoName [: BaseProto, ...] {
 6. `provide def`는 본문이 필수다.
 7. `provide const`만 변수 제공으로 허용한다.
 8. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
+9. proto `require/provide` 함수에서 `self` 리시버 파라미터는 금지한다.
 
 ## 19.3 require/provide 항목 의미론
 
 1. `require struct/enum/class/actor/acts(Path);`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
-2. `require foo(...) -> T;`는 구현체가 충족해야 하는 함수 계약을 추가한다.
+2. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
 3. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
 4. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
 5. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
@@ -51,16 +52,18 @@ proto ProtoName [: BaseProto, ...] {
 
 1. `class Name : ProtoA, ...` 선언으로 proto 제약을 부착할 수 있다.
 2. `struct Name : ProtoA, ...`, `enum Name : ProtoA, ...`도 선언상 허용된다.
-3. `class`는 effective required fn set을 구현해야 한다.
-4. `struct/enum`은 함수 멤버를 가지지 않으므로 effective required fn set이 비어 있어야 한다.
+3. 적용 가능한 proto는 effective required fn set이 비어 있어야 한다.
+4. `struct/enum`은 함수 멤버를 가지지 않으므로 default-only proto만 허용된다.
 5. 시그니처 매칭은 `Self`를 구현체 concrete 타입으로 정규화해 비교한다.
 6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
+7. proto `provide` 멤버 접근/호출은 `->`만 사용한다(`v->id()`, `v->Proto.id()`, `v->CONST`).
+8. `.`와 `->`는 교차 fallback하지 않는다.
 
 예시:
 
 ```parus
 proto Identifiable {
-  provide def id(self) -> i32 { return 7i32; }
+  provide def id() -> i32 { return 7i32; }
 };
 
 class User : Identifiable {
@@ -70,7 +73,7 @@ class User : Identifiable {
 
 def main() -> i32 {
   set u = User();
-  return u.id();
+  return u->id();
 }
 ```
 
@@ -93,7 +96,7 @@ def main() -> i32 {
 
 ```parus
 proto Holder<T> {
-  require get(self) -> T;
+  provide def get_default(v: T) -> T { return v; }
 };
 
 class IntHolder: Holder<i32> {
@@ -102,7 +105,13 @@ class IntHolder: Holder<i32> {
 };
 ```
 
-## 19.8 진단 코드
+## 19.8 의존 순환 금지
+
+1. `type -> proto`, `proto -> proto`, `proto -> type/acts`, `acts -> owner type` 에지를 합친 그래프에서 순환은 금지한다.
+2. 직접/간접 순환(`type <-> proto`, `proto <-> proto`, `proto -> acts -> type -> proto`)은 모두 hard error다.
+3. 진단은 `ProtoDependencyCycle`을 사용한다.
+
+## 19.9 진단 코드
 
 1. `ProtoOperatorNotAllowed`
 2. `ProtoMemberBodyNotAllowed`
@@ -116,8 +125,13 @@ class IntHolder: Holder<i32> {
 10. `GenericActsOverlap`
 11. `ActsGenericClauseRemoved`
 12. `GenericActorDeclNotSupportedV1`
+13. `ProtoSelfParamForbidden`
+14. `ProtoArrowMemberNotFound`
+15. `ProtoArrowMemberAmbiguous`
+16. `ProtoArrowQualifierRequired`
+17. `ProtoDependencyCycle`
 
-## 19.9 예외 채널 마커 proto (v0)
+## 19.10 예외 채널 마커 proto (v0)
 
 예외 채널 분류는 아래 마커 proto를 사용한다.
 

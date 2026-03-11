@@ -1,5 +1,7 @@
 proto Holder<T> {
-  require get(self) -> T;
+  provide def get_default(v: T) -> T {
+    return v;
+  }
 };
 
 class Box<T>: Holder<T> {
@@ -19,5 +21,5 @@ acts for Box<T> {
 
 def main() -> i32 {
   set b = Box<i32>(v: 5i32);
-  return b.pick() + b.get();
+  return b.pick() + b.get() + b->get_default(v: 0i32);
 }

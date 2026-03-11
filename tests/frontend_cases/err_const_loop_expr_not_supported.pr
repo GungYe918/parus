@@ -1,0 +1,8 @@
+const def bad() -> i32 {
+    set x = loop {
+        break 1i32;
+    };
+    return x;
+}
+
+const X: i32 = bad();

@@ -1,13 +1,12 @@
 proto Equatable {
-  require eq(self, rhs: &Self) -> bool;
+  provide def eq(lhs: i32, rhs: i32) -> bool {
+    return lhs == rhs;
+  }
 };
 
 class UserId : Equatable {
   value: i32;
-
-  def eq(self, rhs: &Self) -> bool {
-    return true;
-  }
+  init() = default;
 };
 
 def same<T>(a: &T, b: &T) with [T: Equatable] -> bool {
@@ -15,5 +14,9 @@ def same<T>(a: &T, b: &T) with [T: Equatable] -> bool {
 }
 
 def main() -> i32 {
-  return 0i32;
+  set u = UserId();
+  if (u->eq(lhs: 1i32, rhs: 1i32)) {
+    return 0i32;
+  }
+  return 1i32;
 }

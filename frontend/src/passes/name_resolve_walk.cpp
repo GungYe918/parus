@@ -227,8 +227,9 @@
                 case ast::ExprKind::kAssign:
                 case ast::ExprKind::kIndex: {
                     if (is_valid_expr_id_(r, e.a)) stack.push_back(e.a);
-                    if (e.kind == ast::ExprKind::kBinary && e.op == syntax::TokenKind::kDot) {
-                        // value member access는 rhs 식별자를 "심볼 이름 해소" 대상으로 보지 않는다.
+                    if (e.kind == ast::ExprKind::kBinary &&
+                        (e.op == syntax::TokenKind::kDot || e.op == syntax::TokenKind::kArrow)) {
+                        // member access(. / ->) rhs 식별자는 심볼 이름 해소 대상으로 보지 않는다.
                         break;
                     }
                     if (is_valid_expr_id_(r, e.b)) stack.push_back(e.b);

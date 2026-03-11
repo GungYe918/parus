@@ -285,8 +285,262 @@
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
 
+        auto resolve_member_owner_type = [&](ast::ExprId recv_eid, Span member_span) -> ty::TypeId {
+            if (recv_eid == ast::k_invalid_expr || (size_t)recv_eid >= ast_.exprs().size()) {
+                return ty::kInvalidType;
+            }
+            const ast::Expr& recv = ast_.expr(recv_eid);
+            if (recv.kind == ast::ExprKind::kIdent) {
+                std::string recv_lookup = std::string(recv.text);
+                if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
+                    recv_lookup = *rewritten;
+                }
+                if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                    const auto& recv_sym = sym_.symbol(*recv_sid);
+                    if (recv_sym.kind == sema::SymbolKind::kType) {
+                        diag_(diag::Code::kDotReceiverMustBeValue, recv.span, recv.text);
+                        err_(recv.span, "member access receiver must be a value, not a type name");
+                        return types_.error();
+                    }
+                }
+            }
+
+            ty::TypeId owner_t = check_expr_(recv_eid);
+            owner_t = read_decay_borrow_(types_, owner_t);
+            (void)ensure_generic_field_instance_from_type_(owner_t, member_span);
+            return owner_t;
+        };
+
+        auto resolve_owner_decl_sid_for_proto = [&](ty::TypeId owner_t) -> ast::StmtId {
+            if (owner_t == ty::kInvalidType) return ast::k_invalid_stmt;
+            if (auto it = class_decl_by_type_.find(owner_t); it != class_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = actor_decl_by_type_.find(owner_t); it != actor_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = enum_decl_by_type_.find(owner_t); it != enum_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = field_abi_meta_by_type_.find(owner_t); it != field_abi_meta_by_type_.end()) {
+                return it->second.sid;
+            }
+            return ast::k_invalid_stmt;
+        };
+
+        auto collect_proto_closure = [&](auto&& self,
+                                         ast::StmtId proto_sid,
+                                         std::unordered_set<ast::StmtId>& out) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!out.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t ib = ps.decl_path_ref_begin;
+            const uint64_t ie = ib + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ps.decl_path_ref_begin; i < ps.decl_path_ref_begin + ps.decl_path_ref_count; ++i) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], ps.span)) {
+                        self(self, *base_sid, out);
+                    }
+                }
+            }
+        };
+
+        auto proto_name_matches = [&](ast::StmtId proto_sid, std::string_view q) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            if (ps.name == q) return true;
+            if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
+                if (it->second == q) return true;
+            }
+            return false;
+        };
+
+        auto proto_qname_of = [&](ast::StmtId proto_sid) -> std::string {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) {
+                return {};
+            }
+            if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
+                return it->second;
+            }
+            return std::string(ast_.stmt(proto_sid).name);
+        };
+
+        auto check_proto_arrow_const_access = [&](ast::ExprId recv_eid,
+                                                  std::optional<std::string_view> qualifier,
+                                                  const ast::Expr& member_expr) -> ty::TypeId {
+            if (member_expr.kind != ast::ExprKind::kIdent) {
+                diag_(diag::Code::kTypeErrorGeneric, member_expr.span, "arrow member access requires identifier rhs");
+                err_(member_expr.span, "arrow member access requires identifier rhs");
+                return types_.error();
+            }
+
+            const ty::TypeId owner_t = resolve_member_owner_type(recv_eid, member_expr.span);
+            if (is_error_(owner_t)) return types_.error();
+
+            const ast::StmtId owner_sid = resolve_owner_decl_sid_for_proto(owner_t);
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
+                diag_(diag::Code::kProtoArrowMemberNotFound, member_expr.span, std::string(member_expr.text));
+                err_(member_expr.span, "proto arrow member is unavailable for this receiver type");
+                return types_.error();
+            }
+
+            std::unordered_set<ast::StmtId> proto_sids{};
+            const auto& owner = ast_.stmt(owner_sid);
+            const auto& refs = ast_.path_refs();
+            const uint64_t rb = owner.decl_path_ref_begin;
+            const uint64_t re = rb + owner.decl_path_ref_count;
+            if (rb <= refs.size() && re <= refs.size()) {
+                for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                    if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], member_expr.span)) {
+                        collect_proto_closure(collect_proto_closure, *psid, proto_sids);
+                    }
+                }
+            }
+
+            std::unordered_set<ast::StmtId> filtered{};
+            for (const ast::StmtId psid : proto_sids) {
+                if (psid == ast::k_invalid_stmt || (size_t)psid >= ast_.stmts().size()) continue;
+                if (evaluate_proto_require_at_apply_(psid, owner_t, member_expr.span,
+                                                     /*emit_unsatisfied_diag=*/false,
+                                                     /*emit_shape_diag=*/false)) {
+                    filtered.insert(psid);
+                }
+            }
+
+            if (qualifier.has_value()) {
+                std::unordered_set<ast::StmtId> narrowed{};
+                for (const ast::StmtId psid : filtered) {
+                    if (proto_name_matches(psid, *qualifier)) {
+                        collect_proto_closure(collect_proto_closure, psid, narrowed);
+                    }
+                }
+                if (narrowed.empty()) {
+                    diag_(diag::Code::kProtoArrowMemberNotFound, member_expr.span, std::string(member_expr.text));
+                    err_(member_expr.span, "unknown proto qualifier on arrow access");
+                    return types_.error();
+                }
+                filtered = std::move(narrowed);
+            }
+
+            struct ConstCandidate {
+                ast::StmtId proto_sid = ast::k_invalid_stmt;
+                ast::StmtId var_sid = ast::k_invalid_stmt;
+            };
+            std::vector<ConstCandidate> const_candidates{};
+            std::unordered_set<ast::StmtId> const_provider_protos{};
+            bool has_provided_fn_with_same_name = false;
+
+            const auto& kids = ast_.stmt_children();
+            for (const ast::StmtId psid : filtered) {
+                if (psid == ast::k_invalid_stmt || (size_t)psid >= ast_.stmts().size()) continue;
+                const auto& ps = ast_.stmt(psid);
+                const uint64_t mb = ps.stmt_begin;
+                const uint64_t me = mb + ps.stmt_count;
+                if (mb > kids.size() || me > kids.size()) continue;
+
+                bool provided_const_here = false;
+                for (uint32_t i = ps.stmt_begin; i < ps.stmt_begin + ps.stmt_count; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kProvide &&
+                        m.a != ast::k_invalid_stmt &&
+                        m.name == member_expr.text) {
+                        has_provided_fn_with_same_name = true;
+                    }
+
+                    if (m.kind != ast::StmtKind::kVar) continue;
+                    if (!m.var_is_proto_provide || !m.is_const) continue;
+                    if (m.name != member_expr.text) continue;
+                    const_candidates.push_back({psid, msid});
+                    provided_const_here = true;
+                }
+                if (provided_const_here) const_provider_protos.insert(psid);
+            }
+
+            if (const_candidates.empty()) {
+                diag_(diag::Code::kProtoArrowMemberNotFound, member_expr.span, std::string(member_expr.text));
+                if (has_provided_fn_with_same_name) {
+                    err_(member_expr.span, "arrow member is a function; call it with (...)");
+                } else {
+                    err_(member_expr.span, "proto arrow const member is not found");
+                }
+                return types_.error();
+            }
+
+            if (!qualifier.has_value() && const_provider_protos.size() > 1) {
+                diag_(diag::Code::kProtoArrowQualifierRequired, member_expr.span, std::string(member_expr.text));
+                err_(member_expr.span, "arrow const member is provided by multiple protos; use receiver->Proto.member");
+                return types_.error();
+            }
+
+            if (qualifier.has_value() && const_provider_protos.size() > 1) {
+                diag_(diag::Code::kProtoArrowMemberAmbiguous, member_expr.span, std::string(member_expr.text));
+                err_(member_expr.span, "arrow const member remains ambiguous in qualified proto closure");
+                return types_.error();
+            }
+
+            const auto& chosen = const_candidates.front();
+            if (chosen.var_sid == ast::k_invalid_stmt || (size_t)chosen.var_sid >= ast_.stmts().size()) {
+                return types_.error();
+            }
+
+            const auto& var_decl = ast_.stmt(chosen.var_sid);
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                current_expr_id_ < expr_resolved_symbol_cache_.size()) {
+                const std::string proto_q = proto_qname_of(chosen.proto_sid);
+                if (!proto_q.empty()) {
+                    const std::string symbol_qname = proto_q + "::" + std::string(var_decl.name);
+                    if (auto sid = lookup_symbol_(symbol_qname)) {
+                        expr_resolved_symbol_cache_[current_expr_id_] = *sid;
+                    }
+                }
+            }
+
+            return var_decl.type;
+        };
+
         // value member access (v0): obj.field
+        if (e.op == K::kArrow) {
+            if (e.b == ast::k_invalid_expr) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member on '->' access");
+                err_(e.span, "missing member on '->' access");
+                return types_.error();
+            }
+            const ast::Expr& rhs = ast_.expr(e.b);
+            return check_proto_arrow_const_access(e.a, std::nullopt, rhs);
+        }
+
         if (e.op == K::kDot) {
+            if (e.a != ast::k_invalid_expr) {
+                const auto& lhs = ast_.expr(e.a);
+                if (lhs.kind == ast::ExprKind::kBinary &&
+                    lhs.op == K::kArrow &&
+                    lhs.a != ast::k_invalid_expr &&
+                    lhs.b != ast::k_invalid_expr) {
+                    const auto& qualifier_expr = ast_.expr(lhs.b);
+                    if (qualifier_expr.kind != ast::ExprKind::kIdent) {
+                        diag_(diag::Code::kTypeErrorGeneric, qualifier_expr.span,
+                              "proto qualifier after '->' must be identifier");
+                        err_(qualifier_expr.span, "invalid proto qualifier in arrow member access");
+                        return types_.error();
+                    }
+                    if (e.b == ast::k_invalid_expr) {
+                        diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member after proto qualifier");
+                        err_(e.span, "missing member after proto qualifier");
+                        return types_.error();
+                    }
+                    const auto& rhs = ast_.expr(e.b);
+                    return check_proto_arrow_const_access(lhs.a, qualifier_expr.text, rhs);
+                }
+            }
+
             if (e.b == ast::k_invalid_expr) {
                 diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member on '.' access");
                 err_(e.span, "missing member on '.' access");

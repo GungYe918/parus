@@ -91,6 +91,11 @@ namespace parus::diag {
         kProtoImplTargetNotSupported,     // implements target is not a known proto
         kProtoImplMissingMember,          // implementation type misses required proto member
         kProtoConstraintUnsatisfied,      // generic/proto constraint not satisfied
+        kProtoSelfParamForbidden,         // proto require/provide function must not declare self parameter
+        kProtoArrowMemberNotFound,        // proto arrow member is not found
+        kProtoArrowMemberAmbiguous,       // proto arrow member resolves to multiple proto providers
+        kProtoArrowQualifierRequired,     // proto arrow member requires explicit proto qualifier
+        kProtoDependencyCycle,            // proto/type/acts dependency cycle detected
         kRequireExprTypeNotBool,          // require(expr); must evaluate to bool
         kRequireExprTooComplex,           // require(expr); only simple compile-time bool folding is supported
         kRequireUnsatisfied,              // require(expr); folded to false
@@ -313,6 +318,12 @@ namespace parus::diag {
         kConstExprNotEvaluable, // args[0]=reason
         kConstExprCallNotSupported, // function call is not allowed in const expression (v1)
         kConstExprCycle, // const declaration cycle detected
+        kConstFnCallsNonConstFn, // args[0]=callee
+        kConstFnBodyUnsupportedStmt, // args[0]=stmt-kind/reason
+        kConstLoopExprNotSupported, // loop expression is not allowed in const evaluation
+        kConstEvalCallDepthExceeded, // args[0]=callee
+        kConstEvalStepLimitExceeded, // args[0]=budget
+        kConstGlobalCompositeNotSupported, // args[0]=symbol
 
         // ---- place requirement (tyck) ----
         kAssignLhsMustBePlace,      // (no args)

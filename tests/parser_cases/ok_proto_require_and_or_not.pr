@@ -1,14 +1,19 @@
 proto BoolReq {
-  require f(self) -> i32;
-  require class(X);
-};
-
-class X : BoolReq {
-  def f(self) -> i32 {
+  require class(Anchor);
+  provide def f() -> i32 {
     return 1i32;
   }
 };
 
+class Anchor {
+  init() = default;
+};
+
+class X : BoolReq {
+  init() = default;
+};
+
 def main() -> i32 {
-  return 0i32;
+  set x = X();
+  return x->f();
 }

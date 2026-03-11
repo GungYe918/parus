@@ -240,64 +240,283 @@ namespace parus::tyck {
             return m.name == "init" || m.name == "deinit";
         };
 
+        auto resolve_member_owner_type = [&](ast::ExprId recv_eid, Span member_span) -> ty::TypeId {
+            if (recv_eid == ast::k_invalid_expr || (size_t)recv_eid >= ast_.exprs().size()) {
+                return ty::kInvalidType;
+            }
+
+            const ast::Expr& recv_expr = ast_.expr(recv_eid);
+            if (recv_expr.kind == ast::ExprKind::kIdent) {
+                std::string recv_lookup = std::string(recv_expr.text);
+                if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
+                    recv_lookup = *rewritten;
+                }
+                if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                    const auto& recv_sym = sym_.symbol(*recv_sid);
+                    if (recv_sym.kind == sema::SymbolKind::kType) {
+                        diag_(diag::Code::kDotReceiverMustBeValue, recv_expr.span, recv_expr.text);
+                        err_(recv_expr.span, "member-call receiver must be a value, not a type name");
+                        return types_.error();
+                    }
+                }
+            }
+
+            ty::TypeId owner_t = check_expr_(recv_eid);
+            if (owner_t != ty::kInvalidType) {
+                const auto& ot = types_.get(owner_t);
+                if (ot.kind == ty::Kind::kBorrow) {
+                    owner_t = ot.elem;
+                }
+            }
+
+            {
+                std::string owner_base;
+                std::vector<ty::TypeId> owner_args;
+                if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
+                    std::string owner_key = owner_base;
+                    if (auto rewritten = rewrite_imported_path_(owner_key)) {
+                        owner_key = *rewritten;
+                    }
+                    auto cit = class_decl_by_name_.find(owner_key);
+                    if (cit != class_decl_by_name_.end()) {
+                        if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, member_span)) {
+                            const auto& inst = ast_.stmt(*inst_sid);
+                            if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                                owner_t = inst.type;
+                            }
+                        }
+                    }
+                }
+            }
+
+            (void)ensure_generic_field_instance_from_type_(owner_t, member_span);
+            ensure_generic_acts_for_owner_(owner_t, member_span);
+            return owner_t;
+        };
+
+        auto resolve_owner_decl_sid_for_proto = [&](ty::TypeId owner_t) -> ast::StmtId {
+            if (owner_t == ty::kInvalidType) return ast::k_invalid_stmt;
+            if (auto it = class_decl_by_type_.find(owner_t); it != class_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = actor_decl_by_type_.find(owner_t); it != actor_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = enum_decl_by_type_.find(owner_t); it != enum_decl_by_type_.end()) {
+                return it->second;
+            }
+            if (auto it = field_abi_meta_by_type_.find(owner_t); it != field_abi_meta_by_type_.end()) {
+                return it->second.sid;
+            }
+            return ast::k_invalid_stmt;
+        };
+
+        auto collect_proto_closure = [&](auto&& self,
+                                         ast::StmtId proto_sid,
+                                         std::unordered_set<ast::StmtId>& out) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!out.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint64_t ib = ps.decl_path_ref_begin;
+            const uint64_t ie = ib + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ps.decl_path_ref_begin; i < ps.decl_path_ref_begin + ps.decl_path_ref_count; ++i) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], ps.span)) {
+                        self(self, *base_sid, out);
+                    }
+                }
+            }
+        };
+
+        auto proto_name_matches = [&](ast::StmtId proto_sid, std::string_view q) -> bool {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
+            if (ps.name == q) return true;
+            if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
+                if (it->second == q) return true;
+            }
+            return false;
+        };
+
+        auto collect_proto_arrow_call_overloads = [&](ty::TypeId owner_t,
+                                                      std::string_view member_name,
+                                                      std::optional<std::string_view> qualifier,
+                                                      Span member_span,
+                                                      std::vector<ast::StmtId>& out) -> bool {
+            out.clear();
+            if (owner_t == ty::kInvalidType) return false;
+
+            const ast::StmtId owner_sid = resolve_owner_decl_sid_for_proto(owner_t);
+            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
+                diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                err_(member_span, "proto arrow member is unavailable for this receiver type");
+                return false;
+            }
+
+            std::unordered_set<ast::StmtId> declared_proto_sids{};
+            const auto& owner = ast_.stmt(owner_sid);
+            const auto& refs = ast_.path_refs();
+            const uint64_t rb = owner.decl_path_ref_begin;
+            const uint64_t re = rb + owner.decl_path_ref_count;
+            if (rb <= refs.size() && re <= refs.size()) {
+                for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+                    if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], member_span)) {
+                        collect_proto_closure(collect_proto_closure, *psid, declared_proto_sids);
+                    }
+                }
+            }
+
+            std::unordered_set<ast::StmtId> filtered_proto_sids{};
+            filtered_proto_sids.reserve(declared_proto_sids.size());
+            for (const ast::StmtId psid : declared_proto_sids) {
+                if (psid == ast::k_invalid_stmt || (size_t)psid >= ast_.stmts().size()) continue;
+                if (evaluate_proto_require_at_apply_(psid, owner_t, member_span,
+                                                     /*emit_unsatisfied_diag=*/false,
+                                                     /*emit_shape_diag=*/false)) {
+                    filtered_proto_sids.insert(psid);
+                }
+            }
+
+            if (qualifier.has_value()) {
+                std::unordered_set<ast::StmtId> narrowed{};
+                for (const ast::StmtId psid : filtered_proto_sids) {
+                    if (proto_name_matches(psid, *qualifier)) {
+                        collect_proto_closure(collect_proto_closure, psid, narrowed);
+                    }
+                }
+                if (narrowed.empty()) {
+                    diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                    err_(member_span, "unknown proto qualifier on arrow access");
+                    return false;
+                }
+                filtered_proto_sids = std::move(narrowed);
+            }
+
+            std::unordered_set<ast::StmtId> provider_proto_sids{};
+            const auto& kids = ast_.stmt_children();
+            for (const ast::StmtId psid : filtered_proto_sids) {
+                if (psid == ast::k_invalid_stmt || (size_t)psid >= ast_.stmts().size()) continue;
+                const auto& ps = ast_.stmt(psid);
+                const uint64_t mb = ps.stmt_begin;
+                const uint64_t me = mb + ps.stmt_count;
+                if (mb > kids.size() || me > kids.size()) continue;
+                bool provided_here = false;
+                for (uint32_t i = ps.stmt_begin; i < ps.stmt_begin + ps.stmt_count; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind != ast::StmtKind::kFnDecl) continue;
+                    if (m.proto_fn_role != ast::ProtoFnRole::kProvide) continue;
+                    if (m.a == ast::k_invalid_stmt) continue;
+                    if (m.name != member_name) continue;
+                    out.push_back(msid);
+                    provided_here = true;
+                }
+                if (provided_here) provider_proto_sids.insert(psid);
+            }
+
+            if (out.empty()) {
+                diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                err_(member_span, "proto arrow call target is not found");
+                return false;
+            }
+
+            if (!qualifier.has_value() && provider_proto_sids.size() > 1) {
+                diag_(diag::Code::kProtoArrowQualifierRequired, member_span, std::string(member_name));
+                err_(member_span, "arrow member is provided by multiple protos; use receiver->Proto.member");
+                return false;
+            }
+
+            if (qualifier.has_value() && provider_proto_sids.size() > 1) {
+                diag_(diag::Code::kProtoArrowMemberAmbiguous, member_span, std::string(member_name));
+                err_(member_span, "arrow member remains ambiguous in qualified proto closure");
+                return false;
+            }
+
+            return true;
+        };
+
         // ------------------------------------------------------------
         // 1) method call fast-path: `value.ident(...)`
         // ------------------------------------------------------------
         {
             const ast::Expr& callee_expr = ast_.expr(e.a);
             if (callee_expr.kind == ast::ExprKind::kBinary &&
+                callee_expr.op == K::kArrow &&
+                callee_expr.a != ast::k_invalid_expr &&
+                callee_expr.b != ast::k_invalid_expr) {
+                const ast::Expr& rhs = ast_.expr(callee_expr.b);
+                if (rhs.kind == ast::ExprKind::kIdent) {
+                    const ty::TypeId owner_t = resolve_member_owner_type(callee_expr.a, rhs.span);
+                    if (is_error_(owner_t)) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    std::vector<ast::StmtId> proto_overloads;
+                    if (!collect_proto_arrow_call_overloads(owner_t, rhs.text, std::nullopt, rhs.span, proto_overloads)) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    overload_decl_ids.insert(overload_decl_ids.end(), proto_overloads.begin(), proto_overloads.end());
+                    is_dot_method_call = true;
+                    dot_owner_type = owner_t;
+                    dot_needs_self_normalization = false;
+                    callee_name = types_.to_string(owner_t) + "->" + std::string(rhs.text);
+                }
+            }
+
+            if (!is_dot_method_call &&
+                callee_expr.kind == ast::ExprKind::kBinary &&
                 callee_expr.op == K::kDot &&
                 callee_expr.a != ast::k_invalid_expr &&
                 callee_expr.b != ast::k_invalid_expr) {
                 const ast::Expr& rhs = ast_.expr(callee_expr.b);
                 if (rhs.kind == ast::ExprKind::kIdent) {
-                    const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
-                    if (recv_expr.kind == ast::ExprKind::kIdent) {
-                        std::string recv_lookup = std::string(recv_expr.text);
-                        if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
-                            recv_lookup = *rewritten;
+                    ast::ExprId recv_eid = callee_expr.a;
+                    std::optional<std::string_view> proto_qualifier{};
+                    const ast::Expr& dot_lhs = ast_.expr(callee_expr.a);
+                    if (dot_lhs.kind == ast::ExprKind::kBinary &&
+                        dot_lhs.op == K::kArrow &&
+                        dot_lhs.a != ast::k_invalid_expr &&
+                        dot_lhs.b != ast::k_invalid_expr) {
+                        const ast::Expr& qualifier_expr = ast_.expr(dot_lhs.b);
+                        if (qualifier_expr.kind != ast::ExprKind::kIdent) {
+                            diag_(diag::Code::kUnexpectedToken, qualifier_expr.span, "proto qualifier after '->'");
+                            err_(qualifier_expr.span, "invalid proto qualifier in arrow member call");
+                            check_all_arg_exprs_only();
+                            return types_.error();
                         }
-                        if (auto recv_sid = lookup_symbol_(recv_lookup)) {
-                            const auto& recv_sym = sym_.symbol(*recv_sid);
-                            if (recv_sym.kind == sema::SymbolKind::kType) {
-                                diag_(diag::Code::kDotReceiverMustBeValue, recv_expr.span, recv_expr.text);
-                                err_(recv_expr.span, "dot call receiver must be a value, not a type name");
-                                check_all_arg_exprs_only();
-                                return types_.error();
-                            }
-                        }
+                        recv_eid = dot_lhs.a;
+                        proto_qualifier = qualifier_expr.text;
                     }
 
-                    ty::TypeId owner_t = check_expr_(callee_expr.a);
-                    if (owner_t != ty::kInvalidType) {
-                        const auto& ot = types_.get(owner_t);
-                        if (ot.kind == ty::Kind::kBorrow) {
-                            owner_t = ot.elem;
-                        }
+                    ty::TypeId owner_t = resolve_member_owner_type(recv_eid, rhs.span);
+                    if (is_error_(owner_t)) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
                     }
 
-                    {
-                        std::string owner_base;
-                        std::vector<ty::TypeId> owner_args;
-                        if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
-                            std::string owner_key = owner_base;
-                            if (auto rewritten = rewrite_imported_path_(owner_key)) {
-                                owner_key = *rewritten;
-                            }
-                            auto cit = class_decl_by_name_.find(owner_key);
-                            if (cit != class_decl_by_name_.end()) {
-                                if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, rhs.span)) {
-                                    const auto& inst = ast_.stmt(*inst_sid);
-                                    if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
-                                        owner_t = inst.type;
-                                    }
-                                }
-                            }
+                    if (proto_qualifier.has_value()) {
+                        std::vector<ast::StmtId> proto_overloads;
+                        if (!collect_proto_arrow_call_overloads(owner_t, rhs.text, proto_qualifier, rhs.span, proto_overloads)) {
+                            check_all_arg_exprs_only();
+                            return types_.error();
                         }
+
+                        overload_decl_ids.insert(overload_decl_ids.end(), proto_overloads.begin(), proto_overloads.end());
+                        is_dot_method_call = true;
+                        dot_owner_type = owner_t;
+                        dot_needs_self_normalization = false;
+                        callee_name = types_.to_string(owner_t) + "->" + std::string(*proto_qualifier) + "." + std::string(rhs.text);
                     }
 
-                    (void)ensure_generic_field_instance_from_type_(owner_t, rhs.span);
-                    ensure_generic_acts_for_owner_(owner_t, rhs.span);
+                    if (!is_dot_method_call) {
 
                     auto resolve_owner_type_in_map = [&](auto& method_map, ty::TypeId t) -> ty::TypeId {
                         if (t == ty::kInvalidType) return t;
@@ -462,6 +681,7 @@ namespace parus::tyck {
                             check_all_arg_exprs_only();
                             return types_.error();
                         }
+                    }
                     }
                 }
             }

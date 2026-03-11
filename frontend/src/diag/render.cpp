@@ -97,6 +97,11 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "ProtoImplTargetNotSupported";
             case Code::kProtoImplMissingMember: return "ProtoImplMissingMember";
             case Code::kProtoConstraintUnsatisfied: return "ProtoConstraintUnsatisfied";
+            case Code::kProtoSelfParamForbidden: return "ProtoSelfParamForbidden";
+            case Code::kProtoArrowMemberNotFound: return "ProtoArrowMemberNotFound";
+            case Code::kProtoArrowMemberAmbiguous: return "ProtoArrowMemberAmbiguous";
+            case Code::kProtoArrowQualifierRequired: return "ProtoArrowQualifierRequired";
+            case Code::kProtoDependencyCycle: return "ProtoDependencyCycle";
             case Code::kRequireExprTypeNotBool: return "RequireExprTypeNotBool";
             case Code::kRequireExprTooComplex: return "RequireExprTooComplex";
             case Code::kRequireUnsatisfied: return "RequireUnsatisfied";
@@ -335,6 +340,12 @@ namespace parus::diag {
             case Code::kConstExprNotEvaluable: return "ConstExprNotEvaluable";
             case Code::kConstExprCallNotSupported: return "ConstExprCallNotSupported";
             case Code::kConstExprCycle: return "ConstExprCycle";
+            case Code::kConstFnCallsNonConstFn: return "ConstFnCallsNonConstFn";
+            case Code::kConstFnBodyUnsupportedStmt: return "ConstFnBodyUnsupportedStmt";
+            case Code::kConstLoopExprNotSupported: return "ConstLoopExprNotSupported";
+            case Code::kConstEvalCallDepthExceeded: return "ConstEvalCallDepthExceeded";
+            case Code::kConstEvalStepLimitExceeded: return "ConstEvalStepLimitExceeded";
+            case Code::kConstGlobalCompositeNotSupported: return "ConstGlobalCompositeNotSupported";
 
             case Code::kWriteToImmutable: return "WriteToImmutable";
         }
@@ -409,6 +420,11 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "implementation target is not a supported proto";
             case Code::kProtoImplMissingMember: return "proto implementation is missing a required member";
             case Code::kProtoConstraintUnsatisfied: return "proto constraint is not satisfied";
+            case Code::kProtoSelfParamForbidden: return "proto require/provide function must not declare self parameter";
+            case Code::kProtoArrowMemberNotFound: return "proto member is not found on arrow access";
+            case Code::kProtoArrowMemberAmbiguous: return "proto arrow member is ambiguous";
+            case Code::kProtoArrowQualifierRequired: return "proto arrow member requires an explicit proto qualifier";
+            case Code::kProtoDependencyCycle: return "proto/type/acts dependency cycle detected";
             case Code::kRequireExprTypeNotBool: return "require(expr) must evaluate to bool";
             case Code::kRequireExprTooComplex: return "require(expr) supports only simple boolean folding (true/false/not/and/or/==/!=) in v0";
             case Code::kRequireUnsatisfied: return "require(expr) evaluated to false";
@@ -654,6 +670,12 @@ namespace parus::diag {
             case Code::kConstExprNotEvaluable: return "const expression is not evaluable: {0}";
             case Code::kConstExprCallNotSupported: return "function calls are not supported in const expressions (v1)";
             case Code::kConstExprCycle: return "const declaration cycle detected";
+            case Code::kConstFnCallsNonConstFn: return "const evaluation can only call const def (callee: {0})";
+            case Code::kConstFnBodyUnsupportedStmt: return "const def body contains unsupported statement: {0}";
+            case Code::kConstLoopExprNotSupported: return "loop expression is not allowed in const evaluation (use while statement)";
+            case Code::kConstEvalCallDepthExceeded: return "const evaluation call depth limit exceeded while calling '{0}'";
+            case Code::kConstEvalStepLimitExceeded: return "const evaluation step limit exceeded (budget={0})";
+            case Code::kConstGlobalCompositeNotSupported: return "global/static const composite initializer is not supported in v1: '{0}'";
 
             case Code::kWriteToImmutable: return "cannot write to immutable binding (declare it with 'mut')";
         }
@@ -727,6 +749,11 @@ namespace parus::diag {
             case Code::kProtoImplTargetNotSupported: return "구현 대상으로 지정한 항목이 지원되는 proto가 아닙니다";
             case Code::kProtoImplMissingMember: return "proto 구현에 필요한 멤버가 누락되었습니다";
             case Code::kProtoConstraintUnsatisfied: return "proto 제약을 만족하지 못했습니다";
+            case Code::kProtoSelfParamForbidden: return "proto require/provide 함수는 self 파라미터를 선언할 수 없습니다";
+            case Code::kProtoArrowMemberNotFound: return "-> 접근에서 proto 멤버를 찾을 수 없습니다";
+            case Code::kProtoArrowMemberAmbiguous: return "-> 접근의 proto 멤버가 모호합니다";
+            case Code::kProtoArrowQualifierRequired: return "-> 접근의 proto 멤버는 명시적 proto 한정자가 필요합니다";
+            case Code::kProtoDependencyCycle: return "proto/type/acts 의존 순환이 감지되었습니다";
             case Code::kRequireExprTypeNotBool: return "require(expr)는 bool로 평가되어야 합니다";
             case Code::kRequireExprTooComplex: return "v0에서 require(expr)는 단순 bool 폴딩(true/false/not/and/or/==/!=)만 허용됩니다";
             case Code::kRequireUnsatisfied: return "require(expr)가 false로 평가되었습니다";
@@ -978,6 +1005,12 @@ namespace parus::diag {
             case Code::kConstExprNotEvaluable: return "const 식을 평가할 수 없습니다: {0}";
             case Code::kConstExprCallNotSupported: return "v1 const 식에서는 함수 호출을 지원하지 않습니다";
             case Code::kConstExprCycle: return "const 선언 간 순환 참조가 감지되었습니다";
+            case Code::kConstFnCallsNonConstFn: return "const 평가에서는 const def만 호출할 수 있습니다(호출 대상: {0})";
+            case Code::kConstFnBodyUnsupportedStmt: return "const def 본문에 지원되지 않는 문이 있습니다: {0}";
+            case Code::kConstLoopExprNotSupported: return "const 평가에서는 loop 식을 사용할 수 없습니다(while 문을 사용하세요)";
+            case Code::kConstEvalCallDepthExceeded: return "const 평가 호출 깊이 제한을 초과했습니다(호출 대상: '{0}')";
+            case Code::kConstEvalStepLimitExceeded: return "const 평가 단계 제한을 초과했습니다(예산={0})";
+            case Code::kConstGlobalCompositeNotSupported: return "v1에서는 전역/static const의 복합 초기화식을 지원하지 않습니다: '{0}'";
 
             case Code::kWriteToImmutable: return "불변 변수에 대해 값을 쓸 수 없습니다";
         }

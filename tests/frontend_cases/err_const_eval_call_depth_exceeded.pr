@@ -1,0 +1,5 @@
+const def recurse(n: i32) -> i32 {
+    return recurse(n + 1i32);
+}
+
+const X: i32 = recurse(0i32);

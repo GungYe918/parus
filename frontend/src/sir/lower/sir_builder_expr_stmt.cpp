@@ -151,6 +151,24 @@ namespace parus::sir::detail {
             }
 
             case parus::ast::ExprKind::kBinary: {
+                const bool is_proto_arrow_form =
+                    (e.op == parus::syntax::TokenKind::kArrow) ||
+                    (e.op == parus::syntax::TokenKind::kDot &&
+                     e.a != parus::ast::k_invalid_expr &&
+                     ast.expr(e.a).kind == parus::ast::ExprKind::kBinary &&
+                     ast.expr(e.a).op == parus::syntax::TokenKind::kArrow);
+                if (is_proto_arrow_form) {
+                    const SymbolId resolved_sym = resolve_symbol_from_expr(nres, tyck, eid);
+                    if (resolved_sym != k_invalid_symbol) {
+                        v.kind = ValueKind::kLocal;
+                        v.sym = resolved_sym;
+                        if ((size_t)resolved_sym < sym.symbols().size()) {
+                            v.text = sym.symbol(resolved_sym).name;
+                        }
+                        break;
+                    }
+                }
+
                 if (e.op == parus::syntax::TokenKind::kDot) {
                     v.kind = ValueKind::kField;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
