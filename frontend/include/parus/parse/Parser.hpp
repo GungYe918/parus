@@ -153,6 +153,8 @@ namespace parus {
 
         //  stmt/decl 혼용의 내부 엔트리
         ast::StmtId parse_stmt_any();
+        ast::StmtId parse_stmt_compiler_if_directive();
+        ast::StmtId parse_stmt_compiler_intrinsic_directive();
 
         //  expr ';' 문장 파싱
         ast::StmtId parse_stmt_expr();
@@ -252,6 +254,7 @@ namespace parus {
         ast::ExprId parse_macro_call_expr();
         bool parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
         std::pair<uint32_t, uint32_t> parse_macro_call_arg_tokens();
+        bool parse_compiler_directive_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
 
         // --------------------
         // recovery & misc
@@ -262,6 +265,8 @@ namespace parus {
 
         //  ';'를 요구하되 없으면 stmt 경계까지 recovery
         Span stmt_consume_semicolon_or_recover(Span fallback_end);
+        // ';'가 있으면 소비, 없으면 현재 span을 종료점으로 사용
+        Span stmt_consume_optional_semicolon(Span fallback_end);
 
         //  현재 위치에서 stmt 경계(';', '}', EOF)까지 스킵
         void stmt_sync_to_boundary();

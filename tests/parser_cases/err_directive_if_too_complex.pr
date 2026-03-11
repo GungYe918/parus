@@ -1,0 +1,4 @@
+//@expect-error DirectiveIfConditionTooComplex
+$[if(flag)] struct Hidden {
+  value: i32;
+};

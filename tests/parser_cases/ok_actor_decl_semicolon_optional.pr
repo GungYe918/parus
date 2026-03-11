@@ -5,10 +5,9 @@ actor Counter {
 
   init(seed: i32) {
     draft.value = seed;
-    commit;
   }
 
-  def pub get() -> i32 {
+  def sub get() -> i32 {
     recast;
     return draft.value;
   }

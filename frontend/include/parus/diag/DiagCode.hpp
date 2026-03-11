@@ -94,6 +94,11 @@ namespace parus::diag {
         kRequireExprTypeNotBool,          // require(expr); must evaluate to bool
         kRequireExprTooComplex,           // require(expr); only simple compile-time bool folding is supported
         kRequireUnsatisfied,              // require(expr); folded to false
+        kDirectiveIfConditionTypeNotBool, // $[if(...)] condition must fold to bool
+        kDirectiveIfConditionTooComplex,  // $[if(...)] supports simple bool folding only (v1)
+        kDirectiveIfItemExpected,         // $[if(...)] must be followed by an item declaration
+        kDirectiveIntrinsicSyntax,        // $![...] syntax error
+        kDirectiveIntrinsicPolicyPending, // $![...] parsed but intrinsic policy is not fixed yet (warning)
         kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
         kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
         kClassLifecycleDirectCallForbidden, // init/deinit direct calls are forbidden (compiler-managed lifecycle)

@@ -323,7 +323,7 @@
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         const uint32_t member_begin = (uint32_t)ast_.stmt_children().size();
         for (auto sid : members) {

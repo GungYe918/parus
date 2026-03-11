@@ -239,6 +239,7 @@ namespace parusc::dump {
             case K::kClassDecl: return "ClassDecl";
             case K::kActorDecl: return "ActorDecl";
             case K::kActsDecl: return "ActsDecl";
+            case K::kCompilerIntrinsicDirective: return "CompilerIntrinsicDirective";
             case K::kSwitch: return "Switch";
             case K::kError: return "Error";
         }

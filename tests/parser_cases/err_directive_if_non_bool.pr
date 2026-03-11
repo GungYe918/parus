@@ -1,0 +1,4 @@
+//@expect-error DirectiveIfConditionTypeNotBool
+$[if(1i32)] struct Hidden {
+  value: i32;
+};

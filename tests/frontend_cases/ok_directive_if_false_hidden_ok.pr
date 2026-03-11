@@ -1,0 +1,11 @@
+$[if(false)] struct Hidden {
+  value: i32;
+};
+
+struct Visible {
+  value: i32;
+};
+
+def main() -> i32 {
+  return 0i32;
+}

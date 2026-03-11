@@ -161,6 +161,12 @@ namespace parus {
         if (k == K::kKwWhile || k == K::kKwDo || k == K::kKwSwitch)         return true;
         if (k == K::kKwManual)                                               return true;
         if (k == K::kKwUse)                                                 return true;
+        if (k == K::kDollar) {
+            const auto k1 = cursor_.peek(1).kind;
+            const auto k2 = cursor_.peek(2).kind;
+            if (k1 == K::kLBracket) return true;
+            if (k1 == K::kBang && k2 == K::kLBracket) return true;
+        }
 
         // if/loop/{...} 는 expr도 될 수 있으므로 여기 넣지 않음
         return false;
@@ -255,6 +261,52 @@ namespace parus {
         }
 
         return true;
+    }
+
+    bool Parser::parse_compiler_directive_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span) {
+        using K = syntax::TokenKind;
+        out_path_begin = static_cast<uint32_t>(ast_.path_segs().size());
+        out_path_count = 0;
+
+        auto eat_coloncolon = [&]() -> bool {
+            if (cursor_.eat(K::kColonColon)) return true;
+            if (cursor_.at(K::kColon) && cursor_.peek(1).kind == K::kColon) {
+                cursor_.bump();
+                cursor_.bump();
+                return true;
+            }
+            return false;
+        };
+
+        Token seg = cursor_.peek();
+        if (seg.kind != K::kIdent) {
+            diag_report(diag::Code::kDirectiveIntrinsicSyntax, seg.span, "expected path segment");
+            out_span = seg.span;
+            return false;
+        }
+
+        while (true) {
+            seg = cursor_.peek();
+            if (seg.kind != K::kIdent) {
+                diag_report(diag::Code::kDirectiveIntrinsicSyntax, seg.span, "expected path segment");
+                return out_path_count > 0;
+            }
+
+            cursor_.bump();
+            ast_.add_path_seg(seg.lexeme);
+            ++out_path_count;
+            if (out_path_count == 1) {
+                out_span = seg.span;
+            } else {
+                out_span = span_join(out_span, seg.span);
+            }
+
+            if (cursor_.eat(K::kDot)) continue;
+            if (eat_coloncolon()) continue;
+            break;
+        }
+
+        return out_path_count > 0;
     }
 
     std::pair<uint32_t, uint32_t> Parser::parse_macro_call_arg_tokens() {

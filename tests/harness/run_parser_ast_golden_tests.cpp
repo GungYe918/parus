@@ -161,6 +161,7 @@ static const char* stmt_kind_name_(parus::ast::StmtKind k) {
         case K::kActsDecl: return "ActsDecl";
         case K::kUse: return "Use";
         case K::kNestDecl: return "NestDecl";
+        case K::kCompilerIntrinsicDirective: return "CompilerIntrinsicDirective";
     }
     return "UnknownStmt";
 }
@@ -900,6 +901,11 @@ static void dump_stmt_(
             append_line_(out, depth + 1, "rhs_ident=" + escape_string_(s.use_rhs_ident));
             append_line_(out, depth + 1, "path=" + escape_string_(join_path_(ast, s.use_path_begin, s.use_path_count)));
             dump_expr_ref_(ast, s.expr, depth + 1, out, state, "expr");
+            break;
+
+        case parus::ast::StmtKind::kCompilerIntrinsicDirective:
+            append_line_(out, depth + 1, "key_path=" + escape_string_(join_path_(ast, s.directive_key_path_begin, s.directive_key_path_count)));
+            append_line_(out, depth + 1, "target_path=" + escape_string_(join_path_(ast, s.directive_target_path_begin, s.directive_target_path_count)));
             break;
 
         default:

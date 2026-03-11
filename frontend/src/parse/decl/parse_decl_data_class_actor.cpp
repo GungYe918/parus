@@ -580,7 +580,7 @@
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
         for (const auto sid : members) {
@@ -962,7 +962,7 @@
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         if (!seen_draft) {
             diag_report(diag::Code::kActorRequiresSingleDraft, span_join(start, end_sp));

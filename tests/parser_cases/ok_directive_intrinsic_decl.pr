@@ -1,0 +1,9 @@
+$![thread.spawn = lib::spawn];
+
+struct Marker {
+  value: i32;
+}
+
+def main() -> i32 {
+  return 0i32;
+}

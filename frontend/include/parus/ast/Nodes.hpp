@@ -112,6 +112,7 @@ namespace parus::ast {
         // use
         kUse,
         kNestDecl,   // nest foo; / nest foo { ... }
+        kCompilerIntrinsicDirective, // $![key.path = target::path];
     };
 
     inline constexpr uint8_t kManualPermGet = 1u << 0;
@@ -627,6 +628,12 @@ namespace parus::ast {
         uint32_t nest_path_begin = 0;
         uint32_t nest_path_count = 0;
         bool nest_is_file_directive = false; // nest foo;
+
+        // ---- compiler intrinsic directive ----
+        uint32_t directive_key_path_begin = 0;
+        uint32_t directive_key_path_count = 0;
+        uint32_t directive_target_path_begin = 0;
+        uint32_t directive_target_path_count = 0;
 
         // ---- manual stmt ----
         // bit0: get, bit1: set, bit2: abi

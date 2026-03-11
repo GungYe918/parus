@@ -89,6 +89,18 @@ namespace parus {
         const auto& tok = cursor_.peek();
         using K = syntax::TokenKind;
 
+        // compiler directives:
+        // - $[if(cond)] <item-decl>
+        // - $![key.path = target::path];
+        if (tok.kind == K::kDollar && cursor_.peek(1).kind == K::kLBracket) {
+            return parse_stmt_compiler_if_directive();
+        }
+        if (tok.kind == K::kDollar &&
+            cursor_.peek(1).kind == K::kBang &&
+            cursor_.peek(2).kind == K::kLBracket) {
+            return parse_stmt_compiler_intrinsic_directive();
+        }
+
         // decl start => decl 파서로 위임
         if (is_decl_start(tok.kind)) {
             return parse_decl_any();
@@ -147,6 +159,195 @@ namespace parus {
         if (tok.kind == K::kKwMut && is_var_stmt_start_lookahead(/*off=*/0)) return parse_stmt_var();
 
         return parse_stmt_expr();
+    }
+
+    ast::StmtId Parser::parse_stmt_compiler_if_directive() {
+        using K = syntax::TokenKind;
+
+        const Token dol = cursor_.peek();
+        if (!cursor_.eat(K::kDollar)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "$");
+            return ast::k_invalid_stmt;
+        }
+        if (!cursor_.eat(K::kLBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "[");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+            return ast::k_invalid_stmt;
+        }
+        if (!cursor_.eat(K::kKwIf)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "if");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+            return ast::k_invalid_stmt;
+        }
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            recover_to_delim(K::kLParen, K::kRParen, K::kRBracket);
+            (void)cursor_.eat(K::kLParen);
+        }
+
+        ast::ExprId cond = ast::k_invalid_expr;
+        if (!cursor_.at(K::kRParen) && !cursor_.at(K::kRBracket) && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kEof)) {
+            cond = parse_expr();
+        }
+
+        if (!cursor_.eat(K::kRParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+            recover_to_delim(K::kRParen, K::kRBracket, K::kSemicolon);
+            (void)cursor_.eat(K::kRParen);
+        }
+        if (!cursor_.eat(K::kRBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+        }
+
+        enum class IfFold : uint8_t {
+            kTrue,
+            kFalse,
+            kTypeNotBool,
+            kTooComplex,
+        };
+        const auto fold_cond = [&](auto&& self, ast::ExprId eid) -> IfFold {
+            if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) {
+                return IfFold::kTooComplex;
+            }
+            const auto& e = ast_.expr(eid);
+            switch (e.kind) {
+                case ast::ExprKind::kBoolLit:
+                    return (e.text == "true") ? IfFold::kTrue : IfFold::kFalse;
+
+                case ast::ExprKind::kUnary: {
+                    if (e.op != K::kKwNot) return IfFold::kTooComplex;
+                    const IfFold inner = self(self, e.a);
+                    if (inner == IfFold::kTrue) return IfFold::kFalse;
+                    if (inner == IfFold::kFalse) return IfFold::kTrue;
+                    return inner;
+                }
+
+                case ast::ExprKind::kBinary: {
+                    const IfFold lhs = self(self, e.a);
+                    const IfFold rhs = self(self, e.b);
+                    if (lhs == IfFold::kTooComplex || rhs == IfFold::kTooComplex) {
+                        return IfFold::kTooComplex;
+                    }
+                    if ((lhs != IfFold::kTrue && lhs != IfFold::kFalse) ||
+                        (rhs != IfFold::kTrue && rhs != IfFold::kFalse)) {
+                        return IfFold::kTypeNotBool;
+                    }
+                    const bool l = (lhs == IfFold::kTrue);
+                    const bool r = (rhs == IfFold::kTrue);
+                    if (e.op == K::kKwAnd) return (l && r) ? IfFold::kTrue : IfFold::kFalse;
+                    if (e.op == K::kKwOr) return (l || r) ? IfFold::kTrue : IfFold::kFalse;
+                    if (e.op == K::kEqEq) return (l == r) ? IfFold::kTrue : IfFold::kFalse;
+                    if (e.op == K::kBangEq) return (l != r) ? IfFold::kTrue : IfFold::kFalse;
+                    return IfFold::kTooComplex;
+                }
+
+                case ast::ExprKind::kIntLit:
+                case ast::ExprKind::kFloatLit:
+                case ast::ExprKind::kStringLit:
+                case ast::ExprKind::kCharLit:
+                case ast::ExprKind::kNullLit:
+                case ast::ExprKind::kArrayLit:
+                case ast::ExprKind::kFieldInit:
+                    return IfFold::kTypeNotBool;
+
+                default:
+                    return IfFold::kTooComplex;
+            }
+        };
+
+        bool enabled = false;
+        const IfFold folded = fold_cond(fold_cond, cond);
+        switch (folded) {
+            case IfFold::kTrue:
+                enabled = true;
+                break;
+            case IfFold::kFalse:
+                enabled = false;
+                break;
+            case IfFold::kTypeNotBool:
+                diag_report(diag::Code::kDirectiveIfConditionTypeNotBool,
+                            cond == ast::k_invalid_expr ? dol.span : ast_.expr(cond).span);
+                break;
+            case IfFold::kTooComplex:
+                diag_report(diag::Code::kDirectiveIfConditionTooComplex,
+                            cond == ast::k_invalid_expr ? dol.span : ast_.expr(cond).span);
+                break;
+        }
+
+        if (!is_decl_start(cursor_.peek().kind)) {
+            diag_report(diag::Code::kDirectiveIfItemExpected, cursor_.peek().span);
+            if (!cursor_.at(K::kSemicolon) && !cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
+                stmt_sync_to_boundary();
+            }
+            if (cursor_.at(K::kSemicolon)) (void)cursor_.bump();
+            return ast::k_invalid_stmt;
+        }
+
+        const ast::StmtId sid = parse_decl_any();
+        if (!enabled) return ast::k_invalid_stmt;
+        return sid;
+    }
+
+    ast::StmtId Parser::parse_stmt_compiler_intrinsic_directive() {
+        using K = syntax::TokenKind;
+
+        const Token start = cursor_.peek();
+
+        (void)cursor_.eat(K::kDollar);
+        if (!cursor_.eat(K::kBang)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "!");
+            return ast::k_invalid_stmt;
+        }
+        if (!cursor_.eat(K::kLBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "[");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+            return ast::k_invalid_stmt;
+        }
+
+        uint32_t key_begin = 0;
+        uint32_t key_count = 0;
+        Span key_span = start.span;
+        const bool key_ok = parse_compiler_directive_path(key_begin, key_count, key_span);
+
+        if (!cursor_.eat(K::kAssign)) {
+            diag_report(diag::Code::kDirectiveIntrinsicSyntax, cursor_.peek().span, "expected '='");
+            recover_to_delim(K::kAssign, K::kRBracket, K::kSemicolon);
+            (void)cursor_.eat(K::kAssign);
+        }
+
+        uint32_t target_begin = 0;
+        uint32_t target_count = 0;
+        Span target_span = key_span;
+        const bool target_ok = parse_compiler_directive_path(target_begin, target_count, target_span);
+
+        if (!cursor_.eat(K::kRBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+        }
+
+        Span end = target_ok ? target_span : key_span;
+        end = stmt_consume_semicolon_or_recover(end);
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kCompilerIntrinsicDirective;
+        s.span = span_join(start.span, end);
+        if (key_ok) {
+            s.directive_key_path_begin = key_begin;
+            s.directive_key_path_count = key_count;
+        }
+        if (target_ok) {
+            s.directive_target_path_begin = target_begin;
+            s.directive_target_path_count = target_count;
+        }
+        const ast::StmtId sid = ast_.add_stmt(s);
+        diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, s.span);
+        return sid;
     }
     // '{ ... }' 블록 파싱
     ast::StmtId Parser::parse_stmt_block(bool allow_macro_decl) {
@@ -1195,6 +1396,13 @@ namespace parus {
         }
 
         return last;
+    }
+
+    Span Parser::stmt_consume_optional_semicolon(Span fallback_end) {
+        if (cursor_.at(syntax::TokenKind::kSemicolon)) {
+            return cursor_.bump().span;
+        }
+        return fallback_end;
     }
 
 } // namespace parus

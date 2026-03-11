@@ -69,6 +69,9 @@ namespace parus::tyck {
                 check_stmt_require_(s);
                 return;
 
+            case ast::StmtKind::kCompilerIntrinsicDirective:
+                return;
+
             case ast::StmtKind::kThrow:
                 check_stmt_throw_(s);
                 return;

@@ -100,6 +100,11 @@ namespace parus::diag {
             case Code::kRequireExprTypeNotBool: return "RequireExprTypeNotBool";
             case Code::kRequireExprTooComplex: return "RequireExprTooComplex";
             case Code::kRequireUnsatisfied: return "RequireUnsatisfied";
+            case Code::kDirectiveIfConditionTypeNotBool: return "DirectiveIfConditionTypeNotBool";
+            case Code::kDirectiveIfConditionTooComplex: return "DirectiveIfConditionTooComplex";
+            case Code::kDirectiveIfItemExpected: return "DirectiveIfItemExpected";
+            case Code::kDirectiveIntrinsicSyntax: return "DirectiveIntrinsicSyntax";
+            case Code::kDirectiveIntrinsicPolicyPending: return "DirectiveIntrinsicPolicyPending";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "ClassLifecycleDefaultParamNotAllowed";
             case Code::kClassLifecycleSelfNotAllowed: return "ClassLifecycleSelfNotAllowed";
             case Code::kClassLifecycleDirectCallForbidden: return "ClassLifecycleDirectCallForbidden";
@@ -398,6 +403,11 @@ namespace parus::diag {
             case Code::kRequireExprTypeNotBool: return "require(expr) must evaluate to bool";
             case Code::kRequireExprTooComplex: return "require(expr) supports only simple boolean folding (true/false/not/and/or/==/!=) in v0";
             case Code::kRequireUnsatisfied: return "require(expr) evaluated to false";
+            case Code::kDirectiveIfConditionTypeNotBool: return "$[if(...)] condition must evaluate to bool";
+            case Code::kDirectiveIfConditionTooComplex: return "$[if(...)] supports only simple boolean folding (true/false/not/and/or/==/!=) in v1";
+            case Code::kDirectiveIfItemExpected: return "$[if(...)] must be followed by an item declaration";
+            case Code::kDirectiveIntrinsicSyntax: return "$![...] syntax is invalid";
+            case Code::kDirectiveIntrinsicPolicyPending: return "$![...] is parsed, but intrinsic binding policy is not fixed yet";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit cannot be called directly; lifecycle is compiler-managed";
@@ -702,6 +712,11 @@ namespace parus::diag {
             case Code::kRequireExprTypeNotBool: return "require(expr)는 bool로 평가되어야 합니다";
             case Code::kRequireExprTooComplex: return "v0에서 require(expr)는 단순 bool 폴딩(true/false/not/and/or/==/!=)만 허용됩니다";
             case Code::kRequireUnsatisfied: return "require(expr)가 false로 평가되었습니다";
+            case Code::kDirectiveIfConditionTypeNotBool: return "$[if(...)] 조건식은 bool로 평가되어야 합니다";
+            case Code::kDirectiveIfConditionTooComplex: return "v1에서 $[if(...)]는 단순 bool 폴딩(true/false/not/and/or/==/!=)만 허용됩니다";
+            case Code::kDirectiveIfItemExpected: return "$[if(...)] 뒤에는 item declaration이 와야 합니다";
+            case Code::kDirectiveIntrinsicSyntax: return "$![...] 문법이 올바르지 않습니다";
+            case Code::kDirectiveIntrinsicPolicyPending: return "$![...]는 파싱되지만 intrinsic 바인딩 정책은 아직 확정되지 않았습니다";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle 멤버에는 self 리시버를 선언할 수 없습니다";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit 는 직접 호출할 수 없습니다. lifecycle 호출은 컴파일러가 관리합니다";

@@ -391,7 +391,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kFieldDecl;
@@ -623,7 +623,7 @@ namespace parus {
             recover_to_delim(K::kRBrace, K::kSemicolon);
             cursor_.eat(K::kRBrace);
         }
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kEnumDecl;
@@ -847,7 +847,7 @@ namespace parus {
             recover_to_delim(K::kSemicolon);
         }
 
-        const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+        const Span end_sp = stmt_consume_optional_semicolon(cursor_.prev().span);
 
         const uint32_t member_begin = static_cast<uint32_t>(ast_.stmt_children().size());
         for (const auto sid : members) {

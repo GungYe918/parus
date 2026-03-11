@@ -1,0 +1,2 @@
+//@expect-error DirectiveIntrinsicSyntax
+$![thread.spawn lib::spawn];

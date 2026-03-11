@@ -412,6 +412,7 @@ namespace parus::cap {
                     case ast::StmtKind::kProtoDecl:
                     case ast::StmtKind::kUse:
                     case ast::StmtKind::kNestDecl:
+                    case ast::StmtKind::kCompilerIntrinsicDirective:
                     case ast::StmtKind::kError:
                         return;
 

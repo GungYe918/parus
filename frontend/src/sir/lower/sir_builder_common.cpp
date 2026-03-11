@@ -323,11 +323,21 @@ namespace parus::sir::detail {
         // Nested blocks lower into slots appended after this reserved range.
         m.stmts.resize((size_t)m.blocks[bid].stmt_begin + (size_t)m.blocks[bid].stmt_count);
 
+        uint32_t written = 0;
         for (uint32_t i = 0; i < bs.stmt_count; ++i) {
             const auto child = ast.stmt_children()[bs.stmt_begin + i];
-            m.stmts[m.blocks[bid].stmt_begin + i] =
+            if (child == parus::ast::k_invalid_stmt || (size_t)child >= ast.stmts().size()) {
+                continue;
+            }
+            const auto& child_stmt = ast.stmt(child);
+            if (child_stmt.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective) {
+                continue;
+            }
+            m.stmts[m.blocks[bid].stmt_begin + written] =
                 lower_stmt_(m, out_has_any_write, ast, sym, nres, tyck, child);
+            ++written;
         }
+        m.blocks[bid].stmt_count = written;
 
         return bid;
     }
