@@ -462,6 +462,60 @@ bool test_parus_module_first_bundle_context() {
     return true;
 }
 
+bool test_parus_incremental_newline_falls_back_cleanly() {
+    const std::string uri = "file:///tmp/parusd_incremental_actor.pr";
+    const std::string text =
+        "actor Counter {\n"
+        "  draft {\n"
+        "    value: i32;\n"
+        "  }\n"
+        "\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "\n"
+        "  def sub get() -> i32 {\n"
+        "    recast;\n"
+        "    return draft.value;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return c.get();\n"
+        "}\n";
+
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + uri
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(text) + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"" + uri
+            + "\",\"version\":2},\"contentChanges\":[{\"range\":{\"start\":{\"line\":11,\"character\":0},\"end\":{\"line\":11,\"character\":0}},\"text\":\"\\n\"}]}}",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"" + uri
+            + "\",\"version\":3},\"contentChanges\":[{\"range\":{\"start\":{\"line\":11,\"character\":0},\"end\":{\"line\":12,\"character\":0}},\"text\":\"\"}]}}",
+        R"({"jsonrpc":"2.0","id":3,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc, "PARUSD_TRACE_INCREMENTAL=1");
+    if (rc != 0) {
+        std::cerr << "incremental actor newline lsp session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"uri\":\"" + uri + "\",\"version\":2,\"diagnostics\":[]") ||
+        !contains(out, "\"uri\":\"" + uri + "\",\"version\":3,\"diagnostics\":[]")) {
+        std::cerr << "incremental newline edits must keep diagnostics empty\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "parse=fallback-full")) {
+        std::cerr << "incremental newline edit must trace fallback-full reparse mode\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -473,8 +527,9 @@ int main() {
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_parus_module_first_bundle_context();
     const bool ok8 = test_parus_core_prelude_auto_loaded();
+    const bool ok9 = test_parus_incremental_newline_falls_back_cleanly();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

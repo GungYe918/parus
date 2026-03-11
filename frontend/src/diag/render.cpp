@@ -120,6 +120,9 @@ namespace parus::diag {
             case Code::kActorRecastOnlyInSub: return "ActorRecastOnlyInSub";
             case Code::kActorPubMissingTopLevelCommit: return "ActorPubMissingTopLevelCommit";
             case Code::kActorEscapeDraftMoveNotAllowed: return "ActorEscapeDraftMoveNotAllowed";
+            case Code::kActorSelfReceiverNotAllowed: return "ActorSelfReceiverNotAllowed";
+            case Code::kActorSelfFieldAccessUseDraft: return "ActorSelfFieldAccessUseDraft";
+            case Code::kActorBraceInitNotAllowed: return "ActorBraceInitNotAllowed";
             case Code::kEnumVariantDuplicate: return "EnumVariantDuplicate";
             case Code::kEnumCtorArgMismatch: return "EnumCtorArgMismatch";
             case Code::kEnumCtorLabelMismatch: return "EnumCtorLabelMismatch";
@@ -415,6 +418,9 @@ namespace parus::diag {
             case Code::kActorRecastOnlyInSub: return "recast is only allowed inside actor sub methods";
             case Code::kActorPubMissingTopLevelCommit: return "actor pub method must contain at least one top-level commit statement";
             case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft cannot be moved with '~'";
+            case Code::kActorSelfReceiverNotAllowed: return "actor methods and init() must not declare an explicit self receiver; use 'draft.x' inside the body";
+            case Code::kActorSelfFieldAccessUseDraft: return "actor state access must use 'draft.{0}' instead of 'self.{0}'";
+            case Code::kActorBraceInitNotAllowed: return "actor construction must use '{0}(...)', not '{0} { ... }'";
             case Code::kEnumVariantDuplicate: return "enum variant '{0}' is duplicated";
             case Code::kEnumCtorArgMismatch: return "enum constructor arguments do not match variant payload for '{0}'";
             case Code::kEnumCtorLabelMismatch: return "unknown or duplicated enum constructor label '{0}'";
@@ -716,6 +722,9 @@ namespace parus::diag {
             case Code::kActorRecastOnlyInSub: return "recast는 actor sub 메서드 내부에서만 사용할 수 있습니다";
             case Code::kActorPubMissingTopLevelCommit: return "actor pub 메서드에는 최상위 commit 문이 최소 1개 필요합니다";
             case Code::kActorEscapeDraftMoveNotAllowed: return "actor draft는 '~'로 move할 수 없습니다";
+            case Code::kActorSelfReceiverNotAllowed: return "actor 메서드와 init()은 explicit self receiver를 선언할 수 없습니다. 본문에서는 'draft.x'를 사용하세요";
+            case Code::kActorSelfFieldAccessUseDraft: return "actor 상태 접근은 'self.{0}' 대신 'draft.{0}'를 사용해야 합니다";
+            case Code::kActorBraceInitNotAllowed: return "actor 생성은 '{0}(...)' 형식을 사용해야 하며 '{0} { ... }'는 허용되지 않습니다";
             case Code::kEnumVariantDuplicate: return "enum variant '{0}'이(가) 중복 선언되었습니다";
             case Code::kEnumCtorArgMismatch: return "enum 생성자 인자가 variant payload와 일치하지 않습니다: '{0}'";
             case Code::kEnumCtorLabelMismatch: return "enum 생성자 라벨이 잘못되었거나 중복되었습니다: '{0}'";

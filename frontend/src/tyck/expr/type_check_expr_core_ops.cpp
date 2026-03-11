@@ -287,10 +287,6 @@
 
         // value member access (v0): obj.field
         if (e.op == K::kDot) {
-            ty::TypeId base_t = check_expr_(e.a);
-            base_t = read_decay_borrow_(types_, base_t);
-            (void)ensure_generic_enum_instance_from_type_(base_t, e.span);
-
             if (e.b == ast::k_invalid_expr) {
                 diag_(diag::Code::kTypeErrorGeneric, e.span, "missing member on '.' access");
                 err_(e.span, "missing member on '.' access");
@@ -303,6 +299,19 @@
                 err_(rhs.span, "member access requires identifier rhs");
                 return types_.error();
             }
+
+            if (in_actor_method_ && e.a != ast::k_invalid_expr) {
+                const ast::Expr& lhs = ast_.expr(e.a);
+                if (lhs.kind == ast::ExprKind::kIdent && lhs.text == "self") {
+                    diag_(diag::Code::kActorSelfFieldAccessUseDraft, rhs.span, rhs.text);
+                    err_(rhs.span, "actor state access must use 'draft." + std::string(rhs.text) + "'");
+                    return types_.error();
+                }
+            }
+
+            ty::TypeId base_t = check_expr_(e.a);
+            base_t = read_decay_borrow_(types_, base_t);
+            (void)ensure_generic_enum_instance_from_type_(base_t, e.span);
 
             if (enum_abi_meta_by_type_.find(base_t) != enum_abi_meta_by_type_.end()) {
                 diag_(diag::Code::kEnumDotFieldAccessForbidden, rhs.span);

@@ -89,6 +89,7 @@ target_include_directories(parusc_cli_option_tests PRIVATE
 if (TARGET parus_cli_tests)
     target_compile_definitions(parus_cli_tests PRIVATE
         PARUS_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parus"
+        PARUSC_BUILD_BIN="${CMAKE_BINARY_DIR}/compiler/parusc/parusc"
         PARUS_MAIN_PR="${CMAKE_SOURCE_DIR}/main.pr"
         PARUS_LEI_CASE_DIR="${CMAKE_SOURCE_DIR}/tools/Lei/tests/cases"
     )

@@ -180,17 +180,36 @@
         bool has_named_group = false;
         parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
 
+        auto strip_actor_self_params = [&](uint32_t& begin, uint32_t& count, uint32_t& positional) {
+            bool found_self = false;
+            for (uint32_t i = 0; i < count; ++i) {
+                const auto param = ast_.params()[begin + i];
+                if (!param.is_self) continue;
+                diag_report(diag::Code::kActorSelfReceiverNotAllowed, param.span);
+                found_self = true;
+            }
+            if (!found_self) return;
+
+            const uint32_t filtered_begin = static_cast<uint32_t>(ast_.params().size());
+            uint32_t filtered_count = 0;
+            uint32_t filtered_positional = 0;
+            for (uint32_t i = 0; i < count; ++i) {
+                const auto param = ast_.params()[begin + i];
+                if (param.is_self) continue;
+                ast_.add_param(param);
+                ++filtered_count;
+                if (!param.is_named_group) ++filtered_positional;
+            }
+            begin = filtered_begin;
+            count = filtered_count;
+            positional = filtered_positional;
+        };
+        strip_actor_self_params(param_begin, param_count, positional_count);
+
         const uint32_t user_param_count = param_count;
         if (has_named_group) {
             diag_report(diag::Code::kUnexpectedToken, start_tok.span,
                         "actor init() does not support named-group parameters in v0");
-        }
-
-        for (uint32_t i = 0; i < user_param_count; ++i) {
-            const auto& p = ast_.params()[param_begin + i];
-            if (p.is_self) {
-                diag_report(diag::Code::kClassLifecycleSelfNotAllowed, p.span);
-            }
         }
 
         if (cursor_.at(K::kArrow)) {
@@ -692,6 +711,32 @@
             uint32_t positional_count = 0;
             bool has_named_group = false;
             parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+
+            auto strip_actor_self_params = [&](uint32_t& begin, uint32_t& count, uint32_t& positional) {
+                bool found_self = false;
+                for (uint32_t i = 0; i < count; ++i) {
+                    const auto param = ast_.params()[begin + i];
+                    if (!param.is_self) continue;
+                    diag_report(diag::Code::kActorSelfReceiverNotAllowed, param.span);
+                    found_self = true;
+                }
+                if (!found_self) return;
+
+                const uint32_t filtered_begin = static_cast<uint32_t>(ast_.params().size());
+                uint32_t filtered_count = 0;
+                uint32_t filtered_positional = 0;
+                for (uint32_t i = 0; i < count; ++i) {
+                    const auto param = ast_.params()[begin + i];
+                    if (param.is_self) continue;
+                    ast_.add_param(param);
+                    ++filtered_count;
+                    if (!param.is_named_group) ++filtered_positional;
+                }
+                begin = filtered_begin;
+                count = filtered_count;
+                positional = filtered_positional;
+            };
+            strip_actor_self_params(param_begin, param_count, positional_count);
 
             uint32_t constraint_begin = 0;
             uint32_t constraint_count = 0;

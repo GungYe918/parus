@@ -29,6 +29,7 @@ namespace parus::backend::link {
 
         LinkerMode mode = LinkerMode::kAuto;
         bool allow_fallback = true;
+        bool requires_cpp_runtime = false;
     };
 
     /// @brief 링크 실행 결과.

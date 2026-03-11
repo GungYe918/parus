@@ -1715,6 +1715,7 @@ namespace parusc::p0 {
                     return 1;
                 }
                 link_opt.object_paths.push_back(prt_archive);
+                link_opt.requires_cpp_runtime = !opt.freestanding;
             }
 
             const auto link_res = parus::backend::link::link_executable(link_opt);

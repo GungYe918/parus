@@ -1,0 +1,16 @@
+actor Vec2 {
+  draft {
+    x: i32;
+    y: i32;
+  }
+
+  init(self, x: i32, y: i32) {
+    draft.x = x;
+    draft.y = y;
+  }
+
+  def sub add(self) -> i32 {
+    recast;
+    return draft.x + draft.y;
+  }
+};

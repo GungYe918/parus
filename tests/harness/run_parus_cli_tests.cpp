@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -31,6 +33,58 @@ bool write_text(const std::filesystem::path& path, const std::string& text) {
     if (!ofs) return false;
     ofs << text;
     return ofs.good();
+}
+
+std::string read_text(const std::filesystem::path& path) {
+    std::ifstream ifs(path, std::ios::binary);
+    if (!ifs) return {};
+    return std::string((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+}
+
+std::string parse_default_target_triple(const std::string& manifest_text) {
+    const std::string key = "\"default_target_triple\"";
+    const size_t key_pos = manifest_text.find(key);
+    if (key_pos == std::string::npos) return {};
+    const size_t colon = manifest_text.find(':', key_pos + key.size());
+    if (colon == std::string::npos) return {};
+    const size_t first_quote = manifest_text.find('"', colon + 1);
+    if (first_quote == std::string::npos) return {};
+    const size_t second_quote = manifest_text.find('"', first_quote + 1);
+    if (second_quote == std::string::npos || second_quote <= first_quote + 1) return {};
+    return manifest_text.substr(first_quote + 1, second_quote - first_quote - 1);
+}
+
+std::optional<std::pair<std::string, std::string>> resolve_installed_sysroot_and_target() {
+    const char* env_sysroot = std::getenv("PARUS_SYSROOT");
+    if (env_sysroot != nullptr && env_sysroot[0] != '\0') {
+        const std::filesystem::path sysroot = env_sysroot;
+        const std::string target = parse_default_target_triple(read_text(sysroot / "manifest.json"));
+        if (!target.empty()) return std::make_pair(sysroot.string(), target);
+    }
+
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') return std::nullopt;
+
+    const std::filesystem::path toolchains = std::filesystem::path(home) / ".local/share/parus/toolchains";
+    std::error_code ec{};
+    if (!std::filesystem::exists(toolchains, ec) || ec) return std::nullopt;
+
+    std::vector<std::filesystem::path> candidates{};
+    for (const auto& entry : std::filesystem::directory_iterator(toolchains, ec)) {
+        if (ec) break;
+        if (!entry.is_directory()) continue;
+        const auto sysroot = entry.path() / "sysroot";
+        const auto manifest = sysroot / "manifest.json";
+        if (std::filesystem::exists(manifest, ec) && !ec) {
+            candidates.push_back(sysroot);
+        }
+    }
+    std::sort(candidates.begin(), candidates.end());
+    for (auto it = candidates.rbegin(); it != candidates.rend(); ++it) {
+        const std::string target = parse_default_target_triple(read_text(*it / "manifest.json"));
+        if (!target.empty()) return std::make_pair(it->string(), target);
+    }
+    return std::nullopt;
 }
 
 bool test_help_and_version() {
@@ -962,6 +1016,132 @@ bool test_actor_allowed_in_freestanding_profile() {
     return true;
 }
 
+bool test_hosted_actor_link_uses_clang_driver() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parusc-hosted-actor-link";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "actor Counter {\n"
+        "  draft {\n"
+        "    value: i32;\n"
+        "  }\n"
+        "\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "\n"
+        "  def sub get() -> i32 {\n"
+        "    recast;\n"
+        "    return draft.value;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return c.get();\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write hosted actor link test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for hosted actor link test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc != 0) {
+        std::cerr << "hosted actor link should succeed\n" << out;
+        return false;
+    }
+    if (contains(out, "undefined symbol: __Znwm") || contains(out, "backend linker failed")) {
+        std::cerr << "hosted actor link must not hit raw parus-lld C++ runtime failure\n" << out;
+        return false;
+    }
+    if (!contains(out, "linked executable to")) {
+        std::cerr << "hosted actor link must emit success message\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_hosted_actor_parus_lld_mode_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parusc-hosted-actor-parus-lld";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "actor Counter {\n"
+        "  draft { value: i32; }\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write hosted actor parus-lld policy test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for hosted actor parus-lld test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- -fuse-linker=parus-lld \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "hosted actor link with -fuse-linker=parus-lld must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "hosted actor runtime requires a system clang++ driver link")) {
+        std::cerr << "hosted actor parus-lld rejection did not report the expected policy error\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -982,9 +1162,11 @@ int main() {
     const bool ok15 = test_auto_core_prelude_for_single_pr();
     const bool ok16 = test_actor_rejected_in_no_std_profile();
     const bool ok17 = test_actor_allowed_in_freestanding_profile();
+    const bool ok18 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok19 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
-        !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17) {
+        !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19) {
         return 1;
     }
 

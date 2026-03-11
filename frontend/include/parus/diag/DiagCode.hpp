@@ -114,6 +114,9 @@ namespace parus::diag {
         kActorRecastOnlyInSub,            // recast is only allowed in actor sub methods
         kActorPubMissingTopLevelCommit,   // actor pub method needs at least one top-level commit
         kActorEscapeDraftMoveNotAllowed,  // actor draft must not be moved by ~
+        kActorSelfReceiverNotAllowed,     // actor init/sub/pub must not declare explicit self receiver
+        kActorSelfFieldAccessUseDraft,    // actor state field access must use draft.x, not self.x
+        kActorBraceInitNotAllowed,        // actor construction must use ctor-style call, not field-init literal
         kEnumVariantDuplicate,            // enum variant name is duplicated
         kEnumCtorArgMismatch,             // enum constructor arguments mismatch
         kEnumCtorLabelMismatch,           // enum constructor label mismatch

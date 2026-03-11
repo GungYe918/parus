@@ -116,6 +116,12 @@
             return types_.error();
         }
 
+        if (actor_decl_by_type_.find(field_ty) != actor_decl_by_type_.end()) {
+            diag_(diag::Code::kActorBraceInitNotAllowed, e.span, literal_head);
+            err_(e.span, "actor construction must use ctor-style call");
+            return types_.error();
+        }
+
         auto meta_it = field_abi_meta_by_type_.find(field_ty);
         if (meta_it == field_abi_meta_by_type_.end()) {
             (void)ensure_generic_field_instance_from_type_(field_ty, e.span);

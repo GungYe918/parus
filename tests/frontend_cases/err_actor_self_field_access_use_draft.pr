@@ -1,0 +1,21 @@
+actor Vec2 {
+  draft {
+    x: i32;
+    y: i32;
+  }
+
+  init(x: i32, y: i32) {
+    draft.x = x;
+    draft.y = y;
+  }
+
+  def sub add() -> i32 {
+    recast;
+    return self.x + self.y;
+  }
+};
+
+def main() -> i32 {
+  set v = Vec2(x: 42i32, y: 42i32);
+  return v.add();
+}

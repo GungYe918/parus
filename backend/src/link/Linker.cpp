@@ -244,7 +244,16 @@ namespace parus::backend::link {
         std::vector<Candidate> candidates{};
 
         auto append_auto_policy = [&]() {
-            candidates.push_back(Candidate{parus_lld, false});
+            if (opt.requires_cpp_runtime) {
+                candidates.push_back(Candidate{clangxx, true});
+                if (opt.allow_fallback) {
+                    candidates.push_back(Candidate{clangxx, false});
+                }
+                return;
+            }
+            if (!opt.requires_cpp_runtime) {
+                candidates.push_back(Candidate{parus_lld, false});
+            }
             if (opt.allow_fallback) {
                 candidates.push_back(Candidate{clangxx, true});
                 candidates.push_back(Candidate{clangxx, false});
@@ -256,6 +265,14 @@ namespace parus::backend::link {
                 append_auto_policy();
                 break;
             case LinkerMode::kParusLld:
+                if (opt.requires_cpp_runtime) {
+                    out.messages.push_back(CompileMessage{
+                        true,
+                        "hosted actor runtime requires a system clang++ driver link; "
+                        "'-fuse-linker=parus-lld' is not supported for this link step."
+                    });
+                    return out;
+                }
                 candidates.push_back(Candidate{parus_lld, false});
                 if (opt.allow_fallback) {
                     candidates.push_back(Candidate{clangxx, true});
