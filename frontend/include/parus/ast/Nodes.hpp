@@ -408,7 +408,7 @@ namespace parus::ast {
 
         // string literal metadata
         bool string_is_raw = false;     // R"""..."""
-        bool string_is_format = false;  // F"""..."""
+        bool string_is_format = false;  // F"""...""" / $"..."
         uint32_t string_part_begin = 0; // slice into AstArena::fstring_parts_
         uint32_t string_part_count = 0;
         // optional folded/normalized literal text for lowering (quoted literal form)

@@ -29,6 +29,7 @@ namespace parus {
         Token lex_ident_or_kw();
         Token lex_string();     // supports "..."
         Token lex_prefixed_triple_string(char prefix); // supports R"""...""" / F"""..."""
+        Token lex_dollar_string(); // supports $"..."
         Token lex_char();       // supports 'C', '글', '\n', '\'', '\\' (minimal)
 
         Token lex_punct_or_unknown();

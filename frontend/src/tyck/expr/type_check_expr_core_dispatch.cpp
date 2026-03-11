@@ -471,6 +471,236 @@ namespace parus::tyck {
         return true;
     }
 
+    bool TypeChecker::try_fold_fstring_expr_no_diag_(ast::ExprId string_eid, std::string& out_bytes) {
+        if (string_eid == ast::k_invalid_expr || string_eid >= ast_.exprs().size()) return false;
+        const ast::Expr& root = ast_.expr(string_eid);
+        if (root.kind != ast::ExprKind::kStringLit || !root.string_is_format) return false;
+
+        const auto& parts = ast_.fstring_parts();
+        const uint32_t begin = root.string_part_begin;
+        const uint32_t count = root.string_part_count;
+        if (begin > parts.size() || begin + count > parts.size()) return false;
+
+        auto eval_const = [&](auto&& self, ast::ExprId expr_eid, FStringConstValue& out) -> bool {
+            if (expr_eid == ast::k_invalid_expr || expr_eid >= ast_.exprs().size()) return false;
+            const ast::Expr& e = ast_.expr(expr_eid);
+
+            switch (e.kind) {
+                case ast::ExprKind::kIntLit: {
+                    int64_t v = 0;
+                    if (!parse_i64_lit_(e.text, v)) return false;
+                    out.kind = FStringConstValue::Kind::kInt;
+                    out.i64 = v;
+                    return true;
+                }
+                case ast::ExprKind::kFloatLit: {
+                    double v = 0.0;
+                    if (!parse_f64_lit_(e.text, v)) return false;
+                    out.kind = FStringConstValue::Kind::kFloat;
+                    out.f64 = v;
+                    return true;
+                }
+                case ast::ExprKind::kBoolLit:
+                    out.kind = FStringConstValue::Kind::kBool;
+                    out.b = (e.text == "true");
+                    return true;
+                case ast::ExprKind::kCharLit: {
+                    char v = '\0';
+                    if (!parse_char_byte_lit_(e.text, v)) return false;
+                    out.kind = FStringConstValue::Kind::kChar;
+                    out.ch = v;
+                    return true;
+                }
+                case ast::ExprKind::kStringLit: {
+                    if (e.string_is_format) {
+                        std::string folded;
+                        if (!try_fold_fstring_expr_no_diag_(expr_eid, folded)) return false;
+                        out.kind = FStringConstValue::Kind::kText;
+                        out.text = std::move(folded);
+                        return true;
+                    }
+
+                    std::string bytes;
+                    if (!decode_string_bytes_(e, bytes)) return false;
+                    out.kind = FStringConstValue::Kind::kText;
+                    out.text = std::move(bytes);
+                    return true;
+                }
+                case ast::ExprKind::kUnary: {
+                    FStringConstValue a{};
+                    if (!self(self, e.a, a)) return false;
+
+                    if (e.op == K::kPlus && a.kind == FStringConstValue::Kind::kInt) {
+                        out = a;
+                        return true;
+                    }
+                    if (e.op == K::kMinus && a.kind == FStringConstValue::Kind::kInt) {
+                        out.kind = FStringConstValue::Kind::kInt;
+                        out.i64 = -a.i64;
+                        return true;
+                    }
+                    if (e.op == K::kPlus && a.kind == FStringConstValue::Kind::kFloat) {
+                        out = a;
+                        return true;
+                    }
+                    if (e.op == K::kMinus && a.kind == FStringConstValue::Kind::kFloat) {
+                        out.kind = FStringConstValue::Kind::kFloat;
+                        out.f64 = -a.f64;
+                        return true;
+                    }
+                    if (e.op == K::kKwNot && a.kind == FStringConstValue::Kind::kBool) {
+                        out.kind = FStringConstValue::Kind::kBool;
+                        out.b = !a.b;
+                        return true;
+                    }
+                    if (e.op == K::kBang && a.kind == FStringConstValue::Kind::kInt) {
+                        out.kind = FStringConstValue::Kind::kInt;
+                        out.i64 = ~a.i64;
+                        return true;
+                    }
+                    return false;
+                }
+                case ast::ExprKind::kBinary: {
+                    FStringConstValue a{};
+                    FStringConstValue b{};
+                    if (!self(self, e.a, a)) return false;
+                    if (!self(self, e.b, b)) return false;
+
+                    if (a.kind == FStringConstValue::Kind::kInt && b.kind == FStringConstValue::Kind::kInt) {
+                        switch (e.op) {
+                            case K::kPlus: out.kind = FStringConstValue::Kind::kInt; out.i64 = a.i64 + b.i64; return true;
+                            case K::kMinus: out.kind = FStringConstValue::Kind::kInt; out.i64 = a.i64 - b.i64; return true;
+                            case K::kStar: out.kind = FStringConstValue::Kind::kInt; out.i64 = a.i64 * b.i64; return true;
+                            case K::kSlash:
+                                if (b.i64 == 0) return false;
+                                out.kind = FStringConstValue::Kind::kInt;
+                                out.i64 = a.i64 / b.i64;
+                                return true;
+                            case K::kPercent:
+                                if (b.i64 == 0) return false;
+                                out.kind = FStringConstValue::Kind::kInt;
+                                out.i64 = a.i64 % b.i64;
+                                return true;
+                            case K::kEqEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 == b.i64); return true;
+                            case K::kBangEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 != b.i64); return true;
+                            case K::kLt: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 < b.i64); return true;
+                            case K::kLtEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 <= b.i64); return true;
+                            case K::kGt: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 > b.i64); return true;
+                            case K::kGtEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.i64 >= b.i64); return true;
+                            default:
+                                break;
+                        }
+                    }
+
+                    if (a.kind == FStringConstValue::Kind::kFloat && b.kind == FStringConstValue::Kind::kFloat) {
+                        switch (e.op) {
+                            case K::kPlus: out.kind = FStringConstValue::Kind::kFloat; out.f64 = a.f64 + b.f64; return true;
+                            case K::kMinus: out.kind = FStringConstValue::Kind::kFloat; out.f64 = a.f64 - b.f64; return true;
+                            case K::kStar: out.kind = FStringConstValue::Kind::kFloat; out.f64 = a.f64 * b.f64; return true;
+                            case K::kSlash: out.kind = FStringConstValue::Kind::kFloat; out.f64 = a.f64 / b.f64; return true;
+                            case K::kEqEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 == b.f64); return true;
+                            case K::kBangEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 != b.f64); return true;
+                            case K::kLt: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 < b.f64); return true;
+                            case K::kLtEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 <= b.f64); return true;
+                            case K::kGt: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 > b.f64); return true;
+                            case K::kGtEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.f64 >= b.f64); return true;
+                            default:
+                                break;
+                        }
+                    }
+
+                    if (a.kind == FStringConstValue::Kind::kBool && b.kind == FStringConstValue::Kind::kBool) {
+                        switch (e.op) {
+                            case K::kEqEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b == b.b); return true;
+                            case K::kBangEq: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b != b.b); return true;
+                            case K::kKwAnd: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b && b.b); return true;
+                            case K::kKwOr: out.kind = FStringConstValue::Kind::kBool; out.b = (a.b || b.b); return true;
+                            default:
+                                break;
+                        }
+                    }
+
+                    if (e.op == K::kPlus &&
+                        a.kind == FStringConstValue::Kind::kText &&
+                        b.kind == FStringConstValue::Kind::kText) {
+                        out.kind = FStringConstValue::Kind::kText;
+                        out.text = a.text;
+                        out.text += b.text;
+                        return true;
+                    }
+
+                    return false;
+                }
+                case ast::ExprKind::kTernary: {
+                    FStringConstValue c{};
+                    if (!self(self, e.a, c)) return false;
+                    if (c.kind != FStringConstValue::Kind::kBool) return false;
+                    return self(self, c.b ? e.b : e.c, out);
+                }
+                default:
+                    return false;
+            }
+        };
+
+        out_bytes.clear();
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& p = parts[begin + i];
+            if (!p.is_expr) {
+                out_bytes.append(p.text.data(), p.text.size());
+                continue;
+            }
+
+            FStringConstValue v{};
+            if (!eval_const(eval_const, p.expr, v)) return false;
+
+            std::string seg;
+            if (!fstring_const_to_text_(v, seg)) return false;
+            out_bytes += seg;
+        }
+        return true;
+    }
+
+    bool TypeChecker::check_fstring_runtime_form_(ast::ExprId string_eid, ast::ExprId& out_runtime_text_expr) {
+        out_runtime_text_expr = ast::k_invalid_expr;
+        if (string_eid == ast::k_invalid_expr || string_eid >= ast_.exprs().size()) return false;
+        const ast::Expr& e = ast_.expr(string_eid);
+        if (e.kind != ast::ExprKind::kStringLit || !e.string_is_format) return false;
+
+        const auto& parts = ast_.fstring_parts();
+        const uint32_t begin = e.string_part_begin;
+        const uint32_t count = e.string_part_count;
+        if (begin > parts.size() || begin + count > parts.size()) {
+            diag_(diag::Code::kTypeErrorGeneric, e.span, "internal fstring part range is invalid");
+            err_(e.span, "internal fstring part range is invalid");
+            return false;
+        }
+
+        if (count != 1) {
+            diag_(diag::Code::kFStringRuntimeShapeUnsupported, e.span);
+            err_(e.span, "runtime f-string shape is not supported in v1");
+            return false;
+        }
+
+        const auto& only = parts[begin];
+        if (!only.is_expr || only.expr == ast::k_invalid_expr) {
+            diag_(diag::Code::kFStringRuntimeShapeUnsupported, only.span);
+            err_(only.span, "runtime f-string shape is not supported in v1");
+            return false;
+        }
+
+        const ty::TypeId expr_t = check_expr_(only.expr, Slot::kValue);
+        if (expr_t != string_type_) {
+            if (!is_error_(expr_t)) {
+                diag_(diag::Code::kFStringRuntimeExprMustBeText, only.span, types_.to_string(expr_t));
+            }
+            err_(only.span, "runtime f-string interpolation expression must be text");
+            return false;
+        }
+
+        out_runtime_text_expr = only.expr;
+        return true;
+    }
+
     ty::TypeId TypeChecker::check_expr_(ast::ExprId eid, Slot slot) {
         if (eid == ast::k_invalid_expr) return types_.error();
         if (eid >= expr_type_cache_.size()) return types_.error();
@@ -559,11 +789,25 @@ namespace parus::tyck {
             case ast::ExprKind::kStringLit: {
                 if (e.string_is_format) {
                     std::string folded;
-                    if (fold_fstring_expr_(eid, folded)) {
+                    if (try_fold_fstring_expr_no_diag_(eid, folded)) {
                         const std::string quoted = quote_bytes_as_string_lit_(folded);
                         auto& me = ast_.expr_mut(eid);
                         me.string_folded_text = ast_.add_owned_string(quoted);
+                        if ((size_t)eid < expr_fstring_runtime_expr_cache_.size()) {
+                            expr_fstring_runtime_expr_cache_[eid] = ast::k_invalid_expr;
+                        }
+                    } else {
+                        ast::ExprId runtime_text_expr = ast::k_invalid_expr;
+                        if (!check_fstring_runtime_form_(eid, runtime_text_expr)) {
+                            t = types_.error();
+                            break;
+                        }
+                        if ((size_t)eid < expr_fstring_runtime_expr_cache_.size()) {
+                            expr_fstring_runtime_expr_cache_[eid] = runtime_text_expr;
+                        }
                     }
+                } else if ((size_t)eid < expr_fstring_runtime_expr_cache_.size()) {
+                    expr_fstring_runtime_expr_cache_[eid] = ast::k_invalid_expr;
                 }
                 t = string_type_;
                 break;

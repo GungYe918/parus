@@ -338,12 +338,60 @@ namespace {
         return ok;
     }
 
+    static bool test_fstring_dollar_parts_and_escape_split_ok() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let s: text = $"A{{B}}C{1 + 2}D";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+
+        const parus::ast::Expr* fmt = nullptr;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind == parus::ast::ExprKind::kStringLit &&
+                e.string_is_format &&
+                e.text.size() >= 2 &&
+                e.text.substr(0, 2) == "$\"") {
+                fmt = &e;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(fmt != nullptr, "dollar format string literal must exist");
+        if (!ok) return false;
+
+        ok &= require_(fmt->string_part_count == 3, "$-fstring must be split to literal/expr/literal");
+        if (!ok) return false;
+
+        const auto begin = fmt->string_part_begin;
+        const auto& parts = p.ast.fstring_parts();
+        ok &= require_(begin + fmt->string_part_count <= parts.size(), "$-fstring part slice must be in-range");
+        if (!ok) return false;
+
+        const auto& p0 = parts[begin + 0];
+        const auto& p1 = parts[begin + 1];
+        const auto& p2 = parts[begin + 2];
+
+        ok &= require_(!p0.is_expr && p0.text == "A{B}C", "part[0] must be escaped literal text");
+        ok &= require_(p1.is_expr && p1.expr != parus::ast::k_invalid_expr, "part[1] must be interpolation expr");
+        ok &= require_(!p2.is_expr && p2.text == "D", "part[2] must be literal text");
+        ok &= require_(!p.bag.has_error(), "well-formed $-fstring source must not emit diagnostics");
+        return ok;
+    }
+
     static bool test_fstring_brace_error_diagnostics() {
         const std::string src = R"(
             def main() -> i32 {
                 let a: text = F"""x}y""";
                 let b: text = F"""x{}y""";
                 let c: text = F"""x{1 + 2""";
+                let d: text = $"x}y";
+                let e: text = $"x{}y";
+                let f: text = $"x{1 + 2";
+                let g: text = F"abc";
                 return 0i32;
             }
         )";
@@ -355,6 +403,101 @@ namespace {
             "invalid F-string braces must emit UnexpectedToken");
         ok &= require_(p.bag.has_code(parus::diag::Code::kExpectedToken),
             "unterminated F-string interpolation must emit ExpectedToken('}')");
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFStringShortFormUnsupported),
+            "F\"...\" short form must emit dedicated parser diagnostic");
+        return ok;
+    }
+
+    static bool test_fstring_dollar_const_fold_ok() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let s: text = $"sum={1 + 2}";
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        const parus::ast::Expr* fmt = nullptr;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind == parus::ast::ExprKind::kStringLit &&
+                e.string_is_format &&
+                e.text.size() >= 2 &&
+                e.text.substr(0, 2) == "$\"") {
+                fmt = &e;
+                break;
+            }
+        }
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "const-foldable $-fstring source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "const-foldable $-fstring source must not emit tyck errors");
+        ok &= require_(fmt != nullptr, "$-fstring node must exist");
+        if (!ok) return false;
+        ok &= require_(!fmt->string_folded_text.empty(), "$-fstring with const expr must be folded");
+        ok &= require_(fmt->string_folded_text.find("sum=3") != std::string_view::npos,
+            "folded $-fstring text must contain computed interpolation result");
+        return ok;
+    }
+
+    static bool test_fstring_dollar_runtime_passthrough_ok() {
+        const std::string src = R"(
+            def id(x: text) -> text {
+                return $"{x}";
+            }
+
+            def main() -> i32 {
+                let msg: text = "x";
+                let y: text = id(x: msg);
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "runtime passthrough $-fstring source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "runtime passthrough $-fstring source must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_fstring_dollar_runtime_shape_rejected() {
+        const std::string src = R"(
+            def bad(msg: text) -> text {
+                return $"a{msg}b";
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFStringRuntimeShapeUnsupported),
+            "dynamic mixed-shape $-fstring must emit runtime shape diagnostic");
+        ok &= require_(!ty.errors.empty(), "dynamic mixed-shape $-fstring must fail typecheck");
+        return ok;
+    }
+
+    static bool test_fstring_dollar_runtime_expr_must_be_text() {
+        const std::string src = R"(
+            def bad(n: i32) -> text {
+                return $"{n}";
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFStringRuntimeExprMustBeText),
+            "runtime $-fstring interpolation must require text expression");
+        ok &= require_(!ty.errors.empty(), "runtime $-fstring with non-text expr must fail typecheck");
         return ok;
     }
 
@@ -1506,7 +1649,12 @@ int main() {
         {"text_string_literal_typecheck_ok", test_text_string_literal_typecheck_ok},
         {"raw_and_format_triple_string_lex_parse_ok", test_raw_and_format_triple_string_lex_parse_ok},
         {"fstring_parts_and_escape_split_ok", test_fstring_parts_and_escape_split_ok},
+        {"fstring_dollar_parts_and_escape_split_ok", test_fstring_dollar_parts_and_escape_split_ok},
         {"fstring_brace_error_diagnostics", test_fstring_brace_error_diagnostics},
+        {"fstring_dollar_const_fold_ok", test_fstring_dollar_const_fold_ok},
+        {"fstring_dollar_runtime_passthrough_ok", test_fstring_dollar_runtime_passthrough_ok},
+        {"fstring_dollar_runtime_shape_rejected", test_fstring_dollar_runtime_shape_rejected},
+        {"fstring_dollar_runtime_expr_must_be_text", test_fstring_dollar_runtime_expr_must_be_text},
         {"null_coalesce_assign_parsed_as_assign", test_null_coalesce_assign_parsed_as_assign},
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
         {"while_break_value_rejected", test_while_break_value_rejected},

@@ -371,22 +371,51 @@ namespace parus {
             return ast_.add_expr(e);
         } 
 
+        if (t.kind == syntax::TokenKind::kIdent &&
+            t.lexeme == "F" &&
+            cursor_.peek(1).kind == syntax::TokenKind::kStringLit &&
+            starts_with_(cursor_.peek(1).lexeme, "\"")) {
+            const Token next = cursor_.peek(1);
+            diag_report(diag::Code::kFStringShortFormUnsupported, t.span);
+            cursor_.bump(); // 'F'
+            cursor_.bump(); // "...":
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = span_join(t.span, next.span);
+            e.text = "fstring_short_form_removed";
+            return ast_.add_expr(e);
+        }
+
         if (t.kind == syntax::TokenKind::kStringLit) {
             cursor_.bump();
             ast::Expr e{};
             e.kind = ast::ExprKind::kStringLit;
             e.span = t.span;
             e.text = t.lexeme;
-            e.string_is_raw = starts_with_(t.lexeme, "R\"\"\"");
-            e.string_is_format = starts_with_(t.lexeme, "F\"\"\"");
+            const bool is_raw_triple = starts_with_(t.lexeme, "R\"\"\"");
+            const bool is_format_triple = starts_with_(t.lexeme, "F\"\"\"");
+            const bool is_format_short = starts_with_(t.lexeme, "$\"");
+            e.string_is_raw = is_raw_triple;
+            e.string_is_format = is_format_triple || is_format_short;
 
-            // F"""...{expr}...""" parsing:
+            // format string parsing:
             // - literal braces: '{{' / '}}'
             // - interpolation: '{ expr }'
             // - parts are stored in ast.fstring_parts()
-            if (e.string_is_format && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
-                const std::string_view body = t.lexeme.substr(4, t.lexeme.size() - 7);
-                const uint32_t base_lo = t.span.lo + 4;
+            std::string_view body{};
+            uint32_t base_lo = t.span.lo;
+            bool has_format_body = false;
+            if (is_format_triple && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
+                body = t.lexeme.substr(4, t.lexeme.size() - 7);
+                base_lo = t.span.lo + 4;
+                has_format_body = true;
+            } else if (is_format_short && t.lexeme.size() >= 3 && t.lexeme.back() == '"') {
+                body = t.lexeme.substr(2, t.lexeme.size() - 3);
+                base_lo = t.span.lo + 2;
+                has_format_body = true;
+            }
+
+            if (e.string_is_format && has_format_body) {
 
                 e.string_part_begin = static_cast<uint32_t>(ast_.fstring_parts().size());
                 e.string_part_count = 0;

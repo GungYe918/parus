@@ -113,6 +113,9 @@ namespace parus::diag {
         kDirectiveInstUnknown,            // unknown inst callee
         kDirectiveInstExternalPayloadInvalid, // external inst payload is malformed
         kDirectiveInstForbiddenOperator,  // '&', '~', '^&' are not allowed in inst
+        kFStringShortFormUnsupported,     // F"..." short form is removed; use $"..."
+        kFStringRuntimeShapeUnsupported,  // runtime f-string shape is unsupported in v1
+        kFStringRuntimeExprMustBeText,    // runtime f-string expression must be text
         kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
         kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
         kClassLifecycleDirectCallForbidden, // init/deinit direct calls are forbidden (compiler-managed lifecycle)

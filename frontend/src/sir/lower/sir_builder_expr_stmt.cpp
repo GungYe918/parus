@@ -54,6 +54,12 @@ namespace parus::sir::detail {
                 v.text = e.text;
                 break;
             case parus::ast::ExprKind::kStringLit:
+                if ((size_t)eid < tyck.expr_fstring_runtime_expr.size()) {
+                    const auto runtime_eid = tyck.expr_fstring_runtime_expr[eid];
+                    if (runtime_eid != parus::ast::k_invalid_expr && runtime_eid != eid) {
+                        return lower_expr(m, out_has_any_write, ast, sym, nres, tyck, runtime_eid);
+                    }
+                }
                 v.kind = ValueKind::kStringLit;
                 v.text = e.string_folded_text.empty() ? e.text : e.string_folded_text;
                 break;

@@ -119,6 +119,9 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "DirectiveInstUnknown";
             case Code::kDirectiveInstExternalPayloadInvalid: return "DirectiveInstExternalPayloadInvalid";
             case Code::kDirectiveInstForbiddenOperator: return "DirectiveInstForbiddenOperator";
+            case Code::kFStringShortFormUnsupported: return "FStringShortFormUnsupported";
+            case Code::kFStringRuntimeShapeUnsupported: return "FStringRuntimeShapeUnsupported";
+            case Code::kFStringRuntimeExprMustBeText: return "FStringRuntimeExprMustBeText";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "ClassLifecycleDefaultParamNotAllowed";
             case Code::kClassLifecycleSelfNotAllowed: return "ClassLifecycleSelfNotAllowed";
             case Code::kClassLifecycleDirectCallForbidden: return "ClassLifecycleDirectCallForbidden";
@@ -442,6 +445,9 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "unknown inst used in $[...]";
             case Code::kDirectiveInstExternalPayloadInvalid: return "external inst payload is malformed";
             case Code::kDirectiveInstForbiddenOperator: return "'&', '~', and '^&' are forbidden in inst";
+            case Code::kFStringShortFormUnsupported: return "F\"...\" is not supported; use $\"...\" or F\"\"\"...\"\"\"";
+            case Code::kFStringRuntimeShapeUnsupported: return "runtime f-string supports only a single interpolation in the form $\"{text_expr}\" in v1";
+            case Code::kFStringRuntimeExprMustBeText: return "runtime f-string interpolation expression must have type text";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle members must not declare a self receiver";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit cannot be called directly; lifecycle is compiler-managed";
@@ -771,6 +777,9 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "$[...]에서 사용한 inst를 찾을 수 없습니다";
             case Code::kDirectiveInstExternalPayloadInvalid: return "외부 inst payload 형식이 올바르지 않습니다";
             case Code::kDirectiveInstForbiddenOperator: return "inst에서는 '&', '~', '^&' 연산을 사용할 수 없습니다";
+            case Code::kFStringShortFormUnsupported: return "F\"...\"는 지원되지 않습니다. $\"...\" 또는 F\"\"\"...\"\"\"를 사용하세요";
+            case Code::kFStringRuntimeShapeUnsupported: return "v1 런타임 f-string은 $\"{text_expr}\" 형태의 단일 보간만 지원합니다";
+            case Code::kFStringRuntimeExprMustBeText: return "런타임 f-string 보간 식의 타입은 text여야 합니다";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";
             case Code::kClassLifecycleSelfNotAllowed: return "class lifecycle 멤버에는 self 리시버를 선언할 수 없습니다";
             case Code::kClassLifecycleDirectCallForbidden: return "init/deinit 는 직접 호출할 수 없습니다. lifecycle 호출은 컴파일러가 관리합니다";

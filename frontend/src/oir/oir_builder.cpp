@@ -1067,6 +1067,11 @@ namespace parus::oir {
                 return decode_escaped_string_body_(body);
             }
 
+            if (starts_with_(text, "$\"") && text.size() >= 3 && text.back() == '"') {
+                const auto body = text.substr(2, text.size() - 3);
+                return decode_escaped_string_body_(body);
+            }
+
             if (starts_with_(text, "R\"\"\"") && ends_with_(text, "\"\"\"") && text.size() >= 7) {
                 return std::string(text.substr(4, text.size() - 7));
             }

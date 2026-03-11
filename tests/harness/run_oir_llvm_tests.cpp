@@ -250,6 +250,7 @@ namespace {
                 sink(msg: "A\nB");
                 sink(msg: R"""A\nB""");
                 sink(msg: F"""A{1}B""");
+                sink(msg: $"A{1}B");
                 return 0i32;
             }
         )";
@@ -281,16 +282,59 @@ namespace {
         ok &= require_(lowered.ok, "LLVM text lowering for text literal case must succeed");
         ok &= require_(lowered.llvm_ir.find("declare i32 @sink({ ptr, i64 })") != std::string::npos,
                        "extern \"C\" text parameter must be emitted as `{ptr,i64}` aggregate");
-        ok &= require_(text_const_count >= 3,
-                       "three string literals must be emitted as rodata constants");
+        ok &= require_(text_const_count >= 4,
+                       "four string literals must be emitted as rodata constants");
         ok &= require_(lowered.llvm_ir.find("A\\0AB\\00") != std::string::npos,
                        "escaped normal string must contain decoded newline byte (0x0A)");
         ok &= require_(lowered.llvm_ir.find("A\\5CnB\\00") != std::string::npos,
                        "raw string must preserve backslash+n byte sequence");
         ok &= require_(lowered.llvm_ir.find("A1B\\00") != std::string::npos,
-                       "format triple string must be folded at compile time");
+                       "format string literals must be folded at compile time");
         ok &= require_(lowered.llvm_ir.find("malloc") == std::string::npos,
                        "text literal lowering must not introduce heap allocation calls");
+        return ok;
+    }
+
+    static bool test_fstring_runtime_text_passthrough_llvm_patterns() {
+        const std::string src = R"(
+            extern "C" def sink(msg: text) -> i32;
+
+            def main() -> i32 {
+                let msg: text = "M";
+                return sink(msg: $"{msg}");
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "runtime passthrough $-fstring source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        size_t text_const_count = 0;
+        bool saw_braced_text_const = false;
+        for (const auto& inst : p->oir.mod.insts) {
+            if (const auto* ct = std::get_if<parus::oir::InstConstText>(&inst.data)) {
+                ++text_const_count;
+                if (ct->bytes.find('{') != std::string::npos ||
+                    ct->bytes.find('}') != std::string::npos) {
+                    saw_braced_text_const = true;
+                }
+            }
+        }
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "runtime passthrough $-fstring LLVM lowering must succeed");
+        ok &= require_(text_const_count == 1,
+                       "runtime passthrough $-fstring must not materialize extra text constants");
+        ok &= require_(!saw_braced_text_const,
+                       "runtime passthrough $-fstring must not lower as literal '{...}' bytes");
+        ok &= require_(lowered.llvm_ir.find("{msg}") == std::string::npos,
+                       "runtime passthrough $-fstring must not appear as literal text in LLVM");
         return ok;
     }
 
@@ -692,7 +736,8 @@ namespace {
     /// @brief 예외 payload 슬롯 저장/복원 및 untyped rethrow dynamic type-id 경로를 LLVM-IR에서 검증한다.
     static bool test_exception_payload_and_rethrow_llvm_patterns_() {
         const std::string src = R"(
-            proto Recoverable {} with require(true);
+            proto Recoverable {
+            };
 
             struct E: Recoverable {
                 code: i32;
@@ -1227,7 +1272,7 @@ namespace {
     static bool test_generic_proto_default_materialization_llvm_symbols_() {
         const std::string src = R"(
             proto Echo<T> {
-                def echo(self, v: T) -> T {
+                provide def echo(v: T) -> T {
                     return v;
                 }
             };
@@ -1238,7 +1283,7 @@ namespace {
 
             def main() -> i32 {
                 set u = EchoUser();
-                return u.echo(v: 7i32);
+                return u->echo(v: 7i32);
             }
         )";
 
@@ -1363,7 +1408,7 @@ namespace {
     static bool test_class_proto_default_member_llvm_symbols_() {
         const std::string src = R"(
             proto WidgetProto {
-                def id(self) -> i32 {
+                provide def id() -> i32 {
                     return 11i32;
                 }
             };
@@ -1403,7 +1448,7 @@ namespace {
     static bool test_proto_override_call_prefers_class_symbol_() {
         const std::string src = R"(
             proto ValueProto {
-                def value(self) -> i32 {
+                provide def value() -> i32 {
                     return 1i32;
                 }
             };
@@ -2020,6 +2065,7 @@ int main() {
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},
+        {"fstring_runtime_text_passthrough_llvm_patterns", test_fstring_runtime_text_passthrough_llvm_patterns},
         {"float_char_literal_lowering", test_float_char_literal_lowering_},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},

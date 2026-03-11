@@ -295,7 +295,7 @@ namespace {
     static bool test_generic_proto_default_materialization_oir_lowering_ok() {
         const std::string src = R"(
             proto Echo<T> {
-                def echo(self, v: T) -> T {
+                provide def echo(v: T) -> T {
                     return v;
                 }
             };
@@ -306,7 +306,7 @@ namespace {
 
             def main() -> i32 {
                 set u = EchoUser();
-                return u.echo(v: 7i32);
+                return u->echo(v: 7i32);
             }
         )";
 
@@ -1028,7 +1028,7 @@ namespace {
     static bool test_class_and_proto_default_member_lowering_ok() {
         const std::string src = R"(
             proto WidgetProto {
-                def id(self) -> i32 {
+                provide def id() -> i32 {
                     return 7i32;
                 }
             };
@@ -1079,7 +1079,7 @@ namespace {
     static bool test_proto_default_override_dispatch_prefers_class_member_ok() {
         const std::string src = R"(
             proto ValueProto {
-                def value(self) -> i32 {
+                provide def value() -> i32 {
                     return 1i32;
                 }
             };
@@ -1557,7 +1557,8 @@ namespace {
     /// untyped catch의 `throw e` 재던지기가 dynamic type-id 경로로 내려가는지 검사한다.
     static bool test_exception_payload_and_rethrow_lowering_ok() {
         const std::string src = R"(
-            proto Recoverable {} with require(true);
+            proto Recoverable {
+            };
 
             struct E: Recoverable {
                 code: i32;
