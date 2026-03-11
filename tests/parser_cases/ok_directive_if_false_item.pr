@@ -1,4 +1,4 @@
-$[if(false)] struct Hidden {
+$[If(false)] struct Hidden {
   value: i32;
 }
 

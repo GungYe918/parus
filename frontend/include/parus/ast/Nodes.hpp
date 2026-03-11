@@ -108,10 +108,12 @@ namespace parus::ast {
         kClassDecl,
         kActorDecl,
         kActsDecl,
+        kInstDecl, // compile-time instruction declaration
 
         // use
         kUse,
         kNestDecl,   // nest foo; / nest foo { ... }
+        kCompilerDirective, // $[Foo(...)] <item>;
         kCompilerIntrinsicDirective, // $![key.path = target::path];
     };
 

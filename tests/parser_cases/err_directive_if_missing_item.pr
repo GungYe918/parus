@@ -1,3 +1,3 @@
-//@expect-error DirectiveIfItemExpected
-$[if(true)]
+//@expect-error DirectiveItemExpected
+$[If(true)]
 ;

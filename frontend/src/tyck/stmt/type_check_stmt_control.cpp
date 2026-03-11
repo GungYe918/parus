@@ -71,6 +71,10 @@ namespace parus::tyck {
 
             case ast::StmtKind::kCompilerIntrinsicDirective:
                 return;
+            case ast::StmtKind::kCompilerDirective:
+                return;
+            case ast::StmtKind::kInstDecl:
+                return;
 
             case ast::StmtKind::kThrow:
                 check_stmt_throw_(s);

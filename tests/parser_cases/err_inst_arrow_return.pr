@@ -1,0 +1,4 @@
+//@expect-error UnexpectedToken
+inst Wrong() -> bool {
+  return true;
+}

@@ -33,8 +33,10 @@ namespace parus::passes {
             case ast::StmtKind::kClassDecl:
             case ast::StmtKind::kActorDecl:
             case ast::StmtKind::kActsDecl:
+            case ast::StmtKind::kInstDecl:
             case ast::StmtKind::kNestDecl:
             case ast::StmtKind::kUse:
+            case ast::StmtKind::kCompilerDirective:
             case ast::StmtKind::kCompilerIntrinsicDirective:
                 return true;
 

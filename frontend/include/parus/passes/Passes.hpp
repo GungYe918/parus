@@ -38,7 +38,7 @@ namespace parus::passes {
     // 프로그램(= parse_program 결과 root) 기준 passes
     // - Top-level decl only 체크 포함
     PassResults run_on_program(
-        const ast::AstArena& ast,
+        ast::AstArena& ast,
         ast::StmtId program_root,
         diag::Bag& bag,
         const PassOptions& opt

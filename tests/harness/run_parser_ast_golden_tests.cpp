@@ -159,8 +159,10 @@ static const char* stmt_kind_name_(parus::ast::StmtKind k) {
         case K::kClassDecl: return "ClassDecl";
         case K::kActorDecl: return "ActorDecl";
         case K::kActsDecl: return "ActsDecl";
+        case K::kInstDecl: return "InstDecl";
         case K::kUse: return "Use";
         case K::kNestDecl: return "NestDecl";
+        case K::kCompilerDirective: return "CompilerDirective";
         case K::kCompilerIntrinsicDirective: return "CompilerIntrinsicDirective";
     }
     return "UnknownStmt";
@@ -887,6 +889,12 @@ static void dump_stmt_(
             dump_stmt_children_slice_(ast, s.stmt_begin, s.stmt_count, depth + 1, out, state, "members");
             break;
 
+        case parus::ast::StmtKind::kInstDecl:
+            append_line_(out, depth + 1, "name=" + escape_string_(s.name));
+            append_line_(out, depth + 1, "params=" + std::to_string(s.param_count));
+            dump_stmt_ref_(ast, s.a, depth + 1, out, state, "body");
+            break;
+
         case parus::ast::StmtKind::kNestDecl:
             append_line_(out, depth + 1, "path=" + escape_string_(join_path_(ast, s.nest_path_begin, s.nest_path_count)));
             append_line_(out, depth + 1, "file_directive=" + std::string(s.nest_is_file_directive ? "1" : "0"));
@@ -906,6 +914,11 @@ static void dump_stmt_(
         case parus::ast::StmtKind::kCompilerIntrinsicDirective:
             append_line_(out, depth + 1, "key_path=" + escape_string_(join_path_(ast, s.directive_key_path_begin, s.directive_key_path_count)));
             append_line_(out, depth + 1, "target_path=" + escape_string_(join_path_(ast, s.directive_target_path_begin, s.directive_target_path_count)));
+            break;
+
+        case parus::ast::StmtKind::kCompilerDirective:
+            dump_expr_ref_(ast, s.expr, depth + 1, out, state, "callee");
+            dump_stmt_ref_(ast, s.a, depth + 1, out, state, "item");
             break;
 
         default:

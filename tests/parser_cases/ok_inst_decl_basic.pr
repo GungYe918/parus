@@ -1,0 +1,10 @@
+inst FeatureEnabled(flag: bool) {
+  if (flag) {
+    return true;
+  }
+  return false;
+}
+
+def main() -> i32 {
+  return 0i32;
+}

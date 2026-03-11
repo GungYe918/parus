@@ -94,11 +94,20 @@ namespace parus::diag {
         kRequireExprTypeNotBool,          // require(expr); must evaluate to bool
         kRequireExprTooComplex,           // require(expr); only simple compile-time bool folding is supported
         kRequireUnsatisfied,              // require(expr); folded to false
-        kDirectiveIfConditionTypeNotBool, // $[if(...)] condition must fold to bool
-        kDirectiveIfConditionTooComplex,  // $[if(...)] supports simple bool folding only (v1)
-        kDirectiveIfItemExpected,         // $[if(...)] must be followed by an item declaration
+        kDirectiveLegacyIfRemoved,        // $[if(...)] is removed; use $[If(...)]
+        kDirectiveCallExpected,           // $[...] requires a call expression
+        kDirectiveItemExpected,           // $[...] must be followed by an item declaration
         kDirectiveIntrinsicSyntax,        // $![...] syntax error
         kDirectiveIntrinsicPolicyPending, // $![...] parsed but intrinsic policy is not fixed yet (warning)
+        kDirectiveInstBodyUnsupportedStmt,// inst body allows only let/if/return (and block)
+        kDirectiveInstExprUnsupported,    // inst expression is outside supported subset
+        kDirectiveInstMissingReturn,      // inst evaluation reached end without return
+        kDirectiveInstReturnMustBeBool,   // inst must return bool
+        kDirectiveInstRecursion,          // inst recursive/cyclic call
+        kDirectiveInstCallArgMismatch,    // inst call argument mismatch
+        kDirectiveInstUnknown,            // unknown inst callee
+        kDirectiveInstExternalPayloadInvalid, // external inst payload is malformed
+        kDirectiveInstForbiddenOperator,  // '&', '~', '^&' are not allowed in inst
         kClassLifecycleDefaultParamNotAllowed, // init()/deinit() = default only supports empty parameter list
         kClassLifecycleSelfNotAllowed,    // class lifecycle members must not declare self receiver
         kClassLifecycleDirectCallForbidden, // init/deinit direct calls are forbidden (compiler-managed lifecycle)

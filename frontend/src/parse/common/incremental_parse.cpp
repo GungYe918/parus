@@ -139,6 +139,7 @@ namespace parus::parse {
                 case ast::StmtKind::kActorDecl:
                 case ast::StmtKind::kActsDecl:
                 case ast::StmtKind::kProtoDecl:
+                case ast::StmtKind::kInstDecl:
                     return true;
                 default:
                     return false;

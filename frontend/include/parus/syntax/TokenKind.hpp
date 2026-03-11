@@ -64,6 +64,7 @@ namespace parus::syntax {
         kKwProto,
         kKwClass,
         kKwActor,
+        kKwInst,
         kKwInit,
         kKwDeinit,
         kKwDraft,
@@ -189,6 +190,7 @@ namespace parus::syntax {
             case TokenKind::kKwEnum: return "enum";
             case TokenKind::kKwProto: return "proto";
             case TokenKind::kKwActs: return "acts";
+            case TokenKind::kKwInst: return "inst";
             case TokenKind::kKwInit: return "init";
             case TokenKind::kKwDeinit: return "deinit";
             case TokenKind::kKwDraft: return "draft";

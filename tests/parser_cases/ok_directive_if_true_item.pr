@@ -1,4 +1,4 @@
-$[if(true)] struct Enabled {
+$[If(true)] struct Enabled {
   value: i32;
 }
 

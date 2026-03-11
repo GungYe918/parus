@@ -351,7 +351,8 @@ namespace parus::passes {
              s.kind == ast::StmtKind::kProtoDecl ||
              s.kind == ast::StmtKind::kClassDecl ||
              s.kind == ast::StmtKind::kActorDecl ||
-             s.kind == ast::StmtKind::kActsDecl) &&
+             s.kind == ast::StmtKind::kActsDecl ||
+             s.kind == ast::StmtKind::kInstDecl) &&
             !s.name.empty()) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
             add_namespace_prefixes_of_symbol_path_(qname, known_namespace_paths);

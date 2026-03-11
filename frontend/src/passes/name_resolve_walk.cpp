@@ -206,6 +206,7 @@
                             // fallback by SymbolKind (확장 대비)
                             if (symobj.kind == sema::SymbolKind::kFn) bk = BindingKind::kFn;
                             else if (symobj.kind == sema::SymbolKind::kType) bk = BindingKind::kType;
+                            else if (symobj.kind == sema::SymbolKind::kInst) bk = BindingKind::kType;
                             else bk = BindingKind::kLocalVar;
                         }
 
@@ -920,6 +921,11 @@
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 return;
 
+            case ast::StmtKind::kCompilerDirective:
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, file_scope);
+                return;
+
             case ast::StmtKind::kNestDecl:
                 if (!s.nest_is_file_directive) {
                     uint32_t pushed = 0;
@@ -951,6 +957,22 @@
                     }
                 }
                 return;
+
+            case ast::StmtKind::kInstDecl: {
+                const std::string qname = qualify_name_(namespace_stack, s.name);
+                uint32_t inst_sym = sema::SymbolTable::kNoScope;
+                if (auto sid = sym.lookup(qname)) {
+                    inst_sym = *sid;
+                } else {
+                    auto ins = declare_(sema::SymbolKind::kInst, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                    inst_sym = ins.symbol_id;
+                }
+                if (inst_sym != sema::SymbolTable::kNoScope) {
+                    const auto rid = add_resolved_(out, BindingKind::kType, inst_sym, s.span);
+                    out.stmt_to_resolved[(uint32_t)id] = rid;
+                }
+                return;
+            }
 
             default:
                 return;
@@ -1341,6 +1363,23 @@
                             se.is_external = false;
                         }
                     }
+                }
+            }
+            return;
+        }
+
+        if (s.kind == ast::StmtKind::kInstDecl) {
+            const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (!sym.lookup(qname)) {
+                auto ins = declare_(sema::SymbolKind::kInst, qname, ast::k_invalid_type, s.span, sym, bag, opt);
+                if (ins.ok && !ins.is_duplicate) {
+                    auto& se = sym.symbol_mut(ins.symbol_id);
+                    se.decl_file_id = s.span.file_id;
+                    se.decl_bundle_name = opt.current_bundle_name;
+                    se.decl_module_head = opt.current_module_head;
+                    se.decl_source_dir_norm = opt.current_source_dir_norm;
+                    se.is_export = s.is_export;
+                    se.is_external = false;
                 }
             }
             return;

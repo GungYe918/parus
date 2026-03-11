@@ -330,7 +330,9 @@ namespace parus::sir::detail {
                 continue;
             }
             const auto& child_stmt = ast.stmt(child);
-            if (child_stmt.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective) {
+            if (child_stmt.kind == parus::ast::StmtKind::kCompilerDirective ||
+                child_stmt.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective ||
+                child_stmt.kind == parus::ast::StmtKind::kInstDecl) {
                 continue;
             }
             m.stmts[m.blocks[bid].stmt_begin + written] =

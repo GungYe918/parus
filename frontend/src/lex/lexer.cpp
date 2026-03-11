@@ -416,6 +416,7 @@ namespace parus {
         if (t.lexeme == "proto")    { t.kind = syntax::TokenKind::kKwProto;    return t; }
         if (t.lexeme == "class")   { t.kind = syntax::TokenKind::kKwClass;   return t; }
         if (t.lexeme == "actor")   { t.kind = syntax::TokenKind::kKwActor;   return t; }
+        if (t.lexeme == "inst")    { t.kind = syntax::TokenKind::kKwInst;    return t; }
         if (t.lexeme == "init")     { t.kind = syntax::TokenKind::kKwInit;     return t; }
         if (t.lexeme == "deinit")   { t.kind = syntax::TokenKind::kKwDeinit;   return t; }
         if (t.lexeme == "draft")    { t.kind = syntax::TokenKind::kKwDraft;    return t; }

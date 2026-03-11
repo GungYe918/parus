@@ -1,0 +1,15 @@
+inst Enabled(flag: bool) {
+  return flag;
+}
+
+$[Enabled(true)] struct A {
+  value: i32;
+}
+
+$[Enabled(false)] struct B {
+  value: i32;
+}
+
+def main() -> i32 {
+  return 0i32;
+}

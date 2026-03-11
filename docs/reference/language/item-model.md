@@ -22,7 +22,7 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 
 1. 파일은 `item`과 `empty item`(`;`)의 반복을 허용한다.
 2. `statement`는 블록 내부에서만 허용한다.
-3. `item = declaration item + directive item`.
+3. `item = declaration item + directive item + compiler directive item`.
 4. `empty item`(`;`)은 no-op으로 허용한다.
 5. `declaration item (braced)` 자체는 종결 `;`를 요구하지 않는다.
 6. braced declaration 뒤의 `;`는 별도 `empty item`으로 허용한다.
@@ -39,23 +39,32 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 1. `def` 본문 선언
 2. `struct`
 3. `acts`
-4. (미래) `proto`
-5. (미래) `class`
-6. (미래) `actor`
+4. `proto`
+5. `class`
+6. `actor`
+7. `inst`
 
 #### 3.1.2 simple declaration item (`;` 필수)
 
 1. `extern "C" def ...;`
 2. 전역 변수 선언
 
-### 3.2 directive item (`;` 필수)
+### 3.2 directive item
 
 1. `import ...;`
 2. `use ...;`
 3. `use nest ...;`
 4. `nest path;` (파일 지시어)
+5. `$![key.path = target::path];`
 
 `nest path { ... }`는 block을 갖는 declaration-style item으로 취급한다.
+
+### 3.3 compiler directive item
+
+1. `$[Callee(...)] <item-decl>` 형태를 사용한다.
+2. `$[]`는 다음 선언 item 하나를 조건부로 채택/제거한다.
+3. `$[If(...)]`의 `If`는 builtin이며 유저 선언으로 대체할 수 없다.
+4. `$[]` 자체는 종결 `;`를 쓰지 않는다(뒤의 `<item-decl>` 규칙을 따른다).
 
 ---
 
@@ -65,7 +74,7 @@ Parus 파일 스코프를 `item` 중심으로 고정해 다음을 달성한다.
 File            := (Item | EmptyItem)* EOF ;
 EmptyItem       := ";" ;
 
-Item            := DeclItem | DirectiveItem ;
+Item            := DeclItem | DirectiveItem | CompilerDirectiveItem ;
 
 DeclItem        := BracedDeclItem | SimpleDeclItem ;
 BracedDeclItem  := NormalFuncDecl
@@ -78,6 +87,7 @@ BracedDeclItem  := NormalFuncDecl
 SimpleDeclItem  := CAbiFuncDecl | GlobalVarDecl ;
 
 DirectiveItem   := ImportStmt | UseStmt | NamespaceDecl ;
+CompilerDirectiveItem := "$" "[" DirectiveCall "]" ItemDecl ;
 ```
 
 ---

@@ -1,4 +1,4 @@
-//@expect-error DirectiveIfConditionTypeNotBool
+//@expect-error DirectiveLegacyIfRemoved
 $[if(1i32)] struct Hidden {
   value: i32;
 };

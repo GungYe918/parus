@@ -1,0 +1,4 @@
+//@expect-error DirectiveCallExpected
+$[true] struct Hidden {
+  value: i32;
+}

@@ -40,6 +40,7 @@ namespace parus::passes {
             std::string module_head{};
             std::string decl_source_dir_norm{};
             bool is_export = true;
+            std::string inst_payload{};
         };
         std::vector<ExternalExport> external_exports{};
     };

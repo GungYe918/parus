@@ -90,10 +90,11 @@ namespace parus {
         using K = syntax::TokenKind;
 
         // compiler directives:
-        // - $[if(cond)] <item-decl>
+        // - $[If(cond)] <item-decl>
+        // - $[Foo(...)] <item-decl>
         // - $![key.path = target::path];
         if (tok.kind == K::kDollar && cursor_.peek(1).kind == K::kLBracket) {
-            return parse_stmt_compiler_if_directive();
+            return parse_stmt_compiler_directive();
         }
         if (tok.kind == K::kDollar &&
             cursor_.peek(1).kind == K::kBang &&
@@ -161,10 +162,10 @@ namespace parus {
         return parse_stmt_expr();
     }
 
-    ast::StmtId Parser::parse_stmt_compiler_if_directive() {
+    ast::StmtId Parser::parse_stmt_compiler_directive() {
         using K = syntax::TokenKind;
 
-        const Token dol = cursor_.peek();
+        const Token start = cursor_.peek();
         if (!cursor_.eat(K::kDollar)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "$");
             return ast::k_invalid_stmt;
@@ -175,111 +176,45 @@ namespace parus {
             (void)cursor_.eat(K::kRBracket);
             return ast::k_invalid_stmt;
         }
-        if (!cursor_.eat(K::kKwIf)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "if");
-            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
-            (void)cursor_.eat(K::kRBracket);
-            return ast::k_invalid_stmt;
-        }
-        if (!cursor_.eat(K::kLParen)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-            recover_to_delim(K::kLParen, K::kRParen, K::kRBracket);
-            (void)cursor_.eat(K::kLParen);
+        ast::ExprId call = ast::k_invalid_expr;
+        if (cursor_.at(K::kKwIf)) {
+            diag_report(diag::Code::kDirectiveLegacyIfRemoved, cursor_.peek().span);
+            cursor_.bump(); // if
+            if (cursor_.eat(K::kLParen)) {
+                if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof) && !cursor_.at(K::kRBracket)) {
+                    (void)parse_expr();
+                }
+                if (!cursor_.eat(K::kRParen)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    recover_to_delim(K::kRParen, K::kRBracket, K::kSemicolon);
+                    (void)cursor_.eat(K::kRParen);
+                }
+            }
+        } else if (!cursor_.at(K::kRBracket) && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kEof)) {
+            call = parse_expr();
         }
 
-        ast::ExprId cond = ast::k_invalid_expr;
-        if (!cursor_.at(K::kRParen) && !cursor_.at(K::kRBracket) && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kEof)) {
-            cond = parse_expr();
-        }
-
-        if (!cursor_.eat(K::kRParen)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-            recover_to_delim(K::kRParen, K::kRBracket, K::kSemicolon);
-            (void)cursor_.eat(K::kRParen);
-        }
         if (!cursor_.eat(K::kRBracket)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
             recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
             (void)cursor_.eat(K::kRBracket);
         }
 
-        enum class IfFold : uint8_t {
-            kTrue,
-            kFalse,
-            kTypeNotBool,
-            kTooComplex,
-        };
-        const auto fold_cond = [&](auto&& self, ast::ExprId eid) -> IfFold {
-            if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) {
-                return IfFold::kTooComplex;
+        bool call_ok = true;
+        if (call == ast::k_invalid_expr || (size_t)call >= ast_.exprs().size()) {
+            call_ok = false;
+        } else {
+            const auto& ce = ast_.expr(call);
+            if (ce.kind != ast::ExprKind::kCall) {
+                call_ok = false;
             }
-            const auto& e = ast_.expr(eid);
-            switch (e.kind) {
-                case ast::ExprKind::kBoolLit:
-                    return (e.text == "true") ? IfFold::kTrue : IfFold::kFalse;
-
-                case ast::ExprKind::kUnary: {
-                    if (e.op != K::kKwNot) return IfFold::kTooComplex;
-                    const IfFold inner = self(self, e.a);
-                    if (inner == IfFold::kTrue) return IfFold::kFalse;
-                    if (inner == IfFold::kFalse) return IfFold::kTrue;
-                    return inner;
-                }
-
-                case ast::ExprKind::kBinary: {
-                    const IfFold lhs = self(self, e.a);
-                    const IfFold rhs = self(self, e.b);
-                    if (lhs == IfFold::kTooComplex || rhs == IfFold::kTooComplex) {
-                        return IfFold::kTooComplex;
-                    }
-                    if ((lhs != IfFold::kTrue && lhs != IfFold::kFalse) ||
-                        (rhs != IfFold::kTrue && rhs != IfFold::kFalse)) {
-                        return IfFold::kTypeNotBool;
-                    }
-                    const bool l = (lhs == IfFold::kTrue);
-                    const bool r = (rhs == IfFold::kTrue);
-                    if (e.op == K::kKwAnd) return (l && r) ? IfFold::kTrue : IfFold::kFalse;
-                    if (e.op == K::kKwOr) return (l || r) ? IfFold::kTrue : IfFold::kFalse;
-                    if (e.op == K::kEqEq) return (l == r) ? IfFold::kTrue : IfFold::kFalse;
-                    if (e.op == K::kBangEq) return (l != r) ? IfFold::kTrue : IfFold::kFalse;
-                    return IfFold::kTooComplex;
-                }
-
-                case ast::ExprKind::kIntLit:
-                case ast::ExprKind::kFloatLit:
-                case ast::ExprKind::kStringLit:
-                case ast::ExprKind::kCharLit:
-                case ast::ExprKind::kNullLit:
-                case ast::ExprKind::kArrayLit:
-                case ast::ExprKind::kFieldInit:
-                    return IfFold::kTypeNotBool;
-
-                default:
-                    return IfFold::kTooComplex;
-            }
-        };
-
-        bool enabled = false;
-        const IfFold folded = fold_cond(fold_cond, cond);
-        switch (folded) {
-            case IfFold::kTrue:
-                enabled = true;
-                break;
-            case IfFold::kFalse:
-                enabled = false;
-                break;
-            case IfFold::kTypeNotBool:
-                diag_report(diag::Code::kDirectiveIfConditionTypeNotBool,
-                            cond == ast::k_invalid_expr ? dol.span : ast_.expr(cond).span);
-                break;
-            case IfFold::kTooComplex:
-                diag_report(diag::Code::kDirectiveIfConditionTooComplex,
-                            cond == ast::k_invalid_expr ? dol.span : ast_.expr(cond).span);
-                break;
+        }
+        if (!call_ok) {
+            diag_report(diag::Code::kDirectiveCallExpected, start.span);
         }
 
         if (!is_decl_start(cursor_.peek().kind)) {
-            diag_report(diag::Code::kDirectiveIfItemExpected, cursor_.peek().span);
+            diag_report(diag::Code::kDirectiveItemExpected, cursor_.peek().span);
             if (!cursor_.at(K::kSemicolon) && !cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
                 stmt_sync_to_boundary();
             }
@@ -287,9 +222,17 @@ namespace parus {
             return ast::k_invalid_stmt;
         }
 
-        const ast::StmtId sid = parse_decl_any();
-        if (!enabled) return ast::k_invalid_stmt;
-        return sid;
+        const ast::StmtId item_sid = parse_decl_any();
+        if (!call_ok || item_sid == ast::k_invalid_stmt) {
+            return ast::k_invalid_stmt;
+        }
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kCompilerDirective;
+        s.span = span_join(start.span, ast_.stmt(item_sid).span);
+        s.expr = call;
+        s.a = item_sid;
+        return ast_.add_stmt(s);
     }
 
     ast::StmtId Parser::parse_stmt_compiler_intrinsic_directive() {

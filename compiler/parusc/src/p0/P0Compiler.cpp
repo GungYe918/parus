@@ -163,6 +163,7 @@ namespace parusc::p0 {
             std::string module_head{};
             std::string decl_dir{};
             std::string type_repr{};
+            std::string inst_payload{};
             std::string decl_file{};
             uint32_t decl_line = 1;
             uint32_t decl_col = 1;
@@ -288,6 +289,7 @@ namespace parusc::p0 {
                 case K::kField: return "field";
                 case K::kAct: return "act";
                 case K::kType: return "type";
+                case K::kInst: return "inst";
                 default: return "var";
             }
         }
@@ -299,6 +301,7 @@ namespace parusc::p0 {
             if (s == "field") return K::kField;
             if (s == "act") return K::kAct;
             if (s == "type") return K::kType;
+            if (s == "inst") return K::kInst;
             return std::nullopt;
         }
 
@@ -549,7 +552,8 @@ namespace parusc::p0 {
                                    parus::ty::TypeId tid,
                                    bool is_export,
                                    parus::Span span,
-                                   std::string link_name = {}) {
+                                   std::string link_name = {},
+                                   std::string inst_payload = {}) {
                 if (qname.empty()) return;
                 ExportSurfaceEntry e{};
                 e.kind = kind;
@@ -561,6 +565,7 @@ namespace parusc::p0 {
                 if (tid != parus::ty::kInvalidType) {
                     e.type_repr = types.to_export_string(tid);
                 }
+                e.inst_payload = std::move(inst_payload);
                 e.decl_file = decl_file;
                 const auto lc = sm.line_col(span.file_id, span.lo);
                 e.decl_line = lc.line;
@@ -630,6 +635,22 @@ namespace parusc::p0 {
                         }
                     }
                 }
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kInstDecl && !s.name.empty()) {
+                std::string payload{};
+                const auto src = sm.content(s.span.file_id);
+                if (s.span.lo <= s.span.hi && s.span.hi <= src.size()) {
+                    payload.assign(src.substr(s.span.lo, s.span.hi - s.span.lo));
+                }
+                push_export(parus::sema::SymbolKind::kInst,
+                            qualify_name_(ns, s.name),
+                            parus::ty::kInvalidType,
+                            s.is_export,
+                            s.span,
+                            /*link_name=*/{},
+                            std::move(payload));
                 return;
             }
         }
@@ -771,7 +792,7 @@ namespace parusc::p0 {
             }
 
             ofs << "{\n";
-            ofs << "  \"version\": 4,\n";
+            ofs << "  \"version\": 5,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"exports\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
@@ -782,6 +803,7 @@ namespace parusc::p0 {
                     << "\",\"module_head\":\"" << json_escape_text_(e.module_head)
                     << "\",\"decl_dir\":\"" << json_escape_text_(e.decl_dir)
                     << "\",\"type_repr\":\"" << json_escape_text_(e.type_repr)
+                    << "\",\"inst_payload\":\"" << json_escape_text_(e.inst_payload)
                     << "\",\"decl_span\":{\"file\":\"" << json_escape_text_(e.decl_file)
                     << "\",\"line\":" << e.decl_line
                     << ",\"col\":" << e.decl_col
@@ -836,6 +858,15 @@ namespace parusc::p0 {
             }
             if (pos >= text.size() || text[pos] != '"') return false;
             return json_unescape_text_(raw, out);
+        }
+
+        bool parse_json_string_field_optional_(std::string_view text, std::string_view key, std::string& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) {
+                out.clear();
+                return true;
+            }
+            return parse_json_string_field_(text, key, out);
         }
 
         bool parse_json_uint_field_(std::string_view text, std::string_view key, uint32_t& out) {
@@ -942,7 +973,7 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || version != 4) {
+            if (!parse_json_uint_field_(text, "version", version) || version != 5) {
                 out_err = "unsupported export-index version in: " + path;
                 return false;
             }
@@ -964,6 +995,7 @@ namespace parusc::p0 {
                 std::string module_head{};
                 std::string decl_dir{};
                 std::string type_repr{};
+                std::string inst_payload{};
                 std::string decl_file{};
                 uint32_t decl_line = 1;
                 uint32_t decl_col = 1;
@@ -991,6 +1023,10 @@ namespace parusc::p0 {
                 }
                 if (!parse_json_string_field_(obj, "type_repr", type_repr)) {
                     out_err = "invalid export-index entry field 'type_repr' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_optional_(obj, "inst_payload", inst_payload)) {
+                    out_err = "invalid export-index entry field 'inst_payload' in: " + path;
                     return false;
                 }
                 if (!parse_json_string_field_(obj, "file", decl_file)) {
@@ -1024,6 +1060,7 @@ namespace parusc::p0 {
                 e.module_head = std::move(module_head);
                 e.decl_dir = std::move(decl_dir);
                 e.type_repr = std::move(type_repr);
+                e.inst_payload = std::move(inst_payload);
                 e.decl_file = std::move(decl_file);
                 e.decl_line = decl_line;
                 e.decl_col = decl_col;
@@ -1503,6 +1540,7 @@ namespace parusc::p0 {
             x.module_head = e.module_head;
             x.decl_source_dir_norm = e.decl_dir;
             x.is_export = e.is_export;
+            x.inst_payload = e.inst_payload;
             pass_opt.name_resolve.external_exports.push_back(std::move(x));
         };
 

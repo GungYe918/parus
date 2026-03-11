@@ -1,0 +1,8 @@
+//@expect-error DirectiveInstForbiddenOperator
+inst Bad(flag: bool) {
+  return ~flag;
+}
+
+$[Bad(true)] struct A {
+  value: i32;
+}

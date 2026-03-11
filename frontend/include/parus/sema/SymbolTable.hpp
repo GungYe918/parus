@@ -20,6 +20,7 @@ namespace parus::sema {
         kType,    // 타입 이름(class/struct/alias 등)
         kField,   // field 이름(향후)
         kAct,     // acts 이름(향후)
+        kInst,    // compile-time inst declaration
     };
 
     // 심볼 1개 엔트리

@@ -6,6 +6,7 @@
 #include <parus/passes/CheckPlaceExpr.hpp>
 #include <parus/passes/CheckTopLevelDeclOnly.hpp>
 #include <parus/passes/GenericPrep.hpp>
+#include <parus/passes/CompilerDirectiveEval.hpp>
 
 
 namespace parus::passes {
@@ -55,7 +56,7 @@ namespace parus::passes {
     }
 
     PassResults run_on_program(
-        const ast::AstArena& ast,
+        ast::AstArena& ast,
         ast::StmtId program_root,
         diag::Bag& bag,
         const PassOptions& opt
@@ -64,13 +65,16 @@ namespace parus::passes {
             return PassResults{};
         }
 
-        // 0) Top-level decl-only 체크
+        // 0) compiler directive evaluation/pruning
+        evaluate_compiler_directives(ast, program_root, bag, opt);
+
+        // 1) Top-level decl-only 체크
         check_top_level_decl_only(ast, program_root, bag);
 
-        // 1) stmt 기반 패스
+        // 2) stmt 기반 패스
         auto res = run_on_stmt_tree(ast, program_root, bag, opt);
 
-        // 2) generic prepass (index + lightweight validation prep)
+        // 3) generic prepass (index + lightweight validation prep)
         res.generic_prep = run_generic_prep(ast, program_root, bag);
         return res;
     }

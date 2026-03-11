@@ -52,6 +52,9 @@ namespace parus::ast {
         kActsMember,
         kNestBody,
         kUseExpr,
+        kInstBody,
+        kDirectiveCall,
+        kDirectiveItem,
     };
 
     class TreeVisitor {
@@ -322,6 +325,22 @@ namespace parus::ast {
                     break;
                 }
 
+                case StmtKind::kInstDecl: {
+                    const auto& params = ast.params();
+                    const uint64_t begin = s.param_begin;
+                    const uint64_t end = begin + s.param_count;
+                    if (begin <= params.size() && end <= params.size()) {
+                        for (uint32_t i = 0; i < s.param_count; ++i) {
+                            const auto& p = params[s.param_begin + i];
+                            if (p.has_default) {
+                                visit_expr_inner(ast, p.default_expr, v);
+                            }
+                        }
+                    }
+                    visit_stmt_child_if_(ast, id, s, StmtChildRole::kInstBody, s.a, v);
+                    break;
+                }
+
                 case StmtKind::kProtoDecl: {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
@@ -408,6 +427,11 @@ namespace parus::ast {
 
                 case StmtKind::kUse:
                     visit_expr_inner(ast, s.expr, v);
+                    break;
+
+                case StmtKind::kCompilerDirective:
+                    visit_expr_inner(ast, s.expr, v);
+                    visit_stmt_child_if_(ast, id, s, StmtChildRole::kDirectiveItem, s.a, v);
                     break;
 
                 default:

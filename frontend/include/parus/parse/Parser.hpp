@@ -153,7 +153,7 @@ namespace parus {
 
         //  stmt/decl 혼용의 내부 엔트리
         ast::StmtId parse_stmt_any();
-        ast::StmtId parse_stmt_compiler_if_directive();
+        ast::StmtId parse_stmt_compiler_directive();
         ast::StmtId parse_stmt_compiler_intrinsic_directive();
 
         //  expr ';' 문장 파싱
@@ -216,6 +216,7 @@ namespace parus {
         ast::StmtId parse_decl_proto();
         ast::StmtId parse_decl_class();
         ast::StmtId parse_decl_actor();
+        ast::StmtId parse_decl_inst();
         ast::StmtId parse_decl_class_lifecycle_member();
         ast::StmtId parse_decl_actor_init_member();
 

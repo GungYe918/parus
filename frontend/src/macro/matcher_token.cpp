@@ -161,9 +161,11 @@ namespace parus::macro {
                 case ast::StmtKind::kClassDecl:
                 case ast::StmtKind::kActorDecl:
                 case ast::StmtKind::kActsDecl:
+                case ast::StmtKind::kInstDecl:
                 case ast::StmtKind::kUse:
                 case ast::StmtKind::kNestDecl:
                 case ast::StmtKind::kVar:
+                case ast::StmtKind::kCompilerDirective:
                     return true;
                 default:
                     return false;
