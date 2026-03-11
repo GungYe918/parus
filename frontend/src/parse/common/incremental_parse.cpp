@@ -5,6 +5,7 @@
 #include <parus/syntax/TokenKind.hpp>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <utility>
@@ -33,6 +34,16 @@ namespace parus::parse {
             if (!env || env[0] == '\0') return false;
             if (env[0] == '0' && env[1] == '\0') return false;
             return true;
+        }
+
+        bool incremental_merge_trace_enabled_() {
+            const char* env = std::getenv("PARUS_TRACE_INCREMENTAL_MERGE");
+            return env != nullptr && env[0] != '\0' && !(env[0] == '0' && env[1] == '\0');
+        }
+
+        void incremental_merge_trace_(const char* stage, const char* reason) {
+            if (!incremental_merge_trace_enabled_()) return;
+            std::fprintf(stderr, "[incremental-merge] %s: %s\n", stage, reason);
         }
 
         Span span_join_(Span a, Span b) {
@@ -87,6 +98,92 @@ namespace parus::parse {
             return (lo == kInvalidU32) ? 0u : lo;
         }
 
+        std::string_view latest_source_view_(const std::vector<std::shared_ptr<std::string>>& owners) {
+            if (owners.empty() || owners.back() == nullptr) return {};
+            return *owners.back();
+        }
+
+        bool contains_structural_char_(std::string_view text) {
+            for (const char ch : text) {
+                switch (ch) {
+                    case '\n':
+                    case '\r':
+                    case '{':
+                    case '}':
+                    case '(':
+                    case ')':
+                    case '[':
+                    case ']':
+                    case ';':
+                    case ',':
+                        return true;
+                    default:
+                        break;
+                }
+            }
+            return false;
+        }
+
+        std::string_view clamp_substr_(std::string_view text, uint32_t lo, uint32_t hi) {
+            const size_t begin = std::min<size_t>(lo, text.size());
+            const size_t end = std::min<size_t>(hi, text.size());
+            if (begin >= end) return {};
+            return text.substr(begin, end - begin);
+        }
+
+        bool is_risky_top_level_kind_(ast::StmtKind kind) {
+            switch (kind) {
+                case ast::StmtKind::kFieldDecl:
+                case ast::StmtKind::kEnumDecl:
+                case ast::StmtKind::kClassDecl:
+                case ast::StmtKind::kActorDecl:
+                case ast::StmtKind::kActsDecl:
+                case ast::StmtKind::kProtoDecl:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        bool should_force_full_rebuild_(const ParseSnapshot& snapshot,
+                                        const std::vector<std::shared_ptr<std::string>>& source_owners,
+                                        std::string_view new_source,
+                                        std::span<const EditWindow> edits,
+                                        size_t first_affected_item) {
+            const std::string_view old_source = latest_source_view_(source_owners);
+            if (old_source.empty()) return true;
+            if (first_affected_item >= snapshot.top_items.size()) return true;
+
+            const auto& first_item = snapshot.top_items[first_affected_item];
+            if (first_item.sid == ast::k_invalid_stmt ||
+                first_item.sid >= snapshot.ast.stmts().size()) {
+                return true;
+            }
+
+            const auto& first_stmt = snapshot.ast.stmt(first_item.sid);
+            if (is_risky_top_level_kind_(first_stmt.kind)) return true;
+
+            for (const auto& edit : edits) {
+                const uint32_t lo = std::min(edit.lo, edit.hi);
+                const uint32_t hi = std::max(edit.lo, edit.hi);
+                if (lo <= first_item.lo) return true;
+
+                const uint32_t old_win_lo = (lo > 2u) ? (lo - 2u) : 0u;
+                const uint32_t old_win_hi = std::min<uint32_t>(
+                    static_cast<uint32_t>(std::min<size_t>(std::numeric_limits<uint32_t>::max(), old_source.size())),
+                    hi + 2u
+                );
+                const uint32_t new_win_hi = std::min<uint32_t>(
+                    static_cast<uint32_t>(std::min<size_t>(std::numeric_limits<uint32_t>::max(), new_source.size())),
+                    lo + 2u
+                );
+
+                if (contains_structural_char_(clamp_substr_(old_source, old_win_lo, old_win_hi))) return true;
+                if (contains_structural_char_(clamp_substr_(new_source, old_win_lo, new_win_hi))) return true;
+            }
+            return false;
+        }
+
         size_t find_token_begin_(const std::vector<Token>& toks, uint32_t parse_lo) {
             size_t i = 0;
             while (i < toks.size()) {
@@ -105,6 +202,20 @@ namespace parus::parse {
                 if (p.get() == owner.get()) return;
             }
             out.push_back(owner);
+        }
+
+        bool validate_merged_children_(const ast::AstArena& ast, const std::vector<ast::StmtId>& children) {
+            uint32_t prev_lo = 0;
+            bool first = true;
+            for (const auto sid : children) {
+                if (sid == ast::k_invalid_stmt || sid >= ast.stmts().size()) return false;
+                const auto& st = ast.stmt(sid);
+                if (st.span.hi < st.span.lo) return false;
+                if (!first && st.span.lo < prev_lo) return false;
+                prev_lo = st.span.lo;
+                first = false;
+            }
+            return true;
         }
 
     } // namespace
@@ -177,17 +288,33 @@ namespace parus::parse {
         }
 
         if (!ready_) return false;
-        if (snapshot_.root == ast::k_invalid_stmt) return false;
-        if (source_owners_.size() > 16) return false; // old source retention compact trigger
+        if (snapshot_.root == ast::k_invalid_stmt) {
+            incremental_merge_trace_("reject", "invalid-root");
+            return false;
+        }
+        if (source_owners_.size() > 16) {
+            incremental_merge_trace_("reject", "too-many-source-owners");
+            return false; // old source retention compact trigger
+        }
 
         const auto earliest_lo = earliest_edit_lo_(edits);
         const auto old_items = snapshot_.top_items;
-        if (old_items.empty()) return false;
+        if (old_items.empty()) {
+            incremental_merge_trace_("reject", "no-top-items");
+            return false;
+        }
 
         size_t first = find_first_affected_item_(old_items, earliest_lo);
-        if (first == 0) return false; // 시작 item부터 영향이면 full parse로 복귀
+        if (first == 0) {
+            incremental_merge_trace_("reject", "first-top-item-affected");
+            return false; // 시작 item부터 영향이면 full parse로 복귀
+        }
         if (first >= old_items.size()) {
             first = old_items.size() - 1;
+        }
+        if (should_force_full_rebuild_(snapshot_, source_owners_, source, edits, first)) {
+            incremental_merge_trace_("reject", "structural-edit-or-risky-top-item");
+            return false;
         }
 
         auto source_owner = std::make_shared<std::string>(source);
@@ -195,39 +322,62 @@ namespace parus::parse {
         diag::Bag local_bag;
         Lexer lx(*source_owner, file_id, &local_bag);
         auto new_tokens = lx.lex_all();
-        if (local_bag.has_fatal()) return false;
-        if (new_tokens.empty()) return false;
+        if (local_bag.has_fatal()) {
+            incremental_merge_trace_("reject", "lex-fatal");
+            return false;
+        }
+        if (new_tokens.empty()) {
+            incremental_merge_trace_("reject", "empty-token-stream");
+            return false;
+        }
 
         const uint32_t parse_lo = std::min(old_items[first].lo, earliest_lo);
         const size_t tok_begin = find_token_begin_(new_tokens, parse_lo);
-        if (tok_begin >= new_tokens.size()) return false;
+        if (tok_begin >= new_tokens.size()) {
+            incremental_merge_trace_("reject", "token-begin-out-of-range");
+            return false;
+        }
 
         std::vector<Token> partial_tokens{};
         partial_tokens.reserve(new_tokens.size() - tok_begin);
         for (size_t i = tok_begin; i < new_tokens.size(); ++i) {
             partial_tokens.push_back(new_tokens[i]);
         }
-        if (partial_tokens.empty()) return false;
+        if (partial_tokens.empty()) {
+            incremental_merge_trace_("reject", "empty-partial-token-stream");
+            return false;
+        }
 
         ast::AstArena arena = snapshot_.ast;
         ty::TypePool types = snapshot_.types;
 
         Parser partial_parser(partial_tokens, arena, types, &local_bag, /*max_errors=*/256, feature_flags_);
         const auto partial_root = partial_parser.parse_program();
-        if (partial_root == ast::k_invalid_stmt) return false;
+        if (partial_root == ast::k_invalid_stmt) {
+            incremental_merge_trace_("reject", "partial-root-invalid");
+            return false;
+        }
 
         const auto& old_root = arena.stmt(snapshot_.root);
-        if (old_root.kind != ast::StmtKind::kBlock) return false;
+        if (old_root.kind != ast::StmtKind::kBlock) {
+            incremental_merge_trace_("reject", "old-root-not-block");
+            return false;
+        }
 
         const auto& partial_root_stmt = arena.stmt(partial_root);
-        if (partial_root_stmt.kind != ast::StmtKind::kBlock) return false;
+        if (partial_root_stmt.kind != ast::StmtKind::kBlock) {
+            incremental_merge_trace_("reject", "partial-root-not-block");
+            return false;
+        }
 
         const auto& children = arena.stmt_children();
         if (old_root.stmt_begin > children.size() || old_root.stmt_begin + old_root.stmt_count > children.size()) {
+            incremental_merge_trace_("reject", "old-root-child-range-invalid");
             return false;
         }
         if (partial_root_stmt.stmt_begin > children.size()
             || partial_root_stmt.stmt_begin + partial_root_stmt.stmt_count > children.size()) {
+            incremental_merge_trace_("reject", "partial-root-child-range-invalid");
             return false;
         }
 
@@ -238,6 +388,10 @@ namespace parus::parse {
         }
         for (uint32_t i = 0; i < partial_root_stmt.stmt_count; ++i) {
             merged_children.push_back(children[partial_root_stmt.stmt_begin + i]);
+        }
+        if (!validate_merged_children_(arena, merged_children)) {
+            incremental_merge_trace_("reject", "merged-children-invalid");
+            return false;
         }
 
         uint32_t merged_begin = static_cast<uint32_t>(arena.stmt_children().size());
@@ -266,6 +420,10 @@ namespace parus::parse {
         next.tokens = std::move(new_tokens);
         next.top_items = collect_top_items_(next.ast, next.root);
         next.revision = ++revision_seq_;
+        if (next.root == ast::k_invalid_stmt || next.top_items.size() != merged_children.size()) {
+            incremental_merge_trace_("reject", "next-snapshot-shape-invalid");
+            return false;
+        }
 
         snapshot_ = std::move(next);
 
@@ -277,6 +435,7 @@ namespace parus::parse {
 
         append_diag_bag_(bag, local_bag);
         ready_ = true;
+        incremental_merge_trace_("accept", "incremental-merge");
         return true;
     }
 

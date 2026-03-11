@@ -1,6 +1,7 @@
 proto BoolReq {
-  def f(self) -> i32;
-} with require(true and not false or true);
+  require f(self) -> i32;
+  require class(X);
+};
 
 class X : BoolReq {
   def f(self) -> i32 {

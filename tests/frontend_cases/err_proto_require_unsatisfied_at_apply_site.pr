@@ -1,6 +1,7 @@
 proto P {
-    def f(self) -> i32;
-} with require(false);
+    require f(self) -> i32;
+    require class(MissingType);
+};
 
 class A: P {
     init() = default;

@@ -1,5 +1,5 @@
 proto EqProto {
-  def eq(self, rhs: i32) -> bool {
+  provide def eq(self, rhs: i32) -> bool {
     return true;
   }
 };

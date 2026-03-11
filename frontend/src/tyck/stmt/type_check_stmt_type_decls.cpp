@@ -240,7 +240,47 @@
                     const ast::StmtId msid = kids[i];
                     if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                     const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kFnDecl && m.a == ast::k_invalid_stmt) out.push_back(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kRequire) {
+                        out.push_back(msid);
+                    }
+                }
+            }
+        };
+        auto collect_provided = [&](auto&& self,
+                                    ast::StmtId proto_sid,
+                                    std::vector<ast::StmtId>& out,
+                                    std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kProvide &&
+                        m.a != ast::k_invalid_stmt) {
+                        out.push_back(msid);
+                    }
                 }
             }
         };
@@ -267,11 +307,37 @@
                 }
 
                 std::vector<ast::StmtId> required;
+                std::vector<ast::StmtId> provided;
                 std::unordered_set<ast::StmtId> visiting;
                 collect_required(collect_required, *proto_sid, required, visiting);
+                visiting.clear();
+                collect_provided(collect_provided, *proto_sid, provided, visiting);
                 for (const ast::StmtId req_sid : required) {
                     if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
                     const auto& req = ast_.stmt(req_sid);
+                    bool satisfied_by_provide = false;
+                    for (const ast::StmtId prov_sid : provided) {
+                        if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
+                        const auto& prov = ast_.stmt(prov_sid);
+                        if (req.name == prov.name && req.param_count == prov.param_count &&
+                            req.positional_param_count == prov.positional_param_count &&
+                            req.fn_ret == prov.fn_ret) {
+                            bool same_params = true;
+                            for (uint32_t pi = 0; pi < req.param_count; ++pi) {
+                                const auto& rp = ast_.params()[req.param_begin + pi];
+                                const auto& pp = ast_.params()[prov.param_begin + pi];
+                                if (rp.type != pp.type || rp.is_self != pp.is_self || rp.self_kind != pp.self_kind) {
+                                    same_params = false;
+                                    break;
+                                }
+                            }
+                            if (same_params) {
+                                satisfied_by_provide = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (satisfied_by_provide) continue;
                     diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
                     err_(req.span, "field does not provide proto member: " + std::string(req.name));
                 }
@@ -389,7 +455,80 @@
         enum_abi_meta_by_type_[self_ty] = std::move(meta);
         enum_decl_by_type_[self_ty] = sid;
 
-        // enum + proto policy: v0 only supports default-only proto attachment.
+        auto collect_required = [&](auto&& self,
+                                    ast::StmtId proto_sid,
+                                    std::vector<ast::StmtId>& out,
+                                    std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kRequire) {
+                        out.push_back(msid);
+                    }
+                }
+            }
+        };
+        auto collect_provided = [&](auto&& self,
+                                    ast::StmtId proto_sid,
+                                    std::vector<ast::StmtId>& out,
+                                    std::unordered_set<ast::StmtId>& visiting) -> void {
+            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return;
+            if (!visiting.insert(proto_sid).second) return;
+            const auto& ps = ast_.stmt(proto_sid);
+            if (ps.kind != ast::StmtKind::kProtoDecl) return;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = ps.decl_path_ref_begin;
+            const uint32_t ie = ps.decl_path_ref_begin + ps.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    const auto& pr = refs[i];
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(pr, pr.span)) {
+                        self(self, *base_sid, out, visiting);
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = ps.stmt_begin;
+            const uint32_t me = ps.stmt_begin + ps.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kProvide &&
+                        m.a != ast::k_invalid_stmt) {
+                        out.push_back(msid);
+                    }
+                }
+            }
+        };
+
         const auto& refs = ast_.path_refs();
         const uint32_t rb = s.decl_path_ref_begin;
         const uint32_t re = s.decl_path_ref_begin + s.decl_path_ref_count;
@@ -411,22 +550,40 @@
                     continue;
                 }
 
-                const auto& ps = ast_.stmt(*proto_sid);
-                if (ps.kind != ast::StmtKind::kProtoDecl) continue;
-                const auto& kids = ast_.stmt_children();
-                const uint64_t mb = ps.stmt_begin;
-                const uint64_t me = mb + ps.stmt_count;
-                if (mb > kids.size() || me > kids.size()) continue;
-                for (uint32_t ki = ps.stmt_begin; ki < ps.stmt_begin + ps.stmt_count; ++ki) {
-                    const ast::StmtId msid = kids[ki];
-                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                    const auto& m = ast_.stmt(msid);
-                    if (m.kind != ast::StmtKind::kFnDecl) continue;
-                    if (m.a == ast::k_invalid_stmt) {
-                        diag_(diag::Code::kEnumProtoRequiresDefaultOnly, m.span, ps.name);
-                        err_(m.span, "enum can only attach default-only proto in v0");
-                        break;
+                std::vector<ast::StmtId> required;
+                std::vector<ast::StmtId> provided;
+                std::unordered_set<ast::StmtId> visiting;
+                collect_required(collect_required, *proto_sid, required, visiting);
+                visiting.clear();
+                collect_provided(collect_provided, *proto_sid, provided, visiting);
+                for (const ast::StmtId req_sid : required) {
+                    if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
+                    const auto& req = ast_.stmt(req_sid);
+                    bool satisfied_by_provide = false;
+                    for (const ast::StmtId prov_sid : provided) {
+                        if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
+                        const auto& prov = ast_.stmt(prov_sid);
+                        if (req.name == prov.name && req.param_count == prov.param_count &&
+                            req.positional_param_count == prov.positional_param_count &&
+                            req.fn_ret == prov.fn_ret) {
+                            bool same_params = true;
+                            for (uint32_t pi = 0; pi < req.param_count; ++pi) {
+                                const auto& rp = ast_.params()[req.param_begin + pi];
+                                const auto& pp = ast_.params()[prov.param_begin + pi];
+                                if (rp.type != pp.type || rp.is_self != pp.is_self || rp.self_kind != pp.self_kind) {
+                                    same_params = false;
+                                    break;
+                                }
+                            }
+                            if (same_params) {
+                                satisfied_by_provide = true;
+                                break;
+                            }
+                        }
                     }
+                    if (satisfied_by_provide) continue;
+                    diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                    err_(req.span, "enum does not provide proto member: " + std::string(req.name));
                 }
             }
         }

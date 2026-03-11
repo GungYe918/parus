@@ -1,5 +1,5 @@
 proto Marker {
-  def mark(self) -> i32 {
+  provide def mark(self) -> i32 {
     return 1i32;
   }
 };

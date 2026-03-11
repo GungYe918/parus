@@ -1,5 +1,5 @@
 proto Eq {
-  def eq(self, rhs: &Self) -> bool;
+  require eq(self, rhs: &Self) -> bool;
 };
 
 class Box<T> with [U: Eq] {

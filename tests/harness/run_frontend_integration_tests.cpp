@@ -1407,7 +1407,7 @@ namespace {
     static bool test_generic_proto_target_arity_reports_once() {
         const std::string src = R"(
             proto Holder<T> {
-                def get(self) -> T;
+                require get(self) -> T;
             };
 
             class Bad: Holder<i32, i32> {

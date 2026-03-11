@@ -643,7 +643,7 @@ namespace parus {
         return ast_.add_stmt(s);
     }
 
-    /// @brief `proto Name [: BaseProto, ...] { def sig(...)->T; ... } [with require(expr) (, require(expr))*];`
+    /// @brief `proto Name [: BaseProto, ...] { require ...; provide ...; ... };`
     ast::StmtId Parser::parse_decl_proto() {
         using K = syntax::TokenKind;
 
@@ -710,24 +710,9 @@ namespace parus {
         }
 
         std::vector<ast::StmtId> members;
-        members.reserve(8);
+        members.reserve(16);
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             if (cursor_.eat(K::kSemicolon)) continue;
-
-            if (cursor_.at(K::kKwConst) && cursor_.peek(1).kind == K::kKwFn) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                            "const def is not allowed in proto member signatures");
-                cursor_.bump(); // const
-                const ast::StmtId msid = parse_decl_proto_member_sig();
-                if (msid != ast::k_invalid_stmt) members.push_back(msid);
-                continue;
-            }
-
-            if (cursor_.at(K::kKwFn)) {
-                const ast::StmtId msid = parse_decl_proto_member_sig();
-                if (msid != ast::k_invalid_stmt) members.push_back(msid);
-                continue;
-            }
 
             if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "operator") {
                 diag_report(diag::Code::kProtoOperatorNotAllowed, cursor_.peek().span);
@@ -736,8 +721,116 @@ namespace parus {
                 continue;
             }
 
+            if (cursor_.at(K::kKwRequire)) {
+                const Token req_tok = cursor_.bump(); // require
+
+                const auto parse_require_kind_item = [&](ast::ProtoRequireKind req_kind) -> ast::StmtId {
+                    if (!cursor_.eat(K::kLParen)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+                        recover_to_delim(K::kLParen, K::kRParen, K::kSemicolon);
+                        (void)cursor_.eat(K::kLParen);
+                    }
+
+                    ast::PathRef pr{};
+                    bool path_ok = true;
+                    if (cursor_.at(K::kRParen) || cursor_.at(K::kSemicolon) || cursor_.at(K::kEof)) {
+                        path_ok = false;
+                        diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "type path");
+                    } else {
+                        path_ok = parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true);
+                    }
+
+                    if (!cursor_.eat(K::kRParen)) {
+                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                        recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
+                        (void)cursor_.eat(K::kRParen);
+                    }
+
+                    Span end_sp = req_tok.span;
+                    if (path_ok) {
+                        end_sp = pr.span;
+                    }
+                    end_sp = stmt_consume_semicolon_or_recover(end_sp);
+
+                    ast::Stmt m{};
+                    m.kind = ast::StmtKind::kRequire;
+                    m.span = span_join(req_tok.span, end_sp);
+                    m.proto_require_kind = req_kind;
+                    if (path_ok) {
+                        m.proto_req_path_begin = pr.path_begin;
+                        m.proto_req_path_count = pr.path_count;
+                    }
+                    return ast_.add_stmt(m);
+                };
+
+                const Token next = cursor_.peek();
+                if (next.kind == K::kKwField || next.kind == K::kKwEnum ||
+                    next.kind == K::kKwClass || next.kind == K::kKwActor ||
+                    next.kind == K::kKwActs) {
+                    ast::ProtoRequireKind req_kind = ast::ProtoRequireKind::kNone;
+                    switch (next.kind) {
+                        case K::kKwField: req_kind = ast::ProtoRequireKind::kStruct; break;
+                        case K::kKwEnum: req_kind = ast::ProtoRequireKind::kEnum; break;
+                        case K::kKwClass: req_kind = ast::ProtoRequireKind::kClass; break;
+                        case K::kKwActor: req_kind = ast::ProtoRequireKind::kActor; break;
+                        case K::kKwActs: req_kind = ast::ProtoRequireKind::kActs; break;
+                        default: break;
+                    }
+                    cursor_.bump(); // kind keyword
+                    const ast::StmtId msid = parse_require_kind_item(req_kind);
+                    if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                    continue;
+                }
+
+                if (next.kind == K::kKwFn) {
+                    diag_report(diag::Code::kUnexpectedToken, next.span,
+                                "require function signature must not use 'def'");
+                }
+                const ast::StmtId msid = parse_decl_proto_member_sig(
+                    /*with_def_keyword=*/false,
+                    /*require_body=*/false,
+                    ast::ProtoFnRole::kRequire
+                );
+                if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                continue;
+            }
+
+            if (cursor_.at(K::kKwProvide)) {
+                cursor_.bump(); // provide
+                if (cursor_.at(K::kKwFn)) {
+                    const ast::StmtId msid = parse_decl_proto_member_sig(
+                        /*with_def_keyword=*/true,
+                        /*require_body=*/true,
+                        ast::ProtoFnRole::kProvide
+                    );
+                    if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                    continue;
+                }
+
+                if (cursor_.at(K::kKwConst)) {
+                    const ast::StmtId msid = parse_stmt_var();
+                    if (msid != ast::k_invalid_stmt && (size_t)msid < ast_.stmts().size()) {
+                        auto& m = ast_.stmt_mut(msid);
+                        if (m.kind == ast::StmtKind::kVar) {
+                            m.var_is_proto_provide = true;
+                            m.is_const = true;
+                            m.is_static = true;
+                            m.is_set = false;
+                            m.is_mut = false;
+                        }
+                    }
+                    if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                    continue;
+                }
+
+                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "provide def/const");
+                recover_to_delim(K::kSemicolon, K::kRBrace);
+                (void)cursor_.eat(K::kSemicolon);
+                continue;
+            }
+
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "proto member signature");
+                        "proto member (require/provide)");
             recover_to_delim(K::kSemicolon, K::kRBrace);
             cursor_.eat(K::kSemicolon);
         }
@@ -748,74 +841,10 @@ namespace parus {
             cursor_.eat(K::kRBrace);
         }
 
-        auto make_bool_lit = [&](std::string_view text, Span sp) -> ast::ExprId {
-            ast::Expr e{};
-            e.kind = ast::ExprKind::kBoolLit;
-            e.span = sp;
-            e.text = text;
-            return ast_.add_expr(e);
-        };
-
-        const Span default_require_span = cursor_.prev().span.hi ? cursor_.prev().span : start;
-        bool has_require = true;
-        ast::ExprId require_expr = make_bool_lit("true", default_require_span);
-        const auto is_require_token = [&]() -> bool {
-            return cursor_.at(K::kKwRequire);
-        };
-        const auto parse_require_clause = [&]() -> ast::ExprId {
-            if (!is_require_token()) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "require");
-                return ast::k_invalid_expr;
-            }
-            cursor_.bump(); // require
-
-            if (!cursor_.eat(K::kLParen)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-            }
-
-            ast::ExprId expr_id = ast::k_invalid_expr;
-            if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
-                expr_id = parse_expr();
-            } else {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "bool expression");
-            }
-
-            if (!cursor_.eat(K::kRParen)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
-                recover_to_delim(K::kRParen, K::kComma, K::kSemicolon);
-                cursor_.eat(K::kRParen);
-            }
-            return expr_id;
-        };
-        const bool has_with = cursor_.at(K::kKwWith);
-        if (has_with) {
-            cursor_.bump(); // with
-            ast::ExprId folded = parse_require_clause();
-            if (folded != ast::k_invalid_expr) {
-                require_expr = folded;
-            }
-
-            while (cursor_.eat(K::kComma)) {
-                if (cursor_.at(K::kSemicolon) || cursor_.at(K::kRBrace) || cursor_.at(K::kEof)) {
-                    diag_report(diag::Code::kProtoRequireTrailingCommaNotAllowed, cursor_.prev().span);
-                    break;
-                }
-
-                ast::ExprId next_clause = parse_require_clause();
-                if (next_clause == ast::k_invalid_expr) {
-                    recover_to_delim(K::kComma, K::kSemicolon, K::kRBrace);
-                    if (cursor_.eat(K::kComma)) continue;
-                    break;
-                }
-
-                ast::Expr and_expr{};
-                and_expr.kind = ast::ExprKind::kBinary;
-                and_expr.op = K::kKwAnd;
-                and_expr.a = require_expr;
-                and_expr.b = next_clause;
-                and_expr.span = span_join(ast_.expr(require_expr).span, ast_.expr(next_clause).span);
-                require_expr = ast_.add_expr(and_expr);
-            }
+        if (cursor_.at(K::kKwWith)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "legacy 'with require(...)' syntax is removed; use proto body require/provide items");
+            recover_to_delim(K::kSemicolon);
         }
 
         const Span end_sp = stmt_consume_semicolon_or_recover(cursor_.prev().span);
@@ -835,8 +864,6 @@ namespace parus {
         s.stmt_count = static_cast<uint32_t>(members.size());
         s.decl_path_ref_begin = inherit_begin;
         s.decl_path_ref_count = inherit_count;
-        s.proto_has_require = has_require;
-        s.proto_require_expr = require_expr;
         s.decl_generic_param_begin = decl_generic_begin;
         s.decl_generic_param_count = decl_generic_count;
         s.decl_constraint_begin = 0;

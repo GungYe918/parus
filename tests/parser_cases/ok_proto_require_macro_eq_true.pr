@@ -5,8 +5,8 @@ macro rtrue -> {
 }
 
 proto P {
-    def f(self) -> i32;
-} with require($rtrue() == true);
+    require f(self) -> i32;
+};
 
 class A: P {
     init() = default;

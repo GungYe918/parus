@@ -1,6 +1,6 @@
 proto NeedEq {
-  def eq(self, rhs: &Self) -> bool;
-} with require(true);
+  require eq(self, rhs: &Self) -> bool;
+};
 
 struct Bad {
   x: i32;

@@ -1,4 +1,4 @@
-proto Recoverable {} with require(true);
+proto Recoverable {};
 
 struct E: Recoverable {
     code: i32;

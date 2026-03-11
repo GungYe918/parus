@@ -486,6 +486,21 @@ namespace parus::ast {
         kActsEnable,   // use T with acts(NameOrDefault);
     };
 
+    enum class ProtoFnRole : uint8_t {
+        kNone = 0,
+        kRequire,
+        kProvide,
+    };
+
+    enum class ProtoRequireKind : uint8_t {
+        kNone = 0,
+        kStruct,
+        kEnum,
+        kClass,
+        kActor,
+        kActs,
+    };
+
     struct Stmt {
         StmtKind kind{};
         Span span{};
@@ -572,8 +587,11 @@ namespace parus::ast {
         uint32_t enum_variant_count = 0;
         uint32_t decl_path_ref_begin = 0; // proto inherit / field/class implements path refs
         uint32_t decl_path_ref_count = 0;
-        bool proto_has_require = false;
-        ExprId proto_require_expr = k_invalid_expr;
+        ProtoFnRole proto_fn_role = ProtoFnRole::kNone;
+        ProtoRequireKind proto_require_kind = ProtoRequireKind::kNone;
+        uint32_t proto_req_path_begin = 0;
+        uint32_t proto_req_path_count = 0;
+        bool var_is_proto_provide = false;
 
         // ---- acts decl ----
         bool acts_is_for = false;          // true: `acts for T` or `acts Name for T`

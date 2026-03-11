@@ -1,4 +1,4 @@
-proto Recoverable {} with require(true);
+proto Recoverable {};
 
 enum E: Recoverable {
     case Fail,

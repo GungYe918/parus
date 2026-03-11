@@ -1,5 +1,5 @@
 proto Base {
-  def id(self) -> i32 {
+  provide def id(self) -> i32 {
     return 1i32;
   }
 };

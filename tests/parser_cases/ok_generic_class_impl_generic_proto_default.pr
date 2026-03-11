@@ -1,5 +1,5 @@
 proto Echo<T> {
-  def echo(self, v: T) -> T {
+  provide def echo(self, v: T) -> T {
     return v;
   }
 };

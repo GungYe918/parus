@@ -241,7 +241,7 @@ namespace parus {
         bool parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self = nullptr);
         bool parse_decl_generic_param_clause(uint32_t& out_begin, uint32_t& out_count);
         bool parse_decl_fn_constraint_clause(uint32_t& out_begin, uint32_t& out_count);
-        ast::StmtId parse_decl_proto_member_sig();
+        ast::StmtId parse_decl_proto_member_sig(bool with_def_keyword, bool require_body, ast::ProtoFnRole role);
 
         // --------------------
         // call args

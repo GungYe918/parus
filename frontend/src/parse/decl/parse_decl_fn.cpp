@@ -466,14 +466,20 @@ namespace parus {
         return true;
     }
 
-    ast::StmtId Parser::parse_decl_proto_member_sig() {
+    ast::StmtId Parser::parse_decl_proto_member_sig(bool with_def_keyword, bool require_body, ast::ProtoFnRole role) {
         using K = syntax::TokenKind;
 
         const Token start_tok = cursor_.peek();
         Span start = start_tok.span;
 
-        if (!cursor_.eat(K::kKwFn)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "def");
+        if (with_def_keyword) {
+            if (!cursor_.eat(K::kKwFn)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "def");
+            }
+        } else if (cursor_.at(K::kKwFn)) {
+            diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
+                        "proto require function must not use 'def'");
+            cursor_.bump();
         }
 
         std::string_view name{};
@@ -526,6 +532,16 @@ namespace parus {
         if (cursor_.at(K::kLBrace)) {
             body = parse_stmt_required_block("proto member");
             end_sp = ast_.stmt(body).span;
+
+            if (role == ast::ProtoFnRole::kRequire) {
+                diag_report(diag::Code::kProtoMemberBodyNotAllowed, ast_.stmt(body).span);
+                body = ast::k_invalid_stmt;
+                end_sp = cursor_.prev().span;
+            }
+        }
+
+        if (require_body && body == ast::k_invalid_stmt) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "{");
         }
 
         if (body == ast::k_invalid_stmt) {
@@ -587,6 +603,7 @@ namespace parus {
         s.positional_param_count = positional_count;
         s.has_named_group = has_named_group;
         s.fn_is_proto_sig = true;
+        s.proto_fn_role = role;
         s.fn_generic_param_begin = generic_begin;
         s.fn_generic_param_count = generic_count;
         s.fn_constraint_begin = constraint_begin;

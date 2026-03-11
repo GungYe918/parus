@@ -1,5 +1,5 @@
 proto P {
-  def id(self) -> i32;
+  require id(self) -> i32;
 } with require(true) require(false);
 
 def main() -> i32 {

@@ -399,6 +399,7 @@ namespace parus {
         if (t.lexeme == "nest")     { t.kind = syntax::TokenKind::kKwNest;      return t; }
         if (t.lexeme == "with")     { t.kind = syntax::TokenKind::kKwWith;      return t; }
         if (t.lexeme == "require")  { t.kind = syntax::TokenKind::kKwRequire;   return t; }
+        if (t.lexeme == "provide")  { t.kind = syntax::TokenKind::kKwProvide;   return t; }
 
         if (t.lexeme == "commit")   { t.kind = syntax::TokenKind::kKwCommit;   return t; }
         if (t.lexeme == "recast")   { t.kind = syntax::TokenKind::kKwRecast;   return t; }

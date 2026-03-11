@@ -1,6 +1,6 @@
-//@expect-error ProtoRequireTrailingCommaNotAllowed
+//@expect-error UnexpectedToken
 proto P {
-  def id(self) -> i32;
+  require id(self) -> i32;
 } with require(true),;
 
 def main() -> i32 {

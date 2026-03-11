@@ -323,9 +323,6 @@ namespace parus::ast {
                 }
 
                 case StmtKind::kProtoDecl: {
-                    if (s.proto_has_require && s.proto_require_expr != k_invalid_expr) {
-                        visit_expr_inner(ast, s.proto_require_expr, v);
-                    }
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
                     const uint64_t end = begin + s.stmt_count;

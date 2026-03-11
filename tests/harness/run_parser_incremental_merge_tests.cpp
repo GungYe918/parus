@@ -116,7 +116,6 @@ static uint64_t ast_fingerprint_(const parus::parse::ParseSnapshot& snap) {
             push_stmt(st.b);
             push_expr(st.expr);
             push_expr(st.init);
-            push_expr(st.proto_require_expr);
 
             if (st.stmt_begin + st.stmt_count <= children.size()) {
                 for (uint32_t i = 0; i < st.stmt_count; ++i) {
@@ -209,6 +208,28 @@ static std::string apply_insert_(const std::string& src, uint32_t at, std::strin
     return out;
 }
 
+static uint32_t find_merge_friendly_insert_pos_(const std::string& src, const parus::parse::TopItemMeta& item) {
+    const uint32_t lo = std::min<uint32_t>(item.lo, static_cast<uint32_t>(src.size()));
+    const uint32_t hi = std::min<uint32_t>(item.hi, static_cast<uint32_t>(src.size()));
+    if (lo >= hi) return lo;
+
+    const std::string_view slice(src.data() + lo, hi - lo);
+    if (const size_t ret = slice.find("return "); ret != std::string_view::npos) {
+        return lo + static_cast<uint32_t>(ret + 7u);
+    }
+    if (const size_t eq = slice.find(" = "); eq != std::string_view::npos) {
+        return lo + static_cast<uint32_t>(eq + 3u);
+    }
+
+    for (uint32_t i = lo; i < hi; ++i) {
+        const char ch = src[i];
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) {
+            return i;
+        }
+    }
+    return lo;
+}
+
 static const char* mode_name_(parus::parse::ReparseMode mode) {
     using parus::parse::ReparseMode;
     switch (mode) {
@@ -252,7 +273,8 @@ static bool run_case_(const std::filesystem::path& path) {
     // but result equivalence vs full parse must always hold.
     constexpr uint32_t kLongRunSteps = 16;
 
-    static const char* kInsertions[] = {" ", "\n", "\n "};
+    static const char* kStrictInsertions[] = {" ", "  ", "\t"};
+    static const char* kLongRunInsertions[] = {" ", "\n", "\n "};
     uint32_t merge_hits = 0;
     uint32_t fallback_hits = 0;
 
@@ -264,10 +286,13 @@ static bool run_case_(const std::filesystem::path& path) {
         }
 
         const size_t idx = 1 + (step % (items.size() - 1));
-        uint32_t at = items[idx].lo;
+        uint32_t at = find_merge_friendly_insert_pos_(src, items[idx]);
         at = std::min<uint32_t>(at, static_cast<uint32_t>(src.size()));
 
-        const std::string next_src = apply_insert_(src, at, kInsertions[step % 3]);
+        const char* repl = require_merge
+            ? kStrictInsertions[step % 3]
+            : kLongRunInsertions[step % 3];
+        const std::string next_src = apply_insert_(src, at, repl);
         const parus::parse::EditWindow edit{at, at};
 
         parus::diag::Bag inc_bag{};
@@ -356,6 +381,65 @@ static bool collect_case_files_(std::vector<std::filesystem::path>& out) {
 #endif
 }
 
+static bool test_structural_newline_forces_fallback_() {
+    const std::string src =
+        "actor Counter {\n"
+        "  draft {\n"
+        "    value: i32;\n"
+        "  }\n"
+        "\n"
+        "  init(seed: i32) {\n"
+        "    draft.value = seed;\n"
+        "  }\n"
+        "\n"
+        "  def sub get() -> i32 {\n"
+        "    recast;\n"
+        "    return draft.value;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set c = Counter(seed: 1i32);\n"
+        "  return c.get();\n"
+        "}\n";
+
+    const auto pos = src.find("    return draft.value;");
+    if (pos == std::string::npos) {
+        std::cerr << "  - structural fallback fixture is malformed\n";
+        return false;
+    }
+
+    parus::parse::IncrementalParserSession inc{};
+    parus::diag::Bag init_inc_bag{};
+    if (!inc.initialize(src, /*file_id=*/1, init_inc_bag)) {
+        std::cerr << "  - structural fallback incremental init failed\n";
+        return false;
+    }
+
+    const std::string next_src = apply_insert_(src, static_cast<uint32_t>(pos), "\n");
+    const parus::parse::EditWindow edit{static_cast<uint32_t>(pos), static_cast<uint32_t>(pos)};
+
+    parus::diag::Bag inc_bag{};
+    if (!inc.reparse_with_edits(next_src, /*file_id=*/1, std::span<const parus::parse::EditWindow>(&edit, 1), inc_bag)) {
+        std::cerr << "  - structural fallback incremental reparse failed\n";
+        return false;
+    }
+    if (inc.last_mode() != parus::parse::ReparseMode::kFallbackFullRebuild) {
+        std::cerr << "  - structural newline edit must force fallback rebuild, got "
+                  << mode_name_(inc.last_mode()) << "\n";
+        return false;
+    }
+
+    parus::parse::IncrementalParserSession full{};
+    parus::diag::Bag full_bag{};
+    if (!full.initialize(next_src, /*file_id=*/1, full_bag)) {
+        std::cerr << "  - structural fallback full parse failed\n";
+        return false;
+    }
+
+    return compare_snapshots_strict_("structural-newline", inc_bag, inc.snapshot(), full_bag, full.snapshot());
+}
+
 } // namespace
 
 int main() {
@@ -371,6 +455,7 @@ int main() {
         if (!run_case_(p)) return 1;
         ++passed;
     }
+    if (!test_structural_newline_forces_fallback_()) return 1;
 
     std::cout << "[incremental-merge] passed " << passed << "/" << files.size() << "\n";
     return 0;

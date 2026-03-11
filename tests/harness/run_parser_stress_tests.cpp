@@ -112,7 +112,6 @@ static uint64_t ast_fingerprint_(const parus::parse::ParseSnapshot& snap) {
             push_stmt(st.b);
             push_expr(st.expr);
             push_expr(st.init);
-            push_expr(st.proto_require_expr);
 
             if (st.stmt_begin + st.stmt_count <= children.size()) {
                 for (uint32_t i = 0; i < st.stmt_count; ++i) {

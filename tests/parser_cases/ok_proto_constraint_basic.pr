@@ -1,6 +1,6 @@
 proto Equatable {
-  def eq(self, rhs: &Self) -> bool;
-} with require(true);
+  require eq(self, rhs: &Self) -> bool;
+};
 
 class UserId : Equatable {
   value: i32;

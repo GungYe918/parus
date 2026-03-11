@@ -1,5 +1,5 @@
 proto Widget {
-  def id(self) -> i32 {
+  provide def id(self) -> i32 {
     return 7i32;
   }
 };

@@ -87,6 +87,7 @@ namespace parus::syntax {
         kKwNest,
         kKwWith,
         kKwRequire,
+        kKwProvide,
 
         // punct / delimiters
         kAt,       // @
@@ -224,6 +225,7 @@ namespace parus::syntax {
             case TokenKind::kKwNest: return "nest";
             case TokenKind::kKwWith: return "with";
             case TokenKind::kKwRequire: return "require";
+            case TokenKind::kKwProvide: return "provide";
 
             case TokenKind::kKwPub: return "pub";
             case TokenKind::kKwSub: return "sub";

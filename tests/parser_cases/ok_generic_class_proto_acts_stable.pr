@@ -1,6 +1,6 @@
 proto Echo<T> {
-  def echo(self, v: T) -> T;
-} with require(true);
+  require echo(self, v: T) -> T;
+};
 
 class Box<T>: Echo<T> {
   value: T;

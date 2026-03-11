@@ -1,6 +1,7 @@
 proto P {
-  def id(self) -> i32;
-} with require(true), require(true and not false);
+  require id(self) -> i32;
+  require class(A);
+};
 
 class A: P {
   id_value: i32;

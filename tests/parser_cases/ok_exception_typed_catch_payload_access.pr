@@ -1,4 +1,4 @@
-proto Recoverable {} with require(true);
+proto Recoverable {};
 
 struct StoreErr: Recoverable {
     code: i32;

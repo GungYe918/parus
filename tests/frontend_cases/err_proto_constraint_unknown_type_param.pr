@@ -1,6 +1,6 @@
 proto Equatable {
-  def eq(self, rhs: &Self) -> bool;
-} with require(true);
+  require eq(self, rhs: &Self) -> bool;
+};
 
 def same<T>(a: &T, b: &T) with [U: Equatable] -> bool {
   return true;

@@ -1,5 +1,5 @@
 proto Equatable {
-  def eq(self, rhs: &Self) -> bool;
+  require eq(self, rhs: &Self) -> bool;
 };
 
 tablet UserId : Equatable {

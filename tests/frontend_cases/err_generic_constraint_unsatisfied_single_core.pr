@@ -1,5 +1,5 @@
 proto NeedsRun {
-  def run(self) -> i32;
+  require run(self) -> i32;
 };
 
 def call<T>(x: T) with [T: NeedsRun] -> i32 {

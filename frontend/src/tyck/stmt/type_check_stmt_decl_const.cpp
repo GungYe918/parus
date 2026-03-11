@@ -922,35 +922,153 @@
         if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return true;
         const auto& ps = ast_.stmt(proto_sid);
         if (ps.kind != ast::StmtKind::kProtoDecl) return true;
-        if (!ps.proto_has_require || ps.proto_require_expr == ast::k_invalid_expr) return true;
 
-        const ast::ExprId req_eid = ps.proto_require_expr;
-        const Span req_span = ((size_t)req_eid < ast_.exprs().size()) ? ast_.expr(req_eid).span : apply_span;
-        const ProtoRequireEvalResult status = eval_proto_require_const_bool_(req_eid);
-        switch (status) {
-            case ProtoRequireEvalResult::kTrue:
+        auto emit_req_failure = [&](Span sp, const std::string& msg) {
+            if (emit_shape_diag) {
+                diag_(diag::Code::kTypeErrorGeneric, sp, msg);
+                err_(sp, msg);
+            }
+            if (emit_unsatisfied_diag) {
+                diag_(diag::Code::kProtoConstraintUnsatisfied, apply_span, std::string(ps.name));
+                err_(apply_span, msg);
+            }
+        };
+
+        const std::string current_bundle = current_bundle_name_();
+        auto symbol_visible_from_use = [&](const sema::Symbol& sym_obj) -> bool {
+            if (sym_obj.is_external) return sym_obj.is_export;
+
+            if (apply_span.file_id != 0 &&
+                sym_obj.decl_file_id != 0 &&
+                sym_obj.decl_file_id != apply_span.file_id &&
+                !sym_obj.is_export) {
+                return false;
+            }
+
+            if (!current_bundle.empty() &&
+                !sym_obj.decl_bundle_name.empty() &&
+                sym_obj.decl_bundle_name != current_bundle &&
+                !sym_obj.is_export) {
+                return false;
+            }
+            return true;
+        };
+
+        auto req_kind_matches = [&](ast::ProtoRequireKind req_kind, const sema::Symbol& sym_obj) -> bool {
+            switch (req_kind) {
+                case ast::ProtoRequireKind::kStruct:
+                    return sym_obj.kind == sema::SymbolKind::kField;
+
+                case ast::ProtoRequireKind::kEnum:
+                    return sym_obj.kind == sema::SymbolKind::kType &&
+                        enum_decl_by_name_.find(sym_obj.name) != enum_decl_by_name_.end();
+
+                case ast::ProtoRequireKind::kClass:
+                    return sym_obj.kind == sema::SymbolKind::kType &&
+                        class_decl_by_name_.find(sym_obj.name) != class_decl_by_name_.end();
+
+                case ast::ProtoRequireKind::kActor:
+                    return sym_obj.kind == sema::SymbolKind::kType &&
+                        actor_decl_by_name_.find(sym_obj.name) != actor_decl_by_name_.end();
+
+                case ast::ProtoRequireKind::kActs:
+                    return sym_obj.kind == sema::SymbolKind::kAct;
+
+                case ast::ProtoRequireKind::kNone:
+                    return true;
+            }
+            return true;
+        };
+
+        auto req_kind_name = [&](ast::ProtoRequireKind req_kind) -> const char* {
+            switch (req_kind) {
+                case ast::ProtoRequireKind::kStruct: return "struct";
+                case ast::ProtoRequireKind::kEnum: return "enum";
+                case ast::ProtoRequireKind::kClass: return "class";
+                case ast::ProtoRequireKind::kActor: return "actor";
+                case ast::ProtoRequireKind::kActs: return "acts";
+                case ast::ProtoRequireKind::kNone: return "require";
+            }
+            return "require";
+        };
+
+        auto evaluate_req_item = [&](const ast::Stmt& req_item) -> bool {
+            if (req_item.proto_require_kind == ast::ProtoRequireKind::kNone) {
                 return true;
-            case ProtoRequireEvalResult::kFalse:
-                if (emit_unsatisfied_diag) {
-                    diag_(diag::Code::kProtoConstraintUnsatisfied, apply_span, std::string(ps.name));
-                    err_(apply_span, "proto require(...) evaluated to false at apply-site");
-                }
+            }
+            const std::string raw_path = path_join_(req_item.proto_req_path_begin, req_item.proto_req_path_count);
+            if (raw_path.empty()) {
+                emit_req_failure(req_item.span, "proto require target path is missing");
                 return false;
-            case ProtoRequireEvalResult::kTypeNotBool:
-                if (emit_shape_diag && proto_require_type_diag_emitted_.insert(req_eid).second) {
-                    diag_(diag::Code::kProtoRequireTypeNotBool, req_span);
-                    err_(req_span, "require(...) expression must be bool");
-                }
+            }
+
+            std::string lookup = raw_path;
+            if (auto rewritten = rewrite_imported_path_(lookup)) {
+                lookup = *rewritten;
+            }
+
+            auto sym_sid = lookup_symbol_(lookup);
+            if (!sym_sid.has_value()) {
+                const std::string msg = std::string("proto require target not found: ") + raw_path;
+                emit_req_failure(req_item.span, msg);
                 return false;
-            case ProtoRequireEvalResult::kTooComplex:
-                if (emit_shape_diag && proto_require_complex_diag_emitted_.insert(req_eid).second) {
-                    diag_(diag::Code::kProtoRequireExprTooComplex, req_span);
-                    err_(req_span,
-                         "require(...) supports only true/false/not/and/or/==/!= in v1");
-                }
+            }
+
+            const auto& sym_obj = sym_.symbol(*sym_sid);
+            if (!symbol_visible_from_use(sym_obj)) {
+                const std::string msg = std::string("proto require target is not visible from this use-site: ") + raw_path;
+                emit_req_failure(req_item.span, msg);
                 return false;
-        }
-        return false;
+            }
+
+            if (!req_kind_matches(req_item.proto_require_kind, sym_obj)) {
+                std::string msg = "proto require kind mismatch: expected ";
+                msg += req_kind_name(req_item.proto_require_kind);
+                msg += ", got symbol '";
+                msg += sym_obj.name;
+                msg += "'";
+                emit_req_failure(req_item.span, msg);
+                return false;
+            }
+            return true;
+        };
+
+        auto visit_proto = [&](auto&& self, ast::StmtId cur_sid, std::unordered_set<ast::StmtId>& visiting) -> bool {
+            if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return true;
+            if (!visiting.insert(cur_sid).second) return true;
+            const auto& cur = ast_.stmt(cur_sid);
+            if (cur.kind != ast::StmtKind::kProtoDecl) return true;
+
+            const auto& refs = ast_.path_refs();
+            const uint32_t ib = cur.decl_path_ref_begin;
+            const uint32_t ie = cur.decl_path_ref_begin + cur.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = ib; i < ie; ++i) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], apply_span)) {
+                        if (!self(self, *base_sid, visiting)) return false;
+                    }
+                }
+            }
+
+            const auto& kids = ast_.stmt_children();
+            const uint32_t mb = cur.stmt_begin;
+            const uint32_t me = cur.stmt_begin + cur.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = mb; i < me; ++i) {
+                    const ast::StmtId msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind == ast::StmtKind::kRequire &&
+                        m.proto_require_kind != ast::ProtoRequireKind::kNone) {
+                        if (!evaluate_req_item(m)) return false;
+                    }
+                }
+            }
+            return true;
+        };
+
+        std::unordered_set<ast::StmtId> visiting;
+        return visit_proto(visit_proto, proto_sid, visiting);
     }
 
     void TypeChecker::check_stmt_proto_decl_(ast::StmtId sid) {
@@ -964,51 +1082,103 @@
         const auto& kids = ast_.stmt_children();
         const uint32_t mb = s.stmt_begin;
         const uint32_t me = s.stmt_begin + s.stmt_count;
-        uint32_t proto_member_with_body = 0;
-        uint32_t proto_member_sig_only = 0;
-        std::vector<ast::StmtId> proto_default_members;
+        std::vector<ast::StmtId> proto_provide_fn_members;
         if (mb <= kids.size() && me <= kids.size()) {
             for (uint32_t i = 0; i < s.stmt_count; ++i) {
                 const ast::StmtId msid = kids[s.stmt_begin + i];
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
-                if (m.kind != ast::StmtKind::kFnDecl) {
-                    diag_(diag::Code::kUnexpectedToken, m.span, "proto member signature");
-                    err_(m.span, "proto body allows only function signatures");
+
+                if (m.kind == ast::StmtKind::kFnDecl) {
+                    if (m.fn_is_operator) {
+                        diag_(diag::Code::kProtoOperatorNotAllowed, m.span);
+                        err_(m.span, "operator declarations are not allowed in proto");
+                    }
+
+                    if (m.proto_fn_role == ast::ProtoFnRole::kRequire) {
+                        if (m.a != ast::k_invalid_stmt) {
+                            diag_(diag::Code::kProtoMemberBodyNotAllowed, m.span);
+                            err_(m.span, "proto require function must not define a body");
+                        }
+                    } else if (m.proto_fn_role == ast::ProtoFnRole::kProvide) {
+                        if (m.a == ast::k_invalid_stmt) {
+                            diag_(diag::Code::kUnexpectedToken, m.span,
+                                  "provide def member must define a body");
+                            err_(m.span, "proto provide function requires a body");
+                        } else {
+                            proto_provide_fn_members.push_back(msid);
+                        }
+                    } else {
+                        diag_(diag::Code::kUnexpectedToken, m.span,
+                              "proto function member must begin with require/provide");
+                        err_(m.span, "proto function member must begin with require/provide");
+                    }
                     continue;
                 }
-                if (m.fn_is_operator) {
-                    diag_(diag::Code::kProtoOperatorNotAllowed, m.span);
-                    err_(m.span, "operator declarations are not allowed in proto");
+
+                if (m.kind == ast::StmtKind::kRequire) {
+                    if (m.proto_require_kind == ast::ProtoRequireKind::kNone) {
+                        diag_(diag::Code::kUnexpectedToken, m.span,
+                              "require(expr) statement is not allowed in proto body");
+                        err_(m.span, "proto body requires typed require item");
+                    } else if (m.proto_req_path_count == 0) {
+                        diag_(diag::Code::kUnexpectedToken, m.span, "require target path");
+                        err_(m.span, "proto require target path is missing");
+                    }
+                    continue;
                 }
 
-                if (m.a != ast::k_invalid_stmt) {
-                    ++proto_member_with_body;
-                    proto_default_members.push_back(msid);
-                } else {
-                    ++proto_member_sig_only;
+                if (m.kind == ast::StmtKind::kVar) {
+                    if (!m.var_is_proto_provide || !m.is_const) {
+                        diag_(diag::Code::kUnexpectedToken, m.span,
+                              "only provide const declarations are allowed as proto variables");
+                        err_(m.span, "proto variable member must be provide const");
+                        continue;
+                    }
+                    if (!m.is_static) {
+                        diag_(diag::Code::kUnexpectedToken, m.span,
+                              "proto provide const must be static");
+                        err_(m.span, "proto provide const must be static");
+                    }
+                    if (m.type == ty::kInvalidType) {
+                        diag_(diag::Code::kVarDeclTypeAnnotationRequired, m.span);
+                        err_(m.span, "proto provide const requires explicit type");
+                    }
+                    if (m.init == ast::k_invalid_expr) {
+                        diag_(diag::Code::kVarDeclInitializerExpected, m.span);
+                        err_(m.span, "proto provide const requires initializer");
+                    } else {
+                        const CoercionPlan init_plan = classify_assign_with_coercion_(
+                            AssignSite::LetInit, m.type, m.init, m.span);
+                        const ty::TypeId init_t = init_plan.src_after;
+                        if (m.type != ty::kInvalidType && !init_plan.ok) {
+                            diag_(diag::Code::kTypeLetInitMismatch, m.span,
+                                  m.name, types_.to_string(m.type), type_for_user_diag_(init_t, m.init));
+                            err_(m.span, "proto provide const init mismatch");
+                        }
+                        ConstInitData folded{};
+                        if (!eval_const_expr_(m.init, folded, m.span)) {
+                            err_(m.span, "proto provide const initializer must be compile-time evaluable");
+                        }
+                    }
+                    continue;
                 }
+
+                diag_(diag::Code::kUnexpectedToken, m.span, "proto member");
+                err_(m.span, "unsupported proto member");
             }
         }
 
-        if (proto_member_with_body > 0 && proto_member_sig_only > 0) {
-            diag_(diag::Code::kProtoMemberBodyMixNotAllowed, s.span);
-            err_(s.span, "proto members must be all signature-only or all default-body");
-        }
-
-        for (const ast::StmtId msid : proto_default_members) {
+        for (const ast::StmtId msid : proto_provide_fn_members) {
             if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
             check_stmt_fn_decl_(msid, ast_.stmt(msid));
         }
 
-        if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
-            // Declaration-time check validates require expression shape only.
-            // Truth value is enforced at proto apply-site (class/struct/enum/generic concrete).
-            (void)evaluate_proto_require_at_apply_(
-                sid, ty::kInvalidType, s.span,
-                /*emit_unsatisfied_diag=*/false,
-                /*emit_shape_diag=*/true);
-        }
+        // Declaration-time validation for proto body require items.
+        (void)evaluate_proto_require_at_apply_(
+            sid, ty::kInvalidType, s.span,
+            /*emit_unsatisfied_diag=*/false,
+            /*emit_shape_diag=*/true);
 
         const auto& refs = ast_.path_refs();
         const uint32_t ib = s.decl_path_ref_begin;
@@ -1108,7 +1278,10 @@
                     const ast::StmtId msid = kids[i];
                     if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                     const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kFnDecl && m.a == ast::k_invalid_stmt) out.push_back(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kRequire) {
+                        out.push_back(msid);
+                    }
                 }
             }
         };
@@ -1142,7 +1315,11 @@
                     const ast::StmtId msid = kids[i];
                     if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                     const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kFnDecl && m.a != ast::k_invalid_stmt) out.push_back(msid);
+                    if (m.kind == ast::StmtKind::kFnDecl &&
+                        m.proto_fn_role == ast::ProtoFnRole::kProvide &&
+                        m.a != ast::k_invalid_stmt) {
+                        out.push_back(msid);
+                    }
                 }
             }
         };
@@ -1494,11 +1671,26 @@
                 }
 
                 std::vector<ast::StmtId> required;
+                std::vector<ast::StmtId> provided;
                 std::unordered_set<ast::StmtId> visiting;
                 collect_required(collect_required, *proto_sid, required, visiting);
+                visiting.clear();
+                collect_default_members(collect_default_members, *proto_sid, provided, visiting);
                 for (const ast::StmtId req_sid : required) {
                     if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
                     const auto& req = ast_.stmt(req_sid);
+
+                    bool satisfied_by_provide = false;
+                    for (const ast::StmtId prov_sid : provided) {
+                        if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
+                        const auto& prov = ast_.stmt(prov_sid);
+                        if (fn_sig_matches(req, prov)) {
+                            satisfied_by_provide = true;
+                            break;
+                        }
+                    }
+                    if (satisfied_by_provide) continue;
+
                     auto mit = impl_methods.find(std::string(req.name));
                     bool matched = false;
                     if (mit != impl_methods.end()) {

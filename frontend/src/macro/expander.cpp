@@ -821,11 +821,6 @@ namespace parus::macro {
                 if (sid >= ctx.ast.stmts().size()) return false;
                 ctx.ast.stmt_mut(sid).init = init;
 
-                auto proto_req = ctx.ast.stmt(sid).proto_require_expr;
-                if (!expand_expr(proto_req, scope_depth, depth)) return false;
-                if (sid >= ctx.ast.stmts().size()) return false;
-                ctx.ast.stmt_mut(sid).proto_require_expr = proto_req;
-
                 auto type_node = ctx.ast.stmt(sid).type_node;
                 if (!expand_type_node(type_node, scope_depth, depth)) return false;
                 if (sid >= ctx.ast.stmts().size()) return false;

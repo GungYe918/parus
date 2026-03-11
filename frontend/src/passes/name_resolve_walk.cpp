@@ -616,9 +616,6 @@
                         walk_stmt(ast, r, kids[s.stmt_begin + i], sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                     }
                 }
-                if (s.proto_has_require && s.proto_require_expr != ast::k_invalid_expr) {
-                    walk_expr(ast, r, s.proto_require_expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
-                }
                 return;
             }
 

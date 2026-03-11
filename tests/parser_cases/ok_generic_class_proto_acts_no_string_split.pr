@@ -1,5 +1,5 @@
 proto Holder<T> {
-  def get(self) -> T;
+  require get(self) -> T;
 };
 
 class Box<T>: Holder<T> {

@@ -1315,21 +1315,67 @@ namespace parus::tyck {
             return std::nullopt;
         };
 
-        auto proto_all_default_impl = [&](ast::StmtId proto_sid) -> bool {
+        auto fn_sig_same = [&](const ast::Stmt& a, const ast::Stmt& b) -> bool {
+            if (a.kind != ast::StmtKind::kFnDecl || b.kind != ast::StmtKind::kFnDecl) return false;
+            if (a.name != b.name) return false;
+            if (a.param_count != b.param_count) return false;
+            if (a.positional_param_count != b.positional_param_count) return false;
+            if (a.fn_ret != b.fn_ret) return false;
+            for (uint32_t i = 0; i < a.param_count; ++i) {
+                const auto& ap = ast_.params()[a.param_begin + i];
+                const auto& bp = ast_.params()[b.param_begin + i];
+                if (ap.type != bp.type || ap.is_self != bp.is_self || ap.self_kind != bp.self_kind) return false;
+            }
+            return true;
+        };
+
+        auto proto_effective_required_empty = [&](ast::StmtId proto_sid) -> bool {
             if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
-            const auto& ps = ast_.stmt(proto_sid);
-            if (ps.kind != ast::StmtKind::kProtoDecl) return false;
-            const auto& kids = ast_.stmt_children();
-            const uint64_t begin = ps.stmt_begin;
-            const uint64_t end = begin + ps.stmt_count;
-            if (begin > kids.size() || end > kids.size()) return false;
-            if (ps.stmt_count == 0) return true;
-            for (uint32_t i = 0; i < ps.stmt_count; ++i) {
-                const ast::StmtId msid = kids[ps.stmt_begin + i];
-                if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) return false;
-                const auto& m = ast_.stmt(msid);
-                if (m.kind != ast::StmtKind::kFnDecl) return false;
-                if (m.a == ast::k_invalid_stmt) return false;
+            std::vector<ast::StmtId> reqs;
+            std::vector<ast::StmtId> provs;
+            std::unordered_set<ast::StmtId> visiting;
+            auto collect = [&](auto&& self, ast::StmtId cur_sid) -> void {
+                if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return;
+                if (!visiting.insert(cur_sid).second) return;
+                const auto& cur = ast_.stmt(cur_sid);
+                if (cur.kind != ast::StmtKind::kProtoDecl) return;
+                const auto& refs = ast_.path_refs();
+                const uint64_t ib = cur.decl_path_ref_begin;
+                const uint64_t ie = ib + cur.decl_path_ref_count;
+                if (ib <= refs.size() && ie <= refs.size()) {
+                    for (uint32_t i = cur.decl_path_ref_begin; i < cur.decl_path_ref_begin + cur.decl_path_ref_count; ++i) {
+                        if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], e.span)) {
+                            self(self, *base_sid);
+                        }
+                    }
+                }
+                const auto& kids = ast_.stmt_children();
+                const uint64_t mb = cur.stmt_begin;
+                const uint64_t me = mb + cur.stmt_count;
+                if (mb <= kids.size() && me <= kids.size()) {
+                    for (uint32_t i = cur.stmt_begin; i < cur.stmt_begin + cur.stmt_count; ++i) {
+                        const auto msid = kids[i];
+                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                        const auto& m = ast_.stmt(msid);
+                        if (m.kind != ast::StmtKind::kFnDecl) continue;
+                        if (m.proto_fn_role == ast::ProtoFnRole::kRequire) reqs.push_back(msid);
+                        if (m.proto_fn_role == ast::ProtoFnRole::kProvide && m.a != ast::k_invalid_stmt) provs.push_back(msid);
+                    }
+                }
+            };
+            collect(collect, proto_sid);
+            for (const auto req_sid : reqs) {
+                if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
+                const auto& req = ast_.stmt(req_sid);
+                bool satisfied = false;
+                for (const auto prov_sid : provs) {
+                    if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
+                    if (fn_sig_same(req, ast_.stmt(prov_sid))) {
+                        satisfied = true;
+                        break;
+                    }
+                }
+                if (!satisfied) return false;
             }
             return true;
         };
@@ -1341,7 +1387,7 @@ namespace parus::tyck {
                                                   /*emit_shape_diag=*/false)) {
                 return false;
             }
-            if (proto_all_default_impl(proto_sid)) return true;
+            if (proto_effective_required_empty(proto_sid)) return true;
 
             ast::StmtId owner_sid = ast::k_invalid_stmt;
             if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {

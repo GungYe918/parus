@@ -235,6 +235,29 @@ static const char* use_kind_name_(parus::ast::UseKind k) {
     return "UnknownUse";
 }
 
+static const char* proto_fn_role_name_(parus::ast::ProtoFnRole k) {
+    using K = parus::ast::ProtoFnRole;
+    switch (k) {
+        case K::kNone: return "None";
+        case K::kRequire: return "Require";
+        case K::kProvide: return "Provide";
+    }
+    return "UnknownProtoFnRole";
+}
+
+static const char* proto_require_kind_name_(parus::ast::ProtoRequireKind k) {
+    using K = parus::ast::ProtoRequireKind;
+    switch (k) {
+        case K::kNone: return "None";
+        case K::kStruct: return "Struct";
+        case K::kEnum: return "Enum";
+        case K::kClass: return "Class";
+        case K::kActor: return "Actor";
+        case K::kActs: return "Acts";
+    }
+    return "UnknownProtoRequireKind";
+}
+
 static const char* case_pat_kind_name_(parus::ast::CasePatKind k) {
     using K = parus::ast::CasePatKind;
     switch (k) {
@@ -694,9 +717,17 @@ static void dump_stmt_(
             break;
 
         case parus::ast::StmtKind::kReturn:
-        case parus::ast::StmtKind::kRequire:
         case parus::ast::StmtKind::kThrow:
             dump_expr_ref_(ast, s.expr, depth + 1, out, state, "expr");
+            break;
+
+        case parus::ast::StmtKind::kRequire:
+            if (s.proto_require_kind != parus::ast::ProtoRequireKind::kNone) {
+                append_line_(out, depth + 1, "proto_require_kind=" + std::string(proto_require_kind_name_(s.proto_require_kind)));
+                append_line_(out, depth + 1, "proto_require_path=" + escape_string_(join_path_(ast, s.proto_req_path_begin, s.proto_req_path_count)));
+            } else {
+                dump_expr_ref_(ast, s.expr, depth + 1, out, state, "expr");
+            }
             break;
 
         case parus::ast::StmtKind::kSwitch: {
@@ -753,6 +784,9 @@ static void dump_stmt_(
             append_line_(out, depth + 1, "pure=" + std::string(s.is_pure ? "1" : "0"));
             append_line_(out, depth + 1, "comptime=" + std::string(s.is_comptime ? "1" : "0"));
             append_line_(out, depth + 1, "operator=" + std::string(s.fn_is_operator ? "1" : "0"));
+            if (s.proto_fn_role != parus::ast::ProtoFnRole::kNone) {
+                append_line_(out, depth + 1, "proto_fn_role=" + std::string(proto_fn_role_name_(s.proto_fn_role)));
+            }
             if (s.fn_is_operator) {
                 append_line_(out, depth + 1, "operator_tok=" + token_name_(s.fn_operator_token));
                 append_line_(out, depth + 1, "operator_postfix=" + std::string(s.fn_operator_is_postfix ? "1" : "0"));
@@ -849,10 +883,6 @@ static void dump_stmt_(
 
         case parus::ast::StmtKind::kProtoDecl:
             append_line_(out, depth + 1, "name=" + escape_string_(s.name));
-            append_line_(out, depth + 1, "has_require=" + std::string(s.proto_has_require ? "1" : "0"));
-            if (s.proto_has_require) {
-                dump_expr_ref_(ast, s.proto_require_expr, depth + 1, out, state, "require_expr");
-            }
             dump_stmt_children_slice_(ast, s.stmt_begin, s.stmt_count, depth + 1, out, state, "members");
             break;
 
