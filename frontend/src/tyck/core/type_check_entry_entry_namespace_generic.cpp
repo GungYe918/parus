@@ -112,6 +112,7 @@ namespace parus::tyck {
         expr_enum_ctor_variant_index_cache_.assign(ast_.exprs().size(), 0xFFFF'FFFFu);
         expr_enum_ctor_tag_value_cache_.assign(ast_.exprs().size(), 0);
         expr_resolved_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
@@ -120,6 +121,7 @@ namespace parus::tyck {
         result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
         // string literal은 builtin text 타입으로 고정한다.
@@ -582,6 +584,7 @@ namespace parus::tyck {
         result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
         result_.generic_instantiated_fn_sids = generic_instantiated_fn_sids_;
@@ -1483,6 +1486,9 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) {
             expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         }
+        if (expr_proto_const_decl_cache_.size() < expr_size) {
+            expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        }
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) {
             param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -1885,6 +1891,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
@@ -2031,6 +2038,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
@@ -2365,6 +2373,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
@@ -2493,6 +2502,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
@@ -2731,6 +2741,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 

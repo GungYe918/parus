@@ -158,15 +158,22 @@ namespace parus::sir::detail {
                      ast.expr(e.a).kind == parus::ast::ExprKind::kBinary &&
                      ast.expr(e.a).op == parus::syntax::TokenKind::kArrow);
                 if (is_proto_arrow_form) {
-                    const SymbolId resolved_sym = resolve_symbol_from_expr(nres, tyck, eid);
-                    if (resolved_sym != k_invalid_symbol) {
-                        v.kind = ValueKind::kLocal;
-                        v.sym = resolved_sym;
-                        if ((size_t)resolved_sym < sym.symbols().size()) {
-                            v.text = sym.symbol(resolved_sym).name;
+                    const ast::StmtId const_decl_sid =
+                        ((size_t)eid < tyck.expr_proto_const_decl.size())
+                            ? tyck.expr_proto_const_decl[eid]
+                            : ast::k_invalid_stmt;
+                    if (const_decl_sid != ast::k_invalid_stmt &&
+                        (size_t)const_decl_sid < ast.stmts().size()) {
+                        const auto& decl = ast.stmt(const_decl_sid);
+                        if (decl.kind == ast::StmtKind::kVar &&
+                            decl.var_is_proto_provide &&
+                            decl.is_const &&
+                            decl.init != ast::k_invalid_expr) {
+                            return lower_expr(m, out_has_any_write, ast, sym, nres, tyck, decl.init);
                         }
-                        break;
                     }
+                    v.kind = ValueKind::kError;
+                    break;
                 }
 
                 if (e.op == parus::syntax::TokenKind::kDot) {

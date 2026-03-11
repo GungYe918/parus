@@ -359,16 +359,6 @@
             return false;
         };
 
-        auto proto_qname_of = [&](ast::StmtId proto_sid) -> std::string {
-            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) {
-                return {};
-            }
-            if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
-                return it->second;
-            }
-            return std::string(ast_.stmt(proto_sid).name);
-        };
-
         auto check_proto_arrow_const_access = [&](ast::ExprId recv_eid,
                                                   std::optional<std::string_view> qualifier,
                                                   const ast::Expr& member_expr) -> ty::TypeId {
@@ -493,14 +483,8 @@
 
             const auto& var_decl = ast_.stmt(chosen.var_sid);
             if (current_expr_id_ != ast::k_invalid_expr &&
-                current_expr_id_ < expr_resolved_symbol_cache_.size()) {
-                const std::string proto_q = proto_qname_of(chosen.proto_sid);
-                if (!proto_q.empty()) {
-                    const std::string symbol_qname = proto_q + "::" + std::string(var_decl.name);
-                    if (auto sid = lookup_symbol_(symbol_qname)) {
-                        expr_resolved_symbol_cache_[current_expr_id_] = *sid;
-                    }
-                }
+                current_expr_id_ < expr_proto_const_decl_cache_.size()) {
+                expr_proto_const_decl_cache_[current_expr_id_] = chosen.var_sid;
             }
 
             return var_decl.type;

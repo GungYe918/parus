@@ -1456,6 +1456,93 @@ namespace {
         return ok;
     }
 
+    /// @brief proto provide const(i32) 접근(v->x)이 0이 아닌 실제 상수값으로 lowering되는지 검사한다.
+    static bool test_proto_provide_const_scalar_arrow_value_() {
+        const std::string src = R"(
+            proto Equatable {
+                provide const x: i32 = 42i32;
+            };
+
+            struct Vec3: Equatable {
+            };
+
+            def main() -> i32 {
+                set v = Vec3 {};
+                return v->x;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "proto provide const scalar source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for proto provide const scalar source must succeed");
+        if (!ok) return false;
+
+        const bool has_42 =
+            lowered.llvm_ir.find("ret i32 42") != std::string::npos ||
+            lowered.llvm_ir.find("add i32 0, 42") != std::string::npos;
+        ok &= require_(has_42, "proto provide const scalar arrow access must materialize 42 in LLVM IR");
+        ok &= require_(lowered.llvm_ir.find("add i32 0, 0") == std::string::npos,
+                       "proto provide const scalar arrow access must not degrade to zero");
+        return ok;
+    }
+
+    /// @brief proto provide const(struct) 접근(v->vx).x가 0이 아닌 실제 필드값으로 lowering되는지 검사한다.
+    static bool test_proto_provide_const_struct_arrow_value_() {
+        const std::string src = R"(
+            proto Equatable {
+                require struct(Vec2);
+
+                provide const vx: Vec2 = Vec2 {
+                    x: 42i32, y: 42i32
+                };
+            };
+
+            struct Vec2 {
+                x: i32;
+                y: i32;
+            }
+
+            struct Vec3: Equatable {
+            };
+
+            def main() -> i32 {
+                set v = Vec3 {};
+                set x = v->vx;
+                return x.x;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "proto provide const struct source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for proto provide const struct source must succeed");
+        if (!ok) return false;
+
+        const bool has_42 =
+            lowered.llvm_ir.find("store i32 42") != std::string::npos ||
+            lowered.llvm_ir.find("ret i32 42") != std::string::npos ||
+            lowered.llvm_ir.find("add i32 0, 42") != std::string::npos;
+        ok &= require_(has_42, "proto provide const struct arrow access must materialize 42 in LLVM IR");
+        ok &= require_(lowered.llvm_ir.find("zeroinitializer") == std::string::npos,
+                       "proto provide const struct arrow access must not lower as zero-initialized payload");
+        return ok;
+    }
+
     /// @brief class 생성식 `A(...)`가 LLVM IR에서 `A::init` 호출로 내려가는지 검사한다.
     static bool test_class_ctor_call_llvm_init_symbol_() {
         const std::string src = R"(
@@ -1955,6 +2042,8 @@ int main() {
         {"generic_struct_materialization_llvm_symbols", test_generic_struct_materialization_llvm_symbols_},
         {"class_proto_default_member_llvm_symbols", test_class_proto_default_member_llvm_symbols_},
         {"proto_override_call_prefers_class_symbol", test_proto_override_call_prefers_class_symbol_},
+        {"proto_provide_const_scalar_arrow_value", test_proto_provide_const_scalar_arrow_value_},
+        {"proto_provide_const_struct_arrow_value", test_proto_provide_const_struct_arrow_value_},
         {"class_ctor_call_llvm_init_symbol", test_class_ctor_call_llvm_init_symbol_},
         {"class_ctor_temp_receiver_safe", test_class_ctor_temp_receiver_safe_},
         {"class_field_offset_lowering", test_class_field_offset_lowering_},

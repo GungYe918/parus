@@ -1923,6 +1923,10 @@ namespace parus::oir {
                 return emit_const_null(v.type);
             }
 
+            case parus::sir::ValueKind::kError:
+                report_lowering_error("value lowering failed: encountered SIR error value");
+                return emit_const_null(v.type);
+
             default:
                 return emit_const_null(v.type);
             }

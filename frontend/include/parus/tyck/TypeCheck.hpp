@@ -55,6 +55,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_enum_ctor_variant_index; // expr index -> enum variant index, invalid if not enum-ctor expr
         std::vector<int64_t> expr_enum_ctor_tag_value; // expr index -> enum tag value, valid on enum-ctor expr
         std::vector<uint32_t> expr_resolved_symbol; // expr index -> resolved symbol id (tyck fallback for cloned generic nodes)
+        std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
         std::vector<ast::StmtId> generic_instantiated_fn_sids; // concrete generic fn instantiations created during tyck
@@ -315,6 +316,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_enum_ctor_variant_index_cache_;
         std::vector<int64_t> expr_enum_ctor_tag_value_cache_;
         std::vector<uint32_t> expr_resolved_symbol_cache_;
+        std::vector<ast::StmtId> expr_proto_const_decl_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
