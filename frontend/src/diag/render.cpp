@@ -281,6 +281,8 @@ namespace parus::diag {
             case Code::kTypeCondMustBeBool:   return "TypeCondMustBeBool";
             case Code::kTypeIndexMustBeUSize: return "TypeIndexMustBeUSize";
             case Code::kTypeIndexNonArray:    return "TypeIndexNonArray";
+            case Code::kTypeSliceConstRangeInvalid: return "TypeSliceConstRangeInvalid";
+            case Code::kTypeSliceConstOutOfBounds: return "TypeSliceConstOutOfBounds";
             case Code::kSetCannotInferFromNull: return "SetCannotInferFromNull";
             case Code::kMissingReturn: return "MissingReturn";
 
@@ -610,6 +612,8 @@ namespace parus::diag {
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "condition must be bool (got {0})";
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "index/slice bound must be an integer type (got {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "cannot index non-array type {0}";
+            case Code::kTypeSliceConstRangeInvalid: /* args[0]=lo, args[1]=hi_exclusive */ return "invalid constant slice range: lo ({0}) must be <= hi_exclusive ({1})";
+            case Code::kTypeSliceConstOutOfBounds: /* args[0]=len, args[1]=hi_exclusive */ return "constant slice upper bound is out of range: hi_exclusive ({1}) exceeds array length ({0})";
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "cannot infer type from null in 'set' (use: let {0}: T? = null; with an explicit optional type)";
             case Code::kMissingReturn: return "missing return";
 
@@ -946,6 +950,8 @@ namespace parus::diag {
             case Code::kTypeCondMustBeBool: /* args[0]=got_type */ return "조건식은 bool이어야 합니다(현재 {0})";
             case Code::kTypeIndexMustBeUSize: /* args[0]=got_type */ return "인덱스/슬라이스 경계는 정수 타입이어야 합니다(현재 {0})";
             case Code::kTypeIndexNonArray: /* args[0]=base_type */ return "배열이 아닌 타입 {0}에는 인덱싱을 사용할 수 없습니다";
+            case Code::kTypeSliceConstRangeInvalid: /* args[0]=lo, args[1]=hi_exclusive */ return "상수 슬라이스 범위가 잘못되었습니다: lo({0})는 hi_exclusive({1}) 이하여야 합니다";
+            case Code::kTypeSliceConstOutOfBounds: /* args[0]=len, args[1]=hi_exclusive */ return "상수 슬라이스 상한이 배열 범위를 벗어났습니다: hi_exclusive({1}) > len({0})";
             
             case Code::kSetCannotInferFromNull: /* args[0]=name (optional) */ return "set에서 null로는 타입을 추론할 수 없습니다. (예: let {0}: T? = null; 처럼 옵셔널 타입을 명시하세요)";
             case Code::kMissingReturn: return "반환문이 누락되었습니다";

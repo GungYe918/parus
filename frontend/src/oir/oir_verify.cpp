@@ -203,6 +203,10 @@ namespace parus::oir {
                 } else if constexpr (std::is_same_v<T, InstIndex>) {
                     (void)check_value_id_(m, errs, iid, "inst(index base)", x.base);
                     (void)check_value_id_(m, errs, iid, "inst(index idx)", x.index);
+                } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                    (void)check_value_id_(m, errs, iid, "inst(slice base)", x.base);
+                    (void)check_value_id_(m, errs, iid, "inst(slice lo)", x.lo);
+                    (void)check_value_id_(m, errs, iid, "inst(slice hi)", x.hi);
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     (void)check_value_id_(m, errs, iid, "inst(field base)", x.base);
                 } else if constexpr (std::is_same_v<T, InstActorCommit> ||

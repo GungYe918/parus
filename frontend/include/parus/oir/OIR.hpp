@@ -118,6 +118,12 @@ namespace parus::oir {
     struct InstActorCommit { ValueId ctx = kInvalidId; };
     struct InstActorRecast { ValueId ctx = kInvalidId; };
     struct InstIndex      { ValueId base; ValueId index; };
+    struct InstSliceView  {
+        ValueId base = kInvalidId;
+        ValueId lo = kInvalidId;
+        ValueId hi = kInvalidId;
+        bool hi_inclusive = false; // true for `..:`, false for `..`
+    };
     struct InstField      { ValueId base; std::string field; };
     struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
 
@@ -141,6 +147,7 @@ namespace parus::oir {
         InstActorCommit,
         InstActorRecast,
         InstIndex,
+        InstSliceView,
         InstField,
         InstDrop,
         InstAllocaLocal,

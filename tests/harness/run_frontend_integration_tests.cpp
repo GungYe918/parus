@@ -1012,6 +1012,49 @@ namespace {
         return ok;
     }
 
+    static bool test_slice_const_oob_diagnostics() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let arr: i32[4] = [1, 2, 3, 4];
+                set a = &arr[3..:1];
+                set b = &arr[0..:10];
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kTypeSliceConstRangeInvalid),
+            "invalid constant range must emit TypeSliceConstRangeInvalid");
+        ok &= require_(p.bag.has_code(parus::diag::Code::kTypeSliceConstOutOfBounds),
+            "constant upper bound OOB must emit TypeSliceConstOutOfBounds");
+        ok &= require_(!ty.errors.empty(), "constant OOB slice source must fail typecheck");
+        return ok;
+    }
+
+    static bool test_text_slicing_remains_unsupported() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let s: text = "abcd";
+                set x = &s[1..2];
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kTypeIndexNonArray),
+            "text slicing must remain rejected as non-array indexing");
+        ok &= require_(!ty.errors.empty(), "text slicing source must fail typecheck");
+        return ok;
+    }
+
     static bool test_borrow_read_in_arithmetic_ok() {
         // &i32 파라미터를 산술식에서 읽기 값으로 사용할 수 있어야 한다.
         const std::string src = R"(
@@ -1829,6 +1872,8 @@ int main() {
         {"acts_for_parse_and_tyck_ok", test_acts_for_parse_and_tyck_ok},
         {"diag_block_tail_expr_required", test_diag_block_tail_expr_required},
         {"cap_escape_on_slice_borrow_rejected", test_cap_escape_on_slice_borrow_rejected},
+        {"slice_const_oob_diagnostics", test_slice_const_oob_diagnostics},
+        {"text_slicing_remains_unsupported", test_text_slicing_remains_unsupported},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},

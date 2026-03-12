@@ -454,6 +454,21 @@ namespace parus::oir {
                 return r;
             }
 
+            ValueId emit_slice_view(TypeId ty, ValueId base, ValueId lo, ValueId hi, bool hi_inclusive) {
+                ValueId r = make_value(ty, Effect::MayTrap);
+                Inst inst{};
+                inst.data = InstSliceView{
+                    .base = base,
+                    .lo = lo,
+                    .hi = hi,
+                    .hi_inclusive = hi_inclusive
+                };
+                inst.eff = Effect::MayTrap;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
             ValueId emit_field(TypeId ty, ValueId base, std::string field) {
                 ValueId r = make_value(ty, Effect::MayReadMem);
                 Inst inst{};
@@ -1798,6 +1813,28 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kIndex: {
                 ValueId base = lower_value(v.a);
+                if (v.b != parus::sir::k_invalid_value &&
+                    (size_t)v.b < sir->values.size()) {
+                    const auto& sub = sir->values[v.b];
+                    if (sub.kind == parus::sir::ValueKind::kBinary) {
+                        const auto sub_op = static_cast<parus::syntax::TokenKind>(sub.op);
+                        if ((sub_op == parus::syntax::TokenKind::kDotDot ||
+                             sub_op == parus::syntax::TokenKind::kDotDotColon) &&
+                            sub.a != parus::sir::k_invalid_value &&
+                            sub.b != parus::sir::k_invalid_value) {
+                            ValueId lo = lower_value(sub.a);
+                            ValueId hi = lower_value(sub.b);
+                            return emit_slice_view(
+                                v.type,
+                                base,
+                                lo,
+                                hi,
+                                /*hi_inclusive=*/(sub_op == parus::syntax::TokenKind::kDotDotColon)
+                            );
+                        }
+                    }
+                }
+
                 ValueId idx = lower_value(v.b);
                 return emit_index(v.type, base, idx);
             }

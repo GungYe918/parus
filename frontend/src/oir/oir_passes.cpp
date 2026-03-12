@@ -203,6 +203,10 @@ namespace parus::oir {
                     } else if constexpr (std::is_same_v<T, InstIndex>) {
                         apply(x.base);
                         apply(x.index);
+                    } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                        apply(x.base);
+                        apply(x.lo);
+                        apply(x.hi);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         apply(x.base);
                     } else if constexpr (std::is_same_v<T, InstActorCommit> ||
@@ -293,6 +297,16 @@ namespace parus::oir {
                 } else {
                     out.read_fp = AliasFootprint::Unknown;
                 }
+            } else if (std::holds_alternative<InstSliceView>(inst.data)) {
+                const auto& sv = std::get<InstSliceView>(inst.data);
+                out.read_loc = resolve_memory_loc_from_value_(m, sv.base);
+                out.reads = true;
+                if (has_memory_base_(out.read_loc)) {
+                    out.read_fp = AliasFootprint::LocalMemory;
+                    out.read_slot = out.read_loc.base_slot;
+                } else {
+                    out.read_fp = AliasFootprint::Unknown;
+                }
             } else if (std::holds_alternative<InstField>(inst.data)) {
                 const auto& fld = std::get<InstField>(inst.data);
                 out.read_loc = resolve_memory_loc_from_value_(m, fld.base);
@@ -365,6 +379,10 @@ namespace parus::oir {
                     } else if constexpr (std::is_same_v<T, InstIndex>) {
                         add(x.base);
                         add(x.index);
+                    } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                        add(x.base);
+                        add(x.lo);
+                        add(x.hi);
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         add(x.base);
                     } else if constexpr (std::is_same_v<T, InstActorCommit> ||
@@ -442,6 +460,10 @@ namespace parus::oir {
                 } else if constexpr (std::is_same_v<T, InstIndex>) {
                     def(x.base);
                     def(x.index);
+                } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                    def(x.base);
+                    def(x.lo);
+                    def(x.hi);
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     def(x.base);
                 } else if constexpr (std::is_same_v<T, InstActorCommit> ||
@@ -1399,6 +1421,8 @@ namespace parus::oir {
                         return false;
                     } else if constexpr (std::is_same_v<T, InstIndex>) {
                         return x.base == slot || x.index == slot;
+                    } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                        return x.base == slot || x.lo == slot || x.hi == slot;
                     } else if constexpr (std::is_same_v<T, InstField>) {
                         return x.base == slot;
                     } else if constexpr (std::is_same_v<T, InstActorCommit> ||
@@ -2029,6 +2053,8 @@ namespace parus::oir {
                     return out;
                 } else if constexpr (std::is_same_v<T, InstIndex>) {
                     return {x.base, x.index};
+                } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                    return {x.base, x.lo, x.hi};
                 } else if constexpr (std::is_same_v<T, InstField>) {
                     return {x.base};
                 } else if constexpr (std::is_same_v<T, InstActorCommit> ||

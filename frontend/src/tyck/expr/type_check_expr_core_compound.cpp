@@ -266,6 +266,71 @@
             check_bound(r.a);
             check_bound(r.b);
 
+            // Sized array + constant bounds: diagnose obvious OOB early.
+            if (t.array_has_size) {
+                auto const_i64 = [&](auto&& self, ast::ExprId bid) -> std::optional<int64_t> {
+                    if (bid == ast::k_invalid_expr || bid >= ast_.exprs().size()) return std::nullopt;
+                    const auto& be = ast_.expr(bid);
+
+                    if (be.kind == ast::ExprKind::kIntLit) {
+                        int64_t v = 0;
+                        if (parse_i64_lit_(be.text, v)) return v;
+                        return std::nullopt;
+                    }
+
+                    if (be.kind == ast::ExprKind::kUnary &&
+                        (be.op == syntax::TokenKind::kMinus || be.op == syntax::TokenKind::kPlus) &&
+                        be.a != ast::k_invalid_expr) {
+                        auto inner = self(self, be.a);
+                        if (!inner.has_value()) return std::nullopt;
+                        if (be.op == syntax::TokenKind::kMinus) return -*inner;
+                        return *inner;
+                    }
+
+                    return std::nullopt;
+                };
+
+                const auto lo = const_i64(const_i64, r.a);
+                const auto hi = const_i64(const_i64, r.b);
+                if (lo.has_value() && hi.has_value()) {
+                    bool bad = false;
+                    int64_t hi_exclusive = *hi;
+                    if (r.op == syntax::TokenKind::kDotDotColon) {
+                        if (hi_exclusive == std::numeric_limits<int64_t>::max()) {
+                            bad = true;
+                        } else {
+                            hi_exclusive += 1;
+                        }
+                    }
+
+                    if (!bad) {
+                        if (*lo < 0 || hi_exclusive < 0 || *lo > hi_exclusive) {
+                            diag_(
+                                diag::Code::kTypeSliceConstRangeInvalid,
+                                e.span,
+                                std::to_string(*lo),
+                                std::to_string(hi_exclusive)
+                            );
+                            err_(e.span, "invalid constant slice range");
+                            bad = true;
+                        }
+                    }
+
+                    if (!bad) {
+                        const int64_t len = static_cast<int64_t>(t.array_size);
+                        if (hi_exclusive > len) {
+                            diag_(
+                                diag::Code::kTypeSliceConstOutOfBounds,
+                                e.span,
+                                std::to_string(len),
+                                std::to_string(hi_exclusive)
+                            );
+                            err_(e.span, "constant slice out of bounds");
+                        }
+                    }
+                }
+            }
+
             // slicing result is unsized element view (T[])
             return types_.make_array(t.elem);
         }

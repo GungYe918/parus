@@ -171,6 +171,46 @@ namespace {
         return ok;
     }
 
+    /// @brief range slicing이 OIR InstSliceView + LLVM slice-view 생성 경로로 하향되는지 검사한다.
+    static bool test_slice_range_view_lowering_patterns_() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let arr: i32[4] = [10i32, 20i32, 30i32, 40i32];
+                set s = &arr[1i32..:2i32];
+                return s[0i32];
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "slice range source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool has_slice_view = false;
+        for (const auto& inst : p->oir.mod.insts) {
+            if (std::holds_alternative<parus::oir::InstSliceView>(inst.data)) {
+                has_slice_view = true;
+                break;
+            }
+        }
+        ok &= require_(has_slice_view, "OIR must materialize range slicing as InstSliceView");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+        ok &= require_(lowered.ok, "LLVM text lowering for slice range case must succeed");
+        ok &= require_(lowered.llvm_ir.find("call void @__parus_bounds_check(i1 ") != std::string::npos,
+                       "slice range lowering must emit bounds-check call");
+        ok &= require_(lowered.llvm_ir.find("define internal void @__parus_bounds_check(i1 %ok)") != std::string::npos,
+                       "slice range lowering must emit internal bounds-check helper");
+        ok &= require_(lowered.llvm_ir.find("getelementptr { ptr, i64 }, ptr ") != std::string::npos,
+                       "slice range lowering must build slice-view header {ptr,len}");
+        return ok;
+    }
+
     /// @brief layout(c)/align(n) struct + C ABI global이 LLVM-IR에 반영되는지 검사한다.
     static bool test_c_abi_field_layout_and_global_symbol() {
         const std::string src = R"(
@@ -2145,6 +2185,7 @@ int main() {
 
     const Case cases[] = {
         {"source_index_lowering_uses_gep", test_source_index_lowering_uses_gep},
+        {"slice_range_view_lowering_patterns", test_slice_range_view_lowering_patterns_},
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},

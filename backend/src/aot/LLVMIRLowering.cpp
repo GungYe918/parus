@@ -374,6 +374,10 @@ namespace parus::backend::aot {
                     } else if constexpr (std::is_same_v<T, parus::oir::InstIndex>) {
                         as_value(x.base);
                         as_value(x.index);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstSliceView>) {
+                        as_value(x.base);
+                        as_value(x.lo);
+                        as_value(x.hi);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstField>) {
                         as_value(x.base);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstActorCommit> ||
@@ -652,7 +656,8 @@ namespace parus::backend::aot {
                 const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
                 const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants,
                 const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks,
-                bool* saw_invalid_callee_call
+                bool* saw_invalid_callee_call,
+                bool* need_bounds_check_stub
             ) : m_(m),
                 types_(types),
                 fn_(def),
@@ -663,7 +668,8 @@ namespace parus::backend::aot {
                 field_offsets_(field_offsets),
                 text_constants_(text_constants),
                 drop_thunks_(drop_thunks),
-                saw_invalid_callee_call_(saw_invalid_callee_call) {
+                saw_invalid_callee_call_(saw_invalid_callee_call),
+                need_bounds_check_stub_(need_bounds_check_stub) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -736,6 +742,7 @@ namespace parus::backend::aot {
             const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
             const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks_ = nullptr;
             bool* saw_invalid_callee_call_ = nullptr;
+            bool* need_bounds_check_stub_ = nullptr;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
@@ -816,6 +823,88 @@ namespace parus::backend::aot {
                     return tid;
                 }
                 return m_.globals[gr->global].type;
+            }
+
+            struct ArrayViewInfo {
+                parus::ty::TypeId array_type = parus::ty::kInvalidType;
+                std::string data_ptr{};
+                std::string len_i64{};
+                bool has_static_len = false;
+                uint64_t static_len = 0;
+            };
+
+            /// @brief 값 타입에서 배열 타입(T[N]/T[])을 추출한다. (&/~/ptr 래퍼는 한 단계 이상 벗긴다.)
+            parus::ty::TypeId array_type_from_value_(parus::oir::ValueId v) const {
+                using K = parus::ty::Kind;
+                parus::ty::TypeId tid = value_type_id_(v);
+                for (uint32_t i = 0; i < 6 && tid != parus::ty::kInvalidType; ++i) {
+                    const auto& t = types_.get(tid);
+                    if (t.kind == K::kArray) return tid;
+                    if ((t.kind == K::kBorrow || t.kind == K::kEscape || t.kind == K::kPtr) &&
+                        t.elem != parus::ty::kInvalidType) {
+                        tid = t.elem;
+                        continue;
+                    }
+                    break;
+                }
+                return parus::ty::kInvalidType;
+            }
+
+            /// @brief base 값을 데이터 포인터+길이 view로 정규화한다.
+            std::optional<ArrayViewInfo> materialize_array_view_(
+                std::ostringstream& os,
+                parus::oir::ValueId base
+            ) {
+                const auto arr_tid = array_type_from_value_(base);
+                if (arr_tid == parus::ty::kInvalidType) return std::nullopt;
+
+                const auto& at = types_.get(arr_tid);
+                if (at.kind != parus::ty::Kind::kArray) return std::nullopt;
+
+                ArrayViewInfo out{};
+                out.array_type = arr_tid;
+
+                const std::string base_ptr = slot_ptr_ref_(os, base);
+                if (at.array_has_size) {
+                    out.data_ptr = base_ptr;
+                    out.has_static_len = true;
+                    out.static_len = at.array_size;
+                    out.len_i64 = std::to_string(at.array_size);
+                    return out;
+                }
+
+                // unsized array view representation: { ptr, i64 }
+                const std::string view_ty = map_type_(types_, arr_tid, &named_layouts_, &actor_types_);
+                if (!is_aggregate_llvm_ty_(view_ty)) return std::nullopt;
+
+                const std::string data_gep = next_tmp_();
+                os << "  " << data_gep << " = getelementptr " << view_ty
+                   << ", ptr " << base_ptr << ", i32 0, i32 0\n";
+                const std::string data = next_tmp_();
+                os << "  " << data << " = load ptr, ptr " << data_gep << "\n";
+
+                const std::string len_gep = next_tmp_();
+                os << "  " << len_gep << " = getelementptr " << view_ty
+                   << ", ptr " << base_ptr << ", i32 0, i32 1\n";
+                const std::string len = next_tmp_();
+                os << "  " << len << " = load i64, ptr " << len_gep << "\n";
+
+                out.data_ptr = data;
+                out.len_i64 = len;
+                out.has_static_len = false;
+                out.static_len = 0;
+                return out;
+            }
+
+            /// @brief slice/index bounds 검사 helper 호출을 기록/출력한다.
+            void emit_bounds_check_(
+                std::ostringstream& os,
+                const std::string& cond_i1
+            ) {
+                if (need_bounds_check_stub_ != nullptr) {
+                    *need_bounds_check_stub_ = true;
+                }
+                os << "  call void @__parus_bounds_check(i1 " << cond_i1 << ")\n";
             }
 
             /// @brief 값이 일반 값 문맥에서 읽히는지 검사한다.
@@ -1142,8 +1231,14 @@ namespace parus::backend::aot {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
 
-                const auto base_ptr = slot_ptr_ref_(os, x.base);
                 const auto idx64 = coerce_value_(os, x.index, "i64");
+                std::string data_ptr{};
+
+                if (auto av = materialize_array_view_(os, x.base); av.has_value()) {
+                    data_ptr = av->data_ptr;
+                } else {
+                    data_ptr = slot_ptr_ref_(os, x.base);
+                }
 
                 const auto elem_ty_id = value_type_id_(inst.result);
                 const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id, &named_layouts_, &actor_types_));
@@ -1156,7 +1251,7 @@ namespace parus::backend::aot {
                 }
 
                 const std::string byte_ptr = next_tmp_();
-                os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << byte_off << "\n";
+                os << "  " << byte_ptr << " = getelementptr i8, ptr " << data_ptr << ", i64 " << byte_off << "\n";
 
                 const std::string typed_ptr = next_tmp_();
                 os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
@@ -1192,6 +1287,111 @@ namespace parus::backend::aot {
                 } else if (is_float_ty_(rty)) {
                     os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
                        << ", " << zero_literal_(rty) << "\n";
+                } else {
+                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                }
+            }
+
+            /// @brief range slice를 `{ptr,len}` view 생성으로 lowering한다.
+            void emit_slice_view_(
+                std::ostringstream& os,
+                const parus::oir::Inst& inst,
+                const parus::oir::InstSliceView& x
+            ) {
+                using namespace parus::oir;
+                if (inst.result == kInvalidId) return;
+
+                auto base_view = materialize_array_view_(os, x.base);
+                if (!base_view.has_value()) {
+                    // unsupported base shape: materialize an empty view
+                    const std::string slot = emit_zero_aggregate_slot_(os, "{ ptr, i64 }");
+                    address_ref_by_value_[inst.result] = slot;
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                    return;
+                }
+
+                const std::string lo64 = coerce_value_(os, x.lo, "i64");
+                const std::string hi_raw = coerce_value_(os, x.hi, "i64");
+                std::string hi_exclusive = hi_raw;
+                if (x.hi_inclusive) {
+                    hi_exclusive = next_tmp_();
+                    os << "  " << hi_exclusive << " = add i64 " << hi_raw << ", 1\n";
+                }
+
+                // Bounds check: lo <= hi_exclusive && hi_exclusive <= len
+                const std::string lo_ok = next_tmp_();
+                os << "  " << lo_ok << " = icmp ule i64 " << lo64 << ", " << hi_exclusive << "\n";
+                const std::string hi_ok = next_tmp_();
+                os << "  " << hi_ok << " = icmp ule i64 " << hi_exclusive << ", " << base_view->len_i64 << "\n";
+                const std::string in_bounds = next_tmp_();
+                os << "  " << in_bounds << " = and i1 " << lo_ok << ", " << hi_ok << "\n";
+                emit_bounds_check_(os, in_bounds);
+
+                parus::ty::TypeId elem_ty = parus::ty::kInvalidType;
+                if (const auto arr_tid = base_view->array_type; arr_tid != parus::ty::kInvalidType) {
+                    const auto& arr_t = types_.get(arr_tid);
+                    if (arr_t.kind == parus::ty::Kind::kArray) {
+                        elem_ty = arr_t.elem;
+                    }
+                }
+                if (elem_ty == parus::ty::kInvalidType) {
+                    const auto ret_tid = value_type_id_(inst.result);
+                    if (ret_tid != parus::ty::kInvalidType) {
+                        const auto& rt = types_.get(ret_tid);
+                        if (rt.kind == parus::ty::Kind::kArray && rt.elem != parus::ty::kInvalidType) {
+                            elem_ty = rt.elem;
+                        }
+                    }
+                }
+                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty, &named_layouts_, &actor_types_));
+
+                std::string byte_off = lo64;
+                if (elem_size != 1) {
+                    const std::string mul_tmp = next_tmp_();
+                    os << "  " << mul_tmp << " = mul i64 " << lo64 << ", " << elem_size << "\n";
+                    byte_off = mul_tmp;
+                }
+                const std::string data_start = next_tmp_();
+                os << "  " << data_start << " = getelementptr i8, ptr " << base_view->data_ptr << ", i64 " << byte_off << "\n";
+
+                const std::string len = next_tmp_();
+                os << "  " << len << " = sub i64 " << hi_exclusive << ", " << lo64 << "\n";
+
+                const auto ret_tid = value_type_id_(inst.result);
+                std::string view_ty = map_type_(types_, ret_tid, &named_layouts_, &actor_types_);
+                if (!is_aggregate_llvm_ty_(view_ty)) {
+                    view_ty = "{ ptr, i64 }";
+                }
+                const std::string slot = next_tmp_();
+                os << "  " << slot << " = alloca " << view_ty << "\n";
+                os << "  store " << view_ty << " zeroinitializer, ptr " << slot << "\n";
+
+                const std::string data_gep = next_tmp_();
+                os << "  " << data_gep << " = getelementptr " << view_ty
+                   << ", ptr " << slot << ", i32 0, i32 0\n";
+                os << "  store ptr " << data_start << ", ptr " << data_gep << "\n";
+
+                const std::string len_gep = next_tmp_();
+                os << "  " << len_gep << " = getelementptr " << view_ty
+                   << ", ptr " << slot << ", i32 0, i32 1\n";
+                os << "  store i64 " << len << ", ptr " << len_gep << "\n";
+
+                address_ref_by_value_[inst.result] = slot;
+
+                const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                    return;
+                }
+                if (is_value_read_(inst.result)) {
+                    os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << slot << "\n";
+                    return;
+                }
+                if (is_int_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                } else if (is_float_ty_(rty)) {
+                    os << "  " << vref_(inst.result) << " = fadd " << rty << " "
+                       << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
                 } else {
                     os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                 }
@@ -1730,6 +1930,8 @@ namespace parus::backend::aot {
                             }
                         } else if constexpr (std::is_same_v<T, InstIndex>) {
                             emit_index_(os, inst, x);
+                        } else if constexpr (std::is_same_v<T, InstSliceView>) {
+                            emit_slice_view_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstField>) {
                             emit_field_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstActorCommit>) {
@@ -2247,6 +2449,7 @@ namespace parus::backend::aot {
             "parus_bundle_init__" + normalize_symbol_fragment_(bundle_name);
 
         bool need_call_stub = false;
+        bool need_bounds_check_stub = false;
         bool saw_invalid_callee_call = false;
         bool has_raw_main_symbol = false;
         bool has_ambiguous_main_entry = false;
@@ -2301,7 +2504,8 @@ namespace parus::backend::aot {
                 field_offsets,
                 text_constants,
                 &drop_thunk_symbols,
-                &saw_invalid_callee_call
+                &saw_invalid_callee_call,
+                &need_bounds_check_stub
             );
             os << fe.emit(need_call_stub) << "\n";
         }
@@ -2368,6 +2572,19 @@ namespace parus::backend::aot {
             // 링크 단계에서 unresolved 심볼이 생기지 않도록 내부 no-op 스텁을 함께 생성한다.
             os << "define internal void @parus_oir_call_stub() {\n";
             os << "entry:\n";
+            os << "  ret void\n";
+            os << "}\n";
+        }
+
+        if (need_bounds_check_stub) {
+            os << "declare void @llvm.trap()\n\n";
+            os << "define internal void @__parus_bounds_check(i1 %ok) {\n";
+            os << "entry:\n";
+            os << "  br i1 %ok, label %pass, label %trap\n";
+            os << "trap:\n";
+            os << "  call void @llvm.trap()\n";
+            os << "  unreachable\n";
+            os << "pass:\n";
             os << "  ret void\n";
             os << "}\n";
         }

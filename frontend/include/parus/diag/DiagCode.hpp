@@ -301,6 +301,8 @@ namespace parus::diag {
         kTypeCondMustBeBool,    // args[0]=got_type
         kTypeIndexMustBeUSize,  // args[0]=got_type
         kTypeIndexNonArray,     // args[0]=base_type
+        kTypeSliceConstRangeInvalid, // args[0]=lo, args[1]=hi_exclusive
+        kTypeSliceConstOutOfBounds,  // args[0]=len, args[1]=hi_exclusive
         kSetCannotInferFromNull, // set <name> = null; is not allowed
         kMissingReturn,         // return is missing
         kDotMethodSelfRequired, // dot method calls require self receiver in the first parameter
