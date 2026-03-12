@@ -43,6 +43,7 @@ namespace parus::diag {
         // dedicated pipe direction diagnostics
         kPipeFwdRhsMustBeCall, // |> requires RHS call
         kPipeRevLhsMustBeCall, // <| requires LHS call
+        kPipeRevNotSupportedYet, // <| is reserved but not supported in v1
 
         kPipeHoleMustBeLabeled,
         kPipeHoleCountMismatch,

@@ -338,6 +338,89 @@ namespace {
         return ok;
     }
 
+    /// @brief `|>` 체인이 SIR kPipeCall을 거쳐 OIR/LLVM call 경로로 내려가는지 검사한다.
+    static bool test_pipe_forward_chain_llvm_call_patterns() {
+        const std::string src = R"(
+            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def mul(x: i32, y: i32) -> i32 { return x * y; }
+
+            def main(seed: i32) -> i32 {
+                return seed |> add(a: _, b: 2i32) |> mul(x: _, y: 10i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "pipe forward chain source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool has_pipe_call = false;
+        bool has_pipe_chain = false;
+        for (const auto& v : p->sir_mod.values) {
+            if (v.kind == parus::sir::ValueKind::kPipeCall) {
+                has_pipe_call = true;
+                bool has_pipe_input = false;
+                bool has_ten_literal = false;
+                const uint64_t begin = v.arg_begin;
+                const uint64_t end = begin + v.arg_count;
+                if (end <= p->sir_mod.args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto avid = p->sir_mod.args[v.arg_begin + i].value;
+                        if (avid == parus::sir::k_invalid_value ||
+                            avid >= p->sir_mod.values.size()) {
+                            continue;
+                        }
+                        const auto& av = p->sir_mod.values[avid];
+                        if (av.kind == parus::sir::ValueKind::kPipeCall) {
+                            has_pipe_input = true;
+                        }
+                        if (av.kind == parus::sir::ValueKind::kIntLit &&
+                            av.text.find("10") != std::string::npos) {
+                            has_ten_literal = true;
+                        }
+                    }
+                }
+                if (has_pipe_input && has_ten_literal) {
+                    has_pipe_chain = true;
+                }
+            }
+        }
+        ok &= require_(has_pipe_call, "SIR must preserve canonicalized pipe call as kPipeCall");
+        ok &= require_(has_pipe_chain,
+            "SIR pipe chain must pass previous pipe-call result into next stage argument");
+        if (!ok) return false;
+
+        bool oir_call_consumes_call_result = false;
+        for (const auto& inst : p->oir.mod.insts) {
+            const auto* call = std::get_if<parus::oir::InstCall>(&inst.data);
+            if (call == nullptr) continue;
+            for (const auto avid : call->args) {
+                if (avid == parus::oir::kInvalidId || avid >= p->oir.mod.values.size()) continue;
+                const auto def_iid = p->oir.mod.values[avid].def_a;
+                if (def_iid == parus::oir::kInvalidId || def_iid >= p->oir.mod.insts.size()) continue;
+                if (std::holds_alternative<parus::oir::InstCall>(p->oir.mod.insts[def_iid].data)) {
+                    oir_call_consumes_call_result = true;
+                    break;
+                }
+            }
+            if (oir_call_consumes_call_result) break;
+        }
+        ok &= require_(oir_call_consumes_call_result,
+                       "OIR must keep pipe chain as call-result feeding next call");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for pipe forward chain must succeed");
+        ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
+                       "pipe chain direct-call lowering should not use generic call stub");
+        return ok;
+    }
+
     /// @brief float/char 리터럴이 OIR/LLVM 경로에서 ConstNull로 대체되지 않고 정상 lowering되는지 검사한다.
     static bool test_float_char_literal_lowering_() {
         const std::string src = R"(
@@ -2066,6 +2149,7 @@ int main() {
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},
         {"fstring_runtime_text_passthrough_llvm_patterns", test_fstring_runtime_text_passthrough_llvm_patterns},
+        {"pipe_forward_chain_llvm_call_patterns", test_pipe_forward_chain_llvm_call_patterns},
         {"float_char_literal_lowering", test_float_char_literal_lowering_},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
         {"object_emission_api_path", test_object_emission_api_path},

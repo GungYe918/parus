@@ -55,6 +55,7 @@ namespace parus::diag {
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
             case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
+            case Code::kPipeRevNotSupportedYet: return "PipeRevNotSupportedYet";
             case Code::kPipeHoleMustBeLabeled: return "PipeHoleMustBeLabeled";
             case Code::kPipeHoleCountMismatch: return "PipeHoleCountMismatch";
             case Code::kPipeHolePositionalNotAllowed: return "PipeHolePositionalNotAllowed";
@@ -381,6 +382,7 @@ namespace parus::diag {
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
             case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
+            case Code::kPipeRevNotSupportedYet: return "pipe operator '<|' is reserved but not supported in v1";
             case Code::kPipeHoleMustBeLabeled: return "hole '_' must appear as a labeled argument value (e.g., a: _)";
             case Code::kPipeHoleCountMismatch: return "pipe call must contain exactly one labeled hole '_' (found {0})";
             case Code::kPipeHolePositionalNotAllowed: return "hole '_' is not allowed as a positional argument in pipe calls";
@@ -713,6 +715,7 @@ namespace parus::diag {
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";
+            case Code::kPipeRevNotSupportedYet: return "파이프 연산자 '<|'는 예약되어 있으나 v1에서 지원되지 않습니다";
             case Code::kPipeHoleMustBeLabeled: return "'_'는 라벨 인자 값 위치에만 올 수 있습니다(예: a: _)";
             case Code::kPipeHoleCountMismatch: return "파이프 호출에는 라벨 인자 값으로 '_'가 정확히 1개 있어야 합니다(현재 {0}개)";
             case Code::kPipeHolePositionalNotAllowed: return "'_'는 파이프 호출에서 위치 인자로 사용할 수 없습니다";

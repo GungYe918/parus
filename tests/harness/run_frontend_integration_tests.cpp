@@ -501,6 +501,159 @@ namespace {
         return ok;
     }
 
+    static bool test_pipe_forward_chain_canonicalize_and_sir_pipecall_ok() {
+        const std::string src = R"(
+            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def mul(x: i32, y: i32) -> i32 { return x * y; }
+            def main() -> i32 {
+                return 1i32 |> add(a: _, b: 2i32) |> mul(x: _, y: 10i32);
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "pipe forward chain source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "pipe forward chain source must not emit tyck errors");
+        ok &= require_(sir.verify_errors.empty(), "pipe forward chain source must pass SIR verify");
+        ok &= require_(sir.cap.ok, "pipe forward chain source must pass SIR capability");
+        if (!ok) return false;
+
+        bool has_pipe_binary = false;
+        bool has_pipe_call_expr = false;
+        for (const auto& e : p.ast.exprs()) {
+            if (e.kind == parus::ast::ExprKind::kBinary &&
+                e.op == parus::syntax::TokenKind::kPipeFwd) {
+                has_pipe_binary = true;
+            }
+            if (e.kind == parus::ast::ExprKind::kCall && e.call_from_pipe) {
+                has_pipe_call_expr = true;
+            }
+        }
+
+        bool has_pipe_call_value = false;
+        bool has_pipe_chain_value = false;
+        for (const auto& v : sir.mod.values) {
+            if (v.kind == parus::sir::ValueKind::kPipeCall) {
+                has_pipe_call_value = true;
+                bool has_pipe_input = false;
+                bool has_ten_literal = false;
+                const uint64_t begin = v.arg_begin;
+                const uint64_t end = begin + v.arg_count;
+                if (end <= sir.mod.args.size()) {
+                    for (uint32_t i = 0; i < v.arg_count; ++i) {
+                        const auto aid = v.arg_begin + i;
+                        const auto avid = sir.mod.args[aid].value;
+                        if (avid == parus::sir::k_invalid_value ||
+                            avid >= sir.mod.values.size()) {
+                            continue;
+                        }
+                        const auto& av = sir.mod.values[avid];
+                        if (av.kind == parus::sir::ValueKind::kPipeCall) {
+                            has_pipe_input = true;
+                        }
+                        if (av.kind == parus::sir::ValueKind::kIntLit &&
+                            av.text.find("10") != std::string_view::npos) {
+                            has_ten_literal = true;
+                        }
+                    }
+                }
+                if (has_pipe_input && has_ten_literal) {
+                    has_pipe_chain_value = true;
+                }
+            }
+        }
+
+        ok &= require_(!has_pipe_binary, "valid pipe chains must be canonicalized before tyck");
+        ok &= require_(has_pipe_call_expr, "canonicalized call expr must carry from_pipe metadata");
+        ok &= require_(has_pipe_call_value, "SIR lowering must preserve pipe call as kPipeCall");
+        ok &= require_(has_pipe_chain_value,
+            "SIR pipe chain must feed previous pipe-call result into next pipe-call argument");
+        return ok;
+    }
+
+    static bool test_pipe_forward_rhs_must_be_call_error() {
+        const std::string src = R"(
+            def main() -> i32 {
+                set x = 1i32 |> 2i32;
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kPipeFwdRhsMustBeCall),
+            "pipe rhs non-call must emit kPipeFwdRhsMustBeCall");
+        ok &= require_(!ty.errors.empty(), "pipe rhs non-call must fail typecheck");
+        return ok;
+    }
+
+    static bool test_pipe_forward_hole_count_mismatch_error() {
+        const std::string src = R"(
+            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def main() -> i32 {
+                set x = 1i32 |> add(a: 2i32, b: 3i32);
+                set y = 1i32 |> add(a: _, b: _);
+                return x + y;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kPipeHoleCountMismatch),
+            "pipe hole count mismatch must emit kPipeHoleCountMismatch");
+        ok &= require_(!ty.errors.empty(), "pipe hole count mismatch must fail typecheck");
+        return ok;
+    }
+
+    static bool test_pipe_forward_positional_hole_rejected() {
+        const std::string src = R"(
+            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def main() -> i32 {
+                set x = 1i32 |> add(_, b: 2i32);
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kPipeHolePositionalNotAllowed),
+            "positional hole in pipe call must emit kPipeHolePositionalNotAllowed");
+        ok &= require_(!ty.errors.empty(), "positional hole in pipe call must fail typecheck");
+        return ok;
+    }
+
+    static bool test_pipe_reverse_not_supported_yet() {
+        const std::string src = R"(
+            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def main() -> i32 {
+                set x = add(a: _, b: 2i32) <| 1i32;
+                return x;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        (void)run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kPipeRevNotSupportedYet),
+            "pipe reverse must emit reserved-not-supported diagnostic");
+        return ok;
+    }
+
     static bool test_null_coalesce_assign_parsed_as_assign() {
         // '??='가 이항식이 아니라 대입식(Assign)으로 파싱되어야 한다.
         const std::string src = R"(
@@ -1655,6 +1808,11 @@ int main() {
         {"fstring_dollar_runtime_passthrough_ok", test_fstring_dollar_runtime_passthrough_ok},
         {"fstring_dollar_runtime_shape_rejected", test_fstring_dollar_runtime_shape_rejected},
         {"fstring_dollar_runtime_expr_must_be_text", test_fstring_dollar_runtime_expr_must_be_text},
+        {"pipe_forward_chain_canonicalize_and_sir_pipecall_ok", test_pipe_forward_chain_canonicalize_and_sir_pipecall_ok},
+        {"pipe_forward_rhs_must_be_call_error", test_pipe_forward_rhs_must_be_call_error},
+        {"pipe_forward_hole_count_mismatch_error", test_pipe_forward_hole_count_mismatch_error},
+        {"pipe_forward_positional_hole_rejected", test_pipe_forward_positional_hole_rejected},
+        {"pipe_reverse_not_supported_yet", test_pipe_reverse_not_supported_yet},
         {"null_coalesce_assign_parsed_as_assign", test_null_coalesce_assign_parsed_as_assign},
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
         {"while_break_value_rejected", test_while_break_value_rejected},

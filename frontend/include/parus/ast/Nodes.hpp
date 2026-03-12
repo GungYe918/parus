@@ -419,6 +419,7 @@ namespace parus::ast {
         uint32_t arg_count = 0;
         uint32_t call_type_arg_begin = 0; // slice in AstArena::type_args_
         uint32_t call_type_arg_count = 0;
+        bool call_from_pipe = false;      // canonicalized from `lhs |> f(label: _)`
 
         // field init entries storage (FieldInitEntry 배열 slice)
         uint32_t field_init_begin = 0;

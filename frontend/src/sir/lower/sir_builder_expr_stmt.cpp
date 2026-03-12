@@ -105,12 +105,14 @@ namespace parus::sir::detail {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
+                    const ValueId operand =
+                        lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+
                     v.arg_begin = (uint32_t)m.args.size();
                     v.arg_count = 0;
-
                     Arg a0{};
                     a0.kind = ArgKind::kPositional;
-                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.value = operand;
                     a0.span = ast.expr(e.a).span;
                     m.add_arg(a0);
                     v.arg_count = 1;
@@ -138,13 +140,15 @@ namespace parus::sir::detail {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
+                    const ValueId operand =
+                        lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
 
                     v.arg_begin = (uint32_t)m.args.size();
                     v.arg_count = 0;
 
                     Arg a0{};
                     a0.kind = ArgKind::kPositional;
-                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.value = operand;
                     a0.span = e.span;
                     m.add_arg(a0);
                     v.arg_count = 1;
@@ -197,19 +201,23 @@ namespace parus::sir::detail {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
+                    const ValueId lhs =
+                        lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    const ValueId rhs =
+                        lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
                     v.arg_begin = (uint32_t)m.args.size();
                     v.arg_count = 0;
 
                     Arg a0{};
                     a0.kind = ArgKind::kPositional;
-                    a0.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    a0.value = lhs;
                     a0.span = ast.expr(e.a).span;
                     m.add_arg(a0);
                     v.arg_count++;
 
                     Arg a1{};
                     a1.kind = ArgKind::kPositional;
-                    a1.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                    a1.value = rhs;
                     a1.span = ast.expr(e.b).span;
                     m.add_arg(a1);
                     v.arg_count++;
@@ -289,7 +297,7 @@ namespace parus::sir::detail {
             }
 
             case parus::ast::ExprKind::kCall: {
-                v.kind = ValueKind::kCall;
+                v.kind = e.call_from_pipe ? ValueKind::kPipeCall : ValueKind::kCall;
                 if ((size_t)eid < tyck.expr_enum_ctor_owner_type.size()) {
                     const auto owner_ty = tyck.expr_enum_ctor_owner_type[eid];
                     if (owner_ty != parus::ty::kInvalidType) {
@@ -350,9 +358,9 @@ namespace parus::sir::detail {
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
                 }
 
-                // args slice into Module::args
-                v.arg_begin = (uint32_t)m.args.size();
-                v.arg_count = 0;
+                // Build parent args first, then append as one contiguous slice.
+                std::vector<Arg> pending_args;
+                pending_args.reserve(e.arg_count + (inject_implicit_receiver ? 1u : 0u));
 
                 if (inject_implicit_receiver &&
                     receiver_param_index == 0 &&
@@ -363,8 +371,7 @@ namespace parus::sir::detail {
                     recv.is_hole = false;
                     recv.span = ast.expr(receiver_eid).span;
                     recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
-                    m.add_arg(recv);
-                    v.arg_count++;
+                    pending_args.push_back(recv);
                 }
 
                 for (uint32_t i = 0; i < e.arg_count; ++i) {
@@ -384,9 +391,7 @@ namespace parus::sir::detail {
                         parent.value = k_invalid_value;
                     }
 
-                    m.add_arg(parent);
-                    v.arg_count++;
-                    continue; // IMPORTANT: keep processing remaining args
+                    pending_args.push_back(parent);
                 }
 
                 if (inject_implicit_receiver &&
@@ -398,7 +403,13 @@ namespace parus::sir::detail {
                     recv.is_hole = false;
                     recv.span = ast.expr(receiver_eid).span;
                     recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
-                    m.add_arg(recv);
+                    pending_args.push_back(recv);
+                }
+
+                v.arg_begin = (uint32_t)m.args.size();
+                v.arg_count = 0;
+                for (const auto& a : pending_args) {
+                    m.add_arg(a);
                     v.arg_count++;
                 }
 
@@ -407,8 +418,8 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kArrayLit: {
                 v.kind = ValueKind::kArrayLit;
-                v.arg_begin = (uint32_t)m.args.size();
-                v.arg_count = 0;
+                std::vector<Arg> pending_items;
+                pending_items.reserve(e.arg_count);
 
                 const auto& args = ast.args();
                 const uint32_t end = e.arg_begin + e.arg_count;
@@ -428,9 +439,14 @@ namespace parus::sir::detail {
                             item.value = k_invalid_value;
                         }
 
-                        m.add_arg(item);
-                        v.arg_count++;
+                        pending_items.push_back(item);
                     }
+                }
+                v.arg_begin = (uint32_t)m.args.size();
+                v.arg_count = 0;
+                for (const auto& item : pending_items) {
+                    m.add_arg(item);
+                    v.arg_count++;
                 }
                 break;
             }
@@ -438,8 +454,8 @@ namespace parus::sir::detail {
             case parus::ast::ExprKind::kFieldInit: {
                 v.kind = ValueKind::kFieldInit;
                 v.text = e.text;
-                v.arg_begin = (uint32_t)m.args.size();
-                v.arg_count = 0;
+                std::vector<Arg> pending_fields;
+                pending_fields.reserve(e.field_init_count);
 
                 const auto& inits = ast.field_init_entries();
                 const uint64_t begin = e.field_init_begin;
@@ -455,9 +471,14 @@ namespace parus::sir::detail {
                         if (ent.expr != parus::ast::k_invalid_expr) {
                             a.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, ent.expr);
                         }
-                        m.add_arg(a);
-                        v.arg_count++;
+                        pending_fields.push_back(a);
                     }
+                }
+                v.arg_begin = (uint32_t)m.args.size();
+                v.arg_count = 0;
+                for (const auto& a : pending_fields) {
+                    m.add_arg(a);
+                    v.arg_count++;
                 }
                 break;
             }
@@ -530,6 +551,7 @@ namespace parus::sir::detail {
                 break;
 
             case ValueKind::kCall:
+            case ValueKind::kPipeCall:
                 join_child(v.a);
                 break;
 

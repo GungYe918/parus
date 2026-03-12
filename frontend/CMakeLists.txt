@@ -20,6 +20,7 @@ add_library(parus_frontend STATIC
     src/passes/check_place_expr.cpp
     src/passes/check_pub_commit.cpp
     src/passes/check_top_level_decl_only.cpp
+    src/passes/canonicalize_pipe.cpp
     src/passes/generic_prep.cpp
     src/passes/compiler_directive_eval.cpp
     src/passes/name_resolve.cpp

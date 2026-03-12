@@ -77,8 +77,13 @@ namespace parus::passes {
     }
 
     static void check_pipe(const ast::AstArena& ast, const ast::Expr& pipe_expr, diag::Bag& bag) {
-        const auto& lhs = ast.expr(pipe_expr.a);
         const auto& rhs = ast.expr(pipe_expr.b);
+
+        // <| : reserved, but not supported in v1.
+        if (pipe_expr.op == syntax::TokenKind::kPipeRev) {
+            report(bag, diag::Code::kPipeRevNotSupportedYet, pipe_expr.span);
+            return;
+        }
 
         // |> : RHS가 call 이어야 함
         if (pipe_expr.op == syntax::TokenKind::kPipeFwd) {
@@ -87,16 +92,6 @@ namespace parus::passes {
                 return;
             }
             validate_pipe_call(ast, rhs, bag);
-            return;
-        }
-
-        // <| : LHS가 call 이어야 함
-        if (pipe_expr.op == syntax::TokenKind::kPipeRev) {
-            if (!is_call(lhs)) {
-                report(bag, diag::Code::kPipeRevLhsMustBeCall, pipe_expr.span);
-                return;
-            }
-            validate_pipe_call(ast, lhs, bag);
             return;
         }
     }

@@ -611,6 +611,19 @@
             return types_.error();
         }
 
+        // Pipe operators are canonicalized before tyck.
+        // - '|>' valid form should be rewritten to Call Expr.
+        // - '<|' is reserved but intentionally unsupported in v1.
+        if (e.op == K::kPipeRev) {
+            diag_(diag::Code::kPipeRevNotSupportedYet, e.span);
+            err_(e.span, "pipe operator '<|' is not supported in v1");
+            return types_.error();
+        }
+        if (e.op == K::kPipeFwd) {
+            err_(e.span, "pipe expression was not canonicalized");
+            return types_.error();
+        }
+
         // NOTE:
         // - v0 정책: binary는 기본적으로 "builtin fast-path"만 처리한다.
         // - 추후 operator overloading을 넣을 때도,

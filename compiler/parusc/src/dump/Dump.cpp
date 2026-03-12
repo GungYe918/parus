@@ -44,6 +44,7 @@ namespace parusc::dump {
             case K::kAssign: return "Assign";
             case K::kPostfixInc: return "PostfixInc";
             case K::kCall: return "Call";
+            case K::kPipeCall: return "PipeCall";
             case K::kEnumCtor: return "EnumCtor";
             case K::kIndex: return "Index";
             case K::kField: return "Field";

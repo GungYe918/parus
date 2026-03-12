@@ -328,7 +328,8 @@ namespace parus::sir {
                     break;
                 }
 
-                case ValueKind::kCall: {
+                case ValueKind::kCall:
+                case ValueKind::kPipeCall: {
                     const bool has_direct_callee_meta =
                         (v.callee_sym != k_invalid_symbol) ||
                         (v.callee_decl_stmt != 0xFFFF'FFFFu);

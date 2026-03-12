@@ -178,6 +178,7 @@ namespace parus::sir::detail {
                 return EffectClass::kMayWrite;
 
             case ValueKind::kCall:
+            case ValueKind::kPipeCall:
                 return EffectClass::kUnknown;
 
             default:

@@ -30,6 +30,7 @@ namespace parus::sir {
                 case ValueKind::kEscape:
                     return EffectClass::kMayWrite;
                 case ValueKind::kCall:
+                case ValueKind::kPipeCall:
                 case ValueKind::kEnumCtor:
                     return EffectClass::kUnknown;
                 default:
@@ -107,6 +108,7 @@ namespace parus::sir {
 
             for (auto& v : m.values) {
                 if (v.kind != ValueKind::kCall &&
+                    v.kind != ValueKind::kPipeCall &&
                     v.kind != ValueKind::kEnumCtor &&
                     v.kind != ValueKind::kArrayLit &&
                     v.kind != ValueKind::kFieldInit) {
@@ -218,6 +220,7 @@ namespace parus::sir {
                     join_child(v.c);
                     break;
                 case ValueKind::kCall:
+                case ValueKind::kPipeCall:
                 case ValueKind::kEnumCtor: {
                     join_child(v.a);
                     const uint64_t end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;

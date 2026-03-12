@@ -66,6 +66,7 @@ namespace parus::sir {
         kAssign,        // place = value (or compound assigns lowered later)
         kPostfixInc,    // place++
         kCall,
+        kPipeCall,      // canonicalized from `lhs |> f(label: _)`
         kEnumCtor,
         kIndex,
         kField,         // place/value: a.b (future)

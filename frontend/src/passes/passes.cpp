@@ -7,6 +7,7 @@
 #include <parus/passes/CheckTopLevelDeclOnly.hpp>
 #include <parus/passes/GenericPrep.hpp>
 #include <parus/passes/CompilerDirectiveEval.hpp>
+#include <parus/passes/CanonicalizePipe.hpp>
 
 
 namespace parus::passes {
@@ -68,13 +69,16 @@ namespace parus::passes {
         // 0) compiler directive evaluation/pruning
         evaluate_compiler_directives(ast, program_root, bag, opt);
 
-        // 1) Top-level decl-only 체크
+        // 1) mutating canonicalization passes
+        canonicalize_pipe(ast, program_root, bag);
+
+        // 2) Top-level decl-only 체크
         check_top_level_decl_only(ast, program_root, bag);
 
-        // 2) stmt 기반 패스
+        // 3) stmt 기반 패스
         auto res = run_on_stmt_tree(ast, program_root, bag, opt);
 
-        // 3) generic prepass (index + lightweight validation prep)
+        // 4) generic prepass (index + lightweight validation prep)
         res.generic_prep = run_generic_prep(ast, program_root, bag);
         return res;
     }

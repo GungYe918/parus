@@ -1489,7 +1489,8 @@ namespace parus::oir {
                 return emit_cast(v.type, eff, ck, v.cast_to, src);
             }
 
-            case parus::sir::ValueKind::kCall: {
+            case parus::sir::ValueKind::kCall:
+            case parus::sir::ValueKind::kPipeCall: {
                 std::vector<ValueId> args;
                 std::vector<parus::sir::ValueId> arg_value_ids;
                 args.reserve(v.arg_count);

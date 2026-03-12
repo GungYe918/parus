@@ -1032,6 +1032,7 @@ namespace parus::sir {
                     }
 
                     case ValueKind::kCall:
+                    case ValueKind::kPipeCall:
                     case ValueKind::kEnumCtor: {
                         analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
 
