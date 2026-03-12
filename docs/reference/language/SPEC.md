@@ -27,7 +27,7 @@
 1. `spec/16.md` - 7.7 loop 형태별 상세 규칙
 1. `spec/17.md` - 7.8 범위 표현식
 1. `spec/18.md` - 7.9 기대 효과
-1. `spec/19.md` - 8. 표현식과 연산자, 파이프 << 와 hole _
+1. `spec/19.md` - 8. 표현식과 연산자, 파이프 |> 와 hole _
 1. `spec/20.md` - 9. actor, draft, pub/sub, commit, recast
 1. `spec/21.md` - 10. 타입 정의: struct, proto, class, 접근 제한자
 1. `spec/22.md` - 10.4 proto + 제네릭 결합 방향(v1+)
