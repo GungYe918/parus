@@ -111,7 +111,12 @@ Parus 기본 설치 루트:
 표준 라이브러리 위치는 다음으로 고정한다.
 
 1. 소스: `sysroot/std/src` (프로젝트) / `.../toolchains/<id>/sysroot/std/src` (설치본)
-2. core prelude 소스: `sysroot/core/src` (프로젝트) / `.../toolchains/<id>/sysroot/core/src` (설치본)
+2. core 소스: `sysroot/core/src` (프로젝트) / `.../toolchains/<id>/sysroot/core/src` (설치본)
+   - builtin `acts`는 `$![Impl::Core];` 파일 표식을 요구한다.
+   - core API 자동 주입은 source prelude 병합이 아니라 export-index 기반으로 수행한다.
+   - core export-index canonical path: `sysroot/core/index/core.exports.json`
+   - non-core bundle은 `import core` 없이 `core::...` 경로를 바로 사용할 수 있다(자동 alias 주입).
+   - `-fno-core` 또는 `PARUS_NO_CORE=1`이면 자동 주입을 비활성화한다.
 3. target별 파생 산출물:
    - `.../targets/<triple>/std/parlib`
    - `.../targets/<triple>/std/obj`

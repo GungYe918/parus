@@ -41,6 +41,14 @@ namespace parus::tyck {
             current_expr_id_ < expr_enum_ctor_tag_value_cache_.size()) {
             expr_enum_ctor_tag_value_cache_[current_expr_id_] = 0;
         }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_external_callee_symbol_cache_.size()) {
+            expr_external_callee_symbol_cache_[current_expr_id_] = sema::SymbolTable::kNoScope;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_external_receiver_expr_cache_.size()) {
+            expr_external_receiver_expr_cache_[current_expr_id_] = ast::k_invalid_expr;
+        }
 
         // Snapshot call-site args before any generic instantiation can mutate AST storage.
         std::vector<ast::Arg> call_args;
@@ -137,6 +145,7 @@ namespace parus::tyck {
         ty::TypeId dot_owner_type = ty::kInvalidType;
         bool dot_needs_self_normalization = false;
         std::vector<ast::StmtId> overload_decl_ids;
+        std::vector<ExternalActsMethodDecl> external_overload_methods;
 
         struct ExplicitActsPath {
             std::string owner_path;
@@ -652,6 +661,18 @@ namespace parus::tyck {
                                 any_method_named = (mit != oit->second.end() && !mit->second.empty());
                             }
                         }
+                        bool any_external_method_named = false;
+                        std::vector<ExternalActsMethodDecl> selected_external_methods;
+                        if (owner_t != ty::kInvalidType) {
+                            auto oit = external_acts_default_method_map_.find(owner_t);
+                            if (oit != external_acts_default_method_map_.end()) {
+                                auto mit = oit->second.find(std::string(rhs.text));
+                                if (mit != oit->second.end() && !mit->second.empty()) {
+                                    any_external_method_named = true;
+                                    selected_external_methods = mit->second;
+                                }
+                            }
+                        }
 
                         bool has_self_receiver_candidate = false;
                         for (const auto& md : selected_methods) {
@@ -665,6 +686,23 @@ namespace parus::tyck {
                             is_dot_method_call = true;
                             dot_owner_type = owner_t;
                             callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                        } else if (any_external_method_named) {
+                            bool has_external_self_receiver = false;
+                            for (const auto& md : selected_external_methods) {
+                                if (!md.receiver_is_self) continue;
+                                has_external_self_receiver = true;
+                                external_overload_methods.push_back(md);
+                            }
+                            if (has_external_self_receiver) {
+                                is_dot_method_call = true;
+                                dot_owner_type = owner_t;
+                                callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                            } else {
+                                diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
+                                err_(rhs.span, "dot call requires self receiver on acts method");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
                         } else if (any_method_named && !selected_methods.empty()) {
                             diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
                             err_(rhs.span, "dot call requires self receiver on acts method");
@@ -1277,6 +1315,98 @@ namespace parus::tyck {
             oss << ")";
             return oss.str();
         };
+
+        // ------------------------------------------------------------
+        // 2.5) external acts default-method candidates (from export-index metadata)
+        // ------------------------------------------------------------
+        if (overload_decl_ids.empty() && !external_overload_methods.empty()) {
+            ast::ExprId receiver_eid = ast::k_invalid_expr;
+            if (e.a != ast::k_invalid_expr) {
+                const auto& callee_expr = ast_.expr(e.a);
+                if (callee_expr.kind == ast::ExprKind::kBinary &&
+                    callee_expr.op == K::kDot &&
+                    callee_expr.a != ast::k_invalid_expr) {
+                    receiver_eid = callee_expr.a;
+                }
+            }
+            if (receiver_eid == ast::k_invalid_expr) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid external acts method call receiver");
+                err_(e.span, "invalid external acts method call receiver");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+
+            if (form != CallForm::kPositionalOnly) {
+                diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                err_(e.span, "external acts method call currently supports positional arguments only");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+
+            uint32_t selected_external_sym = sema::SymbolTable::kNoScope;
+            ty::TypeId selected_external_fn_type = ty::kInvalidType;
+
+            for (const auto& cand : external_overload_methods) {
+                if (cand.fn_symbol == sema::SymbolTable::kNoScope ||
+                    cand.fn_symbol >= sym_.symbols().size()) {
+                    continue;
+                }
+                const auto& fn_sym = sym_.symbol(cand.fn_symbol);
+                const ty::TypeId fn_t = fn_sym.declared_type;
+                if (fn_t == ty::kInvalidType || types_.get(fn_t).kind != ty::Kind::kFn) continue;
+                const uint32_t total_cnt = types_.get(fn_t).param_count;
+                if (total_cnt == 0) continue;
+
+                const uint32_t expected_outside_positional = total_cnt - 1u; // receiver consumed implicitly
+                if (outside_positional.size() != expected_outside_positional) continue;
+
+                const CoercionPlan recv_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg,
+                    types_.fn_param_at(fn_t, 0),
+                    receiver_eid,
+                    ast_.expr(receiver_eid).span
+                );
+                if (!recv_plan.ok) continue;
+
+                bool all_ok = true;
+                for (size_t i = 0; i < outside_positional.size(); ++i) {
+                    const ty::TypeId expected = types_.fn_param_at(fn_t, static_cast<uint32_t>(i + 1));
+                    const CoercionPlan plan = classify_assign_with_coercion_(
+                        AssignSite::CallArg,
+                        expected,
+                        outside_positional[i]->expr,
+                        outside_positional[i]->span
+                    );
+                    if (!plan.ok) {
+                        all_ok = false;
+                        break;
+                    }
+                }
+                if (!all_ok) continue;
+
+                selected_external_sym = cand.fn_symbol;
+                selected_external_fn_type = fn_t;
+                break;
+            }
+
+            if (selected_external_sym == sema::SymbolTable::kNoScope ||
+                selected_external_fn_type == ty::kInvalidType) {
+                diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                err_(e.span, "no matching external acts method overload");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                current_expr_id_ < expr_external_callee_symbol_cache_.size()) {
+                expr_external_callee_symbol_cache_[current_expr_id_] = selected_external_sym;
+            }
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                current_expr_id_ < expr_external_receiver_expr_cache_.size()) {
+                expr_external_receiver_expr_cache_[current_expr_id_] = receiver_eid;
+            }
+            return types_.get(selected_external_fn_type).ret;
+        }
 
         // ------------------------------------------------------------
         // 3) fallback: overload 집합을 못 찾으면 function type call-shape로 검사

@@ -120,6 +120,8 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "DirectiveInstUnknown";
             case Code::kDirectiveInstExternalPayloadInvalid: return "DirectiveInstExternalPayloadInvalid";
             case Code::kDirectiveInstForbiddenOperator: return "DirectiveInstForbiddenOperator";
+            case Code::kDirectiveCoreMarkerMustBeHeader: return "DirectiveCoreMarkerMustBeHeader";
+            case Code::kDirectiveCoreMarkerDuplicate: return "DirectiveCoreMarkerDuplicate";
             case Code::kFStringShortFormUnsupported: return "FStringShortFormUnsupported";
             case Code::kFStringRuntimeShapeUnsupported: return "FStringRuntimeShapeUnsupported";
             case Code::kFStringRuntimeExprMustBeText: return "FStringRuntimeExprMustBeText";
@@ -449,6 +451,8 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "unknown inst used in $[...]";
             case Code::kDirectiveInstExternalPayloadInvalid: return "external inst payload is malformed";
             case Code::kDirectiveInstForbiddenOperator: return "'&', '~', and '^&' are forbidden in inst";
+            case Code::kDirectiveCoreMarkerMustBeHeader: return "$![Impl::Core]; must be the first top-level item in the file header";
+            case Code::kDirectiveCoreMarkerDuplicate: return "$![Impl::Core]; can only appear once per file";
             case Code::kFStringShortFormUnsupported: return "F\"...\" is not supported; use $\"...\" or F\"\"\"...\"\"\"";
             case Code::kFStringRuntimeShapeUnsupported: return "runtime f-string supports only a single interpolation in the form $\"{text_expr}\" in v1";
             case Code::kFStringRuntimeExprMustBeText: return "runtime f-string interpolation expression must have type text";
@@ -784,6 +788,8 @@ namespace parus::diag {
             case Code::kDirectiveInstUnknown: return "$[...]에서 사용한 inst를 찾을 수 없습니다";
             case Code::kDirectiveInstExternalPayloadInvalid: return "외부 inst payload 형식이 올바르지 않습니다";
             case Code::kDirectiveInstForbiddenOperator: return "inst에서는 '&', '~', '^&' 연산을 사용할 수 없습니다";
+            case Code::kDirectiveCoreMarkerMustBeHeader: return "$![Impl::Core];는 파일 헤더의 첫 번째 top-level item이어야 합니다";
+            case Code::kDirectiveCoreMarkerDuplicate: return "$![Impl::Core];는 파일당 1회만 선언할 수 있습니다";
             case Code::kFStringShortFormUnsupported: return "F\"...\"는 지원되지 않습니다. $\"...\" 또는 F\"\"\"...\"\"\"를 사용하세요";
             case Code::kFStringRuntimeShapeUnsupported: return "v1 런타임 f-string은 $\"{text_expr}\" 형태의 단일 보간만 지원합니다";
             case Code::kFStringRuntimeExprMustBeText: return "런타임 f-string 보간 식의 타입은 text여야 합니다";

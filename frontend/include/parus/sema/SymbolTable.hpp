@@ -29,6 +29,7 @@ namespace parus::sema {
 
         std::string name{};
         std::string link_name{}; // stable linker symbol name (for external imports)
+        std::string external_payload{}; // optional metadata payload from export-index
         ty::TypeId declared_type = ty::kInvalidType; // 선언 타입(없으면 invalid)
 
         Span decl_span{}; // 선언 지점
@@ -131,7 +132,8 @@ namespace parus::sema {
                             bool is_external = false,
                             std::string_view decl_module_head = {},
                             std::string_view decl_source_dir_norm = {},
-                            std::string_view link_name = {}) {
+                            std::string_view link_name = {},
+                            std::string_view external_payload = {}) {
             InsertResult r{};
 
             // duplicate (same scope)
@@ -152,6 +154,7 @@ namespace parus::sema {
             sym.kind = kind;
             sym.name = std::string(name);
             sym.link_name = std::string(link_name);
+            sym.external_payload = std::string(external_payload);
             sym.declared_type = declared_type;
             sym.decl_span = decl_span;
             sym.owner_scope = current_scope();

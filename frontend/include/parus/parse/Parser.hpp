@@ -46,6 +46,9 @@ namespace parus {
         // EOF까지 stmt/decl을 반복 파싱하여 프로그램(Block) 노드 생성
         ast::StmtId parse_program();
 
+        // true when file contains valid header marker: $![Impl::Core];
+        bool is_core_impl_file_mode() const { return core_impl_file_mode_; }
+
         const ParserFeatureFlags& feature_flags() const { return parser_features_; }
 
     private:
@@ -256,6 +259,7 @@ namespace parus {
         bool parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
         std::pair<uint32_t, uint32_t> parse_macro_call_arg_tokens();
         bool parse_compiler_directive_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
+        bool is_core_impl_marker_path_(uint32_t path_begin, uint32_t path_count) const;
 
         // --------------------
         // recovery & misc
@@ -307,6 +311,11 @@ namespace parus {
         uint32_t macro_scope_depth_ = 0;
         bool in_actor_member_context_ = false;
         uint8_t generic_gt_pending_ = 0;
+        bool core_impl_file_mode_ = false;
+        bool seen_core_impl_marker_ = false;
+        bool in_parse_program_ = false;
+        uint32_t top_level_stmt_count_ = 0;
+        uint32_t stmt_block_depth_ = 0;
         static constexpr uint32_t kMaxExprRecursionDepth = 512;
         uint32_t expr_recursion_depth_ = 0;
         ParserFeatureFlags parser_features_{};

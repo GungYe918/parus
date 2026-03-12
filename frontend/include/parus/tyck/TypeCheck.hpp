@@ -56,6 +56,8 @@ namespace parus::tyck {
         std::vector<int64_t> expr_enum_ctor_tag_value; // expr index -> enum tag value, valid on enum-ctor expr
         std::vector<uint32_t> expr_resolved_symbol; // expr index -> resolved symbol id (tyck fallback for cloned generic nodes)
         std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
+        std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
+        std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
         std::vector<ast::ExprId> expr_fstring_runtime_expr; // expr index -> runtime passthrough expr for non-folded f-string, invalid otherwise
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
         std::unordered_map<ast::StmtId, std::string> fn_qualified_names; // def decl stmt -> qualified path name
@@ -88,8 +90,8 @@ namespace parus::tyck {
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
         void set_seed_symbol_table(const sema::SymbolTable* seed) { seed_sym_ = seed; }
-        void set_trusted_builtin_acts_decl_sids(std::unordered_set<ast::StmtId> sids) {
-            trusted_builtin_acts_decl_sids_ = std::move(sids);
+        void set_core_impl_marker_file_ids(std::unordered_set<uint32_t> file_ids) {
+            explicit_core_impl_marker_file_ids_ = std::move(file_ids);
         }
 
         // program(StmtId) 하나를 타입체크
@@ -320,6 +322,8 @@ namespace parus::tyck {
         std::vector<int64_t> expr_enum_ctor_tag_value_cache_;
         std::vector<uint32_t> expr_resolved_symbol_cache_;
         std::vector<ast::StmtId> expr_proto_const_decl_cache_;
+        std::vector<uint32_t> expr_external_callee_symbol_cache_;
+        std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
@@ -430,10 +434,17 @@ namespace parus::tyck {
             bool receiver_is_self = false;
             bool from_named_set = false;
         };
+        struct ExternalActsMethodDecl {
+            uint32_t fn_symbol = sema::SymbolTable::kNoScope;
+            ty::TypeId owner_type = ty::kInvalidType;
+            bool receiver_is_self = false;
+        };
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_default_method_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> acts_default_decl_by_owner_;
-        std::unordered_set<ast::StmtId> trusted_builtin_acts_decl_sids_;
+        std::unordered_set<uint32_t> explicit_core_impl_marker_file_ids_;
+        std::unordered_set<uint32_t> core_impl_marker_file_ids_;
 
         enum class BuiltinActsApiGroup : uint8_t {
             IntLike = 0,
@@ -476,8 +487,18 @@ namespace parus::tyck {
         static bool is_bool_builtin_(ty::Builtin b);
         bool is_self_named_type_(ty::TypeId t) const;
         bool is_builtin_owner_type_(ty::TypeId t, ty::Builtin* out_builtin = nullptr) const;
+        std::optional<ty::TypeId> parse_builtin_owner_type_from_text_(std::string_view s) const;
+        bool parse_external_builtin_acts_payload_(
+            std::string_view payload,
+            ty::TypeId& out_owner_type,
+            std::string& out_member_name,
+            bool& out_receiver_is_self
+        ) const;
+        void collect_external_builtin_acts_methods_();
         std::string current_bundle_name_() const;
-        bool enforce_builtin_acts_policy_(ast::StmtId sid, const ast::Stmt& acts_decl, ty::TypeId owner_type);
+        void collect_core_impl_marker_file_ids_(ast::StmtId program_stmt);
+        bool is_core_impl_marker_stmt_(const ast::Stmt& s) const;
+        bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,
             std::string& out_base,

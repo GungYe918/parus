@@ -114,6 +114,8 @@ namespace parus::diag {
         kDirectiveInstUnknown,            // unknown inst callee
         kDirectiveInstExternalPayloadInvalid, // external inst payload is malformed
         kDirectiveInstForbiddenOperator,  // '&', '~', '^&' are not allowed in inst
+        kDirectiveCoreMarkerMustBeHeader, // $![Impl::Core]; must appear as top-level first item
+        kDirectiveCoreMarkerDuplicate,    // $![Impl::Core]; marker is duplicated
         kFStringShortFormUnsupported,     // F"..." short form is removed; use $"..."
         kFStringRuntimeShapeUnsupported,  // runtime f-string shape is unsupported in v1
         kFStringRuntimeExprMustBeText,    // runtime f-string expression must be text

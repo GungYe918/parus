@@ -1,0 +1,6 @@
+//@expect-error DirectiveCoreMarkerMustBeHeader
+def prelude() -> i32 {
+  return 0i32;
+}
+
+$![Impl::Core];

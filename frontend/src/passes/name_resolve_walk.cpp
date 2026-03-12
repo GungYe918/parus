@@ -79,7 +79,8 @@
                         /*is_external=*/true,
                         ex.module_head,
                         ex.decl_source_dir_norm,
-                        ex.link_name
+                        ex.link_name,
+                        ex.inst_payload
                     );
                     if (ins.ok || ins.is_duplicate) {
                         return ins.symbol_id;
@@ -175,6 +176,19 @@
                                     break;
                                 }
                             }
+                        }
+                    }
+
+                    if (opt.warn_core_path_when_std) {
+                        const std::string_view text = e.text;
+                        if (text == "core" || text.starts_with("core::")) {
+                            report(
+                                bag,
+                                diag::Severity::kWarning,
+                                diag::Code::kTypeErrorGeneric,
+                                e.span,
+                                "std is enabled; prefer 'std::...' over direct 'core::...' path usage"
+                            );
                         }
                     }
 
@@ -1427,9 +1441,14 @@
                     const auto& old = sym.symbol(*existing);
                     if (old.kind != ex.kind) {
                         report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, nm);
-                    } else if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty()) {
+                    } else {
                         auto& cur = sym.symbol_mut(*existing);
-                        if (cur.link_name.empty()) cur.link_name = ex.link_name;
+                        if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty() && cur.link_name.empty()) {
+                            cur.link_name = ex.link_name;
+                        }
+                        if (cur.external_payload.empty() && !ex.inst_payload.empty()) {
+                            cur.external_payload = ex.inst_payload;
+                        }
                     }
                     continue;
                 }
@@ -1451,6 +1470,7 @@
                 se.decl_module_head = ex.module_head;
                 se.decl_source_dir_norm = ex.decl_source_dir_norm;
                 se.link_name = ex.link_name;
+                se.external_payload = ex.inst_payload;
                 se.is_export = ex.is_export;
                 se.is_external = true;
             }

@@ -1,0 +1,6 @@
+//@expect-no-parser-error
+$![Impl::Core];
+
+def main() -> i32 {
+  return 0i32;
+}

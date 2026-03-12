@@ -309,6 +309,15 @@ namespace parus {
         return out_path_count > 0;
     }
 
+    bool Parser::is_core_impl_marker_path_(uint32_t path_begin, uint32_t path_count) const {
+        if (path_count != 2) return false;
+        const auto& segs = ast_.path_segs();
+        const uint64_t begin = path_begin;
+        const uint64_t end = begin + path_count;
+        if (begin > segs.size() || end > segs.size()) return false;
+        return segs[path_begin] == "Impl" && segs[path_begin + 1] == "Core";
+    }
+
     std::pair<uint32_t, uint32_t> Parser::parse_macro_call_arg_tokens() {
         using K = syntax::TokenKind;
         const uint32_t begin = static_cast<uint32_t>(ast_.macro_tokens().size());

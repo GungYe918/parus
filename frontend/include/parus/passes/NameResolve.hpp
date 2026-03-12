@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 
 #include <parus/ast/Nodes.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -28,6 +29,8 @@ namespace parus::passes {
         std::string current_module_head{};
         std::string current_source_dir_norm{};
         std::unordered_set<std::string> allowed_import_heads{};
+        std::unordered_map<std::string, std::string> implicit_import_aliases{};
+        bool warn_core_path_when_std = false;
 
         struct ExternalExport {
             sema::SymbolKind kind = sema::SymbolKind::kVar;

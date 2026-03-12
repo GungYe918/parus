@@ -12,7 +12,7 @@ namespace {
 
 std::pair<int, std::string> run_capture(const std::string& command) {
     const std::string tmp = "/tmp/parus_cli_capture.txt";
-    const std::string full = command + " > " + tmp + " 2>&1";
+    const std::string full = "(export PARUS_NO_CORE=1; " + command + ") > " + tmp + " 2>&1";
     const int rc = std::system(full.c_str());
 
     std::ifstream ifs(tmp, std::ios::binary);
@@ -789,6 +789,8 @@ bool test_builtin_acts_policy_core_gate() {
     }
 
     const auto non_core = temp_root / "non_core.pr";
+    const auto non_core_marker_only = temp_root / "non_core_marker_only.pr";
+    const auto core_no_marker = temp_root / "core_no_marker.pr";
     const auto core_ok = temp_root / "core_ok.pr";
     const auto core_dup = temp_root / "core_dup.pr";
 
@@ -799,7 +801,18 @@ bool test_builtin_acts_policy_core_gate() {
         "  }\n"
         "};\n";
 
+    const std::string marker_decl =
+        "$![Impl::Core];\n"
+        "\n"
+        "acts for i32 {\n"
+        "  def size(self) -> i32 {\n"
+        "    return 4i32;\n"
+        "  }\n"
+        "};\n";
+
     const std::string dup_decl =
+        "$![Impl::Core];\n"
+        "\n"
         "acts for i32 {\n"
         "  def size(self) -> i32 {\n"
         "    return 4i32;\n"
@@ -812,8 +825,17 @@ bool test_builtin_acts_policy_core_gate() {
         "  }\n"
         "};\n";
 
+    const std::string marker_only =
+        "$![Impl::Core];\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
     if (!write_text(non_core, base_decl) ||
-        !write_text(core_ok, base_decl) ||
+        !write_text(non_core_marker_only, marker_only) ||
+        !write_text(core_no_marker, base_decl) ||
+        !write_text(core_ok, marker_decl) ||
         !write_text(core_dup, dup_decl)) {
         std::cerr << "failed to write builtin acts policy files\n";
         std::filesystem::remove_all(temp_root, ec);
@@ -832,8 +854,17 @@ bool test_builtin_acts_policy_core_gate() {
     };
 
     auto [rc_non_core, out_non_core] = run_tool(non_core, "app");
-    if (rc_non_core == 0 || !contains(out_non_core, "reserved for bundle 'core'")) {
+    if (rc_non_core == 0 ||
+        !contains(out_non_core, "requires bundle 'core' and file marker '$![Impl::Core];'")) {
         std::cerr << "non-core builtin acts should fail\n" << out_non_core;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_core_no_marker, out_core_no_marker] = run_tool(core_no_marker, "core");
+    if (rc_core_no_marker == 0 ||
+        !contains(out_core_no_marker, "requires bundle 'core' and file marker '$![Impl::Core];'")) {
+        std::cerr << "core builtin acts without marker should fail\n" << out_core_no_marker;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -846,35 +877,67 @@ bool test_builtin_acts_policy_core_gate() {
     }
 
     auto [rc_core_dup, out_core_dup] = run_tool(core_dup, "core");
-    std::filesystem::remove_all(temp_root, ec);
     if (rc_core_dup == 0 || !contains(out_core_dup, "duplicate default acts declaration for type i32")) {
         std::cerr << "core duplicate builtin acts should fail\n" << out_core_dup;
+        std::filesystem::remove_all(temp_root, ec);
         return false;
     }
+
+    auto [rc_non_core_marker, out_non_core_marker] = run_tool(non_core_marker_only, "app");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_non_core_marker == 0 ||
+        !contains(out_non_core_marker, "$![Impl::Core]; is allowed only when bundle-name is 'core'")) {
+        std::cerr << "non-core marker-only file should fail marker policy\n" << out_non_core_marker;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    std::filesystem::remove_all(temp_root, ec);
     return true;
 }
 
-bool test_auto_core_prelude_for_single_pr() {
+bool test_auto_core_export_index_loaded_for_non_core_bundle() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-auto-core";
     std::filesystem::remove_all(temp_root, ec);
-    std::filesystem::create_directories(temp_root / "sysroot/core/src", ec);
+    std::filesystem::create_directories(temp_root / "sysroot/core/index", ec);
     if (ec) {
         std::cerr << "temp dir create failed\n";
         return false;
     }
 
-    const auto prelude = temp_root / "sysroot/core/src/prelude.pr";
+    const auto core_index = temp_root / "sysroot/core/index/core.exports.json";
     const auto main_pr = temp_root / "main.pr";
-    const auto out_bin = temp_root / "app";
 
-    const std::string prelude_src =
-        "acts for i32 {\n"
-        "  def size(self) -> i32 {\n"
-        "    return 4i32;\n"
-        "  }\n"
-        "};\n";
+    const std::string core_index_src =
+        "{\n"
+        "  \"version\": 5,\n"
+        "  \"bundle\": \"core\",\n"
+        "  \"exports\": [\n"
+        "    {\n"
+        "      \"kind\": \"act\",\n"
+        "      \"path\": \"i32\",\n"
+        "      \"link_name\": \"\",\n"
+        "      \"module_head\": \"core\",\n"
+        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"type_repr\": \"i32\",\n"
+        "      \"inst_payload\": \"\",\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 1, \"col\": 1},\n"
+        "      \"is_export\": true\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"fn\",\n"
+        "      \"path\": \"i32::size\",\n"
+        "      \"link_name\": \"core_i32_size\",\n"
+        "      \"module_head\": \"core\",\n"
+        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"type_repr\": \"def(i32) -> i32\",\n"
+        "      \"inst_payload\": \"parus_builtin_acts|owner=i32|member=size|self=1\",\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 3, \"col\": 3},\n"
+        "      \"is_export\": true\n"
+        "    }\n"
+        "  ]\n"
+        "}\n";
 
     const std::string main_src =
         "def main() -> i32 {\n"
@@ -882,34 +945,44 @@ bool test_auto_core_prelude_for_single_pr() {
         "  return x.size();\n"
         "}\n";
 
-    if (!write_text(prelude, prelude_src) || !write_text(main_pr, main_src)) {
-        std::cerr << "failed to write auto core test files\n";
+    if (!write_text(core_index, core_index_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write auto core index test files\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
     const std::string compile_cmd =
-        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\"" +
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\"" +
         " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
-        " -o \"" + out_bin.string() + "\"";
+        " --emit-object -o \"" + (temp_root / "main.o").string() + "\"";
     auto [rc_compile, out_compile] = run_capture(compile_cmd);
     if (rc_compile != 0) {
-        std::cerr << "auto core compile failed\n" << out_compile;
+        std::cerr << "non-core bundle compile should auto-load core export-index\n" << out_compile;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
-    const std::string run_cmd =
-        "cd \"" + temp_root.string() + "\" && \"./app\"; echo EXIT:$?";
-    auto [rc_run, out_run] = run_capture(run_cmd);
-    std::filesystem::remove_all(temp_root, ec);
-
-    if (rc_run != 0) {
-        std::cerr << "auto core run command failed\n" << out_run;
+    const std::string compile_no_core_cmd =
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main.no_core.o").string() + "\" -fno-core";
+    auto [rc_no_core, out_no_core] = run_capture(compile_no_core_cmd);
+    if (rc_no_core == 0) {
+        std::cerr << "-fno-core must disable implicit core export-index injection\n" << out_no_core;
+        std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    if (!contains(out_run, "EXIT:4")) {
-        std::cerr << "auto core exit mismatch (expected 4)\n" << out_run;
+
+    const auto missing_root = temp_root / "missing";
+    std::filesystem::create_directories(missing_root / "core", ec);
+    const std::string compile_missing_idx_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\"" +
+        " --sysroot \"" + missing_root.string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main.missing.o").string() + "\"";
+    auto [rc_missing_idx, out_missing_idx] = run_capture(compile_missing_idx_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_missing_idx == 0 || !contains(out_missing_idx, "ExportIndexMissing")) {
+        std::cerr << "missing core export-index must fail with ExportIndexMissing\n" << out_missing_idx;
         return false;
     }
     return true;
@@ -1159,7 +1232,7 @@ int main() {
     const bool ok12 = test_cross_bundle_export_runtime_call();
     const bool ok13 = test_same_bundle_multi_module_runtime_call();
     const bool ok14 = test_builtin_acts_policy_core_gate();
-    const bool ok15 = test_auto_core_prelude_for_single_pr();
+    const bool ok15 = test_auto_core_export_index_loaded_for_non_core_bundle();
     const bool ok16 = test_actor_rejected_in_no_std_profile();
     const bool ok17 = test_actor_allowed_in_freestanding_profile();
     const bool ok18 = test_hosted_actor_link_uses_clang_driver();

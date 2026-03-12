@@ -322,6 +322,17 @@ namespace parus::sir::detail {
                 bool inject_implicit_receiver = false;
                 parus::ast::ExprId receiver_eid = parus::ast::k_invalid_expr;
                 uint32_t receiver_param_index = 0xFFFF'FFFFu;
+                bool use_external_callee = false;
+                uint32_t external_callee_sym = k_invalid_symbol;
+                parus::ast::ExprId external_receiver_eid = parus::ast::k_invalid_expr;
+                if ((size_t)eid < tyck.expr_external_callee_symbol.size()) {
+                    external_callee_sym = tyck.expr_external_callee_symbol[eid];
+                    use_external_callee = (external_callee_sym != sema::SymbolTable::kNoScope &&
+                                           external_callee_sym != k_invalid_symbol);
+                }
+                if ((size_t)eid < tyck.expr_external_receiver_expr.size()) {
+                    external_receiver_eid = tyck.expr_external_receiver_expr[eid];
+                }
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
                     v.callee_decl_stmt = overload_sid;
@@ -348,11 +359,15 @@ namespace parus::sir::detail {
                         }
                     }
                 }
+                if (use_external_callee) {
+                    v.callee_sym = external_callee_sym;
+                    v.callee_decl_stmt = ast::k_invalid_stmt;
+                }
 
                 // callee
                 if (v.kind == ValueKind::kEnumCtor) {
                     v.a = k_invalid_value;
-                } else if (overload_sid != ast::k_invalid_stmt) {
+                } else if (overload_sid != ast::k_invalid_stmt || use_external_callee) {
                     v.a = k_invalid_value;
                 } else {
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
@@ -371,6 +386,17 @@ namespace parus::sir::detail {
                     recv.is_hole = false;
                     recv.span = ast.expr(receiver_eid).span;
                     recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
+                    pending_args.push_back(recv);
+                }
+                if (!inject_implicit_receiver &&
+                    use_external_callee &&
+                    external_receiver_eid != parus::ast::k_invalid_expr) {
+                    Arg recv{};
+                    recv.kind = ArgKind::kPositional;
+                    recv.has_label = false;
+                    recv.is_hole = false;
+                    recv.span = ast.expr(external_receiver_eid).span;
+                    recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, external_receiver_eid);
                     pending_args.push_back(recv);
                 }
 

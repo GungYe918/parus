@@ -385,7 +385,8 @@ namespace parusc::cli {
             << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
             << "  --apple-sdk-root <path>  Explicit Apple SDK root for Darwin linking\n"
             << "  -ffreestanding        Select freestanding runtime profile\n"
-            << "  -fno-std              Disable std runtime integration (core prelude stays enabled)\n"
+            << "  -fno-std              Disable std runtime integration\n"
+            << "  -fno-core             Disable automatic core export-index injection\n"
             << "  -O0|-O1|-O2|-O3       Optimization level\n"
             << "  --lang en|ko          Diagnostic language\n"
             << "  --context <N>         Context line count for diagnostics\n"
@@ -563,6 +564,10 @@ namespace parusc::cli {
 
             if (a == "-fno-std") {
                 out.no_std = true;
+                continue;
+            }
+            if (a == "-fno-core") {
+                out.no_core = true;
                 continue;
             }
 

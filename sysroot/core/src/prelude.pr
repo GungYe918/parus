@@ -2,7 +2,9 @@
 //
 // Minimal core prelude seed:
 // - attached method for builtin i32
-// - auto-loaded by parusc when sysroot is available
+// - exported via sysroot/core/index/core.exports.json
+
+$![Impl::Core];
 
 acts for i32 {
     def size(self) -> i32 {

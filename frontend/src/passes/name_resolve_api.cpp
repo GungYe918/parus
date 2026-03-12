@@ -17,6 +17,11 @@
         namespace_stack.reserve(8);
         std::unordered_map<std::string, std::string> import_aliases;
         import_aliases.reserve(32);
+        for (const auto& [alias, path] : opt.implicit_import_aliases) {
+            if (!alias.empty() && !path.empty()) {
+                import_aliases[alias] = path;
+            }
+        }
         init_file_context_(ast, r, root, namespace_stack, import_aliases, bag, opt);
 
         std::unordered_set<std::string> known_namespace_paths;

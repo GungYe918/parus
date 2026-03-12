@@ -1,0 +1,36 @@
+{
+  "version": 5,
+  "bundle": "core",
+  "exports": [
+    {
+      "kind": "act",
+      "path": "i32",
+      "link_name": "",
+      "module_head": "core",
+      "decl_dir": "sysroot/core/src",
+      "type_repr": "i32",
+      "inst_payload": "",
+      "decl_span": {
+        "file": "sysroot/core/src/prelude.pr",
+        "line": 1,
+        "col": 1
+      },
+      "is_export": true
+    },
+    {
+      "kind": "fn",
+      "path": "i32::size",
+      "link_name": "core_i32_size",
+      "module_head": "core",
+      "decl_dir": "sysroot/core/src",
+      "type_repr": "def(i32) -> i32",
+      "inst_payload": "parus_builtin_acts|owner=i32|member=size|self=1",
+      "decl_span": {
+        "file": "sysroot/core/src/prelude.pr",
+        "line": 3,
+        "col": 3
+      },
+      "is_export": true
+    }
+  ]
+}

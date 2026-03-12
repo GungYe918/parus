@@ -73,10 +73,9 @@ std::string run_lsp_session(
         return "failed to write input stream";
     }
 
-    std::string cmd;
+    std::string cmd = "PARUS_NO_CORE=1 ";
     if (!env_prefix.empty()) {
-        cmd += std::string(env_prefix);
-        cmd += " ";
+        cmd += std::string(env_prefix) + " ";
     }
     cmd += "PARUSC=\"" + std::string(PARUSC_BUILD_BIN) + "\" "
         "\"" + std::string(PARUSD_BUILD_BIN) + "\" --stdio < \"" + in_path.string()
@@ -192,28 +191,51 @@ bool test_parus_regression_valid_pr() {
     return true;
 }
 
-bool test_parus_core_prelude_auto_loaded() {
+bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
     const auto stamp = std::to_string(
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
-    const auto root = std::filesystem::temp_directory_path() / ("parusd-core-prelude-" + stamp);
+    const auto root = std::filesystem::temp_directory_path() / ("parusd-core-index-" + stamp);
     const auto sysroot = root / "sysroot";
-    const auto prelude = sysroot / "core" / "src" / "prelude.pr";
+    const auto core_index = sysroot / "core" / "index" / "core.exports.json";
     const auto main_pr = root / "main.pr";
 
-    const std::string prelude_text =
-        "acts for i32 {\n"
-        "  def size(self) -> i32 {\n"
-        "    return 4i32;\n"
-        "  }\n"
-        "};\n";
+    const std::string core_index_text =
+        "{\n"
+        "  \"version\": 5,\n"
+        "  \"bundle\": \"core\",\n"
+        "  \"exports\": [\n"
+        "    {\n"
+        "      \"kind\": \"act\",\n"
+        "      \"path\": \"i32\",\n"
+        "      \"link_name\": \"\",\n"
+        "      \"module_head\": \"core\",\n"
+        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"type_repr\": \"i32\",\n"
+        "      \"inst_payload\": \"\",\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 1, \"col\": 1},\n"
+        "      \"is_export\": true\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"fn\",\n"
+        "      \"path\": \"i32::size\",\n"
+        "      \"link_name\": \"core_i32_size\",\n"
+        "      \"module_head\": \"core\",\n"
+        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"type_repr\": \"def(i32) -> i32\",\n"
+        "      \"inst_payload\": \"parus_builtin_acts|owner=i32|member=size|self=1\",\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 3, \"col\": 3},\n"
+        "      \"is_export\": true\n"
+        "    }\n"
+        "  ]\n"
+        "}\n";
     const std::string main_text =
         "def main() -> i32 {\n"
         "  let x: i32 = 10i32;\n"
         "  x.size();\n"
         "  return 0i32;\n"
         "}\n";
-    if (!write_text(prelude, prelude_text) || !write_text(main_pr, main_text)) {
-        std::cerr << "failed to write core prelude fixture\n";
+    if (!write_text(core_index, core_index_text) || !write_text(main_pr, main_text)) {
+        std::cerr << "failed to write core export-index fixture\n";
         std::error_code ec{};
         std::filesystem::remove_all(root, ec);
         return false;
@@ -231,16 +253,27 @@ bool test_parus_core_prelude_auto_loaded() {
     };
 
     int rc = 0;
-    const std::string env_prefix = "PARUS_SYSROOT=\"" + sysroot.string() + "\"";
+    const std::string env_prefix =
+        "PARUS_NO_CORE=0 PARUS_SYSROOT=\"" + sysroot.string() + "\"";
     const std::string out = run_lsp_session(payloads, rc, env_prefix);
+    int rc_disabled = 0;
+    const std::string out_disabled = run_lsp_session(payloads, rc_disabled, "PARUS_NO_CORE=1");
     std::error_code ec{};
     std::filesystem::remove_all(root, ec);
     if (rc != 0) {
-        std::cerr << "core prelude LSP session failed, rc=" << rc << "\n" << out << "\n";
+        std::cerr << "core export-index LSP session failed, rc=" << rc << "\n" << out << "\n";
         return false;
     }
     if (!contains(out, "\"uri\":\"" + uri + "\",\"version\":1,\"diagnostics\":[]")) {
-        std::cerr << "expected empty diagnostics when core prelude is auto-loaded\n" << out << "\n";
+        std::cerr << "non-core bundle LSP should auto-load core export-index builtin acts\n" << out << "\n";
+        return false;
+    }
+    if (rc_disabled != 0) {
+        std::cerr << "LSP session with PARUS_NO_CORE=1 failed unexpectedly, rc=" << rc_disabled << "\n" << out_disabled << "\n";
+        return false;
+    }
+    if (contains(out_disabled, "\"uri\":\"" + uri + "\",\"version\":1,\"diagnostics\":[]")) {
+        std::cerr << "PARUS_NO_CORE=1 should disable implicit core export-index injection\n" << out_disabled << "\n";
         return false;
     }
     return true;
@@ -526,7 +559,7 @@ int main() {
     const bool ok5 = test_completion_keywords_parus_and_lei();
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_parus_module_first_bundle_context();
-    const bool ok8 = test_parus_core_prelude_auto_loaded();
+    const bool ok8 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
     const bool ok9 = test_parus_incremental_newline_falls_back_cleanly();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9) return 1;

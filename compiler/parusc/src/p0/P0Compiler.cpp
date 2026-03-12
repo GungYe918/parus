@@ -608,31 +608,58 @@ namespace parusc::p0 {
                 const std::string acts_qname = qualify_name_(ns, s.name);
                 push_export(parus::sema::SymbolKind::kAct, acts_qname, s.acts_target_type, s.is_export, s.span);
 
-                if (!s.acts_is_for) {
-                    const auto& kids = ast.stmt_children();
-                    const uint64_t begin = s.stmt_begin;
-                    const uint64_t end = begin + s.stmt_count;
-                    if (begin <= kids.size() && end <= kids.size()) {
-                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                            const auto msid = kids[s.stmt_begin + i];
-                            if (msid == parus::ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast.stmts().size()) continue;
-                            const auto& ms = ast.stmt(msid);
-                            if (ms.kind != parus::ast::StmtKind::kFnDecl || ms.name.empty()) continue;
-                            if (ms.fn_is_operator) continue;
-                            std::string member_qname = acts_qname;
-                            member_qname += "::";
-                            member_qname += std::string(ms.name);
-                            const std::string sig_repr =
-                                (ms.type != parus::ty::kInvalidType) ? types.to_string(ms.type) : std::string("def(?)");
-                            const std::string link_name = build_function_link_name_(
-                                bundle_name,
-                                member_qname,
-                                ms.fn_mode,
-                                sig_repr,
-                                ms.link_abi == parus::ast::LinkAbi::kC
-                            );
-                            push_export(parus::sema::SymbolKind::kFn, member_qname, ms.type, s.is_export, ms.span, link_name);
+                const bool owner_is_builtin =
+                    (s.acts_target_type != parus::ty::kInvalidType) &&
+                    (types.get(s.acts_target_type).kind == parus::ty::Kind::kBuiltin);
+                std::string owner_builtin_text{};
+                if (owner_is_builtin) {
+                    owner_builtin_text = types.to_string(s.acts_target_type);
+                }
+
+                const auto& kids = ast.stmt_children();
+                const uint64_t begin = s.stmt_begin;
+                const uint64_t end = begin + s.stmt_count;
+                if (begin <= kids.size() && end <= kids.size()) {
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        const auto msid = kids[s.stmt_begin + i];
+                        if (msid == parus::ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast.stmts().size()) continue;
+                        const auto& ms = ast.stmt(msid);
+                        if (ms.kind != parus::ast::StmtKind::kFnDecl || ms.name.empty()) continue;
+                        if (ms.fn_is_operator) continue;
+
+                        std::string payload{};
+                        if (s.acts_is_for && owner_is_builtin) {
+                            bool receiver_is_self = false;
+                            for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
+                                const auto& p = ast.params()[ms.param_begin + pi];
+                                if (!p.is_self) continue;
+                                receiver_is_self = true;
+                                break;
+                            }
+                            payload = "parus_builtin_acts|owner=" + owner_builtin_text +
+                                      "|member=" + std::string(ms.name) +
+                                      "|self=" + (receiver_is_self ? "1" : "0");
                         }
+
+                        std::string member_qname = acts_qname;
+                        member_qname += "::";
+                        member_qname += std::string(ms.name);
+                        const std::string sig_repr =
+                            (ms.type != parus::ty::kInvalidType) ? types.to_string(ms.type) : std::string("def(?)");
+                        const std::string link_name = build_function_link_name_(
+                            bundle_name,
+                            member_qname,
+                            ms.fn_mode,
+                            sig_repr,
+                            ms.link_abi == parus::ast::LinkAbi::kC
+                        );
+                        push_export(parus::sema::SymbolKind::kFn,
+                                    member_qname,
+                                    ms.type,
+                                    s.is_export,
+                                    ms.span,
+                                    link_name,
+                                    std::move(payload));
                     }
                 }
                 return;
@@ -1239,73 +1266,40 @@ namespace parusc::p0 {
             return v == "1" || v == "true" || v == "yes" || v == "on";
         }
 
-        std::string resolve_core_prelude_path_(const cli::Options& opt) {
-            (void)opt;
-            if (env_flag_truthy_(getenv_string_("PARUS_NO_CORE"))) {
-                return {};
-            }
-
+        std::string resolve_core_export_index_path_(const cli::Options& opt) {
             namespace fs = std::filesystem;
             std::error_code ec{};
 
             const std::string sysroot = select_sysroot_(opt);
             if (sysroot.empty()) return {};
 
-            const fs::path prelude = fs::path(sysroot) / "core" / "src" / "prelude.pr";
-            const fs::path normalized = fs::weakly_canonical(prelude, ec);
+            const fs::path idx = fs::path(sysroot) / "core" / "index" / "core.exports.json";
+            const fs::path normalized = fs::weakly_canonical(idx, ec);
             if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
                 return parus::normalize_path(normalized.string());
             }
             ec.clear();
-            if (fs::exists(prelude, ec) && !ec && fs::is_regular_file(prelude, ec)) {
-                return parus::normalize_path(prelude.string());
+            if (fs::exists(idx, ec) && !ec && fs::is_regular_file(idx, ec)) {
+                return parus::normalize_path(idx.string());
             }
             return {};
         }
 
-        void append_block_children_(const parus::ast::AstArena& ast,
-                                    parus::ast::StmtId root_sid,
-                                    std::vector<parus::ast::StmtId>& out_children) {
-            if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
-                return;
-            }
-            const auto& s = ast.stmt(root_sid);
-            if (s.kind != parus::ast::StmtKind::kBlock) {
-                out_children.push_back(root_sid);
-                return;
-            }
-            const auto& kids = ast.stmt_children();
-            const uint64_t begin = s.stmt_begin;
-            const uint64_t end = begin + s.stmt_count;
-            if (begin > kids.size() || end > kids.size()) return;
-            for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                out_children.push_back(kids[s.stmt_begin + i]);
-            }
+        bool is_core_impl_marker_stmt_(const parus::ast::AstArena& ast, const parus::ast::Stmt& s) {
+            if (s.kind != parus::ast::StmtKind::kCompilerIntrinsicDirective) return false;
+            if (s.directive_target_path_count != 0) return false; // tag form only
+            if (s.directive_key_path_count != 2) return false;
+            const auto& segs = ast.path_segs();
+            const uint64_t begin = s.directive_key_path_begin;
+            const uint64_t end = begin + s.directive_key_path_count;
+            if (begin > segs.size() || end > segs.size()) return false;
+            return segs[s.directive_key_path_begin] == "Impl" &&
+                   segs[s.directive_key_path_begin + 1] == "Core";
         }
 
-        parus::ast::StmtId merge_program_roots_(parus::ast::AstArena& ast,
-                                                parus::ast::StmtId user_root,
-                                                parus::ast::StmtId core_root,
-                                                parus::Span span) {
-            std::vector<parus::ast::StmtId> merged_children{};
-            append_block_children_(ast, user_root, merged_children);
-            append_block_children_(ast, core_root, merged_children);
-
-            parus::ast::Stmt merged{};
-            merged.kind = parus::ast::StmtKind::kBlock;
-            merged.span = span;
-            merged.stmt_begin = static_cast<uint32_t>(ast.stmt_children().size());
-            merged.stmt_count = 0;
-            for (const auto sid : merged_children) {
-                ast.add_stmt_child(sid);
-                merged.stmt_count++;
-            }
-            return ast.add_stmt(merged);
-        }
-
-        void collect_top_level_acts_decl_sids_(const parus::ast::AstArena& ast,
-                                               parus::ast::StmtId root_sid,
-                                               std::unordered_set<parus::ast::StmtId>& out) {
+        void collect_core_impl_marker_file_ids_(const parus::ast::AstArena& ast,
+                                                parus::ast::StmtId root_sid,
+                                                std::unordered_set<uint32_t>& out) {
             if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
                 return;
             }
@@ -1319,9 +1313,8 @@ namespace parusc::p0 {
                 const auto sid = kids[root.stmt_begin + i];
                 if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
                 const auto& s = ast.stmt(sid);
-                if (s.kind == parus::ast::StmtKind::kActsDecl && s.acts_is_for) {
-                    out.insert(sid);
-                }
+                if (!is_core_impl_marker_stmt_(ast, s)) continue;
+                out.insert(s.span.file_id);
             }
         }
 
@@ -1403,6 +1396,8 @@ namespace parusc::p0 {
         parus::ParserFeatureFlags parser_flags{};
         parus::Parser parser(tokens, ast, types, &bag, opt.max_errors, parser_flags);
         auto root = parser.parse_program();
+        std::unordered_set<uint32_t> core_impl_marker_file_ids{};
+        collect_core_impl_marker_file_ids_(ast, root, core_impl_marker_file_ids);
 
         if (opt.has_xparus && opt.internal.ast_dump) {
             parusc::dump::dump_stmt(ast, types, root, 0);
@@ -1417,29 +1412,20 @@ namespace parusc::p0 {
             return (diag_rc != 0) ? 1 : 0;
         }
 
-        std::unordered_set<parus::ast::StmtId> trusted_builtin_acts_decl_sids{};
-        const std::string core_prelude_path = resolve_core_prelude_path_(opt);
-        if (!core_prelude_path.empty() && core_prelude_path != current_norm) {
-            std::string core_src{};
-            std::string core_io_err{};
-            if (!parus::open_file(core_prelude_path, core_src, core_io_err)) {
-                parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, root_span);
-                std::ostringstream oss;
-                oss << "failed to load core prelude '" << core_prelude_path << "'";
-                if (!core_io_err.empty()) {
-                    oss << ": " << core_io_err;
-                }
-                d.add_arg(oss.str());
+        const bool env_no_core = env_flag_truthy_(getenv_string_("PARUS_NO_CORE"));
+        const bool disable_auto_core = opt.no_core || env_no_core;
+        const bool auto_core_injection = !disable_auto_core && (opt.bundle.bundle_name != "core");
+        std::string auto_core_export_index_path{};
+        if (auto_core_injection) {
+            auto_core_export_index_path = resolve_core_export_index_path_(opt);
+            if (auto_core_export_index_path.empty()) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kExportIndexMissing,
+                    root_span
+                );
+                d.add_arg("missing core export-index file: sysroot/core/index/core.exports.json");
                 bag.add(std::move(d));
-            } else {
-                const uint32_t core_file_id = sm.add(core_prelude_path, core_src);
-                auto core_tokens = lex_with_sm_(sm, core_file_id, &bag);
-                parus::Parser core_parser(core_tokens, ast, types, &bag, opt.max_errors, parser_flags);
-                const auto core_root = core_parser.parse_program();
-                if (!bag.has_error()) {
-                    collect_top_level_acts_decl_sids_(ast, core_root, trusted_builtin_acts_decl_sids);
-                    root = merge_program_roots_(ast, root, core_root, root_span);
-                }
             }
         }
         if (bag.has_error()) {
@@ -1504,12 +1490,19 @@ namespace parusc::p0 {
             ? inv.module_head
             : compute_module_head_(inv.bundle_root, current_norm, opt.bundle.bundle_name);
         pass_opt.name_resolve.current_source_dir_norm = parent_dir_norm_(current_norm);
+        pass_opt.name_resolve.warn_core_path_when_std = auto_core_injection && !opt.no_std;
         pass_opt.name_resolve.allowed_import_heads.clear();
         if (opt.bundle.enabled) {
             for (const auto& head : inv.module_imports) {
                 const auto top = normalize_import_head_top_(head);
                 if (!top.empty()) pass_opt.name_resolve.allowed_import_heads.insert(top);
             }
+            if (auto_core_injection) {
+                pass_opt.name_resolve.allowed_import_heads.insert("core");
+            }
+        }
+        if (auto_core_injection) {
+            pass_opt.name_resolve.implicit_import_aliases["core"] = "core";
         }
 
         std::set<std::pair<std::string, std::string>> external_seen{};
@@ -1551,7 +1544,19 @@ namespace parusc::p0 {
             }
         }
 
-        for (const auto& idx_path : inv.load_export_index_paths) {
+        std::vector<std::string> external_index_paths{};
+        external_index_paths.reserve(inv.load_export_index_paths.size() + (auto_core_export_index_path.empty() ? 0u : 1u));
+        if (!auto_core_export_index_path.empty()) {
+            external_index_paths.push_back(auto_core_export_index_path);
+        }
+        for (const auto& p : inv.load_export_index_paths) {
+            const std::string norm = parus::normalize_path(p);
+            if (std::find(external_index_paths.begin(), external_index_paths.end(), norm) == external_index_paths.end()) {
+                external_index_paths.push_back(norm);
+            }
+        }
+
+        for (const auto& idx_path : external_index_paths) {
             std::string dep_bundle{};
             std::vector<ExportSurfaceEntry> dep_entries{};
             std::string load_err{};
@@ -1584,11 +1589,11 @@ namespace parusc::p0 {
         parus::tyck::TyckResult tyck_res;
         {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
-            if (opt.bundle.enabled || !inv.load_export_index_paths.empty() || !inv.bundle_sources.empty()) {
+            if (opt.bundle.enabled || !external_index_paths.empty() || !inv.bundle_sources.empty()) {
                 tc.set_seed_symbol_table(&pres.sym);
             }
-            if (!trusted_builtin_acts_decl_sids.empty()) {
-                tc.set_trusted_builtin_acts_decl_sids(std::move(trusted_builtin_acts_decl_sids));
+            if (!core_impl_marker_file_ids.empty()) {
+                tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));
             }
             tyck_res = tc.check_program(root);
         }

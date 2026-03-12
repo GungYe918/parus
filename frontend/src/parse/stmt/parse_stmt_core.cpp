@@ -46,6 +46,14 @@ namespace parus {
         Span first = cursor_.peek().span;
         Span last  = first;
 
+        // parse-program scope flags (used by file-level directives like $![Impl::Core];)
+        const bool prev_in_program = in_parse_program_;
+        const uint32_t prev_top_count = top_level_stmt_count_;
+        in_parse_program_ = true;
+        top_level_stmt_count_ = 0;
+        core_impl_file_mode_ = false;
+        seen_core_impl_marker_ = false;
+
         while (!cursor_.at(syntax::TokenKind::kEof)) {
             if (aborted_) break;
 
@@ -54,6 +62,7 @@ namespace parus {
             if (s != ast::k_invalid_stmt) {
                 top.push_back(s);
                 last = ast_.stmt(s).span;
+                ++top_level_stmt_count_;
             }
 
             if (aborted_) break;
@@ -63,6 +72,9 @@ namespace parus {
                 cursor_.bump();
             }
         }
+
+        in_parse_program_ = prev_in_program;
+        top_level_stmt_count_ = prev_top_count;
 
         if (top.empty()) {
             first = cursor_.peek().span;
@@ -93,6 +105,7 @@ namespace parus {
         // - $[If(cond)] <item-decl>
         // - $[Foo(...)] <item-decl>
         // - $![key.path = target::path];
+        // - $![tag.path];
         if (tok.kind == K::kDollar && cursor_.peek(1).kind == K::kLBracket) {
             return parse_stmt_compiler_directive();
         }
@@ -257,16 +270,21 @@ namespace parus {
         Span key_span = start.span;
         const bool key_ok = parse_compiler_directive_path(key_begin, key_count, key_span);
 
-        if (!cursor_.eat(K::kAssign)) {
-            diag_report(diag::Code::kDirectiveIntrinsicSyntax, cursor_.peek().span, "expected '='");
-            recover_to_delim(K::kAssign, K::kRBracket, K::kSemicolon);
-            (void)cursor_.eat(K::kAssign);
+        bool has_target = false;
+        if (cursor_.eat(K::kAssign)) {
+            has_target = true;
+        } else if (!cursor_.at(K::kRBracket)) {
+            diag_report(diag::Code::kDirectiveIntrinsicSyntax, cursor_.peek().span, "expected '=' or ']'");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
         }
 
         uint32_t target_begin = 0;
         uint32_t target_count = 0;
         Span target_span = key_span;
-        const bool target_ok = parse_compiler_directive_path(target_begin, target_count, target_span);
+        bool target_ok = false;
+        if (has_target) {
+            target_ok = parse_compiler_directive_path(target_begin, target_count, target_span);
+        }
 
         if (!cursor_.eat(K::kRBracket)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
@@ -289,7 +307,24 @@ namespace parus {
             s.directive_target_path_count = target_count;
         }
         const ast::StmtId sid = ast_.add_stmt(s);
-        diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, s.span);
+
+        const bool is_tag_form = key_ok && !has_target;
+        const bool is_core_marker = is_tag_form && is_core_impl_marker_path_(key_begin, key_count);
+        if (is_core_marker) {
+            if (seen_core_impl_marker_) {
+                diag_report(diag::Code::kDirectiveCoreMarkerDuplicate, s.span);
+            } else if (!(in_parse_program_ && stmt_block_depth_ == 0 && top_level_stmt_count_ == 0)) {
+                diag_report(diag::Code::kDirectiveCoreMarkerMustBeHeader, s.span);
+            } else {
+                seen_core_impl_marker_ = true;
+                core_impl_file_mode_ = true;
+            }
+        } else {
+            // v1: non-core intrinsic directives remain policy-pending.
+            // applies to both assign form and generic tag form.
+            diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, s.span);
+        }
+
         return sid;
     }
     // '{ ... }' 블록 파싱
@@ -306,6 +341,7 @@ namespace parus {
         if (allow_macro_decl) {
             macro_scope_depth_ = prev_depth + 1;
         }
+        ++stmt_block_depth_;
 
         while (!cursor_.at(syntax::TokenKind::kRBrace) && !cursor_.at(syntax::TokenKind::kEof)) {
             if (aborted_) break;
@@ -336,6 +372,7 @@ namespace parus {
         const Token rb = cursor_.peek();
         diag_expect(syntax::TokenKind::kRBrace);
         macro_scope_depth_ = prev_depth;
+        if (stmt_block_depth_ > 0) --stmt_block_depth_;
 
         // commit (append in one contiguous slice)
         uint32_t begin = static_cast<uint32_t>(ast_.stmt_children().size());

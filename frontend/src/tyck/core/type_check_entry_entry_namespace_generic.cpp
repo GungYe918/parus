@@ -35,8 +35,10 @@ namespace parus::tyck {
         untyped_catch_binder_symbols_.clear();
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
+        external_acts_default_method_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();
         acts_default_decl_by_owner_.clear();
+        core_impl_marker_file_ids_.clear();
         acts_selection_scope_stack_.clear();
         acts_selection_by_symbol_.clear();
         field_abi_meta_by_type_.clear();
@@ -113,6 +115,8 @@ namespace parus::tyck {
         expr_enum_ctor_tag_value_cache_.assign(ast_.exprs().size(), 0);
         expr_resolved_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
+        expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
@@ -123,6 +127,8 @@ namespace parus::tyck {
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
+        result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
+        result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
@@ -149,6 +155,7 @@ namespace parus::tyck {
         // 파일 기본 nest 지시어를 먼저 반영한다.
         init_file_namespace_(program_stmt);
         collect_known_namespace_paths_(program_stmt);
+        collect_external_builtin_acts_methods_();
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
@@ -587,6 +594,8 @@ namespace parus::tyck {
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
+        result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
+        result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;

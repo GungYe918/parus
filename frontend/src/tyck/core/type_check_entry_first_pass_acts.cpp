@@ -24,6 +24,27 @@
         proto_member_fn_sid_set_.clear();
         import_alias_to_path_.clear();
         acts_named_decl_by_owner_and_name_.clear();
+        collect_core_impl_marker_file_ids_(program_stmt);
+
+        const std::string current_bundle = current_bundle_name_();
+        if (!core_impl_marker_file_ids_.empty() && current_bundle != "core") {
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = prog.stmt_begin;
+            const uint64_t end = begin + prog.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < prog.stmt_count; ++i) {
+                    const auto sid = kids[prog.stmt_begin + i];
+                    if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
+                    const auto& s = ast_.stmt(sid);
+                    if (!is_core_impl_marker_stmt_(s)) continue;
+                    std::ostringstream oss;
+                    oss << "$![Impl::Core]; is allowed only when bundle-name is 'core' (current bundle: '"
+                        << (current_bundle.empty() ? "<unknown>" : current_bundle) << "')";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
+                    err_(s.span, oss.str());
+                }
+            }
+        }
 
         auto build_fn_sig = [&](const ast::Stmt& s) -> ty::TypeId {
             ty::TypeId sig = s.type;
@@ -763,7 +784,7 @@
                 }
 
                 if (s.acts_is_for && owner_type != ty::kInvalidType) {
-                    (void)enforce_builtin_acts_policy_(sid, s, owner_type);
+                    (void)enforce_builtin_acts_policy_(s, owner_type);
                 }
 
                 const auto& kids = ast_.stmt_children();
@@ -1307,6 +1328,130 @@
         return true;
     }
 
+    std::optional<ty::TypeId> TypeChecker::parse_builtin_owner_type_from_text_(std::string_view s) const {
+        using B = ty::Builtin;
+        if (s == "bool") return types_.builtin(B::kBool);
+        if (s == "char") return types_.builtin(B::kChar);
+        if (s == "text") return types_.builtin(B::kText);
+        if (s == "i8") return types_.builtin(B::kI8);
+        if (s == "i16") return types_.builtin(B::kI16);
+        if (s == "i32") return types_.builtin(B::kI32);
+        if (s == "i64") return types_.builtin(B::kI64);
+        if (s == "i128") return types_.builtin(B::kI128);
+        if (s == "u8") return types_.builtin(B::kU8);
+        if (s == "u16") return types_.builtin(B::kU16);
+        if (s == "u32") return types_.builtin(B::kU32);
+        if (s == "u64") return types_.builtin(B::kU64);
+        if (s == "u128") return types_.builtin(B::kU128);
+        if (s == "isize") return types_.builtin(B::kISize);
+        if (s == "usize") return types_.builtin(B::kUSize);
+        if (s == "f32") return types_.builtin(B::kF32);
+        if (s == "f64") return types_.builtin(B::kF64);
+        if (s == "f128") return types_.builtin(B::kF128);
+        return std::nullopt;
+    }
+
+    bool TypeChecker::parse_external_builtin_acts_payload_(
+        std::string_view payload,
+        ty::TypeId& out_owner_type,
+        std::string& out_member_name,
+        bool& out_receiver_is_self
+    ) const {
+        out_owner_type = ty::kInvalidType;
+        out_member_name.clear();
+        out_receiver_is_self = false;
+
+        if (!payload.starts_with("parus_builtin_acts|")) return false;
+
+        std::string owner{};
+        std::string member{};
+        std::string self_flag{};
+
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view k = part.substr(0, eq);
+                const std::string_view v = part.substr(eq + 1);
+                if (k == "owner") owner.assign(v);
+                else if (k == "member") member.assign(v);
+                else if (k == "self") self_flag.assign(v);
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        if (owner.empty() || member.empty()) return false;
+        const auto owner_ty = parse_builtin_owner_type_from_text_(owner);
+        if (!owner_ty.has_value()) return false;
+
+        out_owner_type = *owner_ty;
+        out_member_name = std::move(member);
+        out_receiver_is_self = (self_flag == "1" || self_flag == "true");
+        return true;
+    }
+
+    void TypeChecker::collect_external_builtin_acts_methods_() {
+        external_acts_default_method_map_.clear();
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external) continue;
+            if (sym.kind != sema::SymbolKind::kFn) continue;
+            if (sym.external_payload.empty()) continue;
+            if (sym.declared_type == ty::kInvalidType) continue;
+
+            ty::TypeId owner_t = ty::kInvalidType;
+            std::string member_name{};
+            bool receiver_is_self = false;
+            if (!parse_external_builtin_acts_payload_(sym.external_payload, owner_t, member_name, receiver_is_self)) {
+                continue;
+            }
+
+            ExternalActsMethodDecl md{};
+            md.fn_symbol = sid;
+            md.owner_type = owner_t;
+            md.receiver_is_self = receiver_is_self;
+            external_acts_default_method_map_[owner_t][member_name].push_back(md);
+        }
+    }
+
+    bool TypeChecker::is_core_impl_marker_stmt_(const ast::Stmt& s) const {
+        if (s.kind != ast::StmtKind::kCompilerIntrinsicDirective) return false;
+        if (s.directive_target_path_count != 0) return false; // tag form only: $![Impl::Core];
+        if (s.directive_key_path_count != 2) return false;
+
+        const auto& segs = ast_.path_segs();
+        const uint64_t begin = s.directive_key_path_begin;
+        const uint64_t end = begin + s.directive_key_path_count;
+        if (begin > segs.size() || end > segs.size()) return false;
+        return segs[s.directive_key_path_begin] == "Impl" &&
+               segs[s.directive_key_path_begin + 1] == "Core";
+    }
+
+    void TypeChecker::collect_core_impl_marker_file_ids_(ast::StmtId program_stmt) {
+        core_impl_marker_file_ids_ = explicit_core_impl_marker_file_ids_;
+        if (program_stmt == ast::k_invalid_stmt || static_cast<size_t>(program_stmt) >= ast_.stmts().size()) {
+            return;
+        }
+        const auto& root = ast_.stmt(program_stmt);
+        if (root.kind != ast::StmtKind::kBlock) return;
+        const auto& kids = ast_.stmt_children();
+        const uint64_t begin = root.stmt_begin;
+        const uint64_t end = begin + root.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = 0; i < root.stmt_count; ++i) {
+            const auto sid = kids[root.stmt_begin + i];
+            if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
+            const auto& s = ast_.stmt(sid);
+            if (!is_core_impl_marker_stmt_(s)) continue;
+            core_impl_marker_file_ids_.insert(s.span.file_id);
+        }
+    }
+
     std::string TypeChecker::current_bundle_name_() const {
         const auto& syms = sym_.symbols();
         for (const auto& s : syms) {
@@ -1319,7 +1464,7 @@
         return {};
     }
 
-    bool TypeChecker::enforce_builtin_acts_policy_(ast::StmtId sid, const ast::Stmt& acts_decl, ty::TypeId owner_type) {
+    bool TypeChecker::enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type) {
         if (!acts_decl.acts_is_for) return true;
 
         ty::Builtin b = ty::Builtin::kNull;
@@ -1344,18 +1489,19 @@
             return false;
         }
 
-        const bool trusted_core_decl =
-            (sid != ast::k_invalid_stmt) &&
-            (trusted_builtin_acts_decl_sids_.find(sid) != trusted_builtin_acts_decl_sids_.end());
-
         const std::string bundle = current_bundle_name_();
-        if (!trusted_core_decl &&
-            !policy.reserved_bundle.empty() &&
-            bundle != policy.reserved_bundle) {
+        const bool bundle_ok =
+            policy.reserved_bundle.empty() ||
+            bundle == policy.reserved_bundle;
+        const bool marker_ok =
+            core_impl_marker_file_ids_.find(acts_decl.span.file_id) != core_impl_marker_file_ids_.end();
+
+        if (!bundle_ok || !marker_ok) {
             std::ostringstream oss;
             oss << "acts for builtin type '" << types_.to_string(owner_type)
-                << "' is reserved for bundle '" << policy.reserved_bundle
-                << "' (current bundle: '" << (bundle.empty() ? "<unknown>" : bundle) << "')";
+                << "' requires bundle '" << policy.reserved_bundle
+                << "' and file marker '$![Impl::Core];' (current bundle: '"
+                << (bundle.empty() ? "<unknown>" : bundle) << "')";
             diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
             err_(acts_decl.span, oss.str());
             return false;
