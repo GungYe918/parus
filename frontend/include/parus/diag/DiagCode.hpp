@@ -119,6 +119,9 @@ namespace parus::diag {
         kCImportAliasRequired,            // import "header.h" requires 'as <alias>'
         kCImportHeaderLiteralExpected,    // import "<header>" expects plain string literal
         kCImportLibClangUnavailable,      // c-import requested but libclang is unavailable
+        kCImportFnMacroSkipped,           // function-like C macro was skipped during strict promotion (warning)
+        kCImportShimCompileFailed,        // generated C shim compile failed
+        kCImportShimIrOnlyUnsupported,    // generated C shim requires object/link mode
         kCAbiCallPositionalOnly,          // C ABI call accepts positional arguments only
         kCAbiFormatStringForbidden,       // C ABI call does not allow $"..."/F"""...""" argument
         kCImportVariadicCallUnsupported,  // c variadic function calls are unsupported in v1

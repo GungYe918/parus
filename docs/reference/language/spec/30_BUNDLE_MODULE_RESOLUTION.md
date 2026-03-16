@@ -176,7 +176,11 @@ export def add(a: i32, b: i32) -> i32 {
 6. C macro import v2.2 규칙:
 6-a. object-like macro만 상수 심볼(`alias::MACRO`)로 승격한다.
 6-b. 상수 승격 대상은 literal/상수식 subset(`int/float/bool/char/string`)으로 제한한다.
-6-c. function-like macro는 메타 수집만 수행하고 호출 가능한 Parus 심볼로 승격하지 않는다.
+6-c. function-like macro는 strict subset에 한해 호출 가능한 함수 심볼(`alias::MACRO`)로 승격할 수 있다.
+6-d. strict subset은 `CALLEE(arg...)` 단일 호출식이며 각 인자는 macro parameter의 직접 전달 또는 단순 cast 전달(`(T)param`)이어야 한다.
+6-e. direct identity forwarding은 `DirectAlias`로 승격하고 shim 없이 기존 C 함수 심볼을 재사용한다.
+6-f. 인자 재배열/단순 cast forwarding은 자동 생성 C shim(`ShimForward`) 경유로 승격한다.
+6-g. `##`, `#`, statement macro(`({ ... })`), compiler extension 의존 form, variadic function-like macro는 승격 대상에서 제외하며 경고 후 건너뛴다.
 7. 익명 선언(anonymous record/enum) v2.2 규칙:
 7-a. 이름 없는 `struct/union/enum`은 synthetic internal 이름(`__anon_*`)으로 수집한다.
 7-b. typedef가 익명 선언을 가리키는 경우 동일 선언 identity를 공유하도록 연결한다.

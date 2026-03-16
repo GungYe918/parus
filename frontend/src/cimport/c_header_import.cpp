@@ -299,6 +299,221 @@ namespace parus::cimport {
             return false;
         }
 
+        static bool is_ident_token_(std::string_view tok) {
+            if (tok.empty()) return false;
+            const auto is_start = [](unsigned char ch) {
+                return ch == '_' || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+            };
+            const auto is_continue = [&](unsigned char ch) {
+                return is_start(ch) || (ch >= '0' && ch <= '9');
+            };
+            if (!is_start(static_cast<unsigned char>(tok.front()))) return false;
+            for (size_t i = 1; i < tok.size(); ++i) {
+                if (!is_continue(static_cast<unsigned char>(tok[i]))) return false;
+            }
+            return true;
+        }
+
+        static std::string join_tokens_with_space_(
+            const std::vector<std::string>& toks,
+            size_t begin,
+            size_t end
+        ) {
+            std::string out{};
+            for (size_t i = begin; i < end && i < toks.size(); ++i) {
+                if (!out.empty()) out.push_back(' ');
+                out += toks[i];
+            }
+            return out;
+        }
+
+        struct ParsedMacroCallArg {
+            int32_t param_index = -1;
+            std::string cast_prefix{};
+        };
+
+        struct ParsedMacroCall {
+            std::string callee{};
+            std::vector<ParsedMacroCallArg> args{};
+            std::string reason{};
+        };
+
+        static bool parse_macro_function_like_signature_(
+            const std::vector<std::string>& def_toks,
+            size_t& cursor,
+            ImportedMacroDecl& out
+        ) {
+            if (cursor >= def_toks.size() || def_toks[cursor] != "(") {
+                out.skip_reason = "unsupported function-like macro: missing parameter list";
+                return false;
+            }
+            ++cursor; // skip '('
+
+            while (cursor < def_toks.size()) {
+                const auto& tok = def_toks[cursor];
+                if (tok == ")") {
+                    ++cursor;
+                    return true;
+                }
+                if (tok == ",") {
+                    ++cursor;
+                    continue;
+                }
+                if (tok == "...") {
+                    out.is_variadic = true;
+                    out.skip_reason = "unsupported function-like macro: variadic parameter list";
+                    return false;
+                }
+                if (!is_ident_token_(tok)) {
+                    out.skip_reason = "unsupported function-like macro: invalid parameter token";
+                    return false;
+                }
+                out.params.push_back(tok);
+                ++cursor;
+            }
+
+            out.skip_reason = "unsupported function-like macro: unterminated parameter list";
+            return false;
+        }
+
+        static bool parse_macro_replacement_call_(
+            const std::vector<std::string>& repl_toks,
+            const ImportedMacroDecl& macro,
+            ParsedMacroCall& out
+        ) {
+            if (repl_toks.empty()) {
+                out.reason = "unsupported function-like macro: empty replacement";
+                return false;
+            }
+
+            for (const auto& t : repl_toks) {
+                if (t == "##") {
+                    out.reason = "unsupported function-like macro: token-paste (##) is excluded";
+                    return false;
+                }
+                if (t == "#") {
+                    out.reason = "unsupported function-like macro: stringize (#) is excluded";
+                    return false;
+                }
+                if (t == "{" || t == "}" || t == ";" || t == "__extension__") {
+                    out.reason = "unsupported function-like macro: statement/extension form is excluded";
+                    return false;
+                }
+            }
+
+            if (repl_toks.size() < 3 || !is_ident_token_(repl_toks[0]) || repl_toks[1] != "(") {
+                out.reason = "unsupported function-like macro: replacement must be a single function call";
+                return false;
+            }
+
+            int depth = 0;
+            size_t close_idx = std::string::npos;
+            for (size_t i = 1; i < repl_toks.size(); ++i) {
+                if (repl_toks[i] == "(") {
+                    ++depth;
+                } else if (repl_toks[i] == ")") {
+                    --depth;
+                    if (depth == 0) {
+                        close_idx = i;
+                        break;
+                    }
+                    if (depth < 0) break;
+                }
+            }
+            if (close_idx == std::string::npos || close_idx + 1 != repl_toks.size()) {
+                out.reason = "unsupported function-like macro: replacement must be one call expression";
+                return false;
+            }
+
+            out.callee = repl_toks[0];
+            std::unordered_map<std::string, int32_t> param_index{};
+            param_index.reserve(macro.params.size());
+            for (size_t i = 0; i < macro.params.size(); ++i) {
+                param_index.emplace(macro.params[i], static_cast<int32_t>(i));
+            }
+
+            int inner_depth = 0;
+            size_t arg_begin = 2;
+            auto parse_one_arg = [&](size_t b, size_t e) -> bool {
+                if (b >= e) {
+                    out.reason = "unsupported function-like macro: empty call argument";
+                    return false;
+                }
+                // trim trivial spaces/tokens (token stream normally has none)
+                while (b < e && repl_toks[b].empty()) ++b;
+                while (e > b && repl_toks[e - 1].empty()) --e;
+                if (b >= e) {
+                    out.reason = "unsupported function-like macro: empty call argument";
+                    return false;
+                }
+
+                ParsedMacroCallArg arg{};
+                if ((e - b) == 1u) {
+                    const auto it = param_index.find(repl_toks[b]);
+                    if (it == param_index.end()) {
+                        out.reason = "unsupported function-like macro: call arg must be macro parameter";
+                        return false;
+                    }
+                    arg.param_index = it->second;
+                    out.args.push_back(std::move(arg));
+                    return true;
+                }
+
+                // simple cast forwarding: ( <type tokens> ) <param>
+                if (repl_toks[b] != "(") {
+                    out.reason = "unsupported function-like macro: only direct or simple-cast forwarding is allowed";
+                    return false;
+                }
+                int cast_depth = 0;
+                size_t cast_close = std::string::npos;
+                for (size_t i = b; i < e; ++i) {
+                    if (repl_toks[i] == "(") ++cast_depth;
+                    else if (repl_toks[i] == ")") {
+                        --cast_depth;
+                        if (cast_depth == 0) {
+                            cast_close = i;
+                            break;
+                        }
+                    }
+                    if (cast_depth < 0) break;
+                }
+                if (cast_close == std::string::npos || cast_close + 1 != (e - 1)) {
+                    out.reason = "unsupported function-like macro: only (Type)param cast form is allowed";
+                    return false;
+                }
+                if (cast_close <= b + 1) {
+                    out.reason = "unsupported function-like macro: empty cast type";
+                    return false;
+                }
+                const auto it = param_index.find(repl_toks[e - 1]);
+                if (it == param_index.end()) {
+                    out.reason = "unsupported function-like macro: cast argument must end with macro parameter";
+                    return false;
+                }
+                arg.param_index = it->second;
+                arg.cast_prefix = join_tokens_with_space_(repl_toks, b, cast_close + 1);
+                out.args.push_back(std::move(arg));
+                return true;
+            };
+
+            for (size_t i = 2; i < close_idx; ++i) {
+                if (repl_toks[i] == "(") ++inner_depth;
+                else if (repl_toks[i] == ")") --inner_depth;
+                else if (repl_toks[i] == "," && inner_depth == 0) {
+                    if (!parse_one_arg(arg_begin, i)) return false;
+                    arg_begin = i + 1;
+                }
+            }
+            if (arg_begin < close_idx || (close_idx == 2 && arg_begin == 2)) {
+                if (!(close_idx == 2 && arg_begin == 2)) {
+                    if (!parse_one_arg(arg_begin, close_idx)) return false;
+                } else {
+                    // empty argument list is valid
+                }
+            }
+            return true;
+        }
+
         static std::string ensure_synthetic_name_(
             std::unordered_map<std::string, std::string>& map,
             uint32_t& counter,
@@ -752,10 +967,15 @@ namespace parus::cimport {
             fn.api.name = name;
             fn.api.link_name = name;
             fn.api.type_repr = std::move(type_repr);
+            fn.api.c_return_type = to_std_string_(clang_getTypeSpelling(clang_getResultType(fn_ty)));
             fn.api.is_c_abi = true;
             fn.api.is_variadic = variadic;
             fn.arg_type_reprs = arg_repr;
             fn.ret_type_repr = ret_repr;
+            fn.api.c_arg_types.reserve(arg_types.size());
+            for (const auto arg_ty : arg_types) {
+                fn.api.c_arg_types.push_back(to_std_string_(clang_getTypeSpelling(arg_ty)));
+            }
 
             if (!arg_types.empty() && is_c_string_param_(arg_types[0])) {
                 if (variadic) {
@@ -811,22 +1031,46 @@ namespace parus::cimport {
                     break;
                 }
             }
-
-            std::string replacement{};
+            std::vector<std::string> def_toks{};
+            def_toks.reserve(token_count > begin ? token_count - begin : 0u);
             for (unsigned i = begin; i < token_count; ++i) {
-                const std::string tok = to_std_string_(clang_getTokenSpelling(ctx.tu, tokens[i]));
+                std::string tok = to_std_string_(clang_getTokenSpelling(ctx.tu, tokens[i]));
                 if (tok.empty()) continue;
-                if (!replacement.empty()) replacement.push_back(' ');
-                replacement += tok;
+                def_toks.push_back(std::move(tok));
             }
             clang_disposeTokens(ctx.tu, tokens, token_count);
 
             if (!out.is_function_like) {
+                const std::string replacement = join_tokens_with_space_(def_toks, 0, def_toks.size());
                 ImportedConstKind kind = ImportedConstKind::kNone;
                 std::string value_text{};
                 if (try_parse_macro_const_value_(replacement, kind, value_text)) {
                     out.const_kind = kind;
                     out.value_text = std::move(value_text);
+                }
+            } else {
+                size_t cursor = 0;
+                if (parse_macro_function_like_signature_(def_toks, cursor, out) &&
+                    !out.is_variadic) {
+                    std::vector<std::string> repl_toks{};
+                    repl_toks.reserve(def_toks.size() > cursor ? def_toks.size() - cursor : 0u);
+                    for (size_t i = cursor; i < def_toks.size(); ++i) {
+                        repl_toks.push_back(def_toks[i]);
+                    }
+
+                    ParsedMacroCall parsed{};
+                    if (parse_macro_replacement_call_(repl_toks, out, parsed)) {
+                        out.promote_callee_name = std::move(parsed.callee);
+                        out.promote_call_args.reserve(parsed.args.size());
+                        for (const auto& pa : parsed.args) {
+                            ImportedMacroCallArg a{};
+                            a.param_index = pa.param_index;
+                            a.cast_prefix = pa.cast_prefix;
+                            out.promote_call_args.push_back(std::move(a));
+                        }
+                    } else {
+                        out.skip_reason = std::move(parsed.reason);
+                    }
                 }
             }
 
@@ -1008,6 +1252,100 @@ namespace parus::cimport {
                 one.api.variadic_sibling_name = cand.api.name;
                 break;
             }
+        }
+
+        // Promote strictly-convertible function-like macros:
+        //   - DirectAlias:  MACRO(a,b) -> callee(a,b)
+        //   - ShimForward:  MACRO(y,x) -> callee(x,y) or cast forwarding
+        std::unordered_multimap<std::string, size_t> fn_idx_by_name{};
+        fn_idx_by_name.reserve(collected_fns.size() * 2u + 1u);
+        for (size_t i = 0; i < collected_fns.size(); ++i) {
+            fn_idx_by_name.emplace(collected_fns[i].api.name, i);
+        }
+
+        for (auto& mc : out.macros) {
+            if (!mc.is_function_like) continue;
+            if (!mc.skip_reason.empty()) continue;
+            if (mc.promote_callee_name.empty()) {
+                mc.skip_reason = "unsupported function-like macro: unresolved callee";
+                continue;
+            }
+
+            const auto range = fn_idx_by_name.equal_range(mc.promote_callee_name);
+            const CollectedFnDecl* selected = nullptr;
+            for (auto it = range.first; it != range.second; ++it) {
+                const auto& cand = collected_fns[it->second];
+                if (cand.api.is_variadic) continue;
+                if (cand.arg_type_reprs.size() != mc.promote_call_args.size()) continue;
+                if (cand.api.c_arg_types.size() != mc.promote_call_args.size()) continue;
+                selected = &cand;
+                break;
+            }
+            if (selected == nullptr) {
+                mc.skip_reason = "unsupported function-like macro: callee function not found or variadic";
+                continue;
+            }
+
+            if (mc.params.size() != selected->arg_type_reprs.size()) {
+                mc.skip_reason = "unsupported function-like macro: parameter count mismatch";
+                continue;
+            }
+
+            std::vector<uint32_t> param_use(mc.params.size(), 0u);
+            mc.promote_param_type_reprs.assign(mc.params.size(), std::string{});
+            mc.promote_param_c_types.assign(mc.params.size(), std::string{});
+
+            bool has_cast = false;
+            bool identity_order = true;
+            bool invalid = false;
+            for (size_t ai = 0; ai < mc.promote_call_args.size(); ++ai) {
+                const auto& call_arg = mc.promote_call_args[ai];
+                if (call_arg.param_index < 0 ||
+                    static_cast<size_t>(call_arg.param_index) >= mc.params.size()) {
+                    invalid = true;
+                    break;
+                }
+                const size_t pi = static_cast<size_t>(call_arg.param_index);
+                ++param_use[pi];
+                if (param_use[pi] > 1u) {
+                    invalid = true;
+                    break;
+                }
+                mc.promote_param_type_reprs[pi] = selected->arg_type_reprs[ai];
+                mc.promote_param_c_types[pi] = selected->api.c_arg_types[ai];
+                if (!call_arg.cast_prefix.empty()) has_cast = true;
+                if (pi != ai) identity_order = false;
+            }
+            if (invalid) {
+                mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
+                continue;
+            }
+            for (size_t i = 0; i < param_use.size(); ++i) {
+                if (param_use[i] != 1u ||
+                    mc.promote_param_type_reprs[i].empty() ||
+                    mc.promote_param_c_types[i].empty()) {
+                    invalid = true;
+                    break;
+                }
+            }
+            if (invalid) {
+                mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
+                continue;
+            }
+
+            mc.promote_callee_link_name = selected->api.link_name;
+            mc.promote_c_return_type = selected->api.c_return_type;
+            mc.promote_type_repr = "def(";
+            for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
+                if (i) mc.promote_type_repr += ", ";
+                mc.promote_type_repr += mc.promote_param_type_reprs[i];
+            }
+            mc.promote_type_repr += ") -> ";
+            mc.promote_type_repr += selected->ret_type_repr;
+
+            mc.promote_kind = (identity_order && !has_cast)
+                ? ImportedMacroPromoteKind::kDirectAlias
+                : ImportedMacroPromoteKind::kShimForward;
         }
 
         out.functions.reserve(collected_fns.size());

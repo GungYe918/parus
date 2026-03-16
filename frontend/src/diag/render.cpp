@@ -125,6 +125,9 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "CImportAliasRequired";
             case Code::kCImportHeaderLiteralExpected: return "CImportHeaderLiteralExpected";
             case Code::kCImportLibClangUnavailable: return "CImportLibClangUnavailable";
+            case Code::kCImportFnMacroSkipped: return "CImportFnMacroSkipped";
+            case Code::kCImportShimCompileFailed: return "CImportShimCompileFailed";
+            case Code::kCImportShimIrOnlyUnsupported: return "CImportShimIrOnlyUnsupported";
             case Code::kCAbiCallPositionalOnly: return "CAbiCallPositionalOnly";
             case Code::kCAbiFormatStringForbidden: return "CAbiFormatStringForbidden";
             case Code::kCImportVariadicCallUnsupported: return "CImportVariadicCallUnsupported";
@@ -467,6 +470,9 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "c-header import requires alias form: import \"Header.h\" as alias;";
             case Code::kCImportHeaderLiteralExpected: return "c-header import expects plain string literal: import \"Header.h\" as alias;";
             case Code::kCImportLibClangUnavailable: return "c-header import is unavailable because libclang is not configured";
+            case Code::kCImportFnMacroSkipped: return "function-like C macro was skipped under strict promotion rules";
+            case Code::kCImportShimCompileFailed: return "failed to compile generated c-import shim";
+            case Code::kCImportShimIrOnlyUnsupported: return "generated c-import shim is not supported in IR-only emit mode";
             case Code::kCAbiCallPositionalOnly: return "C ABI calls allow positional arguments only";
             case Code::kCAbiFormatStringForbidden: return "C ABI call does not allow format-string literals ($\"...\"/F\"\"\"...\"\")";
             case Code::kCImportVariadicCallUnsupported: return "c variadic function calls are not supported in v1";
@@ -815,6 +821,9 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "C 헤더 import는 별칭이 필요합니다: import \"Header.h\" as alias;";
             case Code::kCImportHeaderLiteralExpected: return "C 헤더 import는 일반 문자열 리터럴만 허용합니다: import \"Header.h\" as alias;";
             case Code::kCImportLibClangUnavailable: return "libclang이 구성되지 않아 C 헤더 import를 사용할 수 없습니다";
+            case Code::kCImportFnMacroSkipped: return "엄격 승격 규칙에 맞지 않아 함수형 C 매크로를 건너뛰었습니다";
+            case Code::kCImportShimCompileFailed: return "자동 생성된 c-import shim 컴파일에 실패했습니다";
+            case Code::kCImportShimIrOnlyUnsupported: return "자동 생성된 c-import shim은 IR 전용 출력 모드에서 사용할 수 없습니다";
             case Code::kCAbiCallPositionalOnly: return "C ABI 호출은 positional 인자만 허용합니다";
             case Code::kCAbiFormatStringForbidden: return "C ABI 호출 인자에서는 $\"...\"/F\"\"\"...\"\"\" 형식을 사용할 수 없습니다";
             case Code::kCImportVariadicCallUnsupported: return "v1에서는 C 가변 인자 함수 호출을 지원하지 않습니다";

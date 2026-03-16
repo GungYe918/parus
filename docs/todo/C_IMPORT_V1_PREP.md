@@ -20,7 +20,7 @@
 | typedef (scalar/pointer/record alias) | supported |
 | function pointer typedef | partial |
 | object-like macro | partial (constant-only) |
-| function-like macro | not supported |
+| function-like macro | partial (strict promotable subset only) |
 | union | partial (`manual[get/set]` gated dot access) |
 | bitfield | not supported |
 | anonymous record/enum | partial (synthetic `__anon_*` name import) |
@@ -41,9 +41,15 @@
 - Add C ABI backend tests for packing and cross-compiler parity.
 
 ### 3) function-like macro support
-- Parse preprocessed macro definitions through libclang PP callbacks.
-- Restrict to side-effect-safe expansions or route as intrinsic wrappers.
-- Add deterministic diagnostics for unsupported token-pasting/stringizing.
+- Current v2.2+ strict mode:
+  - Promote only single-call forwarding forms (`CALLEE(args...)`).
+  - Argument forms are limited to direct parameter forwarding or simple cast forwarding (`(T)param`).
+  - `DirectAlias` uses original C symbol without shim.
+  - `ShimForward` auto-generates a C shim object and links it.
+- Excluded in this round:
+  - token paste/stringize (`##`, `#`)
+  - statement macro / GNU extension dependent macro
+  - variadic function-like macro
 
 ### 4) function-pointer alias full support
 - Extend function type identity in symbol and overload resolution.

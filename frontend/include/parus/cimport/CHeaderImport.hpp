@@ -27,10 +27,23 @@ namespace parus::cimport {
         kString,
     };
 
+    enum class ImportedMacroPromoteKind : uint8_t {
+        kNone = 0,
+        kDirectAlias,
+        kShimForward,
+    };
+
+    struct ImportedMacroCallArg {
+        int32_t param_index = -1;
+        std::string cast_prefix{}; // e.g. "(int)" for simple cast forwarding
+    };
+
     struct ImportedFunctionDecl {
         std::string name{};
         std::string link_name{};
         std::string type_repr{};
+        std::string c_return_type{};
+        std::vector<std::string> c_arg_types{};
         bool is_c_abi = true;
         bool is_variadic = false;
         CFormatKind format_kind = CFormatKind::kNone;
@@ -83,8 +96,20 @@ namespace parus::cimport {
     struct ImportedMacroDecl {
         std::string name{};
         bool is_function_like = false;
+        bool is_variadic = false;
         ImportedConstKind const_kind = ImportedConstKind::kNone;
         std::string value_text{};
+
+        ImportedMacroPromoteKind promote_kind = ImportedMacroPromoteKind::kNone;
+        std::string promote_callee_name{};
+        std::string promote_callee_link_name{};
+        std::string promote_type_repr{};
+        std::string promote_c_return_type{};
+        std::vector<std::string> params{};
+        std::vector<std::string> promote_param_type_reprs{};
+        std::vector<std::string> promote_param_c_types{};
+        std::vector<ImportedMacroCallArg> promote_call_args{};
+        std::string skip_reason{};
     };
 
     struct HeaderImportResult {
