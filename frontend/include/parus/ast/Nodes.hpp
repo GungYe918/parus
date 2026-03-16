@@ -483,6 +483,7 @@ namespace parus::ast {
     enum class UseKind : uint8_t {
         kError,
         kImport,       // import foo [as alias];
+        kImportCHeader, // import "foo.h" as alias;
         kTypeAlias,    // use NewT = u32;
         kPathAlias,    // use A::B = name;
         kNestAlias,    // use nest a::b [as alias];

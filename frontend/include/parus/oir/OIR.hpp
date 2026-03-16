@@ -223,6 +223,8 @@ namespace parus::oir {
         std::string source_name;
         FunctionAbi abi = FunctionAbi::Parus;
         bool is_extern = false;
+        bool is_c_variadic = false;
+        uint32_t c_fixed_param_count = 0;
         bool is_pure = false;
         bool is_comptime = false;
         bool is_const = false;

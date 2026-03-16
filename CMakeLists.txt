@@ -20,6 +20,13 @@ option(PARUS_BUILD_PARUSD "Build Parus standalone LSP server (parusd)" ON)
 option(PARUS_BUILD_LEI "Build LEI standalone DSL project under tools/Lei" ON)
 option(PARUS_BUILD_ORCHESTRATOR "Build Parus orchestrator CLI (parus)" ON)
 
+# C header import preparation (libclang)
+option(PARUS_ENABLE_CIMPORT "Enable libclang-backed C import preparation paths" ON)
+option(PARUS_CIMPORT_REQUIRE_LIBCLANG "Fail configure when libclang is not found" OFF)
+set(PARUS_LIBCLANG_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/third_party/libclang" CACHE PATH "Root directory for vendored libclang headers/libraries")
+set(PARUS_LIBCLANG_INCLUDE_DIR "" CACHE PATH "Override include directory that contains clang-c/Index.h")
+set(PARUS_LIBCLANG_LIBRARY "" CACHE FILEPATH "Override libclang library path")
+
 # Backend module switches
 option(PARUS_ENABLE_BACKEND "Build Parus backend modules" ON)
 option(PARUS_ENABLE_JIT_BACKEND "Build JIT backend module" ON)
@@ -42,6 +49,9 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 enable_testing()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/ParusLibClang.cmake)
+parus_configure_libclang()
 
 # Frontend only: AST -> SIR -> OIR
 add_subdirectory(frontend)

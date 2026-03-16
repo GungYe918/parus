@@ -1308,6 +1308,312 @@ bool test_import_keyword_path_rejected() {
     return true;
 }
 
+bool test_c_header_import_local_non_variadic() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-local";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Circle.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_CIRCLE_H\n"
+        "#define PARUS_CIRCLE_H\n"
+        "int c_add(int a, int b);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Circle.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::c_add(1i32, 2i32);\n"
+        "}\n";
+
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write c-header import local test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc != 0) {
+        if (contains(out, "CImportLibClangUnavailable")) {
+            return true;
+        }
+        std::cerr << "local non-variadic c-header import compile failed\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_stdio_variadic_fixed_arg_count_checked() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-stdio";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto stdio_h = temp_root / "stdio.h";
+    const std::string header_src =
+        "#ifndef PARUS_STDIO_H\n"
+        "#define PARUS_STDIO_H\n"
+        "int printf(const char* fmt, ...);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  stdio::printf();\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write c-header import stdio test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "stdio::printf() without fmt should fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "TypeArgCountMismatch")) {
+        std::cerr << "stdio::printf() rejection must report fixed-arg count mismatch\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_stdio_format_bridge_single_arg() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-stdio-bridge";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto stdio_h = temp_root / "stdio.h";
+    const std::string header_src =
+        "#ifndef PARUS_STDIO_H\n"
+        "#define PARUS_STDIO_H\n"
+        "int printf(const char* fmt, ...);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  stdio::printf($\"sum={1i32 + 2i32}\");\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write c-header format bridge test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "stdio::printf($\"...\") format bridge should typecheck\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_include_dir_option() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-include-dir";
+    const auto include_dir = temp_root / "include";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(include_dir, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = include_dir / "Math.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_MATH_H\n"
+        "#define PARUS_MATH_H\n"
+        "int c_add(int a, int b);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Math.h\" as m;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return m::c_add(1i32, 2i32);\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write include-dir cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- -I \"" + include_dir.string() + "\" \"" +
+        main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "-I include-dir cimport should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_union_manual_get_gate() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-union-get";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "U.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_UNION_U_H\n"
+        "#define PARUS_UNION_U_H\n"
+        "union U { int a; int b; };\n"
+        "union U make_u(void);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"U.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set u = c::make_u();\n"
+        "  set x = u.a;\n"
+        "  return x;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write union get-gate cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "union field read outside manual[get|set] must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "manual[get] or manual[set]")) {
+        std::cerr << "union read gate diagnostic mismatch\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_union_manual_set_gate() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-union-set";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "U.h";
+    const auto main_fail = temp_root / "main_fail.pr";
+    const auto main_ok = temp_root / "main_ok.pr";
+    const std::string header_src =
+        "#ifndef PARUS_UNION_U_H\n"
+        "#define PARUS_UNION_U_H\n"
+        "union U { int a; int b; };\n"
+        "union U make_u(void);\n"
+        "#endif\n";
+    const std::string fail_src =
+        "import \"U.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut u = c::make_u();\n"
+        "  manual[get] {\n"
+        "    u.a = 1i32;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    const std::string ok_src =
+        "import \"U.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut u = c::make_u();\n"
+        "  manual[set] {\n"
+        "    u.a = 1i32;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_fail, fail_src) || !write_text(main_ok, ok_src)) {
+        std::cerr << "failed to write union set-gate cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_fail, "CImportLibClangUnavailable") || contains(out_ok, "CImportLibClangUnavailable")) {
+        return rc_fail != 0;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "union write with manual[get] must fail\n" << out_fail;
+        return false;
+    }
+    if (!contains(out_fail, "manual[set]")) {
+        std::cerr << "union write gate diagnostic mismatch\n" << out_fail;
+        return false;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "union write with manual[set] should pass\n" << out_ok;
+        return false;
+    }
+    return true;
+}
+
 bool test_actor_rejected_in_no_std_profile() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -1559,14 +1865,20 @@ int main() {
     const bool ok19 = test_bundle_grandparent_relative_import_resolves();
     const bool ok20 = test_core_marker_bare_use_special_form();
     const bool ok21 = test_import_keyword_path_rejected();
-    const bool ok22 = test_actor_rejected_in_no_std_profile();
-    const bool ok23 = test_actor_allowed_in_freestanding_profile();
-    const bool ok24 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok25 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok22 = test_c_header_import_local_non_variadic();
+    const bool ok23 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
+    const bool ok24 = test_c_header_import_stdio_format_bridge_single_arg();
+    const bool ok25 = test_c_header_import_include_dir_option();
+    const bool ok26 = test_c_header_import_union_manual_get_gate();
+    const bool ok27 = test_c_header_import_union_manual_set_gate();
+    const bool ok28 = test_actor_rejected_in_no_std_profile();
+    const bool ok29 = test_actor_allowed_in_freestanding_profile();
+    const bool ok30 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok31 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
-        !ok24 || !ok25) {
+        !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31) {
         return 1;
     }
 

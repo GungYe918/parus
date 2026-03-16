@@ -139,6 +139,44 @@ namespace {
         return ok;
     }
 
+    static bool test_cimport_include_options_parse_() {
+        const auto opt = parse_({
+            "-I", "inc/a",
+            "-Iinc/b",
+            "-isystem", "sys/a",
+            "-isystemsys/b",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(opt.ok, "cimport include options parse must succeed");
+        ok &= require_(opt.cimport_include_dirs.size() == 2, "-I dirs must collect both forms");
+        ok &= require_(opt.cimport_isystem_dirs.size() == 2, "-isystem dirs must collect both forms");
+        if (opt.cimport_include_dirs.size() == 2) {
+            ok &= require_(opt.cimport_include_dirs[0] == "inc/a", "first -I dir mismatch");
+            ok &= require_(opt.cimport_include_dirs[1] == "inc/b", "second -I dir mismatch");
+        }
+        if (opt.cimport_isystem_dirs.size() == 2) {
+            ok &= require_(opt.cimport_isystem_dirs[0] == "sys/a", "first -isystem dir mismatch");
+            ok &= require_(opt.cimport_isystem_dirs[1] == "sys/b", "second -isystem dir mismatch");
+        }
+        return ok;
+    }
+
+    static bool test_cimport_include_option_missing_path_() {
+        const auto opt_i = parse_({
+            "-I",
+        });
+        const auto opt_sys = parse_({
+            "-isystem",
+        });
+
+        bool ok = true;
+        ok &= require_(!opt_i.ok, "-I without path must fail parsing");
+        ok &= require_(!opt_sys.ok, "-isystem without path must fail parsing");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -154,6 +192,8 @@ int main() {
         {"macro_token_experimental_removed", test_macro_token_experimental_removed_},
         {"runtime_profile_flags_parse", test_runtime_profile_flags_parse_},
         {"runtime_profile_conflict", test_runtime_profile_conflict_},
+        {"cimport_include_options_parse", test_cimport_include_options_parse_},
+        {"cimport_include_option_missing_path", test_cimport_include_option_missing_path_},
     };
 
     int failed = 0;

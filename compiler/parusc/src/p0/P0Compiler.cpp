@@ -5,6 +5,7 @@
 
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
+#include <parus/cimport/CHeaderImport.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
@@ -1356,6 +1357,85 @@ namespace parusc::p0 {
             }
         }
 
+        struct CHeaderImportSpec {
+            std::string header{};
+            std::string alias{};
+            parus::Span span{};
+        };
+
+        void collect_c_header_imports_(const parus::ast::AstArena& ast,
+                                       parus::ast::StmtId root_sid,
+                                       std::vector<CHeaderImportSpec>& out) {
+            if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+                return;
+            }
+            const auto& root = ast.stmt(root_sid);
+            if (root.kind != parus::ast::StmtKind::kBlock) return;
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = root.stmt_begin;
+            const uint64_t end = begin + root.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return;
+
+            for (uint32_t i = 0; i < root.stmt_count; ++i) {
+                const auto sid = kids[root.stmt_begin + i];
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+                const auto& s = ast.stmt(sid);
+                if (s.kind != parus::ast::StmtKind::kUse) continue;
+                if (s.use_kind != parus::ast::UseKind::kImportCHeader) continue;
+                if (s.use_rhs_ident.empty()) continue;
+
+                CHeaderImportSpec one{};
+                if (s.use_path_count > 0) {
+                    const auto& segs = ast.path_segs();
+                    if (s.use_path_begin + s.use_path_count > segs.size()) continue;
+                    one.header = std::string(segs[s.use_path_begin]);
+                } else if (!s.use_name.empty()) {
+                    one.header = std::string(s.use_name);
+                } else {
+                    continue;
+                }
+                one.alias = std::string(s.use_rhs_ident);
+                one.span = s.span;
+                out.push_back(std::move(one));
+            }
+        }
+
+        std::string make_c_import_payload_(
+            std::string_view header,
+            std::string_view alias,
+            const parus::cimport::ImportedFunctionDecl& fn
+        ) {
+            auto format_kind_text = [](parus::cimport::CFormatKind k) -> std::string_view {
+                switch (k) {
+                    case parus::cimport::CFormatKind::kFmtVarargs: return "fmt_varargs";
+                    case parus::cimport::CFormatKind::kFmtVList: return "fmt_vlist";
+                    case parus::cimport::CFormatKind::kNone:
+                    default:
+                        return "none";
+                }
+            };
+
+            std::string out = "parus_c_import|header=";
+            out += std::string(header);
+            out += "|is_c_abi=";
+            out += fn.is_c_abi ? "1" : "0";
+            out += "|variadic=";
+            out += fn.is_variadic ? "1" : "0";
+            out += "|format=";
+            out += std::string(format_kind_text(fn.format_kind));
+            out += "|fmt_idx=";
+            out += std::to_string(fn.fmt_param_index);
+            out += "|va_idx=";
+            out += std::to_string(fn.va_list_param_index);
+            if (!fn.variadic_sibling_name.empty()) {
+                out += "|sibling=";
+                out += std::string(alias);
+                out += "::";
+                out += fn.variadic_sibling_name;
+            }
+            return out;
+        }
+
         std::string select_apple_sdk_root_(const cli::Options& opt) {
             if (!opt.apple_sdk_root.empty()) return opt.apple_sdk_root;
             return getenv_string_("PARUS_APPLE_SDK_ROOT");
@@ -1450,6 +1530,9 @@ namespace parusc::p0 {
             return (diag_rc != 0) ? 1 : 0;
         }
 
+        std::vector<CHeaderImportSpec> c_header_imports{};
+        collect_c_header_imports_(ast, root, c_header_imports);
+
         const bool env_no_core = env_flag_truthy_(getenv_string_("PARUS_NO_CORE"));
         const bool disable_auto_core = opt.no_core || env_no_core;
         const bool auto_core_injection = !disable_auto_core && (opt.bundle.bundle_name != "core");
@@ -1468,6 +1551,103 @@ namespace parusc::p0 {
         if (bag.has_error() || !type_resolve.ok) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0 || !type_resolve.ok) ? 1 : 0;
+        }
+
+        std::vector<ExportSurfaceEntry> cimport_surface{};
+        if (!c_header_imports.empty()) {
+            std::vector<std::string> include_dirs{};
+            const std::string current_dir = parent_dir_norm_(current_norm);
+            if (!current_dir.empty()) include_dirs.push_back(current_dir);
+            for (const auto& d : opt.cimport_include_dirs) {
+                if (!d.empty()) include_dirs.push_back(parus::normalize_path(d));
+            }
+            std::vector<std::string> isystem_dirs{};
+            for (const auto& d : opt.cimport_isystem_dirs) {
+                if (!d.empty()) isystem_dirs.push_back(parus::normalize_path(d));
+            }
+
+            std::unordered_set<std::string> cimport_seen{};
+            for (const auto& spec : c_header_imports) {
+                const auto imported = parus::cimport::import_c_header_functions(
+                    current_norm, spec.header, include_dirs, isystem_dirs);
+                if (imported.error != parus::cimport::ImportErrorKind::kNone) {
+                    if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
+                        parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kCImportLibClangUnavailable, spec.span);
+                        bag.add(std::move(d));
+                    } else {
+                        parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, spec.span);
+                        std::string msg = "failed to import C header '" + spec.header + "'";
+                        if (!imported.error_text.empty()) {
+                            msg += ": " + imported.error_text;
+                        }
+                        d.add_arg(msg);
+                        bag.add(std::move(d));
+                    }
+                    continue;
+                }
+                if (imported.functions.empty()) {
+                    parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, spec.span);
+                    d.add_arg("no supported C declarations were imported from header '" + spec.header + "'");
+                    bag.add(std::move(d));
+                    continue;
+                }
+
+                for (const auto& fn : imported.functions) {
+                    if (fn.name.empty() || fn.type_repr.empty()) continue;
+                    if (fn.link_name.empty()) continue;
+                    const std::string path = spec.alias + "::" + fn.name;
+                    if (!cimport_seen.insert(path).second) continue;
+
+                    ExportSurfaceEntry e{};
+                    e.kind = parus::sema::SymbolKind::kFn;
+                    e.kind_text = "fn";
+                    e.path = path;
+                    e.link_name = fn.link_name;
+                    e.module_head.clear();
+                    e.decl_dir = current_dir;
+                    e.type_repr = fn.type_repr;
+                    e.inst_payload = make_c_import_payload_(spec.header, spec.alias, fn);
+                    e.decl_file = current_norm;
+                    e.decl_line = 1;
+                    e.decl_col = 1;
+                    e.decl_bundle = "__cimport__";
+                    e.is_export = true;
+                    cimport_surface.push_back(std::move(e));
+                }
+
+                for (const auto& un : imported.unions) {
+                    if (un.name.empty()) continue;
+                    const std::string path = spec.alias + "::" + un.name;
+                    if (!cimport_seen.insert(path + "|type").second) continue;
+
+                    std::string payload = "parus_c_import_union|header=" + spec.header;
+                    payload += "|size=" + std::to_string(un.size_bytes);
+                    payload += "|align=" + std::to_string(un.align_bytes);
+                    payload += "|fields=";
+                    for (size_t fi = 0; fi < un.fields.size(); ++fi) {
+                        if (fi) payload += ",";
+                        payload += un.fields[fi].name;
+                        payload += ":";
+                        payload += un.fields[fi].type_repr;
+                    }
+
+                    ExportSurfaceEntry e{};
+                    e.kind = parus::sema::SymbolKind::kType;
+                    e.kind_text = "type";
+                    e.path = path;
+                    e.link_name.clear();
+                    e.module_head.clear();
+                    e.decl_dir = current_dir;
+                    e.type_repr = path;
+                    e.inst_payload = std::move(payload);
+                    e.decl_file = current_norm;
+                    e.decl_line = 1;
+                    e.decl_col = 1;
+                    e.decl_bundle = "__cimport__";
+                    e.is_export = true;
+                    cimport_surface.push_back(std::move(e));
+                }
+            }
         }
 
         std::vector<ExportSurfaceEntry> bundle_surface{};
@@ -1569,6 +1749,10 @@ namespace parusc::p0 {
             }
         }
 
+        for (const auto& e : cimport_surface) {
+            add_external(e, /*same_bundle=*/false);
+        }
+
         std::vector<std::string> external_index_paths{};
         external_index_paths.reserve(inv.load_export_index_paths.size() + (auto_core_export_index_path.empty() ? 0u : 1u));
         if (!auto_core_export_index_path.empty()) {
@@ -1614,7 +1798,9 @@ namespace parusc::p0 {
         parus::tyck::TyckResult tyck_res;
         {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
-            if (opt.bundle.enabled || !external_index_paths.empty() || !inv.bundle_sources.empty()) {
+            if (opt.bundle.enabled ||
+                !inv.bundle_sources.empty() ||
+                !pass_opt.name_resolve.external_exports.empty()) {
                 tc.set_seed_symbol_table(&pres.sym);
             }
             if (!core_impl_marker_file_ids.empty()) {

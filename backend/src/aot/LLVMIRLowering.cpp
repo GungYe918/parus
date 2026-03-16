@@ -691,6 +691,15 @@ namespace parus::backend::aot {
                             os << abi_value_ty_(entry.params[i], fn_.abi);
                         }
                     }
+                    if (fn_.is_c_variadic) {
+                        if (fn_.entry != parus::oir::kInvalidId &&
+                            static_cast<size_t>(fn_.entry) < m_.blocks.size() &&
+                            !m_.blocks[fn_.entry].params.empty()) {
+                            os << ", ...";
+                        } else {
+                            os << "...";
+                        }
+                    }
                     os << ")\n";
                     need_call_stub = need_call_stub || need_call_stub_;
                     return os.str();
@@ -757,6 +766,8 @@ namespace parus::backend::aot {
                 std::string ret_ty{};
                 std::vector<std::string> param_tys{};
                 parus::oir::FunctionAbi abi = parus::oir::FunctionAbi::Parus;
+                bool is_variadic = false;
+                uint32_t fixed_param_count = 0;
             };
 
             /// @brief 새 임시 SSA 이름을 생성한다.
@@ -963,6 +974,8 @@ namespace parus::backend::aot {
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
                 info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_);
                 info.abi = target.abi;
+                info.is_variadic = target.is_c_variadic;
+                info.fixed_param_count = target.c_fixed_param_count;
 
                 if (target.entry != kInvalidId && static_cast<size_t>(target.entry) < m_.blocks.size()) {
                     const auto& entry = m_.blocks[target.entry];
@@ -1061,6 +1074,10 @@ namespace parus::backend::aot {
 
                 // ABI bridge:
                 // - aggregate value <-> ptr 변환은 alloca/store/load로 물질화한다.
+                if (cur == "{ ptr, i64 }" && want == "ptr") {
+                    os << "  " << tmp << " = extractvalue { ptr, i64 } " << ref << ", 0\n";
+                    return tmp;
+                }
                 if (cur_is_agg && want == "ptr") {
                     const std::string agg_slot = next_tmp_();
                     os << "  " << agg_slot << " = alloca " << cur << "\n";
@@ -1823,10 +1840,22 @@ namespace parus::backend::aot {
                             arg_vals.reserve(x.args.size());
 
                             const auto direct = resolve_direct_callee_(x);
+                            auto promote_c_variadic_abi_ty = [](const std::string& ty) -> std::string {
+                                if (ty == "half" || ty == "float") return "double";
+                                if (ty == "i1" || ty == "i8" || ty == "i16") return "i32";
+                                if (ty == "{ ptr, i64 }") return "ptr";
+                                return ty;
+                            };
                             for (size_t ai = 0; ai < x.args.size(); ++ai) {
-                                std::string want = value_ty_(x.args[ai]);
-                                if (direct.has_value() && ai < direct->param_tys.size()) {
-                                    want = direct->param_tys[ai];
+                                const std::string src_ty = value_ty_(x.args[ai]);
+                                std::string want = src_ty;
+                                if (direct.has_value()) {
+                                    if (ai < direct->param_tys.size()) {
+                                        want = direct->param_tys[ai];
+                                    } else if (direct->is_variadic &&
+                                               ai >= static_cast<size_t>(direct->fixed_param_count)) {
+                                        want = promote_c_variadic_abi_ty(src_ty);
+                                    }
                                 }
                                 arg_tys.push_back(want);
                                 arg_vals.push_back(coerce_value_(os, x.args[ai], want));
@@ -1871,7 +1900,13 @@ namespace parus::backend::aot {
                                 return;
                             }
 
-                            if (direct.has_value() && direct->param_tys.size() == arg_vals.size()) {
+                            const bool direct_arity_ok =
+                                direct.has_value() &&
+                                ((!direct->is_variadic && direct->param_tys.size() == arg_vals.size()) ||
+                                 (direct->is_variadic &&
+                                  arg_vals.size() >= static_cast<size_t>(direct->fixed_param_count)));
+
+                            if (direct_arity_ok) {
                                 if (direct->ret_ty == "void") {
                                     os << "  call void @" << direct->symbol << "(";
                                     emit_arg_list(os);

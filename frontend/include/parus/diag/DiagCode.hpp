@@ -116,6 +116,15 @@ namespace parus::diag {
         kDirectiveInstForbiddenOperator,  // '&', '~', '^&' are not allowed in inst
         kDirectiveCoreMarkerMustBeHeader, // $![Impl::Core]; must appear as top-level first item
         kDirectiveCoreMarkerDuplicate,    // $![Impl::Core]; marker is duplicated
+        kCImportAliasRequired,            // import "header.h" requires 'as <alias>'
+        kCImportHeaderLiteralExpected,    // import "<header>" expects plain string literal
+        kCImportLibClangUnavailable,      // c-import requested but libclang is unavailable
+        kCImportVariadicCallUnsupported,  // c variadic function calls are unsupported in v1
+        kCImportVariadicArgTypeUnsupported, // unsupported argument type in C variadic section
+        kCImportFormatBridgeShapeUnsupported, // $"..." bridge shape is unsupported for C format call
+        kCImportFormatBridgeTypeUnsupported, // interpolation type is unsupported for C format bridge
+        kCImportFormatBridgeNoVariadicSibling, // fmt_vlist target has no variadic sibling
+        kCImportFormatBridgeDynamicTextUnsupported, // dynamic text in %s bridge is unsupported in v1
         kFStringShortFormUnsupported,     // F"..." short form is removed; use $"..."
         kFStringRuntimeShapeUnsupported,  // runtime f-string shape is unsupported in v1
         kFStringRuntimeExprMustBeText,    // runtime f-string expression must be text

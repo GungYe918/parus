@@ -30,6 +30,35 @@ namespace parus::detail {
             || k == K::kKwFalse
             || k == K::kKwNull;
     }
+
+    static bool decode_plain_string_literal(std::string_view lexeme, std::string& out) {
+        if (lexeme.size() < 2) return false;
+        if (lexeme.front() != '"' || lexeme.back() != '"') return false;
+        out.clear();
+        out.reserve(lexeme.size() - 2);
+
+        for (size_t i = 1; i + 1 < lexeme.size(); ++i) {
+            const char c = lexeme[i];
+            if (c != '\\') {
+                out.push_back(c);
+                continue;
+            }
+            if (i + 1 >= lexeme.size() - 1) return false;
+            const char n = lexeme[++i];
+            switch (n) {
+                case '\\': out.push_back('\\'); break;
+                case '"': out.push_back('"'); break;
+                case 'n': out.push_back('\n'); break;
+                case 'r': out.push_back('\r'); break;
+                case 't': out.push_back('\t'); break;
+                default:
+                    // keep unknown escapes verbatim to avoid losing include-path text.
+                    out.push_back(n);
+                    break;
+            }
+        }
+        return true;
+    }
 } // namespace parus::detail
 
 namespace parus {
@@ -241,6 +270,43 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token import_kw = cursor_.bump(); // 'import'
+
+        // c-header import:
+        //   import "Circle.h" as c;
+        if (cursor_.at(K::kStringLit)) {
+            const Token header_tok = cursor_.bump();
+            std::string header_path{};
+            if (!detail::decode_plain_string_literal(header_tok.lexeme, header_path)) {
+                diag_report(diag::Code::kCImportHeaderLiteralExpected, header_tok.span);
+            }
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kUse;
+            s.use_kind = ast::UseKind::kImportCHeader;
+            s.span = import_kw.span;
+            if (!header_path.empty()) {
+                s.use_name = ast_.add_owned_string(header_path);
+                s.use_path_begin = ast_.add_path_seg(header_path);
+                s.use_path_count = 1;
+            }
+
+            if (!cursor_.eat(K::kKwAs)) {
+                diag_report(diag::Code::kCImportAliasRequired, cursor_.peek().span);
+            } else {
+                const Token alias_tok = cursor_.peek();
+                if (alias_tok.kind != K::kIdent) {
+                    diag_report(diag::Code::kUnexpectedToken, alias_tok.span, "identifier (import alias)");
+                } else {
+                    cursor_.bump();
+                    s.use_rhs_ident = alias_tok.lexeme;
+                }
+            }
+
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(import_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
         uint32_t relative_dot_count = 0;
         for (;;) {
             if (cursor_.eat(K::kDot)) {

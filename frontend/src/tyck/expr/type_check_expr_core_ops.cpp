@@ -1,3 +1,186 @@
+    bool TypeChecker::parse_cimport_type_repr_(std::string_view repr, ty::TypeId& out) const {
+        out = ty::kInvalidType;
+
+        auto trim = [](std::string_view s) -> std::string_view {
+            while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\n' || s.front() == '\r')) {
+                s.remove_prefix(1);
+            }
+            while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\n' || s.back() == '\r')) {
+                s.remove_suffix(1);
+            }
+            return s;
+        };
+
+        repr = trim(repr);
+        if (repr.empty()) return false;
+
+        constexpr std::string_view kPtrMut = "ptr mut ";
+        constexpr std::string_view kPtr = "ptr ";
+        if (repr.starts_with(kPtrMut)) {
+            ty::TypeId elem = ty::kInvalidType;
+            if (!parse_cimport_type_repr_(repr.substr(kPtrMut.size()), elem)) return false;
+            out = types_.make_ptr(elem, /*is_mut=*/true);
+            return out != ty::kInvalidType;
+        }
+        if (repr.starts_with(kPtr)) {
+            ty::TypeId elem = ty::kInvalidType;
+            if (!parse_cimport_type_repr_(repr.substr(kPtr.size()), elem)) return false;
+            out = types_.make_ptr(elem, /*is_mut=*/false);
+            return out != ty::kInvalidType;
+        }
+
+        ty::Builtin builtin{};
+        if (ty::TypePool::builtin_from_name(repr, builtin)) {
+            out = types_.builtin(builtin);
+            return out != ty::kInvalidType;
+        }
+
+        const size_t pos = repr.find("::");
+        if (pos == std::string_view::npos) {
+            out = types_.intern_ident(repr);
+            return out != ty::kInvalidType;
+        }
+
+        std::vector<std::string_view> segs{};
+        size_t begin = 0;
+        while (begin < repr.size()) {
+            const size_t split = repr.find("::", begin);
+            const size_t end = (split == std::string_view::npos) ? repr.size() : split;
+            const std::string_view seg = trim(repr.substr(begin, end - begin));
+            if (seg.empty()) return false;
+            segs.push_back(seg);
+            if (split == std::string_view::npos) break;
+            begin = split + 2;
+        }
+        if (segs.empty()) return false;
+        out = types_.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
+        return out != ty::kInvalidType;
+    }
+
+    bool TypeChecker::parse_external_c_union_payload_(
+        std::string_view payload,
+        std::unordered_map<std::string, ty::TypeId>& out_fields
+    ) const {
+        out_fields.clear();
+        if (!payload.starts_with("parus_c_import_union|")) return false;
+
+        std::string_view fields{};
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "fields") {
+                    fields = val;
+                }
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        if (fields.empty()) return true;
+
+        size_t begin = 0;
+        while (begin < fields.size()) {
+            const size_t comma = fields.find(',', begin);
+            const size_t end = (comma == std::string_view::npos) ? fields.size() : comma;
+            const std::string_view one = fields.substr(begin, end - begin);
+            const size_t colon = one.find(':');
+            if (colon != std::string_view::npos && colon > 0 && colon + 1 < one.size()) {
+                const std::string_view name = one.substr(0, colon);
+                const std::string_view type_text = one.substr(colon + 1);
+                ty::TypeId field_ty = ty::kInvalidType;
+                if (parse_cimport_type_repr_(type_text, field_ty) && field_ty != ty::kInvalidType) {
+                    out_fields.emplace(std::string(name), field_ty);
+                }
+            }
+            if (comma == std::string_view::npos) break;
+            begin = comma + 1;
+        }
+
+        return true;
+    }
+
+    void TypeChecker::collect_external_c_union_fields_() {
+        if (external_c_union_fields_collected_) return;
+        external_c_union_fields_collected_ = true;
+        external_c_union_fields_by_type_.clear();
+        external_c_union_fields_by_name_.clear();
+
+        for (const auto& sym : sym_.symbols()) {
+            if (sym.kind != sema::SymbolKind::kType || !sym.is_external) continue;
+            if (sym.declared_type == ty::kInvalidType) continue;
+            std::unordered_map<std::string, ty::TypeId> fields{};
+            if (!parse_external_c_union_payload_(sym.external_payload, fields)) continue;
+            external_c_union_fields_by_type_[sym.declared_type] = std::move(fields);
+
+            const auto tfit = external_c_union_fields_by_type_.find(sym.declared_type);
+            if (tfit == external_c_union_fields_by_type_.end()) continue;
+            const auto& fmap = tfit->second;
+
+            if (!sym.name.empty()) {
+                external_c_union_fields_by_name_[sym.name] = fmap;
+                const size_t last = sym.name.rfind("::");
+                if (last != std::string::npos && last + 2 < sym.name.size()) {
+                    external_c_union_fields_by_name_[sym.name.substr(last + 2)] = fmap;
+                }
+            }
+
+            const std::string decl_ty_name = types_.to_string(sym.declared_type);
+            if (!decl_ty_name.empty()) {
+                external_c_union_fields_by_name_[decl_ty_name] = fmap;
+                const size_t last = decl_ty_name.rfind("::");
+                if (last != std::string::npos && last + 2 < decl_ty_name.size()) {
+                    external_c_union_fields_by_name_[decl_ty_name.substr(last + 2)] = fmap;
+                }
+            }
+        }
+    }
+
+    bool TypeChecker::resolve_external_c_union_field_type_(
+        ty::TypeId owner_type,
+        std::string_view field_name,
+        ty::TypeId& out_field_type,
+        bool* out_is_union_owner
+    ) {
+        collect_external_c_union_fields_();
+        out_field_type = ty::kInvalidType;
+        if (out_is_union_owner != nullptr) *out_is_union_owner = false;
+        if (owner_type == ty::kInvalidType) return false;
+
+        auto it = external_c_union_fields_by_type_.find(owner_type);
+        const std::unordered_map<std::string, ty::TypeId>* fmap = nullptr;
+        if (it != external_c_union_fields_by_type_.end()) {
+            fmap = &it->second;
+        } else {
+            const std::string owner_name = types_.to_string(owner_type);
+            auto nit = external_c_union_fields_by_name_.find(owner_name);
+            if (nit != external_c_union_fields_by_name_.end()) {
+                fmap = &nit->second;
+            } else {
+                const size_t last = owner_name.rfind("::");
+                if (last != std::string::npos && last + 2 < owner_name.size()) {
+                    nit = external_c_union_fields_by_name_.find(owner_name.substr(last + 2));
+                    if (nit != external_c_union_fields_by_name_.end()) {
+                        fmap = &nit->second;
+                    }
+                }
+            }
+        }
+
+        if (fmap == nullptr) return false;
+        if (out_is_union_owner != nullptr) *out_is_union_owner = true;
+
+        auto fit = fmap->find(std::string(field_name));
+        if (fit == fmap->end()) return false;
+        out_field_type = fit->second;
+        return out_field_type != ty::kInvalidType;
+    }
+
     ty::TypeId TypeChecker::check_expr_unary_(const ast::Expr& e) {
         if (current_expr_id_ != ast::k_invalid_expr &&
             current_expr_id_ < expr_overload_target_cache_.size()) {
@@ -557,6 +740,28 @@
                 return types_.error();
             }
 
+            ty::TypeId imported_union_field_ty = ty::kInvalidType;
+            bool imported_union_owner = false;
+            const bool imported_union_field_found =
+                resolve_external_c_union_field_type_(
+                    base_t, rhs.text, imported_union_field_ty, &imported_union_owner);
+            if (imported_union_owner) {
+                if (!has_manual_permission_(ast::kManualPermGet) &&
+                    !has_manual_permission_(ast::kManualPermSet)) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                          "C union field access is only allowed inside manual[get] or manual[set] block");
+                    err_(rhs.span, "C union field access requires manual[get] or manual[set]");
+                    return types_.error();
+                }
+                if (!imported_union_field_found || imported_union_field_ty == ty::kInvalidType) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                          std::string("unknown union field '") + std::string(rhs.text) + "'");
+                    err_(rhs.span, "unknown imported C union field");
+                    return types_.error();
+                }
+                return imported_union_field_ty;
+            }
+
             auto meta_it = field_abi_meta_by_type_.find(base_t);
             if (meta_it == field_abi_meta_by_type_.end()) {
                 (void)ensure_generic_field_instance_from_type_(base_t, e.span);
@@ -925,6 +1130,46 @@
         // - v0: assign expr는 (1) place 체크, (2) rhs 체크, (3) can_assign 검사로 끝낸다.
         // - compound-assign(+= 등)도 현재는 "단순 대입 호환"만 보는 형태.
         // - NEW: ??= 는 제어흐름 의미가 있으므로 별도 규칙을 강제한다.
+
+        auto enforce_imported_union_write_gate = [&]() -> bool {
+            if (e.a == ast::k_invalid_expr || static_cast<size_t>(e.a) >= ast_.exprs().size()) return true;
+            const auto& lhs = ast_.expr(e.a);
+            if (lhs.kind != ast::ExprKind::kBinary || lhs.op != K::kDot) return true;
+            if (lhs.a == ast::k_invalid_expr || lhs.b == ast::k_invalid_expr) return true;
+            if (static_cast<size_t>(lhs.b) >= ast_.exprs().size()) return true;
+
+            const auto& rhs_member = ast_.expr(lhs.b);
+            if (rhs_member.kind != ast::ExprKind::kIdent) return true;
+
+            ty::TypeId owner_t = check_expr_place_no_read_(lhs.a);
+            owner_t = read_decay_borrow_(types_, owner_t);
+
+            ty::TypeId field_ty = ty::kInvalidType;
+            bool is_union_owner = false;
+            const bool has_field =
+                resolve_external_c_union_field_type_(
+                    owner_t, rhs_member.text, field_ty, &is_union_owner);
+            if (!is_union_owner) return true;
+
+            if (!has_manual_permission_(ast::kManualPermSet)) {
+                diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
+                      "writing C union field is only allowed inside manual[set] block");
+                err_(rhs_member.span, "C union field write requires manual[set]");
+                return false;
+            }
+            if (!has_field || field_ty == ty::kInvalidType) {
+                diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
+                      std::string("unknown union field '") + std::string(rhs_member.text) + "'");
+                err_(rhs_member.span, "unknown imported C union field");
+                return false;
+            }
+            return true;
+        };
+
+        if (!enforce_imported_union_write_gate()) {
+            if (e.b != ast::k_invalid_expr) (void)check_expr_(e.b);
+            return types_.error();
+        }
 
         // ------------------------------------------------------------
         // Null-Coalescing Assign: ??=

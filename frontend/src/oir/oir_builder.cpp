@@ -2920,6 +2920,8 @@ namespace parus::oir {
             f.source_name = f.name;
             f.abi = FunctionAbi::C;
             f.is_extern = true;
+            f.is_c_variadic = false;
+            f.c_fixed_param_count = static_cast<uint32_t>(params.size());
             f.ret_ty = ret_ty;
             const BlockId entry = out.mod.add_block(Block{});
             f.entry = entry;
@@ -2972,6 +2974,8 @@ namespace parus::oir {
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
             f.is_extern = sf.is_extern;
+            f.is_c_variadic = sf.is_c_variadic;
+            f.c_fixed_param_count = sf.c_fixed_param_count;
             f.is_pure = sf.is_pure;
             f.is_comptime = sf.is_comptime;
             f.is_const = sf.is_const;

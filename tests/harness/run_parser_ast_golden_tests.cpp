@@ -229,6 +229,7 @@ static const char* use_kind_name_(parus::ast::UseKind k) {
     switch (k) {
         case K::kError: return "Error";
         case K::kImport: return "Import";
+        case K::kImportCHeader: return "ImportCHeader";
         case K::kTypeAlias: return "TypeAlias";
         case K::kPathAlias: return "PathAlias";
         case K::kNestAlias: return "NestAlias";

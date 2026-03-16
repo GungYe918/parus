@@ -6,6 +6,37 @@
 
 namespace parus::sir::detail {
 
+    namespace {
+        struct ParsedCImportPayload {
+            bool is_c_import = false;
+            bool is_variadic = false;
+        };
+
+        ParsedCImportPayload parse_cimport_payload_(std::string_view payload) {
+            ParsedCImportPayload out{};
+            if (!payload.starts_with("parus_c_import|")) return out;
+            out.is_c_import = true;
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "variadic") {
+                        out.is_variadic = (val == "1" || val == "true");
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        }
+    } // namespace
+
     FnMode lower_fn_mode(parus::ast::FnMode m) {
         switch (m) {
             case parus::ast::FnMode::kPub: return FnMode::kPub;
@@ -74,6 +105,8 @@ namespace parus::sir::detail {
         f.is_extern = s.is_extern;
         f.fn_mode = lower_fn_mode(s.fn_mode);
         f.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
+        f.is_c_variadic = false;
+        f.c_fixed_param_count = s.param_count;
 
         f.is_pure = s.is_pure;
         f.is_comptime = s.is_comptime;
@@ -740,6 +773,8 @@ namespace parus::sir {
             f.is_extern = true;
             f.fn_mode = FnMode::kNone;
             f.abi = FuncAbi::kParus;
+            f.is_c_variadic = false;
+            f.c_fixed_param_count = 0;
             f.is_pure = false;
             f.is_comptime = false;
             f.is_const = false;
@@ -756,6 +791,12 @@ namespace parus::sir {
             f.actor_owner_type = k_invalid_type;
 
             const auto& sig = types.get(ss.declared_type);
+            f.c_fixed_param_count = sig.param_count;
+            const auto parsed = parse_cimport_payload_(ss.external_payload);
+            if (parsed.is_c_import) {
+                f.abi = FuncAbi::kC;
+                f.is_c_variadic = parsed.is_variadic;
+            }
             f.param_begin = static_cast<uint32_t>(m.params.size());
             f.param_count = 0;
             f.positional_param_count = types.fn_positional_count(ss.declared_type);

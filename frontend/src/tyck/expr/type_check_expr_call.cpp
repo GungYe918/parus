@@ -19,6 +19,60 @@ namespace parus::tyck {
     using detail::parse_float_literal_;
     using detail::parse_int_literal_;
 
+    namespace {
+        struct CImportCallMeta {
+            bool is_c_import = false;
+            bool is_c_abi = false;
+            bool is_variadic = false;
+            std::string format_kind{}; // none | fmt_varargs | fmt_vlist
+            int32_t fmt_param_index = -1;
+            int32_t va_list_param_index = -1;
+            std::string variadic_sibling_path{};
+        };
+
+        static CImportCallMeta parse_cimport_call_meta_(std::string_view payload) {
+            CImportCallMeta out{};
+            if (!payload.starts_with("parus_c_import|")) return out;
+            out.is_c_import = true;
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "is_c_abi") {
+                        out.is_c_abi = (val == "1" || val == "true");
+                    } else if (key == "variadic") {
+                        out.is_variadic = (val == "1" || val == "true");
+                    } else if (key == "format") {
+                        out.format_kind.assign(val);
+                    } else if (key == "fmt_idx") {
+                        try {
+                            out.fmt_param_index = std::stoi(std::string(val));
+                        } catch (...) {
+                            out.fmt_param_index = -1;
+                        }
+                    } else if (key == "va_idx") {
+                        try {
+                            out.va_list_param_index = std::stoi(std::string(val));
+                        } catch (...) {
+                            out.va_list_param_index = -1;
+                        }
+                    } else if (key == "sibling") {
+                        out.variadic_sibling_path.assign(val);
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        }
+    } // namespace
+
     ty::TypeId TypeChecker::check_expr_call_(ast::Expr e) {
         // e.a = callee, args slice in e.arg_begin/e.arg_count
         if (current_expr_id_ != ast::k_invalid_expr &&
@@ -141,6 +195,9 @@ namespace parus::tyck {
         bool is_dot_method_call = false;
         bool is_explicit_acts_path_call = false;
         bool is_ctor_call = false;
+        bool is_cimport_call = false;
+        CImportCallMeta cimport_meta{};
+        uint32_t cimport_callee_symbol = sema::SymbolTable::kNoScope;
         ty::TypeId ctor_owner_type = ty::kInvalidType;
         ty::TypeId dot_owner_type = ty::kInvalidType;
         bool dot_needs_self_normalization = false;
@@ -1156,6 +1213,13 @@ namespace parus::tyck {
                             }
                         } else if (sym.kind == sema::SymbolKind::kFn) {
                             callee_name = sym.name;
+                            if (sym.is_external) {
+                                cimport_meta = parse_cimport_call_meta_(sym.external_payload);
+                                if (cimport_meta.is_c_import) {
+                                    is_cimport_call = true;
+                                    cimport_callee_symbol = *sid;
+                                }
+                            }
                             auto it = fn_decl_by_name_.find(callee_name);
                             if (it != fn_decl_by_name_.end()) {
                                 overload_decl_ids = it->second;
@@ -1315,6 +1379,387 @@ namespace parus::tyck {
             oss << ")";
             return oss.str();
         };
+
+        const auto read_decay_borrow_local = [&](ty::TypeId t) -> ty::TypeId {
+            if (t == ty::kInvalidType || t >= types_.count()) return t;
+            const auto& tt = types_.get(t);
+            if (tt.kind != ty::Kind::kBorrow) return t;
+            return tt.elem;
+        };
+
+        auto is_c_variadic_abi_arg_type = [&](ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType || is_error_(t)) return false;
+            t = read_decay_borrow_local(t);
+            const auto& tt = types_.get(t);
+            if (tt.kind == ty::Kind::kPtr) return true;
+            if (tt.kind != ty::Kind::kBuiltin) return false;
+            switch (tt.builtin) {
+                case ty::Builtin::kBool:
+                case ty::Builtin::kChar:
+                case ty::Builtin::kI8:
+                case ty::Builtin::kI16:
+                case ty::Builtin::kI32:
+                case ty::Builtin::kI64:
+                case ty::Builtin::kI128:
+                case ty::Builtin::kU8:
+                case ty::Builtin::kU16:
+                case ty::Builtin::kU32:
+                case ty::Builtin::kU64:
+                case ty::Builtin::kU128:
+                case ty::Builtin::kISize:
+                case ty::Builtin::kUSize:
+                case ty::Builtin::kF32:
+                case ty::Builtin::kF64:
+                case ty::Builtin::kF128:
+                case ty::Builtin::kNull:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        auto is_const_text_expr = [&](ast::ExprId eid) -> bool {
+            if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) return false;
+            const auto& ex = ast_.expr(eid);
+            if (ex.kind != ast::ExprKind::kStringLit) return false;
+            if (!ex.string_is_format) return true;
+            std::string folded{};
+            return try_fold_fstring_expr_no_diag_(eid, folded);
+        };
+
+        auto escape_percent_text = [](std::string_view in) -> std::string {
+            std::string out{};
+            out.reserve(in.size() * 2u + 8u);
+            for (const char ch : in) {
+                if (ch == '%') out.push_back('%');
+                out.push_back(ch);
+            }
+            return out;
+        };
+
+        auto encode_string_literal = [](std::string_view bytes) -> std::string {
+            std::string out = "\"";
+            out.reserve(bytes.size() + 8u);
+            for (const char ch : bytes) {
+                switch (ch) {
+                    case '\\': out += "\\\\"; break;
+                    case '\"': out += "\\\\\""; break;
+                    case '\n': out += "\\\\n"; break;
+                    case '\r': out += "\\\\r"; break;
+                    case '\t': out += "\\\\t"; break;
+                    default:
+                        out.push_back(ch);
+                        break;
+                }
+            }
+            out.push_back('\"');
+            return out;
+        };
+
+        auto check_cimport_variadic_call_with_positions =
+            [&](const sema::Symbol& callee_sym,
+                const std::vector<ast::ExprId>& arg_exprs,
+                Span diag_span,
+                bool from_format_bridge) -> ty::TypeId {
+                if (callee_sym.declared_type == ty::kInvalidType ||
+                    types_.get(callee_sym.declared_type).kind != ty::Kind::kFn) {
+                    diag_(diag::Code::kTypeNotCallable, diag_span, callee_name);
+                    err_(diag_span, "invalid C import callee signature");
+                    return types_.error();
+                }
+
+                const ty::TypeId fn_t = callee_sym.declared_type;
+                const auto& fn_sig = types_.get(fn_t);
+                const uint32_t fixed_param_count = fn_sig.param_count;
+                if (!cimport_meta.is_variadic) {
+                    if (arg_exprs.size() != fixed_param_count) {
+                        diag_(diag::Code::kTypeArgCountMismatch, diag_span,
+                              std::to_string(fixed_param_count), std::to_string(arg_exprs.size()));
+                        err_(diag_span, "non-variadic C call argument count mismatch");
+                        return types_.error();
+                    }
+                } else if (arg_exprs.size() < fixed_param_count) {
+                    diag_(diag::Code::kTypeArgCountMismatch, diag_span,
+                          std::to_string(fixed_param_count), std::to_string(arg_exprs.size()));
+                    err_(diag_span, "C variadic call requires at least fixed parameter count");
+                    return types_.error();
+                }
+
+                for (uint32_t i = 0; i < fixed_param_count && i < arg_exprs.size(); ++i) {
+                    const ast::ExprId arg_eid = arg_exprs[i];
+                    const ty::TypeId expected = types_.fn_param_at(fn_t, i);
+                    if (from_format_bridge && i == 0) {
+                        // The format bridge intentionally feeds a synthetic $"..." text literal
+                        // into C string format slot and lets LLVM coerce `{ptr,len}` -> `ptr`.
+                        (void)check_expr_(arg_eid);
+                        continue;
+                    }
+                    const CoercionPlan plan = classify_assign_with_coercion_(
+                        AssignSite::CallArg, expected, arg_eid, ast_.expr(arg_eid).span);
+                    if (!plan.ok) {
+                        diag_(diag::Code::kTypeArgTypeMismatch, ast_.expr(arg_eid).span,
+                              std::to_string(i), types_.to_string(expected),
+                              type_for_user_diag_(plan.src_after, arg_eid));
+                        err_(ast_.expr(arg_eid).span, "C call fixed-parameter type mismatch");
+                        return types_.error();
+                    }
+                }
+
+                if (cimport_meta.is_variadic) {
+                    for (size_t ai = fixed_param_count; ai < arg_exprs.size(); ++ai) {
+                        const ast::ExprId arg_eid = arg_exprs[ai];
+                        const ty::TypeId at = check_expr_(arg_eid);
+                        if (from_format_bridge) {
+                            const ty::TypeId dt = read_decay_borrow_local(at);
+                            if (dt != ty::kInvalidType && !is_error_(dt)) {
+                                const auto& dtt = types_.get(dt);
+                                if (dtt.kind == ty::Kind::kBuiltin &&
+                                    dtt.builtin == ty::Builtin::kText &&
+                                    is_const_text_expr(arg_eid)) {
+                                    continue;
+                                }
+                            }
+                        }
+                        if (!is_c_variadic_abi_arg_type(at)) {
+                            diag_(diag::Code::kCImportVariadicArgTypeUnsupported,
+                                  ast_.expr(arg_eid).span, types_.to_string(at));
+                            err_(ast_.expr(arg_eid).span, "unsupported type in C variadic argument");
+                            return types_.error();
+                        }
+                    }
+                }
+
+                if (current_expr_id_ != ast::k_invalid_expr &&
+                    current_expr_id_ < expr_external_callee_symbol_cache_.size() &&
+                    cimport_callee_symbol != sema::SymbolTable::kNoScope) {
+                    expr_external_callee_symbol_cache_[current_expr_id_] = cimport_callee_symbol;
+                }
+                return fn_sig.ret;
+            };
+
+        const bool maybe_format_bridge_callee =
+            is_cimport_call &&
+            (cimport_meta.format_kind == "fmt_varargs" || cimport_meta.format_kind == "fmt_vlist");
+        bool maybe_format_bridge = false;
+        if (maybe_format_bridge_callee &&
+            form == CallForm::kPositionalOnly &&
+            outside_positional.size() == 1u) {
+            const ast::Arg* only = outside_positional.front();
+            if (only != nullptr &&
+                only->expr != ast::k_invalid_expr &&
+                static_cast<size_t>(only->expr) < ast_.exprs().size()) {
+                const auto& arg_expr = ast_.expr(only->expr);
+                maybe_format_bridge =
+                    (arg_expr.kind == ast::ExprKind::kStringLit && arg_expr.string_is_format);
+            }
+        }
+        if (maybe_format_bridge) {
+            const ast::Arg* only_arg = outside_positional.front();
+            if (only_arg == nullptr || only_arg->expr == ast::k_invalid_expr) {
+                diag_(diag::Code::kCImportFormatBridgeShapeUnsupported, e.span, callee_name);
+                err_(e.span, "format bridge requires a valid f-string argument");
+                return types_.error();
+            }
+
+            const ast::ExprId fmt_arg_eid = only_arg->expr;
+            if ((size_t)fmt_arg_eid >= ast_.exprs().size()) {
+                err_(e.span, "invalid format bridge argument expression");
+                return types_.error();
+            }
+            const auto& fmt_arg = ast_.expr(fmt_arg_eid);
+            if (fmt_arg.kind != ast::ExprKind::kStringLit || !fmt_arg.string_is_format) {
+                diag_(diag::Code::kCImportFormatBridgeShapeUnsupported, fmt_arg.span, callee_name);
+                err_(fmt_arg.span, "format bridge argument must be a $\"...\" or F\"\"\"...\"\"\" literal");
+                return types_.error();
+            }
+
+            const auto& parts = ast_.fstring_parts();
+            const uint64_t pb = fmt_arg.string_part_begin;
+            const uint64_t pe = pb + fmt_arg.string_part_count;
+            if (pb > parts.size() || pe > parts.size()) {
+                err_(fmt_arg.span, "invalid f-string part slice in format bridge");
+                return types_.error();
+            }
+
+            std::string format_text{};
+            std::vector<ast::ExprId> variadic_exprs{};
+            variadic_exprs.reserve(fmt_arg.string_part_count);
+            for (uint32_t i = 0; i < fmt_arg.string_part_count; ++i) {
+                const auto& p = parts[fmt_arg.string_part_begin + i];
+                if (!p.is_expr) {
+                    format_text += escape_percent_text(p.text);
+                    continue;
+                }
+                if (p.expr == ast::k_invalid_expr || (size_t)p.expr >= ast_.exprs().size()) {
+                    diag_(diag::Code::kCImportFormatBridgeShapeUnsupported, p.span, callee_name);
+                    err_(p.span, "invalid interpolation expression in format bridge");
+                    return types_.error();
+                }
+
+                const ty::TypeId it = read_decay_borrow_local(check_expr_(p.expr));
+                if (it == ty::kInvalidType || is_error_(it)) {
+                    return types_.error();
+                }
+                const auto& itt = types_.get(it);
+                if (itt.kind == ty::Kind::kBuiltin) {
+                    switch (itt.builtin) {
+                        case ty::Builtin::kBool:
+                            format_text += "%d";
+                            variadic_exprs.push_back(p.expr);
+                            continue;
+                        case ty::Builtin::kChar:
+                            format_text += "%c";
+                            variadic_exprs.push_back(p.expr);
+                            continue;
+                        case ty::Builtin::kI8:
+                        case ty::Builtin::kI16:
+                        case ty::Builtin::kI32:
+                        case ty::Builtin::kI64:
+                        case ty::Builtin::kI128:
+                        case ty::Builtin::kU8:
+                        case ty::Builtin::kU16:
+                        case ty::Builtin::kU32:
+                        case ty::Builtin::kU64:
+                        case ty::Builtin::kU128:
+                        case ty::Builtin::kISize:
+                        case ty::Builtin::kUSize:
+                            format_text += "%lld";
+                            variadic_exprs.push_back(p.expr);
+                            continue;
+                        case ty::Builtin::kF32:
+                        case ty::Builtin::kF64:
+                        case ty::Builtin::kF128:
+                            format_text += "%f";
+                            variadic_exprs.push_back(p.expr);
+                            continue;
+                        case ty::Builtin::kText:
+                            if (!is_const_text_expr(p.expr)) {
+                                diag_(diag::Code::kCImportFormatBridgeDynamicTextUnsupported,
+                                      p.span, callee_name);
+                                err_(p.span, "dynamic text interpolation for %s is unsupported in v1");
+                                return types_.error();
+                            }
+                            format_text += "%s";
+                            variadic_exprs.push_back(p.expr);
+                            continue;
+                        default:
+                            break;
+                    }
+                }
+                if (itt.kind == ty::Kind::kPtr) {
+                    format_text += "%p";
+                    variadic_exprs.push_back(p.expr);
+                    continue;
+                }
+
+                diag_(diag::Code::kCImportFormatBridgeTypeUnsupported, p.span, types_.to_string(it));
+                err_(p.span, "unsupported interpolation type for C format bridge");
+                return types_.error();
+            }
+
+            const std::string quoted = encode_string_literal(format_text);
+            ast::Expr synth_fmt{};
+            synth_fmt.kind = ast::ExprKind::kStringLit;
+            synth_fmt.span = fmt_arg.span;
+            synth_fmt.text = ast_.add_owned_string(quoted);
+            synth_fmt.string_is_format = false;
+            synth_fmt.string_is_raw = false;
+            synth_fmt.string_part_begin = 0;
+            synth_fmt.string_part_count = 0;
+            synth_fmt.string_folded_text = ast_.add_owned_string(format_text);
+            const ast::ExprId synth_fmt_eid = ast_.add_expr(synth_fmt);
+
+            std::vector<ast::Arg> rewritten_args{};
+            rewritten_args.reserve(1u + variadic_exprs.size());
+            ast::Arg fmt_a{};
+            fmt_a.kind = ast::ArgKind::kPositional;
+            fmt_a.has_label = false;
+            fmt_a.is_hole = false;
+            fmt_a.expr = synth_fmt_eid;
+            fmt_a.span = fmt_arg.span;
+            rewritten_args.push_back(fmt_a);
+            for (const ast::ExprId veid : variadic_exprs) {
+                ast::Arg a{};
+                a.kind = ast::ArgKind::kPositional;
+                a.has_label = false;
+                a.is_hole = false;
+                a.expr = veid;
+                a.span = ast_.expr(veid).span;
+                rewritten_args.push_back(a);
+            }
+
+            uint32_t new_arg_begin = static_cast<uint32_t>(ast_.args().size());
+            for (const auto& a : rewritten_args) {
+                (void)ast_.add_arg(a);
+            }
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                (size_t)current_expr_id_ < ast_.exprs().size()) {
+                auto& em = ast_.expr_mut(current_expr_id_);
+                em.arg_begin = new_arg_begin;
+                em.arg_count = static_cast<uint32_t>(rewritten_args.size());
+            }
+
+            if (cimport_meta.format_kind == "fmt_vlist") {
+                if (cimport_meta.variadic_sibling_path.empty()) {
+                    diag_(diag::Code::kCImportFormatBridgeNoVariadicSibling, e.span, callee_name);
+                    err_(e.span, "vlist format call has no variadic sibling target");
+                    return types_.error();
+                }
+                auto sibling_sid = lookup_symbol_(cimport_meta.variadic_sibling_path);
+                if (!sibling_sid.has_value()) {
+                    diag_(diag::Code::kCImportFormatBridgeNoVariadicSibling, e.span, callee_name);
+                    err_(e.span, "vlist format sibling is not resolvable: " + cimport_meta.variadic_sibling_path);
+                    return types_.error();
+                }
+                const auto& sibling_sym = sym_.symbol(*sibling_sid);
+                if (sibling_sym.kind != sema::SymbolKind::kFn || !sibling_sym.is_external) {
+                    diag_(diag::Code::kCImportFormatBridgeNoVariadicSibling, e.span, callee_name);
+                    err_(e.span, "vlist format sibling must resolve to external function symbol");
+                    return types_.error();
+                }
+                cimport_callee_symbol = *sibling_sid;
+                cimport_meta = parse_cimport_call_meta_(sibling_sym.external_payload);
+                if (!cimport_meta.is_c_import || !cimport_meta.is_variadic) {
+                    diag_(diag::Code::kCImportFormatBridgeNoVariadicSibling, e.span, callee_name);
+                    err_(e.span, "vlist sibling is not a C variadic import");
+                    return types_.error();
+                }
+                std::vector<ast::ExprId> arg_exprs{};
+                arg_exprs.reserve(rewritten_args.size());
+                for (const auto& a : rewritten_args) arg_exprs.push_back(a.expr);
+                return check_cimport_variadic_call_with_positions(sibling_sym, arg_exprs, e.span, /*from_format_bridge=*/true);
+            }
+
+            if (cimport_callee_symbol == sema::SymbolTable::kNoScope ||
+                cimport_callee_symbol >= sym_.symbols().size()) {
+                err_(e.span, "invalid C import callee symbol for format bridge");
+                return types_.error();
+            }
+            std::vector<ast::ExprId> arg_exprs{};
+            arg_exprs.reserve(rewritten_args.size());
+            for (const auto& a : rewritten_args) arg_exprs.push_back(a.expr);
+            return check_cimport_variadic_call_with_positions(sym_.symbol(cimport_callee_symbol), arg_exprs, e.span, /*from_format_bridge=*/true);
+        }
+
+        if (is_cimport_call && cimport_meta.is_variadic && overload_decl_ids.empty()) {
+            if (form != CallForm::kPositionalOnly) {
+                diag_(diag::Code::kCallArgMixNotAllowed, e.span);
+                err_(e.span, "C variadic call currently supports positional arguments only");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+            if (cimport_callee_symbol == sema::SymbolTable::kNoScope ||
+                cimport_callee_symbol >= sym_.symbols().size()) {
+                err_(e.span, "invalid C variadic callee symbol");
+                return types_.error();
+            }
+            std::vector<ast::ExprId> arg_exprs{};
+            arg_exprs.reserve(outside_positional.size());
+            for (const auto* a : outside_positional) {
+                if (a != nullptr) arg_exprs.push_back(a->expr);
+            }
+            return check_cimport_variadic_call_with_positions(sym_.symbol(cimport_callee_symbol), arg_exprs, e.span, /*from_format_bridge=*/false);
+        }
 
         // ------------------------------------------------------------
         // 2.5) external acts default-method candidates (from export-index metadata)

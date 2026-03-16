@@ -1,0 +1,2 @@
+//@expect-error CImportHeaderLiteralExpected
+import $"Circle.h" as c;

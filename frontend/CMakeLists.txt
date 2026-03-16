@@ -15,6 +15,8 @@ add_library(parus_frontend STATIC
     src/macro/matcher_typed.cpp
     src/macro/hygiene.cpp
     src/type/type_resolve.cpp
+    src/cimport/libclang_probe.cpp
+    src/cimport/c_header_import.cpp
 
     src/passes/check_pipe_hole.cpp
     src/passes/check_place_expr.cpp
@@ -48,6 +50,19 @@ target_include_directories(parus_frontend
 )
 
 target_compile_features(parus_frontend PUBLIC cxx_std_23)
+
+if (PARUS_HAS_LIBCLANG AND TARGET parus_libclang)
+    target_link_libraries(parus_frontend PRIVATE parus_libclang)
+    target_compile_definitions(parus_frontend PUBLIC PARUS_HAS_LIBCLANG=1)
+    if (PARUS_LIBCLANG_RESOLVED_INCLUDE_DIR)
+        target_compile_definitions(parus_frontend PRIVATE PARUS_LIBCLANG_INCLUDE_DIR="${PARUS_LIBCLANG_RESOLVED_INCLUDE_DIR}")
+    endif()
+    if (PARUS_LIBCLANG_RESOLVED_LIBRARY)
+        target_compile_definitions(parus_frontend PRIVATE PARUS_LIBCLANG_LIBRARY_PATH="${PARUS_LIBCLANG_RESOLVED_LIBRARY}")
+    endif()
+else()
+    target_compile_definitions(parus_frontend PUBLIC PARUS_HAS_LIBCLANG=0)
+endif()
 
 # ---- warnings (no -Werror; keep iteration smooth) ----
 if (MSVC)

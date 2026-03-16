@@ -169,7 +169,9 @@ namespace parus::tyck {
                 return;
 
             case ast::StmtKind::kUse:
-                if (s.use_kind == ast::UseKind::kImport && block_depth_ != 0) {
+                if ((s.use_kind == ast::UseKind::kImport ||
+                     s.use_kind == ast::UseKind::kImportCHeader) &&
+                    block_depth_ != 0) {
                     const std::string msg = "import is only allowed at file scope";
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
@@ -671,11 +673,20 @@ namespace parus::tyck {
         merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/false);
     }
 
-    /// @brief manual 블록은 타입 규칙 완화 없이 블록 본문만 검사한다.
+    bool TypeChecker::has_manual_permission_(uint8_t perm) const {
+        for (auto it = manual_perm_stack_.rbegin(); it != manual_perm_stack_.rend(); ++it) {
+            if (((*it) & perm) != 0) return true;
+        }
+        return false;
+    }
+
+    /// @brief manual 블록은 권한 컨텍스트를 활성화한 뒤 본문을 검사한다.
     void TypeChecker::check_stmt_manual_(const ast::Stmt& s) {
+        manual_perm_stack_.push_back(s.manual_perm_mask);
         if (s.a != ast::k_invalid_stmt) {
             check_stmt_(s.a);
         }
+        if (!manual_perm_stack_.empty()) manual_perm_stack_.pop_back();
     }
 
     void TypeChecker::check_stmt_return_(const ast::Stmt& s) {

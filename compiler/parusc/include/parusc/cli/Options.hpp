@@ -75,6 +75,8 @@ namespace parusc::cli {
         bool freestanding = false;
         bool no_std = false;
         bool no_core = false;
+        std::vector<std::string> cimport_include_dirs{};
+        std::vector<std::string> cimport_isystem_dirs{};
         DiagFormat diag_format = DiagFormat::kText;
 
         bool has_xparus = false;

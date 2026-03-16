@@ -383,6 +383,8 @@ namespace parusc::cli {
             << "  -o <path>             Output path (default: a.out)\n"
             << "  --target <triple>     Override backend target triple\n"
             << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
+            << "  -I<dir>, -I <dir>     Add C-header import include directory\n"
+            << "  -isystem<dir>, -isystem <dir>  Add C-header import system include directory\n"
             << "  --apple-sdk-root <path>  Explicit Apple SDK root for Darwin linking\n"
             << "  -ffreestanding        Select freestanding runtime profile\n"
             << "  -fno-std              Disable std runtime integration\n"
@@ -530,6 +532,35 @@ namespace parusc::cli {
                 }
                 out.target_triple = std::string(*v);
                 out.target_triple_explicit = true;
+                continue;
+            }
+
+            if (a == "-I") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-I requires a directory path";
+                    return out;
+                }
+                out.cimport_include_dirs.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-I") && a.size() > 2) {
+                out.cimport_include_dirs.emplace_back(a.substr(2));
+                continue;
+            }
+            if (a == "-isystem") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-isystem requires a directory path";
+                    return out;
+                }
+                out.cimport_isystem_dirs.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-isystem") && a.size() > std::string_view("-isystem").size()) {
+                out.cimport_isystem_dirs.emplace_back(a.substr(std::string_view("-isystem").size()));
                 continue;
             }
 

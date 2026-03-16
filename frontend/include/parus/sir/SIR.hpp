@@ -370,6 +370,8 @@ namespace parus::sir {
         bool is_extern = false;
         FnMode fn_mode = FnMode::kNone;
         FuncAbi abi = FuncAbi::kParus;
+        bool is_c_variadic = false;
+        uint32_t c_fixed_param_count = 0;
 
         bool is_pure = false;
         bool is_comptime = false;

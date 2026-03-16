@@ -131,6 +131,7 @@
 
             if (s.kind == ast::StmtKind::kUse &&
                 (s.use_kind == ast::UseKind::kImport ||
+                 s.use_kind == ast::UseKind::kImportCHeader ||
                  s.use_kind == ast::UseKind::kPathAlias ||
                  s.use_kind == ast::UseKind::kNestAlias)) {
                 // v0: alias는 second-pass lexical 처리만 사용한다.
