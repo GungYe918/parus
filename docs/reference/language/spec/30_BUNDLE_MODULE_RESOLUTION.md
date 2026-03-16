@@ -159,6 +159,8 @@ export def add(a: i32, b: i32) -> i32 {
 2-b. `-I`로 전달된 경로(입력 순서 유지)
 2-c. `-isystem`로 전달된 경로(입력 순서 유지)
 2-d. libclang 기본 시스템 include 경로
+2-e. C import 전처리 옵션은 다음을 지원한다: `-D`, `-U`, `-include`, `-imacros`.
+2-f. 전처리 옵션은 Parus 소스 파싱에는 영향을 주지 않고 C header import 단계에만 적용한다.
 3. C variadic 함수 호출은 제한적으로 허용한다.
 3-a. fixed parameter 구간은 일반 호출과 동일 타입검사를 적용한다.
 3-b. variadic 구간은 ABI-safe scalar/pointer만 허용한다.
@@ -171,3 +173,11 @@ export def add(a: i32, b: i32) -> i32 {
 5-a. union field dot 접근은 `manual[...]` 내부에서만 허용한다.
 5-b. read는 `manual[get]` 또는 `manual[set]`가 필요하다.
 5-c. write는 `manual[set]`가 필요하다.
+6. C macro import v2.2 규칙:
+6-a. object-like macro만 상수 심볼(`alias::MACRO`)로 승격한다.
+6-b. 상수 승격 대상은 literal/상수식 subset(`int/float/bool/char/string`)으로 제한한다.
+6-c. function-like macro는 메타 수집만 수행하고 호출 가능한 Parus 심볼로 승격하지 않는다.
+7. 익명 선언(anonymous record/enum) v2.2 규칙:
+7-a. 이름 없는 `struct/union/enum`은 synthetic internal 이름(`__anon_*`)으로 수집한다.
+7-b. typedef가 익명 선언을 가리키는 경우 동일 선언 identity를 공유하도록 연결한다.
+7-c. bitfield는 v2.2 범위에서 계속 미지원이며 import 대상에서 제외한다.

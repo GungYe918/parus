@@ -177,6 +177,66 @@ namespace {
         return ok;
     }
 
+    static bool test_cimport_preprocess_options_parse_() {
+        const auto opt = parse_({
+            "-DFOO=1",
+            "-D", "BAR",
+            "-UBAZ",
+            "-U", "QUX",
+            "-include", "a.h",
+            "-includeb.h",
+            "-imacros", "m1.h",
+            "-imacrosm2.h",
+            "main.pr",
+        });
+
+        bool ok = true;
+        ok &= require_(opt.ok, "cimport preprocess options parse must succeed");
+        ok &= require_(opt.cimport_defines.size() == 2, "-D must collect both forms");
+        ok &= require_(opt.cimport_undefines.size() == 2, "-U must collect both forms");
+        ok &= require_(opt.cimport_forced_includes.size() == 2, "-include must collect both forms");
+        ok &= require_(opt.cimport_imacros.size() == 2, "-imacros must collect both forms");
+        if (opt.cimport_defines.size() == 2) {
+            ok &= require_(opt.cimport_defines[0] == "FOO=1", "first -D value mismatch");
+            ok &= require_(opt.cimport_defines[1] == "BAR", "second -D value mismatch");
+        }
+        if (opt.cimport_undefines.size() == 2) {
+            ok &= require_(opt.cimport_undefines[0] == "BAZ", "first -U value mismatch");
+            ok &= require_(opt.cimport_undefines[1] == "QUX", "second -U value mismatch");
+        }
+        if (opt.cimport_forced_includes.size() == 2) {
+            ok &= require_(opt.cimport_forced_includes[0] == "a.h", "first -include value mismatch");
+            ok &= require_(opt.cimport_forced_includes[1] == "b.h", "second -include value mismatch");
+        }
+        if (opt.cimport_imacros.size() == 2) {
+            ok &= require_(opt.cimport_imacros[0] == "m1.h", "first -imacros value mismatch");
+            ok &= require_(opt.cimport_imacros[1] == "m2.h", "second -imacros value mismatch");
+        }
+        return ok;
+    }
+
+    static bool test_cimport_preprocess_option_missing_path_() {
+        const auto opt_d = parse_({
+            "-D",
+        });
+        const auto opt_u = parse_({
+            "-U",
+        });
+        const auto opt_include = parse_({
+            "-include",
+        });
+        const auto opt_imacros = parse_({
+            "-imacros",
+        });
+
+        bool ok = true;
+        ok &= require_(!opt_d.ok, "-D without value must fail parsing");
+        ok &= require_(!opt_u.ok, "-U without value must fail parsing");
+        ok &= require_(!opt_include.ok, "-include without path must fail parsing");
+        ok &= require_(!opt_imacros.ok, "-imacros without path must fail parsing");
+        return ok;
+    }
+
 } // namespace
 
 int main() {
@@ -194,6 +254,8 @@ int main() {
         {"runtime_profile_conflict", test_runtime_profile_conflict_},
         {"cimport_include_options_parse", test_cimport_include_options_parse_},
         {"cimport_include_option_missing_path", test_cimport_include_option_missing_path_},
+        {"cimport_preprocess_options_parse", test_cimport_preprocess_options_parse_},
+        {"cimport_preprocess_option_missing_path", test_cimport_preprocess_option_missing_path_},
     };
 
     int failed = 0;

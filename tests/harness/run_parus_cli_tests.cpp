@@ -1679,6 +1679,254 @@ bool test_c_header_import_enum_constant_usage() {
     return true;
 }
 
+bool test_c_header_import_define_undefine_options() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-def-undef";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Cfg.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_CFG_H\n"
+        "#define PARUS_CFG_H\n"
+        "#ifdef FEATURE_X\n"
+        "#define CCFG_VALUE 77\n"
+        "#endif\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Cfg.h\" as c;\n"
+        "\n"
+        "def main() -> i64 {\n"
+        "  return c::CCFG_VALUE;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write define/undef cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- -DFEATURE_X \"" + main_pr.string() + "\" -fsyntax-only");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- -DFEATURE_X -UFEATURE_X \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable") || contains(out_fail, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "-D FEATURE_X should make macro import available\n" << out_ok;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "-U FEATURE_X should make macro unavailable\n" << out_fail;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_imacros_option() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-imacros";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto macro_h = temp_root / "Defs.h";
+    const auto header_h = temp_root / "Cfg.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string defs_src =
+        "#ifndef PARUS_DEFS_H\n"
+        "#define PARUS_DEFS_H\n"
+        "#define FEATURE_IMACROS 1\n"
+        "#endif\n";
+    const std::string header_src =
+        "#ifndef PARUS_CFG_H\n"
+        "#define PARUS_CFG_H\n"
+        "#ifdef FEATURE_IMACROS\n"
+        "#define CCFG_IMA 9\n"
+        "#endif\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Cfg.h\" as c;\n"
+        "\n"
+        "def main() -> i64 {\n"
+        "  return c::CCFG_IMA;\n"
+        "}\n";
+    if (!write_text(macro_h, defs_src) || !write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write imacros cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- -imacros \"" + macro_h.string() + "\" \"" +
+        main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "-imacros should affect cimport preprocessing\n" << out_ok;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_forced_include_option() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-include-preprocess";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto force_h = temp_root / "Force.h";
+    const auto header_h = temp_root / "Cfg.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string force_src =
+        "#ifndef PARUS_FORCE_H\n"
+        "#define PARUS_FORCE_H\n"
+        "#define FEATURE_INCLUDE 1\n"
+        "#endif\n";
+    const std::string header_src =
+        "#ifndef PARUS_CFG_H\n"
+        "#define PARUS_CFG_H\n"
+        "#ifdef FEATURE_INCLUDE\n"
+        "#define CCFG_INC 123\n"
+        "#endif\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Cfg.h\" as c;\n"
+        "\n"
+        "def main() -> i64 {\n"
+        "  return c::CCFG_INC;\n"
+        "}\n";
+    if (!write_text(force_h, force_src) || !write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write forced-include cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- -include \"" + force_h.string() + "\" \"" +
+        main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "-include should affect cimport preprocessing\n" << out_ok;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_anonymous_typedef_struct_usage() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-anon-typedef-struct";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Anon.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_ANON_H\n"
+        "#define PARUS_ANON_H\n"
+        "typedef struct { int x; int y; } Point;\n"
+        "Point make_point(void);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Anon.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set p = c::make_point();\n"
+        "  return p.x;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write anonymous typedef struct cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "anonymous typedef struct import should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_function_like_macro_not_imported() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fn-macro";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "M.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_M_H\n"
+        "#define PARUS_M_H\n"
+        "#define ADD2(x, y) ((x) + (y))\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"M.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::ADD2;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write function-like macro test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "function-like macro should not be imported as constant symbol\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_actor_rejected_in_no_std_profile() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -1937,14 +2185,19 @@ int main() {
     const bool ok26 = test_c_header_import_union_manual_get_gate();
     const bool ok27 = test_c_header_import_union_manual_set_gate();
     const bool ok28 = test_c_header_import_enum_constant_usage();
-    const bool ok29 = test_actor_rejected_in_no_std_profile();
-    const bool ok30 = test_actor_allowed_in_freestanding_profile();
-    const bool ok31 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok32 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok29 = test_c_header_import_define_undefine_options();
+    const bool ok30 = test_c_header_import_imacros_option();
+    const bool ok31 = test_c_header_import_forced_include_option();
+    const bool ok32 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok33 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok34 = test_actor_rejected_in_no_std_profile();
+    const bool ok35 = test_actor_allowed_in_freestanding_profile();
+    const bool ok36 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok37 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
-        !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32) {
+        !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 || !ok36 || !ok37) {
         return 1;
     }
 
