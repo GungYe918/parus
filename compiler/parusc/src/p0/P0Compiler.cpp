@@ -408,6 +408,24 @@ namespace parusc::p0 {
             return std::string(top);
         }
 
+        std::string normalize_core_public_module_head_(
+            std::string_view bundle_name,
+            std::string_view module_head
+        ) {
+            if (bundle_name != "core") {
+                return std::string(module_head);
+            }
+            if (module_head.empty()) {
+                return std::string("core");
+            }
+            if (module_head == "core" || module_head.starts_with("core::")) {
+                return std::string(module_head);
+            }
+            std::string out = "core::";
+            out += module_head;
+            return out;
+        }
+
         std::string normalize_symbol_fragment_(std::string_view in) {
             std::string out;
             out.reserve(in.size());
@@ -601,6 +619,26 @@ namespace parusc::p0 {
 
             if (s.kind == parus::ast::StmtKind::kFieldDecl && !s.name.empty()) {
                 push_export(parus::sema::SymbolKind::kField, qualify_name_(ns, s.name), s.type, s.is_export, s.span);
+                return;
+            }
+
+            if ((s.kind == parus::ast::StmtKind::kEnumDecl ||
+                 s.kind == parus::ast::StmtKind::kProtoDecl ||
+                 s.kind == parus::ast::StmtKind::kClassDecl ||
+                 s.kind == parus::ast::StmtKind::kActorDecl) &&
+                !s.name.empty()) {
+                std::string payload{};
+                if (s.kind == parus::ast::StmtKind::kProtoDecl) payload = "parus_decl_kind=proto";
+                if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = "parus_decl_kind=enum";
+                if (s.kind == parus::ast::StmtKind::kClassDecl) payload = "parus_decl_kind=class";
+                if (s.kind == parus::ast::StmtKind::kActorDecl) payload = "parus_decl_kind=actor";
+                push_export(parus::sema::SymbolKind::kType,
+                            qualify_name_(ns, s.name),
+                            s.type,
+                            s.is_export,
+                            s.span,
+                            /*link_name=*/{},
+                            std::move(payload));
                 return;
             }
 
@@ -1019,7 +1057,7 @@ namespace parusc::p0 {
                 std::string kind_s{};
                 std::string path_s{};
                 std::string link_name{};
-                std::string module_head{};
+                std::string module_head_raw{};
                 std::string decl_dir{};
                 std::string type_repr{};
                 std::string inst_payload{};
@@ -1040,7 +1078,7 @@ namespace parusc::p0 {
                     out_err = "invalid export-index entry field 'link_name' in: " + path;
                     return false;
                 }
-                if (!parse_json_string_field_(obj, "module_head", module_head)) {
+                if (!parse_json_string_field_(obj, "module_head", module_head_raw)) {
                     out_err = "invalid export-index entry field 'module_head' in: " + path;
                     return false;
                 }
@@ -1084,7 +1122,7 @@ namespace parusc::p0 {
                 e.kind_text = kind_s;
                 e.path = std::move(path_s);
                 e.link_name = std::move(link_name);
-                e.module_head = std::move(module_head);
+                e.module_head = normalize_core_public_module_head_(bundle_name, module_head_raw);
                 e.decl_dir = std::move(decl_dir);
                 e.type_repr = std::move(type_repr);
                 e.inst_payload = std::move(inst_payload);
@@ -1273,7 +1311,7 @@ namespace parusc::p0 {
             const std::string sysroot = select_sysroot_(opt);
             if (sysroot.empty()) return {};
 
-            const fs::path idx = fs::path(sysroot) / "core" / "index" / "core.exports.json";
+            const fs::path idx = fs::path(sysroot) / ".cache" / "exports" / "core.exports.json";
             const fs::path normalized = fs::weakly_canonical(idx, ec);
             if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
                 return parus::normalize_path(normalized.string());
@@ -1418,19 +1456,6 @@ namespace parusc::p0 {
         std::string auto_core_export_index_path{};
         if (auto_core_injection) {
             auto_core_export_index_path = resolve_core_export_index_path_(opt);
-            if (auto_core_export_index_path.empty()) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kExportIndexMissing,
-                    root_span
-                );
-                d.add_arg("missing core export-index file: sysroot/core/index/core.exports.json");
-                bag.add(std::move(d));
-            }
-        }
-        if (bag.has_error()) {
-            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-            return (diag_rc != 0) ? 1 : 0;
         }
 
         const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, opt.macro_budget);

@@ -1705,6 +1705,24 @@ namespace {
         return std::string(top);
     }
 
+    std::string normalize_core_public_module_head_(
+        std::string_view bundle_name,
+        std::string_view module_head
+    ) {
+        if (bundle_name != "core") {
+            return std::string(module_head);
+        }
+        if (module_head.empty()) {
+            return std::string("core");
+        }
+        if (module_head == "core" || module_head.starts_with("core::")) {
+            return std::string(module_head);
+        }
+        std::string out = "core::";
+        out += module_head;
+        return out;
+    }
+
     uint64_t file_mtime_tick_(const std::filesystem::path& p) {
         std::error_code ec{};
         const auto t = std::filesystem::last_write_time(p, ec);
@@ -1776,7 +1794,7 @@ namespace {
         const std::string sysroot = resolve_lsp_sysroot_();
         if (sysroot.empty()) return {};
 
-        const fs::path idx = fs::path(sysroot) / "core" / "index" / "core.exports.json";
+        const fs::path idx = fs::path(sysroot) / ".cache" / "exports" / "core.exports.json";
         const fs::path normalized = fs::weakly_canonical(idx, ec);
         if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
             return normalize_host_path_(normalized.string());
@@ -2174,7 +2192,7 @@ namespace {
             const auto mapped_kind = export_kind_from_string_(*kind_s);
             if (!mapped_kind.has_value()) continue;
 
-            std::string module_head = std::string(*module_head_s);
+            std::string module_head = normalize_core_public_module_head_(bundle_name, *module_head_s);
             std::string decl_source_dir = std::string(*decl_dir_s);
 
             std::string lookup_path = std::string(*path_s);
@@ -2226,15 +2244,15 @@ namespace {
                     };
 
                     add_decl(lookup_path_for_nav);
-                    if (!module_head_s->empty()) {
-                        const std::string prefix = std::string(*module_head_s) + "::";
+                    if (!module_head.empty()) {
+                        const std::string prefix = module_head + "::";
                         const bool already_prefixed =
-                            lookup_path_for_nav == *module_head_s ||
+                            lookup_path_for_nav == module_head ||
                             lookup_path_for_nav.starts_with(prefix);
                         if (!already_prefixed) {
                             add_decl(prefix + lookup_path_for_nav);
                         }
-                        if (same_bundle && current_module_head == *module_head_s) {
+                        if (same_bundle && current_module_head == module_head) {
                             std::string local = lookup_path_for_nav;
                             if (local.starts_with(prefix)) {
                                 local.erase(0, prefix.size());
@@ -2518,15 +2536,7 @@ namespace {
                             popt.name_resolve.warn_core_path_when_std = true;
 
                             const std::string core_index_path = resolve_core_export_index_path_();
-                            if (core_index_path.empty()) {
-                                parus::diag::Diagnostic d(
-                                    parus::diag::Severity::kError,
-                                    parus::diag::Code::kExportIndexMissing,
-                                    parus::Span{file_id, 0, 0}
-                                );
-                                d.add_arg("missing core export-index file: sysroot/core/index/core.exports.json");
-                                bag.add(std::move(d));
-                            } else {
+                            if (!core_index_path.empty()) {
                                 std::unordered_map<std::string, std::vector<ExternalDeclLocation>> core_decl_locs{};
                                 std::string load_err{};
                                 if (!load_export_index_for_lint_(

@@ -900,13 +900,13 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-auto-core";
     std::filesystem::remove_all(temp_root, ec);
-    std::filesystem::create_directories(temp_root / "sysroot/core/index", ec);
+    std::filesystem::create_directories(temp_root / "sysroot/.cache/exports", ec);
     if (ec) {
         std::cerr << "temp dir create failed\n";
         return false;
     }
 
-    const auto core_index = temp_root / "sysroot/core/index/core.exports.json";
+    const auto core_index = temp_root / "sysroot/.cache/exports/core.exports.json";
     const auto main_pr = temp_root / "main.pr";
 
     const std::string core_index_src =
@@ -918,22 +918,22 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
         "      \"kind\": \"act\",\n"
         "      \"path\": \"i32\",\n"
         "      \"link_name\": \"\",\n"
-        "      \"module_head\": \"core\",\n"
-        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"module_head\": \"num\",\n"
+        "      \"decl_dir\": \"sysroot/core/num\",\n"
         "      \"type_repr\": \"i32\",\n"
         "      \"inst_payload\": \"\",\n"
-        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 1, \"col\": 1},\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/num/i32.pr\", \"line\": 1, \"col\": 1},\n"
         "      \"is_export\": true\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"fn\",\n"
         "      \"path\": \"i32::size\",\n"
         "      \"link_name\": \"core_i32_size\",\n"
-        "      \"module_head\": \"core\",\n"
-        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"module_head\": \"num\",\n"
+        "      \"decl_dir\": \"sysroot/core/num\",\n"
         "      \"type_repr\": \"def(i32) -> i32\",\n"
         "      \"inst_payload\": \"parus_builtin_acts|owner=i32|member=size|self=1\",\n"
-        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 3, \"col\": 3},\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/num/i32.pr\", \"line\": 3, \"col\": 3},\n"
         "      \"is_export\": true\n"
         "    }\n"
         "  ]\n"
@@ -981,8 +981,328 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
         " --emit-object -o \"" + (temp_root / "main.missing.o").string() + "\"";
     auto [rc_missing_idx, out_missing_idx] = run_capture(compile_missing_idx_cmd);
     std::filesystem::remove_all(temp_root, ec);
-    if (rc_missing_idx == 0 || !contains(out_missing_idx, "ExportIndexMissing")) {
-        std::cerr << "missing core export-index must fail with ExportIndexMissing\n" << out_missing_idx;
+    if (rc_missing_idx == 0) {
+        std::cerr << "missing core export-index should not inject builtin acts implicitly\n" << out_missing_idx;
+        return false;
+    }
+    if (contains(out_missing_idx, "ExportIndexMissing")) {
+        std::cerr << "missing core export-index should not be a hard error anymore\n" << out_missing_idx;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_alias_proto_impl_path_resolves() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-proto-alias";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "markers", ec);
+    std::filesystem::create_directories(temp_root / "err", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto proto_pr = temp_root / "markers/marker.pr";
+    const auto err_pr = temp_root / "err/basic.pr";
+
+    const std::string proto_src =
+        "export proto Recoverable {\n"
+        "};\n";
+    const std::string err_src =
+        "import markers as p;\n"
+        "\n"
+        "export enum CoreErr: p::Recoverable {\n"
+        "  case InvalidState,\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(proto_pr, proto_src) || !write_text(err_pr, err_src)) {
+        std::cerr << "failed to write proto alias bundle files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + err_pr.string() + "\" -fsyntax-only" +
+        " --bundle-name core" +
+        " --bundle-root \"" + temp_root.string() + "\"" +
+        " --module-head err" +
+        " --module-import markers" +
+        " --bundle-source \"" + proto_pr.string() + "\"" +
+        " --bundle-source \"" + err_pr.string() + "\"";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc != 0) {
+        std::cerr << "qualified proto path via import alias should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_relative_import_resolves() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-relative-import";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "foo", ec);
+    std::filesystem::create_directories(temp_root / "bar", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto bar_pr = temp_root / "bar/marker.pr";
+    const auto foo_pr = temp_root / "foo/main.pr";
+    const std::string bar_src =
+        "export proto Recoverable {\n"
+        "};\n";
+    const std::string foo_src =
+        "import .bar as b;\n"
+        "\n"
+        "export enum E: b::Recoverable {\n"
+        "  case A,\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(bar_pr, bar_src) || !write_text(foo_pr, foo_src)) {
+        std::cerr << "failed to write relative import bundle files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + foo_pr.string() + "\" -fsyntax-only" +
+        " --bundle-name app" +
+        " --bundle-root \"" + temp_root.string() + "\"" +
+        " --module-head foo" +
+        " --module-import bar" +
+        " --bundle-source \"" + bar_pr.string() + "\"" +
+        " --bundle-source \"" + foo_pr.string() + "\"";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc != 0) {
+        std::cerr << "relative import .bar should resolve to sibling module\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_parent_relative_import_resolves() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-parent-relative-import";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "foo/bar", ec);
+    std::filesystem::create_directories(temp_root / "foo/baz", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto bar_pr = temp_root / "foo/bar/types.pr";
+    const auto baz_pr = temp_root / "foo/baz/main.pr";
+    const std::string bar_src =
+        "export proto Recoverable {\n"
+        "};\n";
+    const std::string baz_src =
+        "import ..foo::bar as b;\n"
+        "\n"
+        "export enum E: b::Recoverable {\n"
+        "  case A,\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(bar_pr, bar_src) || !write_text(baz_pr, baz_src)) {
+        std::cerr << "failed to write parent-relative import bundle files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + baz_pr.string() + "\" -fsyntax-only" +
+        " --bundle-name app" +
+        " --bundle-root \"" + temp_root.string() + "\"" +
+        " --module-head foo::baz" +
+        " --module-import foo" +
+        " --bundle-source \"" + bar_pr.string() + "\"" +
+        " --bundle-source \"" + baz_pr.string() + "\"";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc != 0) {
+        std::cerr << "relative import ..foo::bar should resolve via parent module\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_bundle_grandparent_relative_import_resolves() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-grandparent-relative-import";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "foo/baz/qux", ec);
+    std::filesystem::create_directories(temp_root / "bar", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto bar_pr = temp_root / "bar/types.pr";
+    const auto qux_pr = temp_root / "foo/baz/qux/main.pr";
+    const std::string bar_src =
+        "export proto Recoverable {\n"
+        "};\n";
+    const std::string qux_src =
+        "import ...bar as b;\n"
+        "\n"
+        "export enum E: b::Recoverable {\n"
+        "  case A,\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(bar_pr, bar_src) || !write_text(qux_pr, qux_src)) {
+        std::cerr << "failed to write grandparent-relative import bundle files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + qux_pr.string() + "\" -fsyntax-only" +
+        " --bundle-name app" +
+        " --bundle-root \"" + temp_root.string() + "\"" +
+        " --module-head foo::baz::qux" +
+        " --module-import bar" +
+        " --bundle-source \"" + bar_pr.string() + "\"" +
+        " --bundle-source \"" + qux_pr.string() + "\"";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc != 0) {
+        std::cerr << "relative import ...bar should resolve via grandparent module\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_core_marker_bare_use_special_form() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-core-bare-use";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto core_marker_ok = temp_root / "core_marker_ok.pr";
+    const auto core_no_marker = temp_root / "core_no_marker.pr";
+    const auto non_core_marker = temp_root / "non_core_marker.pr";
+
+    const std::string marker_src =
+        "$![Impl::Core];\n"
+        "use Equatable;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    const std::string no_marker_src =
+        "use Equatable;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
+    if (!write_text(core_marker_ok, marker_src) ||
+        !write_text(core_no_marker, no_marker_src) ||
+        !write_text(non_core_marker, marker_src)) {
+        std::cerr << "failed to write core bare-use policy files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto run_tool = [&](const std::filesystem::path& pr,
+                        const std::string& bundle_name) -> std::pair<int, std::string> {
+        const std::string cmd =
+            "\"" + bin + "\" tool parusc -- \"" + pr.string() + "\" -fsyntax-only" +
+            " --bundle-name " + bundle_name +
+            " --bundle-root \"" + temp_root.string() + "\"" +
+            " --module-head " + bundle_name +
+            " --bundle-source \"" + pr.string() + "\"";
+        return run_capture(cmd);
+    };
+
+    auto [rc_core_ok, out_core_ok] = run_tool(core_marker_ok, "core");
+    if (rc_core_ok != 0) {
+        std::cerr << "core marker file should accept bare use form\n" << out_core_ok;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_core_no_marker, out_core_no_marker] = run_tool(core_no_marker, "core");
+    if (rc_core_no_marker == 0 || !contains(out_core_no_marker, "literal (use substitution)")) {
+        std::cerr << "core file without marker must reject bare use shorthand\n" << out_core_no_marker;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_non_core_marker, out_non_core_marker] = run_tool(non_core_marker, "app");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_non_core_marker == 0 ||
+        !contains(out_non_core_marker, "$![Impl::Core]; is allowed only when bundle-name is 'core'")) {
+        std::cerr << "non-core bundle must reject Impl::Core marker even with bare use shorthand\n" << out_non_core_marker;
+        return false;
+    }
+    return true;
+}
+
+bool test_import_keyword_path_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-import-keyword-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "import proto as p;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write import-keyword rejection file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cmd =
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only";
+    auto [rc, out] = run_capture(cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc == 0) {
+        std::cerr << "import keyword path should fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "identifier (path segment)")) {
+        std::cerr << "import keyword rejection must report identifier path segment expectation\n" << out;
         return false;
     }
     return true;
@@ -1233,13 +1553,20 @@ int main() {
     const bool ok13 = test_same_bundle_multi_module_runtime_call();
     const bool ok14 = test_builtin_acts_policy_core_gate();
     const bool ok15 = test_auto_core_export_index_loaded_for_non_core_bundle();
-    const bool ok16 = test_actor_rejected_in_no_std_profile();
-    const bool ok17 = test_actor_allowed_in_freestanding_profile();
-    const bool ok18 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok19 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok16 = test_bundle_alias_proto_impl_path_resolves();
+    const bool ok17 = test_bundle_relative_import_resolves();
+    const bool ok18 = test_bundle_parent_relative_import_resolves();
+    const bool ok19 = test_bundle_grandparent_relative_import_resolves();
+    const bool ok20 = test_core_marker_bare_use_special_form();
+    const bool ok21 = test_import_keyword_path_rejected();
+    const bool ok22 = test_actor_rejected_in_no_std_profile();
+    const bool ok23 = test_actor_allowed_in_freestanding_profile();
+    const bool ok24 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok25 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
-        !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19) {
+        !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
+        !ok24 || !ok25) {
         return 1;
     }
 

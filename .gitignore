@@ -7,3 +7,7 @@ tests/out/*
 bar/
 .lei/
 .lei-cache/
+
+sysroot/.cache/
+sysroot/.cache/exports/
+sysroot/.cache/exports/core.exports.json

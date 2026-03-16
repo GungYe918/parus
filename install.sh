@@ -214,12 +214,14 @@ fi
 mkdir -p "${ROOT_DIR}/sysroot/std/src"
 mkdir -p "${SYSROOT_DIR}/std/src"
 cp -R "${ROOT_DIR}/sysroot/std/src/." "${SYSROOT_DIR}/std/src/"
-mkdir -p "${ROOT_DIR}/sysroot/core/src"
-mkdir -p "${SYSROOT_DIR}/core/src"
-cp -R "${ROOT_DIR}/sysroot/core/src/." "${SYSROOT_DIR}/core/src/"
-mkdir -p "${ROOT_DIR}/sysroot/core/index"
-mkdir -p "${SYSROOT_DIR}/core/index"
-cp -R "${ROOT_DIR}/sysroot/core/index/." "${SYSROOT_DIR}/core/index/"
+mkdir -p "${SYSROOT_DIR}/core"
+if [[ -d "${ROOT_DIR}/sysroot/core" ]]; then
+  cp -R "${ROOT_DIR}/sysroot/core/." "${SYSROOT_DIR}/core/"
+fi
+if [[ -d "${ROOT_DIR}/sysroot/.cache/exports" ]]; then
+  mkdir -p "${SYSROOT_DIR}/.cache/exports"
+  cp -R "${ROOT_DIR}/sysroot/.cache/exports/." "${SYSROOT_DIR}/.cache/exports/"
+fi
 
 PRT_HOSTED_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_hosted.a"
 PRT_FREESTANDING_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_freestanding.a"

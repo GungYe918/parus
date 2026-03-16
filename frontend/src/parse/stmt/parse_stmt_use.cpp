@@ -241,13 +241,26 @@ namespace parus {
         using K = syntax::TokenKind;
 
         const Token import_kw = cursor_.bump(); // 'import'
+        uint32_t relative_dot_count = 0;
+        for (;;) {
+            if (cursor_.eat(K::kDot)) {
+                ++relative_dot_count;
+                continue;
+            }
+            if (cursor_.eat(K::kDotDot)) {
+                relative_dot_count += 2;
+                continue;
+            }
+            break;
+        }
+        const bool is_relative = relative_dot_count > 0;
 
         ast::Stmt s{};
         s.kind = ast::StmtKind::kUse;
         s.use_kind = ast::UseKind::kImport;
         s.span = import_kw.span;
 
-        auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+        auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/!is_relative);
         s.use_path_begin = pb;
         s.use_path_count = pc;
 
@@ -256,6 +269,15 @@ namespace parus {
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(import_kw.span, end);
             return ast_.add_stmt(s);
+        }
+
+        if (is_relative) {
+            auto& segs = ast_.path_segs_mut();
+            if (pb < segs.size()) {
+                std::string rel(relative_dot_count, '.');
+                rel += segs[pb];
+                segs[pb] = ast_.add_owned_string(std::move(rel));
+            }
         }
 
         std::string_view alias = ast_.path_segs()[pb + pc - 1];
@@ -489,6 +511,20 @@ namespace parus {
             }
 
             s.use_kind = ast::UseKind::kActsEnable;
+            Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
+            s.span = span_join(use_kw.span, end);
+            return ast_.add_stmt(s);
+        }
+
+        // ------------------------------------------------------------
+        // 2-A.5) core marker file special form:
+        //   use Equatable;
+        // ------------------------------------------------------------
+        if (core_impl_file_mode_ && pc == 1 && cursor_.at(K::kSemicolon)) {
+            const auto& segs = ast_.path_segs();
+            s.use_kind = ast::UseKind::kCoreBuiltinUse;
+            s.use_name = segs[pb];
+
             Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
             s.span = span_join(use_kw.span, end);
             return ast_.add_stmt(s);

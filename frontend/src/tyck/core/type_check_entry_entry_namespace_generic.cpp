@@ -1645,14 +1645,19 @@ namespace parus::tyck {
         bool* out_typed_path_failure
     ) {
         if (out_typed_path_failure) *out_typed_path_failure = false;
+        bool typed_path_failure = false;
         if (pr.type != ty::kInvalidType) {
-            bool typed_path_failure = false;
             if (auto sid = resolve_proto_decl_from_type_(pr.type, use_span, &typed_path_failure)) {
                 return sid;
             }
             if (typed_path_failure) {
-                if (out_typed_path_failure) *out_typed_path_failure = true;
-                return std::nullopt;
+                const auto& t = types_.get(pr.type);
+                const bool has_applied_generic_args =
+                    (t.kind == ty::Kind::kNamedUser) && (t.named_arg_count > 0);
+                if (has_applied_generic_args) {
+                    if (out_typed_path_failure) *out_typed_path_failure = true;
+                    return std::nullopt;
+                }
             }
         }
 
@@ -1670,6 +1675,28 @@ namespace parus::tyck {
             if (pit != proto_decl_by_name_.end()) {
                 return pit->second;
             }
+            const bool external_proto_symbol =
+                ss.is_external &&
+                ss.kind == sema::SymbolKind::kType &&
+                (ss.external_payload == "parus_decl_kind=proto");
+            if (external_proto_symbol) {
+                ast::Stmt stub{};
+                stub.kind = ast::StmtKind::kProtoDecl;
+                stub.span = ss.decl_span;
+                stub.name = ss.name;
+                stub.type = ss.declared_type;
+                stub.is_export = ss.is_export;
+                const auto stub_sid = ast_.add_stmt(stub);
+                proto_decl_by_name_[ss.name] = stub_sid;
+                proto_qualified_name_by_stmt_[stub_sid] = ss.name;
+                if (ss.declared_type != ty::kInvalidType) {
+                    proto_decl_by_type_[ss.declared_type] = stub_sid;
+                }
+                return stub_sid;
+            }
+        }
+        if (typed_path_failure && out_typed_path_failure) {
+            *out_typed_path_failure = true;
         }
         return std::nullopt;
     }
@@ -2829,6 +2856,49 @@ namespace parus::tyck {
         return out;
     }
 
+    std::string TypeChecker::resolve_import_path_for_alias_(std::string_view raw_path) const {
+        if (raw_path.empty()) return {};
+        if (!raw_path.starts_with('.')) return std::string(raw_path);
+
+        size_t dot_count = 0;
+        while (dot_count < raw_path.size() && raw_path[dot_count] == '.') {
+            ++dot_count;
+        }
+        if (dot_count == 0) return std::string(raw_path);
+
+        std::string_view rel = raw_path.substr(dot_count);
+        if (rel.starts_with("::")) {
+            rel.remove_prefix(2);
+        }
+        if (rel.empty()) return {};
+
+        const std::string cur_head = current_module_head_();
+        if (cur_head.empty()) return std::string(rel);
+
+        std::vector<std::string> parts{};
+        size_t pos = 0;
+        while (pos < cur_head.size()) {
+            size_t next = cur_head.find("::", pos);
+            if (next == std::string::npos) {
+                parts.push_back(cur_head.substr(pos));
+                break;
+            }
+            parts.push_back(cur_head.substr(pos, next - pos));
+            pos = next + 2;
+        }
+        if (parts.empty()) return std::string(rel);
+
+        const size_t keep = (dot_count >= parts.size()) ? 0 : (parts.size() - dot_count);
+        std::string out{};
+        for (size_t i = 0; i < keep; ++i) {
+            if (i) out += "::";
+            out += parts[i];
+        }
+        if (!out.empty()) out += "::";
+        out += rel;
+        return out;
+    }
+
     std::string TypeChecker::current_namespace_prefix_() const {
         if (namespace_stack_.empty()) return {};
         std::string out;
@@ -2837,6 +2907,18 @@ namespace parus::tyck {
             out += namespace_stack_[i];
         }
         return out;
+    }
+
+    std::string TypeChecker::current_module_head_() const {
+        const auto& syms = sym_.symbols();
+        for (const auto& s : syms) {
+            if (s.is_external) continue;
+            if (!s.decl_module_head.empty()) return s.decl_module_head;
+        }
+        for (const auto& s : syms) {
+            if (!s.decl_module_head.empty()) return s.decl_module_head;
+        }
+        return {};
     }
 
     std::string TypeChecker::qualify_decl_name_(std::string_view base_name) const {

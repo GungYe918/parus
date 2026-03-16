@@ -488,6 +488,7 @@ namespace parus::ast {
         kNestAlias,    // use nest a::b [as alias];
         kTextSubst,    // use PI 3.14f;
         kActsEnable,   // use T with acts(NameOrDefault);
+        kCoreBuiltinUse, // core marker file only: use Equatable;
     };
 
     enum class ProtoFnRole : uint8_t {

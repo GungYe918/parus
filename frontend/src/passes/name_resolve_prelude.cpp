@@ -198,6 +198,56 @@ namespace parus::passes {
         return out;
     }
 
+    static std::string resolve_import_path_for_alias_(
+        std::string_view raw_path,
+        const NameResolveOptions& opt
+    ) {
+        if (raw_path.empty()) return {};
+        if (!raw_path.starts_with('.')) return std::string(raw_path);
+
+        size_t dot_count = 0;
+        while (dot_count < raw_path.size() && raw_path[dot_count] == '.') {
+            ++dot_count;
+        }
+        if (dot_count == 0) return std::string(raw_path);
+
+        std::string_view rel = raw_path.substr(dot_count);
+        if (rel.starts_with("::")) {
+            rel.remove_prefix(2);
+        }
+        if (rel.empty()) return {};
+
+        if (opt.current_module_head.empty()) {
+            return std::string(rel);
+        }
+
+        std::vector<std::string> parts{};
+        size_t pos = 0;
+        while (pos < opt.current_module_head.size()) {
+            size_t next = opt.current_module_head.find("::", pos);
+            if (next == std::string::npos) {
+                parts.push_back(opt.current_module_head.substr(pos));
+                break;
+            }
+            parts.push_back(opt.current_module_head.substr(pos, next - pos));
+            pos = next + 2;
+        }
+
+        if (parts.empty()) {
+            return std::string(rel);
+        }
+
+        const size_t keep = (dot_count >= parts.size()) ? 0 : (parts.size() - dot_count);
+        std::string out{};
+        for (size_t i = 0; i < keep; ++i) {
+            if (i) out += "::";
+            out += parts[i];
+        }
+        if (!out.empty()) out += "::";
+        out += rel;
+        return out;
+    }
+
     static std::string qualify_name_(const std::vector<std::string>& namespace_stack, std::string_view base) {
         if (base.empty()) return {};
         if (namespace_stack.empty()) return std::string(base);

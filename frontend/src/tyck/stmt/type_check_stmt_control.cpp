@@ -179,12 +179,20 @@ namespace parus::tyck {
                      s.use_kind == ast::UseKind::kPathAlias ||
                      s.use_kind == ast::UseKind::kNestAlias) &&
                     s.use_path_count > 0) {
-                    const std::string path = path_join_(s.use_path_begin, s.use_path_count);
+                    const std::string raw_path = path_join_(s.use_path_begin, s.use_path_count);
+                    const std::string path = resolve_import_path_for_alias_(raw_path);
                     std::string alias(s.use_rhs_ident);
                     if (alias.empty()) {
                         const auto& segs = ast_.path_segs();
                         if (s.use_path_begin + s.use_path_count <= segs.size()) {
-                            alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
+                            const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
+                            if (!last.empty() && last.front() == '.') {
+                                size_t off = 0;
+                                while (off < last.size() && last[off] == '.') ++off;
+                                alias = std::string(last.substr(off));
+                            } else {
+                                alias = std::string(last);
+                            }
                         }
                     }
                     if (!path.empty() && !alias.empty()) {

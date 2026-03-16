@@ -368,7 +368,9 @@ namespace parus::tyck {
         std::optional<uint32_t> lookup_symbol_(std::string_view name) const;
         std::optional<std::string> rewrite_imported_path_(std::string_view path) const;
         std::string current_namespace_prefix_() const;
+        std::string current_module_head_() const;
         std::string path_join_(uint32_t begin, uint32_t count) const;
+        std::string resolve_import_path_for_alias_(std::string_view raw_path) const;
         ty::TypeId canonicalize_acts_owner_type_(ty::TypeId owner_type) const;
         void collect_known_namespace_paths_(ast::StmtId program_stmt);
         bool is_known_namespace_path_(std::string_view path) const;

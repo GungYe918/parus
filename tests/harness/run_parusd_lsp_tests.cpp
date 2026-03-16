@@ -196,7 +196,7 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto root = std::filesystem::temp_directory_path() / ("parusd-core-index-" + stamp);
     const auto sysroot = root / "sysroot";
-    const auto core_index = sysroot / "core" / "index" / "core.exports.json";
+    const auto core_index = sysroot / ".cache" / "exports" / "core.exports.json";
     const auto main_pr = root / "main.pr";
 
     const std::string core_index_text =
@@ -208,22 +208,22 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
         "      \"kind\": \"act\",\n"
         "      \"path\": \"i32\",\n"
         "      \"link_name\": \"\",\n"
-        "      \"module_head\": \"core\",\n"
-        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"module_head\": \"num\",\n"
+        "      \"decl_dir\": \"sysroot/core/num\",\n"
         "      \"type_repr\": \"i32\",\n"
         "      \"inst_payload\": \"\",\n"
-        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 1, \"col\": 1},\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/num/i32.pr\", \"line\": 1, \"col\": 1},\n"
         "      \"is_export\": true\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"fn\",\n"
         "      \"path\": \"i32::size\",\n"
         "      \"link_name\": \"core_i32_size\",\n"
-        "      \"module_head\": \"core\",\n"
-        "      \"decl_dir\": \"sysroot/core/src\",\n"
+        "      \"module_head\": \"num\",\n"
+        "      \"decl_dir\": \"sysroot/core/num\",\n"
         "      \"type_repr\": \"def(i32) -> i32\",\n"
         "      \"inst_payload\": \"parus_builtin_acts|owner=i32|member=size|self=1\",\n"
-        "      \"decl_span\": {\"file\": \"sysroot/core/src/prelude.pr\", \"line\": 3, \"col\": 3},\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/num/i32.pr\", \"line\": 3, \"col\": 3},\n"
         "      \"is_export\": true\n"
         "    }\n"
         "  ]\n"

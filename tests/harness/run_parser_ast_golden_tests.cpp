@@ -234,6 +234,7 @@ static const char* use_kind_name_(parus::ast::UseKind k) {
         case K::kNestAlias: return "NestAlias";
         case K::kTextSubst: return "TextSubst";
         case K::kActsEnable: return "ActsEnable";
+        case K::kCoreBuiltinUse: return "CoreBuiltinUse";
     }
     return "UnknownUse";
 }

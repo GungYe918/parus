@@ -898,14 +898,22 @@
 
             case ast::StmtKind::kUse:
                 if (s.use_kind == ast::UseKind::kImport && file_scope && s.use_path_count > 0) {
-                    const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                    const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                    const std::string path = resolve_import_path_for_alias_(raw_path, opt);
                     if (!path.empty()) {
                         validate_import_dep_(bag, opt, s.span, path);
                         std::string alias = std::string(s.use_rhs_ident);
                         if (alias.empty()) {
                             const auto& segs = ast.path_segs();
                             if (s.use_path_begin + s.use_path_count <= segs.size()) {
-                                alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
+                                const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
+                                if (!last.empty() && last.front() == '.') {
+                                    size_t off = 0;
+                                    while (off < last.size() && last[off] == '.') ++off;
+                                    alias = std::string(last.substr(off));
+                                } else {
+                                    alias = std::string(last);
+                                }
                             }
                         }
                         if (!alias.empty()) {
@@ -1045,14 +1053,22 @@
                 s.use_kind == ast::UseKind::kImport &&
                 s.use_path_count > 0)
             {
-                const std::string path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                const std::string path = resolve_import_path_for_alias_(raw_path, opt);
                 if (path.empty()) continue;
                 validate_import_dep_(bag, opt, s.span, path);
 
                 std::string alias = std::string(s.use_rhs_ident);
                 if (alias.empty()) {
                     if (s.use_path_begin + s.use_path_count <= segs.size()) {
-                        alias = std::string(segs[s.use_path_begin + s.use_path_count - 1]);
+                        const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
+                        if (!last.empty() && last.front() == '.') {
+                            size_t off = 0;
+                            while (off < last.size() && last[off] == '.') ++off;
+                            alias = std::string(last.substr(off));
+                        } else {
+                            alias = std::string(last);
+                        }
                     }
                 }
                 if (!alias.empty()) {
