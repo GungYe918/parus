@@ -1,13 +1,13 @@
 # C Import (libclang) Preparation Plan
 
 > Note: This document started as a v1 prep note.  
-> Current implementation has moved to v2 partial support (`-I/-isystem`, limited variadic, format bridge, union manual gate).
+> Current implementation has moved to v2 partial support (`-I/-isystem`, limited variadic, union manual gate, C ABI positional-only).
 
 ## Scope in this round
 - Enable user-facing C-header import syntax: `import "Header.h" as alias;`.
 - Build libclang-backed declaration manifest for C functions/types and inject into external symbol surface.
 - Support include path flags for cimport: `-I`, `-isystem`.
-- Support limited C variadic calls + signature-driven `$\"...\"` format bridge.
+- Support limited C variadic calls (no Parus-side format bridge).
 - Add union metadata import and `manual[get/set]` gate for union dot access.
 
 ## Current C mapping status target (v1)

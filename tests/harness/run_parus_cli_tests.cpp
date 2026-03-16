@@ -1413,35 +1413,56 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         return false;
     }
 
-    const auto main_pr = temp_root / "main.pr";
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_fail = temp_root / "main_fail.pr";
     const auto stdio_h = temp_root / "stdio.h";
     const std::string header_src =
         "#ifndef PARUS_STDIO_H\n"
         "#define PARUS_STDIO_H\n"
         "int printf(const char* fmt, ...);\n"
         "#endif\n";
-    const std::string main_src =
+    const std::string ok_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  stdio::printf(\"%d\", 5i32);\n"
+        "  return 0i32;\n"
+        "}\n";
+    const std::string fail_src =
         "import \"stdio.h\" as stdio;\n"
         "\n"
         "def main() -> i32 {\n"
         "  stdio::printf($\"sum={1i32 + 2i32}\");\n"
         "  return 0i32;\n"
         "}\n";
-    if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
+    if (!write_text(stdio_h, header_src) ||
+        !write_text(main_ok, ok_src) ||
+        !write_text(main_fail, fail_src)) {
         std::cerr << "failed to write c-header format bridge test files\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
-    auto [rc, out] = run_capture(
-        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
     std::filesystem::remove_all(temp_root, ec);
 
-    if (contains(out, "CImportLibClangUnavailable")) {
-        return rc != 0;
+    if (contains(out_ok, "CImportLibClangUnavailable") ||
+        contains(out_fail, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
     }
-    if (rc != 0) {
-        std::cerr << "stdio::printf($\"...\") format bridge should typecheck\n" << out;
+    if (rc_ok != 0) {
+        std::cerr << "stdio::printf(\"%d\", 5i32) should typecheck\n" << out_ok;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "stdio::printf($\"...\") should be rejected in C ABI call\n" << out_fail;
+        return false;
+    }
+    if (!contains(out_fail, "CAbiFormatStringForbidden")) {
+        std::cerr << "stdio::printf($\"...\") rejection must report CAbiFormatStringForbidden\n" << out_fail;
         return false;
     }
     return true;
@@ -1609,6 +1630,50 @@ bool test_c_header_import_union_manual_set_gate() {
     }
     if (rc_ok != 0) {
         std::cerr << "union write with manual[set] should pass\n" << out_ok;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_enum_constant_usage() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-enum-const";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "E.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_ENUM_E_H\n"
+        "#define PARUS_ENUM_E_H\n"
+        "enum Color { RED = 3, BLUE = 7 };\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"E.h\" as c;\n"
+        "\n"
+        "def main() -> u32 {\n"
+        "  return c::RED;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write enum-constant cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "c-import enum constant should compile\n" << out;
         return false;
     }
     return true;
@@ -1871,14 +1936,15 @@ int main() {
     const bool ok25 = test_c_header_import_include_dir_option();
     const bool ok26 = test_c_header_import_union_manual_get_gate();
     const bool ok27 = test_c_header_import_union_manual_set_gate();
-    const bool ok28 = test_actor_rejected_in_no_std_profile();
-    const bool ok29 = test_actor_allowed_in_freestanding_profile();
-    const bool ok30 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok31 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok28 = test_c_header_import_enum_constant_usage();
+    const bool ok29 = test_actor_rejected_in_no_std_profile();
+    const bool ok30 = test_actor_allowed_in_freestanding_profile();
+    const bool ok31 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok32 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
-        !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31) {
+        !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32) {
         return 1;
     }
 

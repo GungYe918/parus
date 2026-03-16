@@ -163,10 +163,10 @@ export def add(a: i32, b: i32) -> i32 {
 3-a. fixed parameter 구간은 일반 호출과 동일 타입검사를 적용한다.
 3-b. variadic 구간은 ABI-safe scalar/pointer만 허용한다.
 3-c. default promotion(`f32 -> f64`, small int/bool/char -> int 계열)은 lowering에서 적용한다.
-4. format bridge는 함수명 하드코딩 없이 시그니처 메타로 판정한다.
-4-a. bridge 발동 형태는 `callee($"...")` 단일 인자 호출만 허용한다.
-4-b. `fmt_vlist` 함수는 importer가 찾은 variadic sibling으로 rewrite 후 동일 규칙을 적용한다.
-4-c. `%s` 보간은 v1에서 리터럴/const text만 허용한다.
+4. C ABI 호출은 positional-only다(import C / extern "C" 공통).
+4-a. labeled/named-group 인자는 허용하지 않는다.
+4-b. `$/F` format string literal(`$"..."`, `F"""..."""`)은 C ABI 인자에서 금지한다.
+4-c. C `char*`(및 `const char*`) 기대 슬롯에서는 plain string literal(`"..."`)을 자동 허용한다.
 5. C union import는 2차 규칙을 따른다.
 5-a. union field dot 접근은 `manual[...]` 내부에서만 허용한다.
 5-b. read는 `manual[get]` 또는 `manual[set]`가 필요하다.
