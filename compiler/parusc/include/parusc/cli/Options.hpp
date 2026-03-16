@@ -77,6 +77,10 @@ namespace parusc::cli {
         bool no_core = false;
         std::vector<std::string> cimport_include_dirs{};
         std::vector<std::string> cimport_isystem_dirs{};
+        std::vector<std::string> cimport_defines{};
+        std::vector<std::string> cimport_undefines{};
+        std::vector<std::string> cimport_forced_includes{};
+        std::vector<std::string> cimport_imacros{};
         DiagFormat diag_format = DiagFormat::kText;
 
         bool has_xparus = false;

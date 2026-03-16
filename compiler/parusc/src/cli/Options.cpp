@@ -385,6 +385,10 @@ namespace parusc::cli {
             << "  --sysroot <path>      Parus sysroot path for link/runtime lookup\n"
             << "  -I<dir>, -I <dir>     Add C-header import include directory\n"
             << "  -isystem<dir>, -isystem <dir>  Add C-header import system include directory\n"
+            << "  -D<name[=value]>, -D <name[=value]>  Add C preprocessor define for cimport\n"
+            << "  -U<name>, -U <name>  Add C preprocessor undefine for cimport\n"
+            << "  -include<file>, -include <file>  Force-include C header before cimport\n"
+            << "  -imacros<file>, -imacros <file>  Import macro definitions from file for cimport\n"
             << "  --apple-sdk-root <path>  Explicit Apple SDK root for Darwin linking\n"
             << "  -ffreestanding        Select freestanding runtime profile\n"
             << "  -fno-std              Disable std runtime integration\n"
@@ -561,6 +565,62 @@ namespace parusc::cli {
             }
             if (a.starts_with("-isystem") && a.size() > std::string_view("-isystem").size()) {
                 out.cimport_isystem_dirs.emplace_back(a.substr(std::string_view("-isystem").size()));
+                continue;
+            }
+            if (a == "-D") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-D requires a macro definition";
+                    return out;
+                }
+                out.cimport_defines.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-D") && a.size() > 2) {
+                out.cimport_defines.emplace_back(a.substr(2));
+                continue;
+            }
+            if (a == "-U") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-U requires a macro name";
+                    return out;
+                }
+                out.cimport_undefines.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-U") && a.size() > 2) {
+                out.cimport_undefines.emplace_back(a.substr(2));
+                continue;
+            }
+            if (a == "-include") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-include requires a header path";
+                    return out;
+                }
+                out.cimport_forced_includes.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-include") && a.size() > std::string_view("-include").size()) {
+                out.cimport_forced_includes.emplace_back(a.substr(std::string_view("-include").size()));
+                continue;
+            }
+            if (a == "-imacros") {
+                const auto v = read_next_(args, i);
+                if (!v || v->empty()) {
+                    out.ok = false;
+                    out.error = "-imacros requires a header path";
+                    return out;
+                }
+                out.cimport_imacros.emplace_back(*v);
+                continue;
+            }
+            if (a.starts_with("-imacros") && a.size() > std::string_view("-imacros").size()) {
+                out.cimport_imacros.emplace_back(a.substr(std::string_view("-imacros").size()));
                 continue;
             }
 

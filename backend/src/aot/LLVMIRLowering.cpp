@@ -1489,6 +1489,21 @@ namespace parus::backend::aot {
                 if (inst.result == kInvalidId) return;
 
                 const auto it = text_constants_.find(iid);
+                const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    if (it != text_constants_.end()) {
+                        const auto& info = it->second;
+                        const std::string data_ptr = next_tmp_();
+                        os << "  " << data_ptr << " = getelementptr ["
+                           << info.storage_len << " x i8], ptr @" << info.symbol
+                           << ", i32 0, i32 0\n";
+                        os << "  " << vref_(inst.result) << " = bitcast ptr " << data_ptr << " to ptr\n";
+                    } else {
+                        os << "  " << vref_(inst.result) << " = getelementptr i8, ptr null, i64 0\n";
+                    }
+                    return;
+                }
+
                 const auto tid = value_type_id_(inst.result);
                 const std::string text_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
 
@@ -1520,8 +1535,6 @@ namespace parus::backend::aot {
                 }
 
                 address_ref_by_value_[inst.result] = slot;
-
-                const std::string rty = value_ty_(inst.result);
                 if (rty == "ptr") {
                     os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
                     return;

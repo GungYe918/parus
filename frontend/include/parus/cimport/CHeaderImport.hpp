@@ -18,6 +18,15 @@ namespace parus::cimport {
         kFmtVList,
     };
 
+    enum class ImportedConstKind : uint8_t {
+        kNone = 0,
+        kInt,
+        kFloat,
+        kBool,
+        kChar,
+        kString,
+    };
+
     struct ImportedFunctionDecl {
         std::string name{};
         std::string link_name{};
@@ -71,6 +80,13 @@ namespace parus::cimport {
         std::vector<ImportedEnumConstantDecl> constants{};
     };
 
+    struct ImportedMacroDecl {
+        std::string name{};
+        bool is_function_like = false;
+        ImportedConstKind const_kind = ImportedConstKind::kNone;
+        std::string value_text{};
+    };
+
     struct HeaderImportResult {
         ImportErrorKind error = ImportErrorKind::kNone;
         std::string error_text{};
@@ -79,13 +95,18 @@ namespace parus::cimport {
         std::vector<ImportedTypedefDecl> typedefs{};
         std::vector<ImportedStructDecl> structs{};
         std::vector<ImportedEnumDecl> enums{};
+        std::vector<ImportedMacroDecl> macros{};
     };
 
     HeaderImportResult import_c_header_functions(
         const std::string& importer_source_path,
         const std::string& header_path,
         const std::vector<std::string>& include_dirs,
-        const std::vector<std::string>& isystem_dirs
+        const std::vector<std::string>& isystem_dirs,
+        const std::vector<std::string>& defines,
+        const std::vector<std::string>& undefines,
+        const std::vector<std::string>& forced_includes,
+        const std::vector<std::string>& imacros
     );
 
 } // namespace parus::cimport

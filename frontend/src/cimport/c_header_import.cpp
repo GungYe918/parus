@@ -1,9 +1,11 @@
 #include <parus/cimport/CHeaderImport.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -16,6 +18,8 @@ namespace parus::cimport {
 
 #if defined(PARUS_HAS_LIBCLANG) && PARUS_HAS_LIBCLANG
     namespace {
+
+        struct ImportCollectCtx;
 
         struct CollectedFnDecl {
             ImportedFunctionDecl api{};
@@ -119,9 +123,202 @@ namespace parus::cimport {
             return false;
         }
 
-        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth = 0);
+        static std::string cursor_identity_key_(CXCursor c) {
+            const std::string usr = to_std_string_(clang_getCursorUSR(c));
+            if (!usr.empty()) return std::string("usr:") + usr;
+            return std::string("hash:") + std::to_string(clang_hashCursor(c));
+        }
 
-        static bool map_c_fn_type_to_parus_(CXType fn_ty, std::string& out, uint32_t depth) {
+        static bool parse_macro_int_literal_text_(std::string_view text, std::string& out) {
+            auto trim = [](std::string_view s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+                return s;
+            };
+            text = trim(text);
+            if (text.empty()) return false;
+
+            bool neg = false;
+            if (text.front() == '+' || text.front() == '-') {
+                neg = (text.front() == '-');
+                text.remove_prefix(1);
+            }
+            if (text.empty()) return false;
+
+            while (!text.empty()) {
+                const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(text.back())));
+                if (c == 'u' || c == 'l') {
+                    text.remove_suffix(1);
+                    continue;
+                }
+                break;
+            }
+            text = trim(text);
+            if (text.empty()) return false;
+
+            const bool is_hex = text.size() > 2 &&
+                                text[0] == '0' &&
+                                (text[1] == 'x' || text[1] == 'X');
+            for (char c : text) {
+                if (c == '\'') continue;
+                if (is_hex) {
+                    const bool ok = std::isdigit(static_cast<unsigned char>(c)) ||
+                                    (c >= 'a' && c <= 'f') ||
+                                    (c >= 'A' && c <= 'F') ||
+                                    c == 'x' || c == 'X';
+                    if (!ok) return false;
+                } else if (!std::isdigit(static_cast<unsigned char>(c))) {
+                    return false;
+                }
+            }
+
+            out.clear();
+            if (neg) out.push_back('-');
+            out.append(text);
+            return true;
+        }
+
+        static bool parse_macro_float_literal_text_(std::string_view text, std::string& out) {
+            auto trim = [](std::string_view s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+                return s;
+            };
+            text = trim(text);
+            if (text.empty()) return false;
+
+            bool neg = false;
+            if (text.front() == '+' || text.front() == '-') {
+                neg = (text.front() == '-');
+                text.remove_prefix(1);
+            }
+            if (text.empty()) return false;
+
+            while (!text.empty()) {
+                const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(text.back())));
+                if (c == 'f' || c == 'l') {
+                    text.remove_suffix(1);
+                    continue;
+                }
+                break;
+            }
+            text = trim(text);
+            if (text.empty()) return false;
+
+            bool has_dot = false;
+            bool has_exp = false;
+            for (char c : text) {
+                if (c == '.') {
+                    has_dot = true;
+                    continue;
+                }
+                if (c == 'e' || c == 'E' || c == 'p' || c == 'P') {
+                    has_exp = true;
+                    continue;
+                }
+            }
+            if (!has_dot && !has_exp) return false;
+
+            out.clear();
+            if (neg) out.push_back('-');
+            out.append(text);
+            return true;
+        }
+
+        static bool parse_macro_char_literal_text_(std::string_view text, std::string& out) {
+            if (text.size() < 3) return false;
+            const size_t quote = text.find('\'');
+            if (quote == std::string_view::npos) return false;
+            const size_t last_quote = text.rfind('\'');
+            if (last_quote == std::string_view::npos || last_quote <= quote) return false;
+            out.assign(text.substr(quote, last_quote - quote + 1));
+            return true;
+        }
+
+        static bool parse_macro_string_literal_text_(std::string_view text, std::string& out) {
+            auto trim = [](std::string_view s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+                return s;
+            };
+            text = trim(text);
+            if (text.empty()) return false;
+            if (text.front() == 'L' || text.front() == 'u' || text.front() == 'U') {
+                text.remove_prefix(1);
+            } else if (text.size() >= 2 && text.substr(0, 2) == "u8") {
+                text.remove_prefix(2);
+            }
+            text = trim(text);
+            if (text.size() < 2 || text.front() != '"' || text.back() != '"') return false;
+            out.assign(text);
+            return true;
+        }
+
+        static bool try_parse_macro_const_value_(
+            std::string_view text,
+            ImportedConstKind& out_kind,
+            std::string& out_text
+        ) {
+            auto trim = [](std::string_view s) {
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+                while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+                return s;
+            };
+
+            text = trim(text);
+            while (text.size() >= 2 && text.front() == '(' && text.back() == ')') {
+                text.remove_prefix(1);
+                text.remove_suffix(1);
+                text = trim(text);
+            }
+
+            if (text == "true" || text == "false") {
+                out_kind = ImportedConstKind::kBool;
+                out_text = (text == "true") ? "1" : "0";
+                return true;
+            }
+            if (parse_macro_char_literal_text_(text, out_text)) {
+                out_kind = ImportedConstKind::kChar;
+                return true;
+            }
+            if (parse_macro_string_literal_text_(text, out_text)) {
+                out_kind = ImportedConstKind::kString;
+                return true;
+            }
+            if (parse_macro_float_literal_text_(text, out_text)) {
+                out_kind = ImportedConstKind::kFloat;
+                return true;
+            }
+            if (parse_macro_int_literal_text_(text, out_text)) {
+                out_kind = ImportedConstKind::kInt;
+                return true;
+            }
+
+            out_kind = ImportedConstKind::kNone;
+            out_text.clear();
+            return false;
+        }
+
+        static std::string ensure_synthetic_name_(
+            std::unordered_map<std::string, std::string>& map,
+            uint32_t& counter,
+            const std::string& key,
+            std::string_view prefix
+        ) {
+            if (auto it = map.find(key); it != map.end()) return it->second;
+            std::string out = std::string(prefix) + std::to_string(counter++);
+            map.emplace(key, out);
+            return out;
+        }
+
+        static std::string ensure_enum_name_(CXCursor decl, ImportCollectCtx& ctx);
+        static std::string ensure_record_name_(CXCursor decl, ImportCollectCtx& ctx);
+
+        static bool map_c_type_to_parus_(
+            CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth = 0);
+
+        static bool map_c_fn_type_to_parus_(
+            CXType fn_ty, std::string& out, ImportCollectCtx* ctx, uint32_t depth) {
             if (depth > 8) return false;
 
             const CXType ct = clang_getCanonicalType(fn_ty);
@@ -134,14 +331,14 @@ namespace parus::cimport {
             if (clang_isFunctionTypeVariadic(ct) != 0) return false;
 
             std::string ret_repr{};
-            if (!map_c_type_to_parus_(clang_getResultType(ct), ret_repr, depth + 1)) {
+            if (!map_c_type_to_parus_(clang_getResultType(ct), ret_repr, ctx, depth + 1)) {
                 return false;
             }
 
             std::string sig = "def(";
             for (int i = 0; i < arg_n; ++i) {
                 std::string arg_repr{};
-                if (!map_c_type_to_parus_(clang_getArgType(ct, i), arg_repr, depth + 1)) {
+                if (!map_c_type_to_parus_(clang_getArgType(ct, i), arg_repr, ctx, depth + 1)) {
                     return false;
                 }
                 if (i > 0) sig += ", ";
@@ -153,7 +350,7 @@ namespace parus::cimport {
             return true;
         }
 
-        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth) {
+        static bool map_c_type_to_parus_(CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth) {
             if (depth > 8) return false;
 
             if (t.kind == CXType_Typedef) {
@@ -220,7 +417,7 @@ namespace parus::cimport {
                     return true;
                 case CXType_FunctionProto:
                 case CXType_FunctionNoProto:
-                    return map_c_fn_type_to_parus_(ct, out, depth + 1);
+                    return map_c_fn_type_to_parus_(ct, out, ctx, depth + 1);
                 case CXType_Enum: {
                     const CXCursor decl = clang_getTypeDeclaration(ct);
                     if (!clang_Cursor_isNull(decl)) {
@@ -229,9 +426,13 @@ namespace parus::cimport {
                             out = name;
                             return true;
                         }
+                        if (ctx != nullptr) {
+                            out = ensure_enum_name_(decl, *ctx);
+                            if (!out.empty()) return true;
+                        }
                         const CXType int_ty = clang_getEnumDeclIntegerType(decl);
                         if (int_ty.kind != CXType_Invalid) {
-                            return map_c_type_to_parus_(int_ty, out, depth + 1);
+                            return map_c_type_to_parus_(int_ty, out, ctx, depth + 1);
                         }
                     }
                     return false;
@@ -244,10 +445,10 @@ namespace parus::cimport {
                     if (elem.kind == CXType_Void) {
                         elem_repr = "u8";
                     } else if (elem.kind == CXType_FunctionProto || elem.kind == CXType_FunctionNoProto) {
-                        if (!map_c_fn_type_to_parus_(elem, elem_repr, depth + 1)) {
+                        if (!map_c_fn_type_to_parus_(elem, elem_repr, ctx, depth + 1)) {
                             return false;
                         }
-                    } else if (!map_c_type_to_parus_(elem, elem_repr, depth + 1)) {
+                    } else if (!map_c_type_to_parus_(elem, elem_repr, ctx, depth + 1)) {
                         return false;
                     }
 
@@ -262,13 +463,23 @@ namespace parus::cimport {
                     const CXCursorKind dk = clang_getCursorKind(decl);
                     if (dk != CXCursor_UnionDecl && dk != CXCursor_StructDecl) return false;
                     const std::string name = to_std_string_(clang_getCursorSpelling(decl));
-                    if (name.empty()) return false;
-                    out = name;
-                    return true;
+                    if (!name.empty()) {
+                        out = name;
+                        return true;
+                    }
+                    if (ctx != nullptr) {
+                        out = ensure_record_name_(decl, *ctx);
+                        return !out.empty();
+                    }
+                    return false;
                 }
                 default:
                     return false;
             }
+        }
+
+        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth = 0) {
+            return map_c_type_to_parus_(t, out, nullptr, depth);
         }
 
         static std::string format_family_key_(std::string_view name) {
@@ -284,19 +495,44 @@ namespace parus::cimport {
             std::unordered_set<std::string> struct_dedup{};
             std::unordered_set<std::string> enum_dedup{};
             std::unordered_set<std::string> typedef_dedup{};
+            std::unordered_set<std::string> macro_dedup{};
+            std::unordered_map<std::string, std::string> anon_record_name_by_key{};
+            std::unordered_map<std::string, std::string> anon_enum_name_by_key{};
+            uint32_t anon_record_counter = 0;
+            uint32_t anon_enum_counter = 0;
+            CXTranslationUnit tu = nullptr;
             std::vector<CollectedFnDecl>* out_fns = nullptr;
             std::vector<ImportedUnionDecl>* out_unions = nullptr;
             std::vector<ImportedStructDecl>* out_structs = nullptr;
             std::vector<ImportedEnumDecl>* out_enums = nullptr;
             std::vector<ImportedTypedefDecl>* out_typedefs = nullptr;
+            std::vector<ImportedMacroDecl>* out_macros = nullptr;
         };
+
+        static std::string ensure_enum_name_(CXCursor decl, ImportCollectCtx& ctx) {
+            const std::string key = cursor_identity_key_(decl);
+            return ensure_synthetic_name_(
+                ctx.anon_enum_name_by_key, ctx.anon_enum_counter, key, "__anon_enum_");
+        }
+
+        static std::string ensure_record_name_(CXCursor decl, ImportCollectCtx& ctx) {
+            const std::string key = cursor_identity_key_(decl);
+            std::string_view prefix = "__anon_record_";
+            switch (clang_getCursorKind(decl)) {
+                case CXCursor_StructDecl: prefix = "__anon_struct_"; break;
+                case CXCursor_UnionDecl: prefix = "__anon_union_"; break;
+                default: break;
+            }
+            return ensure_synthetic_name_(
+                ctx.anon_record_name_by_key, ctx.anon_record_counter, key, prefix);
+        }
 
         static bool collect_union_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_UnionDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
 
-            const std::string name = to_std_string_(clang_getCursorSpelling(c));
-            if (name.empty()) return true;
+            std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) name = ensure_record_name_(c, ctx);
             if (!ctx.union_dedup.insert(name).second) return true;
 
             ImportedUnionDecl u{};
@@ -344,8 +580,8 @@ namespace parus::cimport {
             if (clang_getCursorKind(c) != CXCursor_StructDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
 
-            const std::string name = to_std_string_(clang_getCursorSpelling(c));
-            if (name.empty()) return true;
+            std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) name = ensure_record_name_(c, ctx);
             if (!ctx.struct_dedup.insert(name).second) return true;
 
             ImportedStructDecl s{};
@@ -400,13 +636,13 @@ namespace parus::cimport {
             if (clang_getCursorKind(c) != CXCursor_EnumDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
 
-            const std::string name = to_std_string_(clang_getCursorSpelling(c));
-            if (name.empty()) return true;
+            std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) name = ensure_enum_name_(c, ctx);
             if (!ctx.enum_dedup.insert(name).second) return true;
 
             ImportedEnumDecl e{};
             e.name = name;
-            if (!map_c_type_to_parus_(clang_getEnumDeclIntegerType(c), e.underlying_type_repr)) {
+            if (!map_c_type_to_parus_(clang_getEnumDeclIntegerType(c), e.underlying_type_repr, &ctx)) {
                 e.underlying_type_repr = "i32";
             }
 
@@ -445,7 +681,7 @@ namespace parus::cimport {
             if (!ctx.typedef_dedup.insert(name).second) return true;
 
             std::string type_repr{};
-            if (!map_c_type_to_parus_(clang_getTypedefDeclUnderlyingType(c), type_repr)) {
+            if (!map_c_type_to_parus_(clang_getTypedefDeclUnderlyingType(c), type_repr, &ctx)) {
                 return true;
             }
 
@@ -480,7 +716,7 @@ namespace parus::cimport {
             }
 
             std::string ret_repr{};
-            if (!map_c_type_to_parus_(clang_getResultType(fn_ty), ret_repr)) {
+            if (!map_c_type_to_parus_(clang_getResultType(fn_ty), ret_repr, &ctx)) {
                 return true;
             }
 
@@ -491,7 +727,7 @@ namespace parus::cimport {
             for (int i = 0; i < arg_n; ++i) {
                 const CXType arg_ty = clang_getArgType(fn_ty, i);
                 std::string one{};
-                if (!map_c_type_to_parus_(arg_ty, one)) {
+                if (!map_c_type_to_parus_(arg_ty, one, &ctx)) {
                     return true;
                 }
                 arg_types.push_back(arg_ty);
@@ -543,6 +779,63 @@ namespace parus::cimport {
             return true;
         }
 
+        static bool collect_macro_decl_(CXCursor c, ImportCollectCtx& ctx) {
+            if (clang_getCursorKind(c) != CXCursor_MacroDefinition) return false;
+            if (ctx.tu == nullptr) return true;
+
+            if (clang_Cursor_isMacroBuiltin(c) != 0) return true;
+
+            const std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) return true;
+            if (name.size() >= 2 && name[0] == '_' && name[1] == '_') return true;
+            if (!ctx.macro_dedup.insert(name).second) return true;
+
+            ImportedMacroDecl out{};
+            out.name = name;
+            out.is_function_like = (clang_Cursor_isMacroFunctionLike(c) != 0);
+
+            CXToken* tokens = nullptr;
+            unsigned token_count = 0;
+            clang_tokenize(ctx.tu, clang_getCursorExtent(c), &tokens, &token_count);
+            if (tokens == nullptr || token_count == 0) {
+                if (ctx.out_macros != nullptr) ctx.out_macros->push_back(std::move(out));
+                if (tokens != nullptr) clang_disposeTokens(ctx.tu, tokens, token_count);
+                return true;
+            }
+
+            unsigned begin = 0;
+            for (unsigned i = 0; i < token_count; ++i) {
+                const std::string tok = to_std_string_(clang_getTokenSpelling(ctx.tu, tokens[i]));
+                if (tok == name) {
+                    begin = i + 1;
+                    break;
+                }
+            }
+
+            std::string replacement{};
+            for (unsigned i = begin; i < token_count; ++i) {
+                const std::string tok = to_std_string_(clang_getTokenSpelling(ctx.tu, tokens[i]));
+                if (tok.empty()) continue;
+                if (!replacement.empty()) replacement.push_back(' ');
+                replacement += tok;
+            }
+            clang_disposeTokens(ctx.tu, tokens, token_count);
+
+            if (!out.is_function_like) {
+                ImportedConstKind kind = ImportedConstKind::kNone;
+                std::string value_text{};
+                if (try_parse_macro_const_value_(replacement, kind, value_text)) {
+                    out.const_kind = kind;
+                    out.value_text = std::move(value_text);
+                }
+            }
+
+            if (ctx.out_macros != nullptr) {
+                ctx.out_macros->push_back(std::move(out));
+            }
+            return true;
+        }
+
         static CXChildVisitResult collect_decl_visitor_(CXCursor c, CXCursor, CXClientData client_data) {
             auto* ctx = static_cast<ImportCollectCtx*>(client_data);
             if (ctx == nullptr) return CXChildVisit_Continue;
@@ -552,6 +845,7 @@ namespace parus::cimport {
             (void)collect_enum_decl_(c, *ctx);
             (void)collect_typedef_decl_(c, *ctx);
             (void)collect_function_decl_(c, *ctx);
+            (void)collect_macro_decl_(c, *ctx);
             return CXChildVisit_Recurse;
         }
 
@@ -562,7 +856,11 @@ namespace parus::cimport {
         const std::string& importer_source_path,
         const std::string& header_path,
         const std::vector<std::string>& include_dirs,
-        const std::vector<std::string>& isystem_dirs
+        const std::vector<std::string>& isystem_dirs,
+        const std::vector<std::string>& defines,
+        const std::vector<std::string>& undefines,
+        const std::vector<std::string>& forced_includes,
+        const std::vector<std::string>& imacros
     ) {
         HeaderImportResult out{};
 
@@ -571,6 +869,10 @@ namespace parus::cimport {
         (void)header_path;
         (void)include_dirs;
         (void)isystem_dirs;
+        (void)defines;
+        (void)undefines;
+        (void)forced_includes;
+        (void)imacros;
         out.error = ImportErrorKind::kLibClangUnavailable;
         out.error_text = "libclang unavailable";
         return out;
@@ -580,7 +882,14 @@ namespace parus::cimport {
         const std::string tu_name = importer_source_path + ".parus_cimport.c";
 
         std::vector<std::string> args_storage{};
-        args_storage.reserve(8 + include_dirs.size() + isystem_dirs.size() * 2u);
+        args_storage.reserve(
+            8 +
+            include_dirs.size() +
+            isystem_dirs.size() * 2u +
+            defines.size() +
+            undefines.size() +
+            forced_includes.size() * 2u +
+            imacros.size() * 2u);
         args_storage.emplace_back("-x");
         args_storage.emplace_back("c");
         args_storage.emplace_back("-std=c17");
@@ -593,6 +902,24 @@ namespace parus::cimport {
             if (dir.empty()) continue;
             args_storage.emplace_back("-isystem");
             args_storage.emplace_back(dir);
+        }
+        for (const auto& one : defines) {
+            if (one.empty()) continue;
+            args_storage.emplace_back("-D" + one);
+        }
+        for (const auto& one : undefines) {
+            if (one.empty()) continue;
+            args_storage.emplace_back("-U" + one);
+        }
+        for (const auto& one : forced_includes) {
+            if (one.empty()) continue;
+            args_storage.emplace_back("-include");
+            args_storage.emplace_back(one);
+        }
+        for (const auto& one : imacros) {
+            if (one.empty()) continue;
+            args_storage.emplace_back("-imacros");
+            args_storage.emplace_back(one);
         }
 
         std::vector<const char*> args{};
@@ -621,7 +948,7 @@ namespace parus::cimport {
             static_cast<int>(args.size()),
             &unsaved,
             1,
-            CXTranslationUnit_None,
+            CXTranslationUnit_DetailedPreprocessingRecord,
             &tu
         );
         if (ec != CXError_Success || tu == nullptr) {
@@ -652,6 +979,8 @@ namespace parus::cimport {
         ctx.out_structs = &out.structs;
         ctx.out_enums = &out.enums;
         ctx.out_typedefs = &out.typedefs;
+        ctx.out_macros = &out.macros;
+        ctx.tu = tu;
 
         const CXCursor root = clang_getTranslationUnitCursor(tu);
         clang_visitChildren(root, collect_decl_visitor_, &ctx);

@@ -1690,11 +1690,34 @@ namespace parusc::p0 {
             for (const auto& d : opt.cimport_isystem_dirs) {
                 if (!d.empty()) isystem_dirs.push_back(parus::normalize_path(d));
             }
+            std::vector<std::string> defines{};
+            for (const auto& d : opt.cimport_defines) {
+                if (!d.empty()) defines.push_back(d);
+            }
+            std::vector<std::string> undefines{};
+            for (const auto& d : opt.cimport_undefines) {
+                if (!d.empty()) undefines.push_back(d);
+            }
+            std::vector<std::string> forced_includes{};
+            for (const auto& d : opt.cimport_forced_includes) {
+                if (!d.empty()) forced_includes.push_back(parus::normalize_path(d));
+            }
+            std::vector<std::string> imacros{};
+            for (const auto& d : opt.cimport_imacros) {
+                if (!d.empty()) imacros.push_back(parus::normalize_path(d));
+            }
 
             std::unordered_set<std::string> cimport_seen{};
             for (const auto& spec : c_header_imports) {
                 const auto imported = parus::cimport::import_c_header_functions(
-                    current_norm, spec.header, include_dirs, isystem_dirs);
+                    current_norm,
+                    spec.header,
+                    include_dirs,
+                    isystem_dirs,
+                    defines,
+                    undefines,
+                    forced_includes,
+                    imacros);
                 if (imported.error != parus::cimport::ImportErrorKind::kNone) {
                     if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
                         parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kCImportLibClangUnavailable, spec.span);
@@ -1714,7 +1737,8 @@ namespace parusc::p0 {
                     imported.unions.empty() &&
                     imported.typedefs.empty() &&
                     imported.structs.empty() &&
-                    imported.enums.empty()) {
+                    imported.enums.empty() &&
+                    imported.macros.empty()) {
                     parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, spec.span);
                     d.add_arg("no supported C declarations were imported from header '" + spec.header + "'");
                     bag.add(std::move(d));
@@ -1883,6 +1907,55 @@ namespace parusc::p0 {
                         ce.is_export = true;
                         cimport_surface.push_back(std::move(ce));
                     }
+                }
+
+                for (const auto& mc : imported.macros) {
+                    if (mc.name.empty() || mc.is_function_like) continue;
+                    if (mc.const_kind == parus::cimport::ImportedConstKind::kNone) continue;
+
+                    const std::string const_path = spec.alias + "::" + mc.name;
+                    if (!cimport_seen.insert("var|" + const_path).second) continue;
+
+                    ExportSurfaceEntry ce{};
+                    ce.kind = parus::sema::SymbolKind::kVar;
+                    ce.kind_text = "var";
+                    ce.path = const_path;
+                    ce.link_name.clear();
+                    ce.module_head.clear();
+                    ce.decl_dir = current_dir;
+                    ce.decl_file = current_norm;
+                    ce.decl_line = 1;
+                    ce.decl_col = 1;
+                    ce.decl_bundle = "__cimport__";
+                    ce.is_export = true;
+
+                    switch (mc.const_kind) {
+                        case parus::cimport::ImportedConstKind::kInt:
+                            ce.type_repr = "i64";
+                            ce.inst_payload = make_c_import_const_payload_("int", mc.value_text);
+                            break;
+                        case parus::cimport::ImportedConstKind::kFloat:
+                            ce.type_repr = "f64";
+                            ce.inst_payload = make_c_import_const_payload_("float", mc.value_text);
+                            break;
+                        case parus::cimport::ImportedConstKind::kBool:
+                            ce.type_repr = "bool";
+                            ce.inst_payload = make_c_import_const_payload_("bool", mc.value_text);
+                            break;
+                        case parus::cimport::ImportedConstKind::kChar:
+                            ce.type_repr = "char";
+                            ce.inst_payload = make_c_import_const_payload_("char", mc.value_text);
+                            break;
+                        case parus::cimport::ImportedConstKind::kString:
+                            ce.type_repr = "ptr i8";
+                            ce.inst_payload = make_c_import_const_payload_("string", mc.value_text);
+                            break;
+                        case parus::cimport::ImportedConstKind::kNone:
+                        default:
+                            continue;
+                    }
+
+                    cimport_surface.push_back(std::move(ce));
                 }
             }
         }

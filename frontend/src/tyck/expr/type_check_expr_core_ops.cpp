@@ -183,6 +183,7 @@
         else if (kind == "float") out.kind = ConstInitKind::kFloat;
         else if (kind == "bool") out.kind = ConstInitKind::kBool;
         else if (kind == "char") out.kind = ConstInitKind::kChar;
+        else if (kind == "string") out.kind = ConstInitKind::kString;
         else return false;
 
         out.text = std::string(text);

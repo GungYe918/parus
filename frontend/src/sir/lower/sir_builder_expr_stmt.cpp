@@ -95,6 +95,10 @@ namespace parus::sir::detail {
                             v.kind = ValueKind::kCharLit;
                             v.text = cit->second.text;
                             break;
+                        case tyck::ConstInitKind::kString:
+                            v.kind = ValueKind::kStringLit;
+                            v.text = cit->second.text;
+                            break;
                         case tyck::ConstInitKind::kNone:
                         default:
                             break;

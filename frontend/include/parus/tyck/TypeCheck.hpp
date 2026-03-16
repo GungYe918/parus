@@ -39,6 +39,7 @@ namespace parus::tyck {
         kFloat,
         kBool,
         kChar,
+        kString,
     };
 
     struct ConstInitData {
