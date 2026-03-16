@@ -42,11 +42,43 @@ namespace parus::cimport {
         uint32_t align_bytes = 0;
     };
 
+    struct ImportedTypedefDecl {
+        std::string name{};
+        std::string type_repr{};
+    };
+
+    struct ImportedStructFieldDecl {
+        std::string name{};
+        std::string type_repr{};
+        uint32_t offset_bytes = 0;
+    };
+
+    struct ImportedStructDecl {
+        std::string name{};
+        std::vector<ImportedStructFieldDecl> fields{};
+        uint32_t size_bytes = 0;
+        uint32_t align_bytes = 0;
+    };
+
+    struct ImportedEnumConstantDecl {
+        std::string name{};
+        std::string value_text{};
+    };
+
+    struct ImportedEnumDecl {
+        std::string name{};
+        std::string underlying_type_repr{};
+        std::vector<ImportedEnumConstantDecl> constants{};
+    };
+
     struct HeaderImportResult {
         ImportErrorKind error = ImportErrorKind::kNone;
         std::string error_text{};
         std::vector<ImportedFunctionDecl> functions{};
         std::vector<ImportedUnionDecl> unions{};
+        std::vector<ImportedTypedefDecl> typedefs{};
+        std::vector<ImportedStructDecl> structs{};
+        std::vector<ImportedEnumDecl> enums{};
     };
 
     HeaderImportResult import_c_header_functions(

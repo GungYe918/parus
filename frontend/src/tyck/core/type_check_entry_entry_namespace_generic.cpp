@@ -118,6 +118,7 @@ namespace parus::tyck {
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
+        expr_external_const_value_cache_.clear();
         param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
         result_.expr_types = expr_type_cache_; // 결과 벡터도 동일 크기로 시작
         result_.expr_overload_target = expr_overload_target_cache_;
@@ -130,6 +131,7 @@ namespace parus::tyck {
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
+        result_.expr_external_const_values = expr_external_const_value_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
         // string literal은 builtin text 타입으로 고정한다.
@@ -597,6 +599,7 @@ namespace parus::tyck {
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
+        result_.expr_external_const_values = expr_external_const_value_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
         result_.fn_qualified_names = fn_qualified_name_by_stmt_;
         result_.generic_instantiated_fn_sids = generic_instantiated_fn_sids_;

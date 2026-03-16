@@ -76,6 +76,31 @@ namespace parus::sir::detail {
                 break;
 
             case parus::ast::ExprKind::kIdent: {
+                const auto cit = tyck.expr_external_const_values.find(eid);
+                if (cit != tyck.expr_external_const_values.end()) {
+                    switch (cit->second.kind) {
+                        case tyck::ConstInitKind::kInt:
+                            v.kind = ValueKind::kIntLit;
+                            v.text = cit->second.text;
+                            break;
+                        case tyck::ConstInitKind::kFloat:
+                            v.kind = ValueKind::kFloatLit;
+                            v.text = cit->second.text;
+                            break;
+                        case tyck::ConstInitKind::kBool:
+                            v.kind = ValueKind::kBoolLit;
+                            v.text = (cit->second.text == "0") ? std::string_view("false") : std::string_view("true");
+                            break;
+                        case tyck::ConstInitKind::kChar:
+                            v.kind = ValueKind::kCharLit;
+                            v.text = cit->second.text;
+                            break;
+                        case tyck::ConstInitKind::kNone:
+                        default:
+                            break;
+                    }
+                    if (v.kind != ValueKind::kError) break;
+                }
                 v.kind = ValueKind::kLocal;
                 v.text = e.text;
                 v.sym = resolve_symbol_from_expr(nres, tyck, eid);

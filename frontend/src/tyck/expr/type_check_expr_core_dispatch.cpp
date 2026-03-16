@@ -859,8 +859,18 @@ namespace parus::tyck {
                     if (!suppress_ownership_read_) {
                         (void)ensure_symbol_readable_(*id, e.span);
                     }
-                    t = sym_.symbol(*id).declared_type;
+                    const auto& ss = sym_.symbol(*id);
+                    t = ss.declared_type;
                     if (t == ty::kInvalidType) t = types_.error();
+
+                    if (ss.is_external && !ss.external_payload.empty()) {
+                        ConstInitData imported_const{};
+                        if (parse_external_c_const_payload_(ss.external_payload, imported_const)) {
+                            if (current_expr_id_ != ast::k_invalid_expr) {
+                                expr_external_const_value_cache_[current_expr_id_] = imported_const;
+                            }
+                        }
+                    }
 
                     const auto& tt = types_.get(t);
                     if (tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger) {

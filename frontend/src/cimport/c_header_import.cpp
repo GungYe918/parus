@@ -119,8 +119,51 @@ namespace parus::cimport {
             return false;
         }
 
-        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth = 0) {
+        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth = 0);
+
+        static bool map_c_fn_type_to_parus_(CXType fn_ty, std::string& out, uint32_t depth) {
             if (depth > 8) return false;
+
+            const CXType ct = clang_getCanonicalType(fn_ty);
+            if (ct.kind != CXType_FunctionProto && ct.kind != CXType_FunctionNoProto) {
+                return false;
+            }
+
+            const int arg_n = clang_getNumArgTypes(ct);
+            if (arg_n < 0) return false;
+            if (clang_isFunctionTypeVariadic(ct) != 0) return false;
+
+            std::string ret_repr{};
+            if (!map_c_type_to_parus_(clang_getResultType(ct), ret_repr, depth + 1)) {
+                return false;
+            }
+
+            std::string sig = "def(";
+            for (int i = 0; i < arg_n; ++i) {
+                std::string arg_repr{};
+                if (!map_c_type_to_parus_(clang_getArgType(ct, i), arg_repr, depth + 1)) {
+                    return false;
+                }
+                if (i > 0) sig += ", ";
+                sig += arg_repr;
+            }
+            sig += ") -> ";
+            sig += ret_repr;
+            out = std::move(sig);
+            return true;
+        }
+
+        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth) {
+            if (depth > 8) return false;
+
+            if (t.kind == CXType_Typedef) {
+                const CXCursor td = clang_getTypeDeclaration(t);
+                const std::string td_name = to_std_string_(clang_getCursorSpelling(td));
+                if (!td_name.empty()) {
+                    out = td_name;
+                    return true;
+                }
+            }
 
             const CXType ct = clang_getCanonicalType(t);
             switch (ct.kind) {
@@ -175,9 +218,17 @@ namespace parus::cimport {
                 case CXType_LongDouble:
                     out = "f64";
                     return true;
+                case CXType_FunctionProto:
+                case CXType_FunctionNoProto:
+                    return map_c_fn_type_to_parus_(ct, out, depth + 1);
                 case CXType_Enum: {
                     const CXCursor decl = clang_getTypeDeclaration(ct);
-                    if (clang_Cursor_isNull(decl) == 0) {
+                    if (!clang_Cursor_isNull(decl)) {
+                        const std::string name = to_std_string_(clang_getCursorSpelling(decl));
+                        if (!name.empty()) {
+                            out = name;
+                            return true;
+                        }
                         const CXType int_ty = clang_getEnumDeclIntegerType(decl);
                         if (int_ty.kind != CXType_Invalid) {
                             return map_c_type_to_parus_(int_ty, out, depth + 1);
@@ -188,16 +239,18 @@ namespace parus::cimport {
                 case CXType_Pointer: {
                     const CXType elem = clang_getPointeeType(ct);
                     if (elem.kind == CXType_Invalid) return false;
-                    if (elem.kind == CXType_FunctionProto || elem.kind == CXType_FunctionNoProto) {
-                        return false;
-                    }
 
                     std::string elem_repr{};
                     if (elem.kind == CXType_Void) {
                         elem_repr = "u8";
+                    } else if (elem.kind == CXType_FunctionProto || elem.kind == CXType_FunctionNoProto) {
+                        if (!map_c_fn_type_to_parus_(elem, elem_repr, depth + 1)) {
+                            return false;
+                        }
                     } else if (!map_c_type_to_parus_(elem, elem_repr, depth + 1)) {
                         return false;
                     }
+
                     const bool pointee_const = clang_isConstQualifiedType(elem) != 0;
                     out = pointee_const ? ("ptr " + elem_repr) : ("ptr mut " + elem_repr);
                     return true;
@@ -207,7 +260,7 @@ namespace parus::cimport {
                     const CXCursor decl = clang_getTypeDeclaration(ct);
                     if (clang_Cursor_isNull(decl) != 0) return false;
                     const CXCursorKind dk = clang_getCursorKind(decl);
-                    if (dk != CXCursor_UnionDecl) return false;
+                    if (dk != CXCursor_UnionDecl && dk != CXCursor_StructDecl) return false;
                     const std::string name = to_std_string_(clang_getCursorSpelling(decl));
                     if (name.empty()) return false;
                     out = name;
@@ -228,8 +281,14 @@ namespace parus::cimport {
         struct ImportCollectCtx {
             std::unordered_set<std::string> fn_dedup{};
             std::unordered_set<std::string> union_dedup{};
+            std::unordered_set<std::string> struct_dedup{};
+            std::unordered_set<std::string> enum_dedup{};
+            std::unordered_set<std::string> typedef_dedup{};
             std::vector<CollectedFnDecl>* out_fns = nullptr;
             std::vector<ImportedUnionDecl>* out_unions = nullptr;
+            std::vector<ImportedStructDecl>* out_structs = nullptr;
+            std::vector<ImportedEnumDecl>* out_enums = nullptr;
+            std::vector<ImportedTypedefDecl>* out_typedefs = nullptr;
         };
 
         static bool collect_union_decl_(CXCursor c, ImportCollectCtx& ctx) {
@@ -277,6 +336,124 @@ namespace parus::cimport {
 
             if (ctx.out_unions != nullptr) {
                 ctx.out_unions->push_back(std::move(u));
+            }
+            return true;
+        }
+
+        static bool collect_struct_decl_(CXCursor c, ImportCollectCtx& ctx) {
+            if (clang_getCursorKind(c) != CXCursor_StructDecl) return false;
+            if (clang_isCursorDefinition(c) == 0) return true;
+
+            const std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) return true;
+            if (!ctx.struct_dedup.insert(name).second) return true;
+
+            ImportedStructDecl s{};
+            s.name = name;
+
+            const CXType struct_ty = clang_getCursorType(c);
+            const long long sz = clang_Type_getSizeOf(struct_ty);
+            const long long al = clang_Type_getAlignOf(struct_ty);
+            if (sz > 0) s.size_bytes = static_cast<uint32_t>(sz);
+            if (al > 0) s.align_bytes = static_cast<uint32_t>(al);
+
+            clang_visitChildren(
+                c,
+                [](CXCursor child, CXCursor, CXClientData data) -> CXChildVisitResult {
+                    auto* out = static_cast<ImportedStructDecl*>(data);
+                    if (out == nullptr) return CXChildVisit_Continue;
+                    if (clang_getCursorKind(child) != CXCursor_FieldDecl) {
+                        return CXChildVisit_Continue;
+                    }
+                    if (clang_Cursor_isBitField(child) != 0) {
+                        return CXChildVisit_Continue;
+                    }
+
+                    const std::string field_name = to_std_string_(clang_getCursorSpelling(child));
+                    if (field_name.empty()) return CXChildVisit_Continue;
+
+                    std::string field_ty{};
+                    if (!map_c_type_to_parus_(clang_getCursorType(child), field_ty)) {
+                        return CXChildVisit_Continue;
+                    }
+
+                    const long long off_bits = clang_Cursor_getOffsetOfField(child);
+                    if (off_bits < 0) return CXChildVisit_Continue;
+
+                    ImportedStructFieldDecl fd{};
+                    fd.name = field_name;
+                    fd.type_repr = std::move(field_ty);
+                    fd.offset_bytes = static_cast<uint32_t>(off_bits / 8);
+                    out->fields.push_back(std::move(fd));
+                    return CXChildVisit_Continue;
+                },
+                &s
+            );
+
+            if (ctx.out_structs != nullptr) {
+                ctx.out_structs->push_back(std::move(s));
+            }
+            return true;
+        }
+
+        static bool collect_enum_decl_(CXCursor c, ImportCollectCtx& ctx) {
+            if (clang_getCursorKind(c) != CXCursor_EnumDecl) return false;
+            if (clang_isCursorDefinition(c) == 0) return true;
+
+            const std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) return true;
+            if (!ctx.enum_dedup.insert(name).second) return true;
+
+            ImportedEnumDecl e{};
+            e.name = name;
+            if (!map_c_type_to_parus_(clang_getEnumDeclIntegerType(c), e.underlying_type_repr)) {
+                e.underlying_type_repr = "i32";
+            }
+
+            clang_visitChildren(
+                c,
+                [](CXCursor child, CXCursor, CXClientData data) -> CXChildVisitResult {
+                    auto* out = static_cast<ImportedEnumDecl*>(data);
+                    if (out == nullptr) return CXChildVisit_Continue;
+                    if (clang_getCursorKind(child) != CXCursor_EnumConstantDecl) {
+                        return CXChildVisit_Continue;
+                    }
+
+                    const std::string constant_name = to_std_string_(clang_getCursorSpelling(child));
+                    if (constant_name.empty()) return CXChildVisit_Continue;
+
+                    ImportedEnumConstantDecl one{};
+                    one.name = constant_name;
+                    one.value_text = std::to_string(clang_getEnumConstantDeclValue(child));
+                    out->constants.push_back(std::move(one));
+                    return CXChildVisit_Continue;
+                },
+                &e
+            );
+
+            if (ctx.out_enums != nullptr) {
+                ctx.out_enums->push_back(std::move(e));
+            }
+            return true;
+        }
+
+        static bool collect_typedef_decl_(CXCursor c, ImportCollectCtx& ctx) {
+            if (clang_getCursorKind(c) != CXCursor_TypedefDecl) return false;
+
+            const std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) return true;
+            if (!ctx.typedef_dedup.insert(name).second) return true;
+
+            std::string type_repr{};
+            if (!map_c_type_to_parus_(clang_getTypedefDeclUnderlyingType(c), type_repr)) {
+                return true;
+            }
+
+            ImportedTypedefDecl td{};
+            td.name = name;
+            td.type_repr = std::move(type_repr);
+            if (ctx.out_typedefs != nullptr) {
+                ctx.out_typedefs->push_back(std::move(td));
             }
             return true;
         }
@@ -371,6 +548,9 @@ namespace parus::cimport {
             if (ctx == nullptr) return CXChildVisit_Continue;
 
             (void)collect_union_decl_(c, *ctx);
+            (void)collect_struct_decl_(c, *ctx);
+            (void)collect_enum_decl_(c, *ctx);
+            (void)collect_typedef_decl_(c, *ctx);
             (void)collect_function_decl_(c, *ctx);
             return CXChildVisit_Recurse;
         }
@@ -469,6 +649,9 @@ namespace parus::cimport {
         ImportCollectCtx ctx{};
         ctx.out_fns = &collected_fns;
         ctx.out_unions = &out.unions;
+        ctx.out_structs = &out.structs;
+        ctx.out_enums = &out.enums;
+        ctx.out_typedefs = &out.typedefs;
 
         const CXCursor root = clang_getTranslationUnitCursor(tu);
         clang_visitChildren(root, collect_decl_visitor_, &ctx);

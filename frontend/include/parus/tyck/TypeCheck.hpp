@@ -70,6 +70,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
         std::vector<ty::TypeId> actor_type_ids; // known actor nominal types
         std::unordered_map<uint32_t, ConstInitData> const_symbol_values; // SymbolId -> const initializer value
+        std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_values; // expr id -> imported external const literal payload
         std::vector<TyError> errors;
     };
 
@@ -325,6 +326,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
+        std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
 
@@ -360,10 +362,18 @@ namespace parus::tyck {
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
         static bool is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id);
         bool has_manual_permission_(uint8_t perm) const;
-        void collect_external_c_union_fields_();
+        void collect_external_c_record_fields_();
         bool parse_external_c_union_payload_(
             std::string_view payload,
             std::unordered_map<std::string, ty::TypeId>& out_fields
+        ) const;
+        bool parse_external_c_struct_payload_(
+            std::string_view payload,
+            std::unordered_map<std::string, ty::TypeId>& out_fields
+        ) const;
+        bool parse_external_c_const_payload_(
+            std::string_view payload,
+            ConstInitData& out
         ) const;
         bool parse_cimport_type_repr_(std::string_view repr, ty::TypeId& out) const;
         bool resolve_external_c_union_field_type_(
@@ -371,6 +381,12 @@ namespace parus::tyck {
             std::string_view field_name,
             ty::TypeId& out_field_type,
             bool* out_is_union_owner = nullptr
+        );
+        bool resolve_external_c_struct_field_type_(
+            ty::TypeId owner_type,
+            std::string_view field_name,
+            ty::TypeId& out_field_type,
+            bool* out_is_struct_owner = nullptr
         );
 
         // --------------------
@@ -752,9 +768,11 @@ namespace parus::tyck {
         std::unordered_map<uint32_t, uint8_t> const_symbol_eval_state_;
         std::unordered_map<uint32_t, ConstValue> const_symbol_runtime_values_;
         std::unordered_set<uint32_t> const_cycle_diag_emitted_;
-        bool external_c_union_fields_collected_ = false;
+        bool external_c_record_fields_collected_ = false;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, ty::TypeId>> external_c_union_fields_by_type_;
         std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>> external_c_union_fields_by_name_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, ty::TypeId>> external_c_struct_fields_by_type_;
+        std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>> external_c_struct_fields_by_name_;
 
     };
 

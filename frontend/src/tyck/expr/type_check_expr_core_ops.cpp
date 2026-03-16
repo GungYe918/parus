@@ -105,37 +105,137 @@
         return true;
     }
 
-    void TypeChecker::collect_external_c_union_fields_() {
-        if (external_c_union_fields_collected_) return;
-        external_c_union_fields_collected_ = true;
+    bool TypeChecker::parse_external_c_struct_payload_(
+        std::string_view payload,
+        std::unordered_map<std::string, ty::TypeId>& out_fields
+    ) const {
+        out_fields.clear();
+        if (!payload.starts_with("parus_c_import_struct|")) return false;
+
+        std::string_view fields{};
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "fields") fields = val;
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        if (fields.empty()) return true;
+
+        size_t begin = 0;
+        while (begin < fields.size()) {
+            const size_t comma = fields.find(',', begin);
+            const size_t end = (comma == std::string_view::npos) ? fields.size() : comma;
+            const std::string_view one = fields.substr(begin, end - begin);
+            const size_t colon = one.find(':');
+            if (colon != std::string_view::npos && colon > 0 && colon + 1 < one.size()) {
+                const std::string_view name = one.substr(0, colon);
+                std::string_view type_text = one.substr(colon + 1);
+                if (const size_t at = type_text.rfind('@'); at != std::string_view::npos && at > 0) {
+                    type_text = type_text.substr(0, at);
+                }
+                ty::TypeId field_ty = ty::kInvalidType;
+                if (parse_cimport_type_repr_(type_text, field_ty) && field_ty != ty::kInvalidType) {
+                    out_fields.emplace(std::string(name), field_ty);
+                }
+            }
+            if (comma == std::string_view::npos) break;
+            begin = comma + 1;
+        }
+
+        return true;
+    }
+
+    bool TypeChecker::parse_external_c_const_payload_(
+        std::string_view payload,
+        ConstInitData& out
+    ) const {
+        out = ConstInitData{};
+        if (!payload.starts_with("parus_c_import_const|")) return false;
+
+        std::string_view kind{};
+        std::string_view text{};
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "kind") kind = val;
+                if (key == "text") text = val;
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        if (kind == "int") out.kind = ConstInitKind::kInt;
+        else if (kind == "float") out.kind = ConstInitKind::kFloat;
+        else if (kind == "bool") out.kind = ConstInitKind::kBool;
+        else if (kind == "char") out.kind = ConstInitKind::kChar;
+        else return false;
+
+        out.text = std::string(text);
+        return true;
+    }
+
+    void TypeChecker::collect_external_c_record_fields_() {
+        if (external_c_record_fields_collected_) return;
+        external_c_record_fields_collected_ = true;
         external_c_union_fields_by_type_.clear();
         external_c_union_fields_by_name_.clear();
+        external_c_struct_fields_by_type_.clear();
+        external_c_struct_fields_by_name_.clear();
 
         for (const auto& sym : sym_.symbols()) {
             if (sym.kind != sema::SymbolKind::kType || !sym.is_external) continue;
             if (sym.declared_type == ty::kInvalidType) continue;
-            std::unordered_map<std::string, ty::TypeId> fields{};
-            if (!parse_external_c_union_payload_(sym.external_payload, fields)) continue;
-            external_c_union_fields_by_type_[sym.declared_type] = std::move(fields);
 
-            const auto tfit = external_c_union_fields_by_type_.find(sym.declared_type);
-            if (tfit == external_c_union_fields_by_type_.end()) continue;
-            const auto& fmap = tfit->second;
+            auto register_name_maps = [&](const std::unordered_map<std::string, ty::TypeId>& fmap,
+                                          std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>>& out_by_name) {
+                if (!sym.name.empty()) {
+                    out_by_name[sym.name] = fmap;
+                    const size_t last = sym.name.rfind("::");
+                    if (last != std::string::npos && last + 2 < sym.name.size()) {
+                        out_by_name[sym.name.substr(last + 2)] = fmap;
+                    }
+                }
 
-            if (!sym.name.empty()) {
-                external_c_union_fields_by_name_[sym.name] = fmap;
-                const size_t last = sym.name.rfind("::");
-                if (last != std::string::npos && last + 2 < sym.name.size()) {
-                    external_c_union_fields_by_name_[sym.name.substr(last + 2)] = fmap;
+                const std::string decl_ty_name = types_.to_string(sym.declared_type);
+                if (!decl_ty_name.empty()) {
+                    out_by_name[decl_ty_name] = fmap;
+                    const size_t last = decl_ty_name.rfind("::");
+                    if (last != std::string::npos && last + 2 < decl_ty_name.size()) {
+                        out_by_name[decl_ty_name.substr(last + 2)] = fmap;
+                    }
+                }
+            };
+
+            std::unordered_map<std::string, ty::TypeId> ufields{};
+            if (parse_external_c_union_payload_(sym.external_payload, ufields)) {
+                external_c_union_fields_by_type_[sym.declared_type] = std::move(ufields);
+                const auto fit = external_c_union_fields_by_type_.find(sym.declared_type);
+                if (fit != external_c_union_fields_by_type_.end()) {
+                    register_name_maps(fit->second, external_c_union_fields_by_name_);
                 }
             }
 
-            const std::string decl_ty_name = types_.to_string(sym.declared_type);
-            if (!decl_ty_name.empty()) {
-                external_c_union_fields_by_name_[decl_ty_name] = fmap;
-                const size_t last = decl_ty_name.rfind("::");
-                if (last != std::string::npos && last + 2 < decl_ty_name.size()) {
-                    external_c_union_fields_by_name_[decl_ty_name.substr(last + 2)] = fmap;
+            std::unordered_map<std::string, ty::TypeId> sfields{};
+            if (parse_external_c_struct_payload_(sym.external_payload, sfields)) {
+                external_c_struct_fields_by_type_[sym.declared_type] = std::move(sfields);
+                const auto fit = external_c_struct_fields_by_type_.find(sym.declared_type);
+                if (fit != external_c_struct_fields_by_type_.end()) {
+                    register_name_maps(fit->second, external_c_struct_fields_by_name_);
                 }
             }
         }
@@ -147,7 +247,7 @@
         ty::TypeId& out_field_type,
         bool* out_is_union_owner
     ) {
-        collect_external_c_union_fields_();
+        collect_external_c_record_fields_();
         out_field_type = ty::kInvalidType;
         if (out_is_union_owner != nullptr) *out_is_union_owner = false;
         if (owner_type == ty::kInvalidType) return false;
@@ -174,6 +274,46 @@
 
         if (fmap == nullptr) return false;
         if (out_is_union_owner != nullptr) *out_is_union_owner = true;
+
+        auto fit = fmap->find(std::string(field_name));
+        if (fit == fmap->end()) return false;
+        out_field_type = fit->second;
+        return out_field_type != ty::kInvalidType;
+    }
+
+    bool TypeChecker::resolve_external_c_struct_field_type_(
+        ty::TypeId owner_type,
+        std::string_view field_name,
+        ty::TypeId& out_field_type,
+        bool* out_is_struct_owner
+    ) {
+        collect_external_c_record_fields_();
+        out_field_type = ty::kInvalidType;
+        if (out_is_struct_owner != nullptr) *out_is_struct_owner = false;
+        if (owner_type == ty::kInvalidType) return false;
+
+        auto it = external_c_struct_fields_by_type_.find(owner_type);
+        const std::unordered_map<std::string, ty::TypeId>* fmap = nullptr;
+        if (it != external_c_struct_fields_by_type_.end()) {
+            fmap = &it->second;
+        } else {
+            const std::string owner_name = types_.to_string(owner_type);
+            auto nit = external_c_struct_fields_by_name_.find(owner_name);
+            if (nit != external_c_struct_fields_by_name_.end()) {
+                fmap = &nit->second;
+            } else {
+                const size_t last = owner_name.rfind("::");
+                if (last != std::string::npos && last + 2 < owner_name.size()) {
+                    nit = external_c_struct_fields_by_name_.find(owner_name.substr(last + 2));
+                    if (nit != external_c_struct_fields_by_name_.end()) {
+                        fmap = &nit->second;
+                    }
+                }
+            }
+        }
+
+        if (fmap == nullptr) return false;
+        if (out_is_struct_owner != nullptr) *out_is_struct_owner = true;
 
         auto fit = fmap->find(std::string(field_name));
         if (fit == fmap->end()) return false;
@@ -745,6 +885,11 @@
             const bool imported_union_field_found =
                 resolve_external_c_union_field_type_(
                     base_t, rhs.text, imported_union_field_ty, &imported_union_owner);
+            ty::TypeId imported_struct_field_ty = ty::kInvalidType;
+            bool imported_struct_owner = false;
+            const bool imported_struct_field_found =
+                resolve_external_c_struct_field_type_(
+                    base_t, rhs.text, imported_struct_field_ty, &imported_struct_owner);
             if (imported_union_owner) {
                 if (!has_manual_permission_(ast::kManualPermGet) &&
                     !has_manual_permission_(ast::kManualPermSet)) {
@@ -760,6 +905,15 @@
                     return types_.error();
                 }
                 return imported_union_field_ty;
+            }
+            if (imported_struct_owner) {
+                if (!imported_struct_field_found || imported_struct_field_ty == ty::kInvalidType) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                          std::string("unknown struct field '") + std::string(rhs.text) + "'");
+                    err_(rhs.span, "unknown imported C struct field");
+                    return types_.error();
+                }
+                return imported_struct_field_ty;
             }
 
             auto meta_it = field_abi_meta_by_type_.find(base_t);
