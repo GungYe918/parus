@@ -125,6 +125,8 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "CImportAliasRequired";
             case Code::kCImportHeaderLiteralExpected: return "CImportHeaderLiteralExpected";
             case Code::kCImportLibClangUnavailable: return "CImportLibClangUnavailable";
+            case Code::kCAbiCallPositionalOnly: return "CAbiCallPositionalOnly";
+            case Code::kCAbiFormatStringForbidden: return "CAbiFormatStringForbidden";
             case Code::kCImportVariadicCallUnsupported: return "CImportVariadicCallUnsupported";
             case Code::kCImportVariadicArgTypeUnsupported: return "CImportVariadicArgTypeUnsupported";
             case Code::kCImportFormatBridgeShapeUnsupported: return "CImportFormatBridgeShapeUnsupported";
@@ -465,6 +467,8 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "c-header import requires alias form: import \"Header.h\" as alias;";
             case Code::kCImportHeaderLiteralExpected: return "c-header import expects plain string literal: import \"Header.h\" as alias;";
             case Code::kCImportLibClangUnavailable: return "c-header import is unavailable because libclang is not configured";
+            case Code::kCAbiCallPositionalOnly: return "C ABI calls allow positional arguments only";
+            case Code::kCAbiFormatStringForbidden: return "C ABI call does not allow format-string literals ($\"...\"/F\"\"\"...\"\")";
             case Code::kCImportVariadicCallUnsupported: return "c variadic function calls are not supported in v1";
             case Code::kCImportVariadicArgTypeUnsupported: return "unsupported argument type in C variadic call";
             case Code::kCImportFormatBridgeShapeUnsupported: return "C format bridge expects a single argument in the form callee($\"...\")";
@@ -811,6 +815,8 @@ namespace parus::diag {
             case Code::kCImportAliasRequired: return "C 헤더 import는 별칭이 필요합니다: import \"Header.h\" as alias;";
             case Code::kCImportHeaderLiteralExpected: return "C 헤더 import는 일반 문자열 리터럴만 허용합니다: import \"Header.h\" as alias;";
             case Code::kCImportLibClangUnavailable: return "libclang이 구성되지 않아 C 헤더 import를 사용할 수 없습니다";
+            case Code::kCAbiCallPositionalOnly: return "C ABI 호출은 positional 인자만 허용합니다";
+            case Code::kCAbiFormatStringForbidden: return "C ABI 호출 인자에서는 $\"...\"/F\"\"\"...\"\"\" 형식을 사용할 수 없습니다";
             case Code::kCImportVariadicCallUnsupported: return "v1에서는 C 가변 인자 함수 호출을 지원하지 않습니다";
             case Code::kCImportVariadicArgTypeUnsupported: return "C 가변 인자 구간에서 지원되지 않는 인자 타입입니다";
             case Code::kCImportFormatBridgeShapeUnsupported: return "C format 브리지는 callee($\"...\") 단일 인자 형태만 지원합니다";

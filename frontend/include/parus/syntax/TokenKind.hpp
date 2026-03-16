@@ -37,6 +37,7 @@ namespace parus::syntax {
         // stmt keywords
         kKwLet,
         kKwSet,
+        kKwFix, // reserved (future computed property)
         kKwIf,
         kKwElif,
         kKwElse,
@@ -196,6 +197,7 @@ namespace parus::syntax {
             case TokenKind::kKwDraft: return "draft";
             case TokenKind::kKwLet: return "let";
             case TokenKind::kKwSet: return "set";
+            case TokenKind::kKwFix: return "fix";
             case TokenKind::kKwIf:  return "if";
             case TokenKind::kKwElif: return "elif";
             case TokenKind::kKwElse: return "else";

@@ -393,6 +393,7 @@ namespace parus {
         // stmt keywords
         if (t.lexeme == "let")      { t.kind = syntax::TokenKind::kKwLet;      return t; }
         if (t.lexeme == "set")      { t.kind = syntax::TokenKind::kKwSet;      return t; }
+        if (t.lexeme == "fix")      { t.kind = syntax::TokenKind::kKwFix;      return t; }
         if (t.lexeme == "if")       { t.kind = syntax::TokenKind::kKwIf;       return t; }
         if (t.lexeme == "elif")     { t.kind = syntax::TokenKind::kKwElif;     return t; }
         if (t.lexeme == "else")     { t.kind = syntax::TokenKind::kKwElse;     return t; }

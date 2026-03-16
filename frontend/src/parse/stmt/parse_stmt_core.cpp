@@ -574,6 +574,15 @@ namespace parus {
         // prefix 'mut'가 있었더라도 선언 자체는 계속 파싱하여 연쇄 오류를 줄인다.
         (void)mut_prefix_invalid;
 
+        if (cursor_.at(K::kKwFix)) {
+            diag_report(
+                diag::Code::kUnexpectedToken,
+                cursor_.peek().span,
+                "'fix' is reserved but not supported yet"
+            );
+            cursor_.bump();
+        }
+
         // ---- name ----
         std::string_view name{};
         const Token name_tok = cursor_.peek();
