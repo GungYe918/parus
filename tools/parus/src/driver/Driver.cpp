@@ -139,6 +139,8 @@ struct BundleSourceUnit {
     std::string source{};
     std::vector<std::string> module_imports{};
     std::vector<std::string> bundle_deps{};
+    std::vector<std::string> module_cimport_isystem{};
+    std::vector<std::string> bundle_cimport_isystem{};
 };
 
 bool unescape_json_string(std::string_view in, std::string& out) {
@@ -244,6 +246,17 @@ bool parse_json_string_array_field_line(const std::string& line, std::string_vie
     return false;
 }
 
+bool parse_json_string_array_field_line_optional(const std::string& line,
+                                                 std::string_view key,
+                                                 std::vector<std::string>& out) {
+    const std::string needle = "\"" + std::string(key) + "\":[";
+    if (line.find(needle) == std::string::npos) {
+        out.clear();
+        return true;
+    }
+    return parse_json_string_array_field_line(line, key, out);
+}
+
 std::vector<BundleSourceUnit> parse_bundle_units_json(const std::string& text, std::string& out_err) {
     out_err.clear();
     std::vector<BundleSourceUnit> units{};
@@ -264,7 +277,13 @@ std::vector<BundleSourceUnit> parse_bundle_units_json(const std::string& text, s
             !parse_json_string_field_line(line, "module", u.module) ||
             !parse_json_string_field_line(line, "source", u.source) ||
             !parse_json_string_array_field_line(line, "module_imports", u.module_imports) ||
-            !parse_json_string_array_field_line(line, "bundle_deps", u.bundle_deps)) {
+            !parse_json_string_array_field_line(line, "bundle_deps", u.bundle_deps) ||
+            !parse_json_string_array_field_line_optional(
+                line, "module_cimport_isystem", u.module_cimport_isystem
+            ) ||
+            !parse_json_string_array_field_line_optional(
+                line, "bundle_cimport_isystem", u.bundle_cimport_isystem
+            )) {
             out_err = "failed to parse LEI --list_sources JSON payload";
             return {};
         }
@@ -720,6 +739,8 @@ int run_check(const cli::Options& opt,
         std::vector<std::string> deps{};
         std::unordered_map<std::string, std::string> module_head_by_source{};
         std::unordered_map<std::string, std::vector<std::string>> module_imports_by_source{};
+        std::unordered_map<std::string, std::vector<std::string>> module_cimport_isystem_by_source{};
+        std::vector<std::string> bundle_cimport_isystem{};
     };
     std::unordered_map<std::string, BundleInfo> bundles{};
     std::vector<std::string> bundle_order{};
@@ -735,8 +756,12 @@ int run_check(const cli::Options& opt,
         it->second.sources.push_back(source_norm);
         it->second.module_head_by_source[source_norm] = u.module;
         it->second.module_imports_by_source[source_norm] = u.module_imports;
+        it->second.module_cimport_isystem_by_source[source_norm] = u.module_cimport_isystem;
         if (it->second.deps.empty()) {
             it->second.deps = u.bundle_deps;
+        }
+        if (it->second.bundle_cimport_isystem.empty()) {
+            it->second.bundle_cimport_isystem = u.bundle_cimport_isystem;
         }
     }
     for (auto& [name, info] : bundles) {
@@ -777,6 +802,24 @@ int run_check(const cli::Options& opt,
                 extra.push_back("--module-import");
                 extra.push_back(mh);
             }
+        }
+        auto first_cimport =
+            bit->second.module_cimport_isystem_by_source.find(bit->second.sources.front());
+        if (first_cimport != bit->second.module_cimport_isystem_by_source.end()) {
+            for (const auto& d : first_cimport->second) {
+                if (d.empty()) continue;
+                std::filesystem::path p(d);
+                if (p.is_relative()) p = entry_base / p;
+                extra.push_back("-isystem");
+                extra.push_back(p.lexically_normal().string());
+            }
+        }
+        for (const auto& d : bit->second.bundle_cimport_isystem) {
+            if (d.empty()) continue;
+            std::filesystem::path p(d);
+            if (p.is_relative()) p = entry_base / p;
+            extra.push_back("-isystem");
+            extra.push_back(p.lexically_normal().string());
         }
         extra.push_back("--emit-export-index");
         extra.push_back(idx_path);
@@ -827,6 +870,23 @@ int run_check(const cli::Options& opt,
                     extra.push_back("--module-import");
                     extra.push_back(mh);
                 }
+            }
+            auto ciit = info.module_cimport_isystem_by_source.find(src);
+            if (ciit != info.module_cimport_isystem_by_source.end()) {
+                for (const auto& d : ciit->second) {
+                    if (d.empty()) continue;
+                    std::filesystem::path p(d);
+                    if (p.is_relative()) p = entry_base / p;
+                    extra.push_back("-isystem");
+                    extra.push_back(p.lexically_normal().string());
+                }
+            }
+            for (const auto& d : info.bundle_cimport_isystem) {
+                if (d.empty()) continue;
+                std::filesystem::path p(d);
+                if (p.is_relative()) p = entry_base / p;
+                extra.push_back("-isystem");
+                extra.push_back(p.lexically_normal().string());
             }
             for (const auto& all_src : info.sources) {
                 extra.push_back("--bundle-source");

@@ -54,6 +54,9 @@ namespace parus::cimport {
         std::string type_repr{};
         std::string c_return_type{};
         std::vector<std::string> c_arg_types{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
         bool is_c_abi = true;
         bool is_variadic = false;
         CCallConvKind callconv = CCallConvKind::kDefault;
@@ -71,6 +74,9 @@ namespace parus::cimport {
     struct ImportedUnionDecl {
         std::string name{};
         std::vector<ImportedUnionFieldDecl> fields{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
         uint32_t size_bytes = 0;
         uint32_t align_bytes = 0;
     };
@@ -78,6 +84,9 @@ namespace parus::cimport {
     struct ImportedTypedefDecl {
         std::string name{};
         std::string type_repr{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
     };
 
     struct ImportedStructFieldDecl {
@@ -99,6 +108,9 @@ namespace parus::cimport {
         std::string name{};
         std::string c_type_spelling{};
         std::vector<ImportedStructFieldDecl> fields{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
         uint32_t size_bytes = 0;
         uint32_t align_bytes = 0;
         bool is_packed = false;
@@ -107,12 +119,18 @@ namespace parus::cimport {
     struct ImportedEnumConstantDecl {
         std::string name{};
         std::string value_text{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
     };
 
     struct ImportedEnumDecl {
         std::string name{};
         std::string underlying_type_repr{};
         std::vector<ImportedEnumConstantDecl> constants{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
     };
 
     struct ImportedMacroDecl {
@@ -121,6 +139,9 @@ namespace parus::cimport {
         bool is_variadic = false;
         ImportedConstKind const_kind = ImportedConstKind::kNone;
         std::string value_text{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
 
         ImportedMacroPromoteKind promote_kind = ImportedMacroPromoteKind::kNone;
         std::string promote_callee_name{};

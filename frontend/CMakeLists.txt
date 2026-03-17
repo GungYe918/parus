@@ -17,6 +17,7 @@ add_library(parus_frontend STATIC
     src/type/type_resolve.cpp
     src/cimport/libclang_probe.cpp
     src/cimport/c_header_import.cpp
+    src/cimport/toolchain_resolver.cpp
 
     src/passes/check_pipe_hole.cpp
     src/passes/check_place_expr.cpp

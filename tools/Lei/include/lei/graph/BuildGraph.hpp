@@ -15,6 +15,7 @@ struct ModuleNode {
     std::string bundle{};
     std::vector<std::string> sources{};
     std::vector<std::string> imports{};
+    std::vector<std::string> cimport_isystem{};
 };
 
 struct BundleNode {
@@ -22,6 +23,7 @@ struct BundleNode {
     std::string kind{};
     std::vector<std::string> modules{};
     std::vector<std::string> deps{};
+    std::vector<std::string> cimport_isystem{};
 };
 
 struct TaskNode {

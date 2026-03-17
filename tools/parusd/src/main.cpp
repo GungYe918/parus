@@ -1,5 +1,8 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
+#include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/ToolchainResolver.hpp>
+#include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
 #include <parus/macro/Expander.hpp>
@@ -30,6 +33,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -627,6 +631,16 @@ namespace {
         std::vector<std::string> warnings{};
     };
 
+    struct ServerCImportConfig {
+        std::vector<std::string> include_dirs{};
+        std::vector<std::string> isystem_dirs{};
+        std::vector<std::string> defines{};
+        std::vector<std::string> undefines{};
+        std::vector<std::string> forced_includes{};
+        std::vector<std::string> imacros{};
+        std::vector<std::string> warnings{};
+    };
+
     std::string lower_ascii_(std::string s) {
         std::transform(s.begin(), s.end(), s.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
@@ -933,6 +947,54 @@ namespace {
                 + " -> "
                 + std::to_string(cfg.budget.max_output_tokens));
         }
+        return cfg;
+    }
+
+    void parse_string_array_field_(const std::unordered_map<std::string, JsonValue>& obj,
+                                   std::string_view key,
+                                   std::vector<std::string>& out,
+                                   std::vector<std::string>& warnings,
+                                   std::string_view warning_prefix) {
+        const auto it = obj.find(std::string(key));
+        if (it == obj.end()) return;
+        const JsonValue* node = &it->second;
+        if (node->kind != JsonValue::Kind::kArray) {
+            warnings.push_back(std::string(warning_prefix) + std::string(key) + " must be array<string>");
+            return;
+        }
+        for (size_t i = 0; i < node->array_v.size(); ++i) {
+            const auto sv = as_string_(&node->array_v[i]);
+            if (!sv.has_value()) {
+                warnings.push_back(std::string(warning_prefix) + std::string(key) + "[" + std::to_string(i)
+                                   + "] must be string");
+                continue;
+            }
+            out.push_back(std::string(*sv));
+        }
+    }
+
+    ServerCImportConfig parse_cimport_config_from_initialize_(const JsonValue* params) {
+        ServerCImportConfig cfg{};
+        if (params == nullptr || params->kind != JsonValue::Kind::kObject) return cfg;
+        const auto* init_opts = obj_get_(*params, "initializationOptions");
+        if (init_opts == nullptr || init_opts->kind != JsonValue::Kind::kObject) return cfg;
+
+        const JsonValue* root = init_opts;
+        if (const auto* parus_cfg = obj_get_(*init_opts, "parus");
+            parus_cfg != nullptr && parus_cfg->kind == JsonValue::Kind::kObject) {
+            root = parus_cfg;
+        }
+        const auto* cimport = obj_get_(*root, "cimport");
+        if (cimport == nullptr || cimport->kind != JsonValue::Kind::kObject) return cfg;
+        const auto* cobj = &cimport->object_v;
+
+        constexpr std::string_view kWarnPrefix = "initializationOptions.parus.cimport.";
+        parse_string_array_field_(*cobj, "includeDirs", cfg.include_dirs, cfg.warnings, kWarnPrefix);
+        parse_string_array_field_(*cobj, "isystemDirs", cfg.isystem_dirs, cfg.warnings, kWarnPrefix);
+        parse_string_array_field_(*cobj, "defines", cfg.defines, cfg.warnings, kWarnPrefix);
+        parse_string_array_field_(*cobj, "undefines", cfg.undefines, cfg.warnings, kWarnPrefix);
+        parse_string_array_field_(*cobj, "forcedIncludes", cfg.forced_includes, cfg.warnings, kWarnPrefix);
+        parse_string_array_field_(*cobj, "imacros", cfg.imacros, cfg.warnings, kWarnPrefix);
         return cfg;
     }
 
@@ -1587,9 +1649,11 @@ namespace {
     struct BundleUnitMeta {
         std::string bundle_name{};
         std::vector<std::string> bundle_deps{};
+        std::vector<std::string> bundle_cimport_isystem{};
         std::vector<std::string> normalized_sources{};
         std::unordered_map<std::string, std::string> module_head_by_source{};
         std::unordered_map<std::string, std::vector<std::string>> module_imports_by_source{};
+        std::unordered_map<std::string, std::vector<std::string>> module_cimport_isystem_by_source{};
     };
 
     struct ParusBundleLintContext {
@@ -1597,6 +1661,7 @@ namespace {
         std::string current_module_head{};
         std::string current_source_dir_norm{};
         std::unordered_set<std::string> allowed_import_heads{};
+        std::vector<std::string> cimport_isystem_dirs{};
         std::vector<parus::passes::NameResolveOptions::ExternalExport> external_exports{};
         std::unordered_map<std::string, std::vector<ExternalDeclLocation>> external_decl_locs{};
         std::vector<std::string> index_load_errors{};
@@ -1839,6 +1904,236 @@ namespace {
         }
     }
 
+    struct CHeaderImportSpec {
+        std::string header{};
+        std::string alias{};
+        parus::Span span{};
+    };
+
+    void collect_c_header_imports_(const parus::ast::AstArena& ast,
+                                   parus::ast::StmtId root_sid,
+                                   std::vector<CHeaderImportSpec>& out) {
+        if (root_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+            return;
+        }
+        const auto& root = ast.stmt(root_sid);
+        if (root.kind != parus::ast::StmtKind::kBlock) return;
+        const auto& kids = ast.stmt_children();
+        const uint64_t begin = root.stmt_begin;
+        const uint64_t end = begin + root.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = 0; i < root.stmt_count; ++i) {
+            const auto sid = kids[root.stmt_begin + i];
+            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+            const auto& s = ast.stmt(sid);
+            if (s.kind != parus::ast::StmtKind::kUse) continue;
+            if (s.use_kind != parus::ast::UseKind::kImportCHeader) continue;
+            if (s.use_rhs_ident.empty()) continue;
+
+            CHeaderImportSpec one{};
+            if (s.use_path_count > 0) {
+                const auto& segs = ast.path_segs();
+                if (s.use_path_begin + s.use_path_count > segs.size()) continue;
+                one.header = std::string(segs[s.use_path_begin]);
+            } else if (!s.use_name.empty()) {
+                one.header = std::string(s.use_name);
+            } else {
+                continue;
+            }
+            one.alias = std::string(s.use_rhs_ident);
+            one.span = s.span;
+            out.push_back(std::move(one));
+        }
+    }
+
+    bool is_ident_start_(char ch) {
+        return (ch == '_') ||
+               (ch >= 'a' && ch <= 'z') ||
+               (ch >= 'A' && ch <= 'Z');
+    }
+
+    bool is_ident_continue_(char ch) {
+        return is_ident_start_(ch) || (ch >= '0' && ch <= '9');
+    }
+
+    bool is_builtin_type_token_(std::string_view tok) {
+        static const std::unordered_set<std::string> kBuiltins = {
+            "void", "bool",
+            "char",
+            "i8", "i16", "i32", "i64", "i128",
+            "u8", "u16", "u32", "u64", "u128",
+            "isize", "usize",
+            "f32", "f64", "f128",
+            "text",
+            "null",
+            "ptr",
+            "mut",
+            "def",
+        };
+        return kBuiltins.find(std::string(tok)) != kBuiltins.end();
+    }
+
+    std::string rewrite_cimport_type_with_alias_(
+        std::string_view type_repr,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names
+    ) {
+        if (type_repr.empty() || alias.empty() || known_type_names.empty()) {
+            return std::string(type_repr);
+        }
+
+        std::string out{};
+        out.reserve(type_repr.size() + 16u);
+        size_t i = 0;
+        while (i < type_repr.size()) {
+            const char ch = type_repr[i];
+            if (!is_ident_start_(ch)) {
+                out.push_back(ch);
+                ++i;
+                continue;
+            }
+            const size_t begin_tok = i;
+            ++i;
+            while (i < type_repr.size() && is_ident_continue_(type_repr[i])) ++i;
+            const std::string_view tok = type_repr.substr(begin_tok, i - begin_tok);
+
+            const bool has_scope_prefix =
+                begin_tok >= 2 && type_repr[begin_tok - 1] == ':' && type_repr[begin_tok - 2] == ':';
+            const bool has_scope_suffix =
+                i + 1 < type_repr.size() && type_repr[i] == ':' && type_repr[i + 1] == ':';
+
+            if (!has_scope_prefix &&
+                !has_scope_suffix &&
+                !is_builtin_type_token_(tok) &&
+                known_type_names.find(std::string(tok)) != known_type_names.end()) {
+                out += std::string(alias);
+                out += "::";
+                out += std::string(tok);
+            } else {
+                out += std::string(tok);
+            }
+        }
+        return out;
+    }
+
+    std::string make_c_import_payload_(std::string_view header,
+                                       std::string_view alias,
+                                       const parus::cimport::ImportedFunctionDecl& fn) {
+        auto format_kind_text = [](parus::cimport::CFormatKind k) -> std::string_view {
+            switch (k) {
+                case parus::cimport::CFormatKind::kFmtVarargs: return "fmt_varargs";
+                case parus::cimport::CFormatKind::kFmtVList: return "fmt_vlist";
+                case parus::cimport::CFormatKind::kNone:
+                default:
+                    return "none";
+            }
+        };
+        auto callconv_text = [](parus::cimport::CCallConvKind cc) -> std::string_view {
+            switch (cc) {
+                case parus::cimport::CCallConvKind::kCdecl: return "cdecl";
+                case parus::cimport::CCallConvKind::kStdCall: return "stdcall";
+                case parus::cimport::CCallConvKind::kFastCall: return "fastcall";
+                case parus::cimport::CCallConvKind::kVectorCall: return "vectorcall";
+                case parus::cimport::CCallConvKind::kWin64: return "win64";
+                case parus::cimport::CCallConvKind::kSysV: return "sysv";
+                case parus::cimport::CCallConvKind::kDefault:
+                default:
+                    return "default";
+            }
+        };
+
+        std::string out = "parus_c_import|header=";
+        out += std::string(header);
+        out += "|is_c_abi=";
+        out += fn.is_c_abi ? "1" : "0";
+        out += "|variadic=";
+        out += fn.is_variadic ? "1" : "0";
+        out += "|format=";
+        out += std::string(format_kind_text(fn.format_kind));
+        out += "|fmt_idx=";
+        out += std::to_string(fn.fmt_param_index);
+        out += "|va_idx=";
+        out += std::to_string(fn.va_list_param_index);
+        out += "|callconv=";
+        out += std::string(callconv_text(fn.callconv));
+        if (!fn.variadic_sibling_name.empty()) {
+            out += "|sibling=";
+            out += std::string(alias);
+            out += "::";
+            out += fn.variadic_sibling_name;
+        }
+        return out;
+    }
+
+    std::string make_c_import_union_payload_(
+        std::string_view header,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names,
+        const parus::cimport::ImportedUnionDecl& un
+    ) {
+        std::string payload = "parus_c_import_union|header=" + std::string(header);
+        payload += "|size=" + std::to_string(un.size_bytes);
+        payload += "|align=" + std::to_string(un.align_bytes);
+        payload += "|fields=";
+        for (size_t fi = 0; fi < un.fields.size(); ++fi) {
+            if (fi) payload += ",";
+            payload += un.fields[fi].name;
+            payload += ":";
+            payload += rewrite_cimport_type_with_alias_(
+                un.fields[fi].type_repr, alias, known_type_names);
+        }
+        return payload;
+    }
+
+    std::string make_c_import_struct_payload_(
+        std::string_view header,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names,
+        const parus::cimport::ImportedStructDecl& st
+    ) {
+        auto dash_if_empty = [](std::string_view s) -> std::string {
+            if (s.empty()) return "-";
+            return std::string(s);
+        };
+        std::string payload = "parus_c_import_struct|header=" + std::string(header);
+        payload += "|size=" + std::to_string(st.size_bytes);
+        payload += "|align=" + std::to_string(st.align_bytes);
+        payload += "|packed=" + std::string(st.is_packed ? "1" : "0");
+        payload += "|fields=";
+        for (size_t fi = 0; fi < st.fields.size(); ++fi) {
+            if (fi) payload += ",";
+            const auto& f = st.fields[fi];
+            payload += f.name;
+            payload += ":";
+            payload += rewrite_cimport_type_with_alias_(
+                f.type_repr, alias, known_type_names);
+            payload += "@";
+            payload += std::to_string(f.offset_bytes);
+            payload += "@";
+            payload += f.union_origin ? "1" : "0";
+            payload += "@";
+            payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
+            payload += "@";
+            payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
+            payload += "@";
+            payload += f.bit_signed ? "1" : "0";
+            payload += "@";
+            payload += dash_if_empty(f.bit_getter_name);
+            payload += "@";
+            payload += dash_if_empty(f.bit_setter_name);
+        }
+        return payload;
+    }
+
+    std::string make_c_import_const_payload_(std::string_view kind, std::string_view text) {
+        std::string payload = "parus_c_import_const|kind=";
+        payload += std::string(kind);
+        payload += "|text=";
+        payload += std::string(text);
+        return payload;
+    }
+
     bool is_under_root_(const std::filesystem::path& path, const std::filesystem::path& root) {
         const auto p = normalize_host_path_(path.string());
         const auto r = normalize_host_path_(root.string());
@@ -1961,6 +2256,16 @@ namespace {
                 argv.push_back(normalize_import_head_(import_head));
             }
         }
+        std::vector<std::string> cimport_isystem = unit.bundle_cimport_isystem;
+        if (auto it = unit.module_cimport_isystem_by_source.find(unit.normalized_sources.front());
+            it != unit.module_cimport_isystem_by_source.end()) {
+            parus::cimport::append_unique_normalized_paths(cimport_isystem, it->second);
+        }
+        for (const auto& d : cimport_isystem) {
+            if (d.empty()) continue;
+            argv.push_back("-isystem");
+            argv.push_back(d);
+        }
         for (const auto& src : unit.normalized_sources) {
             argv.push_back("--bundle-source");
             argv.push_back(src);
@@ -2052,6 +2357,16 @@ namespace {
             BundleUnitMeta unit{};
             unit.bundle_name = b.name;
             unit.bundle_deps = b.deps;
+            for (const auto& d : b.cimport_isystem) {
+                if (d.empty()) continue;
+                std::filesystem::path p(d);
+                if (p.is_relative()) p = config_dir / p;
+                unit.bundle_cimport_isystem.push_back(normalize_host_path_(p.string()));
+            }
+            std::sort(unit.bundle_cimport_isystem.begin(), unit.bundle_cimport_isystem.end());
+            unit.bundle_cimport_isystem.erase(
+                std::unique(unit.bundle_cimport_isystem.begin(), unit.bundle_cimport_isystem.end()),
+                unit.bundle_cimport_isystem.end());
             std::sort(unit.bundle_deps.begin(), unit.bundle_deps.end());
             unit.bundle_deps.erase(std::unique(unit.bundle_deps.begin(), unit.bundle_deps.end()), unit.bundle_deps.end());
             unit_by_bundle[b.name] = out_units.size();
@@ -2072,6 +2387,13 @@ namespace {
                     if (top_head.empty()) continue;
                     imports.push_back(top_head);
                 }
+                auto& isystem = unit.module_cimport_isystem_by_source[abs_src];
+                for (const auto& d : m.cimport_isystem) {
+                    if (d.empty()) continue;
+                    std::filesystem::path p(d);
+                    if (p.is_relative()) p = config_dir / p;
+                    isystem.push_back(normalize_host_path_(p.string()));
+                }
             }
         }
 
@@ -2084,6 +2406,10 @@ namespace {
             for (auto& [src, imports] : unit.module_imports_by_source) {
                 std::sort(imports.begin(), imports.end());
                 imports.erase(std::unique(imports.begin(), imports.end()), imports.end());
+            }
+            for (auto& [src, isystem] : unit.module_cimport_isystem_by_source) {
+                std::sort(isystem.begin(), isystem.end());
+                isystem.erase(std::unique(isystem.begin(), isystem.end()), isystem.end());
             }
         }
 
@@ -2365,6 +2691,11 @@ namespace {
                 if (!top_head.empty()) ctx.allowed_import_heads.insert(top_head);
             }
         }
+        ctx.cimport_isystem_dirs = current_unit->bundle_cimport_isystem;
+        if (auto ci = current_unit->module_cimport_isystem_by_source.find(normalized_current);
+            ci != current_unit->module_cimport_isystem_by_source.end()) {
+            parus::cimport::append_unique_normalized_paths(ctx.cimport_isystem_dirs, ci->second);
+        }
 
         std::unordered_map<std::string, const BundleUnitMeta*> units_by_name{};
         for (const auto& u : units) {
@@ -2442,12 +2773,17 @@ namespace {
         std::string_view uri,
         DocumentState& doc,
         const parus::macro::ExpansionBudget& macro_budget,
+        const ServerCImportConfig& cimport_cfg,
         const std::unordered_map<std::string, std::string>* lei_overlays
     ) {
         AnalysisResult out;
 
         parus::SourceManager sm;
         const uint32_t file_id = sm.add(std::string(uri), std::string(doc.text));
+        const auto fs_path = uri_to_file_path_(uri);
+        const std::string normalized_current =
+            fs_path.has_value() ? normalize_host_path_(*fs_path) : normalize_host_path_(std::string(uri));
+        const std::string current_dir = parent_dir_norm_(normalized_current);
 
         parus::diag::Bag bag;
         if (!doc.parse_ready || !doc.parse_session.ready()) {
@@ -2483,6 +2819,8 @@ namespace {
 #endif
         std::unordered_set<uint32_t> core_impl_marker_file_ids{};
         collect_core_impl_marker_file_ids_(ast, root, core_impl_marker_file_ids);
+        std::vector<CHeaderImportSpec> c_header_imports{};
+        collect_c_header_imports_(ast, root, c_header_imports);
 
         std::unordered_map<uint64_t, SemClass> resolved_map;
         parus::passes::PassResults pass_res{};
@@ -2526,6 +2864,332 @@ namespace {
                         }
                     }
 #endif
+                    if (!bag.has_error() && !c_header_imports.empty()) {
+                        struct CImportCacheEntry {
+                            std::vector<parus::passes::NameResolveOptions::ExternalExport> exports{};
+                            std::unordered_map<std::string, std::vector<LspLocation>> defs{};
+                        };
+                        static std::unordered_map<std::string, CImportCacheEntry> g_lsp_cimport_cache{};
+
+                        std::vector<std::string> cimport_include_dirs{};
+                        std::vector<std::string> cimport_isystem_dirs{};
+                        std::vector<std::string> cimport_defines{};
+                        std::vector<std::string> cimport_undefines{};
+                        std::vector<std::string> cimport_forced_includes{};
+                        std::vector<std::string> cimport_imacros{};
+                        if (!current_dir.empty()) cimport_include_dirs.push_back(current_dir);
+                        for (const auto& d : cimport_cfg.include_dirs) {
+                            if (!d.empty()) cimport_include_dirs.push_back(parus::normalize_path(d));
+                        }
+#if PARUSD_ENABLE_LEI
+                        if (lint_ctx_for_doc.has_value()) {
+                            parus::cimport::append_unique_normalized_paths(
+                                cimport_isystem_dirs,
+                                lint_ctx_for_doc->cimport_isystem_dirs
+                            );
+                        }
+#endif
+                        for (const auto& d : cimport_cfg.isystem_dirs) {
+                            if (!d.empty()) cimport_isystem_dirs.push_back(parus::normalize_path(d));
+                        }
+                        const auto auto_isystem = parus::cimport::probe_default_c_system_include_dirs();
+                        if (!auto_isystem.warning.empty()) {
+                            parus::diag::Diagnostic d(
+                                parus::diag::Severity::kWarning,
+                                parus::diag::Code::kTypeErrorGeneric,
+                                parus::Span{file_id, 0, 0}
+                            );
+                            d.add_arg(auto_isystem.warning);
+                            bag.add(std::move(d));
+                        }
+                        parus::cimport::append_unique_normalized_paths(cimport_isystem_dirs, auto_isystem.isystem_dirs);
+                        for (const auto& d : cimport_cfg.defines) {
+                            if (!d.empty()) cimport_defines.push_back(d);
+                        }
+                        for (const auto& d : cimport_cfg.undefines) {
+                            if (!d.empty()) cimport_undefines.push_back(d);
+                        }
+                        for (const auto& d : cimport_cfg.forced_includes) {
+                            if (!d.empty()) cimport_forced_includes.push_back(parus::normalize_path(d));
+                        }
+                        for (const auto& d : cimport_cfg.imacros) {
+                            if (!d.empty()) cimport_imacros.push_back(parus::normalize_path(d));
+                        }
+
+                        std::string cache_key = normalized_current;
+                        cache_key += "|hdr=";
+                        for (const auto& spec : c_header_imports) {
+                            cache_key += spec.header;
+                            cache_key += "@";
+                            cache_key += spec.alias;
+                            cache_key += ";";
+                        }
+                        auto append_vec_to_key = [&](std::string_view tag, const std::vector<std::string>& v) {
+                            cache_key += "|";
+                            cache_key += std::string(tag);
+                            cache_key += "=";
+                            for (const auto& one : v) {
+                                cache_key += one;
+                                cache_key += ";";
+                            }
+                        };
+                        append_vec_to_key("I", cimport_include_dirs);
+                        append_vec_to_key("S", cimport_isystem_dirs);
+                        append_vec_to_key("D", cimport_defines);
+                        append_vec_to_key("U", cimport_undefines);
+                        append_vec_to_key("F", cimport_forced_includes);
+                        append_vec_to_key("M", cimport_imacros);
+
+                        if (auto it = g_lsp_cimport_cache.find(cache_key); it != g_lsp_cimport_cache.end()) {
+                            for (const auto& ex : it->second.exports) {
+                                popt.name_resolve.external_exports.push_back(ex);
+                            }
+                            for (const auto& [k, v] : it->second.defs) {
+                                auto& dst = external_definitions[k];
+                                for (const auto& loc : v) {
+                                    append_unique_location_(dst, loc);
+                                }
+                            }
+                        } else {
+                            CImportCacheEntry cache_entry{};
+
+                            std::set<std::pair<int, std::string>> cimport_seen{};
+                            auto add_decl_loc = [&](const std::string& path,
+                                                    const std::string& file,
+                                                    uint32_t line,
+                                                    uint32_t col) {
+                                if (path.empty() || file.empty()) return;
+                                LspLocation lsp{};
+                                lsp.uri = file_path_to_uri_(file);
+                                lsp.start_line = (line > 0) ? (line - 1) : 0;
+                                lsp.start_character = (col > 0) ? (col - 1) : 0;
+                                lsp.end_line = lsp.start_line;
+                                lsp.end_character = lsp.start_character + 1;
+                                append_unique_location_(external_definitions[path], lsp);
+                                append_unique_location_(cache_entry.defs[path], lsp);
+                            };
+
+                            auto add_external = [&](parus::sema::SymbolKind kind,
+                                                    std::string path,
+                                                    std::string type_repr,
+                                                    std::string link_name,
+                                                    std::string inst_payload) {
+                                if (path.empty() || type_repr.empty()) return;
+                                const auto key = std::make_pair(static_cast<int>(kind), path);
+                                if (!cimport_seen.insert(key).second) return;
+                                parus::passes::NameResolveOptions::ExternalExport ex{};
+                                ex.kind = kind;
+                                ex.path = std::move(path);
+                                ex.link_name = std::move(link_name);
+                                ex.declared_type_repr = std::move(type_repr);
+                                ex.declared_type = parus::ty::kInvalidType;
+                                ex.decl_span = parus::Span{0, 0, 0};
+                                ex.decl_bundle_name = "__cimport__";
+                                ex.decl_source_dir_norm = current_dir;
+                                ex.module_head.clear();
+                                ex.is_export = true;
+                                ex.inst_payload = std::move(inst_payload);
+                                cache_entry.exports.push_back(ex);
+                                popt.name_resolve.external_exports.push_back(std::move(ex));
+                            };
+
+                            for (const auto& spec : c_header_imports) {
+                            const auto imported = parus::cimport::import_c_header_functions(
+                                normalized_current,
+                                spec.header,
+                                cimport_include_dirs,
+                                cimport_isystem_dirs,
+                                cimport_defines,
+                                cimport_undefines,
+                                cimport_forced_includes,
+                                cimport_imacros
+                            );
+                            if (imported.error != parus::cimport::ImportErrorKind::kNone) {
+                                parus::diag::Diagnostic d(
+                                    parus::diag::Severity::kError,
+                                    imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable
+                                        ? parus::diag::Code::kCImportLibClangUnavailable
+                                        : parus::diag::Code::kTypeErrorGeneric,
+                                    spec.span
+                                );
+                                if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
+                                    d.add_arg("libclang unavailable");
+                                } else {
+                                    d.add_arg("failed to import C header '" + spec.header + "': " + imported.error_text);
+                                }
+                                bag.add(std::move(d));
+                                continue;
+                            }
+
+                            std::unordered_set<std::string> known_type_names{};
+                            for (const auto& un : imported.unions) {
+                                if (!un.name.empty()) known_type_names.insert(un.name);
+                            }
+                            for (const auto& st : imported.structs) {
+                                if (!st.name.empty()) known_type_names.insert(st.name);
+                            }
+                            for (const auto& en : imported.enums) {
+                                if (!en.name.empty()) known_type_names.insert(en.name);
+                            }
+                            for (const auto& td : imported.typedefs) {
+                                if (!td.name.empty()) known_type_names.insert(td.name);
+                            }
+
+                            std::unordered_map<std::string, const parus::cimport::ImportedFunctionDecl*> imported_fn_by_name{};
+                            imported_fn_by_name.reserve(imported.functions.size() * 2u + 1u);
+                            for (const auto& fn : imported.functions) {
+                                if (!fn.name.empty()) imported_fn_by_name.emplace(fn.name, &fn);
+                                if (fn.name.empty() || fn.type_repr.empty() || fn.link_name.empty()) continue;
+                                const std::string path = spec.alias + "::" + fn.name;
+                                add_external(
+                                    parus::sema::SymbolKind::kFn,
+                                    path,
+                                    rewrite_cimport_type_with_alias_(fn.type_repr, spec.alias, known_type_names),
+                                    fn.link_name,
+                                    make_c_import_payload_(spec.header, spec.alias, fn)
+                                );
+                                add_decl_loc(path, fn.decl_file, fn.decl_line, fn.decl_col);
+                            }
+
+                            for (const auto& un : imported.unions) {
+                                if (un.name.empty()) continue;
+                                const std::string type_path = spec.alias + "::" + un.name;
+                                add_external(
+                                    parus::sema::SymbolKind::kType,
+                                    type_path,
+                                    type_path,
+                                    {},
+                                    make_c_import_union_payload_(spec.header, spec.alias, known_type_names, un)
+                                );
+                                add_decl_loc(type_path, un.decl_file, un.decl_line, un.decl_col);
+                            }
+
+                            for (const auto& st : imported.structs) {
+                                if (st.name.empty()) continue;
+                                const std::string type_path = spec.alias + "::" + st.name;
+                                add_external(
+                                    parus::sema::SymbolKind::kType,
+                                    type_path,
+                                    type_path,
+                                    {},
+                                    make_c_import_struct_payload_(spec.header, spec.alias, known_type_names, st)
+                                );
+                                add_decl_loc(type_path, st.decl_file, st.decl_line, st.decl_col);
+                            }
+
+                            for (const auto& td : imported.typedefs) {
+                                if (td.name.empty() || td.type_repr.empty()) continue;
+                                const std::string type_path = spec.alias + "::" + td.name;
+                                add_external(
+                                    parus::sema::SymbolKind::kType,
+                                    type_path,
+                                    rewrite_cimport_type_with_alias_(td.type_repr, spec.alias, known_type_names),
+                                    {},
+                                    {}
+                                );
+                                add_decl_loc(type_path, td.decl_file, td.decl_line, td.decl_col);
+                            }
+
+                            for (const auto& en : imported.enums) {
+                                if (en.name.empty()) continue;
+                                const std::string enum_path = spec.alias + "::" + en.name;
+                                add_external(parus::sema::SymbolKind::kType, enum_path, enum_path, {}, {});
+                                add_decl_loc(enum_path, en.decl_file, en.decl_line, en.decl_col);
+
+                                const std::string const_ty = rewrite_cimport_type_with_alias_(
+                                    en.underlying_type_repr.empty()
+                                        ? std::string_view("i32")
+                                        : std::string_view(en.underlying_type_repr),
+                                    spec.alias,
+                                    known_type_names
+                                );
+                                for (const auto& cst : en.constants) {
+                                    if (cst.name.empty() || cst.value_text.empty()) continue;
+                                    const std::string cpath = spec.alias + "::" + cst.name;
+                                    add_external(
+                                        parus::sema::SymbolKind::kVar,
+                                        cpath,
+                                        const_ty,
+                                        {},
+                                        make_c_import_const_payload_("int", cst.value_text)
+                                    );
+                                    add_decl_loc(cpath, cst.decl_file, cst.decl_line, cst.decl_col);
+                                }
+                            }
+
+                            for (const auto& mc : imported.macros) {
+                                if (mc.name.empty()) continue;
+                                if (mc.is_function_like) {
+                                    if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kDirectAlias) {
+                                        const auto it = imported_fn_by_name.find(mc.promote_callee_name);
+                                        if (it != imported_fn_by_name.end() && it->second != nullptr) {
+                                            const auto* callee = it->second;
+                                            const std::string mpath = spec.alias + "::" + mc.name;
+                                            add_external(
+                                                parus::sema::SymbolKind::kFn,
+                                                mpath,
+                                                rewrite_cimport_type_with_alias_(callee->type_repr, spec.alias, known_type_names),
+                                                callee->link_name,
+                                                make_c_import_payload_(spec.header, spec.alias, *callee)
+                                            );
+                                            add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
+                                        }
+                                    } else if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kShimForward &&
+                                               !mc.promote_type_repr.empty()) {
+                                        const std::string mpath = spec.alias + "::" + mc.name;
+                                        add_external(
+                                            parus::sema::SymbolKind::kFn,
+                                            mpath,
+                                            rewrite_cimport_type_with_alias_(mc.promote_type_repr, spec.alias, known_type_names),
+                                            "__parusd_lsp_cimport_shim_" + spec.alias + "_" + mc.name,
+                                            {}
+                                        );
+                                        add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
+                                    }
+                                    continue;
+                                }
+                                if (mc.const_kind == parus::cimport::ImportedConstKind::kNone) continue;
+                                const std::string cpath = spec.alias + "::" + mc.name;
+                                std::string ty = "i64";
+                                std::string payload_kind = "int";
+                                switch (mc.const_kind) {
+                                    case parus::cimport::ImportedConstKind::kInt:
+                                        ty = "i64";
+                                        payload_kind = "int";
+                                        break;
+                                    case parus::cimport::ImportedConstKind::kFloat:
+                                        ty = "f64";
+                                        payload_kind = "float";
+                                        break;
+                                    case parus::cimport::ImportedConstKind::kBool:
+                                        ty = "bool";
+                                        payload_kind = "bool";
+                                        break;
+                                    case parus::cimport::ImportedConstKind::kChar:
+                                        ty = "char";
+                                        payload_kind = "char";
+                                        break;
+                                    case parus::cimport::ImportedConstKind::kString:
+                                        ty = "ptr i8";
+                                        payload_kind = "string";
+                                        break;
+                                    case parus::cimport::ImportedConstKind::kNone:
+                                    default:
+                                        continue;
+                                }
+                                add_external(
+                                    parus::sema::SymbolKind::kVar,
+                                    cpath,
+                                    ty,
+                                    {},
+                                    make_c_import_const_payload_(payload_kind, mc.value_text)
+                                );
+                                add_decl_loc(cpath, mc.decl_file, mc.decl_line, mc.decl_col);
+                            }
+                            }
+                            g_lsp_cimport_cache[cache_key] = std::move(cache_entry);
+                        }
+                    }
                     if (!bag.has_error()) {
                         const bool auto_core_injection =
                             !env_flag_truthy_(getenv_string_("PARUS_NO_CORE")) &&
@@ -3166,11 +3830,12 @@ namespace {
         std::string_view uri,
         DocumentState& doc,
         const parus::macro::ExpansionBudget& macro_budget,
+        const ServerCImportConfig& cimport_cfg,
         const std::unordered_map<std::string, std::string>* lei_overlays
     ) {
         switch (doc.lang) {
             case DocLang::kParus:
-                return analyze_parus_document_(uri, doc, macro_budget, lei_overlays);
+                return analyze_parus_document_(uri, doc, macro_budget, cimport_cfg, lei_overlays);
             case DocLang::kLei: {
                 static const std::unordered_map<std::string, std::string> kEmptyOverlays{};
                 return analyze_lei_document_(
@@ -3443,13 +4108,18 @@ namespace {
                 const auto params = obj_get_(msg, "params");
                 if (*method == "initialize") {
                     const auto macro_cfg = parse_macro_config_from_initialize_(params);
+                    const auto cimport_cfg = parse_cimport_config_from_initialize_(params);
                     macro_budget_ = macro_cfg.budget;
                     parser_features_ = macro_cfg.parser_features;
+                    cimport_cfg_ = cimport_cfg;
 
                     const std::string result = build_initialize_result_();
                     const auto response = build_response_result_(id, result);
                     if (!response.empty()) write_lsp_message_(std::cout, response);
                     for (const auto& w : macro_cfg.warnings) {
+                        notify_log_message_(/*warning=*/2, w);
+                    }
+                    for (const auto& w : cimport_cfg.warnings) {
                         notify_log_message_(/*warning=*/2, w);
                     }
                     continue;
@@ -3602,7 +4272,7 @@ namespace {
             lei_overlays_ptr = &lei_overlays;
 #endif
 
-            auto analyzed = analyze_document_(uri, st, macro_budget_, lei_overlays_ptr);
+            auto analyzed = analyze_document_(uri, st, macro_budget_, cimport_cfg_, lei_overlays_ptr);
             st.analysis.revision = st.revision;
             st.analysis.valid = true;
             st.analysis.diagnostics = std::move(analyzed.diagnostics);
@@ -3945,6 +4615,7 @@ namespace {
         bool trace_incremental_ = (std::getenv("PARUSD_TRACE_INCREMENTAL") != nullptr);
         parus::macro::ExpansionBudget macro_budget_ = parus::macro::default_budget_jit();
         parus::ParserFeatureFlags parser_features_{};
+        ServerCImportConfig cimport_cfg_{};
     };
 
     void print_usage_() {

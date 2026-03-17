@@ -6,6 +6,7 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
@@ -1943,6 +1944,14 @@ namespace parusc::p0 {
             for (const auto& d : opt.cimport_isystem_dirs) {
                 if (!d.empty()) cimport_isystem_dirs_norm.push_back(parus::normalize_path(d));
             }
+            const auto auto_isystem = parus::cimport::probe_default_c_system_include_dirs();
+            if (!auto_isystem.warning.empty()) {
+                std::cerr << "warning: " << auto_isystem.warning << "\n";
+            }
+            parus::cimport::append_unique_normalized_paths(
+                cimport_isystem_dirs_norm,
+                auto_isystem.isystem_dirs
+            );
             for (const auto& d : opt.cimport_defines) {
                 if (!d.empty()) cimport_defines.push_back(d);
             }
@@ -2055,9 +2064,9 @@ namespace parusc::p0 {
                     e.type_repr = rewrite_cimport_type_with_alias_(
                         fn.type_repr, spec.alias, known_type_names);
                     e.inst_payload = make_c_import_payload_(spec.header, spec.alias, fn);
-                    e.decl_file = current_norm;
-                    e.decl_line = 1;
-                    e.decl_col = 1;
+                    e.decl_file = fn.decl_file.empty() ? current_norm : parus::normalize_path(fn.decl_file);
+                    e.decl_line = fn.decl_line;
+                    e.decl_col = fn.decl_col;
                     e.decl_bundle = "__cimport__";
                     e.is_export = true;
                     cimport_surface.push_back(std::move(e));
@@ -2078,9 +2087,9 @@ namespace parusc::p0 {
                     e.type_repr = path;
                     e.inst_payload = make_c_import_union_payload_(
                         spec.header, spec.alias, known_type_names, un);
-                    e.decl_file = current_norm;
-                    e.decl_line = 1;
-                    e.decl_col = 1;
+                    e.decl_file = un.decl_file.empty() ? current_norm : parus::normalize_path(un.decl_file);
+                    e.decl_line = un.decl_line;
+                    e.decl_col = un.decl_col;
                     e.decl_bundle = "__cimport__";
                     e.is_export = true;
                     cimport_surface.push_back(std::move(e));
@@ -2208,9 +2217,9 @@ namespace parusc::p0 {
                     e.type_repr = type_path;
                     e.inst_payload = make_c_import_struct_payload_(
                         spec.header, spec.alias, known_type_names, st);
-                    e.decl_file = current_norm;
-                    e.decl_line = 1;
-                    e.decl_col = 1;
+                    e.decl_file = st_src.decl_file.empty() ? current_norm : parus::normalize_path(st_src.decl_file);
+                    e.decl_line = st_src.decl_line;
+                    e.decl_col = st_src.decl_col;
                     e.decl_bundle = "__cimport__";
                     e.is_export = true;
                     cimport_surface.push_back(std::move(e));
@@ -2231,9 +2240,9 @@ namespace parusc::p0 {
                     e.type_repr = rewrite_cimport_type_with_alias_(
                         td.type_repr, spec.alias, known_type_names);
                     e.inst_payload.clear();
-                    e.decl_file = current_norm;
-                    e.decl_line = 1;
-                    e.decl_col = 1;
+                    e.decl_file = td.decl_file.empty() ? current_norm : parus::normalize_path(td.decl_file);
+                    e.decl_line = td.decl_line;
+                    e.decl_col = td.decl_col;
                     e.decl_bundle = "__cimport__";
                     e.is_export = true;
                     cimport_surface.push_back(std::move(e));
@@ -2252,9 +2261,9 @@ namespace parusc::p0 {
                         e.decl_dir = current_dir;
                         e.type_repr = enum_path;
                         e.inst_payload.clear();
-                        e.decl_file = current_norm;
-                        e.decl_line = 1;
-                        e.decl_col = 1;
+                        e.decl_file = en.decl_file.empty() ? current_norm : parus::normalize_path(en.decl_file);
+                        e.decl_line = en.decl_line;
+                        e.decl_col = en.decl_col;
                         e.decl_bundle = "__cimport__";
                         e.is_export = true;
                         cimport_surface.push_back(std::move(e));
@@ -2281,9 +2290,9 @@ namespace parusc::p0 {
                         ce.decl_dir = current_dir;
                         ce.type_repr = const_ty;
                         ce.inst_payload = make_c_import_const_payload_("int", cst.value_text);
-                        ce.decl_file = current_norm;
-                        ce.decl_line = 1;
-                        ce.decl_col = 1;
+                        ce.decl_file = cst.decl_file.empty() ? current_norm : parus::normalize_path(cst.decl_file);
+                        ce.decl_line = cst.decl_line;
+                        ce.decl_col = cst.decl_col;
                         ce.decl_bundle = "__cimport__";
                         ce.is_export = true;
                         cimport_surface.push_back(std::move(ce));
@@ -2304,9 +2313,9 @@ namespace parusc::p0 {
                     ce.link_name.clear();
                     ce.module_head.clear();
                     ce.decl_dir = current_dir;
-                    ce.decl_file = current_norm;
-                    ce.decl_line = 1;
-                    ce.decl_col = 1;
+                    ce.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
+                    ce.decl_line = mc.decl_line;
+                    ce.decl_col = mc.decl_col;
                     ce.decl_bundle = "__cimport__";
                     ce.is_export = true;
 
@@ -2365,9 +2374,9 @@ namespace parusc::p0 {
                         e.type_repr = rewrite_cimport_type_with_alias_(
                             callee->type_repr, spec.alias, known_type_names);
                         e.inst_payload = make_c_import_payload_(spec.header, spec.alias, *callee);
-                        e.decl_file = current_norm;
-                        e.decl_line = 1;
-                        e.decl_col = 1;
+                        e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
+                        e.decl_line = mc.decl_line;
+                        e.decl_col = mc.decl_col;
                         e.decl_bundle = "__cimport__";
                         e.is_export = true;
                         cimport_surface.push_back(std::move(e));
@@ -2440,9 +2449,9 @@ namespace parusc::p0 {
                         shim_fn.is_c_abi = true;
                         shim_fn.is_variadic = false;
                         e.inst_payload = make_c_import_payload_(spec.header, spec.alias, shim_fn);
-                        e.decl_file = current_norm;
-                        e.decl_line = 1;
-                        e.decl_col = 1;
+                        e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
+                        e.decl_line = mc.decl_line;
+                        e.decl_col = mc.decl_col;
                         e.decl_bundle = "__cimport__";
                         e.is_export = true;
                         cimport_surface.push_back(std::move(e));

@@ -29,6 +29,12 @@ interface ParusConfig {
   traceServer: TraceSetting;
   diagnosticsDebounceMs: number;
   idleTimeoutSec: number;
+  cimportIncludeDirs: string[];
+  cimportIsystemDirs: string[];
+  cimportDefines: string[];
+  cimportUndefines: string[];
+  cimportForcedIncludes: string[];
+  cimportImacros: string[];
 }
 
 interface LaunchCandidate {
@@ -105,6 +111,22 @@ const LEI_TYPE_DIAGNOSTIC_CODES = new Set([
 
 function isSupportedLanguageId(languageId: string): boolean {
   return SUPPORTED_LANGUAGE_IDS.has(languageId);
+}
+
+function readStringArraySetting(
+  cfg: vscode.WorkspaceConfiguration,
+  key: string
+): string[] {
+  const raw = cfg.get<unknown>(key, []);
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const one of raw) {
+    if (typeof one !== "string") continue;
+    const trimmed = one.trim();
+    if (trimmed.length === 0) continue;
+    out.push(trimmed);
+  }
+  return out;
 }
 
 let client: LanguageClient | undefined;
@@ -377,7 +399,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `${SETTINGS_SECTION}.diagnostics.debounceMs`
       );
       const affectsIdle = event.affectsConfiguration(`${SETTINGS_SECTION}.server.idleTimeoutSec`);
-      if (!affectsPath && !affectsMode && !affectsTrace && !affectsDebounce && !affectsIdle) {
+      const affectsCImport =
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.includeDirs`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.isystemDirs`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.defines`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.undefines`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.forcedIncludes`) ||
+        event.affectsConfiguration(`${SETTINGS_SECTION}.cimport.imacros`);
+      if (
+        !affectsPath &&
+        !affectsMode &&
+        !affectsTrace &&
+        !affectsDebounce &&
+        !affectsIdle &&
+        !affectsCImport
+      ) {
         return;
       }
 
@@ -406,6 +442,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (affectsPath || affectsMode) {
         log("서버 경로/모드 설정이 변경되어 서버를 재시작합니다.");
         await enqueueLifecycle(() => restartLanguageClient("config-change"), "설정 변경 재시작");
+      } else if (affectsCImport) {
+        log("C import 설정이 변경되어 서버를 재시작합니다.");
+        await enqueueLifecycle(
+          () => restartLanguageClient("cimport-config-change"),
+          "C import 설정 변경 재시작"
+        );
       }
     }),
     vscode.window.onDidChangeActiveTextEditor((editor) => {
@@ -711,6 +753,7 @@ async function startLanguageClient(reason: string): Promise<void> {
 
   changeDebouncer?.dispose();
   changeDebouncer = new ChangeDebouncer(() => readConfig().diagnosticsDebounceMs, log);
+  const initializationOptions = buildInitializationOptions(cfg);
 
   const clientOptions: LanguageClientOptions = {
     documentSelector: Array.from(SUPPORTED_LANGUAGE_IDS).map((language) => ({
@@ -725,6 +768,7 @@ async function startLanguageClient(reason: string): Promise<void> {
     },
     outputChannel,
     traceOutputChannel: traceChannel,
+    initializationOptions,
     revealOutputChannelOn: RevealOutputChannelOn.Error,
     initializationFailedHandler: (error) => {
       log(`서버 초기화 실패: ${toErrorMessage(error)}`);
@@ -828,6 +872,27 @@ function readConfig(): ParusConfig {
     traceServer: trace === "messages" || trace === "verbose" ? trace : "off",
     diagnosticsDebounceMs: clampNumber(debounceMs, 0, 5000),
     idleTimeoutSec: clampNumber(idleTimeoutSec, 0, 3600),
+    cimportIncludeDirs: readStringArraySetting(cfg, "cimport.includeDirs"),
+    cimportIsystemDirs: readStringArraySetting(cfg, "cimport.isystemDirs"),
+    cimportDefines: readStringArraySetting(cfg, "cimport.defines"),
+    cimportUndefines: readStringArraySetting(cfg, "cimport.undefines"),
+    cimportForcedIncludes: readStringArraySetting(cfg, "cimport.forcedIncludes"),
+    cimportImacros: readStringArraySetting(cfg, "cimport.imacros"),
+  };
+}
+
+function buildInitializationOptions(cfg: ParusConfig): unknown {
+  return {
+    parus: {
+      cimport: {
+        includeDirs: cfg.cimportIncludeDirs,
+        isystemDirs: cfg.cimportIsystemDirs,
+        defines: cfg.cimportDefines,
+        undefines: cfg.cimportUndefines,
+        forcedIncludes: cfg.cimportForcedIncludes,
+        imacros: cfg.cimportImacros,
+      },
+    },
   };
 }
 

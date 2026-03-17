@@ -1514,6 +1514,267 @@ bool test_c_header_import_include_dir_option() {
     return true;
 }
 
+bool test_lei_module_bundle_cimport_isystem_option() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-lei-cimport-isystem";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto include_a = temp_root / "include_a";
+    const auto include_b = temp_root / "include_b";
+    const auto main_pr = temp_root / "main.pr";
+    const auto lei = temp_root / "config.lei";
+    if (!std::filesystem::create_directories(include_a, ec) || !std::filesystem::create_directories(include_b, ec) || ec) {
+        std::cerr << "failed to create include dirs for lei cimport isystem test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string a_h =
+        "#ifndef PARUS_CIMPORT_A_H\n"
+        "#define PARUS_CIMPORT_A_H\n"
+        "#define PARUS_A_VAL 10\n"
+        "#endif\n";
+    const std::string b_h =
+        "#ifndef PARUS_CIMPORT_B_H\n"
+        "#define PARUS_CIMPORT_B_H\n"
+        "#include <A.h>\n"
+        "int c_add(int a, int b);\n"
+        "#endif\n";
+    const std::string pr =
+        "import \"B.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::c_add(1i32, 2i32);\n"
+        "}\n";
+    const std::string lei_src =
+        "plan app_bundle = bundle & {\n"
+        "  name = \"app\";\n"
+        "  kind = \"bin\";\n"
+        "  cimport = {\n"
+        "    isystem: [\"include_a\"],\n"
+        "  };\n"
+        "  modules = [\n"
+        "    module & {\n"
+        "      sources = [\"main.pr\"];\n"
+        "      imports = [];\n"
+        "      cimport = {\n"
+        "        isystem: [\"include_b\"],\n"
+        "      };\n"
+        "    },\n"
+        "  ];\n"
+        "  deps = [];\n"
+        "};\n"
+        "\n"
+        "plan master = master & {\n"
+        "  project = {\n"
+        "    name: \"lei-cimport-isystem\",\n"
+        "    version: \"0.1.0\",\n"
+        "  };\n"
+        "  bundles = [app_bundle];\n"
+        "  tasks = [];\n"
+        "  codegens = [];\n"
+        "};\n";
+    if (!write_text(include_a / "A.h", a_h) ||
+        !write_text(include_b / "B.h", b_h) ||
+        !write_text(main_pr, pr) ||
+        !write_text(lei, lei_src)) {
+        std::cerr << "failed to write lei cimport isystem fixture files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture("\"" + bin + "\" check \"" + lei.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "lei module/bundle cimport.isystem should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_macos_opengl_isystem() {
+#if !defined(__APPLE__)
+    return true;
+#else
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-macos-opengl";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    std::optional<std::filesystem::path> gl_headers{};
+    const std::vector<std::filesystem::path> header_candidates = {
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/OpenGL.framework/Headers",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/OpenGL.framework/Headers",
+    };
+    for (const auto& p : header_candidates) {
+        if (std::filesystem::exists(p / "gl3.h")) {
+            gl_headers = p;
+            break;
+        }
+    }
+    if (!gl_headers.has_value()) {
+        std::cerr << "skip: macOS OpenGL SDK headers were not found for cimport isystem test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    std::optional<std::filesystem::path> sdk_usr_include{};
+    const std::vector<std::filesystem::path> sdk_candidates = {
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
+    };
+    for (const auto& p : sdk_candidates) {
+        if (std::filesystem::exists(p / "stdint.h")) {
+            sdk_usr_include = p;
+            break;
+        }
+    }
+    if (!sdk_usr_include.has_value()) {
+        std::cerr << "skip: macOS SDK usr/include not found for OpenGL cimport test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    // SDK OpenGL headers are framework-layout; build an include overlay for -isystem.
+    const auto overlay_root = temp_root / "include-overlay";
+    std::filesystem::create_directories(overlay_root, ec);
+    if (ec) {
+        std::cerr << "failed to create include overlay root\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    std::filesystem::create_directory_symlink(*gl_headers, overlay_root / "OpenGL", ec);
+    if (ec) {
+        std::cerr << "failed to create OpenGL overlay symlink\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "import \"OpenGL/gl3.h\" as gl;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mode = gl::GL_TRIANGLES;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write macOS OpenGL cimport test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- -isystem \"" + overlay_root.string() +
+        "\" -isystem \"" + sdk_usr_include->string() + "\" \"" +
+        main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "macOS OpenGL header import with -isystem should compile\n" << out;
+        return false;
+    }
+    return true;
+#endif
+}
+
+bool test_c_header_import_macos_moltenvk_isystem() {
+#if !defined(__APPLE__)
+    return true;
+#else
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-macos-moltenvk";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    std::optional<std::filesystem::path> include_root{};
+    const std::vector<std::filesystem::path> candidates = {
+        "/opt/homebrew/include",
+        "/usr/local/include",
+    };
+    for (const auto& p : candidates) {
+        if (std::filesystem::exists(p / "MoltenVK/mvk_vulkan.h")) {
+            include_root = p;
+            break;
+        }
+    }
+    if (!include_root.has_value()) {
+        std::cerr << "skip: MoltenVK headers were not found for cimport isystem test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    std::optional<std::filesystem::path> sdk_usr_include{};
+    const std::vector<std::filesystem::path> sdk_candidates = {
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include",
+    };
+    for (const auto& p : sdk_candidates) {
+        if (std::filesystem::exists(p / "Availability.h")) {
+            sdk_usr_include = p;
+            break;
+        }
+    }
+    if (!sdk_usr_include.has_value()) {
+        std::cerr << "skip: macOS SDK usr/include not found for MoltenVK cimport test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "import \"MoltenVK/mvk_vulkan.h\" as mvk;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set ok = mvk::VK_SUCCESS;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write MoltenVK cimport test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- -isystem \"" + include_root->string() +
+        "\" -isystem \"" + sdk_usr_include->string() + "\" \"" +
+        main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "MoltenVK header import with -isystem should compile\n" << out;
+        return false;
+    }
+    return true;
+#endif
+}
+
 bool test_c_header_import_union_manual_get_gate() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -2498,29 +2759,32 @@ int main() {
     const bool ok23 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
     const bool ok24 = test_c_header_import_stdio_format_bridge_single_arg();
     const bool ok25 = test_c_header_import_include_dir_option();
-    const bool ok26 = test_c_header_import_union_manual_get_gate();
-    const bool ok27 = test_c_header_import_union_manual_set_gate();
-    const bool ok28 = test_c_header_import_enum_constant_usage();
-    const bool ok29 = test_c_header_import_define_undefine_options();
-    const bool ok30 = test_c_header_import_imacros_option();
-    const bool ok31 = test_c_header_import_forced_include_option();
-    const bool ok32 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok33 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok34 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok35 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok36 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok37 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
-    const bool ok38 = test_c_header_import_bitfield_read_write_shim();
-    const bool ok39 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok40 = test_actor_rejected_in_no_std_profile();
-    const bool ok41 = test_actor_allowed_in_freestanding_profile();
-    const bool ok42 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok43 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok26 = test_lei_module_bundle_cimport_isystem_option();
+    const bool ok27 = test_c_header_import_union_manual_get_gate();
+    const bool ok28 = test_c_header_import_union_manual_set_gate();
+    const bool ok29 = test_c_header_import_enum_constant_usage();
+    const bool ok30 = test_c_header_import_define_undefine_options();
+    const bool ok31 = test_c_header_import_imacros_option();
+    const bool ok32 = test_c_header_import_forced_include_option();
+    const bool ok33 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok34 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok35 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok36 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok37 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok38 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
+    const bool ok39 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok40 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok41 = test_c_header_import_macos_opengl_isystem();
+    const bool ok42 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok43 = test_actor_rejected_in_no_std_profile();
+    const bool ok44 = test_actor_allowed_in_freestanding_profile();
+    const bool ok45 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok46 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
-        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43) {
+        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46) {
         return 1;
     }
 

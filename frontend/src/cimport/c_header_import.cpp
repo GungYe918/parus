@@ -35,6 +35,21 @@ namespace parus::cimport {
             return out;
         }
 
+        static void fill_decl_location_(CXCursor c, std::string& out_file, uint32_t& out_line, uint32_t& out_col) {
+            CXSourceLocation loc = clang_getCursorLocation(c);
+            if (clang_equalLocations(loc, clang_getNullLocation()) != 0) return;
+            CXFile file = nullptr;
+            unsigned line = 0;
+            unsigned col = 0;
+            unsigned offset = 0;
+            clang_getFileLocation(loc, &file, &line, &col, &offset);
+            (void)offset;
+            if (file == nullptr) return;
+            out_file = to_std_string_(clang_getFileName(file));
+            out_line = (line == 0u) ? 1u : static_cast<uint32_t>(line);
+            out_col = (col == 0u) ? 1u : static_cast<uint32_t>(col);
+        }
+
         static std::string escape_include_text_(std::string_view s) {
             std::string out;
             out.reserve(s.size() + 8);
@@ -791,6 +806,7 @@ namespace parus::cimport {
 
             ImportedUnionDecl u{};
             u.name = name;
+            fill_decl_location_(c, u.decl_file, u.decl_line, u.decl_col);
 
             const CXType union_ty = clang_getCursorType(c);
             const long long sz = clang_Type_getSizeOf(union_ty);
@@ -840,6 +856,7 @@ namespace parus::cimport {
 
             ImportedStructDecl s{};
             s.name = name;
+            fill_decl_location_(c, s.decl_file, s.decl_line, s.decl_col);
 
             const CXType struct_ty = clang_getCursorType(c);
             s.c_type_spelling = to_std_string_(clang_getTypeSpelling(struct_ty));
@@ -971,6 +988,7 @@ namespace parus::cimport {
 
             ImportedEnumDecl e{};
             e.name = name;
+            fill_decl_location_(c, e.decl_file, e.decl_line, e.decl_col);
             if (!map_c_type_to_parus_(clang_getEnumDeclIntegerType(c), e.underlying_type_repr, &ctx)) {
                 e.underlying_type_repr = "i32";
             }
@@ -990,6 +1008,7 @@ namespace parus::cimport {
                     ImportedEnumConstantDecl one{};
                     one.name = constant_name;
                     one.value_text = std::to_string(clang_getEnumConstantDeclValue(child));
+                    fill_decl_location_(child, one.decl_file, one.decl_line, one.decl_col);
                     out->constants.push_back(std::move(one));
                     return CXChildVisit_Continue;
                 },
@@ -1017,6 +1036,7 @@ namespace parus::cimport {
             ImportedTypedefDecl td{};
             td.name = name;
             td.type_repr = std::move(type_repr);
+            fill_decl_location_(c, td.decl_file, td.decl_line, td.decl_col);
             if (ctx.out_typedefs != nullptr) {
                 ctx.out_typedefs->push_back(std::move(td));
             }
@@ -1081,6 +1101,7 @@ namespace parus::cimport {
             fn.api.name = name;
             fn.api.link_name = name;
             fn.api.type_repr = std::move(type_repr);
+            fill_decl_location_(c, fn.api.decl_file, fn.api.decl_line, fn.api.decl_col);
             fn.api.c_return_type = to_std_string_(clang_getTypeSpelling(clang_getResultType(fn_ty)));
             fn.api.is_c_abi = true;
             fn.api.is_variadic = variadic;
@@ -1128,6 +1149,7 @@ namespace parus::cimport {
             ImportedMacroDecl out{};
             out.name = name;
             out.is_function_like = (clang_Cursor_isMacroFunctionLike(c) != 0);
+            fill_decl_location_(c, out.decl_file, out.decl_line, out.decl_col);
 
             CXToken* tokens = nullptr;
             unsigned token_count = 0;

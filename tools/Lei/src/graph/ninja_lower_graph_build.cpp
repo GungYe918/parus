@@ -201,6 +201,49 @@ bool read_string_array_field(const lei::eval::Value::Object& obj,
     return true;
 }
 
+bool read_cimport_isystem_field(const lei::eval::Value::Object& obj,
+                                std::vector<std::string>& out,
+                                lei::diag::Bag& diags,
+                                const std::string& who) {
+    out.clear();
+    auto it = obj.find("cimport");
+    if (it == obj.end()) return true;
+    auto cobj = std::get_if<lei::eval::Value::Object>(&it->second.data);
+    if (!cobj) {
+        diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+                  "<entry>",
+                  1,
+                  1,
+                  who + " field 'cimport' must be object");
+        return false;
+    }
+    auto it_isystem = cobj->find("isystem");
+    if (it_isystem == cobj->end()) return true;
+    auto arr = std::get_if<lei::eval::Value::Array>(&it_isystem->second.data);
+    if (!arr) {
+        diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+                  "<entry>",
+                  1,
+                  1,
+                  who + " field 'cimport.isystem' must be [string]");
+        return false;
+    }
+    out.reserve(arr->size());
+    for (const auto& v : *arr) {
+        auto sp = std::get_if<std::string>(&v.data);
+        if (!sp) {
+            diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
+                      "<entry>",
+                      1,
+                      1,
+                      who + " field 'cimport.isystem' must contain only string");
+            return false;
+        }
+        out.push_back(*sp);
+    }
+    return true;
+}
+
 uint64_t fnv1a64(std::string_view s) {
     uint64_t h = 1469598103934665603ull;
     for (const unsigned char c : s) {
@@ -437,6 +480,7 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
             if (!expect_string_field(*bobj, "name", bundle.name, diags, "bundle")) return std::nullopt;
             if (!expect_string_field(*bobj, "kind", bundle.kind, diags, "bundle")) return std::nullopt;
             if (!read_string_array_field(*bobj, "deps", bundle.deps, diags, "bundle", false)) return std::nullopt;
+            if (!read_cimport_isystem_field(*bobj, bundle.cimport_isystem, diags, "bundle")) return std::nullopt;
 
             if (bundle.kind != "bin" && bundle.kind != "lib") {
                 diags.add(lei::diag::Code::B_INVALID_BUILD_SHAPE,
@@ -491,6 +535,7 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
                 if (!read_string_array_field(*mobj, "sources", module.sources, diags, "module", true)) return std::nullopt;
                 std::vector<std::string> raw_imports{};
                 if (!read_string_array_field(*mobj, "imports", raw_imports, diags, "module", false)) return std::nullopt;
+                if (!read_cimport_isystem_field(*mobj, module.cimport_isystem, diags, "module")) return std::nullopt;
 
                 if (mobj->find("head") != mobj->end()) {
                     diags.add(lei::diag::Code::B_MODULE_HEAD_REMOVED,
@@ -719,4 +764,3 @@ std::optional<BuildGraph> from_entry_plan_value(const lei::eval::Value& entry_pl
 
     return g;
 }
-

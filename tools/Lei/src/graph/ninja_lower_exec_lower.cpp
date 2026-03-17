@@ -53,6 +53,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         std::vector<std::string> resolved_sources{};
         std::unordered_map<std::string, std::string> source_module_head{};
         std::unordered_map<std::string, std::vector<std::string>> source_module_imports{};
+        std::unordered_map<std::string, std::vector<std::string>> source_module_cimport_isystem{};
 
         for (const auto& mod_head : b.modules) {
             auto mit = module_by_head.find(mod_head);
@@ -79,6 +80,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
                 resolved_sources.push_back(resolved);
                 source_module_head[resolved] = m->head;
                 source_module_imports[resolved] = m->imports;
+                source_module_cimport_isystem[resolved] = m->cimport_isystem;
             }
         }
         std::sort(resolved_sources.begin(), resolved_sources.end());
@@ -117,6 +119,19 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
                 prepass_cmd.push_back("--module-import");
                 prepass_cmd.push_back(im);
             }
+        }
+        if (auto it = source_module_cimport_isystem.find(resolved_sources.front());
+            it != source_module_cimport_isystem.end()) {
+            for (const auto& d : it->second) {
+                if (d.empty()) continue;
+                prepass_cmd.push_back("-isystem");
+                prepass_cmd.push_back(d);
+            }
+        }
+        for (const auto& d : b.cimport_isystem) {
+            if (d.empty()) continue;
+            prepass_cmd.push_back("-isystem");
+            prepass_cmd.push_back(d);
         }
         for (const auto& src : resolved_sources) {
             prepass_cmd.push_back("--bundle-source");
@@ -167,6 +182,19 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
                     cmd.push_back("--module-import");
                     cmd.push_back(im);
                 }
+            }
+            if (auto ciit = source_module_cimport_isystem.find(src);
+                ciit != source_module_cimport_isystem.end()) {
+                for (const auto& d : ciit->second) {
+                    if (d.empty()) continue;
+                    cmd.push_back("-isystem");
+                    cmd.push_back(d);
+                }
+            }
+            for (const auto& d : b.cimport_isystem) {
+                if (d.empty()) continue;
+                cmd.push_back("-isystem");
+                cmd.push_back(d);
             }
             for (const auto& all_src : resolved_sources) {
                 cmd.push_back("--bundle-source");
@@ -440,4 +468,3 @@ static void append_string_array_json(std::ostringstream& oss, const std::vector<
     }
     oss << "]";
 }
-

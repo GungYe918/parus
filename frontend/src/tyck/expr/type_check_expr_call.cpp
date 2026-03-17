@@ -1490,6 +1490,10 @@ namespace parus::tyck {
 
                     if (is_c_char_ptr_type(expected) &&
                         is_plain_string_literal_expr(arg_eid)) {
+                        // C ABI char* 슬롯에서도 문자열 리터럴은 반드시 먼저 타입체크해서
+                        // expr_types를 채운다. (SIR/OIR lowering에서 invalid type 누락 방지)
+                        const ty::TypeId lit_ty = check_expr_(arg_eid);
+                        if (is_error_(lit_ty)) return types_.error();
                         continue;
                     }
                     const CoercionPlan plan = classify_assign_with_coercion_(
@@ -1519,6 +1523,9 @@ namespace parus::tyck {
                         }
 
                         if (is_plain_string_literal_expr(arg_eid)) {
+                            // variadic 슬롯에서도 문자열 리터럴 type cache를 유지한다.
+                            const ty::TypeId lit_ty = check_expr_(arg_eid);
+                            if (is_error_(lit_ty)) return types_.error();
                             continue;
                         }
 

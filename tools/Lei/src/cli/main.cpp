@@ -288,11 +288,15 @@ int main(int argc, char** argv) {
                 std::string source{};
                 std::vector<std::string> module_imports{};
                 std::vector<std::string> bundle_deps{};
+                std::vector<std::string> module_cimport_isystem{};
+                std::vector<std::string> bundle_cimport_isystem{};
             };
             std::vector<Unit> units{};
             std::unordered_map<std::string, std::vector<std::string>> bundle_deps{};
+            std::unordered_map<std::string, std::vector<std::string>> bundle_cimport_isystem{};
             for (const auto& b : graph->bundles) {
                 bundle_deps[b.name] = b.deps;
+                bundle_cimport_isystem[b.name] = b.cimport_isystem;
             }
             for (const auto& m : graph->modules) {
                 for (const auto& s : m.sources) {
@@ -302,6 +306,8 @@ int main(int argc, char** argv) {
                         s,
                         m.imports,
                         bundle_deps[m.bundle],
+                        m.cimport_isystem,
+                        bundle_cimport_isystem[m.bundle],
                     });
                 }
             }
@@ -325,6 +331,16 @@ int main(int argc, char** argv) {
                 for (size_t j = 0; j < u.bundle_deps.size(); ++j) {
                     if (j) std::cout << ",";
                     std::cout << "\"" << json_escape(u.bundle_deps[j]) << "\"";
+                }
+                std::cout << "],\"module_cimport_isystem\":[";
+                for (size_t j = 0; j < u.module_cimport_isystem.size(); ++j) {
+                    if (j) std::cout << ",";
+                    std::cout << "\"" << json_escape(u.module_cimport_isystem[j]) << "\"";
+                }
+                std::cout << "],\"bundle_cimport_isystem\":[";
+                for (size_t j = 0; j < u.bundle_cimport_isystem.size(); ++j) {
+                    if (j) std::cout << ",";
+                    std::cout << "\"" << json_escape(u.bundle_cimport_isystem[j]) << "\"";
                 }
                 std::cout << "]}";
                 if (i + 1 != units.size()) std::cout << ",";

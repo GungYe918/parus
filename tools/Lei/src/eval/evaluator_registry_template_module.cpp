@@ -290,6 +290,22 @@ std::optional<std::string> validate_bundle(const Value::Object& obj) {
     if (legacy_it != obj.end()) {
         return std::string("bundle.sources is removed; use bundle.modules");
     }
+    if (auto it = obj.find("cimport"); it != obj.end()) {
+        if (!it->second.is_object()) {
+            return std::string("bundle.cimport must be object");
+        }
+        const auto* cobj = it->second.as_object();
+        auto is_it = cobj->find("isystem");
+        if (is_it != cobj->end()) {
+            if (!is_it->second.is_array()) {
+                return std::string("bundle.cimport.isystem must be [string]");
+            }
+            const auto& arr = std::get<Value::Array>(is_it->second.data);
+            for (const auto& v : arr) {
+                if (!v.is_string()) return std::string("bundle.cimport.isystem must contain only string");
+            }
+        }
+    }
     return std::nullopt;
 }
 
@@ -316,6 +332,22 @@ std::optional<std::string> validate_module(const Value::Object& obj) {
         for (const auto& v : imps) {
             if (!v.is_string()) {
                 return std::string("module.imports must contain only string");
+            }
+        }
+    }
+    if (auto it = obj.find("cimport"); it != obj.end()) {
+        if (!it->second.is_object()) {
+            return std::string("module.cimport must be object");
+        }
+        const auto* cobj = it->second.as_object();
+        auto is_it = cobj->find("isystem");
+        if (is_it != cobj->end()) {
+            if (!is_it->second.is_array()) {
+                return std::string("module.cimport.isystem must be [string]");
+            }
+            const auto& arr = std::get<Value::Array>(is_it->second.data);
+            for (const auto& v : arr) {
+                if (!v.is_string()) return std::string("module.cimport.isystem must contain only string");
             }
         }
     }
@@ -370,6 +402,11 @@ std::shared_ptr<TemplateSpec> make_bundle_template() {
     spec->fields["kind"] = TemplateField{make_scalar_schema(SchemaType::Kind::kString), true, std::nullopt};
     spec->fields["modules"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kObject)), true, std::nullopt};
     spec->fields["deps"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::optional<Value>{make_array({})}};
+    spec->fields["cimport"] = TemplateField{
+        make_scalar_schema(SchemaType::Kind::kObject),
+        false,
+        std::optional<Value>{make_object({{"isystem", make_array({})}})}
+    };
     spec->validator = validate_bundle;
     return spec;
 }
@@ -380,6 +417,11 @@ std::shared_ptr<TemplateSpec> make_module_template() {
 
     spec->fields["sources"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), true, std::nullopt};
     spec->fields["imports"] = TemplateField{make_array_schema(make_scalar_schema(SchemaType::Kind::kString)), false, std::optional<Value>{make_array({})}};
+    spec->fields["cimport"] = TemplateField{
+        make_scalar_schema(SchemaType::Kind::kObject),
+        false,
+        std::optional<Value>{make_object({{"isystem", make_array({})}})}
+    };
     spec->validator = validate_module;
     return spec;
 }
@@ -738,4 +780,3 @@ void Evaluator::step_or_budget_error(const ast::Span& span) {
 void Evaluator::add_diag(diag::Code code, const ast::Span& span, std::string msg) {
     diags_.add(code, span.file, span.line, span.column, std::move(msg));
 }
-

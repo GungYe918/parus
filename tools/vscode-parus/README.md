@@ -22,6 +22,16 @@ VSCode extension workspace for Parus/LEI language support.
   3. `parusd --stdio` fallback
 - Multi-root workspace policy (MVP): show warning and recommend explicit `parus.server.path`.
 
+## C Import settings
+
+- `parus.cimport.includeDirs`: additional `-I` directories for c-import.
+- `parus.cimport.isystemDirs`: additional `-isystem` directories for c-import.
+- `parus.cimport.defines`: preprocessor defines (`-D`) for c-import.
+- `parus.cimport.undefines`: preprocessor undefines (`-U`) for c-import.
+- `parus.cimport.forcedIncludes`: forced include headers (`-include`) for c-import.
+- `parus.cimport.imacros`: macro-only include headers (`-imacros`) for c-import.
+- These settings are sent to `parusd` through LSP `initializationOptions.parus.cimport`.
+
 ## Local commands
 
 - `npm run compile`

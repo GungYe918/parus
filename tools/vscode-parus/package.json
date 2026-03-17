@@ -120,6 +120,54 @@
           "minimum": 0,
           "maximum": 3600,
           "description": "Stop Parus Language Server after N seconds of inactivity. Set 0 to disable."
+        },
+        "parus.cimport.includeDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional include directories passed to C header import."
+        },
+        "parus.cimport.isystemDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional system include directories passed to C header import."
+        },
+        "parus.cimport.defines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Preprocessor -D options for C header import."
+        },
+        "parus.cimport.undefines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Preprocessor -U options for C header import."
+        },
+        "parus.cimport.forcedIncludes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Forced include headers (-include) for C header import."
+        },
+        "parus.cimport.imacros": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Macro-only include headers (-imacros) for C header import."
         }
       }
     }
