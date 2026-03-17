@@ -421,8 +421,8 @@ namespace {
     /// @brief `|>` 체인이 SIR kPipeCall을 거쳐 OIR/LLVM call 경로로 내려가는지 검사한다.
     static bool test_pipe_forward_chain_llvm_call_patterns() {
         const std::string src = R"(
-            def add(a: i32, b: i32) -> i32 { return a + b; }
-            def mul(x: i32, y: i32) -> i32 { return x * y; }
+            def add({a: i32, b: i32}) -> i32 { return a + b; }
+            def mul({x: i32, y: i32}) -> i32 { return x * y; }
 
             def main(seed: i32) -> i32 {
                 return seed |> add(a: _, b: 2i32) |> mul(x: _, y: 10i32);
@@ -519,7 +519,7 @@ namespace {
             }
 
             def main() -> i32 {
-                return sinkf(v: 1.25f64) + sinkc(v: 'A');
+                return sinkf(1.25f64) + sinkc('A');
             }
         )";
 
@@ -774,8 +774,8 @@ namespace {
             }
 
             def main() -> i32 {
-                let x: i32 = add(a: 1i32, b: 2i32);
-                let y: i64 = add(a: 3i64, b: 4i64);
+                let x: i32 = add(1i32, 2i32);
+                let y: i64 = add(3i64, 4i64);
                 let z: i32 = I32Box { v: 10i32 } + I32Box { v: 20i32 };
                 return x + z;
             }
@@ -970,7 +970,7 @@ namespace {
             }
 
             def main() -> i32 {
-                return engine::math::add(a: 1i32, b: 2i32);
+                return engine::math::add(1i32, 2i32);
             }
         )";
 
@@ -1007,7 +1007,7 @@ namespace {
             }
 
             def main() -> i32 {
-                return m::add(a: 3i32, b: 4i32);
+                return m::add(3i32, 4i32);
             }
         )";
 
@@ -1040,7 +1040,7 @@ namespace {
             }
 
             def main() -> i32 {
-                return pick(x: 2i32);
+                return pick(2i32);
             }
         )";
 
@@ -1227,7 +1227,7 @@ namespace {
                 let a: i32? = 5;
                 let mut b: i32? = null;
                 b = 7;
-                let c: i32 = takes_opt(x: 3);
+                let c: i32 = takes_opt(3);
                 let d: i32? = ret_opt();
                 let e: i32 = d ?? 0i32;
                 return (a ?? 0i32) + (b ?? 0i32) + c + e;
@@ -1270,8 +1270,8 @@ namespace {
                 def sum(a: i32, b: i32) -> i32 { return a + b; }
                 def sum(a: i64, b: i64) -> i64 { return a + b; }
                 def main() -> i32 {
-                    let x: i32 = sum(a: 1i32, b: 2i32);
-                    let y: i64 = sum(a: 3i64, b: 4i64);
+                    let x: i32 = sum(1i32, 2i32);
+                    let y: i64 = sum(3i64, 4i64);
                     return x;
                 }
             )",
@@ -1299,8 +1299,8 @@ namespace {
                 def mix(a: i32, b: i32) -> i32 { return a + b; }
                 def mix(a: i64, b: i64) -> i64 { return a + b; }
                 def main() -> i32 {
-                    let p: i32 = mix(a: 7i32, b: 8i32);
-                    let q: i64 = mix(a: 9i64, b: 10i64);
+                    let p: i32 = mix(7i32, 8i32);
+                    let q: i64 = mix(9i64, 10i64);
                     let r: i32 = I32Box { v: p } + I32Box { v: 1i32 };
                     return r;
                 }
@@ -1403,7 +1403,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set b = Box<i32>(v: 1i32);
+                set b = Box<i32>(1i32);
                 return b.get();
             }
         )";
@@ -1446,7 +1446,7 @@ namespace {
 
             def main() -> i32 {
                 set u = EchoUser();
-                return u->echo(v: 7i32);
+                return u->echo(7i32);
             }
         )";
 
@@ -1486,7 +1486,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set v = Vec<i32>(v: 1i32);
+                set v = Vec<i32>(1i32);
                 return v.get();
             }
         )";
@@ -1882,7 +1882,7 @@ namespace {
             };
 
             def main() -> i32 {
-                return Counter::add(a: Counter::count, b: Consts::B);
+                return Counter::add(Counter::count, Consts::B);
             }
         )";
 
@@ -1971,7 +1971,7 @@ namespace {
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: ~r);
+                sink(~r);
                 return 0i32;
             }
         )";
@@ -2068,9 +2068,9 @@ namespace {
             };
 
             def main() -> i32 {
-                set c = Counter(seed: 5i32);
+                set c = Counter(5i32);
                 set x = c.get();
-                set y = c.add(delta: 3i32);
+                set y = c.add(3i32);
                 return x + y;
             }
         )";
@@ -2128,7 +2128,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set a = Counter(seed: 1i32);
+                set a = Counter(1i32);
                 set b = clone a;
                 return b.get();
             }

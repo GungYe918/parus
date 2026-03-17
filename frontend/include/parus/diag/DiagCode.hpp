@@ -76,6 +76,7 @@ namespace parus::diag {
 
         // def param named-group count
         kFnOnlyOneNamedGroupAllowed,
+        kFnNamedGroupMixedWithPositional, // function declaration must be either positional-only or named-group-only
         kActsForNotSupported,             // acts for T is not supported yet in parser
         kActsMemberExportNotAllowed,      // member-level export inside acts is not allowed
         kActsForTypeExpected,             // `acts for` requires a target type
@@ -124,6 +125,8 @@ namespace parus::diag {
         kCImportShimIrOnlyUnsupported,    // generated C shim requires object/link mode
         kCAbiCallPositionalOnly,          // C ABI call accepts positional arguments only
         kCAbiFormatStringForbidden,       // C ABI call does not allow $"..."/F"""...""" argument
+        kCallLabeledNotAllowedForPositionalFn, // labeled call used for positional-only function
+        kCallPositionalNotAllowedForNamedGroupFn, // positional call used for named-group-only function
         kCImportVariadicCallUnsupported,  // c variadic function calls are unsupported in v1
         kCImportVariadicArgTypeUnsupported, // unsupported argument type in C variadic section
         kCImportFormatBridgeShapeUnsupported, // $"..." bridge shape is unsupported for C format call

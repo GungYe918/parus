@@ -175,7 +175,6 @@ namespace parus::tyck {
         enum class CallForm : uint8_t {
             kPositionalOnly,
             kLabeledOnly,
-            kPositionalThenLabeled,
             kMixedInvalid,
         };
 
@@ -183,7 +182,8 @@ namespace parus::tyck {
         if (has_invalid_order) {
             form = CallForm::kMixedInvalid;
         } else if (!outside_positional.empty() && !outside_labeled.empty()) {
-            form = CallForm::kPositionalThenLabeled;
+            // v1 simplification: positional + labeled tail call form is removed.
+            form = CallForm::kMixedInvalid;
         } else if (!outside_labeled.empty()) {
             form = CallForm::kLabeledOnly;
         } else {
@@ -1365,7 +1365,6 @@ namespace parus::tyck {
             std::ostringstream oss;
             if (form == CallForm::kPositionalOnly) oss << "positional(";
             else if (form == CallForm::kLabeledOnly) oss << "labeled(";
-            else if (form == CallForm::kPositionalThenLabeled) oss << "positional+labeled(";
             else oss << "mixed-invalid(";
 
             bool first = true;
@@ -1697,7 +1696,6 @@ namespace parus::tyck {
 
             std::vector<ShapeParam> pos_params;
             std::vector<ShapeParam> named_params;
-            std::unordered_map<std::string, size_t> pos_by_label;
             std::unordered_map<std::string, size_t> named_by_label;
             pos_params.reserve(pos_cnt);
             named_params.reserve(named_cnt);
@@ -1710,7 +1708,6 @@ namespace parus::tyck {
                 p.has_default = types_.fn_param_has_default_at(callee_t, i);
 
                 if (i < pos_cnt) {
-                    if (!p.name.empty()) pos_by_label.emplace(p.name, pos_params.size());
                     pos_params.push_back(std::move(p));
                 } else {
                     if (!p.name.empty()) named_by_label.emplace(p.name, named_params.size());
@@ -1734,45 +1731,11 @@ namespace parus::tyck {
                 }
 
                 if (form == CallForm::kLabeledOnly) {
+                    if (!pos_params.empty() || named_params.empty()) return false;
                     for (const auto& pair : labeled_by_label) {
-                        if (pos_by_label.find(pair.first) == pos_by_label.end() &&
-                            named_by_label.find(pair.first) == named_by_label.end()) {
+                        if (named_by_label.find(pair.first) == named_by_label.end()) {
                             return false;
                         }
-                    }
-
-                    for (const auto& p : pos_params) {
-                        if (p.name.empty()) return false;
-                        auto it = labeled_by_label.find(p.name);
-                        if (it == labeled_by_label.end()) {
-                            if (!allow_defaults || !p.has_default) return false;
-                            continue;
-                        }
-                        if (!arg_assignable_now(it->second, p.type)) return false;
-                    }
-
-                    for (const auto& p : named_params) {
-                        if (p.name.empty()) return false;
-                        auto it = labeled_by_label.find(p.name);
-                        if (it == labeled_by_label.end()) {
-                            if (!allow_defaults || !p.has_default) return false;
-                            continue;
-                        }
-                        if (!arg_assignable_now(it->second, p.type)) return false;
-                    }
-                    return true;
-                }
-
-                if (form == CallForm::kPositionalThenLabeled) {
-                    if (named_params.empty()) return false;
-                    if (outside_positional.size() != pos_params.size()) return false;
-
-                    for (size_t i = 0; i < outside_positional.size(); ++i) {
-                        if (!arg_assignable_now(outside_positional[i], pos_params[i].type)) return false;
-                    }
-
-                    for (const auto& pair : labeled_by_label) {
-                        if (named_by_label.find(pair.first) == named_by_label.end()) return false;
                     }
 
                     for (const auto& p : named_params) {
@@ -1793,6 +1756,21 @@ namespace parus::tyck {
             const bool stage_a_ok = match_fallback_shape(/*allow_defaults=*/false);
             const bool final_ok = stage_a_ok || match_fallback_shape(/*allow_defaults=*/true);
             if (!final_ok) {
+                if (form == CallForm::kLabeledOnly && !pos_params.empty()) {
+                    diag_(diag::Code::kCallLabeledNotAllowedForPositionalFn, e.span);
+                    err_(e.span, "labeled-call form is not allowed for positional-only function");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
+                if (form == CallForm::kPositionalOnly &&
+                    pos_params.empty() &&
+                    !named_params.empty() &&
+                    !outside_positional.empty()) {
+                    diag_(diag::Code::kCallPositionalNotAllowedForNamedGroupFn, e.span);
+                    err_(e.span, "positional-call form is not allowed for named-group-only function");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
                 diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
                 err_(e.span, "no matching callable shape for indirect function call");
                 check_all_arg_exprs_only();
@@ -1822,24 +1800,6 @@ namespace parus::tyck {
                     check_arg_against_type(*outside_positional[i], pos_params[i].type, pos_params[i].idx);
                 }
             } else if (form == CallForm::kLabeledOnly) {
-                for (const auto& p : pos_params) {
-                    if (p.name.empty()) continue;
-                    auto it = labeled_by_label.find(p.name);
-                    if (it != labeled_by_label.end()) {
-                        check_arg_against_type(*it->second, p.type, p.idx);
-                    }
-                }
-                for (const auto& p : named_params) {
-                    if (p.name.empty()) continue;
-                    auto it = labeled_by_label.find(p.name);
-                    if (it != labeled_by_label.end()) {
-                        check_arg_against_type(*it->second, p.type, p.idx);
-                    }
-                }
-            } else if (form == CallForm::kPositionalThenLabeled) {
-                for (size_t i = 0; i < outside_positional.size() && i < pos_params.size(); ++i) {
-                    check_arg_against_type(*outside_positional[i], pos_params[i].type, pos_params[i].idx);
-                }
                 for (const auto& p : named_params) {
                     if (p.name.empty()) continue;
                     auto it = labeled_by_label.find(p.name);
@@ -2053,7 +2013,6 @@ namespace parus::tyck {
             uint32_t receiver_decl_index = 0xFFFF'FFFFu;
             std::vector<ParamInfo> positional;
             std::vector<ParamInfo> named;
-            std::unordered_map<std::string, size_t> positional_by_label;
             std::unordered_map<std::string, size_t> named_by_label;
             bool generic_viable = true;
         };
@@ -2177,7 +2136,6 @@ namespace parus::tyck {
                     c.named_by_label.emplace(info.name, c.named.size());
                     c.named.push_back(std::move(info));
                 } else {
-                    c.positional_by_label.emplace(info.name, c.positional.size());
                     c.positional.push_back(std::move(info));
                 }
             }
@@ -2217,31 +2175,9 @@ namespace parus::tyck {
                         }
                     }
                 } else if (form == CallForm::kLabeledOnly) {
-                    for (const auto& p : c.positional) {
-                        auto it = labeled_by_label.find(p.name);
-                        if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
-                            infer_ok = false;
-                            break;
-                        }
-                    }
-                    if (infer_ok) {
-                        for (const auto& p : c.named) {
-                            auto it = labeled_by_label.find(p.name);
-                            if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
-                                infer_ok = false;
-                                break;
-                            }
-                        }
-                    }
-                } else if (form == CallForm::kPositionalThenLabeled) {
-                    const size_t n = std::min(outside_positional.size(), c.positional.size());
-                    for (size_t i = 0; i < n; ++i) {
-                        if (!infer_arg(outside_positional[i], c.positional[i])) {
-                            infer_ok = false;
-                            break;
-                        }
-                    }
-                    if (infer_ok) {
+                    if (!c.positional.empty() || c.named.empty()) {
+                        infer_ok = false;
+                    } else {
                         for (const auto& p : c.named) {
                             auto it = labeled_by_label.find(p.name);
                             if (it != labeled_by_label.end() && !infer_arg(it->second, p)) {
@@ -2336,9 +2272,6 @@ namespace parus::tyck {
             if (!c.generic_viable) {
                 continue;
             }
-            if (form == CallForm::kPositionalThenLabeled && c.named.empty()) {
-                continue;
-            }
             filtered.push_back(i);
         }
 
@@ -2395,41 +2328,11 @@ namespace parus::tyck {
             }
 
             if (form == CallForm::kLabeledOnly) {
+                if (!c.positional.empty() || c.named.empty()) return false;
                 for (const auto& pair : labeled_by_label) {
-                    if (c.positional_by_label.find(pair.first) == c.positional_by_label.end() &&
-                        c.named_by_label.find(pair.first) == c.named_by_label.end()) {
+                    if (c.named_by_label.find(pair.first) == c.named_by_label.end()) {
                         return false;
                     }
-                }
-
-                for (const auto& p : c.positional) {
-                    auto it = labeled_by_label.find(p.name);
-                    if (it == labeled_by_label.end()) {
-                        if (!allow_defaults || !p.has_default) return false;
-                        continue;
-                    }
-                    if (!arg_assignable_now(it->second, p.type)) return false;
-                }
-
-                for (const auto& p : c.named) {
-                    auto it = labeled_by_label.find(p.name);
-                    if (it == labeled_by_label.end()) {
-                        if (!allow_defaults || !p.has_default) return false;
-                        continue;
-                    }
-                    if (!arg_assignable_now(it->second, p.type)) return false;
-                }
-                return true;
-            }
-
-            if (form == CallForm::kPositionalThenLabeled) {
-                if (outside_positional.size() != c.positional.size()) return false;
-                for (size_t i = 0; i < outside_positional.size(); ++i) {
-                    if (!arg_assignable_now(outside_positional[i], c.positional[i].type)) return false;
-                }
-
-                for (const auto& pair : labeled_by_label) {
-                    if (c.named_by_label.find(pair.first) == c.named_by_label.end()) return false;
                 }
 
                 for (const auto& p : c.named) {
@@ -2465,6 +2368,33 @@ namespace parus::tyck {
         }
 
         if (final_matches.empty()) {
+            bool has_positional_shape = false;
+            bool has_named_group_only_shape = false;
+            for (const auto idx : filtered) {
+                const auto& c = candidates[idx];
+                if (c.positional.empty() && !c.named.empty()) {
+                    has_named_group_only_shape = true;
+                } else {
+                    has_positional_shape = true;
+                }
+            }
+            if (form == CallForm::kLabeledOnly &&
+                !has_named_group_only_shape &&
+                has_positional_shape) {
+                diag_(diag::Code::kCallLabeledNotAllowedForPositionalFn, e.span);
+                err_(e.span, "labeled-call form is not allowed for positional-only function");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
+            if (form == CallForm::kPositionalOnly &&
+                !has_positional_shape &&
+                has_named_group_only_shape &&
+                !outside_positional.empty()) {
+                diag_(diag::Code::kCallPositionalNotAllowedForNamedGroupFn, e.span);
+                err_(e.span, "positional-call form is not allowed for named-group-only function");
+                check_all_arg_exprs_only();
+                return fallback_ret;
+            }
             if (generic_failure.has_arity) {
                 diag_(diag::Code::kGenericArityMismatch, e.span,
                       std::to_string(generic_failure.expected_arity),
@@ -2632,22 +2562,6 @@ namespace parus::tyck {
                 check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
             }
         } else if (form == CallForm::kLabeledOnly) {
-            for (const auto& p : selected.positional) {
-                auto it = labeled_by_label.find(p.name);
-                if (it != labeled_by_label.end()) {
-                    check_arg_against_param_final(*it->second, p);
-                }
-            }
-            for (const auto& p : selected.named) {
-                auto it = labeled_by_label.find(p.name);
-                if (it != labeled_by_label.end()) {
-                    check_arg_against_param_final(*it->second, p);
-                }
-            }
-        } else if (form == CallForm::kPositionalThenLabeled) {
-            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
-                check_arg_against_param_final(*outside_positional[i], selected.positional[i]);
-            }
             for (const auto& p : selected.named) {
                 auto it = labeled_by_label.find(p.name);
                 if (it != labeled_by_label.end()) {
@@ -2666,22 +2580,6 @@ namespace parus::tyck {
                 consume_arg_if_moved(outside_positional[i], selected.positional[i]);
             }
         } else if (form == CallForm::kLabeledOnly) {
-            for (const auto& p : selected.positional) {
-                auto it = labeled_by_label.find(p.name);
-                if (it != labeled_by_label.end()) {
-                    consume_arg_if_moved(it->second, p);
-                }
-            }
-            for (const auto& p : selected.named) {
-                auto it = labeled_by_label.find(p.name);
-                if (it != labeled_by_label.end()) {
-                    consume_arg_if_moved(it->second, p);
-                }
-            }
-        } else if (form == CallForm::kPositionalThenLabeled) {
-            for (size_t i = 0; i < outside_positional.size() && i < selected.positional.size(); ++i) {
-                consume_arg_if_moved(outside_positional[i], selected.positional[i]);
-            }
             for (const auto& p : selected.named) {
                 auto it = labeled_by_label.find(p.name);
                 if (it != labeled_by_label.end()) {

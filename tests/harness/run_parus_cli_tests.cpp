@@ -482,7 +482,7 @@ bool test_cross_bundle_non_export_violation() {
     const std::string app_src =
         "import math as m;\n"
         "def main() -> i32 {\n"
-        "  return m::arith::hidden(a: 1i32, b: 2i32);\n"
+        "  return m::arith::hidden(1i32, 2i32);\n"
         "}\n";
 
     const std::string math_lei_src =
@@ -1973,6 +1973,117 @@ bool test_c_header_import_enum_constant_usage() {
     return true;
 }
 
+bool test_c_header_import_global_and_tls_usage() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-global-tls";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "G.h";
+    const auto main_pr = temp_root / "main.pr";
+    const auto llvm_out = temp_root / "main.ll";
+    const std::string header_src =
+        "#ifndef PARUS_GLOBAL_G_H\n"
+        "#define PARUS_GLOBAL_G_H\n"
+        "extern int g_value;\n"
+        "extern _Thread_local int g_tls;\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"G.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  c::g_value = 1i32;\n"
+        "  c::g_tls = 2i32;\n"
+        "  set x = c::g_value;\n"
+        "  set y = c::g_tls;\n"
+        "  return x + y;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write cimport global/tls test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    auto [rc_ir, out_ir] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() +
+        "\" -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
+    const std::string llvm_ir = read_text(llvm_out);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable") || contains(out_ir, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "c-import global/tls use should typecheck\n" << out_ok;
+        return false;
+    }
+    if (rc_ir != 0) {
+        std::cerr << "c-import global/tls llvm-ir emission should succeed\n" << out_ir;
+        return false;
+    }
+    if (!contains(llvm_ir, "@g_tls = thread_local external global i32")) {
+        std::cerr << "imported C TLS global must lower as thread_local external global\n" << llvm_ir;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_const_global_write_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-const-global";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "G.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_CONST_GLOBAL_G_H\n"
+        "#define PARUS_CONST_GLOBAL_G_H\n"
+        "extern const int g_ro;\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"G.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  c::g_ro = 1i32;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write cimport const-global test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "assigning imported const C global must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "WriteToImmutable")) {
+        std::cerr << "const C global write rejection must report immutable-write diagnostic\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_define_undefine_options() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -2831,7 +2942,7 @@ bool test_actor_rejected_in_no_std_profile() {
         "};\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set c = Counter(seed: 1i32);\n"
+        "  set c = Counter(1i32);\n"
         "  return 0i32;\n"
         "}\n";
 
@@ -2886,7 +2997,7 @@ bool test_actor_allowed_in_freestanding_profile() {
         "};\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set c = Counter(seed: 1i32);\n"
+        "  set c = Counter(1i32);\n"
         "  return c.get();\n"
         "}\n";
 
@@ -2938,7 +3049,7 @@ bool test_hosted_actor_link_uses_clang_driver() {
         "};\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set c = Counter(seed: 1i32);\n"
+        "  set c = Counter(1i32);\n"
         "  return c.get();\n"
         "}\n";
     if (!write_text(main_pr, src)) {
@@ -2999,7 +3110,7 @@ bool test_hosted_actor_parus_lld_mode_rejected() {
         "};\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set c = Counter(seed: 1i32);\n"
+        "  set c = Counter(1i32);\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(main_pr, src)) {
@@ -3066,35 +3177,37 @@ int main() {
     const bool ok27 = test_c_header_import_union_manual_get_gate();
     const bool ok28 = test_c_header_import_union_manual_set_gate();
     const bool ok29 = test_c_header_import_enum_constant_usage();
-    const bool ok30 = test_c_header_import_define_undefine_options();
-    const bool ok31 = test_c_header_import_imacros_option();
-    const bool ok32 = test_c_header_import_forced_include_option();
-    const bool ok33 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok34 = test_c_header_import_transparent_typedef_uint32_assign();
-    const bool ok35 = test_c_header_import_nominal_typedef_record_stays_nominal();
-    const bool ok36 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok37 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok38 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok39 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok40 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
-    const bool ok41 = test_c_header_import_function_like_macro_chain_promoted();
-    const bool ok42 = test_c_header_import_object_macro_const_expr_resolved();
-    const bool ok43 = test_c_header_import_function_like_macro_chain_cycle_warns();
-    const bool ok44 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
-    const bool ok45 = test_c_header_import_bitfield_read_write_shim();
-    const bool ok46 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok47 = test_c_header_import_macos_opengl_isystem();
-    const bool ok48 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok49 = test_actor_rejected_in_no_std_profile();
-    const bool ok50 = test_actor_allowed_in_freestanding_profile();
-    const bool ok51 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok52 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok30 = test_c_header_import_global_and_tls_usage();
+    const bool ok31 = test_c_header_import_const_global_write_rejected();
+    const bool ok32 = test_c_header_import_define_undefine_options();
+    const bool ok33 = test_c_header_import_imacros_option();
+    const bool ok34 = test_c_header_import_forced_include_option();
+    const bool ok35 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok36 = test_c_header_import_transparent_typedef_uint32_assign();
+    const bool ok37 = test_c_header_import_nominal_typedef_record_stays_nominal();
+    const bool ok38 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok39 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok40 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok41 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok42 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
+    const bool ok43 = test_c_header_import_function_like_macro_chain_promoted();
+    const bool ok44 = test_c_header_import_object_macro_const_expr_resolved();
+    const bool ok45 = test_c_header_import_function_like_macro_chain_cycle_warns();
+    const bool ok46 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
+    const bool ok47 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok48 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok49 = test_c_header_import_macos_opengl_isystem();
+    const bool ok50 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok51 = test_actor_rejected_in_no_std_profile();
+    const bool ok52 = test_actor_allowed_in_freestanding_profile();
+    const bool ok53 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok54 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
-        !ok48 || !ok49 || !ok50 || !ok51 || !ok52) {
+        !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54) {
         return 1;
     }
 

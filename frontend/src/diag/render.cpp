@@ -82,6 +82,7 @@ namespace parus::diag {
             case Code::kStaticVarRequiresInitializer: return "StaticVarRequiresInitializer";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
+            case Code::kFnNamedGroupMixedWithPositional: return "FnNamedGroupMixedWithPositional";
             case Code::kActsForNotSupported: return "ActsForNotSupported";
             case Code::kActsMemberExportNotAllowed: return "ActsMemberExportNotAllowed";
             case Code::kActsForTypeExpected: return "ActsForTypeExpected";
@@ -130,6 +131,8 @@ namespace parus::diag {
             case Code::kCImportShimIrOnlyUnsupported: return "CImportShimIrOnlyUnsupported";
             case Code::kCAbiCallPositionalOnly: return "CAbiCallPositionalOnly";
             case Code::kCAbiFormatStringForbidden: return "CAbiFormatStringForbidden";
+            case Code::kCallLabeledNotAllowedForPositionalFn: return "CallLabeledNotAllowedForPositionalFn";
+            case Code::kCallPositionalNotAllowedForNamedGroupFn: return "CallPositionalNotAllowedForNamedGroupFn";
             case Code::kCImportVariadicCallUnsupported: return "CImportVariadicCallUnsupported";
             case Code::kCImportVariadicArgTypeUnsupported: return "CImportVariadicArgTypeUnsupported";
             case Code::kCImportFormatBridgeShapeUnsupported: return "CImportFormatBridgeShapeUnsupported";
@@ -427,6 +430,7 @@ namespace parus::diag {
             case Code::kStaticVarRequiresInitializer: return "static variable requires an initializer";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
+            case Code::kFnNamedGroupMixedWithPositional: return "function declaration must be either positional-only '(a: T, b: U)' or named-group-only '({a: T, ...})'";
             case Code::kActsForNotSupported: return "'acts for T' is not supported yet; use 'acts A { ... }'";
             case Code::kActsMemberExportNotAllowed: return "member-level 'export' is not allowed inside acts";
             case Code::kActsForTypeExpected: return "'acts for' requires a target type";
@@ -475,6 +479,8 @@ namespace parus::diag {
             case Code::kCImportShimIrOnlyUnsupported: return "generated c-import shim is not supported in IR-only emit mode";
             case Code::kCAbiCallPositionalOnly: return "C ABI calls allow positional arguments only";
             case Code::kCAbiFormatStringForbidden: return "C ABI call does not allow format-string literals ($\"...\"/F\"\"\"...\"\")";
+            case Code::kCallLabeledNotAllowedForPositionalFn: return "labeled-call form is not allowed for positional-only function";
+            case Code::kCallPositionalNotAllowedForNamedGroupFn: return "positional-call form is not allowed for named-group-only function";
             case Code::kCImportVariadicCallUnsupported: return "c variadic function calls are not supported in v1";
             case Code::kCImportVariadicArgTypeUnsupported: return "unsupported argument type in C variadic call";
             case Code::kCImportFormatBridgeShapeUnsupported: return "C format bridge expects a single argument in the form callee($\"...\")";
@@ -778,6 +784,7 @@ namespace parus::diag {
             case Code::kStaticVarRequiresInitializer: return "static 변수는 초기화식이 반드시 필요합니다";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
+            case Code::kFnNamedGroupMixedWithPositional: return "함수 선언은 positional-only '(a: T, b: U)' 또는 named-group-only '({a: T, ...})' 중 하나여야 합니다";
             case Code::kActsForNotSupported: return "'acts for T'는 아직 지원되지 않습니다. 'acts A { ... }' 형태를 사용하세요";
             case Code::kActsMemberExportNotAllowed: return "acts 내부 멤버 함수에는 'export'를 붙일 수 없습니다";
             case Code::kActsForTypeExpected: return "'acts for' 뒤에는 대상 타입이 필요합니다";
@@ -826,6 +833,8 @@ namespace parus::diag {
             case Code::kCImportShimIrOnlyUnsupported: return "자동 생성된 c-import shim은 IR 전용 출력 모드에서 사용할 수 없습니다";
             case Code::kCAbiCallPositionalOnly: return "C ABI 호출은 positional 인자만 허용합니다";
             case Code::kCAbiFormatStringForbidden: return "C ABI 호출 인자에서는 $\"...\"/F\"\"\"...\"\"\" 형식을 사용할 수 없습니다";
+            case Code::kCallLabeledNotAllowedForPositionalFn: return "positional-only 함수에는 labeled-call 형태를 사용할 수 없습니다";
+            case Code::kCallPositionalNotAllowedForNamedGroupFn: return "named-group-only 함수에는 positional-call 형태를 사용할 수 없습니다";
             case Code::kCImportVariadicCallUnsupported: return "v1에서는 C 가변 인자 함수 호출을 지원하지 않습니다";
             case Code::kCImportVariadicArgTypeUnsupported: return "C 가변 인자 구간에서 지원되지 않는 인자 타입입니다";
             case Code::kCImportFormatBridgeShapeUnsupported: return "C format 브리지는 callee($\"...\") 단일 인자 형태만 지원합니다";

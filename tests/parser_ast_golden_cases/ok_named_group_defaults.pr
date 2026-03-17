@@ -1,7 +1,7 @@
-def mix(a: i32, { b: i32 = 2i32, c: i32 = 3i32 }) -> i32 {
+def mix({ a: i32, b: i32 = 2i32, c: i32 = 3i32 }) -> i32 {
     return a + b + c;
 }
 
 def main() -> i32 {
-    return mix(10i32, b: 20i32);
+    return mix(a: 10i32, b: 20i32);
 }

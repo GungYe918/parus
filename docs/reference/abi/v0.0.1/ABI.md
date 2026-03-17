@@ -160,6 +160,13 @@ Parus v0는 예외 채널을 2개로 분리한다.
 3. C/C++ 경계에서는 foreign unwind를 반드시 포획/변환해 ABI-safe 결과로 반환해야 한다.
 4. Recoverable(`throw`)는 ABI 경계에서 값으로 변환하거나 명시 반환 채널로 브리지해야 한다.
 
+### 8.1 C import TLS/Thread 경계 (고정)
+
+1. `import "X.h" as c;`로 들어온 `_Thread_local`/`__thread` 전역은 imported TLS global로 취급한다.
+2. TLS 초기화/소멸(ctor/dtor) 책임은 외부 C 런타임/로더에 있다.
+3. Parus 컴파일러/런타임은 imported TLS에 대한 별도 ctor/dtor 실행 경로를 추가하지 않는다.
+4. imported C global/TLS 접근은 thread-safe를 보장하지 않는다(호출/접근 effect는 보수적으로 유지).
+
 ---
 
 ## 9. DOD/SIMD 지향성 반영 원칙

@@ -382,9 +382,25 @@ namespace parus::tyck {
             std::string getter_path{};
             std::string setter_path{};
         };
+        struct ExternalCGlobalMeta {
+            enum class TlsKind : uint8_t {
+                kNone = 0,
+                kDynamic,
+                kStatic,
+            };
+            bool is_c_import = false;
+            bool is_const = false;
+            bool is_volatile = false;
+            bool is_restrict = false;
+            TlsKind tls_kind = TlsKind::kNone;
+        };
         bool parse_external_c_struct_payload_(
             std::string_view payload,
             std::unordered_map<std::string, ExternalCFieldMeta>& out_fields
+        ) const;
+        bool parse_external_c_global_payload_(
+            std::string_view payload,
+            ExternalCGlobalMeta& out
         ) const;
         bool parse_external_c_const_payload_(
             std::string_view payload,

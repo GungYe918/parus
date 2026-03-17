@@ -151,6 +151,16 @@ namespace parus::cimport {
             return std::string("hash:") + std::to_string(clang_hashCursor(c));
         }
 
+        static ImportedGlobalTlsKind map_tls_kind_(CXTLSKind k) {
+            switch (k) {
+                case CXTLS_Dynamic: return ImportedGlobalTlsKind::kDynamic;
+                case CXTLS_Static: return ImportedGlobalTlsKind::kStatic;
+                case CXTLS_None:
+                default:
+                    return ImportedGlobalTlsKind::kNone;
+            }
+        }
+
         static bool parse_macro_int_literal_text_(std::string_view text, std::string& out) {
             auto trim = [](std::string_view s) {
                 while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
@@ -1484,6 +1494,7 @@ namespace parus::cimport {
 
         struct ImportCollectCtx {
             std::unordered_set<std::string> fn_dedup{};
+            std::unordered_set<std::string> global_dedup{};
             std::unordered_set<std::string> union_dedup{};
             std::unordered_set<std::string> struct_dedup{};
             std::unordered_set<std::string> enum_dedup{};
@@ -1495,6 +1506,7 @@ namespace parus::cimport {
             uint32_t anon_enum_counter = 0;
             CXTranslationUnit tu = nullptr;
             std::vector<CollectedFnDecl>* out_fns = nullptr;
+            std::vector<ImportedGlobalDecl>* out_globals = nullptr;
             std::vector<ImportedUnionDecl>* out_unions = nullptr;
             std::vector<ImportedStructDecl>* out_structs = nullptr;
             std::vector<ImportedEnumDecl>* out_enums = nullptr;
@@ -1874,6 +1886,42 @@ namespace parus::cimport {
             return true;
         }
 
+        static bool collect_global_decl_(CXCursor c, ImportCollectCtx& ctx) {
+            if (clang_getCursorKind(c) != CXCursor_VarDecl) return false;
+
+            const CXLinkageKind linkage = clang_getCursorLinkage(c);
+            if (linkage == CXLinkage_Internal || linkage == CXLinkage_NoLinkage) {
+                return true;
+            }
+
+            const std::string name = to_std_string_(clang_getCursorSpelling(c));
+            if (name.empty()) return true;
+            if (!ctx.global_dedup.insert(name).second) return true;
+
+            const CXType var_ty = clang_getCursorType(c);
+            std::string type_repr{};
+            if (!map_c_type_to_parus_(var_ty, type_repr, &ctx)) {
+                return true;
+            }
+
+            ImportedGlobalDecl gv{};
+            gv.name = name;
+            gv.link_name = name;
+            gv.type_repr = std::move(type_repr);
+            gv.c_type = to_std_string_(clang_getTypeSpelling(var_ty));
+            gv.is_c_abi = true;
+            gv.is_const = clang_isConstQualifiedType(var_ty) != 0;
+            gv.is_volatile = clang_isVolatileQualifiedType(var_ty) != 0;
+            gv.is_restrict = clang_isRestrictQualifiedType(var_ty) != 0;
+            gv.tls_kind = map_tls_kind_(clang_getCursorTLSKind(c));
+            fill_decl_location_(c, gv.decl_file, gv.decl_line, gv.decl_col);
+
+            if (ctx.out_globals != nullptr) {
+                ctx.out_globals->push_back(std::move(gv));
+            }
+            return true;
+        }
+
         static bool collect_macro_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_MacroDefinition) return false;
             if (ctx.tu == nullptr) return true;
@@ -1968,6 +2016,7 @@ namespace parus::cimport {
             (void)collect_enum_decl_(c, *ctx);
             (void)collect_typedef_decl_(c, *ctx);
             (void)collect_function_decl_(c, *ctx);
+            (void)collect_global_decl_(c, *ctx);
             (void)collect_macro_decl_(c, *ctx);
             return CXChildVisit_Recurse;
         }
@@ -2098,6 +2147,7 @@ namespace parus::cimport {
         std::vector<CollectedFnDecl> collected_fns{};
         ImportCollectCtx ctx{};
         ctx.out_fns = &collected_fns;
+        ctx.out_globals = &out.globals;
         ctx.out_unions = &out.unions;
         ctx.out_structs = &out.structs;
         ctx.out_enums = &out.enums;
@@ -2573,6 +2623,8 @@ namespace parus::cimport {
 
         out.coverage.total_function_decls = static_cast<uint32_t>(collected_fns.size());
         out.coverage.imported_function_decls = static_cast<uint32_t>(out.functions.size());
+        out.coverage.total_global_decls = static_cast<uint32_t>(out.globals.size());
+        out.coverage.imported_global_decls = static_cast<uint32_t>(out.globals.size());
         out.coverage.total_type_decls = static_cast<uint32_t>(
             out.structs.size() + out.unions.size() + out.enums.size() + out.typedefs.size());
         out.coverage.imported_type_decls = out.coverage.total_type_decls;

@@ -1,11 +1,12 @@
 # C Import (libclang) Preparation Plan
 
 > Note: This document started as a v1 prep note.  
-> Current implementation has moved to v2.3 partial support (`-I/-isystem`, `-D/-U/-include/-imacros`, limited variadic, union manual gate, C ABI positional-only, object-like macro const-expression subset, function-like strict promotion + chain/cycle diagnostics, anonymous decl synthetic names).
+> Current implementation has moved to v2.3+ freeze support (`-I/-isystem`, `-D/-U/-include/-imacros`, limited variadic, union manual gate, C ABI positional-only, object-like macro const-expression subset, function-like strict promotion + chain/cycle diagnostics, anonymous decl synthetic names, external C global/TLS import).
 
 ## Scope in this round
 - Enable user-facing C-header import syntax: `import "Header.h" as alias;`.
 - Build libclang-backed declaration manifest for C functions/types and inject into external symbol surface.
+- Import external-linkage C global variables (including `_Thread_local`/`__thread`) with TLS metadata.
 - Support include path flags for cimport: `-I`, `-isystem`.
 - Support limited C variadic calls (no Parus-side format bridge).
 - Add union metadata import and `manual[get/set]` gate for union dot access.
@@ -14,7 +15,7 @@
 | C feature | Target in v1 |
 |---|---|
 | function declaration | supported |
-| global variable declaration | supported |
+| global variable declaration | supported (with const/tls metadata) |
 | named struct | supported |
 | named enum | supported |
 | typedef (scalar/pointer/fnptr/record alias) | supported (`scalar/pointer/fnptr` transparent, record nominal) |

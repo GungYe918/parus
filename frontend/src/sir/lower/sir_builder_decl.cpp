@@ -13,6 +13,12 @@ namespace parus::sir::detail {
             CCallConv callconv = CCallConv::kDefault;
         };
 
+        struct ParsedCImportGlobalPayload {
+            bool is_c_import_global = false;
+            bool is_const = false;
+            CThreadLocalKind tls_kind = CThreadLocalKind::kNone;
+        };
+
         ParsedCImportPayload parse_cimport_payload_(std::string_view payload) {
             ParsedCImportPayload out{};
             if (!payload.starts_with("parus_c_import|")) return out;
@@ -37,6 +43,34 @@ namespace parus::sir::detail {
                         else if (val == "win64") out.callconv = CCallConv::kWin64;
                         else if (val == "sysv") out.callconv = CCallConv::kSysV;
                         else out.callconv = CCallConv::kDefault;
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        }
+
+        ParsedCImportGlobalPayload parse_cimport_global_payload_(std::string_view payload) {
+            ParsedCImportGlobalPayload out{};
+            if (!payload.starts_with("parus_c_import_global|")) return out;
+            out.is_c_import_global = true;
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "const") {
+                        out.is_const = (val == "1" || val == "true");
+                    } else if (key == "tls") {
+                        if (val == "dynamic") out.tls_kind = CThreadLocalKind::kDynamic;
+                        else if (val == "static") out.tls_kind = CThreadLocalKind::kStatic;
+                        else out.tls_kind = CThreadLocalKind::kNone;
                     }
                 }
                 if (next == payload.size()) break;
@@ -828,6 +862,40 @@ namespace parus::sir {
             }
 
             (void)m.add_func(f);
+        }
+
+        std::unordered_set<SymbolId> lowered_global_symbols{};
+        lowered_global_symbols.reserve(m.globals.size());
+        for (const auto& g : m.globals) {
+            if (g.sym != k_invalid_symbol) lowered_global_symbols.insert(g.sym);
+        }
+
+        for (uint32_t sid = 0; sid < static_cast<uint32_t>(symbols.size()); ++sid) {
+            const auto& ss = symbols[sid];
+            if (!ss.is_external) continue;
+            if (ss.kind != sema::SymbolKind::kVar) continue;
+            if (!lowered_global_symbols.insert(sid).second) continue;
+            if (ss.declared_type == k_invalid_type) continue;
+
+            const auto parsed = parse_cimport_global_payload_(ss.external_payload);
+            if (!parsed.is_c_import_global) continue;
+
+            GlobalVarDecl g{};
+            g.span = ss.decl_span;
+            g.name = ss.link_name.empty() ? ss.name : ss.link_name;
+            g.sym = sid;
+            g.is_set = false;
+            g.is_mut = !parsed.is_const;
+            g.is_static = false;
+            g.is_const = parsed.is_const;
+            g.is_export = ss.is_export;
+            g.is_extern = true;
+            g.abi = FuncAbi::kC;
+            g.c_tls_kind = parsed.tls_kind;
+            g.declared_type = ss.declared_type;
+            g.init = k_invalid_value;
+
+            (void)m.add_global(g);
         }
 
         if (!tyck.actor_type_ids.empty()) {

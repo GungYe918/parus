@@ -20,6 +20,6 @@ acts for Box<T> {
 };
 
 def main() -> i32 {
-  set b = Box<i32>(v: 5i32);
-  return b.pick() + b.get() + b->get_default(v: 0i32);
+  set b = Box<i32>(5i32);
+  return b.pick() + b.get() + b->get_default(0i32);
 }

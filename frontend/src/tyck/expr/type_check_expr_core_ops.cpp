@@ -314,6 +314,38 @@
         return true;
     }
 
+    bool TypeChecker::parse_external_c_global_payload_(
+        std::string_view payload,
+        ExternalCGlobalMeta& out
+    ) const {
+        out = ExternalCGlobalMeta{};
+        if (!payload.starts_with("parus_c_import_global|")) return false;
+        out.is_c_import = true;
+
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "const") out.is_const = (val == "1" || val == "true");
+                else if (key == "volatile") out.is_volatile = (val == "1" || val == "true");
+                else if (key == "restrict") out.is_restrict = (val == "1" || val == "true");
+                else if (key == "tls") {
+                    if (val == "dynamic") out.tls_kind = ExternalCGlobalMeta::TlsKind::kDynamic;
+                    else if (val == "static") out.tls_kind = ExternalCGlobalMeta::TlsKind::kStatic;
+                    else out.tls_kind = ExternalCGlobalMeta::TlsKind::kNone;
+                }
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+        return true;
+    }
+
     bool TypeChecker::parse_external_c_typedef_payload_(
         std::string_view payload,
         bool& out_transparent,

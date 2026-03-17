@@ -504,6 +504,66 @@ bool test_definition_cimport_promoted_macro_symbol() {
     return true;
 }
 
+bool test_definition_cimport_global_symbol() {
+    std::error_code ec{};
+    const auto root = std::filesystem::temp_directory_path(ec) / "parusd-definition-cimport-global";
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    if (ec) {
+        std::cerr << "failed to create cimport global definition temp root\n";
+        return false;
+    }
+
+    const auto header = root / "Global.h";
+    const auto main_pr = root / "main.pr";
+    const std::string header_text =
+        "#ifndef GLOBAL_H\n"
+        "#define GLOBAL_H\n"
+        "extern int g_value;\n"
+        "extern _Thread_local int g_tls;\n"
+        "#endif\n";
+    const std::string main_text =
+        "import \"Global.h\" as c;\n"
+        "def main() -> i32 {\n"
+        "  set x = c::g_tls;\n"
+        "  return c::g_value + x;\n"
+        "}\n";
+    if (!write_text(header, header_text) || !write_text(main_pr, main_text)) {
+        std::cerr << "failed to write cimport global definition fixture\n";
+        std::filesystem::remove_all(root, ec);
+        return false;
+    }
+
+    const std::string uri = to_file_uri(main_pr);
+    const std::string header_uri = to_file_uri(header);
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":121,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(main_text) + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":122,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
+            + json_escape(uri) + "\"},\"position\":{\"line\":2,\"character\":14}}}",
+        R"({"jsonrpc":"2.0","id":123,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    std::filesystem::remove_all(root, ec);
+    if (rc != 0) {
+        std::cerr << "cimport global definition session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return true;
+    }
+    if (!contains(out, "\"id\":122") || !contains(out, "\"uri\":\"" + header_uri + "\"")) {
+        std::cerr << "cimport global definition must jump to C header declaration\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool test_parus_module_first_bundle_context() {
     const auto stamp = std::to_string(
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -631,7 +691,7 @@ bool test_parus_incremental_newline_falls_back_cleanly() {
         "};\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set c = Counter(seed: 1i32);\n"
+        "  set c = Counter(1i32);\n"
         "  return c.get();\n"
         "}\n";
 
@@ -677,11 +737,12 @@ int main() {
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_definition_cimport_symbol();
     const bool ok8 = test_definition_cimport_promoted_macro_symbol();
-    const bool ok9 = test_parus_module_first_bundle_context();
-    const bool ok10 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
-    const bool ok11 = test_parus_incremental_newline_falls_back_cleanly();
+    const bool ok9 = test_definition_cimport_global_symbol();
+    const bool ok10 = test_parus_module_first_bundle_context();
+    const bool ok11 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
+    const bool ok12 = test_parus_incremental_newline_falls_back_cleanly();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

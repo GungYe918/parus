@@ -1,6 +1,6 @@
 // sema_smoke.pr
 
-@comptime @pure export def scale_add(a: int, b: int, { scale: int = 2, bias: int = 0 }) -> int {
+@comptime @pure export def scale_add({ a: int, b: int, scale: int = 2, bias: int = 0 }) -> int {
   // (a + b) * scale + bias
   set s = (a + b) * scale;
   return s + bias;
@@ -15,10 +15,10 @@ export def entry() -> void {
   set b = 4;
 
   // named-group 기본값 적용 (scale=2, bias=0)
-  set r0 = scale_add(a, b);
+  set r0 = scale_add(a: a, b: b);
 
   // named-group 부분 지정
-  set r1 = scale_add(a, b, scale: 10);
+  set r1 = scale_add(a: a, b: b, scale: 10);
 
   // hole 허용 정책을 쓴다면(“값 미정/나중 지정”), timeout_ms 같은 곳에 적용
   rpcCall({ endpoint: "login", retry: 3, timeout_ms: _ });

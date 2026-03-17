@@ -2819,6 +2819,18 @@ namespace parus::oir {
             g.abi = map_func_abi_(sg.abi);
             g.is_extern = sg.is_extern;
             g.is_const = sg.is_const;
+            switch (sg.c_tls_kind) {
+                case parus::sir::CThreadLocalKind::kDynamic:
+                    g.c_tls_kind = CThreadLocalKind::Dynamic;
+                    break;
+                case parus::sir::CThreadLocalKind::kStatic:
+                    g.c_tls_kind = CThreadLocalKind::Static;
+                    break;
+                case parus::sir::CThreadLocalKind::kNone:
+                default:
+                    g.c_tls_kind = CThreadLocalKind::None;
+                    break;
+            }
             switch (sg.const_init.kind) {
                 case parus::sir::ConstInitKind::kInt:   g.const_init.kind = ConstInitKind::Int; break;
                 case parus::sir::ConstInitKind::kFloat: g.const_init.kind = ConstInitKind::Float; break;

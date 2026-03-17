@@ -1817,6 +1817,7 @@ namespace parusc::p0 {
                     std::cerr
                         << "[cimport-report] header=" << spec.header
                         << " fn=" << cov.imported_function_decls << "/" << cov.total_function_decls
+                        << " global=" << cov.imported_global_decls << "/" << cov.total_global_decls
                         << " type=" << cov.imported_type_decls << "/" << cov.total_type_decls
                         << " const=" << cov.imported_const_decls << "/" << cov.total_const_decls
                         << " fn_macro=" << cov.promoted_function_macros << "/" << cov.total_function_macros
@@ -1837,6 +1838,7 @@ namespace parusc::p0 {
                     }
                 }
                 if (imported.functions.empty() &&
+                    imported.globals.empty() &&
                     imported.unions.empty() &&
                     imported.typedefs.empty() &&
                     imported.structs.empty() &&
@@ -1891,6 +1893,29 @@ namespace parusc::p0 {
                     e.decl_file = fn.decl_file.empty() ? current_norm : parus::normalize_path(fn.decl_file);
                     e.decl_line = fn.decl_line;
                     e.decl_col = fn.decl_col;
+                    e.decl_bundle = "__cimport__";
+                    e.is_export = true;
+                    cimport_surface.push_back(std::move(e));
+                }
+
+                for (const auto& gv : imported.globals) {
+                    if (gv.name.empty() || gv.type_repr.empty()) continue;
+                    const std::string path = spec.alias + "::" + gv.name;
+                    if (!cimport_seen.insert("var|" + path).second) continue;
+
+                    ExportSurfaceEntry e{};
+                    e.kind = parus::sema::SymbolKind::kVar;
+                    e.kind_text = "var";
+                    e.path = path;
+                    e.link_name = gv.link_name.empty() ? gv.name : gv.link_name;
+                    e.module_head.clear();
+                    e.decl_dir = current_dir;
+                    e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
+                        gv.type_repr, spec.alias, known_type_names);
+                    e.inst_payload = parus::cimport::make_c_import_global_payload(spec.header, gv);
+                    e.decl_file = gv.decl_file.empty() ? current_norm : parus::normalize_path(gv.decl_file);
+                    e.decl_line = gv.decl_line;
+                    e.decl_col = gv.decl_col;
                     e.decl_bundle = "__cimport__";
                     e.is_export = true;
                     cimport_surface.push_back(std::move(e));

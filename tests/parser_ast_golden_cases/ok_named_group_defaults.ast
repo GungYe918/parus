@@ -17,9 +17,9 @@ root:
               path="i32"
               generic_args=0
           params=3
-          positional_params=1
+          positional_params=0
           has_named_group=1
-            param[0] name="a" mut=0 self=0 self_kind=None named_group=0 has_default=0
+            param[0] name="a" mut=0 self=0 self_kind=None named_group=1 has_default=0
               type:
                 Type(NamedPath)
                   path="i32"
@@ -88,7 +88,7 @@ root:
                           Expr(Ident)
                             text="mix"
                         args=2
-                          arg[0] kind=Positional label="" hole=0
+                          arg[0] kind=Labeled label="a" hole=0
                             Expr(IntLit)
                               text="10i32"
                           arg[1] kind=Labeled label="b" hole=0

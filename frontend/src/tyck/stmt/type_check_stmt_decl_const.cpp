@@ -79,6 +79,11 @@
             }
         }
 
+        if (s.has_named_group && s.positional_param_count > 0) {
+            diag_(diag::Code::kFnNamedGroupMixedWithPositional, s.span);
+            err_(s.span, "function declaration must be either positional-only or named-group-only");
+        }
+
         // ----------------------------
         // 0.5) generic proto constraints (declaration-time validation)
         // ----------------------------

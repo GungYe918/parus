@@ -37,6 +37,12 @@ namespace parus::cimport {
         kString,
     };
 
+    enum class ImportedGlobalTlsKind : uint8_t {
+        kNone = 0,
+        kDynamic,
+        kStatic,
+    };
+
     enum class ImportedMacroPromoteKind : uint8_t {
         kNone = 0,
         kDirectAlias,
@@ -79,6 +85,21 @@ namespace parus::cimport {
         int32_t fmt_param_index = -1;
         int32_t va_list_param_index = -1;
         std::string variadic_sibling_name{};
+    };
+
+    struct ImportedGlobalDecl {
+        std::string name{};
+        std::string link_name{};
+        std::string type_repr{};
+        std::string c_type{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
+        bool is_c_abi = true;
+        bool is_const = false;
+        bool is_volatile = false;
+        bool is_restrict = false;
+        ImportedGlobalTlsKind tls_kind = ImportedGlobalTlsKind::kNone;
     };
 
     struct ImportedUnionFieldDecl {
@@ -177,6 +198,8 @@ namespace parus::cimport {
     struct ImportCoverageReport {
         uint32_t total_function_decls = 0;
         uint32_t imported_function_decls = 0;
+        uint32_t total_global_decls = 0;
+        uint32_t imported_global_decls = 0;
         uint32_t total_type_decls = 0;
         uint32_t imported_type_decls = 0;
         uint32_t total_const_decls = 0;
@@ -192,6 +215,7 @@ namespace parus::cimport {
         ImportErrorKind error = ImportErrorKind::kNone;
         std::string error_text{};
         std::vector<ImportedFunctionDecl> functions{};
+        std::vector<ImportedGlobalDecl> globals{};
         std::vector<ImportedUnionDecl> unions{};
         std::vector<ImportedTypedefDecl> typedefs{};
         std::vector<ImportedStructDecl> structs{};

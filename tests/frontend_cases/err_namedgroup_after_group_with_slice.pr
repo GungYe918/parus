@@ -1,5 +1,5 @@
 // 비허용 케이스: 라벨 인자 뒤 추가 위치 인자 금지(+slice borrow 결합)
-def fold(xs: &[i32], { bias: i32 = 0i32 }) -> i32 {
+def fold({ xs: &[i32], bias: i32 = 0i32 }) -> i32 {
   return bias;
 };
 

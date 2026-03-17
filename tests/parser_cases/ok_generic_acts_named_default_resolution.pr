@@ -16,7 +16,7 @@ acts Math for Vec<T> {
 };
 
 def main() -> i32 {
-  set v = Vec<i32>(v: 3i32);
+  set v = Vec<i32>(3i32);
   set a = v.pick(1i32);
   return a;
 }

@@ -193,3 +193,12 @@ export def add(a: i32, b: i32) -> i32 {
 8. ABI 속성 반영(v2.3):
 8-a. 함수 calling convention 메타를 importer payload에 보존하고 extern decl/call lowering에 실제 반영한다.
 8-b. record layout은 effective `size/align` 기준으로 유지하며 packed/aligned 속성은 payload 메타로 보존한다.
+9. C global/TLS import(v1.0 freeze):
+9-a. external linkage `VarDecl`은 `alias::NAME` external var 심볼로 import한다.
+9-b. importer payload는 `const/volatile/restrict` qualifier와 `tls_kind(none/dynamic/static)`를 보존한다.
+9-c. `_Thread_local`/`__thread` import 심볼은 LLVM lowering에서 `thread_local` external global로 반영한다.
+9-d. TLS 초기화/소멸 책임은 외부 C 런타임/로더에 있으며 Parus는 TLS ctor/dtor 실행 경로를 추가하지 않는다.
+9-e. imported C global/TLS 접근은 thread-safe를 보장하지 않으며 effect는 보수적으로 유지한다.
+10. 미지원/부분지원 처리 정책:
+10-a. `##`, `#`, statement macro, compiler-extension macro, variadic function-like macro는 skip+warning으로 처리한다.
+10-b. silent skip은 금지하며 skip 항목은 reason code와 함께 진단에 노출한다.

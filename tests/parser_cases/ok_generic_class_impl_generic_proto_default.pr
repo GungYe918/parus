@@ -10,5 +10,5 @@ class EchoUser: Echo<i32> {
 
 def main() -> i32 {
   set u = EchoUser();
-  return u->echo(v: 7i32);
+  return u->echo(7i32);
 }

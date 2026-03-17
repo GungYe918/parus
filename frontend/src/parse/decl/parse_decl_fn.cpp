@@ -266,6 +266,16 @@ namespace parus {
 
         auto parse_named_group_section = [&]() {
             // entering at '{'
+            if (out_positional_count > 0) {
+                // v1 simplification: declaration form must be either positional-only or named-group-only.
+                diag_report(diag::Code::kFnNamedGroupMixedWithPositional, cursor_.peek().span);
+                cursor_.bump(); // '{'
+                recover_to_delim(K::kRBrace, K::kRParen, K::kArrow);
+                cursor_.eat(K::kRBrace);
+                consumed_named_group = true;
+                return;
+            }
+
             if (consumed_named_group) {
                 diag_report(diag::Code::kFnOnlyOneNamedGroupAllowed, cursor_.peek().span);
                 cursor_.bump(); // '{'

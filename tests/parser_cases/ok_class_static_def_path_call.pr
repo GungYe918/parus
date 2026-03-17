@@ -7,5 +7,5 @@ class Math {
 };
 
 def main() -> i32 {
-  return Math::add(a: 1i32, b: 2i32);
+  return Math::add(1i32, 2i32);
 }

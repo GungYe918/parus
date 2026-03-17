@@ -11,5 +11,5 @@ def helper(x: i32) -> i32 {
 }
 
 def main() -> i32 {
-    return helper(x: 39i32);
+    return helper(39i32);
 }

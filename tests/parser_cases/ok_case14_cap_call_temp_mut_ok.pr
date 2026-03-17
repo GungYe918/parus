@@ -5,7 +5,7 @@ def touch(v: &mut i32) -> void {
 
 def main() -> void {
   let mut x: i32 = 0i32;
-  touch(v: &mut x);
+  touch(&mut x);
   set y = x;
   return;
 }

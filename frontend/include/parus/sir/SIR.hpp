@@ -469,6 +469,12 @@ namespace parus::sir {
         std::string text{};
     };
 
+    enum class CThreadLocalKind : uint8_t {
+        kNone = 0,
+        kDynamic,
+        kStatic,
+    };
+
     struct GlobalVarDecl {
         parus::Span span{};
         std::string name{};
@@ -481,6 +487,7 @@ namespace parus::sir {
         bool is_export = false;
         bool is_extern = false;
         FuncAbi abi = FuncAbi::kParus;
+        CThreadLocalKind c_tls_kind = CThreadLocalKind::kNone;
 
         TypeId declared_type = k_invalid_type;
         ValueId init = k_invalid_value; // lowered initializer expression for runtime module/bundle init

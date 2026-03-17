@@ -5,6 +5,6 @@ def sum3(xs: &[i32]) -> i32 {
 
 def main() -> i32 {
   let arr: i32[5] = [1, 2, 3, 4, 5];
-  set s = sum3(xs: &arr[0..3]);
+  set s = sum3(&arr[0..3]);
   return s;
 }

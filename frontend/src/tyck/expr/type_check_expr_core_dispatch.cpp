@@ -1210,7 +1210,26 @@ namespace parus::tyck {
 
     bool TypeChecker::is_mutable_symbol_(uint32_t sym_id) const {
         auto it = sym_is_mut_.find(sym_id);
-        if (it == sym_is_mut_.end()) return false;
+        if (it == sym_is_mut_.end()) {
+            if (sym_id >= sym_.symbols().size()) return false;
+            const auto& sym = sym_.symbol(sym_id);
+            if (!sym.is_external || sym.kind != sema::SymbolKind::kVar || sym.external_payload.empty()) {
+                return false;
+            }
+
+            // Imported external const payload is immutable by definition.
+            ConstInitData imported_const{};
+            if (parse_external_c_const_payload_(sym.external_payload, imported_const)) {
+                return false;
+            }
+
+            // Imported C globals are mutable unless explicitly const-qualified.
+            ExternalCGlobalMeta gmeta{};
+            if (parse_external_c_global_payload_(sym.external_payload, gmeta)) {
+                return !gmeta.is_const;
+            }
+            return false;
+        }
         return it->second;
     }
 

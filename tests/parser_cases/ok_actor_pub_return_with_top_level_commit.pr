@@ -15,6 +15,6 @@ actor Counter {
 };
 
 def main() -> i32 {
-  set c = Counter(seed: 1i32);
-  return c.add(delta: 2i32);
+  set c = Counter(1i32);
+  return c.add(2i32);
 }

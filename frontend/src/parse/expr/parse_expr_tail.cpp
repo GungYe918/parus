@@ -238,7 +238,9 @@ namespace parus {
                     if (mode == CallMode::kUnknown) {
                         mode = CallMode::kLabeledTail;
                     } else if (mode == CallMode::kPositionalPrefix) {
-                        mode = CallMode::kLabeledTail;
+                        // v1 simplification: positional->labeled tail form is removed.
+                        diag_mix(a.span.hi ? a.span : cursor_.prev().span);
+                        mode = CallMode::kInvalidMixed;
                     } else if (mode == CallMode::kLabeledTail) {
                         // keep
                     } else {

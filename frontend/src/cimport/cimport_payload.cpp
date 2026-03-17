@@ -131,6 +131,35 @@ namespace parus::cimport {
         return out;
     }
 
+    std::string make_c_import_global_payload(
+        std::string_view header,
+        const ImportedGlobalDecl& gv
+    ) {
+        auto tls_kind_text = [](ImportedGlobalTlsKind k) -> std::string_view {
+            switch (k) {
+                case ImportedGlobalTlsKind::kDynamic: return "dynamic";
+                case ImportedGlobalTlsKind::kStatic: return "static";
+                case ImportedGlobalTlsKind::kNone:
+                default:
+                    return "none";
+            }
+        };
+
+        std::string out = "parus_c_import_global|header=";
+        out += std::string(header);
+        out += "|is_c_abi=";
+        out += gv.is_c_abi ? "1" : "0";
+        out += "|const=";
+        out += gv.is_const ? "1" : "0";
+        out += "|volatile=";
+        out += gv.is_volatile ? "1" : "0";
+        out += "|restrict=";
+        out += gv.is_restrict ? "1" : "0";
+        out += "|tls=";
+        out += std::string(tls_kind_text(gv.tls_kind));
+        return out;
+    }
+
     std::string make_c_import_union_payload(
         std::string_view header,
         std::string_view alias,
@@ -235,4 +264,3 @@ namespace parus::cimport {
     }
 
 } // namespace parus::cimport
-

@@ -5,6 +5,6 @@ class Box<T> {
 };
 
 def main() -> i32 {
-  set b = Box<i32>(v: 1i32);
+  set b = Box<i32>(1i32);
   return b.get();
 }

@@ -6,11 +6,11 @@ static G0: i32 = 11i32;
 static G1: i32 = 22i32;
 static mut SLOT: &&i32 = &&G0;
 
-def read_mix(a: &i32, b: &i32, { bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
+def read_mix({ a: &i32, b: &i32, bias: i32 = 0i32, scale: i32 = 1i32 }) -> i32 {
   return (a + b) * scale + bias;
 }
 
-def bump_one(x: &mut i32, { delta: i32 = 1i32 }) -> void {
+def bump_one({ x: &mut i32, delta: i32 = 1i32 }) -> void {
   x = x + delta;
   return;
 }
@@ -26,11 +26,11 @@ def main() -> i32 {
   {
     set first = &arr[0];
     set second = &arr[1];
-    out = read_mix(first, second, bias: 3i32, scale: 2i32);
+    out = read_mix(a: first, b: second, bias: 3i32, scale: 2i32);
   }
 
-  bump_one(&mut arr[2], delta: 5i32);
-  bump_one(&mut arr[3], delta: 7i32);
+  bump_one(x: &mut arr[2], delta: 5i32);
+  bump_one(x: &mut arr[3], delta: 7i32);
 
   set c0 = consume(&&G0);
   set c1 = consume(&&G1);

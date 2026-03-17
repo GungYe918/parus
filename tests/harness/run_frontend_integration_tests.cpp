@@ -450,7 +450,7 @@ namespace {
 
             def main() -> i32 {
                 let msg: text = "x";
-                let y: text = id(x: msg);
+                let y: text = id(msg);
                 return 0i32;
             }
         )";
@@ -503,8 +503,8 @@ namespace {
 
     static bool test_pipe_forward_chain_canonicalize_and_sir_pipecall_ok() {
         const std::string src = R"(
-            def add(a: i32, b: i32) -> i32 { return a + b; }
-            def mul(x: i32, y: i32) -> i32 { return x * y; }
+            def add({a: i32, b: i32}) -> i32 { return a + b; }
+            def mul({x: i32, y: i32}) -> i32 { return x * y; }
             def main() -> i32 {
                 return 1i32 |> add(a: _, b: 2i32) |> mul(x: _, y: 10i32);
             }
@@ -596,7 +596,7 @@ namespace {
 
     static bool test_pipe_forward_hole_count_mismatch_error() {
         const std::string src = R"(
-            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def add({a: i32, b: i32}) -> i32 { return a + b; }
             def main() -> i32 {
                 set x = 1i32 |> add(a: 2i32, b: 3i32);
                 set y = 1i32 |> add(a: _, b: _);
@@ -619,7 +619,7 @@ namespace {
         const std::string src = R"(
             def add(a: i32, b: i32) -> i32 { return a + b; }
             def main() -> i32 {
-                set x = 1i32 |> add(_, b: 2i32);
+                set x = 1i32 |> add(_, 2i32);
                 return x;
             }
         )";
@@ -637,7 +637,7 @@ namespace {
 
     static bool test_pipe_reverse_not_supported_yet() {
         const std::string src = R"(
-            def add(a: i32, b: i32) -> i32 { return a + b; }
+            def add({a: i32, b: i32}) -> i32 { return a + b; }
             def main() -> i32 {
                 set x = add(a: _, b: 2i32) <| 1i32;
                 return x;
@@ -776,11 +776,11 @@ namespace {
     static bool test_diag_call_arg_mix_not_allowed() {
         // 라벨 인자 이후 위치 인자를 두면 혼합 호출 진단이 나와야 한다.
         const std::string src = R"(
-            def sub(a: i32, b: i32, { clamp: i32 = 0 }) -> i32 {
+            def sub({ a: i32, b: i32, clamp: i32 = 0 }) -> i32 {
                 return a - b + clamp;
             }
             def main() -> i32 {
-                return sub(1, 2, clamp: 1, 3);
+                return sub(a: 1, b: 2, clamp: 1, 3);
             }
         )";
 
@@ -797,11 +797,11 @@ namespace {
     static bool test_diag_never_exposes_internal_infer_integer() {
         // 사용자 진단 문자열에는 내부 타입 토큰 "{integer}"가 노출되면 안 된다.
         const std::string src = R"(
-            def add(a: i32, {b: i32}) -> i32 {
+            def add(a: i32, b: i32) -> i32 {
                 return a + b;
             }
             def main() -> i32 {
-                add(1, 2);
+                add(a: 1, b: 2);
                 return 42;
             }
         )";
@@ -811,8 +811,8 @@ namespace {
         (void)run_tyck(p);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(parus::diag::Code::kOverloadNoMatchingCall),
-            "must emit overload no-matching-call diagnostic");
+        ok &= require_(p.bag.has_code(parus::diag::Code::kCallLabeledNotAllowedForPositionalFn),
+            "positional-only function must reject labeled-only call form");
 
         bool leaked = false;
         for (const auto& d : p.bag.diags()) {
@@ -824,6 +824,43 @@ namespace {
         }
 
         ok &= require_(!leaked, "user diagnostics must not expose internal '{integer}' token");
+        return ok;
+    }
+
+    static bool test_diag_fn_named_group_mixed_with_positional_decl() {
+        const std::string src = R"(
+            def bad(a: i32, { b: i32 }) -> i32 {
+                return a + b;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kFnNamedGroupMixedWithPositional),
+            "mixed declaration form must emit FnNamedGroupMixedWithPositional");
+        return ok;
+    }
+
+    static bool test_diag_named_group_only_rejects_positional_call() {
+        const std::string src = R"(
+            def only_ng({ a: i32, b: i32 = 0 }) -> i32 {
+                return a + b;
+            }
+            def main() -> i32 {
+                return only_ng(1, 2);
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        (void)run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kCallPositionalNotAllowedForNamedGroupFn),
+            "named-group-only function must reject positional call form");
         return ok;
     }
 
@@ -1064,7 +1101,7 @@ namespace {
             def main() -> i32 {
                 let x: i32 = 10;
                 let y: i32 = 20;
-                set s = sum2(a: &x, b: &y);
+                set s = sum2(&x, &y);
                 return s;
             }
         )";
@@ -1092,7 +1129,7 @@ namespace {
             }
             def main() -> i32 {
                 set mut a = 1i32;
-                inc(x: &mut a);
+                inc(&mut a);
                 return a;
             }
         )";
@@ -1236,7 +1273,7 @@ namespace {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ~G);
+                return sink(~G);
             }
         )";
 
@@ -1276,7 +1313,7 @@ namespace {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ~G);
+                return sink(~G);
             }
         )";
 
@@ -1311,7 +1348,7 @@ namespace {
             }
             def main() -> i32 {
                 set mut a = 1i32;
-                inc(x: &mut a);
+                inc(&mut a);
                 return a;
             }
         )";
@@ -1515,7 +1552,7 @@ namespace {
 
     static bool test_c_abi_reject_named_group() {
         const std::string src = R"(
-            extern "C" def bad_ng(a: i32, { b: i32 }) -> i32;
+            extern "C" def bad_ng({ a: i32, b: i32 }) -> i32;
             def main() -> i32 { return 0i32; }
         )";
 
@@ -1863,6 +1900,8 @@ int main() {
         {"diag_legacy_escape_token_rejected", test_diag_legacy_escape_token_rejected},
         {"diag_call_arg_mix_not_allowed", test_diag_call_arg_mix_not_allowed},
         {"diag_never_exposes_internal_infer_integer", test_diag_never_exposes_internal_infer_integer},
+        {"diag_fn_named_group_mixed_with_positional_decl", test_diag_fn_named_group_mixed_with_positional_decl},
+        {"diag_named_group_only_rejects_positional_call", test_diag_named_group_only_rejects_positional_call},
         {"diag_var_decl_name_expected", test_diag_var_decl_name_expected},
         {"diag_set_initializer_required", test_diag_set_initializer_required},
         {"diag_var_initializer_expected", test_diag_var_initializer_expected},

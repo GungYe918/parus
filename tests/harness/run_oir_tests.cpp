@@ -106,7 +106,7 @@ namespace {
                 return a + b;
             }
             def main() -> i32 {
-                return add(a: 1i32, b: 2i32);
+                return add(1i32, 2i32);
             }
         )";
 
@@ -240,7 +240,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set b = Box<i32>(v: 1i32);
+                set b = Box<i32>(1i32);
                 return b.get();
             }
         )";
@@ -306,7 +306,7 @@ namespace {
 
             def main() -> i32 {
                 set u = EchoUser();
-                return u->echo(v: 7i32);
+                return u->echo(7i32);
             }
         )";
 
@@ -370,7 +370,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set v = Vec<i32>(v: 1i32);
+                set v = Vec<i32>(1i32);
                 return v.get();
             }
         )";
@@ -437,7 +437,7 @@ namespace {
 
             def main() -> i32 {
                 let p: Pair<i32> = Pair<i32>{ first: 1i32, second: 2i32 };
-                return sum(p: p);
+                return sum(p);
             }
         )";
 
@@ -723,7 +723,7 @@ namespace {
                 return 0i32;
             }
             def main() -> i32 {
-                return sink(h: ~G);
+                return sink(~G);
             }
         )";
 
@@ -1244,7 +1244,7 @@ namespace {
             };
 
             def main() -> i32 {
-                return Counter::add(a: Counter::count, b: 1i32);
+                return Counter::add(Counter::count, 1i32);
             }
         )";
 
@@ -1339,7 +1339,7 @@ namespace {
 
             def main() -> i32 {
                 set r = Resource();
-                sink(v: ~r);
+                sink(~r);
                 return 0i32;
             }
         )";
@@ -1416,9 +1416,9 @@ namespace {
             };
 
             def main() -> i32 {
-                set c = Counter(seed: 1i32);
+                set c = Counter(1i32);
                 set x = c.get();
-                set y = c.add(delta: 2i32);
+                set y = c.add(2i32);
                 return x + y;
             }
         )";
@@ -1506,7 +1506,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set a = Counter(seed: 1i32);
+                set a = Counter(1i32);
                 set b = clone a;
                 return b.get();
             }

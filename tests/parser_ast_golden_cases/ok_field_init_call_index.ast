@@ -62,7 +62,7 @@ root:
                               Expr(Ident)
                                 text="foo"
                             args=2
-                              arg[0] kind=Positional label="" hole=0
+                              arg[0] kind=Labeled label="left" hole=0
                                 Expr(Binary)
                                   op=.
                                   lhs:
@@ -71,7 +71,7 @@ root:
                                   rhs:
                                     Expr(Ident)
                                       text="left"
-                              arg[1] kind=Labeled label="label" hole=0
+                              arg[1] kind=Labeled label="right" hole=0
                                 Expr(Binary)
                                   op=.
                                   lhs:

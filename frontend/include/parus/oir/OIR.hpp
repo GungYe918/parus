@@ -286,6 +286,12 @@ namespace parus::oir {
         std::string text{};
     };
 
+    enum class CThreadLocalKind : uint8_t {
+        None = 0,
+        Dynamic,
+        Static,
+    };
+
     struct GlobalDecl {
         std::string name;
         TypeId type = kInvalidId;
@@ -294,6 +300,7 @@ namespace parus::oir {
         bool is_mut = false;
         bool is_const = false;
         bool is_export = false;
+        CThreadLocalKind c_tls_kind = CThreadLocalKind::None;
         ConstInitData const_init{};
     };
 

@@ -2902,6 +2902,19 @@ namespace {
                                 add_decl_loc(path, fn.decl_file, fn.decl_line, fn.decl_col);
                             }
 
+                            for (const auto& gv : imported.globals) {
+                                if (gv.name.empty() || gv.type_repr.empty()) continue;
+                                const std::string path = spec.alias + "::" + gv.name;
+                                add_external(
+                                    parus::sema::SymbolKind::kVar,
+                                    path,
+                                    parus::cimport::rewrite_cimport_type_with_alias(gv.type_repr, spec.alias, known_type_names),
+                                    gv.link_name.empty() ? gv.name : gv.link_name,
+                                    parus::cimport::make_c_import_global_payload(spec.header, gv)
+                                );
+                                add_decl_loc(path, gv.decl_file, gv.decl_line, gv.decl_col);
+                            }
+
                             for (const auto& un : imported.unions) {
                                 if (un.name.empty()) continue;
                                 const std::string type_path = spec.alias + "::" + un.name;

@@ -18,8 +18,8 @@ def mix(a: i64, b: i64) -> i64 {
 }
 
 def main() -> i32 {
-    let p: i32 = mix(a: 7i32, b: 8i32);
-    let q: i64 = mix(a: 9i64, b: 10i64);
+    let p: i32 = mix(7i32, 8i32);
+    let q: i64 = mix(9i64, 10i64);
     let r: I32Box = I32Box { v: p } + I32Box { v: 1i32 };
     return r.v;
 }

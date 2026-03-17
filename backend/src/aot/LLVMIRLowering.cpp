@@ -2385,8 +2385,14 @@ namespace parus::backend::aot {
                     is_internal = true;
                 }
 
+                os << "@" << sym << " = ";
+                if (!g.is_extern && is_internal) os << "internal ";
+                if (g.c_tls_kind != parus::oir::CThreadLocalKind::None) {
+                    os << "thread_local ";
+                }
+
                 if (g.is_extern) {
-                    os << "@" << sym << " = external global " << gty;
+                    os << "external " << (g.is_const ? "constant " : "global ") << gty;
                 } else {
                     if (g.is_const && g.is_mut) {
                         global_emit_error = true;
@@ -2404,8 +2410,6 @@ namespace parus::backend::aot {
                     }
 
                     const char* kind = g.is_mut ? "global" : "constant";
-                    os << "@" << sym << " = ";
-                    if (is_internal) os << "internal ";
                     std::string init_text{};
                     if (!g.is_mut && render_global_const_init_(g, init_text)) {
                         os << "constant " << gty << " " << init_text;
