@@ -2109,6 +2109,9 @@
     bool TypeChecker::resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected) {
         if (eid == ast::k_invalid_expr) return false;
 
+        expected = canonicalize_transparent_external_typedef_(expected);
+        if (expected == ty::kInvalidType) return false;
+
         const auto& et = types_.get(expected);
 
         // ------------------------------------------------------------

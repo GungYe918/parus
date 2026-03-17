@@ -862,6 +862,7 @@ namespace parus::tyck {
                     const auto& ss = sym_.symbol(*id);
                     t = ss.declared_type;
                     if (t == ty::kInvalidType) t = types_.error();
+                    t = canonicalize_transparent_external_typedef_(t);
 
                     if (ss.is_external && !ss.external_payload.empty()) {
                         ConstInitData imported_const{};
@@ -1012,6 +1013,10 @@ namespace parus::tyck {
         if (src == types_.builtin(ty::Builtin::kNever)) return true;
         // only never can be assigned into never
         if (dst == types_.builtin(ty::Builtin::kNever)) return src == dst;
+
+        dst = canonicalize_transparent_external_typedef_(dst);
+        src = canonicalize_transparent_external_typedef_(src);
+        if (dst == src) return true;
 
         // null -> T? 허용
         if (is_null_(src) && is_optional_(dst)) return true;

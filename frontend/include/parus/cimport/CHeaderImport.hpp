@@ -84,6 +84,8 @@ namespace parus::cimport {
     struct ImportedTypedefDecl {
         std::string name{};
         std::string type_repr{};
+        bool is_transparent = false;
+        std::string transparent_type_repr{};
         std::string decl_file{};
         uint32_t decl_line = 1;
         uint32_t decl_col = 1;

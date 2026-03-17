@@ -14,6 +14,81 @@
         repr = trim(repr);
         if (repr.empty()) return false;
 
+        constexpr std::string_view kFn = "def(";
+        if (repr.starts_with(kFn)) {
+            int32_t depth = 0;
+            size_t close = std::string_view::npos;
+            for (size_t i = kFn.size() - 1; i < repr.size(); ++i) {
+                const char ch = repr[i];
+                if (ch == '(') {
+                    ++depth;
+                } else if (ch == ')') {
+                    --depth;
+                    if (depth == 0) {
+                        close = i;
+                        break;
+                    }
+                    if (depth < 0) return false;
+                }
+            }
+            if (close == std::string_view::npos) return false;
+
+            std::string_view tail = trim(repr.substr(close + 1));
+            if (!tail.starts_with("->")) return false;
+            tail = trim(tail.substr(2));
+            if (tail.empty()) return false;
+
+            std::string_view params_text = repr.substr(kFn.size(), close - kFn.size());
+            std::vector<ty::TypeId> params{};
+            std::vector<std::string_view> labels{};
+            std::vector<uint8_t> defaults{};
+            params.reserve(8);
+
+            size_t begin = 0;
+            int32_t param_depth = 0;
+            auto parse_one_param = [&](std::string_view one) -> bool {
+                one = trim(one);
+                if (one.empty()) return false;
+                ty::TypeId pt = ty::kInvalidType;
+                if (!parse_cimport_type_repr_(one, pt) || pt == ty::kInvalidType) return false;
+                params.push_back(pt);
+                labels.push_back({});
+                defaults.push_back(0u);
+                return true;
+            };
+
+            for (size_t i = 0; i < params_text.size(); ++i) {
+                const char ch = params_text[i];
+                if (ch == '(') {
+                    ++param_depth;
+                } else if (ch == ')') {
+                    --param_depth;
+                    if (param_depth < 0) return false;
+                } else if (ch == ',' && param_depth == 0) {
+                    if (!parse_one_param(params_text.substr(begin, i - begin))) return false;
+                    begin = i + 1;
+                }
+            }
+            if (begin < params_text.size()) {
+                if (!parse_one_param(params_text.substr(begin))) return false;
+            } else if (!params_text.empty()) {
+                return false;
+            }
+
+            ty::TypeId ret = ty::kInvalidType;
+            if (!parse_cimport_type_repr_(tail, ret) || ret == ty::kInvalidType) return false;
+
+            out = types_.make_fn(
+                ret,
+                params.empty() ? nullptr : params.data(),
+                static_cast<uint32_t>(params.size()),
+                static_cast<uint32_t>(params.size()),
+                labels.empty() ? nullptr : labels.data(),
+                defaults.empty() ? nullptr : defaults.data()
+            );
+            return out != ty::kInvalidType;
+        }
+
         constexpr std::string_view kPtrMut = "ptr mut ";
         constexpr std::string_view kPtr = "ptr ";
         if (repr.starts_with(kPtrMut)) {
@@ -237,6 +312,67 @@
 
         out.text = std::string(text);
         return true;
+    }
+
+    bool TypeChecker::parse_external_c_typedef_payload_(
+        std::string_view payload,
+        bool& out_transparent,
+        ty::TypeId& out_target
+    ) const {
+        out_transparent = false;
+        out_target = ty::kInvalidType;
+        if (!payload.starts_with("parus_c_import_typedef|")) return false;
+
+        std::string_view transparent{};
+        std::string_view target{};
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "transparent") {
+                    transparent = val;
+                } else if (key == "target") {
+                    target = val;
+                }
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        out_transparent = (transparent == "1" || transparent == "true");
+        if (!out_transparent) return true;
+        if (target.empty()) return false;
+        return parse_cimport_type_repr_(target, out_target) && out_target != ty::kInvalidType;
+    }
+
+    ty::TypeId TypeChecker::canonicalize_transparent_external_typedef_(ty::TypeId t) const {
+        ty::TypeId cur = t;
+        for (uint32_t depth = 0; depth < 8; ++depth) {
+            if (cur == ty::kInvalidType) break;
+            const auto& tt = types_.get(cur);
+            if (tt.kind != ty::Kind::kNamedUser) break;
+
+            auto sid = lookup_symbol_(types_.to_string(cur));
+            if (!sid.has_value()) break;
+            const auto& sym = sym_.symbol(*sid);
+            if (!sym.is_external || sym.kind != sema::SymbolKind::kType || sym.external_payload.empty()) {
+                break;
+            }
+
+            bool transparent = false;
+            ty::TypeId target = ty::kInvalidType;
+            if (!parse_external_c_typedef_payload_(sym.external_payload, transparent, target)) {
+                break;
+            }
+            if (!transparent || target == ty::kInvalidType || target == cur) break;
+            cur = target;
+        }
+        return cur;
     }
 
     void TypeChecker::collect_external_c_record_fields_() {

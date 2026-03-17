@@ -29,3 +29,11 @@ parusd --stdio
 ## 코드 근거
 
 1. `tools/parusd/src/main.cpp`
+
+## C Import 안정화 메모
+
+1. `import "X.h" as c;` 심볼은 LSP 내부에서 libclang으로 수집한 external export로 주입된다.
+2. Go to Definition은 가능하면 C 헤더 원본 파일/라인으로 이동한다.
+3. 시스템 헤더 탐색 순서는 `config.lei cimport.isystem` + VSCode `parus.cimport.*` + auto-probe 순이다.
+4. C import 실패 시 `CImportLibClangUnavailable` 또는 상세 원인 진단이 같이 표면화된다.
+5. VSCode에서 C import 심볼이 전부 미해결로 보이면 `parus.server.path`가 최신 `parusd/parusc`를 가리키는지 확인 후 서버를 재시작한다.

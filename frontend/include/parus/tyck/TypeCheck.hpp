@@ -390,7 +390,13 @@ namespace parus::tyck {
             std::string_view payload,
             ConstInitData& out
         ) const;
+        bool parse_external_c_typedef_payload_(
+            std::string_view payload,
+            bool& out_transparent,
+            ty::TypeId& out_target
+        ) const;
         bool parse_cimport_type_repr_(std::string_view repr, ty::TypeId& out) const;
+        ty::TypeId canonicalize_transparent_external_typedef_(ty::TypeId t) const;
         bool resolve_external_c_union_field_type_(
             ty::TypeId owner_type,
             std::string_view field_name,

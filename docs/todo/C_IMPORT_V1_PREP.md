@@ -17,12 +17,12 @@
 | global variable declaration | supported |
 | named struct | supported |
 | named enum | supported |
-| typedef (scalar/pointer/record alias) | supported |
-| function pointer typedef | partial |
+| typedef (scalar/pointer/fnptr/record alias) | supported (`scalar/pointer/fnptr` transparent, record nominal) |
+| function pointer typedef | supported |
 | object-like macro | partial (constant-only) |
-| function-like macro | partial (strict promotable subset only) |
+| function-like macro | partial (strict promotable subset + 1-step macro-chain) |
 | union | partial (`manual[get/set]` gated dot access) |
-| bitfield | not supported |
+| bitfield | partial (getter/setter shim 기반 read/write) |
 | anonymous record/enum | partial (synthetic `__anon_*` name import) |
 | variadic call lowering | partial (ABI-safe scalar/pointer only) |
 

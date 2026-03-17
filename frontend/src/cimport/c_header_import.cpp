@@ -756,6 +756,36 @@ namespace parus::cimport {
             }
         }
 
+        static bool is_transparent_typedef_underlying_(CXType ty) {
+            const CXType ct = clang_getCanonicalType(ty);
+            switch (ct.kind) {
+                case CXType_Bool:
+                case CXType_Char_U:
+                case CXType_UChar:
+                case CXType_Char_S:
+                case CXType_SChar:
+                case CXType_UShort:
+                case CXType_UInt:
+                case CXType_ULong:
+                case CXType_ULongLong:
+                case CXType_UInt128:
+                case CXType_Short:
+                case CXType_Int:
+                case CXType_Long:
+                case CXType_LongLong:
+                case CXType_Int128:
+                case CXType_Float:
+                case CXType_Double:
+                case CXType_LongDouble:
+                case CXType_Pointer:
+                case CXType_FunctionProto:
+                case CXType_FunctionNoProto:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         struct ImportCollectCtx {
             std::unordered_set<std::string> fn_dedup{};
             std::unordered_set<std::string> union_dedup{};
@@ -1028,14 +1058,27 @@ namespace parus::cimport {
             if (name.empty()) return true;
             if (!ctx.typedef_dedup.insert(name).second) return true;
 
+            const CXType under_ty = clang_getTypedefDeclUnderlyingType(c);
+
             std::string type_repr{};
-            if (!map_c_type_to_parus_(clang_getTypedefDeclUnderlyingType(c), type_repr, &ctx)) {
+            if (!map_c_type_to_parus_(under_ty, type_repr, &ctx)) {
                 return true;
             }
 
             ImportedTypedefDecl td{};
             td.name = name;
             td.type_repr = std::move(type_repr);
+            td.is_transparent = is_transparent_typedef_underlying_(under_ty);
+            if (td.is_transparent) {
+                std::string canonical_repr{};
+                if (map_c_type_to_parus_(clang_getCanonicalType(under_ty), canonical_repr, &ctx) &&
+                    !canonical_repr.empty()) {
+                    td.transparent_type_repr = std::move(canonical_repr);
+                } else {
+                    td.is_transparent = false;
+                    td.transparent_type_repr.clear();
+                }
+            }
             fill_decl_location_(c, td.decl_file, td.decl_line, td.decl_col);
             if (ctx.out_typedefs != nullptr) {
                 ctx.out_typedefs->push_back(std::move(td));
@@ -1403,95 +1446,241 @@ namespace parus::cimport {
         // Promote strictly-convertible function-like macros:
         //   - DirectAlias:  MACRO(a,b) -> callee(a,b)
         //   - ShimForward:  MACRO(y,x) -> callee(x,y) or cast forwarding
+        //   - 1-step chain: MACRO(...) -> OTHER_MACRO(...) -> callee(...)
         std::unordered_multimap<std::string, size_t> fn_idx_by_name{};
         fn_idx_by_name.reserve(collected_fns.size() * 2u + 1u);
         for (size_t i = 0; i < collected_fns.size(); ++i) {
             fn_idx_by_name.emplace(collected_fns[i].api.name, i);
         }
 
+        auto extract_return_repr = [](std::string_view fn_type_repr, std::string& out_ret) -> bool {
+            const size_t arrow = fn_type_repr.rfind("->");
+            if (arrow == std::string_view::npos || arrow + 2 >= fn_type_repr.size()) return false;
+            out_ret.assign(fn_type_repr.substr(arrow + 2));
+            while (!out_ret.empty() && std::isspace(static_cast<unsigned char>(out_ret.front()))) {
+                out_ret.erase(out_ret.begin());
+            }
+            while (!out_ret.empty() && std::isspace(static_cast<unsigned char>(out_ret.back()))) {
+                out_ret.pop_back();
+            }
+            return !out_ret.empty();
+        };
+
+        auto populate_macro_from_function =
+            [&](ImportedMacroDecl& mc, const CollectedFnDecl& selected) -> bool {
+                if (mc.params.size() != selected.arg_type_reprs.size()) {
+                    mc.skip_reason = "unsupported function-like macro: parameter count mismatch";
+                    return false;
+                }
+
+                std::vector<uint32_t> param_use(mc.params.size(), 0u);
+                mc.promote_param_type_reprs.assign(mc.params.size(), std::string{});
+                mc.promote_param_c_types.assign(mc.params.size(), std::string{});
+
+                bool has_cast = false;
+                bool identity_order = true;
+                bool invalid = false;
+                for (size_t ai = 0; ai < mc.promote_call_args.size(); ++ai) {
+                    const auto& call_arg = mc.promote_call_args[ai];
+                    if (call_arg.param_index < 0 ||
+                        static_cast<size_t>(call_arg.param_index) >= mc.params.size()) {
+                        invalid = true;
+                        break;
+                    }
+                    const size_t pi = static_cast<size_t>(call_arg.param_index);
+                    ++param_use[pi];
+                    if (param_use[pi] > 1u) {
+                        invalid = true;
+                        break;
+                    }
+                    mc.promote_param_type_reprs[pi] = selected.arg_type_reprs[ai];
+                    mc.promote_param_c_types[pi] = selected.api.c_arg_types[ai];
+                    if (!call_arg.cast_prefix.empty()) has_cast = true;
+                    if (pi != ai) identity_order = false;
+                }
+                if (invalid) {
+                    mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
+                    return false;
+                }
+                for (size_t i = 0; i < param_use.size(); ++i) {
+                    if (param_use[i] != 1u ||
+                        mc.promote_param_type_reprs[i].empty() ||
+                        mc.promote_param_c_types[i].empty()) {
+                        mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
+                        return false;
+                    }
+                }
+
+                mc.promote_callee_link_name = selected.api.link_name;
+                mc.promote_c_return_type = selected.api.c_return_type;
+                mc.promote_type_repr = "def(";
+                for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
+                    if (i) mc.promote_type_repr += ", ";
+                    mc.promote_type_repr += mc.promote_param_type_reprs[i];
+                }
+                mc.promote_type_repr += ") -> ";
+                mc.promote_type_repr += selected.ret_type_repr;
+
+                mc.promote_kind = (identity_order && !has_cast)
+                    ? ImportedMacroPromoteKind::kDirectAlias
+                    : ImportedMacroPromoteKind::kShimForward;
+                return true;
+            };
+
+        auto populate_macro_from_macro =
+            [&](ImportedMacroDecl& mc, const ImportedMacroDecl& callee_macro) -> bool {
+                if (callee_macro.promote_kind == ImportedMacroPromoteKind::kNone ||
+                    callee_macro.promote_type_repr.empty() ||
+                    callee_macro.promote_param_type_reprs.size() != callee_macro.params.size() ||
+                    callee_macro.promote_param_c_types.size() != callee_macro.params.size() ||
+                    mc.promote_call_args.size() != callee_macro.params.size()) {
+                    return false;
+                }
+
+                std::vector<ImportedMacroCallArg> composed_args{};
+                composed_args.reserve(callee_macro.promote_call_args.size());
+                for (const auto& inner : callee_macro.promote_call_args) {
+                    if (inner.param_index < 0 ||
+                        static_cast<size_t>(inner.param_index) >= mc.promote_call_args.size()) {
+                        return false;
+                    }
+                    const auto& outer = mc.promote_call_args[static_cast<size_t>(inner.param_index)];
+                    if (outer.param_index < 0 ||
+                        static_cast<size_t>(outer.param_index) >= mc.params.size()) {
+                        return false;
+                    }
+                    if (!inner.cast_prefix.empty() && !outer.cast_prefix.empty()) {
+                        mc.skip_reason = "unsupported function-like macro: nested cast forwarding through macro chain";
+                        return false;
+                    }
+
+                    ImportedMacroCallArg one{};
+                    one.param_index = outer.param_index;
+                    one.cast_prefix = !inner.cast_prefix.empty() ? inner.cast_prefix : outer.cast_prefix;
+                    composed_args.push_back(std::move(one));
+                }
+
+                std::vector<uint32_t> param_use(mc.params.size(), 0u);
+                mc.promote_param_type_reprs.assign(mc.params.size(), std::string{});
+                mc.promote_param_c_types.assign(mc.params.size(), std::string{});
+                for (size_t callee_param = 0; callee_param < callee_macro.params.size(); ++callee_param) {
+                    const auto& outer = mc.promote_call_args[callee_param];
+                    if (outer.param_index < 0 ||
+                        static_cast<size_t>(outer.param_index) >= mc.params.size()) {
+                        mc.skip_reason = "unsupported function-like macro: invalid argument forwarding in macro chain";
+                        return false;
+                    }
+                    const size_t outer_param = static_cast<size_t>(outer.param_index);
+                    ++param_use[outer_param];
+                    if (param_use[outer_param] > 1u) {
+                        mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
+                        return false;
+                    }
+                    mc.promote_param_type_reprs[outer_param] = callee_macro.promote_param_type_reprs[callee_param];
+                    mc.promote_param_c_types[outer_param] = callee_macro.promote_param_c_types[callee_param];
+                }
+                for (size_t i = 0; i < param_use.size(); ++i) {
+                    if (param_use[i] != 1u ||
+                        mc.promote_param_type_reprs[i].empty() ||
+                        mc.promote_param_c_types[i].empty()) {
+                        mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
+                        return false;
+                    }
+                }
+
+                std::string ret_repr{};
+                if (!extract_return_repr(callee_macro.promote_type_repr, ret_repr)) {
+                    mc.skip_reason = "unsupported function-like macro: invalid chained callee type representation";
+                    return false;
+                }
+
+                bool has_cast = false;
+                bool identity_order = true;
+                for (size_t i = 0; i < composed_args.size(); ++i) {
+                    if (!composed_args[i].cast_prefix.empty()) has_cast = true;
+                    if (composed_args[i].param_index != static_cast<int32_t>(i)) identity_order = false;
+                }
+
+                mc.promote_call_args = std::move(composed_args);
+                mc.promote_callee_name = callee_macro.promote_callee_name;
+                mc.promote_callee_link_name = callee_macro.promote_callee_link_name;
+                mc.promote_c_return_type = callee_macro.promote_c_return_type;
+
+                mc.promote_type_repr = "def(";
+                for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
+                    if (i) mc.promote_type_repr += ", ";
+                    mc.promote_type_repr += mc.promote_param_type_reprs[i];
+                }
+                mc.promote_type_repr += ") -> ";
+                mc.promote_type_repr += ret_repr;
+
+                mc.promote_kind = (identity_order && !has_cast)
+                    ? ImportedMacroPromoteKind::kDirectAlias
+                    : ImportedMacroPromoteKind::kShimForward;
+                return true;
+            };
+
         for (auto& mc : out.macros) {
             if (!mc.is_function_like) continue;
             if (!mc.skip_reason.empty()) continue;
-            if (mc.promote_callee_name.empty()) {
-                mc.skip_reason = "unsupported function-like macro: unresolved callee";
-                continue;
-            }
+            mc.promote_kind = ImportedMacroPromoteKind::kNone;
+            mc.promote_callee_link_name.clear();
+            mc.promote_type_repr.clear();
+            mc.promote_c_return_type.clear();
+            mc.promote_param_type_reprs.clear();
+            mc.promote_param_c_types.clear();
+        }
 
-            const auto range = fn_idx_by_name.equal_range(mc.promote_callee_name);
-            const CollectedFnDecl* selected = nullptr;
-            for (auto it = range.first; it != range.second; ++it) {
-                const auto& cand = collected_fns[it->second];
-                if (cand.api.is_variadic) continue;
-                if (cand.arg_type_reprs.size() != mc.promote_call_args.size()) continue;
-                if (cand.api.c_arg_types.size() != mc.promote_call_args.size()) continue;
-                selected = &cand;
-                break;
-            }
-            if (selected == nullptr) {
-                mc.skip_reason = "unsupported function-like macro: callee function not found or variadic";
-                continue;
-            }
-
-            if (mc.params.size() != selected->arg_type_reprs.size()) {
-                mc.skip_reason = "unsupported function-like macro: parameter count mismatch";
-                continue;
-            }
-
-            std::vector<uint32_t> param_use(mc.params.size(), 0u);
-            mc.promote_param_type_reprs.assign(mc.params.size(), std::string{});
-            mc.promote_param_c_types.assign(mc.params.size(), std::string{});
-
-            bool has_cast = false;
-            bool identity_order = true;
-            bool invalid = false;
-            for (size_t ai = 0; ai < mc.promote_call_args.size(); ++ai) {
-                const auto& call_arg = mc.promote_call_args[ai];
-                if (call_arg.param_index < 0 ||
-                    static_cast<size_t>(call_arg.param_index) >= mc.params.size()) {
-                    invalid = true;
-                    break;
+        for (size_t round = 0; round < out.macros.size(); ++round) {
+            bool progressed = false;
+            for (auto& mc : out.macros) {
+                if (!mc.is_function_like) continue;
+                if (!mc.skip_reason.empty()) continue;
+                if (mc.promote_kind != ImportedMacroPromoteKind::kNone) continue;
+                if (mc.promote_callee_name.empty()) {
+                    mc.skip_reason = "unsupported function-like macro: unresolved callee";
+                    continue;
                 }
-                const size_t pi = static_cast<size_t>(call_arg.param_index);
-                ++param_use[pi];
-                if (param_use[pi] > 1u) {
-                    invalid = true;
-                    break;
+
+                bool promoted = false;
+                const auto range = fn_idx_by_name.equal_range(mc.promote_callee_name);
+                for (auto it = range.first; it != range.second; ++it) {
+                    const auto& cand = collected_fns[it->second];
+                    if (cand.api.is_variadic) continue;
+                    if (cand.arg_type_reprs.size() != mc.promote_call_args.size()) continue;
+                    if (cand.api.c_arg_types.size() != mc.promote_call_args.size()) continue;
+                    if (populate_macro_from_function(mc, cand)) {
+                        promoted = true;
+                        break;
+                    }
                 }
-                mc.promote_param_type_reprs[pi] = selected->arg_type_reprs[ai];
-                mc.promote_param_c_types[pi] = selected->api.c_arg_types[ai];
-                if (!call_arg.cast_prefix.empty()) has_cast = true;
-                if (pi != ai) identity_order = false;
-            }
-            if (invalid) {
-                mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
-                continue;
-            }
-            for (size_t i = 0; i < param_use.size(); ++i) {
-                if (param_use[i] != 1u ||
-                    mc.promote_param_type_reprs[i].empty() ||
-                    mc.promote_param_c_types[i].empty()) {
-                    invalid = true;
-                    break;
+                if (promoted) {
+                    progressed = true;
+                    continue;
+                }
+
+                for (const auto& callee_macro : out.macros) {
+                    if (!callee_macro.is_function_like) continue;
+                    if (callee_macro.name != mc.promote_callee_name) continue;
+                    if (callee_macro.promote_kind == ImportedMacroPromoteKind::kNone) continue;
+                    if (populate_macro_from_macro(mc, callee_macro)) {
+                        promoted = true;
+                        break;
+                    }
+                }
+                if (promoted) {
+                    progressed = true;
                 }
             }
-            if (invalid) {
-                mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
-                continue;
-            }
+            if (!progressed) break;
+        }
 
-            mc.promote_callee_link_name = selected->api.link_name;
-            mc.promote_c_return_type = selected->api.c_return_type;
-            mc.promote_type_repr = "def(";
-            for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
-                if (i) mc.promote_type_repr += ", ";
-                mc.promote_type_repr += mc.promote_param_type_reprs[i];
+        for (auto& mc : out.macros) {
+            if (!mc.is_function_like) continue;
+            if (!mc.skip_reason.empty()) continue;
+            if (mc.promote_kind == ImportedMacroPromoteKind::kNone) {
+                mc.skip_reason = "unsupported function-like macro: callee function/macro chain not resolvable";
             }
-            mc.promote_type_repr += ") -> ";
-            mc.promote_type_repr += selected->ret_type_repr;
-
-            mc.promote_kind = (identity_order && !has_cast)
-                ? ImportedMacroPromoteKind::kDirectAlias
-                : ImportedMacroPromoteKind::kShimForward;
         }
 
         out.functions.reserve(collected_fns.size());

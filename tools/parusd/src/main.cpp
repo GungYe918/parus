@@ -2134,6 +2134,23 @@ namespace {
         return payload;
     }
 
+    std::string make_c_import_typedef_payload_(
+        std::string_view header,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names,
+        const parus::cimport::ImportedTypedefDecl& td
+    ) {
+        std::string payload = "parus_c_import_typedef|header=" + std::string(header);
+        payload += "|transparent=";
+        payload += (td.is_transparent && !td.transparent_type_repr.empty()) ? "1" : "0";
+        if (td.is_transparent && !td.transparent_type_repr.empty()) {
+            payload += "|target=";
+            payload += rewrite_cimport_type_with_alias_(
+                td.transparent_type_repr, alias, known_type_names);
+        }
+        return payload;
+    }
+
     bool is_under_root_(const std::filesystem::path& path, const std::filesystem::path& root) {
         const auto p = normalize_host_path_(path.string());
         const auto r = normalize_host_path_(root.string());
@@ -3013,7 +3030,11 @@ namespace {
                                     spec.span
                                 );
                                 if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
-                                    d.add_arg("libclang unavailable");
+                                    if (!imported.error_text.empty()) {
+                                        d.add_arg(imported.error_text);
+                                    } else {
+                                        d.add_arg("libclang unavailable");
+                                    }
                                 } else {
                                     d.add_arg("failed to import C header '" + spec.header + "': " + imported.error_text);
                                 }
@@ -3085,7 +3106,7 @@ namespace {
                                     type_path,
                                     rewrite_cimport_type_with_alias_(td.type_repr, spec.alias, known_type_names),
                                     {},
-                                    {}
+                                    make_c_import_typedef_payload_(spec.header, spec.alias, known_type_names, td)
                                 );
                                 add_decl_loc(type_path, td.decl_file, td.decl_line, td.decl_col);
                             }

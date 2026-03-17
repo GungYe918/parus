@@ -2144,6 +2144,91 @@ bool test_c_header_import_anonymous_typedef_struct_usage() {
     return true;
 }
 
+bool test_c_header_import_transparent_typedef_uint32_assign() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-typedef-transparent-u32";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "import \"stdint.h\" as std;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let a: std::uint32_t = 10;\n"
+        "  let b: std::uint32_t = 10u32;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write transparent typedef uint32 cimport test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "transparent typedef uint32 assignment should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_nominal_typedef_record_stays_nominal() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-typedef-nominal-record";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Nominal.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_NOMINAL_H\n"
+        "#define PARUS_NOMINAL_H\n"
+        "typedef struct { int x; } Nominal;\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"Nominal.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let x: c::Nominal = 10i32;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write nominal typedef cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "nominal typedef record assignment must fail\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_function_like_macro_not_imported() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -2388,6 +2473,52 @@ bool test_c_header_import_function_like_macro_shim_ir_only_rejected() {
     }
     if (!contains(out, "CImportShimIrOnlyUnsupported")) {
         std::cerr << "IR-only shim rejection must report CImportShimIrOnlyUnsupported\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_function_like_macro_chain_promoted() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fn-macro-chain";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "M.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_M_CHAIN_H\n"
+        "#define PARUS_M_CHAIN_H\n"
+        "int c_add(int a, int b);\n"
+        "#define INNER_ADD(a, b) c_add(a, b)\n"
+        "#define OUTER_ADD(a, b) INNER_ADD(a, b)\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"M.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::OUTER_ADD(1i32, 2i32);\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write macro-chain cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "function-like macro chain should be promoted and compile\n" << out;
         return false;
     }
     return true;
@@ -2767,24 +2898,28 @@ int main() {
     const bool ok31 = test_c_header_import_imacros_option();
     const bool ok32 = test_c_header_import_forced_include_option();
     const bool ok33 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok34 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok35 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok36 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok37 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok38 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
-    const bool ok39 = test_c_header_import_bitfield_read_write_shim();
-    const bool ok40 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok41 = test_c_header_import_macos_opengl_isystem();
-    const bool ok42 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok43 = test_actor_rejected_in_no_std_profile();
-    const bool ok44 = test_actor_allowed_in_freestanding_profile();
-    const bool ok45 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok46 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok34 = test_c_header_import_transparent_typedef_uint32_assign();
+    const bool ok35 = test_c_header_import_nominal_typedef_record_stays_nominal();
+    const bool ok36 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok37 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok38 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok39 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok40 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
+    const bool ok41 = test_c_header_import_function_like_macro_chain_promoted();
+    const bool ok42 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok43 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok44 = test_c_header_import_macos_opengl_isystem();
+    const bool ok45 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok46 = test_actor_rejected_in_no_std_profile();
+    const bool ok47 = test_actor_allowed_in_freestanding_profile();
+    const bool ok48 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok49 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
-        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46) {
+        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
+        !ok48 || !ok49) {
         return 1;
     }
 

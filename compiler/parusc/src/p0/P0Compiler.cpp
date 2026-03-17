@@ -1634,6 +1634,23 @@ namespace parusc::p0 {
             return payload;
         }
 
+        std::string make_c_import_typedef_payload_(
+            std::string_view header,
+            std::string_view alias,
+            const std::unordered_set<std::string>& known_type_names,
+            const parus::cimport::ImportedTypedefDecl& td
+        ) {
+            std::string payload = "parus_c_import_typedef|header=" + std::string(header);
+            payload += "|transparent=";
+            payload += (td.is_transparent && !td.transparent_type_repr.empty()) ? "1" : "0";
+            if (td.is_transparent && !td.transparent_type_repr.empty()) {
+                payload += "|target=";
+                payload += rewrite_cimport_type_with_alias_(
+                    td.transparent_type_repr, alias, known_type_names);
+            }
+            return payload;
+        }
+
         std::string escape_c_include_text_(std::string_view s) {
             std::string out{};
             out.reserve(s.size() + 8u);
@@ -1980,6 +1997,15 @@ namespace parusc::p0 {
                     if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
                         parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kCImportLibClangUnavailable, spec.span);
                         bag.add(std::move(d));
+                        if (!imported.error_text.empty()) {
+                            parus::diag::Diagnostic d2(
+                                parus::diag::Severity::kError,
+                                parus::diag::Code::kTypeErrorGeneric,
+                                spec.span
+                            );
+                            d2.add_arg("c-import libclang detail: " + imported.error_text);
+                            bag.add(std::move(d2));
+                        }
                     } else {
                         parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kTypeErrorGeneric, spec.span);
                         std::string msg = "failed to import C header '" + spec.header + "'";
@@ -2239,7 +2265,8 @@ namespace parusc::p0 {
                     e.decl_dir = current_dir;
                     e.type_repr = rewrite_cimport_type_with_alias_(
                         td.type_repr, spec.alias, known_type_names);
-                    e.inst_payload.clear();
+                    e.inst_payload = make_c_import_typedef_payload_(
+                        spec.header, spec.alias, known_type_names, td);
                     e.decl_file = td.decl_file.empty() ? current_norm : parus::normalize_path(td.decl_file);
                     e.decl_line = td.decl_line;
                     e.decl_col = td.decl_col;
