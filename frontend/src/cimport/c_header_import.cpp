@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -704,6 +705,42 @@ namespace parus::cimport {
             return std::string(name);
         }
 
+        static CCallConvKind map_callconv_kind_(CXCallingConv cc) {
+            switch (cc) {
+                case CXCallingConv_X86StdCall:
+                    return CCallConvKind::kStdCall;
+                case CXCallingConv_X86FastCall:
+                    return CCallConvKind::kFastCall;
+                case CXCallingConv_X86VectorCall:
+                    return CCallConvKind::kVectorCall;
+                case CXCallingConv_Win64:
+                    return CCallConvKind::kWin64;
+                case CXCallingConv_X86_64SysV:
+                    return CCallConvKind::kSysV;
+                case CXCallingConv_Default:
+                case CXCallingConv_C:
+                    return CCallConvKind::kCdecl;
+                default:
+                    return CCallConvKind::kDefault;
+            }
+        }
+
+        static bool is_signed_integer_type_(CXType ty) {
+            const CXType ct = clang_getCanonicalType(ty);
+            switch (ct.kind) {
+                case CXType_Char_S:
+                case CXType_SChar:
+                case CXType_Short:
+                case CXType_Int:
+                case CXType_Long:
+                case CXType_LongLong:
+                case CXType_Int128:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         struct ImportCollectCtx {
             std::unordered_set<std::string> fn_dedup{};
             std::unordered_set<std::string> union_dedup{};
@@ -722,6 +759,8 @@ namespace parus::cimport {
             std::vector<ImportedEnumDecl>* out_enums = nullptr;
             std::vector<ImportedTypedefDecl>* out_typedefs = nullptr;
             std::vector<ImportedMacroDecl>* out_macros = nullptr;
+            std::string hard_error_text{};
+            bool had_hard_error = false;
         };
 
         static std::string ensure_enum_name_(CXCursor decl, ImportCollectCtx& ctx) {
@@ -803,43 +842,118 @@ namespace parus::cimport {
             s.name = name;
 
             const CXType struct_ty = clang_getCursorType(c);
+            s.c_type_spelling = to_std_string_(clang_getTypeSpelling(struct_ty));
             const long long sz = clang_Type_getSizeOf(struct_ty);
             const long long al = clang_Type_getAlignOf(struct_ty);
             if (sz > 0) s.size_bytes = static_cast<uint32_t>(sz);
             if (al > 0) s.align_bytes = static_cast<uint32_t>(al);
+            s.is_packed = false;
 
-            clang_visitChildren(
-                c,
-                [](CXCursor child, CXCursor, CXClientData data) -> CXChildVisitResult {
-                    auto* out = static_cast<ImportedStructDecl*>(data);
-                    if (out == nullptr) return CXChildVisit_Continue;
-                    if (clang_getCursorKind(child) != CXCursor_FieldDecl) {
-                        return CXChildVisit_Continue;
+            auto add_struct_field = [&](ImportedStructFieldDecl one, std::string_view source_path) -> bool {
+                for (const auto& existing : s.fields) {
+                    if (existing.name != one.name) continue;
+                    ctx.had_hard_error = true;
+                    ctx.hard_error_text =
+                        "anonymous field flatten collision in struct '" + s.name +
+                        "': duplicated field '" + one.name + "'";
+                    if (!source_path.empty()) {
+                        ctx.hard_error_text += " at ";
+                        ctx.hard_error_text += std::string(source_path);
                     }
-                    if (clang_Cursor_isBitField(child) != 0) {
+                    return false;
+                }
+                s.fields.push_back(std::move(one));
+                return true;
+            };
+
+            auto collect_fields_recursive = [&](auto&& self,
+                                                CXCursor record_decl,
+                                                uint64_t base_offset_bits,
+                                                bool union_origin,
+                                                std::string_view trace_path) -> bool {
+                if (ctx.had_hard_error) return false;
+                const CXCursorKind record_kind = clang_getCursorKind(record_decl);
+                const bool nested_union_origin = union_origin || (record_kind == CXCursor_UnionDecl);
+                std::function<CXChildVisitResult(CXCursor)> visit_one =
+                    [&](CXCursor child) -> CXChildVisitResult {
+                        if (clang_getCursorKind(child) != CXCursor_FieldDecl) {
+                            return CXChildVisit_Continue;
+                        }
+
+                        const long long rel_off_bits = clang_Cursor_getOffsetOfField(child);
+                        if (rel_off_bits < 0) {
+                            return CXChildVisit_Continue;
+                        }
+                        const uint64_t abs_off_bits = base_offset_bits + static_cast<uint64_t>(rel_off_bits);
+                        const CXType child_ty = clang_getCursorType(child);
+                        const CXType child_ty_can = clang_getCanonicalType(child_ty);
+                        const std::string field_name = to_std_string_(clang_getCursorSpelling(child));
+
+                        if (field_name.empty()) {
+                            CXCursor nested_decl = clang_getTypeDeclaration(child_ty_can);
+                            if (clang_Cursor_isNull(nested_decl)) {
+                                nested_decl = clang_getTypeDeclaration(child_ty);
+                            }
+                            if (clang_Cursor_isNull(nested_decl)) {
+                                return CXChildVisit_Continue;
+                            }
+                            const CXCursorKind nk = clang_getCursorKind(nested_decl);
+                            if (nk != CXCursor_StructDecl && nk != CXCursor_UnionDecl) {
+                                return CXChildVisit_Continue;
+                            }
+                            const std::string nested_name = to_std_string_(clang_getCursorSpelling(nested_decl));
+                            const bool ok = self(
+                                self,
+                                nested_decl,
+                                abs_off_bits,
+                                nested_union_origin || nk == CXCursor_UnionDecl,
+                                nested_name.empty() ? trace_path : std::string(trace_path).append("::").append(nested_name));
+                            return ok ? CXChildVisit_Continue : CXChildVisit_Break;
+                        }
+
+                        std::string field_ty{};
+                        if (!map_c_type_to_parus_(child_ty, field_ty, &ctx)) {
+                            return CXChildVisit_Continue;
+                        }
+
+                        ImportedStructFieldDecl fd{};
+                        fd.name = field_name;
+                        fd.type_repr = std::move(field_ty);
+                        fd.c_type = to_std_string_(clang_getTypeSpelling(child_ty));
+                        fd.offset_bytes = static_cast<uint32_t>(abs_off_bits / 8u);
+                        fd.from_flatten = !std::string(trace_path).empty() && std::string(trace_path) != s.name;
+                        fd.union_origin = nested_union_origin;
+
+                        if (clang_Cursor_isBitField(child) != 0) {
+                            fd.is_bitfield = true;
+                            const int width = clang_getFieldDeclBitWidth(child);
+                            if (width > 0) {
+                                fd.bit_width = static_cast<uint32_t>(width);
+                            }
+                            fd.bit_offset = static_cast<uint32_t>(abs_off_bits);
+                            fd.bit_signed = is_signed_integer_type_(child_ty_can);
+                        }
+
+                        if (!add_struct_field(std::move(fd), trace_path)) {
+                            return CXChildVisit_Break;
+                        }
                         return CXChildVisit_Continue;
-                    }
+                    };
 
-                    const std::string field_name = to_std_string_(clang_getCursorSpelling(child));
-                    if (field_name.empty()) return CXChildVisit_Continue;
+                clang_visitChildren(
+                    record_decl,
+                    [](CXCursor child, CXCursor, CXClientData data) -> CXChildVisitResult {
+                        auto* fn = static_cast<std::function<CXChildVisitResult(CXCursor)>*>(data);
+                        if (fn == nullptr) return CXChildVisit_Continue;
+                        return (*fn)(child);
+                    },
+                    &visit_one
+                );
+                return !ctx.had_hard_error;
+            };
 
-                    std::string field_ty{};
-                    if (!map_c_type_to_parus_(clang_getCursorType(child), field_ty)) {
-                        return CXChildVisit_Continue;
-                    }
-
-                    const long long off_bits = clang_Cursor_getOffsetOfField(child);
-                    if (off_bits < 0) return CXChildVisit_Continue;
-
-                    ImportedStructFieldDecl fd{};
-                    fd.name = field_name;
-                    fd.type_repr = std::move(field_ty);
-                    fd.offset_bytes = static_cast<uint32_t>(off_bits / 8);
-                    out->fields.push_back(std::move(fd));
-                    return CXChildVisit_Continue;
-                },
-                &s
-            );
+            (void)collect_fields_recursive(collect_fields_recursive, c, 0u, false, s.name);
+            if (ctx.had_hard_error) return true;
 
             if (ctx.out_structs != nullptr) {
                 ctx.out_structs->push_back(std::move(s));
@@ -970,6 +1084,7 @@ namespace parus::cimport {
             fn.api.c_return_type = to_std_string_(clang_getTypeSpelling(clang_getResultType(fn_ty)));
             fn.api.is_c_abi = true;
             fn.api.is_variadic = variadic;
+            fn.api.callconv = map_callconv_kind_(clang_getFunctionTypeCallingConv(fn_ty));
             fn.arg_type_reprs = arg_repr;
             fn.ret_type_repr = ret_repr;
             fn.api.c_arg_types.reserve(arg_types.size());
@@ -1228,6 +1343,15 @@ namespace parus::cimport {
 
         const CXCursor root = clang_getTranslationUnitCursor(tu);
         clang_visitChildren(root, collect_decl_visitor_, &ctx);
+        if (ctx.had_hard_error) {
+            out.error = ImportErrorKind::kParseFailed;
+            out.error_text = ctx.hard_error_text.empty()
+                ? "failed to import C header due to anonymous-field flatten collision"
+                : ctx.hard_error_text;
+            clang_disposeTranslationUnit(tu);
+            clang_disposeIndex(idx);
+            return out;
+        }
 
         // Resolve `fmt_vlist` -> variadic sibling mapping without function-name hardcoding.
         for (auto& one : collected_fns) {
@@ -1351,6 +1475,40 @@ namespace parus::cimport {
         out.functions.reserve(collected_fns.size());
         for (auto& f : collected_fns) {
             out.functions.push_back(std::move(f.api));
+        }
+
+        out.coverage.total_function_decls = static_cast<uint32_t>(collected_fns.size());
+        out.coverage.imported_function_decls = static_cast<uint32_t>(out.functions.size());
+        out.coverage.total_type_decls = static_cast<uint32_t>(
+            out.structs.size() + out.unions.size() + out.enums.size() + out.typedefs.size());
+        out.coverage.imported_type_decls = out.coverage.total_type_decls;
+
+        uint32_t enum_const_count = 0;
+        for (const auto& e : out.enums) {
+            enum_const_count += static_cast<uint32_t>(e.constants.size());
+        }
+        out.coverage.total_const_decls = enum_const_count;
+        out.coverage.imported_const_decls = enum_const_count;
+
+        for (const auto& mc : out.macros) {
+            if (!mc.is_function_like) {
+                if (mc.const_kind != ImportedConstKind::kNone) {
+                    ++out.coverage.total_const_decls;
+                    ++out.coverage.imported_const_decls;
+                }
+                continue;
+            }
+
+            ++out.coverage.total_function_macros;
+            if (mc.promote_kind == ImportedMacroPromoteKind::kDirectAlias ||
+                mc.promote_kind == ImportedMacroPromoteKind::kShimForward) {
+                ++out.coverage.promoted_function_macros;
+            } else {
+                ++out.coverage.skipped_function_macros;
+                if (!mc.skip_reason.empty()) {
+                    out.coverage.skipped_reasons.push_back(mc.name + ": " + mc.skip_reason);
+                }
+            }
         }
 
         clang_disposeTranslationUnit(tu);

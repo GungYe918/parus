@@ -469,10 +469,10 @@ namespace parus::oir {
                 return r;
             }
 
-            ValueId emit_field(TypeId ty, ValueId base, std::string field) {
+            ValueId emit_field(TypeId ty, ValueId base, std::string field, FuncId bit_getter = kInvalidId, FuncId bit_setter = kInvalidId) {
                 ValueId r = make_value(ty, Effect::MayReadMem);
                 Inst inst{};
-                inst.data = InstField{base, std::move(field)};
+                inst.data = InstField{base, std::move(field), bit_getter, bit_setter};
                 inst.eff = Effect::MayReadMem;
                 inst.result = r;
                 emit_inst(inst);
@@ -1187,6 +1187,20 @@ namespace parus::oir {
             }
         }
 
+        CCallConv map_c_callconv_(parus::sir::CCallConv cc) {
+            switch (cc) {
+                case parus::sir::CCallConv::kCdecl: return CCallConv::Cdecl;
+                case parus::sir::CCallConv::kStdCall: return CCallConv::StdCall;
+                case parus::sir::CCallConv::kFastCall: return CCallConv::FastCall;
+                case parus::sir::CCallConv::kVectorCall: return CCallConv::VectorCall;
+                case parus::sir::CCallConv::kWin64: return CCallConv::Win64;
+                case parus::sir::CCallConv::kSysV: return CCallConv::SysV;
+                case parus::sir::CCallConv::kDefault:
+                default:
+                    return CCallConv::Default;
+            }
+        }
+
         FieldLayout map_field_layout_(parus::sir::FieldLayout layout) {
             switch (layout) {
                 case parus::sir::FieldLayout::kC:
@@ -1841,7 +1855,19 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kField: {
                 ValueId base = lower_value(v.a);
-                return emit_field(v.type, base, std::string(v.text));
+                FuncId bit_getter = kInvalidId;
+                FuncId bit_setter = kInvalidId;
+                if (fn_symbol_to_func != nullptr) {
+                    if (v.external_c_bitfield_getter_sym != parus::sir::k_invalid_symbol) {
+                        auto it = fn_symbol_to_func->find(v.external_c_bitfield_getter_sym);
+                        if (it != fn_symbol_to_func->end()) bit_getter = it->second;
+                    }
+                    if (v.external_c_bitfield_setter_sym != parus::sir::k_invalid_symbol) {
+                        auto it = fn_symbol_to_func->find(v.external_c_bitfield_setter_sym);
+                        if (it != fn_symbol_to_func->end()) bit_setter = it->second;
+                    }
+                }
+                return emit_field(v.type, base, std::string(v.text), bit_getter, bit_setter);
             }
 
             case parus::sir::ValueKind::kAssign: {
@@ -2973,6 +2999,7 @@ namespace parus::oir {
             }
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
+            f.c_callconv = map_c_callconv_(sf.c_callconv);
             f.is_extern = sf.is_extern;
             f.is_c_variadic = sf.is_c_variadic;
             f.c_fixed_param_count = sf.c_fixed_param_count;

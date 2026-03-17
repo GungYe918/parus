@@ -182,6 +182,10 @@ namespace parus::sir {
 
         // kBorrow payload
         bool borrow_is_mut = false;
+
+        // external C bitfield metadata (kField only)
+        SymbolId external_c_bitfield_getter_sym = k_invalid_symbol;
+        SymbolId external_c_bitfield_setter_sym = k_invalid_symbol;
     };
 
     // ---------------------------------------------
@@ -350,6 +354,16 @@ namespace parus::sir {
         kC,
     };
 
+    enum class CCallConv : uint8_t {
+        kDefault = 0,
+        kCdecl,
+        kStdCall,
+        kFastCall,
+        kVectorCall,
+        kWin64,
+        kSysV,
+    };
+
     enum class FieldLayout : uint8_t {
         kNone = 0,
         kC,
@@ -370,6 +384,7 @@ namespace parus::sir {
         bool is_extern = false;
         FnMode fn_mode = FnMode::kNone;
         FuncAbi abi = FuncAbi::kParus;
+        CCallConv c_callconv = CCallConv::kDefault;
         bool is_c_variadic = false;
         uint32_t c_fixed_param_count = 0;
 

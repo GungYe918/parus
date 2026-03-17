@@ -24,6 +24,7 @@ namespace parus::tyck {
             bool is_c_import = false;
             bool is_c_abi = false;
             bool is_variadic = false;
+            std::string callconv{}; // default|cdecl|stdcall|fastcall|vectorcall|win64|sysv
             std::string format_kind{}; // none | fmt_varargs | fmt_vlist
             int32_t fmt_param_index = -1;
             int32_t va_list_param_index = -1;
@@ -50,6 +51,8 @@ namespace parus::tyck {
                         out.is_variadic = (val == "1" || val == "true");
                     } else if (key == "format") {
                         out.format_kind.assign(val);
+                    } else if (key == "callconv") {
+                        out.callconv.assign(val);
                     } else if (key == "fmt_idx") {
                         try {
                             out.fmt_param_index = std::stoi(std::string(val));

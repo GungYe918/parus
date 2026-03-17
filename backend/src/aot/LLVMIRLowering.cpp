@@ -682,7 +682,7 @@ namespace parus::backend::aot {
 
                 // extern 함수는 본문 없이 선언으로만 내린다.
                 if (fn_.is_extern) {
-                    os << "declare " << ret_ty << " @" << sym << "(";
+                    os << "declare " << llvm_callconv_prefix_(fn_.c_callconv) << ret_ty << " @" << sym << "(";
                     if (fn_.entry != parus::oir::kInvalidId &&
                         static_cast<size_t>(fn_.entry) < m_.blocks.size()) {
                         const auto& entry = m_.blocks[fn_.entry];
@@ -705,7 +705,7 @@ namespace parus::backend::aot {
                     return os.str();
                 }
 
-                os << "define " << ret_ty << " @" << sym << "(";
+                os << "define " << llvm_callconv_prefix_(fn_.c_callconv) << ret_ty << " @" << sym << "(";
                 if (fn_.entry != parus::oir::kInvalidId &&
                     static_cast<size_t>(fn_.entry) < m_.blocks.size()) {
                     const auto& entry = m_.blocks[fn_.entry];
@@ -766,9 +766,25 @@ namespace parus::backend::aot {
                 std::string ret_ty{};
                 std::vector<std::string> param_tys{};
                 parus::oir::FunctionAbi abi = parus::oir::FunctionAbi::Parus;
+                parus::oir::CCallConv c_callconv = parus::oir::CCallConv::Default;
                 bool is_variadic = false;
                 uint32_t fixed_param_count = 0;
             };
+
+            std::string llvm_callconv_prefix_(parus::oir::CCallConv cc) const {
+                using CC = parus::oir::CCallConv;
+                switch (cc) {
+                    case CC::StdCall: return "x86_stdcallcc ";
+                    case CC::FastCall: return "x86_fastcallcc ";
+                    case CC::VectorCall: return "x86_vectorcallcc ";
+                    case CC::Win64: return "win64cc ";
+                    case CC::SysV: return "x86_64_sysvcc ";
+                    case CC::Cdecl:
+                    case CC::Default:
+                    default:
+                        return "";
+                }
+            }
 
             /// @brief 새 임시 SSA 이름을 생성한다.
             std::string next_tmp_() {
@@ -974,6 +990,7 @@ namespace parus::backend::aot {
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
                 info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_);
                 info.abi = target.abi;
+                info.c_callconv = target.c_callconv;
                 info.is_variadic = target.is_c_variadic;
                 info.fixed_param_count = target.c_fixed_param_count;
 
@@ -1422,6 +1439,50 @@ namespace parus::backend::aot {
             ) {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
+
+                if (x.c_bitfield_getter != kInvalidId &&
+                    static_cast<size_t>(x.c_bitfield_getter) < m_.funcs.size()) {
+                    const auto& getter = m_.funcs[x.c_bitfield_getter];
+                    const std::string sym = sanitize_symbol_(getter.name);
+                    const std::string cc = llvm_callconv_prefix_(getter.c_callconv);
+                    const std::string ret_ty = map_type_(types_, getter.ret_ty, &named_layouts_, &actor_types_);
+                    const std::string base_ptr = slot_ptr_ref_(os, x.base);
+
+                    if (is_value_read_(inst.result)) {
+                        const std::string want_ty = value_ty_(inst.result);
+                        if (ret_ty == "void") {
+                            os << "  call " << cc << "void @" << sym << "(ptr " << base_ptr << ")\n";
+                            if (is_int_ty_(want_ty)) {
+                                os << "  " << vref_(inst.result) << " = add " << want_ty << " 0, 0\n";
+                            } else if (is_float_ty_(want_ty)) {
+                                os << "  " << vref_(inst.result) << " = fadd " << want_ty << " " << zero_literal_(want_ty)
+                                   << ", " << zero_literal_(want_ty) << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                            }
+                        } else if (want_ty == ret_ty) {
+                            os << "  " << vref_(inst.result) << " = call " << cc << ret_ty
+                               << " @" << sym << "(ptr " << base_ptr << ")\n";
+                        } else {
+                            const std::string tmp = next_tmp_();
+                            os << "  " << tmp << " = call " << cc << ret_ty
+                               << " @" << sym << "(ptr " << base_ptr << ")\n";
+                            const std::string coerced = coerce_ref_(os, tmp, ret_ty, want_ty);
+                            os << "  " << vref_(inst.result) << " = " << copy_expr_(want_ty, coerced) << "\n";
+                        }
+                    } else {
+                        const std::string rty = value_ty_(inst.result);
+                        if (is_int_ty_(rty)) {
+                            os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
+                        } else if (is_float_ty_(rty)) {
+                            os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
+                               << ", " << zero_literal_(rty) << "\n";
+                        } else {
+                            os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                        }
+                    }
+                    return;
+                }
 
                 const auto base_ptr = slot_ptr_ref_(os, x.base);
                 const auto base_ty_id = field_base_type_id_(x.base);
@@ -1920,15 +1981,16 @@ namespace parus::backend::aot {
                                   arg_vals.size() >= static_cast<size_t>(direct->fixed_param_count)));
 
                             if (direct_arity_ok) {
+                                const std::string cc = llvm_callconv_prefix_(direct->c_callconv);
                                 if (direct->ret_ty == "void") {
-                                    os << "  call void @" << direct->symbol << "(";
+                                    os << "  call " << cc << "void @" << direct->symbol << "(";
                                     emit_arg_list(os);
                                     os << ")\n";
                                     emit_default_result();
                                 } else if (inst.result != kInvalidId) {
                                     const std::string want_ty = value_ty_(inst.result);
                                     if (want_ty == direct->ret_ty) {
-                                        os << "  " << vref_(inst.result) << " = call " << direct->ret_ty
+                                        os << "  " << vref_(inst.result) << " = call " << cc << direct->ret_ty
                                            << " @" << direct->symbol << "(";
                                         emit_arg_list(os);
                                         os << ")\n";
@@ -1936,7 +1998,7 @@ namespace parus::backend::aot {
                                         // 오버로드/직접 호출 해소가 기대 타입과 어긋나더라도
                                         // SSA 타입 일관성을 보존하도록 결과를 강제 변환한다.
                                         const std::string call_tmp = next_tmp_();
-                                        os << "  " << call_tmp << " = call " << direct->ret_ty
+                                        os << "  " << call_tmp << " = call " << cc << direct->ret_ty
                                            << " @" << direct->symbol << "(";
                                         emit_arg_list(os);
                                         os << ")\n";
@@ -1950,7 +2012,7 @@ namespace parus::backend::aot {
                                         }
                                     }
                                 } else {
-                                    os << "  call " << direct->ret_ty << " @" << direct->symbol << "(";
+                                    os << "  call " << cc << direct->ret_ty << " @" << direct->symbol << "(";
                                     emit_arg_list(os);
                                     os << ")\n";
                                 }
@@ -1958,21 +2020,23 @@ namespace parus::backend::aot {
                             }
 
                             std::string callee_ptr;
+                            std::string indirect_cc{};
                             if (direct.has_value()) {
                                 // direct 메타를 얻었지만 시그니처가 맞지 않아 indirect 경로로 내려가는 경우,
                                 // InstFuncRef 값이 소거되어도 동작하도록 심볼에서 즉시 ptr을 만든다.
                                 callee_ptr = next_tmp_();
                                 os << "  " << callee_ptr << " = bitcast ptr @" << direct->symbol << " to ptr\n";
+                                indirect_cc = llvm_callconv_prefix_(direct->c_callconv);
                             } else {
                                 callee_ptr = coerce_value_(os, x.callee, "ptr");
                             }
                             const std::string rty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
                             if (rty == "void") {
-                                os << "  call void " << callee_ptr << "(";
+                                os << "  call " << indirect_cc << "void " << callee_ptr << "(";
                                 emit_arg_list(os);
                                 os << ")\n";
                             } else {
-                                os << "  " << vref_(inst.result) << " = call " << rty << " " << callee_ptr << "(";
+                                os << "  " << vref_(inst.result) << " = call " << indirect_cc << rty << " " << callee_ptr << "(";
                                 emit_arg_list(os);
                                 os << ")\n";
                             }
@@ -2017,6 +2081,43 @@ namespace parus::backend::aot {
 
                             os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << ptr << "\n";
                         } else if constexpr (std::is_same_v<T, InstStore>) {
+                            if (x.slot != kInvalidId &&
+                                static_cast<size_t>(x.slot) < m_.values.size()) {
+                                const auto& slot_v = m_.values[x.slot];
+                                if (slot_v.def_a != kInvalidId &&
+                                    static_cast<size_t>(slot_v.def_a) < m_.insts.size()) {
+                                    const auto* fld = std::get_if<InstField>(&m_.insts[slot_v.def_a].data);
+                                    if (fld != nullptr &&
+                                        fld->c_bitfield_setter != kInvalidId &&
+                                        static_cast<size_t>(fld->c_bitfield_setter) < m_.funcs.size()) {
+                                        const auto& setter = m_.funcs[fld->c_bitfield_setter];
+                                        const std::string cc = llvm_callconv_prefix_(setter.c_callconv);
+                                        const std::string sym = sanitize_symbol_(setter.name);
+                                        const std::string base_ptr = slot_ptr_ref_(os, fld->base);
+
+                                        std::string arg_ty = value_ty_(x.value);
+                                        if (setter.entry != kInvalidId &&
+                                            static_cast<size_t>(setter.entry) < m_.blocks.size()) {
+                                            const auto& entry = m_.blocks[setter.entry];
+                                            if (entry.params.size() >= 2 &&
+                                                static_cast<size_t>(entry.params[1]) < value_types_.size()) {
+                                                arg_ty = value_types_[entry.params[1]];
+                                            }
+                                        }
+                                        const std::string arg_val = coerce_value_(os, x.value, arg_ty);
+                                        const std::string set_ret = map_type_(types_, setter.ret_ty, &named_layouts_, &actor_types_);
+                                        if (set_ret == "void") {
+                                            os << "  call " << cc << "void @" << sym
+                                               << "(ptr " << base_ptr << ", " << arg_ty << " " << arg_val << ")\n";
+                                        } else {
+                                            const std::string sink = next_tmp_();
+                                            os << "  " << sink << " = call " << cc << set_ret << " @" << sym
+                                               << "(ptr " << base_ptr << ", " << arg_ty << " " << arg_val << ")\n";
+                                        }
+                                        return;
+                                    }
+                                }
+                            }
                             const auto ptr = slot_ptr_ref_(os, x.slot);
 
                             const auto slot_tid = value_type_id_(x.slot);

@@ -107,7 +107,7 @@
 
     bool TypeChecker::parse_external_c_struct_payload_(
         std::string_view payload,
-        std::unordered_map<std::string, ty::TypeId>& out_fields
+        std::unordered_map<std::string, ExternalCFieldMeta>& out_fields
     ) const {
         out_fields.clear();
         if (!payload.starts_with("parus_c_import_struct|")) return false;
@@ -139,12 +139,61 @@
             if (colon != std::string_view::npos && colon > 0 && colon + 1 < one.size()) {
                 const std::string_view name = one.substr(0, colon);
                 std::string_view type_text = one.substr(colon + 1);
-                if (const size_t at = type_text.rfind('@'); at != std::string_view::npos && at > 0) {
+                std::string_view encoded_suffix{};
+                if (const size_t at = type_text.find('@'); at != std::string_view::npos && at > 0) {
+                    encoded_suffix = type_text.substr(at + 1);
                     type_text = type_text.substr(0, at);
                 }
                 ty::TypeId field_ty = ty::kInvalidType;
                 if (parse_cimport_type_repr_(type_text, field_ty) && field_ty != ty::kInvalidType) {
-                    out_fields.emplace(std::string(name), field_ty);
+                    ExternalCFieldMeta meta{};
+                    meta.type = field_ty;
+
+                    if (!encoded_suffix.empty()) {
+                        std::vector<std::string_view> parts{};
+                        parts.reserve(8);
+                        size_t sb = 0;
+                        while (true) {
+                            const size_t sep = encoded_suffix.find('@', sb);
+                            if (sep == std::string_view::npos) {
+                                parts.push_back(encoded_suffix.substr(sb));
+                                break;
+                            }
+                            parts.push_back(encoded_suffix.substr(sb, sep - sb));
+                            sb = sep + 1;
+                            if (parts.size() >= 8) break;
+                        }
+                        if (parts.size() >= 2) {
+                            meta.union_origin = (parts[1] == "1");
+                        }
+                        if (parts.size() >= 4) {
+                            uint32_t bit_off = 0;
+                            uint32_t bit_width = 0;
+                            try {
+                                bit_off = static_cast<uint32_t>(std::stoul(std::string(parts[2])));
+                                bit_width = static_cast<uint32_t>(std::stoul(std::string(parts[3])));
+                            } catch (...) {
+                                bit_off = 0;
+                                bit_width = 0;
+                            }
+                            if (bit_width > 0) {
+                                meta.is_bitfield = true;
+                                meta.bit_offset = bit_off;
+                                meta.bit_width = bit_width;
+                            }
+                        }
+                        if (parts.size() >= 5) {
+                            meta.bit_signed = (parts[4] == "1");
+                        }
+                        if (parts.size() >= 6 && parts[5] != "-" && !parts[5].empty()) {
+                            meta.getter_path.assign(parts[5]);
+                        }
+                        if (parts.size() >= 7 && parts[6] != "-" && !parts[6].empty()) {
+                            meta.setter_path.assign(parts[6]);
+                        }
+                    }
+
+                    out_fields.emplace(std::string(name), std::move(meta));
                 }
             }
             if (comma == std::string_view::npos) break;
@@ -202,8 +251,27 @@
             if (sym.kind != sema::SymbolKind::kType || !sym.is_external) continue;
             if (sym.declared_type == ty::kInvalidType) continue;
 
-            auto register_name_maps = [&](const std::unordered_map<std::string, ty::TypeId>& fmap,
-                                          std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>>& out_by_name) {
+            auto register_name_maps_union = [&](const std::unordered_map<std::string, ty::TypeId>& fmap,
+                                                std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>>& out_by_name) {
+                if (!sym.name.empty()) {
+                    out_by_name[sym.name] = fmap;
+                    const size_t last = sym.name.rfind("::");
+                    if (last != std::string::npos && last + 2 < sym.name.size()) {
+                        out_by_name[sym.name.substr(last + 2)] = fmap;
+                    }
+                }
+
+                const std::string decl_ty_name = types_.to_string(sym.declared_type);
+                if (!decl_ty_name.empty()) {
+                    out_by_name[decl_ty_name] = fmap;
+                    const size_t last = decl_ty_name.rfind("::");
+                    if (last != std::string::npos && last + 2 < decl_ty_name.size()) {
+                        out_by_name[decl_ty_name.substr(last + 2)] = fmap;
+                    }
+                }
+            };
+            auto register_name_maps_struct = [&](const std::unordered_map<std::string, ExternalCFieldMeta>& fmap,
+                                                 std::unordered_map<std::string, std::unordered_map<std::string, ExternalCFieldMeta>>& out_by_name) {
                 if (!sym.name.empty()) {
                     out_by_name[sym.name] = fmap;
                     const size_t last = sym.name.rfind("::");
@@ -227,16 +295,16 @@
                 external_c_union_fields_by_type_[sym.declared_type] = std::move(ufields);
                 const auto fit = external_c_union_fields_by_type_.find(sym.declared_type);
                 if (fit != external_c_union_fields_by_type_.end()) {
-                    register_name_maps(fit->second, external_c_union_fields_by_name_);
+                    register_name_maps_union(fit->second, external_c_union_fields_by_name_);
                 }
             }
 
-            std::unordered_map<std::string, ty::TypeId> sfields{};
+            std::unordered_map<std::string, ExternalCFieldMeta> sfields{};
             if (parse_external_c_struct_payload_(sym.external_payload, sfields)) {
                 external_c_struct_fields_by_type_[sym.declared_type] = std::move(sfields);
                 const auto fit = external_c_struct_fields_by_type_.find(sym.declared_type);
                 if (fit != external_c_struct_fields_by_type_.end()) {
-                    register_name_maps(fit->second, external_c_struct_fields_by_name_);
+                    register_name_maps_struct(fit->second, external_c_struct_fields_by_name_);
                 }
             }
         }
@@ -288,13 +356,25 @@
         ty::TypeId& out_field_type,
         bool* out_is_struct_owner
     ) {
+        ExternalCFieldMeta meta{};
+        const bool ok = resolve_external_c_struct_field_meta_(owner_type, field_name, meta, out_is_struct_owner);
+        out_field_type = ok ? meta.type : ty::kInvalidType;
+        return ok;
+    }
+
+    bool TypeChecker::resolve_external_c_struct_field_meta_(
+        ty::TypeId owner_type,
+        std::string_view field_name,
+        ExternalCFieldMeta& out_field,
+        bool* out_is_struct_owner
+    ) {
         collect_external_c_record_fields_();
-        out_field_type = ty::kInvalidType;
+        out_field = ExternalCFieldMeta{};
         if (out_is_struct_owner != nullptr) *out_is_struct_owner = false;
         if (owner_type == ty::kInvalidType) return false;
 
         auto it = external_c_struct_fields_by_type_.find(owner_type);
-        const std::unordered_map<std::string, ty::TypeId>* fmap = nullptr;
+        const std::unordered_map<std::string, ExternalCFieldMeta>* fmap = nullptr;
         if (it != external_c_struct_fields_by_type_.end()) {
             fmap = &it->second;
         } else {
@@ -318,8 +398,8 @@
 
         auto fit = fmap->find(std::string(field_name));
         if (fit == fmap->end()) return false;
-        out_field_type = fit->second;
-        return out_field_type != ty::kInvalidType;
+        out_field = fit->second;
+        return out_field.type != ty::kInvalidType;
     }
 
     ty::TypeId TypeChecker::check_expr_unary_(const ast::Expr& e) {
@@ -608,6 +688,14 @@
             current_expr_id_ < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_external_c_bitfield_getter_symbol_cache_.size()) {
+            expr_external_c_bitfield_getter_symbol_cache_[current_expr_id_] = sema::SymbolTable::kNoScope;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_external_c_bitfield_setter_symbol_cache_.size()) {
+            expr_external_c_bitfield_setter_symbol_cache_[current_expr_id_] = sema::SymbolTable::kNoScope;
+        }
 
         auto resolve_member_owner_type = [&](ast::ExprId recv_eid, Span member_span) -> ty::TypeId {
             if (recv_eid == ast::k_invalid_expr || (size_t)recv_eid >= ast_.exprs().size()) {
@@ -886,11 +974,11 @@
             const bool imported_union_field_found =
                 resolve_external_c_union_field_type_(
                     base_t, rhs.text, imported_union_field_ty, &imported_union_owner);
-            ty::TypeId imported_struct_field_ty = ty::kInvalidType;
+            ExternalCFieldMeta imported_struct_field{};
             bool imported_struct_owner = false;
             const bool imported_struct_field_found =
-                resolve_external_c_struct_field_type_(
-                    base_t, rhs.text, imported_struct_field_ty, &imported_struct_owner);
+                resolve_external_c_struct_field_meta_(
+                    base_t, rhs.text, imported_struct_field, &imported_struct_owner);
             if (imported_union_owner) {
                 if (!has_manual_permission_(ast::kManualPermGet) &&
                     !has_manual_permission_(ast::kManualPermSet)) {
@@ -908,13 +996,49 @@
                 return imported_union_field_ty;
             }
             if (imported_struct_owner) {
-                if (!imported_struct_field_found || imported_struct_field_ty == ty::kInvalidType) {
+                if (!imported_struct_field_found || imported_struct_field.type == ty::kInvalidType) {
                     diag_(diag::Code::kTypeErrorGeneric, rhs.span,
                           std::string("unknown struct field '") + std::string(rhs.text) + "'");
                     err_(rhs.span, "unknown imported C struct field");
                     return types_.error();
                 }
-                return imported_struct_field_ty;
+                if (imported_struct_field.union_origin &&
+                    !has_manual_permission_(ast::kManualPermGet) &&
+                    !has_manual_permission_(ast::kManualPermSet)) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                          "flattened union-origin field access is only allowed inside manual[get] or manual[set] block");
+                    err_(rhs.span, "flattened union-origin field access requires manual[get] or manual[set]");
+                    return types_.error();
+                }
+                if (imported_struct_field.is_bitfield) {
+                    uint32_t getter_sym = sema::SymbolTable::kNoScope;
+                    uint32_t setter_sym = sema::SymbolTable::kNoScope;
+                    if (!imported_struct_field.getter_path.empty()) {
+                        if (auto sid = lookup_symbol_(imported_struct_field.getter_path)) {
+                            getter_sym = *sid;
+                        }
+                    }
+                    if (!imported_struct_field.setter_path.empty()) {
+                        if (auto sid = lookup_symbol_(imported_struct_field.setter_path)) {
+                            setter_sym = *sid;
+                        }
+                    }
+                    if (getter_sym == sema::SymbolTable::kNoScope) {
+                        diag_(diag::Code::kTypeErrorGeneric, rhs.span,
+                              "missing imported C bitfield getter symbol");
+                        err_(rhs.span, "imported C bitfield getter symbol is not resolved");
+                        return types_.error();
+                    }
+                    if (current_expr_id_ != ast::k_invalid_expr &&
+                        current_expr_id_ < expr_external_c_bitfield_getter_symbol_cache_.size()) {
+                        expr_external_c_bitfield_getter_symbol_cache_[current_expr_id_] = getter_sym;
+                    }
+                    if (current_expr_id_ != ast::k_invalid_expr &&
+                        current_expr_id_ < expr_external_c_bitfield_setter_symbol_cache_.size()) {
+                        expr_external_c_bitfield_setter_symbol_cache_[current_expr_id_] = setter_sym;
+                    }
+                }
+                return imported_struct_field.type;
             }
 
             auto meta_it = field_abi_meta_by_type_.find(base_t);
@@ -1317,6 +1441,26 @@
                       std::string("unknown union field '") + std::string(rhs_member.text) + "'");
                 err_(rhs_member.span, "unknown imported C union field");
                 return false;
+            }
+            ExternalCFieldMeta struct_meta{};
+            bool is_struct_owner = false;
+            const bool has_struct_field =
+                resolve_external_c_struct_field_meta_(
+                    owner_t, rhs_member.text, struct_meta, &is_struct_owner);
+            if (is_struct_owner && has_struct_field && struct_meta.is_bitfield) {
+                if (struct_meta.union_origin &&
+                    !has_manual_permission_(ast::kManualPermSet)) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
+                          "writing flattened union-origin field is only allowed inside manual[set] block");
+                    err_(rhs_member.span, "flattened union-origin field write requires manual[set]");
+                    return false;
+                }
+                if (struct_meta.setter_path.empty() || !lookup_symbol_(struct_meta.setter_path).has_value()) {
+                    diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
+                          "missing imported C bitfield setter symbol");
+                    err_(rhs_member.span, "imported C bitfield setter symbol is not resolved");
+                    return false;
+                }
             }
             return true;
         };

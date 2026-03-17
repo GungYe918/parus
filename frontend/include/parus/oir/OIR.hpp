@@ -124,7 +124,12 @@ namespace parus::oir {
         ValueId hi = kInvalidId;
         bool hi_inclusive = false; // true for `..:`, false for `..`
     };
-    struct InstField      { ValueId base; std::string field; };
+    struct InstField      {
+        ValueId base;
+        std::string field;
+        FuncId c_bitfield_getter = kInvalidId;
+        FuncId c_bitfield_setter = kInvalidId;
+    };
     struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
 
     struct InstAllocaLocal{ TypeId slot_ty; };
@@ -212,6 +217,16 @@ namespace parus::oir {
         C,
     };
 
+    enum class CCallConv : uint8_t {
+        Default = 0,
+        Cdecl,
+        StdCall,
+        FastCall,
+        VectorCall,
+        Win64,
+        SysV,
+    };
+
     enum class FieldLayout : uint8_t {
         None = 0,
         C,
@@ -222,6 +237,7 @@ namespace parus::oir {
         // 디버깅/엔트리 판단용 원본 함수 이름(맹글링 전)
         std::string source_name;
         FunctionAbi abi = FunctionAbi::Parus;
+        CCallConv c_callconv = CCallConv::Default;
         bool is_extern = false;
         bool is_c_variadic = false;
         uint32_t c_fixed_param_count = 0;

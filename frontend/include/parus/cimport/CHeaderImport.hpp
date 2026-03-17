@@ -18,6 +18,16 @@ namespace parus::cimport {
         kFmtVList,
     };
 
+    enum class CCallConvKind : uint8_t {
+        kDefault = 0,
+        kCdecl,
+        kStdCall,
+        kFastCall,
+        kVectorCall,
+        kWin64,
+        kSysV,
+    };
+
     enum class ImportedConstKind : uint8_t {
         kNone = 0,
         kInt,
@@ -46,6 +56,7 @@ namespace parus::cimport {
         std::vector<std::string> c_arg_types{};
         bool is_c_abi = true;
         bool is_variadic = false;
+        CCallConvKind callconv = CCallConvKind::kDefault;
         CFormatKind format_kind = CFormatKind::kNone;
         int32_t fmt_param_index = -1;
         int32_t va_list_param_index = -1;
@@ -72,14 +83,25 @@ namespace parus::cimport {
     struct ImportedStructFieldDecl {
         std::string name{};
         std::string type_repr{};
+        std::string c_type{};
         uint32_t offset_bytes = 0;
+        bool from_flatten = false;
+        bool union_origin = false;
+        bool is_bitfield = false;
+        uint32_t bit_offset = 0;
+        uint32_t bit_width = 0;
+        bool bit_signed = false;
+        std::string bit_getter_name{};
+        std::string bit_setter_name{};
     };
 
     struct ImportedStructDecl {
         std::string name{};
+        std::string c_type_spelling{};
         std::vector<ImportedStructFieldDecl> fields{};
         uint32_t size_bytes = 0;
         uint32_t align_bytes = 0;
+        bool is_packed = false;
     };
 
     struct ImportedEnumConstantDecl {
@@ -112,6 +134,19 @@ namespace parus::cimport {
         std::string skip_reason{};
     };
 
+    struct ImportCoverageReport {
+        uint32_t total_function_decls = 0;
+        uint32_t imported_function_decls = 0;
+        uint32_t total_type_decls = 0;
+        uint32_t imported_type_decls = 0;
+        uint32_t total_const_decls = 0;
+        uint32_t imported_const_decls = 0;
+        uint32_t total_function_macros = 0;
+        uint32_t promoted_function_macros = 0;
+        uint32_t skipped_function_macros = 0;
+        std::vector<std::string> skipped_reasons{};
+    };
+
     struct HeaderImportResult {
         ImportErrorKind error = ImportErrorKind::kNone;
         std::string error_text{};
@@ -121,6 +156,7 @@ namespace parus::cimport {
         std::vector<ImportedStructDecl> structs{};
         std::vector<ImportedEnumDecl> enums{};
         std::vector<ImportedMacroDecl> macros{};
+        ImportCoverageReport coverage{};
     };
 
     HeaderImportResult import_c_header_functions(

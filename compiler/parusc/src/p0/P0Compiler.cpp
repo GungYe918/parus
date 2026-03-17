@@ -1382,7 +1382,14 @@ namespace parusc::p0 {
             std::string cast_prefix{};
         };
 
+        enum class CImportShimKind : uint8_t {
+            kMacroForward = 0,
+            kBitfieldGetter,
+            kBitfieldSetter,
+        };
+
         struct CImportShimTask {
+            CImportShimKind kind = CImportShimKind::kMacroForward;
             std::string header{};
             std::string alias{};
             std::string macro_name{};
@@ -1391,6 +1398,8 @@ namespace parusc::p0 {
             std::string c_return_type{};
             std::vector<CImportShimArg> params{};
             std::vector<CImportShimCallArg> call_args{};
+            std::string owner_c_type{};
+            std::string owner_field_name{};
             parus::Span span{};
         };
 
@@ -1445,6 +1454,19 @@ namespace parusc::p0 {
                         return "none";
                 }
             };
+            auto callconv_text = [](parus::cimport::CCallConvKind cc) -> std::string_view {
+                switch (cc) {
+                    case parus::cimport::CCallConvKind::kCdecl: return "cdecl";
+                    case parus::cimport::CCallConvKind::kStdCall: return "stdcall";
+                    case parus::cimport::CCallConvKind::kFastCall: return "fastcall";
+                    case parus::cimport::CCallConvKind::kVectorCall: return "vectorcall";
+                    case parus::cimport::CCallConvKind::kWin64: return "win64";
+                    case parus::cimport::CCallConvKind::kSysV: return "sysv";
+                    case parus::cimport::CCallConvKind::kDefault:
+                    default:
+                        return "default";
+                }
+            };
 
             std::string out = "parus_c_import|header=";
             out += std::string(header);
@@ -1458,6 +1480,8 @@ namespace parusc::p0 {
             out += std::to_string(fn.fmt_param_index);
             out += "|va_idx=";
             out += std::to_string(fn.va_list_param_index);
+            out += "|callconv=";
+            out += std::string(callconv_text(fn.callconv));
             if (!fn.variadic_sibling_name.empty()) {
                 out += "|sibling=";
                 out += std::string(alias);
@@ -1567,18 +1591,36 @@ namespace parusc::p0 {
             const std::unordered_set<std::string>& known_type_names,
             const parus::cimport::ImportedStructDecl& st
         ) {
+            auto dash_if_empty = [](std::string_view s) -> std::string {
+                if (s.empty()) return "-";
+                return std::string(s);
+            };
             std::string payload = "parus_c_import_struct|header=" + std::string(header);
             payload += "|size=" + std::to_string(st.size_bytes);
             payload += "|align=" + std::to_string(st.align_bytes);
+            payload += "|packed=" + std::string(st.is_packed ? "1" : "0");
             payload += "|fields=";
             for (size_t fi = 0; fi < st.fields.size(); ++fi) {
                 if (fi) payload += ",";
-                payload += st.fields[fi].name;
+                const auto& f = st.fields[fi];
+                payload += f.name;
                 payload += ":";
                 payload += rewrite_cimport_type_with_alias_(
-                    st.fields[fi].type_repr, alias, known_type_names);
+                    f.type_repr, alias, known_type_names);
                 payload += "@";
-                payload += std::to_string(st.fields[fi].offset_bytes);
+                payload += std::to_string(f.offset_bytes);
+                payload += "@";
+                payload += f.union_origin ? "1" : "0";
+                payload += "@";
+                payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
+                payload += "@";
+                payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
+                payload += "@";
+                payload += f.bit_signed ? "1" : "0";
+                payload += "@";
+                payload += dash_if_empty(f.bit_getter_name);
+                payload += "@";
+                payload += dash_if_empty(f.bit_setter_name);
             }
             return payload;
         }
@@ -1689,40 +1731,76 @@ namespace parusc::p0 {
             src += "\n";
 
             for (const auto& t : tasks) {
-                if (t.shim_symbol.empty() || t.callee_link_name.empty()) continue;
-                src += t.c_return_type.empty() ? "void" : t.c_return_type;
-                src += " ";
-                src += t.shim_symbol;
-                src += "(";
-                for (size_t i = 0; i < t.params.size(); ++i) {
-                    if (i) src += ", ";
-                    src += t.params[i].c_type.empty() ? "int" : t.params[i].c_type;
+                if (t.shim_symbol.empty()) continue;
+                if (t.kind == CImportShimKind::kMacroForward) {
+                    if (t.callee_link_name.empty()) continue;
+                    src += t.c_return_type.empty() ? "void" : t.c_return_type;
                     src += " ";
-                    src += t.params[i].name;
-                }
-                src += ") {\n";
-
-                const bool ret_void = (t.c_return_type == "void");
-                if (!ret_void) src += "  return ";
-                else src += "  ";
-                src += t.callee_link_name;
-                src += "(";
-                for (size_t ai = 0; ai < t.call_args.size(); ++ai) {
-                    if (ai) src += ", ";
-                    const auto& ca = t.call_args[ai];
-                    if (ca.param_index >= t.params.size()) {
-                        src += "0";
-                        continue;
-                    }
-                    if (!ca.cast_prefix.empty()) {
-                        src += ca.cast_prefix;
+                    src += t.shim_symbol;
+                    src += "(";
+                    for (size_t i = 0; i < t.params.size(); ++i) {
+                        if (i) src += ", ";
+                        src += t.params[i].c_type.empty() ? "int" : t.params[i].c_type;
                         src += " ";
+                        src += t.params[i].name;
                     }
-                    src += t.params[ca.param_index].name;
+                    src += ") {\n";
+
+                    const bool ret_void = (t.c_return_type == "void");
+                    if (!ret_void) src += "  return ";
+                    else src += "  ";
+                    src += t.callee_link_name;
+                    src += "(";
+                    for (size_t ai = 0; ai < t.call_args.size(); ++ai) {
+                        if (ai) src += ", ";
+                        const auto& ca = t.call_args[ai];
+                        if (ca.param_index >= t.params.size()) {
+                            src += "0";
+                            continue;
+                        }
+                        if (!ca.cast_prefix.empty()) {
+                            src += ca.cast_prefix;
+                            src += " ";
+                        }
+                        src += t.params[ca.param_index].name;
+                    }
+                    src += ");\n";
+                    if (ret_void) src += "  return;\n";
+                    src += "}\n\n";
+                    continue;
                 }
-                src += ");\n";
-                if (ret_void) src += "  return;\n";
-                src += "}\n\n";
+
+                if ((t.kind == CImportShimKind::kBitfieldGetter ||
+                     t.kind == CImportShimKind::kBitfieldSetter) &&
+                    !t.owner_c_type.empty() &&
+                    !t.owner_field_name.empty() &&
+                    !t.c_return_type.empty()) {
+                    src += t.c_return_type;
+                    src += " ";
+                    src += t.shim_symbol;
+                    src += "(";
+                    src += t.owner_c_type;
+                    src += "* __obj";
+                    if (t.kind == CImportShimKind::kBitfieldSetter) {
+                        src += ", ";
+                        src += t.c_return_type;
+                        src += " __v";
+                    }
+                    src += ") {\n";
+                    if (t.kind == CImportShimKind::kBitfieldGetter) {
+                        src += "  return __obj->";
+                        src += t.owner_field_name;
+                        src += ";\n";
+                    } else {
+                        src += "  __obj->";
+                        src += t.owner_field_name;
+                        src += " = __v;\n";
+                        src += "  return __obj->";
+                        src += t.owner_field_name;
+                        src += ";\n";
+                    }
+                    src += "}\n\n";
+                }
             }
 
             return src;
@@ -1856,6 +1934,8 @@ namespace parusc::p0 {
         std::vector<std::string> cimport_imacros_norm{};
 
         if (!c_header_imports.empty()) {
+            const bool cimport_report_enabled =
+                (std::getenv("PARUS_CIMPORT_REPORT") != nullptr);
             if (!current_dir.empty()) cimport_include_dirs_norm.push_back(current_dir);
             for (const auto& d : opt.cimport_include_dirs) {
                 if (!d.empty()) cimport_include_dirs_norm.push_back(parus::normalize_path(d));
@@ -1901,6 +1981,27 @@ namespace parusc::p0 {
                         bag.add(std::move(d));
                     }
                     continue;
+                }
+
+                if (cimport_report_enabled) {
+                    const auto& cov = imported.coverage;
+                    std::cerr
+                        << "[cimport-report] header=" << spec.header
+                        << " fn=" << cov.imported_function_decls << "/" << cov.total_function_decls
+                        << " type=" << cov.imported_type_decls << "/" << cov.total_type_decls
+                        << " const=" << cov.imported_const_decls << "/" << cov.total_const_decls
+                        << " fn_macro=" << cov.promoted_function_macros << "/" << cov.total_function_macros
+                        << " skipped_fn_macro=" << cov.skipped_function_macros
+                        << "\n";
+                    constexpr size_t kMaxReasons = 8;
+                    const size_t reason_n = std::min(cov.skipped_reasons.size(), kMaxReasons);
+                    for (size_t i = 0; i < reason_n; ++i) {
+                        std::cerr << "  - " << cov.skipped_reasons[i] << "\n";
+                    }
+                    if (cov.skipped_reasons.size() > kMaxReasons) {
+                        std::cerr << "  - ... (" << (cov.skipped_reasons.size() - kMaxReasons)
+                                  << " more skipped reasons)\n";
+                    }
                 }
                 if (imported.functions.empty() &&
                     imported.unions.empty() &&
@@ -1985,19 +2086,126 @@ namespace parusc::p0 {
                     cimport_surface.push_back(std::move(e));
                 }
 
-                for (const auto& st : imported.structs) {
-                    if (st.name.empty()) continue;
-                    const std::string path = spec.alias + "::" + st.name;
-                    if (!cimport_seen.insert("type|" + path).second) continue;
+                for (const auto& st_src : imported.structs) {
+                    if (st_src.name.empty()) continue;
+                    auto st = st_src;
+                    const std::string type_path = spec.alias + "::" + st.name;
+
+                    for (auto& fld : st.fields) {
+                        if (!fld.is_bitfield) continue;
+                        if (fld.name.empty() || fld.type_repr.empty() || fld.c_type.empty() ||
+                            st.c_type_spelling.empty()) {
+                            parus::diag::Diagnostic d(
+                                parus::diag::Severity::kWarning,
+                                parus::diag::Code::kCImportFnMacroSkipped,
+                                spec.span
+                            );
+                            d.add_arg("bitfield shim skipped for '" + st.name + "." + fld.name +
+                                      "': incomplete C type metadata");
+                            bag.add(std::move(d));
+                            continue;
+                        }
+
+                        const std::string getter_name = "__parus_cimport_bitget_" +
+                            sanitize_c_ident_(spec.alias) + "_" +
+                            sanitize_c_ident_(st.name) + "_" +
+                            sanitize_c_ident_(fld.name);
+                        const std::string setter_name = "__parus_cimport_bitset_" +
+                            sanitize_c_ident_(spec.alias) + "_" +
+                            sanitize_c_ident_(st.name) + "_" +
+                            sanitize_c_ident_(fld.name);
+                        fld.bit_getter_name = spec.alias + "::" + getter_name;
+                        fld.bit_setter_name = spec.alias + "::" + setter_name;
+
+                        CImportShimTask gtask{};
+                        gtask.kind = CImportShimKind::kBitfieldGetter;
+                        gtask.header = spec.header;
+                        gtask.alias = spec.alias;
+                        gtask.shim_symbol = getter_name;
+                        gtask.owner_c_type = st.c_type_spelling;
+                        gtask.owner_field_name = fld.name;
+                        gtask.c_return_type = fld.c_type;
+                        gtask.span = spec.span;
+                        cimport_shim_tasks.push_back(std::move(gtask));
+
+                        CImportShimTask stask{};
+                        stask.kind = CImportShimKind::kBitfieldSetter;
+                        stask.header = spec.header;
+                        stask.alias = spec.alias;
+                        stask.shim_symbol = setter_name;
+                        stask.owner_c_type = st.c_type_spelling;
+                        stask.owner_field_name = fld.name;
+                        stask.c_return_type = fld.c_type;
+                        stask.span = spec.span;
+                        cimport_shim_tasks.push_back(std::move(stask));
+
+                        parus::cimport::ImportedFunctionDecl getter_fn{};
+                        getter_fn.name = getter_name;
+                        getter_fn.link_name = getter_name;
+                        getter_fn.type_repr = "def(ptr mut " + type_path + ") -> " + fld.type_repr;
+                        getter_fn.c_return_type = fld.c_type;
+                        getter_fn.c_arg_types = {st.c_type_spelling + "*"};
+                        getter_fn.is_c_abi = true;
+                        getter_fn.is_variadic = false;
+                        getter_fn.callconv = parus::cimport::CCallConvKind::kCdecl;
+
+                        ExportSurfaceEntry ge{};
+                        ge.kind = parus::sema::SymbolKind::kFn;
+                        ge.kind_text = "fn";
+                        ge.path = spec.alias + "::" + getter_name;
+                        ge.link_name = getter_name;
+                        ge.module_head.clear();
+                        ge.decl_dir = current_dir;
+                        ge.type_repr = getter_fn.type_repr;
+                        ge.inst_payload = make_c_import_payload_(spec.header, spec.alias, getter_fn);
+                        ge.decl_file = current_norm;
+                        ge.decl_line = 1;
+                        ge.decl_col = 1;
+                        ge.decl_bundle = "__cimport__";
+                        ge.is_export = true;
+                        if (cimport_seen.insert("fn|" + ge.path).second) {
+                            cimport_surface.push_back(std::move(ge));
+                        }
+
+                        parus::cimport::ImportedFunctionDecl setter_fn{};
+                        setter_fn.name = setter_name;
+                        setter_fn.link_name = setter_name;
+                        setter_fn.type_repr = "def(ptr mut " + type_path + ", " + fld.type_repr + ") -> " + fld.type_repr;
+                        setter_fn.c_return_type = fld.c_type;
+                        setter_fn.c_arg_types = {st.c_type_spelling + "*", fld.c_type};
+                        setter_fn.is_c_abi = true;
+                        setter_fn.is_variadic = false;
+                        setter_fn.callconv = parus::cimport::CCallConvKind::kCdecl;
+
+                        ExportSurfaceEntry se{};
+                        se.kind = parus::sema::SymbolKind::kFn;
+                        se.kind_text = "fn";
+                        se.path = spec.alias + "::" + setter_name;
+                        se.link_name = setter_name;
+                        se.module_head.clear();
+                        se.decl_dir = current_dir;
+                        se.type_repr = setter_fn.type_repr;
+                        se.inst_payload = make_c_import_payload_(spec.header, spec.alias, setter_fn);
+                        se.decl_file = current_norm;
+                        se.decl_line = 1;
+                        se.decl_col = 1;
+                        se.decl_bundle = "__cimport__";
+                        se.is_export = true;
+                        if (cimport_seen.insert("fn|" + se.path).second) {
+                            cimport_surface.push_back(std::move(se));
+                        }
+                    }
+
+                    if (!cimport_seen.insert("type|" + type_path).second) continue;
 
                     ExportSurfaceEntry e{};
                     e.kind = parus::sema::SymbolKind::kType;
                     e.kind_text = "type";
-                    e.path = path;
+                    e.path = type_path;
                     e.link_name.clear();
                     e.module_head.clear();
                     e.decl_dir = current_dir;
-                    e.type_repr = path;
+                    e.type_repr = type_path;
                     e.inst_payload = make_c_import_struct_payload_(
                         spec.header, spec.alias, known_type_names, st);
                     e.decl_file = current_norm;
@@ -2181,6 +2389,7 @@ namespace parusc::p0 {
                         }
 
                         CImportShimTask task{};
+                        task.kind = CImportShimKind::kMacroForward;
                         task.header = spec.header;
                         task.alias = spec.alias;
                         task.macro_name = mc.name;

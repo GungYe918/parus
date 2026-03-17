@@ -2132,6 +2132,117 @@ bool test_c_header_import_function_like_macro_shim_ir_only_rejected() {
     return true;
 }
 
+bool test_c_header_import_bitfield_read_write_shim() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-bitfield-shim";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "B.h";
+    const auto main_pr = temp_root / "main.pr";
+    const auto out_o = temp_root / "main.o";
+    const std::string header_src =
+        "#ifndef PARUS_B_H\n"
+        "#define PARUS_B_H\n"
+        "struct Bits {\n"
+        "  unsigned a : 3;\n"
+        "  unsigned b : 5;\n"
+        "};\n"
+        "struct Bits make_bits(void);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"B.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut s = c::make_bits();\n"
+        "  s.a = 5u32;\n"
+        "  set x = s.a;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write bitfield shim cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" --emit-object -o \"" + out_o.string() + "\"");
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "bitfield read/write cimport should compile in object mode\n" << out;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto shim_o = std::filesystem::path(out_o.string() + ".cimport_shim.o");
+    if (!std::filesystem::exists(shim_o)) {
+        std::cerr << "bitfield cimport must emit shim object sidecar\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    std::filesystem::remove_all(temp_root, ec);
+    return true;
+}
+
+bool test_c_header_import_flatten_collision_hard_error() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-flatten-collision";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "C.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_COLLIDE_H\n"
+        "#define PARUS_COLLIDE_H\n"
+        "struct Collide {\n"
+        "  struct { int x; };\n"
+        "  struct { int x; };\n"
+        "};\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"C.h\" as c;\n"
+        "def main() -> i32 { return 0i32; }\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write flatten collision cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "anonymous flatten collision must fail c-import\n" << out;
+        return false;
+    }
+    if (!contains(out, "anonymous field flatten collision") &&
+        !contains(out, "redeclares 'x'")) {
+        std::cerr << "flatten collision import must fail with collision-class diagnostic\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_actor_rejected_in_no_std_profile() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -2399,15 +2510,17 @@ int main() {
     const bool ok35 = test_c_header_import_function_like_macro_shim_link_success();
     const bool ok36 = test_c_header_import_function_like_macro_skip_warning();
     const bool ok37 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
-    const bool ok38 = test_actor_rejected_in_no_std_profile();
-    const bool ok39 = test_actor_allowed_in_freestanding_profile();
-    const bool ok40 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok41 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok38 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok39 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok40 = test_actor_rejected_in_no_std_profile();
+    const bool ok41 = test_actor_allowed_in_freestanding_profile();
+    const bool ok42 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok43 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
-        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41) {
+        !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43) {
         return 1;
     }
 

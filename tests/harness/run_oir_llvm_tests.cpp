@@ -281,6 +281,50 @@ namespace {
         return ok;
     }
 
+    /// @brief OIR function의 callconv 메타가 LLVM extern decl/call 텍스트에 반영되는지 검사한다.
+    static bool test_c_abi_callconv_metadata_lowering_() {
+        const std::string src = R"(
+            extern "C" def c_fn(x: i32) -> i32;
+
+            def main() -> i32 {
+                return c_fn(7i32);
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "C ABI callconv lowering source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        bool patched = false;
+        for (auto& f : p->oir.mod.funcs) {
+            if (f.source_name == "c_fn" || f.name == "c_fn") {
+                f.c_callconv = parus::oir::CCallConv::SysV;
+                patched = true;
+                break;
+            }
+        }
+        ok &= require_(patched, "must locate extern C function symbol in OIR to patch callconv");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "LLVM text lowering for callconv metadata case must succeed");
+        ok &= require_(lowered.llvm_ir.find("declare x86_64_sysvcc i32 @c_fn(i32)") != std::string::npos,
+                       "extern C decl must include x86_64_sysvcc when OIR callconv is SysV");
+        const bool callconv_direct =
+            lowered.llvm_ir.find("call x86_64_sysvcc i32 @c_fn(i32") != std::string::npos;
+        const bool callconv_indirect =
+            lowered.llvm_ir.find("call x86_64_sysvcc i32 %") != std::string::npos;
+        ok &= require_(callconv_direct || callconv_indirect,
+                       "call site must preserve x86_64_sysvcc in direct or indirect form");
+        return ok;
+    }
+
     /// @brief text/문자열 리터럴이 OIR->LLVM에서 rodata 상수 + `{ptr,len}` ABI로 내려가는지 검사한다.
     static bool test_text_literal_rodata_and_c_abi_span_signature() {
         const std::string src = R"(
@@ -2184,6 +2228,7 @@ int main() {
         {"slice_range_view_lowering_patterns", test_slice_range_view_lowering_patterns_},
         {"c_abi_field_layout_and_global_symbol", test_c_abi_field_layout_and_global_symbol},
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
+        {"c_abi_callconv_metadata_lowering", test_c_abi_callconv_metadata_lowering_},
         {"text_literal_rodata_and_c_abi_span_signature", test_text_literal_rodata_and_c_abi_span_signature},
         {"fstring_runtime_text_passthrough_llvm_patterns", test_fstring_runtime_text_passthrough_llvm_patterns},
         {"pipe_forward_chain_llvm_call_patterns", test_pipe_forward_chain_llvm_call_patterns},

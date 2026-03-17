@@ -10,6 +10,7 @@ namespace parus::sir::detail {
         struct ParsedCImportPayload {
             bool is_c_import = false;
             bool is_variadic = false;
+            CCallConv callconv = CCallConv::kDefault;
         };
 
         ParsedCImportPayload parse_cimport_payload_(std::string_view payload) {
@@ -28,6 +29,14 @@ namespace parus::sir::detail {
                     const std::string_view val = part.substr(eq + 1);
                     if (key == "variadic") {
                         out.is_variadic = (val == "1" || val == "true");
+                    } else if (key == "callconv") {
+                        if (val == "cdecl") out.callconv = CCallConv::kCdecl;
+                        else if (val == "stdcall") out.callconv = CCallConv::kStdCall;
+                        else if (val == "fastcall") out.callconv = CCallConv::kFastCall;
+                        else if (val == "vectorcall") out.callconv = CCallConv::kVectorCall;
+                        else if (val == "win64") out.callconv = CCallConv::kWin64;
+                        else if (val == "sysv") out.callconv = CCallConv::kSysV;
+                        else out.callconv = CCallConv::kDefault;
                     }
                 }
                 if (next == payload.size()) break;
@@ -105,6 +114,7 @@ namespace parus::sir::detail {
         f.is_extern = s.is_extern;
         f.fn_mode = lower_fn_mode(s.fn_mode);
         f.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
+        f.c_callconv = CCallConv::kDefault;
         f.is_c_variadic = false;
         f.c_fixed_param_count = s.param_count;
 
@@ -773,6 +783,7 @@ namespace parus::sir {
             f.is_extern = true;
             f.fn_mode = FnMode::kNone;
             f.abi = FuncAbi::kParus;
+            f.c_callconv = CCallConv::kDefault;
             f.is_c_variadic = false;
             f.c_fixed_param_count = 0;
             f.is_pure = false;
@@ -795,6 +806,7 @@ namespace parus::sir {
             const auto parsed = parse_cimport_payload_(ss.external_payload);
             if (parsed.is_c_import) {
                 f.abi = FuncAbi::kC;
+                f.c_callconv = parsed.callconv;
                 f.is_c_variadic = parsed.is_variadic;
             }
             f.param_begin = static_cast<uint32_t>(m.params.size());

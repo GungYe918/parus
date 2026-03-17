@@ -181,7 +181,13 @@ export def add(a: i32, b: i32) -> i32 {
 6-e. direct identity forwarding은 `DirectAlias`로 승격하고 shim 없이 기존 C 함수 심볼을 재사용한다.
 6-f. 인자 재배열/단순 cast forwarding은 자동 생성 C shim(`ShimForward`) 경유로 승격한다.
 6-g. `##`, `#`, statement macro(`({ ... })`), compiler extension 의존 form, variadic function-like macro는 승격 대상에서 제외하며 경고 후 건너뛴다.
-7. 익명 선언(anonymous record/enum) v2.2 규칙:
+7. 익명 선언/bitfield v2.3 규칙:
 7-a. 이름 없는 `struct/union/enum`은 synthetic internal 이름(`__anon_*`)으로 수집한다.
 7-b. typedef가 익명 선언을 가리키는 경우 동일 선언 identity를 공유하도록 연결한다.
-7-c. bitfield는 v2.2 범위에서 계속 미지원이며 import 대상에서 제외한다.
+7-c. bitfield 필드는 import 메타에 포함되며 read/write 모두 지원한다.
+7-d. bitfield 접근 lowering은 백엔드 재해석 대신 자동 생성 C shim accessor(getter/setter) 경로를 사용한다.
+7-e. anonymous flatten으로 유입된 union-origin field는 기존 union 정책과 동일하게 `manual[...]` gate를 적용한다.
+7-f. anonymous flatten 결과 필드명이 충돌하면 c-import를 hard error로 중단한다.
+8. ABI 속성 반영(v2.3):
+8-a. 함수 calling convention 메타를 importer payload에 보존하고 extern decl/call lowering에 실제 반영한다.
+8-b. record layout은 effective `size/align` 기준으로 유지하며 packed/aligned 속성은 payload 메타로 보존한다.
