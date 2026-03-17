@@ -3,5 +3,5 @@ extern "C" def c_expect_counter(v: i32) -> i32;
 
 def main() -> i32 {
     g_counter = 41i32;
-    return c_expect_counter(v: 41i32);
+    return c_expect_counter(41i32);
 }

@@ -1,6 +1,7 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/CImportPayload.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
@@ -1947,210 +1948,6 @@ namespace {
         }
     }
 
-    bool is_ident_start_(char ch) {
-        return (ch == '_') ||
-               (ch >= 'a' && ch <= 'z') ||
-               (ch >= 'A' && ch <= 'Z');
-    }
-
-    bool is_ident_continue_(char ch) {
-        return is_ident_start_(ch) || (ch >= '0' && ch <= '9');
-    }
-
-    bool is_builtin_type_token_(std::string_view tok) {
-        static const std::unordered_set<std::string> kBuiltins = {
-            "void", "bool",
-            "char",
-            "i8", "i16", "i32", "i64", "i128",
-            "u8", "u16", "u32", "u64", "u128",
-            "isize", "usize",
-            "f32", "f64", "f128",
-            "text",
-            "null",
-            "ptr",
-            "mut",
-            "def",
-        };
-        return kBuiltins.find(std::string(tok)) != kBuiltins.end();
-    }
-
-    std::string rewrite_cimport_type_with_alias_(
-        std::string_view type_repr,
-        std::string_view alias,
-        const std::unordered_set<std::string>& known_type_names
-    ) {
-        if (type_repr.empty() || alias.empty() || known_type_names.empty()) {
-            return std::string(type_repr);
-        }
-
-        std::string out{};
-        out.reserve(type_repr.size() + 16u);
-        size_t i = 0;
-        while (i < type_repr.size()) {
-            const char ch = type_repr[i];
-            if (!is_ident_start_(ch)) {
-                out.push_back(ch);
-                ++i;
-                continue;
-            }
-            const size_t begin_tok = i;
-            ++i;
-            while (i < type_repr.size() && is_ident_continue_(type_repr[i])) ++i;
-            const std::string_view tok = type_repr.substr(begin_tok, i - begin_tok);
-
-            const bool has_scope_prefix =
-                begin_tok >= 2 && type_repr[begin_tok - 1] == ':' && type_repr[begin_tok - 2] == ':';
-            const bool has_scope_suffix =
-                i + 1 < type_repr.size() && type_repr[i] == ':' && type_repr[i + 1] == ':';
-
-            if (!has_scope_prefix &&
-                !has_scope_suffix &&
-                !is_builtin_type_token_(tok) &&
-                known_type_names.find(std::string(tok)) != known_type_names.end()) {
-                out += std::string(alias);
-                out += "::";
-                out += std::string(tok);
-            } else {
-                out += std::string(tok);
-            }
-        }
-        return out;
-    }
-
-    std::string make_c_import_payload_(std::string_view header,
-                                       std::string_view alias,
-                                       const parus::cimport::ImportedFunctionDecl& fn) {
-        auto format_kind_text = [](parus::cimport::CFormatKind k) -> std::string_view {
-            switch (k) {
-                case parus::cimport::CFormatKind::kFmtVarargs: return "fmt_varargs";
-                case parus::cimport::CFormatKind::kFmtVList: return "fmt_vlist";
-                case parus::cimport::CFormatKind::kNone:
-                default:
-                    return "none";
-            }
-        };
-        auto callconv_text = [](parus::cimport::CCallConvKind cc) -> std::string_view {
-            switch (cc) {
-                case parus::cimport::CCallConvKind::kCdecl: return "cdecl";
-                case parus::cimport::CCallConvKind::kStdCall: return "stdcall";
-                case parus::cimport::CCallConvKind::kFastCall: return "fastcall";
-                case parus::cimport::CCallConvKind::kVectorCall: return "vectorcall";
-                case parus::cimport::CCallConvKind::kWin64: return "win64";
-                case parus::cimport::CCallConvKind::kSysV: return "sysv";
-                case parus::cimport::CCallConvKind::kDefault:
-                default:
-                    return "default";
-            }
-        };
-
-        std::string out = "parus_c_import|header=";
-        out += std::string(header);
-        out += "|is_c_abi=";
-        out += fn.is_c_abi ? "1" : "0";
-        out += "|variadic=";
-        out += fn.is_variadic ? "1" : "0";
-        out += "|format=";
-        out += std::string(format_kind_text(fn.format_kind));
-        out += "|fmt_idx=";
-        out += std::to_string(fn.fmt_param_index);
-        out += "|va_idx=";
-        out += std::to_string(fn.va_list_param_index);
-        out += "|callconv=";
-        out += std::string(callconv_text(fn.callconv));
-        if (!fn.variadic_sibling_name.empty()) {
-            out += "|sibling=";
-            out += std::string(alias);
-            out += "::";
-            out += fn.variadic_sibling_name;
-        }
-        return out;
-    }
-
-    std::string make_c_import_union_payload_(
-        std::string_view header,
-        std::string_view alias,
-        const std::unordered_set<std::string>& known_type_names,
-        const parus::cimport::ImportedUnionDecl& un
-    ) {
-        std::string payload = "parus_c_import_union|header=" + std::string(header);
-        payload += "|size=" + std::to_string(un.size_bytes);
-        payload += "|align=" + std::to_string(un.align_bytes);
-        payload += "|fields=";
-        for (size_t fi = 0; fi < un.fields.size(); ++fi) {
-            if (fi) payload += ",";
-            payload += un.fields[fi].name;
-            payload += ":";
-            payload += rewrite_cimport_type_with_alias_(
-                un.fields[fi].type_repr, alias, known_type_names);
-        }
-        return payload;
-    }
-
-    std::string make_c_import_struct_payload_(
-        std::string_view header,
-        std::string_view alias,
-        const std::unordered_set<std::string>& known_type_names,
-        const parus::cimport::ImportedStructDecl& st
-    ) {
-        auto dash_if_empty = [](std::string_view s) -> std::string {
-            if (s.empty()) return "-";
-            return std::string(s);
-        };
-        std::string payload = "parus_c_import_struct|header=" + std::string(header);
-        payload += "|size=" + std::to_string(st.size_bytes);
-        payload += "|align=" + std::to_string(st.align_bytes);
-        payload += "|packed=" + std::string(st.is_packed ? "1" : "0");
-        payload += "|fields=";
-        for (size_t fi = 0; fi < st.fields.size(); ++fi) {
-            if (fi) payload += ",";
-            const auto& f = st.fields[fi];
-            payload += f.name;
-            payload += ":";
-            payload += rewrite_cimport_type_with_alias_(
-                f.type_repr, alias, known_type_names);
-            payload += "@";
-            payload += std::to_string(f.offset_bytes);
-            payload += "@";
-            payload += f.union_origin ? "1" : "0";
-            payload += "@";
-            payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
-            payload += "@";
-            payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
-            payload += "@";
-            payload += f.bit_signed ? "1" : "0";
-            payload += "@";
-            payload += dash_if_empty(f.bit_getter_name);
-            payload += "@";
-            payload += dash_if_empty(f.bit_setter_name);
-        }
-        return payload;
-    }
-
-    std::string make_c_import_const_payload_(std::string_view kind, std::string_view text) {
-        std::string payload = "parus_c_import_const|kind=";
-        payload += std::string(kind);
-        payload += "|text=";
-        payload += std::string(text);
-        return payload;
-    }
-
-    std::string make_c_import_typedef_payload_(
-        std::string_view header,
-        std::string_view alias,
-        const std::unordered_set<std::string>& known_type_names,
-        const parus::cimport::ImportedTypedefDecl& td
-    ) {
-        std::string payload = "parus_c_import_typedef|header=" + std::string(header);
-        payload += "|transparent=";
-        payload += (td.is_transparent && !td.transparent_type_repr.empty()) ? "1" : "0";
-        if (td.is_transparent && !td.transparent_type_repr.empty()) {
-            payload += "|target=";
-            payload += rewrite_cimport_type_with_alias_(
-                td.transparent_type_repr, alias, known_type_names);
-        }
-        return payload;
-    }
-
     bool is_under_root_(const std::filesystem::path& path, const std::filesystem::path& root) {
         const auto p = normalize_host_path_(path.string());
         const auto r = normalize_host_path_(root.string());
@@ -2894,10 +2691,11 @@ namespace {
                         std::vector<std::string> cimport_undefines{};
                         std::vector<std::string> cimport_forced_includes{};
                         std::vector<std::string> cimport_imacros{};
-                        if (!current_dir.empty()) cimport_include_dirs.push_back(current_dir);
+                        if (!current_dir.empty()) cimport_include_dirs.push_back(parus::normalize_path(current_dir));
                         for (const auto& d : cimport_cfg.include_dirs) {
                             if (!d.empty()) cimport_include_dirs.push_back(parus::normalize_path(d));
                         }
+                        parus::cimport::append_unique_normalized_paths(cimport_include_dirs, {});
 #if PARUSD_ENABLE_LEI
                         if (lint_ctx_for_doc.has_value()) {
                             parus::cimport::append_unique_normalized_paths(
@@ -2929,9 +2727,11 @@ namespace {
                         for (const auto& d : cimport_cfg.forced_includes) {
                             if (!d.empty()) cimport_forced_includes.push_back(parus::normalize_path(d));
                         }
+                        parus::cimport::append_unique_normalized_paths(cimport_forced_includes, {});
                         for (const auto& d : cimport_cfg.imacros) {
                             if (!d.empty()) cimport_imacros.push_back(parus::normalize_path(d));
                         }
+                        parus::cimport::append_unique_normalized_paths(cimport_imacros, {});
 
                         std::string cache_key = normalized_current;
                         cache_key += "|hdr=";
@@ -3042,6 +2842,36 @@ namespace {
                                 continue;
                             }
 
+                            if (imported.coverage.skipped_function_macros > 0) {
+                                std::string msg = "some function-like C macros were skipped: ";
+                                constexpr size_t kPreview = 3;
+                                size_t printed = 0;
+                                for (size_t i = 0;
+                                     i < imported.coverage.skipped_reasons.size() && printed < kPreview;
+                                     ++i, ++printed) {
+                                    if (printed) msg += "; ";
+                                    msg += imported.coverage.skipped_reasons[i];
+                                }
+                                if (printed == 0) {
+                                    for (size_t i = 0;
+                                         i < imported.coverage.skipped_reason_codes.size() && printed < kPreview;
+                                         ++i, ++printed) {
+                                        if (printed) msg += "; ";
+                                        msg += imported.coverage.skipped_reason_codes[i];
+                                    }
+                                }
+                                if (imported.coverage.skipped_function_macros > printed) {
+                                    msg += "; ...";
+                                }
+                                parus::diag::Diagnostic d(
+                                    parus::diag::Severity::kWarning,
+                                    parus::diag::Code::kCImportFnMacroSkipped,
+                                    spec.span
+                                );
+                                d.add_arg(msg);
+                                bag.add(std::move(d));
+                            }
+
                             std::unordered_set<std::string> known_type_names{};
                             for (const auto& un : imported.unions) {
                                 if (!un.name.empty()) known_type_names.insert(un.name);
@@ -3065,9 +2895,9 @@ namespace {
                                 add_external(
                                     parus::sema::SymbolKind::kFn,
                                     path,
-                                    rewrite_cimport_type_with_alias_(fn.type_repr, spec.alias, known_type_names),
+                                    parus::cimport::rewrite_cimport_type_with_alias(fn.type_repr, spec.alias, known_type_names),
                                     fn.link_name,
-                                    make_c_import_payload_(spec.header, spec.alias, fn)
+                                    parus::cimport::make_c_import_payload(spec.header, spec.alias, fn)
                                 );
                                 add_decl_loc(path, fn.decl_file, fn.decl_line, fn.decl_col);
                             }
@@ -3080,7 +2910,7 @@ namespace {
                                     type_path,
                                     type_path,
                                     {},
-                                    make_c_import_union_payload_(spec.header, spec.alias, known_type_names, un)
+                                    parus::cimport::make_c_import_union_payload(spec.header, spec.alias, known_type_names, un)
                                 );
                                 add_decl_loc(type_path, un.decl_file, un.decl_line, un.decl_col);
                             }
@@ -3093,7 +2923,7 @@ namespace {
                                     type_path,
                                     type_path,
                                     {},
-                                    make_c_import_struct_payload_(spec.header, spec.alias, known_type_names, st)
+                                    parus::cimport::make_c_import_struct_payload(spec.header, spec.alias, known_type_names, st)
                                 );
                                 add_decl_loc(type_path, st.decl_file, st.decl_line, st.decl_col);
                             }
@@ -3104,9 +2934,9 @@ namespace {
                                 add_external(
                                     parus::sema::SymbolKind::kType,
                                     type_path,
-                                    rewrite_cimport_type_with_alias_(td.type_repr, spec.alias, known_type_names),
+                                    parus::cimport::rewrite_cimport_type_with_alias(td.type_repr, spec.alias, known_type_names),
                                     {},
-                                    make_c_import_typedef_payload_(spec.header, spec.alias, known_type_names, td)
+                                    parus::cimport::make_c_import_typedef_payload(spec.header, spec.alias, known_type_names, td)
                                 );
                                 add_decl_loc(type_path, td.decl_file, td.decl_line, td.decl_col);
                             }
@@ -3117,7 +2947,7 @@ namespace {
                                 add_external(parus::sema::SymbolKind::kType, enum_path, enum_path, {}, {});
                                 add_decl_loc(enum_path, en.decl_file, en.decl_line, en.decl_col);
 
-                                const std::string const_ty = rewrite_cimport_type_with_alias_(
+                                const std::string const_ty = parus::cimport::rewrite_cimport_type_with_alias(
                                     en.underlying_type_repr.empty()
                                         ? std::string_view("i32")
                                         : std::string_view(en.underlying_type_repr),
@@ -3132,7 +2962,7 @@ namespace {
                                         cpath,
                                         const_ty,
                                         {},
-                                        make_c_import_const_payload_("int", cst.value_text)
+                                        parus::cimport::make_c_import_const_payload("int", cst.value_text)
                                     );
                                     add_decl_loc(cpath, cst.decl_file, cst.decl_line, cst.decl_col);
                                 }
@@ -3149,21 +2979,27 @@ namespace {
                                             add_external(
                                                 parus::sema::SymbolKind::kFn,
                                                 mpath,
-                                                rewrite_cimport_type_with_alias_(callee->type_repr, spec.alias, known_type_names),
+                                                parus::cimport::rewrite_cimport_type_with_alias(callee->type_repr, spec.alias, known_type_names),
                                                 callee->link_name,
-                                                make_c_import_payload_(spec.header, spec.alias, *callee)
+                                                parus::cimport::make_c_import_payload(spec.header, spec.alias, *callee)
                                             );
                                             add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
                                         }
                                     } else if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kShimForward &&
                                                !mc.promote_type_repr.empty()) {
                                         const std::string mpath = spec.alias + "::" + mc.name;
+                                        parus::cimport::ImportedFunctionDecl shim_fn{};
+                                        shim_fn.name = mc.name;
+                                        shim_fn.link_name = "__parusd_lsp_cimport_shim_" + spec.alias + "_" + mc.name;
+                                        shim_fn.type_repr = mc.promote_type_repr;
+                                        shim_fn.is_c_abi = true;
+                                        shim_fn.is_variadic = false;
                                         add_external(
                                             parus::sema::SymbolKind::kFn,
                                             mpath,
-                                            rewrite_cimport_type_with_alias_(mc.promote_type_repr, spec.alias, known_type_names),
-                                            "__parusd_lsp_cimport_shim_" + spec.alias + "_" + mc.name,
-                                            {}
+                                            parus::cimport::rewrite_cimport_type_with_alias(mc.promote_type_repr, spec.alias, known_type_names),
+                                            shim_fn.link_name,
+                                            parus::cimport::make_c_import_payload(spec.header, spec.alias, shim_fn)
                                         );
                                         add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
                                     }
@@ -3203,7 +3039,7 @@ namespace {
                                     cpath,
                                     ty,
                                     {},
-                                    make_c_import_const_payload_(payload_kind, mc.value_text)
+                                    parus::cimport::make_c_import_const_payload(payload_kind, mc.value_text)
                                 );
                                 add_decl_loc(cpath, mc.decl_file, mc.decl_line, mc.decl_col);
                             }

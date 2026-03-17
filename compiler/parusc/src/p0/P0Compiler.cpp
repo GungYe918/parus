@@ -6,6 +6,7 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/CImportPayload.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
@@ -1441,216 +1442,6 @@ namespace parusc::p0 {
             }
         }
 
-        std::string make_c_import_payload_(
-            std::string_view header,
-            std::string_view alias,
-            const parus::cimport::ImportedFunctionDecl& fn
-        ) {
-            auto format_kind_text = [](parus::cimport::CFormatKind k) -> std::string_view {
-                switch (k) {
-                    case parus::cimport::CFormatKind::kFmtVarargs: return "fmt_varargs";
-                    case parus::cimport::CFormatKind::kFmtVList: return "fmt_vlist";
-                    case parus::cimport::CFormatKind::kNone:
-                    default:
-                        return "none";
-                }
-            };
-            auto callconv_text = [](parus::cimport::CCallConvKind cc) -> std::string_view {
-                switch (cc) {
-                    case parus::cimport::CCallConvKind::kCdecl: return "cdecl";
-                    case parus::cimport::CCallConvKind::kStdCall: return "stdcall";
-                    case parus::cimport::CCallConvKind::kFastCall: return "fastcall";
-                    case parus::cimport::CCallConvKind::kVectorCall: return "vectorcall";
-                    case parus::cimport::CCallConvKind::kWin64: return "win64";
-                    case parus::cimport::CCallConvKind::kSysV: return "sysv";
-                    case parus::cimport::CCallConvKind::kDefault:
-                    default:
-                        return "default";
-                }
-            };
-
-            std::string out = "parus_c_import|header=";
-            out += std::string(header);
-            out += "|is_c_abi=";
-            out += fn.is_c_abi ? "1" : "0";
-            out += "|variadic=";
-            out += fn.is_variadic ? "1" : "0";
-            out += "|format=";
-            out += std::string(format_kind_text(fn.format_kind));
-            out += "|fmt_idx=";
-            out += std::to_string(fn.fmt_param_index);
-            out += "|va_idx=";
-            out += std::to_string(fn.va_list_param_index);
-            out += "|callconv=";
-            out += std::string(callconv_text(fn.callconv));
-            if (!fn.variadic_sibling_name.empty()) {
-                out += "|sibling=";
-                out += std::string(alias);
-                out += "::";
-                out += fn.variadic_sibling_name;
-            }
-            return out;
-        }
-
-        static bool is_ident_start_(char ch) {
-            return (ch == '_') ||
-                   (ch >= 'a' && ch <= 'z') ||
-                   (ch >= 'A' && ch <= 'Z');
-        }
-
-        static bool is_ident_continue_(char ch) {
-            return is_ident_start_(ch) || (ch >= '0' && ch <= '9');
-        }
-
-        static bool is_builtin_type_token_(std::string_view tok) {
-            static const std::unordered_set<std::string> kBuiltins = {
-                "void",
-                "bool",
-                "char",
-                "i8", "i16", "i32", "i64", "i128",
-                "u8", "u16", "u32", "u64", "u128",
-                "isize", "usize",
-                "f32", "f64", "f128",
-                "text",
-                "null",
-                "ptr",
-                "mut",
-                "def",
-            };
-            return kBuiltins.find(std::string(tok)) != kBuiltins.end();
-        }
-
-        std::string rewrite_cimport_type_with_alias_(
-            std::string_view type_repr,
-            std::string_view alias,
-            const std::unordered_set<std::string>& known_type_names
-        ) {
-            if (type_repr.empty() || alias.empty() || known_type_names.empty()) {
-                return std::string(type_repr);
-            }
-
-            std::string out{};
-            out.reserve(type_repr.size() + 16u);
-
-            size_t i = 0;
-            while (i < type_repr.size()) {
-                const char ch = type_repr[i];
-                if (!is_ident_start_(ch)) {
-                    out.push_back(ch);
-                    ++i;
-                    continue;
-                }
-
-                const size_t begin = i;
-                ++i;
-                while (i < type_repr.size() && is_ident_continue_(type_repr[i])) ++i;
-                const std::string_view tok = type_repr.substr(begin, i - begin);
-
-                const bool has_scope_prefix =
-                    begin >= 2 && type_repr[begin - 1] == ':' && type_repr[begin - 2] == ':';
-                const bool has_scope_suffix =
-                    i + 1 < type_repr.size() && type_repr[i] == ':' && type_repr[i + 1] == ':';
-
-                if (!has_scope_prefix &&
-                    !has_scope_suffix &&
-                    !is_builtin_type_token_(tok) &&
-                    known_type_names.find(std::string(tok)) != known_type_names.end()) {
-                    out += std::string(alias);
-                    out += "::";
-                    out += std::string(tok);
-                } else {
-                    out += std::string(tok);
-                }
-            }
-
-            return out;
-        }
-
-        std::string make_c_import_union_payload_(
-            std::string_view header,
-            std::string_view alias,
-            const std::unordered_set<std::string>& known_type_names,
-            const parus::cimport::ImportedUnionDecl& un
-        ) {
-            std::string payload = "parus_c_import_union|header=" + std::string(header);
-            payload += "|size=" + std::to_string(un.size_bytes);
-            payload += "|align=" + std::to_string(un.align_bytes);
-            payload += "|fields=";
-            for (size_t fi = 0; fi < un.fields.size(); ++fi) {
-                if (fi) payload += ",";
-                payload += un.fields[fi].name;
-                payload += ":";
-                payload += rewrite_cimport_type_with_alias_(
-                    un.fields[fi].type_repr, alias, known_type_names);
-            }
-            return payload;
-        }
-
-        std::string make_c_import_struct_payload_(
-            std::string_view header,
-            std::string_view alias,
-            const std::unordered_set<std::string>& known_type_names,
-            const parus::cimport::ImportedStructDecl& st
-        ) {
-            auto dash_if_empty = [](std::string_view s) -> std::string {
-                if (s.empty()) return "-";
-                return std::string(s);
-            };
-            std::string payload = "parus_c_import_struct|header=" + std::string(header);
-            payload += "|size=" + std::to_string(st.size_bytes);
-            payload += "|align=" + std::to_string(st.align_bytes);
-            payload += "|packed=" + std::string(st.is_packed ? "1" : "0");
-            payload += "|fields=";
-            for (size_t fi = 0; fi < st.fields.size(); ++fi) {
-                if (fi) payload += ",";
-                const auto& f = st.fields[fi];
-                payload += f.name;
-                payload += ":";
-                payload += rewrite_cimport_type_with_alias_(
-                    f.type_repr, alias, known_type_names);
-                payload += "@";
-                payload += std::to_string(f.offset_bytes);
-                payload += "@";
-                payload += f.union_origin ? "1" : "0";
-                payload += "@";
-                payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
-                payload += "@";
-                payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
-                payload += "@";
-                payload += f.bit_signed ? "1" : "0";
-                payload += "@";
-                payload += dash_if_empty(f.bit_getter_name);
-                payload += "@";
-                payload += dash_if_empty(f.bit_setter_name);
-            }
-            return payload;
-        }
-
-        std::string make_c_import_const_payload_(std::string_view kind, std::string_view text) {
-            std::string payload = "parus_c_import_const|kind=";
-            payload += std::string(kind);
-            payload += "|text=";
-            payload += std::string(text);
-            return payload;
-        }
-
-        std::string make_c_import_typedef_payload_(
-            std::string_view header,
-            std::string_view alias,
-            const std::unordered_set<std::string>& known_type_names,
-            const parus::cimport::ImportedTypedefDecl& td
-        ) {
-            std::string payload = "parus_c_import_typedef|header=" + std::string(header);
-            payload += "|transparent=";
-            payload += (td.is_transparent && !td.transparent_type_repr.empty()) ? "1" : "0";
-            if (td.is_transparent && !td.transparent_type_repr.empty()) {
-                payload += "|target=";
-                payload += rewrite_cimport_type_with_alias_(
-                    td.transparent_type_repr, alias, known_type_names);
-            }
-            return payload;
-        }
-
         std::string escape_c_include_text_(std::string_view s) {
             std::string out{};
             out.reserve(s.size() + 8u);
@@ -1954,10 +1745,11 @@ namespace parusc::p0 {
         if (!c_header_imports.empty()) {
             const bool cimport_report_enabled =
                 (std::getenv("PARUS_CIMPORT_REPORT") != nullptr);
-            if (!current_dir.empty()) cimport_include_dirs_norm.push_back(current_dir);
+            if (!current_dir.empty()) cimport_include_dirs_norm.push_back(parus::normalize_path(current_dir));
             for (const auto& d : opt.cimport_include_dirs) {
                 if (!d.empty()) cimport_include_dirs_norm.push_back(parus::normalize_path(d));
             }
+            parus::cimport::append_unique_normalized_paths(cimport_include_dirs_norm, {});
             for (const auto& d : opt.cimport_isystem_dirs) {
                 if (!d.empty()) cimport_isystem_dirs_norm.push_back(parus::normalize_path(d));
             }
@@ -1978,9 +1770,11 @@ namespace parusc::p0 {
             for (const auto& d : opt.cimport_forced_includes) {
                 if (!d.empty()) cimport_forced_includes_norm.push_back(parus::normalize_path(d));
             }
+            parus::cimport::append_unique_normalized_paths(cimport_forced_includes_norm, {});
             for (const auto& d : opt.cimport_imacros) {
                 if (!d.empty()) cimport_imacros_norm.push_back(parus::normalize_path(d));
             }
+            parus::cimport::append_unique_normalized_paths(cimport_imacros_norm, {});
 
             std::unordered_set<std::string> cimport_seen{};
             for (const auto& spec : c_header_imports) {
@@ -2032,6 +1826,10 @@ namespace parusc::p0 {
                     const size_t reason_n = std::min(cov.skipped_reasons.size(), kMaxReasons);
                     for (size_t i = 0; i < reason_n; ++i) {
                         std::cerr << "  - " << cov.skipped_reasons[i] << "\n";
+                    }
+                    const size_t code_n = std::min(cov.skipped_reason_codes.size(), kMaxReasons);
+                    for (size_t i = 0; i < code_n; ++i) {
+                        std::cerr << "  - code: " << cov.skipped_reason_codes[i] << "\n";
                     }
                     if (cov.skipped_reasons.size() > kMaxReasons) {
                         std::cerr << "  - ... (" << (cov.skipped_reasons.size() - kMaxReasons)
@@ -2087,9 +1885,9 @@ namespace parusc::p0 {
                     e.link_name = fn.link_name;
                     e.module_head.clear();
                     e.decl_dir = current_dir;
-                    e.type_repr = rewrite_cimport_type_with_alias_(
+                    e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                         fn.type_repr, spec.alias, known_type_names);
-                    e.inst_payload = make_c_import_payload_(spec.header, spec.alias, fn);
+                    e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, fn);
                     e.decl_file = fn.decl_file.empty() ? current_norm : parus::normalize_path(fn.decl_file);
                     e.decl_line = fn.decl_line;
                     e.decl_col = fn.decl_col;
@@ -2111,7 +1909,7 @@ namespace parusc::p0 {
                     e.module_head.clear();
                     e.decl_dir = current_dir;
                     e.type_repr = path;
-                    e.inst_payload = make_c_import_union_payload_(
+                    e.inst_payload = parus::cimport::make_c_import_union_payload(
                         spec.header, spec.alias, known_type_names, un);
                     e.decl_file = un.decl_file.empty() ? current_norm : parus::normalize_path(un.decl_file);
                     e.decl_line = un.decl_line;
@@ -2192,7 +1990,7 @@ namespace parusc::p0 {
                         ge.module_head.clear();
                         ge.decl_dir = current_dir;
                         ge.type_repr = getter_fn.type_repr;
-                        ge.inst_payload = make_c_import_payload_(spec.header, spec.alias, getter_fn);
+                        ge.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, getter_fn);
                         ge.decl_file = current_norm;
                         ge.decl_line = 1;
                         ge.decl_col = 1;
@@ -2220,7 +2018,7 @@ namespace parusc::p0 {
                         se.module_head.clear();
                         se.decl_dir = current_dir;
                         se.type_repr = setter_fn.type_repr;
-                        se.inst_payload = make_c_import_payload_(spec.header, spec.alias, setter_fn);
+                        se.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, setter_fn);
                         se.decl_file = current_norm;
                         se.decl_line = 1;
                         se.decl_col = 1;
@@ -2241,7 +2039,7 @@ namespace parusc::p0 {
                     e.module_head.clear();
                     e.decl_dir = current_dir;
                     e.type_repr = type_path;
-                    e.inst_payload = make_c_import_struct_payload_(
+                    e.inst_payload = parus::cimport::make_c_import_struct_payload(
                         spec.header, spec.alias, known_type_names, st);
                     e.decl_file = st_src.decl_file.empty() ? current_norm : parus::normalize_path(st_src.decl_file);
                     e.decl_line = st_src.decl_line;
@@ -2263,9 +2061,9 @@ namespace parusc::p0 {
                     e.link_name.clear();
                     e.module_head.clear();
                     e.decl_dir = current_dir;
-                    e.type_repr = rewrite_cimport_type_with_alias_(
+                    e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                         td.type_repr, spec.alias, known_type_names);
-                    e.inst_payload = make_c_import_typedef_payload_(
+                    e.inst_payload = parus::cimport::make_c_import_typedef_payload(
                         spec.header, spec.alias, known_type_names, td);
                     e.decl_file = td.decl_file.empty() ? current_norm : parus::normalize_path(td.decl_file);
                     e.decl_line = td.decl_line;
@@ -2297,7 +2095,7 @@ namespace parusc::p0 {
                     }
 
                     const std::string const_ty =
-                        rewrite_cimport_type_with_alias_(
+                        parus::cimport::rewrite_cimport_type_with_alias(
                             en.underlying_type_repr.empty() ? std::string_view("i32") : std::string_view(en.underlying_type_repr),
                             spec.alias,
                             known_type_names
@@ -2316,7 +2114,7 @@ namespace parusc::p0 {
                         ce.module_head.clear();
                         ce.decl_dir = current_dir;
                         ce.type_repr = const_ty;
-                        ce.inst_payload = make_c_import_const_payload_("int", cst.value_text);
+                        ce.inst_payload = parus::cimport::make_c_import_const_payload("int", cst.value_text);
                         ce.decl_file = cst.decl_file.empty() ? current_norm : parus::normalize_path(cst.decl_file);
                         ce.decl_line = cst.decl_line;
                         ce.decl_col = cst.decl_col;
@@ -2349,23 +2147,23 @@ namespace parusc::p0 {
                     switch (mc.const_kind) {
                         case parus::cimport::ImportedConstKind::kInt:
                             ce.type_repr = "i64";
-                            ce.inst_payload = make_c_import_const_payload_("int", mc.value_text);
+                            ce.inst_payload = parus::cimport::make_c_import_const_payload("int", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kFloat:
                             ce.type_repr = "f64";
-                            ce.inst_payload = make_c_import_const_payload_("float", mc.value_text);
+                            ce.inst_payload = parus::cimport::make_c_import_const_payload("float", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kBool:
                             ce.type_repr = "bool";
-                            ce.inst_payload = make_c_import_const_payload_("bool", mc.value_text);
+                            ce.inst_payload = parus::cimport::make_c_import_const_payload("bool", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kChar:
                             ce.type_repr = "char";
-                            ce.inst_payload = make_c_import_const_payload_("char", mc.value_text);
+                            ce.inst_payload = parus::cimport::make_c_import_const_payload("char", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kString:
                             ce.type_repr = "ptr i8";
-                            ce.inst_payload = make_c_import_const_payload_("string", mc.value_text);
+                            ce.inst_payload = parus::cimport::make_c_import_const_payload("string", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kNone:
                         default:
@@ -2398,9 +2196,9 @@ namespace parusc::p0 {
                         e.link_name = callee->link_name;
                         e.module_head.clear();
                         e.decl_dir = current_dir;
-                        e.type_repr = rewrite_cimport_type_with_alias_(
+                        e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                             callee->type_repr, spec.alias, known_type_names);
-                        e.inst_payload = make_c_import_payload_(spec.header, spec.alias, *callee);
+                        e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, *callee);
                         e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
                         e.decl_line = mc.decl_line;
                         e.decl_col = mc.decl_col;
@@ -2467,7 +2265,7 @@ namespace parusc::p0 {
                         e.link_name = task.shim_symbol;
                         e.module_head.clear();
                         e.decl_dir = current_dir;
-                        e.type_repr = rewrite_cimport_type_with_alias_(
+                        e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                             mc.promote_type_repr, spec.alias, known_type_names);
                         parus::cimport::ImportedFunctionDecl shim_fn{};
                         shim_fn.name = mc.name;
@@ -2475,7 +2273,7 @@ namespace parusc::p0 {
                         shim_fn.type_repr = mc.promote_type_repr;
                         shim_fn.is_c_abi = true;
                         shim_fn.is_variadic = false;
-                        e.inst_payload = make_c_import_payload_(spec.header, spec.alias, shim_fn);
+                        e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, shim_fn);
                         e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
                         e.decl_line = mc.decl_line;
                         e.decl_col = mc.decl_col;
@@ -2487,7 +2285,8 @@ namespace parusc::p0 {
                     }
 
                     if (!mc.skip_reason.empty()) {
-                        macro_skip_reasons.push_back(mc.name + ": " + mc.skip_reason);
+                        macro_skip_reasons.push_back(
+                            mc.name + "[" + parus::cimport::imported_macro_skip_code_text(mc.skip_kind) + "]: " + mc.skip_reason);
                     } else {
                         macro_skip_reasons.push_back(mc.name + ": unsupported function-like macro");
                     }

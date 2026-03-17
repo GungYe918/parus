@@ -43,6 +43,21 @@ namespace parus::cimport {
         kShimForward,
     };
 
+    enum class ImportedMacroSkipKind : uint8_t {
+        kNone = 0,
+        kSyntaxUnsupported,
+        kVariadicExcluded,
+        kTokenPasteExcluded,
+        kStringizeExcluded,
+        kStatementOrExtensionExcluded,
+        kInvalidForwarding,
+        kParamMismatch,
+        kUnresolvedCallee,
+        kUnresolvableChain,
+        kChainCycleDetected,
+        kConstExprUnsupported,
+    };
+
     struct ImportedMacroCallArg {
         int32_t param_index = -1;
         std::string cast_prefix{}; // e.g. "(int)" for simple cast forwarding
@@ -154,6 +169,8 @@ namespace parus::cimport {
         std::vector<std::string> promote_param_type_reprs{};
         std::vector<std::string> promote_param_c_types{};
         std::vector<ImportedMacroCallArg> promote_call_args{};
+        std::vector<std::string> replacement_tokens{};
+        ImportedMacroSkipKind skip_kind = ImportedMacroSkipKind::kNone;
         std::string skip_reason{};
     };
 
@@ -168,6 +185,7 @@ namespace parus::cimport {
         uint32_t promoted_function_macros = 0;
         uint32_t skipped_function_macros = 0;
         std::vector<std::string> skipped_reasons{};
+        std::vector<std::string> skipped_reason_codes{};
     };
 
     struct HeaderImportResult {

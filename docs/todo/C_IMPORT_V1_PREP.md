@@ -1,7 +1,7 @@
 # C Import (libclang) Preparation Plan
 
 > Note: This document started as a v1 prep note.  
-> Current implementation has moved to v2.2 partial support (`-I/-isystem`, `-D/-U/-include/-imacros`, limited variadic, union manual gate, C ABI positional-only, object-like macro constants, anonymous decl synthetic names).
+> Current implementation has moved to v2.3 partial support (`-I/-isystem`, `-D/-U/-include/-imacros`, limited variadic, union manual gate, C ABI positional-only, object-like macro const-expression subset, function-like strict promotion + chain/cycle diagnostics, anonymous decl synthetic names).
 
 ## Scope in this round
 - Enable user-facing C-header import syntax: `import "Header.h" as alias;`.
@@ -24,7 +24,7 @@
 | union | partial (`manual[get/set]` gated dot access) |
 | bitfield | partial (getter/setter shim 기반 read/write) |
 | anonymous record/enum | partial (synthetic `__anon_*` name import) |
-| variadic call lowering | partial (ABI-safe scalar/pointer only) |
+| variadic call lowering | partial (ABI-safe scalar/pointer only, unsuffixed int literal -> i32 in v1) |
 
 ## What is required for full support of currently unsupported/partial items
 

@@ -1,10 +1,16 @@
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/CImportPayload.hpp>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
+#include <limits>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -343,6 +349,15 @@ namespace parus::cimport {
             return out;
         }
 
+        static void set_macro_skip_(
+            ImportedMacroDecl& out,
+            ImportedMacroSkipKind kind,
+            std::string_view reason
+        ) {
+            out.skip_kind = kind;
+            out.skip_reason.assign(reason);
+        }
+
         struct ParsedMacroCallArg {
             int32_t param_index = -1;
             std::string cast_prefix{};
@@ -351,8 +366,55 @@ namespace parus::cimport {
         struct ParsedMacroCall {
             std::string callee{};
             std::vector<ParsedMacroCallArg> args{};
+            ImportedMacroSkipKind reason_kind = ImportedMacroSkipKind::kNone;
             std::string reason{};
         };
+
+        static void set_parsed_macro_error_(
+            ParsedMacroCall& out,
+            ImportedMacroSkipKind kind,
+            std::string_view reason
+        ) {
+            out.reason_kind = kind;
+            out.reason.assign(reason);
+        }
+
+        static void trim_token_span_(const std::vector<std::string>& toks, size_t& begin, size_t& end) {
+            while (begin < end && toks[begin].empty()) ++begin;
+            while (end > begin && toks[end - 1].empty()) --end;
+        }
+
+        static bool is_wrapped_in_parens_(
+            const std::vector<std::string>& toks,
+            size_t begin,
+            size_t end
+        ) {
+            if (end <= begin + 1) return false;
+            if (toks[begin] != "(" || toks[end - 1] != ")") return false;
+            int depth = 0;
+            for (size_t i = begin; i < end; ++i) {
+                if (toks[i] == "(") ++depth;
+                else if (toks[i] == ")") {
+                    --depth;
+                    if (depth < 0) return false;
+                    if (depth == 0 && i + 1 < end) return false;
+                }
+            }
+            return depth == 0;
+        }
+
+        static void strip_wrapping_parens_(
+            const std::vector<std::string>& toks,
+            size_t& begin,
+            size_t& end
+        ) {
+            trim_token_span_(toks, begin, end);
+            while (is_wrapped_in_parens_(toks, begin, end)) {
+                ++begin;
+                --end;
+                trim_token_span_(toks, begin, end);
+            }
+        }
 
         static bool parse_macro_function_like_signature_(
             const std::vector<std::string>& def_toks,
@@ -360,7 +422,8 @@ namespace parus::cimport {
             ImportedMacroDecl& out
         ) {
             if (cursor >= def_toks.size() || def_toks[cursor] != "(") {
-                out.skip_reason = "unsupported function-like macro: missing parameter list";
+                set_macro_skip_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                "unsupported function-like macro: missing parameter list");
                 return false;
             }
             ++cursor; // skip '('
@@ -377,18 +440,21 @@ namespace parus::cimport {
                 }
                 if (tok == "...") {
                     out.is_variadic = true;
-                    out.skip_reason = "unsupported function-like macro: variadic parameter list";
+                    set_macro_skip_(out, ImportedMacroSkipKind::kVariadicExcluded,
+                                    "unsupported function-like macro: variadic parameter list");
                     return false;
                 }
                 if (!is_ident_token_(tok)) {
-                    out.skip_reason = "unsupported function-like macro: invalid parameter token";
+                    set_macro_skip_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                    "unsupported function-like macro: invalid parameter token");
                     return false;
                 }
                 out.params.push_back(tok);
                 ++cursor;
             }
 
-            out.skip_reason = "unsupported function-like macro: unterminated parameter list";
+            set_macro_skip_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                            "unsupported function-like macro: unterminated parameter list");
             return false;
         }
 
@@ -398,27 +464,32 @@ namespace parus::cimport {
             ParsedMacroCall& out
         ) {
             if (repl_toks.empty()) {
-                out.reason = "unsupported function-like macro: empty replacement";
+                set_parsed_macro_error_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                        "unsupported function-like macro: empty replacement");
                 return false;
             }
 
             for (const auto& t : repl_toks) {
                 if (t == "##") {
-                    out.reason = "unsupported function-like macro: token-paste (##) is excluded";
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kTokenPasteExcluded,
+                                            "unsupported function-like macro: token-paste (##) is excluded");
                     return false;
                 }
                 if (t == "#") {
-                    out.reason = "unsupported function-like macro: stringize (#) is excluded";
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kStringizeExcluded,
+                                            "unsupported function-like macro: stringize (#) is excluded");
                     return false;
                 }
                 if (t == "{" || t == "}" || t == ";" || t == "__extension__") {
-                    out.reason = "unsupported function-like macro: statement/extension form is excluded";
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kStatementOrExtensionExcluded,
+                                            "unsupported function-like macro: statement/extension form is excluded");
                     return false;
                 }
             }
 
             if (repl_toks.size() < 3 || !is_ident_token_(repl_toks[0]) || repl_toks[1] != "(") {
-                out.reason = "unsupported function-like macro: replacement must be a single function call";
+                set_parsed_macro_error_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                        "unsupported function-like macro: replacement must be a single function call");
                 return false;
             }
 
@@ -437,7 +508,8 @@ namespace parus::cimport {
                 }
             }
             if (close_idx == std::string::npos || close_idx + 1 != repl_toks.size()) {
-                out.reason = "unsupported function-like macro: replacement must be one call expression";
+                set_parsed_macro_error_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                        "unsupported function-like macro: replacement must be one call expression");
                 return false;
             }
 
@@ -451,23 +523,22 @@ namespace parus::cimport {
             int inner_depth = 0;
             size_t arg_begin = 2;
             auto parse_one_arg = [&](size_t b, size_t e) -> bool {
+                trim_token_span_(repl_toks, b, e);
                 if (b >= e) {
-                    out.reason = "unsupported function-like macro: empty call argument";
-                    return false;
-                }
-                // trim trivial spaces/tokens (token stream normally has none)
-                while (b < e && repl_toks[b].empty()) ++b;
-                while (e > b && repl_toks[e - 1].empty()) --e;
-                if (b >= e) {
-                    out.reason = "unsupported function-like macro: empty call argument";
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kSyntaxUnsupported,
+                                            "unsupported function-like macro: empty call argument");
                     return false;
                 }
 
                 ParsedMacroCallArg arg{};
-                if ((e - b) == 1u) {
-                    const auto it = param_index.find(repl_toks[b]);
+                size_t db = b;
+                size_t de = e;
+                strip_wrapping_parens_(repl_toks, db, de);
+                if ((de - db) == 1u) {
+                    const auto it = param_index.find(repl_toks[db]);
                     if (it == param_index.end()) {
-                        out.reason = "unsupported function-like macro: call arg must be macro parameter";
+                        set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                                "unsupported function-like macro: call arg must be macro parameter");
                         return false;
                     }
                     arg.param_index = it->second;
@@ -476,13 +547,14 @@ namespace parus::cimport {
                 }
 
                 // simple cast forwarding: ( <type tokens> ) <param>
-                if (repl_toks[b] != "(") {
-                    out.reason = "unsupported function-like macro: only direct or simple-cast forwarding is allowed";
+                if (repl_toks[db] != "(") {
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                            "unsupported function-like macro: only direct or simple-cast forwarding is allowed");
                     return false;
                 }
                 int cast_depth = 0;
                 size_t cast_close = std::string::npos;
-                for (size_t i = b; i < e; ++i) {
+                for (size_t i = db; i < de; ++i) {
                     if (repl_toks[i] == "(") ++cast_depth;
                     else if (repl_toks[i] == ")") {
                         --cast_depth;
@@ -493,21 +565,32 @@ namespace parus::cimport {
                     }
                     if (cast_depth < 0) break;
                 }
-                if (cast_close == std::string::npos || cast_close + 1 != (e - 1)) {
-                    out.reason = "unsupported function-like macro: only (Type)param cast form is allowed";
+                if (cast_close == std::string::npos || cast_close + 1 >= de) {
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                            "unsupported function-like macro: only (Type)param cast form is allowed");
                     return false;
                 }
-                if (cast_close <= b + 1) {
-                    out.reason = "unsupported function-like macro: empty cast type";
+                if (cast_close <= db + 1) {
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                            "unsupported function-like macro: empty cast type");
                     return false;
                 }
-                const auto it = param_index.find(repl_toks[e - 1]);
+                size_t pb = cast_close + 1;
+                size_t pe = de;
+                strip_wrapping_parens_(repl_toks, pb, pe);
+                if (pe <= pb || pe - pb != 1u) {
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                            "unsupported function-like macro: cast argument must end with macro parameter");
+                    return false;
+                }
+                const auto it = param_index.find(repl_toks[pb]);
                 if (it == param_index.end()) {
-                    out.reason = "unsupported function-like macro: cast argument must end with macro parameter";
+                    set_parsed_macro_error_(out, ImportedMacroSkipKind::kInvalidForwarding,
+                                            "unsupported function-like macro: cast argument must end with macro parameter");
                     return false;
                 }
                 arg.param_index = it->second;
-                arg.cast_prefix = join_tokens_with_space_(repl_toks, b, cast_close + 1);
+                arg.cast_prefix = join_tokens_with_space_(repl_toks, db, cast_close + 1);
                 out.args.push_back(std::move(arg));
                 return true;
             };
@@ -529,6 +612,619 @@ namespace parus::cimport {
             }
             return true;
         }
+
+        enum class MacroConstEvalKind : uint8_t {
+            kInvalid = 0,
+            kInt,
+            kFloat,
+            kBool,
+            kChar,
+            kString,
+        };
+
+        struct MacroConstEvalValue {
+            MacroConstEvalKind kind = MacroConstEvalKind::kInvalid;
+            int64_t i64 = 0;
+            double f64 = 0.0;
+            bool b = false;
+            std::string text{};
+        };
+
+        static bool parse_macro_int_value_(std::string_view text, int64_t& out) {
+            std::string canonical{};
+            if (!parse_macro_int_literal_text_(text, canonical)) return false;
+
+            std::string normalized{};
+            normalized.reserve(canonical.size());
+            for (const char ch : canonical) {
+                if (ch == '\'') continue;
+                normalized.push_back(ch);
+            }
+            if (normalized.empty()) return false;
+
+            errno = 0;
+            char* endp = nullptr;
+            const long long parsed = std::strtoll(normalized.c_str(), &endp, 0);
+            if (endp == nullptr || *endp != '\0' || errno == ERANGE) return false;
+            out = static_cast<int64_t>(parsed);
+            return true;
+        }
+
+        static bool parse_macro_float_value_(std::string_view text, double& out) {
+            std::string canonical{};
+            if (!parse_macro_float_literal_text_(text, canonical)) return false;
+
+            std::string normalized{};
+            normalized.reserve(canonical.size());
+            for (const char ch : canonical) {
+                if (ch == '\'') continue;
+                normalized.push_back(ch);
+            }
+            if (normalized.empty()) return false;
+
+            errno = 0;
+            char* endp = nullptr;
+            const double parsed = std::strtod(normalized.c_str(), &endp);
+            if (endp == nullptr || *endp != '\0' || errno == ERANGE) return false;
+            out = parsed;
+            return true;
+        }
+
+        static bool parse_macro_char_value_(
+            std::string_view text,
+            int64_t& out_code,
+            std::string& out_lit
+        ) {
+            if (!parse_macro_char_literal_text_(text, out_lit)) return false;
+            if (out_lit.size() < 3 || out_lit.front() != '\'' || out_lit.back() != '\'') return false;
+            const std::string_view body = std::string_view(out_lit).substr(1, out_lit.size() - 2);
+            if (body.empty()) return false;
+
+            auto hex_val = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            int v = 0;
+            if (body[0] != '\\') {
+                if (body.size() != 1) return false;
+                v = static_cast<unsigned char>(body[0]);
+            } else {
+                if (body.size() < 2) return false;
+                switch (body[1]) {
+                    case 'n': v = '\n'; break;
+                    case 'r': v = '\r'; break;
+                    case 't': v = '\t'; break;
+                    case '\\': v = '\\'; break;
+                    case '\'': v = '\''; break;
+                    case '"': v = '"'; break;
+                    case '0': v = '\0'; break;
+                    case 'x': {
+                        if (body.size() != 4) return false;
+                        const int hi = hex_val(body[2]);
+                        const int lo = hex_val(body[3]);
+                        if (hi < 0 || lo < 0) return false;
+                        v = (hi << 4) | lo;
+                        break;
+                    }
+                    default:
+                        return false;
+                }
+            }
+            out_code = static_cast<int64_t>(v);
+            return true;
+        }
+
+        static bool macro_const_is_numeric_(const MacroConstEvalValue& v) {
+            return v.kind == MacroConstEvalKind::kInt ||
+                   v.kind == MacroConstEvalKind::kFloat ||
+                   v.kind == MacroConstEvalKind::kBool ||
+                   v.kind == MacroConstEvalKind::kChar;
+        }
+
+        static bool macro_const_to_boolish_(const MacroConstEvalValue& v, bool& out) {
+            switch (v.kind) {
+                case MacroConstEvalKind::kBool:
+                    out = v.b;
+                    return true;
+                case MacroConstEvalKind::kInt:
+                    out = (v.i64 != 0);
+                    return true;
+                case MacroConstEvalKind::kFloat:
+                    out = (v.f64 != 0.0);
+                    return true;
+                case MacroConstEvalKind::kChar:
+                    out = (v.i64 != 0);
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static bool macro_const_to_int_(const MacroConstEvalValue& v, int64_t& out) {
+            switch (v.kind) {
+                case MacroConstEvalKind::kInt:
+                case MacroConstEvalKind::kChar:
+                    out = v.i64;
+                    return true;
+                case MacroConstEvalKind::kBool:
+                    out = v.b ? 1 : 0;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static bool macro_const_to_float_(const MacroConstEvalValue& v, double& out) {
+            switch (v.kind) {
+                case MacroConstEvalKind::kFloat:
+                    out = v.f64;
+                    return true;
+                case MacroConstEvalKind::kInt:
+                case MacroConstEvalKind::kChar:
+                    out = static_cast<double>(v.i64);
+                    return true;
+                case MacroConstEvalKind::kBool:
+                    out = v.b ? 1.0 : 0.0;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static bool macro_const_to_imported_const_(
+            const MacroConstEvalValue& in,
+            ImportedConstKind& out_kind,
+            std::string& out_text
+        ) {
+            switch (in.kind) {
+                case MacroConstEvalKind::kInt:
+                    out_kind = ImportedConstKind::kInt;
+                    out_text = std::to_string(in.i64);
+                    return true;
+                case MacroConstEvalKind::kFloat: {
+                    std::ostringstream oss;
+                    oss.setf(std::ios::fmtflags(0), std::ios::floatfield);
+                    oss.precision(17);
+                    oss << in.f64;
+                    out_kind = ImportedConstKind::kFloat;
+                    out_text = oss.str();
+                    return true;
+                }
+                case MacroConstEvalKind::kBool:
+                    out_kind = ImportedConstKind::kBool;
+                    out_text = in.b ? "1" : "0";
+                    return true;
+                case MacroConstEvalKind::kChar:
+                    out_kind = ImportedConstKind::kChar;
+                    out_text = in.text;
+                    return !out_text.empty();
+                case MacroConstEvalKind::kString:
+                    out_kind = ImportedConstKind::kString;
+                    out_text = in.text;
+                    return !out_text.empty();
+                default:
+                    break;
+            }
+            out_kind = ImportedConstKind::kNone;
+            out_text.clear();
+            return false;
+        }
+
+        class MacroConstExprParser_ {
+        public:
+            using Resolver = std::function<std::optional<MacroConstEvalValue>(std::string_view)>;
+
+            MacroConstExprParser_(const std::vector<std::string>& toks, Resolver resolver)
+                : toks_(toks), resolver_(std::move(resolver)) {}
+
+            bool parse(MacroConstEvalValue& out) {
+                if (!parse_lor_(out)) return false;
+                return pos_ == toks_.size();
+            }
+
+            std::string error() const { return error_; }
+
+        private:
+            bool parse_lor_(MacroConstEvalValue& out) {
+                if (!parse_land_(out)) return false;
+                while (match_("||")) {
+                    MacroConstEvalValue rhs{};
+                    if (!parse_land_(rhs)) return false;
+                    bool lb = false;
+                    bool rb = false;
+                    if (!macro_const_to_boolish_(out, lb) || !macro_const_to_boolish_(rhs, rb)) {
+                        return fail_("logical operator requires boolean-like operands");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = lb || rb;
+                }
+                return true;
+            }
+
+            bool parse_land_(MacroConstEvalValue& out) {
+                if (!parse_bitor_(out)) return false;
+                while (match_("&&")) {
+                    MacroConstEvalValue rhs{};
+                    if (!parse_bitor_(rhs)) return false;
+                    bool lb = false;
+                    bool rb = false;
+                    if (!macro_const_to_boolish_(out, lb) || !macro_const_to_boolish_(rhs, rb)) {
+                        return fail_("logical operator requires boolean-like operands");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = lb && rb;
+                }
+                return true;
+            }
+
+            bool parse_bitor_(MacroConstEvalValue& out) {
+                if (!parse_bitxor_(out)) return false;
+                while (match_("|")) {
+                    MacroConstEvalValue rhs{};
+                    if (!parse_bitxor_(rhs)) return false;
+                    int64_t li = 0;
+                    int64_t ri = 0;
+                    if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                        return fail_("bitwise operator requires integer-like operands");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = li | ri;
+                }
+                return true;
+            }
+
+            bool parse_bitxor_(MacroConstEvalValue& out) {
+                if (!parse_bitand_(out)) return false;
+                while (match_("^")) {
+                    MacroConstEvalValue rhs{};
+                    if (!parse_bitand_(rhs)) return false;
+                    int64_t li = 0;
+                    int64_t ri = 0;
+                    if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                        return fail_("bitwise operator requires integer-like operands");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = li ^ ri;
+                }
+                return true;
+            }
+
+            bool parse_bitand_(MacroConstEvalValue& out) {
+                if (!parse_eq_(out)) return false;
+                while (match_("&")) {
+                    MacroConstEvalValue rhs{};
+                    if (!parse_eq_(rhs)) return false;
+                    int64_t li = 0;
+                    int64_t ri = 0;
+                    if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                        return fail_("bitwise operator requires integer-like operands");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = li & ri;
+                }
+                return true;
+            }
+
+            bool parse_eq_(MacroConstEvalValue& out) {
+                if (!parse_rel_(out)) return false;
+                for (;;) {
+                    const bool is_eq = match_("==");
+                    const bool is_ne = !is_eq && match_("!=");
+                    if (!is_eq && !is_ne) break;
+                    MacroConstEvalValue rhs{};
+                    if (!parse_rel_(rhs)) return false;
+                    bool ok = false;
+                    bool result = false;
+                    if (out.kind == MacroConstEvalKind::kString && rhs.kind == MacroConstEvalKind::kString) {
+                        result = (out.text == rhs.text);
+                        ok = true;
+                    } else if (macro_const_is_numeric_(out) && macro_const_is_numeric_(rhs)) {
+                        if (out.kind == MacroConstEvalKind::kFloat || rhs.kind == MacroConstEvalKind::kFloat) {
+                            double lf = 0.0;
+                            double rf = 0.0;
+                            ok = macro_const_to_float_(out, lf) && macro_const_to_float_(rhs, rf);
+                            if (ok) result = (lf == rf);
+                        } else {
+                            int64_t li = 0;
+                            int64_t ri = 0;
+                            ok = macro_const_to_int_(out, li) && macro_const_to_int_(rhs, ri);
+                            if (ok) result = (li == ri);
+                        }
+                    }
+                    if (!ok) return fail_("equality operator requires compatible operands");
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = is_eq ? result : !result;
+                }
+                return true;
+            }
+
+            bool parse_rel_(MacroConstEvalValue& out) {
+                if (!parse_shift_(out)) return false;
+                for (;;) {
+                    std::string op{};
+                    if (match_("<=")) op = "<=";
+                    else if (match_("<")) op = "<";
+                    else if (match_(">=")) op = ">=";
+                    else if (match_(">")) op = ">";
+                    else break;
+
+                    MacroConstEvalValue rhs{};
+                    if (!parse_shift_(rhs)) return false;
+                    bool result = false;
+                    if (out.kind == MacroConstEvalKind::kFloat || rhs.kind == MacroConstEvalKind::kFloat) {
+                        double lf = 0.0;
+                        double rf = 0.0;
+                        if (!macro_const_to_float_(out, lf) || !macro_const_to_float_(rhs, rf)) {
+                            return fail_("relational operator requires numeric operands");
+                        }
+                        if (op == "<") result = lf < rf;
+                        else if (op == "<=") result = lf <= rf;
+                        else if (op == ">") result = lf > rf;
+                        else result = lf >= rf;
+                    } else {
+                        int64_t li = 0;
+                        int64_t ri = 0;
+                        if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                            return fail_("relational operator requires numeric operands");
+                        }
+                        if (op == "<") result = li < ri;
+                        else if (op == "<=") result = li <= ri;
+                        else if (op == ">") result = li > ri;
+                        else result = li >= ri;
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = result;
+                }
+                return true;
+            }
+
+            bool parse_shift_(MacroConstEvalValue& out) {
+                if (!parse_add_(out)) return false;
+                for (;;) {
+                    const bool is_l = match_("<<");
+                    const bool is_r = !is_l && match_(">>");
+                    if (!is_l && !is_r) break;
+                    MacroConstEvalValue rhs{};
+                    if (!parse_add_(rhs)) return false;
+                    int64_t li = 0;
+                    int64_t ri = 0;
+                    if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                        return fail_("shift operator requires integer operands");
+                    }
+                    if (ri < 0 || ri >= 63) {
+                        return fail_("shift amount must be within [0, 62]");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = is_l ? (li << ri) : (li >> ri);
+                }
+                return true;
+            }
+
+            bool parse_add_(MacroConstEvalValue& out) {
+                if (!parse_mul_(out)) return false;
+                for (;;) {
+                    const bool is_add = match_("+");
+                    const bool is_sub = !is_add && match_("-");
+                    if (!is_add && !is_sub) break;
+                    MacroConstEvalValue rhs{};
+                    if (!parse_mul_(rhs)) return false;
+                    if (out.kind == MacroConstEvalKind::kFloat || rhs.kind == MacroConstEvalKind::kFloat) {
+                        double lf = 0.0;
+                        double rf = 0.0;
+                        if (!macro_const_to_float_(out, lf) || !macro_const_to_float_(rhs, rf)) {
+                            return fail_("arithmetic operator requires numeric operands");
+                        }
+                        out = {};
+                        out.kind = MacroConstEvalKind::kFloat;
+                        out.f64 = is_add ? (lf + rf) : (lf - rf);
+                    } else {
+                        int64_t li = 0;
+                        int64_t ri = 0;
+                        if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                            return fail_("arithmetic operator requires numeric operands");
+                        }
+                        out = {};
+                        out.kind = MacroConstEvalKind::kInt;
+                        out.i64 = is_add ? (li + ri) : (li - ri);
+                    }
+                }
+                return true;
+            }
+
+            bool parse_mul_(MacroConstEvalValue& out) {
+                if (!parse_unary_(out)) return false;
+                for (;;) {
+                    const bool is_mul = match_("*");
+                    const bool is_div = !is_mul && match_("/");
+                    const bool is_mod = !is_mul && !is_div && match_("%");
+                    if (!is_mul && !is_div && !is_mod) break;
+                    MacroConstEvalValue rhs{};
+                    if (!parse_unary_(rhs)) return false;
+                    if (is_mod) {
+                        int64_t li = 0;
+                        int64_t ri = 0;
+                        if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                            return fail_("mod operator requires integer operands");
+                        }
+                        if (ri == 0) return fail_("division by zero in macro constant expression");
+                        out = {};
+                        out.kind = MacroConstEvalKind::kInt;
+                        out.i64 = li % ri;
+                        continue;
+                    }
+                    if (out.kind == MacroConstEvalKind::kFloat || rhs.kind == MacroConstEvalKind::kFloat) {
+                        double lf = 0.0;
+                        double rf = 0.0;
+                        if (!macro_const_to_float_(out, lf) || !macro_const_to_float_(rhs, rf)) {
+                            return fail_("arithmetic operator requires numeric operands");
+                        }
+                        if (is_div && rf == 0.0) return fail_("division by zero in macro constant expression");
+                        out = {};
+                        out.kind = MacroConstEvalKind::kFloat;
+                        out.f64 = is_mul ? (lf * rf) : (lf / rf);
+                    } else {
+                        int64_t li = 0;
+                        int64_t ri = 0;
+                        if (!macro_const_to_int_(out, li) || !macro_const_to_int_(rhs, ri)) {
+                            return fail_("arithmetic operator requires numeric operands");
+                        }
+                        if (is_div && ri == 0) return fail_("division by zero in macro constant expression");
+                        out = {};
+                        out.kind = MacroConstEvalKind::kInt;
+                        out.i64 = is_mul ? (li * ri) : (li / ri);
+                    }
+                }
+                return true;
+            }
+
+            bool parse_unary_(MacroConstEvalValue& out) {
+                if (match_("+")) {
+                    if (!parse_unary_(out)) return false;
+                    if (!macro_const_is_numeric_(out)) {
+                        return fail_("unary '+' requires numeric operand");
+                    }
+                    if (out.kind == MacroConstEvalKind::kBool || out.kind == MacroConstEvalKind::kChar) {
+                        int64_t iv = 0;
+                        if (!macro_const_to_int_(out, iv)) return false;
+                        out = {};
+                        out.kind = MacroConstEvalKind::kInt;
+                        out.i64 = iv;
+                    }
+                    return true;
+                }
+                if (match_("-")) {
+                    if (!parse_unary_(out)) return false;
+                    if (out.kind == MacroConstEvalKind::kFloat) {
+                        out.f64 = -out.f64;
+                        return true;
+                    }
+                    int64_t iv = 0;
+                    if (!macro_const_to_int_(out, iv)) {
+                        return fail_("unary '-' requires numeric operand");
+                    }
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = -iv;
+                    return true;
+                }
+                if (match_("~")) {
+                    if (!parse_unary_(out)) return false;
+                    int64_t iv = 0;
+                    if (!macro_const_to_int_(out, iv)) return fail_("unary '~' requires integer operand");
+                    out = {};
+                    out.kind = MacroConstEvalKind::kInt;
+                    out.i64 = ~iv;
+                    return true;
+                }
+                if (match_("!")) {
+                    if (!parse_unary_(out)) return false;
+                    bool bv = false;
+                    if (!macro_const_to_boolish_(out, bv)) return fail_("unary '!' requires boolean-like operand");
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = !bv;
+                    return true;
+                }
+                return parse_primary_(out);
+            }
+
+            bool parse_primary_(MacroConstEvalValue& out) {
+                if (match_("(")) {
+                    if (!parse_lor_(out)) return false;
+                    if (!match_(")")) return fail_("missing closing ')' in macro constant expression");
+                    return true;
+                }
+
+                if (pos_ >= toks_.size()) return fail_("unexpected end of macro constant expression");
+                const std::string tok = toks_[pos_++];
+
+                if (tok == "true" || tok == "false") {
+                    out = {};
+                    out.kind = MacroConstEvalKind::kBool;
+                    out.b = (tok == "true");
+                    return true;
+                }
+
+                {
+                    std::string str_lit{};
+                    if (parse_macro_string_literal_text_(tok, str_lit)) {
+                        out = {};
+                        out.kind = MacroConstEvalKind::kString;
+                        out.text = std::move(str_lit);
+                        return true;
+                    }
+                }
+                {
+                    int64_t ch = 0;
+                    std::string ch_lit{};
+                    if (parse_macro_char_value_(tok, ch, ch_lit)) {
+                        out = {};
+                        out.kind = MacroConstEvalKind::kChar;
+                        out.i64 = ch;
+                        out.text = std::move(ch_lit);
+                        return true;
+                    }
+                }
+                {
+                    int64_t i64 = 0;
+                    if (parse_macro_int_value_(tok, i64)) {
+                        out = {};
+                        out.kind = MacroConstEvalKind::kInt;
+                        out.i64 = i64;
+                        return true;
+                    }
+                }
+                {
+                    double f64 = 0.0;
+                    if (parse_macro_float_value_(tok, f64)) {
+                        out = {};
+                        out.kind = MacroConstEvalKind::kFloat;
+                        out.f64 = f64;
+                        return true;
+                    }
+                }
+
+                if (is_ident_token_(tok)) {
+                    if (!resolver_) return fail_("identifier cannot be resolved in macro constant expression");
+                    const auto resolved = resolver_(tok);
+                    if (!resolved.has_value()) {
+                        return fail_("unresolved identifier '" + tok + "' in macro constant expression");
+                    }
+                    out = *resolved;
+                    return true;
+                }
+
+                return fail_("unsupported token '" + tok + "' in macro constant expression");
+            }
+
+            bool match_(std::string_view tok) {
+                if (pos_ >= toks_.size()) return false;
+                if (toks_[pos_] != tok) return false;
+                ++pos_;
+                return true;
+            }
+
+            bool fail_(std::string msg) {
+                if (error_.empty()) error_ = std::move(msg);
+                return false;
+            }
+
+            const std::vector<std::string>& toks_;
+            Resolver resolver_{};
+            size_t pos_ = 0;
+            std::string error_{};
+        };
 
         static std::string ensure_synthetic_name_(
             std::unordered_map<std::string, std::string>& map,
@@ -1219,6 +1915,7 @@ namespace parus::cimport {
                 def_toks.push_back(std::move(tok));
             }
             clang_disposeTokens(ctx.tu, tokens, token_count);
+            out.replacement_tokens = def_toks;
 
             if (!out.is_function_like) {
                 const std::string replacement = join_tokens_with_space_(def_toks, 0, def_toks.size());
@@ -1237,6 +1934,7 @@ namespace parus::cimport {
                     for (size_t i = cursor; i < def_toks.size(); ++i) {
                         repl_toks.push_back(def_toks[i]);
                     }
+                    out.replacement_tokens = repl_toks;
 
                     ParsedMacroCall parsed{};
                     if (parse_macro_replacement_call_(repl_toks, out, parsed)) {
@@ -1249,6 +1947,7 @@ namespace parus::cimport {
                             out.promote_call_args.push_back(std::move(a));
                         }
                     } else {
+                        out.skip_kind = parsed.reason_kind;
                         out.skip_reason = std::move(parsed.reason);
                     }
                 }
@@ -1443,6 +2142,136 @@ namespace parus::cimport {
             }
         }
 
+        // Evaluate object-like macro constants with a strict expression subset.
+        std::unordered_map<std::string, size_t> object_macro_idx{};
+        object_macro_idx.reserve(out.macros.size() * 2u + 1u);
+        for (size_t i = 0; i < out.macros.size(); ++i) {
+            if (out.macros[i].is_function_like) continue;
+            if (out.macros[i].name.empty()) continue;
+            object_macro_idx.emplace(out.macros[i].name, i);
+        }
+
+        enum class ObjEvalState : uint8_t { kUnvisited = 0, kVisiting, kDone };
+        std::vector<ObjEvalState> obj_state(out.macros.size(), ObjEvalState::kUnvisited);
+
+        auto object_macro_to_const_value =
+            [&](const ImportedMacroDecl& mc, MacroConstEvalValue& outv) -> bool {
+                switch (mc.const_kind) {
+                    case ImportedConstKind::kInt: {
+                        int64_t i64 = 0;
+                        if (!parse_macro_int_value_(mc.value_text, i64)) return false;
+                        outv.kind = MacroConstEvalKind::kInt;
+                        outv.i64 = i64;
+                        return true;
+                    }
+                    case ImportedConstKind::kFloat: {
+                        double f64 = 0.0;
+                        if (!parse_macro_float_value_(mc.value_text, f64)) return false;
+                        outv.kind = MacroConstEvalKind::kFloat;
+                        outv.f64 = f64;
+                        return true;
+                    }
+                    case ImportedConstKind::kBool:
+                        outv.kind = MacroConstEvalKind::kBool;
+                        outv.b = (mc.value_text == "1" || mc.value_text == "true");
+                        return true;
+                    case ImportedConstKind::kChar: {
+                        int64_t ch = 0;
+                        std::string lit{};
+                        if (!parse_macro_char_value_(mc.value_text, ch, lit)) return false;
+                        outv.kind = MacroConstEvalKind::kChar;
+                        outv.i64 = ch;
+                        outv.text = std::move(lit);
+                        return true;
+                    }
+                    case ImportedConstKind::kString:
+                        outv.kind = MacroConstEvalKind::kString;
+                        outv.text = mc.value_text;
+                        return !outv.text.empty();
+                    case ImportedConstKind::kNone:
+                    default:
+                        return false;
+                }
+            };
+
+        std::function<bool(size_t, bool&)> eval_object_macro =
+            [&](size_t idx, bool& cycle_detected) -> bool {
+                if (idx >= out.macros.size()) return false;
+                auto& mc = out.macros[idx];
+                if (mc.is_function_like) return false;
+
+                if (obj_state[idx] == ObjEvalState::kDone) {
+                    return mc.const_kind != ImportedConstKind::kNone;
+                }
+                if (obj_state[idx] == ObjEvalState::kVisiting) {
+                    cycle_detected = true;
+                    set_macro_skip_(mc, ImportedMacroSkipKind::kChainCycleDetected,
+                                    "unsupported object-like macro: reference cycle detected");
+                    return false;
+                }
+                obj_state[idx] = ObjEvalState::kVisiting;
+
+                if (mc.const_kind != ImportedConstKind::kNone) {
+                    obj_state[idx] = ObjEvalState::kDone;
+                    return true;
+                }
+
+                MacroConstExprParser_ parser(
+                    mc.replacement_tokens,
+                    [&](std::string_view ident) -> std::optional<MacroConstEvalValue> {
+                        const auto it = object_macro_idx.find(std::string(ident));
+                        if (it == object_macro_idx.end()) return std::nullopt;
+                        bool local_cycle = false;
+                        if (!eval_object_macro(it->second, local_cycle)) {
+                            if (local_cycle) cycle_detected = true;
+                            return std::nullopt;
+                        }
+                        MacroConstEvalValue v{};
+                        if (!object_macro_to_const_value(out.macros[it->second], v)) return std::nullopt;
+                        return v;
+                    });
+
+                MacroConstEvalValue expr_value{};
+                if (!parser.parse(expr_value)) {
+                    if (mc.skip_kind == ImportedMacroSkipKind::kNone) {
+                        set_macro_skip_(
+                            mc,
+                            cycle_detected
+                                ? ImportedMacroSkipKind::kChainCycleDetected
+                                : ImportedMacroSkipKind::kConstExprUnsupported,
+                            parser.error().empty()
+                                ? "unsupported object-like macro constant expression"
+                                : ("unsupported object-like macro constant expression: " + parser.error()));
+                    }
+                    obj_state[idx] = ObjEvalState::kDone;
+                    return false;
+                }
+
+                ImportedConstKind out_kind = ImportedConstKind::kNone;
+                std::string out_text{};
+                if (!macro_const_to_imported_const_(expr_value, out_kind, out_text)) {
+                    set_macro_skip_(
+                        mc,
+                        ImportedMacroSkipKind::kConstExprUnsupported,
+                        "unsupported object-like macro constant expression result");
+                    obj_state[idx] = ObjEvalState::kDone;
+                    return false;
+                }
+
+                mc.const_kind = out_kind;
+                mc.value_text = std::move(out_text);
+                obj_state[idx] = ObjEvalState::kDone;
+                return true;
+            };
+
+        for (size_t i = 0; i < out.macros.size(); ++i) {
+            if (out.macros[i].is_function_like) continue;
+            if (out.macros[i].const_kind != ImportedConstKind::kNone) continue;
+            if (out.macros[i].replacement_tokens.empty()) continue;
+            bool cycle = false;
+            (void)eval_object_macro(i, cycle);
+        }
+
         // Promote strictly-convertible function-like macros:
         //   - DirectAlias:  MACRO(a,b) -> callee(a,b)
         //   - ShimForward:  MACRO(y,x) -> callee(x,y) or cast forwarding
@@ -1469,7 +2298,8 @@ namespace parus::cimport {
         auto populate_macro_from_function =
             [&](ImportedMacroDecl& mc, const CollectedFnDecl& selected) -> bool {
                 if (mc.params.size() != selected.arg_type_reprs.size()) {
-                    mc.skip_reason = "unsupported function-like macro: parameter count mismatch";
+                    set_macro_skip_(mc, ImportedMacroSkipKind::kParamMismatch,
+                                    "unsupported function-like macro: parameter count mismatch");
                     return false;
                 }
 
@@ -1499,14 +2329,16 @@ namespace parus::cimport {
                     if (pi != ai) identity_order = false;
                 }
                 if (invalid) {
-                    mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
+                    set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                    "unsupported function-like macro: each parameter must be forwarded exactly once");
                     return false;
                 }
                 for (size_t i = 0; i < param_use.size(); ++i) {
                     if (param_use[i] != 1u ||
                         mc.promote_param_type_reprs[i].empty() ||
                         mc.promote_param_c_types[i].empty()) {
-                        mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
+                        set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                        "unsupported function-like macro: each parameter must map to one callee argument");
                         return false;
                     }
                 }
@@ -1550,7 +2382,8 @@ namespace parus::cimport {
                         return false;
                     }
                     if (!inner.cast_prefix.empty() && !outer.cast_prefix.empty()) {
-                        mc.skip_reason = "unsupported function-like macro: nested cast forwarding through macro chain";
+                        set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                        "unsupported function-like macro: nested cast forwarding through macro chain");
                         return false;
                     }
 
@@ -1567,13 +2400,15 @@ namespace parus::cimport {
                     const auto& outer = mc.promote_call_args[callee_param];
                     if (outer.param_index < 0 ||
                         static_cast<size_t>(outer.param_index) >= mc.params.size()) {
-                        mc.skip_reason = "unsupported function-like macro: invalid argument forwarding in macro chain";
+                        set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                        "unsupported function-like macro: invalid argument forwarding in macro chain");
                         return false;
                     }
                     const size_t outer_param = static_cast<size_t>(outer.param_index);
                     ++param_use[outer_param];
                     if (param_use[outer_param] > 1u) {
-                        mc.skip_reason = "unsupported function-like macro: each parameter must be forwarded exactly once";
+                        set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                        "unsupported function-like macro: each parameter must be forwarded exactly once");
                         return false;
                     }
                     mc.promote_param_type_reprs[outer_param] = callee_macro.promote_param_type_reprs[callee_param];
@@ -1583,14 +2418,16 @@ namespace parus::cimport {
                     if (param_use[i] != 1u ||
                         mc.promote_param_type_reprs[i].empty() ||
                         mc.promote_param_c_types[i].empty()) {
-                        mc.skip_reason = "unsupported function-like macro: each parameter must map to one callee argument";
+                        set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                        "unsupported function-like macro: each parameter must map to one callee argument");
                         return false;
                     }
                 }
 
                 std::string ret_repr{};
                 if (!extract_return_repr(callee_macro.promote_type_repr, ret_repr)) {
-                    mc.skip_reason = "unsupported function-like macro: invalid chained callee type representation";
+                    set_macro_skip_(mc, ImportedMacroSkipKind::kInvalidForwarding,
+                                    "unsupported function-like macro: invalid chained callee type representation");
                     return false;
                 }
 
@@ -1638,7 +2475,8 @@ namespace parus::cimport {
                 if (!mc.skip_reason.empty()) continue;
                 if (mc.promote_kind != ImportedMacroPromoteKind::kNone) continue;
                 if (mc.promote_callee_name.empty()) {
-                    mc.skip_reason = "unsupported function-like macro: unresolved callee";
+                    set_macro_skip_(mc, ImportedMacroSkipKind::kUnresolvedCallee,
+                                    "unsupported function-like macro: unresolved callee");
                     continue;
                 }
 
@@ -1675,11 +2513,56 @@ namespace parus::cimport {
             if (!progressed) break;
         }
 
+        std::unordered_map<std::string, size_t> fn_macro_idx{};
+        fn_macro_idx.reserve(out.macros.size() * 2u + 1u);
+        for (size_t i = 0; i < out.macros.size(); ++i) {
+            const auto& mc = out.macros[i];
+            if (!mc.is_function_like || mc.name.empty()) continue;
+            fn_macro_idx.emplace(mc.name, i);
+        }
+
+        auto unresolved_macro_chain_cycle = [&](size_t root_idx) -> bool {
+            std::unordered_set<size_t> visiting{};
+            std::unordered_set<size_t> visited{};
+            std::function<bool(size_t)> dfs = [&](size_t cur) -> bool {
+                if (visiting.find(cur) != visiting.end()) return true;
+                if (visited.find(cur) != visited.end()) return false;
+                visited.insert(cur);
+                visiting.insert(cur);
+
+                const auto& mc = out.macros[cur];
+                if (!mc.promote_callee_name.empty()) {
+                    if (const auto it = fn_macro_idx.find(mc.promote_callee_name);
+                        it != fn_macro_idx.end()) {
+                        const size_t next = it->second;
+                        const auto& next_mc = out.macros[next];
+                        const bool unresolved =
+                            next_mc.promote_kind == ImportedMacroPromoteKind::kNone &&
+                            next_mc.skip_reason.empty();
+                        if (unresolved && dfs(next)) return true;
+                    }
+                }
+                visiting.erase(cur);
+                return false;
+            };
+            return dfs(root_idx);
+        };
+
         for (auto& mc : out.macros) {
             if (!mc.is_function_like) continue;
             if (!mc.skip_reason.empty()) continue;
             if (mc.promote_kind == ImportedMacroPromoteKind::kNone) {
-                mc.skip_reason = "unsupported function-like macro: callee function/macro chain not resolvable";
+                bool cycle = false;
+                if (const auto it = fn_macro_idx.find(mc.name); it != fn_macro_idx.end()) {
+                    cycle = unresolved_macro_chain_cycle(it->second);
+                }
+                set_macro_skip_(
+                    mc,
+                    cycle ? ImportedMacroSkipKind::kChainCycleDetected
+                          : ImportedMacroSkipKind::kUnresolvableChain,
+                    cycle
+                        ? "unsupported function-like macro: cyclic macro-chain dependency detected"
+                        : "unsupported function-like macro: callee function/macro chain not resolvable");
             }
         }
 
@@ -1719,6 +2602,8 @@ namespace parus::cimport {
                 if (!mc.skip_reason.empty()) {
                     out.coverage.skipped_reasons.push_back(mc.name + ": " + mc.skip_reason);
                 }
+                out.coverage.skipped_reason_codes.push_back(
+                    mc.name + ": " + imported_macro_skip_code_text(mc.skip_kind));
             }
         }
 

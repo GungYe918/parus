@@ -818,6 +818,22 @@ namespace parus::backend::aot {
                 return m_.values[v].ty;
             }
 
+            /// @brief 값이 InstConstText에서 만들어진 경우 text constant 메타를 반환한다.
+            std::optional<TextConstantInfo> const_text_info_of_value_(parus::oir::ValueId v) const {
+                using namespace parus::oir;
+                if (v == kInvalidId || static_cast<size_t>(v) >= m_.values.size()) return std::nullopt;
+                const auto& vv = m_.values[v];
+                if (vv.def_b != kInvalidId) return std::nullopt;
+                if (vv.def_a == kInvalidId || static_cast<size_t>(vv.def_a) >= m_.insts.size()) {
+                    return std::nullopt;
+                }
+                const auto& inst = m_.insts[vv.def_a];
+                if (!std::holds_alternative<InstConstText>(inst.data)) return std::nullopt;
+                const auto it = text_constants_.find(vv.def_a);
+                if (it == text_constants_.end()) return std::nullopt;
+                return it->second;
+            }
+
             /// @brief field base 값의 타입 ID를 보수적으로 추론한다.
             parus::ty::TypeId field_base_type_id_(parus::oir::ValueId base) const {
                 using namespace parus::oir;
@@ -1193,6 +1209,22 @@ namespace parus::backend::aot {
                 const std::string& want
             ) {
                 const std::string cur = value_ty_(src);
+                if (want == "{ ptr, i64 }" && cur == "ptr") {
+                    if (auto info = const_text_info_of_value_(src); info.has_value()) {
+                        const std::string data_ptr = next_tmp_();
+                        os << "  " << data_ptr << " = getelementptr ["
+                           << info->storage_len << " x i8], ptr @" << info->symbol
+                           << ", i32 0, i32 0\n";
+                        const std::string with_data = next_tmp_();
+                        os << "  " << with_data
+                           << " = insertvalue { ptr, i64 } undef, ptr " << data_ptr << ", 0\n";
+                        const std::string with_len = next_tmp_();
+                        os << "  " << with_len
+                           << " = insertvalue { ptr, i64 } " << with_data
+                           << ", i64 " << info->len << ", 1\n";
+                        return with_len;
+                    }
+                }
                 const std::string ref = vref_(src);
                 return coerce_ref_(os, ref, cur, want);
             }
@@ -1963,6 +1995,21 @@ namespace parus::backend::aot {
                                 }
                             };
 
+                            auto callee_fn_sig_text = [&](const DirectCalleeInfo& info) -> std::string {
+                                std::ostringstream sig;
+                                sig << info.ret_ty << " (";
+                                for (size_t i = 0; i < info.param_tys.size(); ++i) {
+                                    if (i) sig << ", ";
+                                    sig << info.param_tys[i];
+                                }
+                                if (info.is_variadic) {
+                                    if (!info.param_tys.empty()) sig << ", ";
+                                    sig << "...";
+                                }
+                                sig << ")";
+                                return sig.str();
+                            };
+
                             if (!direct.has_value() &&
                                 (x.callee == kInvalidId || is_const_null_value_(x.callee))) {
                                 if (saw_invalid_callee_call_ != nullptr) {
@@ -1982,24 +2029,39 @@ namespace parus::backend::aot {
 
                             if (direct_arity_ok) {
                                 const std::string cc = llvm_callconv_prefix_(direct->c_callconv);
+                                const std::string direct_sig =
+                                    direct->is_variadic ? callee_fn_sig_text(*direct) : std::string{};
                                 if (direct->ret_ty == "void") {
-                                    os << "  call " << cc << "void @" << direct->symbol << "(";
+                                    os << "  call " << cc;
+                                    if (direct->is_variadic) {
+                                        os << direct_sig << " @" << direct->symbol << "(";
+                                    } else {
+                                        os << "void @" << direct->symbol << "(";
+                                    }
                                     emit_arg_list(os);
                                     os << ")\n";
                                     emit_default_result();
                                 } else if (inst.result != kInvalidId) {
                                     const std::string want_ty = value_ty_(inst.result);
                                     if (want_ty == direct->ret_ty) {
-                                        os << "  " << vref_(inst.result) << " = call " << cc << direct->ret_ty
-                                           << " @" << direct->symbol << "(";
+                                        os << "  " << vref_(inst.result) << " = call " << cc;
+                                        if (direct->is_variadic) {
+                                            os << direct_sig << " @" << direct->symbol << "(";
+                                        } else {
+                                            os << direct->ret_ty << " @" << direct->symbol << "(";
+                                        }
                                         emit_arg_list(os);
                                         os << ")\n";
                                     } else {
                                         // 오버로드/직접 호출 해소가 기대 타입과 어긋나더라도
                                         // SSA 타입 일관성을 보존하도록 결과를 강제 변환한다.
                                         const std::string call_tmp = next_tmp_();
-                                        os << "  " << call_tmp << " = call " << cc << direct->ret_ty
-                                           << " @" << direct->symbol << "(";
+                                        os << "  " << call_tmp << " = call " << cc;
+                                        if (direct->is_variadic) {
+                                            os << direct_sig << " @" << direct->symbol << "(";
+                                        } else {
+                                            os << direct->ret_ty << " @" << direct->symbol << "(";
+                                        }
                                         emit_arg_list(os);
                                         os << ")\n";
                                         const std::string coerced = coerce_ref_(os, call_tmp, direct->ret_ty, want_ty);
@@ -2012,7 +2074,12 @@ namespace parus::backend::aot {
                                         }
                                     }
                                 } else {
-                                    os << "  call " << cc << direct->ret_ty << " @" << direct->symbol << "(";
+                                    os << "  call " << cc;
+                                    if (direct->is_variadic) {
+                                        os << direct_sig << " @" << direct->symbol << "(";
+                                    } else {
+                                        os << direct->ret_ty << " @" << direct->symbol << "(";
+                                    }
                                     emit_arg_list(os);
                                     os << ")\n";
                                 }
@@ -2021,22 +2088,36 @@ namespace parus::backend::aot {
 
                             std::string callee_ptr;
                             std::string indirect_cc{};
+                            std::string indirect_sig{};
                             if (direct.has_value()) {
                                 // direct 메타를 얻었지만 시그니처가 맞지 않아 indirect 경로로 내려가는 경우,
                                 // InstFuncRef 값이 소거되어도 동작하도록 심볼에서 즉시 ptr을 만든다.
                                 callee_ptr = next_tmp_();
                                 os << "  " << callee_ptr << " = bitcast ptr @" << direct->symbol << " to ptr\n";
                                 indirect_cc = llvm_callconv_prefix_(direct->c_callconv);
+                                if (direct->is_variadic) {
+                                    indirect_sig = callee_fn_sig_text(*direct);
+                                }
                             } else {
                                 callee_ptr = coerce_value_(os, x.callee, "ptr");
                             }
                             const std::string rty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
                             if (rty == "void") {
-                                os << "  call " << indirect_cc << "void " << callee_ptr << "(";
+                                os << "  call " << indirect_cc;
+                                if (!indirect_sig.empty()) {
+                                    os << indirect_sig << " " << callee_ptr << "(";
+                                } else {
+                                    os << "void " << callee_ptr << "(";
+                                }
                                 emit_arg_list(os);
                                 os << ")\n";
                             } else {
-                                os << "  " << vref_(inst.result) << " = call " << indirect_cc << rty << " " << callee_ptr << "(";
+                                os << "  " << vref_(inst.result) << " = call " << indirect_cc;
+                                if (!indirect_sig.empty()) {
+                                    os << indirect_sig << " " << callee_ptr << "(";
+                                } else {
+                                    os << rty << " " << callee_ptr << "(";
+                                }
                                 emit_arg_list(os);
                                 os << ")\n";
                             }

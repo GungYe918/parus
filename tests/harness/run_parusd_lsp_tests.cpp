@@ -445,6 +445,65 @@ bool test_definition_cimport_symbol() {
     return true;
 }
 
+bool test_definition_cimport_promoted_macro_symbol() {
+    std::error_code ec{};
+    const auto root = std::filesystem::temp_directory_path(ec) / "parusd-definition-cimport-macro";
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root, ec);
+    if (ec) {
+        std::cerr << "failed to create cimport promoted-macro definition temp root\n";
+        return false;
+    }
+
+    const auto header = root / "Circle.h";
+    const auto main_pr = root / "main.pr";
+    const std::string header_text =
+        "#ifndef CIRCLE_H\n"
+        "#define CIRCLE_H\n"
+        "int c_add(int a, int b);\n"
+        "#define CADD(a, b) c_add(a, b)\n"
+        "#endif\n";
+    const std::string main_text =
+        "import \"Circle.h\" as c;\n"
+        "def main() -> i32 {\n"
+        "  return c::CADD(1i32, 2i32);\n"
+        "}\n";
+    if (!write_text(header, header_text) || !write_text(main_pr, main_text)) {
+        std::cerr << "failed to write cimport promoted-macro definition fixture\n";
+        std::filesystem::remove_all(root, ec);
+        return false;
+    }
+
+    const std::string uri = to_file_uri(main_pr);
+    const std::string header_uri = to_file_uri(header);
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":111,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(main_text) + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":112,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
+            + json_escape(uri) + "\"},\"position\":{\"line\":2,\"character\":12}}}",
+        R"({"jsonrpc":"2.0","id":113,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    std::filesystem::remove_all(root, ec);
+    if (rc != 0) {
+        std::cerr << "cimport promoted-macro definition session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return true;
+    }
+    if (!contains(out, "\"id\":112") || !contains(out, "\"uri\":\"" + header_uri + "\"")) {
+        std::cerr << "cimport promoted-macro definition must jump to C header declaration\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool test_parus_module_first_bundle_context() {
     const auto stamp = std::to_string(
         static_cast<long long>(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -617,11 +676,12 @@ int main() {
     const bool ok5 = test_completion_keywords_parus_and_lei();
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_definition_cimport_symbol();
-    const bool ok8 = test_parus_module_first_bundle_context();
-    const bool ok9 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
-    const bool ok10 = test_parus_incremental_newline_falls_back_cleanly();
+    const bool ok8 = test_definition_cimport_promoted_macro_symbol();
+    const bool ok9 = test_parus_module_first_bundle_context();
+    const bool ok10 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
+    const bool ok11 = test_parus_incremental_newline_falls_back_cleanly();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

@@ -1414,7 +1414,9 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
     }
 
     const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_ok_infer = temp_root / "main_ok_infer.pr";
     const auto main_fail = temp_root / "main_fail.pr";
+    const auto llvm_out = temp_root / "printf_call.ll";
     const auto stdio_h = temp_root / "stdio.h";
     const std::string header_src =
         "#ifndef PARUS_STDIO_H\n"
@@ -1428,6 +1430,13 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "  stdio::printf(\"%d\", 5i32);\n"
         "  return 0i32;\n"
         "}\n";
+    const std::string ok_infer_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  stdio::printf(\"%d\", 5);\n"
+        "  return 0i32;\n"
+        "}\n";
     const std::string fail_src =
         "import \"stdio.h\" as stdio;\n"
         "\n"
@@ -1437,6 +1446,7 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "}\n";
     if (!write_text(stdio_h, header_src) ||
         !write_text(main_ok, ok_src) ||
+        !write_text(main_ok_infer, ok_infer_src) ||
         !write_text(main_fail, fail_src)) {
         std::cerr << "failed to write c-header format bridge test files\n";
         std::filesystem::remove_all(temp_root, ec);
@@ -1445,16 +1455,27 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
 
     auto [rc_ok, out_ok] = run_capture(
         "\"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    auto [rc_ok_infer, out_ok_infer] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok_infer.string() + "\" -fsyntax-only");
     auto [rc_fail, out_fail] = run_capture(
         "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    auto [rc_ir, out_ir_cmd] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() +
+        "\" -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
+    const std::string llvm_ir = read_text(llvm_out);
     std::filesystem::remove_all(temp_root, ec);
 
     if (contains(out_ok, "CImportLibClangUnavailable") ||
+        contains(out_ok_infer, "CImportLibClangUnavailable") ||
         contains(out_fail, "CImportLibClangUnavailable")) {
         return rc_ok != 0;
     }
     if (rc_ok != 0) {
         std::cerr << "stdio::printf(\"%d\", 5i32) should typecheck\n" << out_ok;
+        return false;
+    }
+    if (rc_ok_infer != 0) {
+        std::cerr << "stdio::printf(\"%d\", 5) should typecheck with infer-int promotion\n" << out_ok_infer;
         return false;
     }
     if (rc_fail == 0) {
@@ -1463,6 +1484,18 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
     }
     if (!contains(out_fail, "CAbiFormatStringForbidden")) {
         std::cerr << "stdio::printf($\"...\") rejection must report CAbiFormatStringForbidden\n" << out_fail;
+        return false;
+    }
+    if (rc_ir != 0) {
+        std::cerr << "stdio::printf llvm-ir emission should succeed\n" << out_ir_cmd;
+        return false;
+    }
+    if (!contains(llvm_ir, "call i32 (ptr, ...) @printf(")) {
+        std::cerr << "variadic call must be emitted as typed-call form\n" << llvm_ir;
+        return false;
+    }
+    if (contains(llvm_ir, "call i32 @printf(")) {
+        std::cerr << "variadic call must not be emitted as untyped direct call\n" << llvm_ir;
         return false;
     }
     return true;
@@ -2524,6 +2557,145 @@ bool test_c_header_import_function_like_macro_chain_promoted() {
     return true;
 }
 
+bool test_c_header_import_object_macro_const_expr_resolved() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-object-macro-const-expr";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "M.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_M_OBJECT_CONST_EXPR_H\n"
+        "#define PARUS_M_OBJECT_CONST_EXPR_H\n"
+        "#define A 5\n"
+        "#define B (A + 3)\n"
+        "#define C ((B << 1) | 1)\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"M.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let x: i64 = c::C;\n"
+        "  let y: i64 = c::B;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write object-like macro const-expr test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "object-like macro const expression should resolve to importable constants\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_function_like_macro_chain_cycle_warns() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fn-macro-cycle";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "M.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_M_CHAIN_CYCLE_H\n"
+        "#define PARUS_M_CHAIN_CYCLE_H\n"
+        "#define A(x) B(x)\n"
+        "#define B(x) A(x)\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"M.h\" as c;\n"
+        "def main() -> i32 { return 0i32; }\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write macro cycle cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "cyclic function-like macro chain must not fail whole c-import\n" << out;
+        return false;
+    }
+    if (!contains(out, "CImportFnMacroSkipped")) {
+        std::cerr << "cyclic function-like macro chain should report skip warning\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_function_like_macro_nested_paren_cast_forwarding() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fn-macro-nested-cast";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "M.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_M_NESTED_CAST_H\n"
+        "#define PARUS_M_NESTED_CAST_H\n"
+        "int abs(int x);\n"
+        "#define ABS_WRAP_NESTED(x) abs(((int)(x)))\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"M.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::ABS_WRAP_NESTED(5i32);\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write nested cast macro test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "nested parenthesized cast-forwarding macro should be promoted\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_bitfield_read_write_shim() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -2906,20 +3078,23 @@ int main() {
     const bool ok39 = test_c_header_import_function_like_macro_skip_warning();
     const bool ok40 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
     const bool ok41 = test_c_header_import_function_like_macro_chain_promoted();
-    const bool ok42 = test_c_header_import_bitfield_read_write_shim();
-    const bool ok43 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok44 = test_c_header_import_macos_opengl_isystem();
-    const bool ok45 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok46 = test_actor_rejected_in_no_std_profile();
-    const bool ok47 = test_actor_allowed_in_freestanding_profile();
-    const bool ok48 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok49 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok42 = test_c_header_import_object_macro_const_expr_resolved();
+    const bool ok43 = test_c_header_import_function_like_macro_chain_cycle_warns();
+    const bool ok44 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
+    const bool ok45 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok46 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok47 = test_c_header_import_macos_opengl_isystem();
+    const bool ok48 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok49 = test_actor_rejected_in_no_std_profile();
+    const bool ok50 = test_actor_allowed_in_freestanding_profile();
+    const bool ok51 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok52 = test_hosted_actor_parus_lld_mode_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
-        !ok48 || !ok49) {
+        !ok48 || !ok49 || !ok50 || !ok51 || !ok52) {
         return 1;
     }
 

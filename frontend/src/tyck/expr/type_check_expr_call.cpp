@@ -1444,6 +1444,15 @@ namespace parus::tyck {
             }
         };
 
+        auto is_infer_integer_type = [&](ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType || is_error_(t)) return false;
+            t = read_decay_borrow_local(t);
+            t = canonicalize_transparent_external_typedef_(t);
+            if (t == ty::kInvalidType || t >= types_.count()) return false;
+            const auto& tt = types_.get(t);
+            return tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger;
+        };
+
         auto check_cimport_call_with_positions =
             [&](const sema::Symbol& callee_sym,
                 const std::vector<ast::ExprId>& arg_exprs,
@@ -1530,9 +1539,16 @@ namespace parus::tyck {
                         }
 
                         const ty::TypeId at = check_expr_(arg_eid);
-                        if (!is_c_variadic_abi_arg_type(at)) {
+                        ty::TypeId checked_ty = at;
+                        if (is_infer_integer_type(checked_ty)) {
+                            // C variadic v1 policy: unsuffixed integer literal defaults to C int(i32).
+                            // This keeps printf("%d", 5) usable while preserving explicit typing elsewhere.
+                            (void)resolve_infer_int_in_context_(arg_eid, types_.builtin(ty::Builtin::kI32));
+                            checked_ty = check_expr_(arg_eid);
+                        }
+                        if (!is_c_variadic_abi_arg_type(checked_ty)) {
                             diag_(diag::Code::kCImportVariadicArgTypeUnsupported,
-                                  ast_.expr(arg_eid).span, types_.to_string(at));
+                                  ast_.expr(arg_eid).span, types_.to_string(checked_ty));
                             err_(ast_.expr(arg_eid).span, "unsupported type in C variadic argument");
                             return types_.error();
                         }
