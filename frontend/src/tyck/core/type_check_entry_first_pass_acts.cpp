@@ -88,6 +88,37 @@
             );
         };
 
+        auto core_builtin_use_type = [&](std::string_view name,
+                                         bool& out_is_transparent,
+                                         ty::TypeId& out_ty) -> bool {
+            out_is_transparent = true;
+            out_ty = ty::kInvalidType;
+            using B = ty::Builtin;
+            if (name == "c_void")      { out_ty = types_.builtin(B::kCVoid); return true; }
+            if (name == "c_char")      { out_ty = types_.builtin(B::kCChar); return true; }
+            if (name == "c_schar")     { out_ty = types_.builtin(B::kCSChar); return true; }
+            if (name == "c_uchar")     { out_ty = types_.builtin(B::kCUChar); return true; }
+            if (name == "c_short")     { out_ty = types_.builtin(B::kCShort); return true; }
+            if (name == "c_ushort")    { out_ty = types_.builtin(B::kCUShort); return true; }
+            if (name == "c_int")       { out_ty = types_.builtin(B::kCInt); return true; }
+            if (name == "c_uint")      { out_ty = types_.builtin(B::kCUInt); return true; }
+            if (name == "c_long")      { out_ty = types_.builtin(B::kCLong); return true; }
+            if (name == "c_ulong")     { out_ty = types_.builtin(B::kCULong); return true; }
+            if (name == "c_longlong")  { out_ty = types_.builtin(B::kCLongLong); return true; }
+            if (name == "c_ulonglong") { out_ty = types_.builtin(B::kCULongLong); return true; }
+            if (name == "c_float")     { out_ty = types_.builtin(B::kCFloat); return true; }
+            if (name == "c_double")    { out_ty = types_.builtin(B::kCDouble); return true; }
+            if (name == "c_size")      { out_ty = types_.builtin(B::kCSize); return true; }
+            if (name == "c_ssize")     { out_ty = types_.builtin(B::kCSSize); return true; }
+            if (name == "c_ptrdiff")   { out_ty = types_.builtin(B::kCPtrDiff); return true; }
+            if (name == "vaList") {
+                out_is_transparent = false;
+                out_ty = types_.builtin(B::kVaList);
+                return true;
+            }
+            return false;
+        };
+
         std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;
 
         auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
@@ -139,6 +170,63 @@
                 return;
             }
 
+            if (s.kind == ast::StmtKind::kUse &&
+                s.use_kind == ast::UseKind::kCoreBuiltinUse) {
+                const std::string qname = qualify_decl_name_(s.use_name);
+                const std::string current_bundle = current_bundle_name_();
+                if (current_bundle != "core") {
+                    const std::string msg = "core builtin use is allowed only in bundle-name 'core'";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    return;
+                }
+                if (core_impl_marker_file_ids_.find(s.span.file_id) == core_impl_marker_file_ids_.end()) {
+                    const std::string msg = "core builtin use requires $![Impl::Core]; in the same file";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    return;
+                }
+                const std::string module_head = current_module_head_();
+                const bool module_ok =
+                    qname.starts_with("ext::") ||
+                    module_head == "ext" ||
+                    module_head.ends_with("::ext");
+                if (!module_ok) {
+                    const std::string msg = "core builtin use is allowed only in module 'ext' (got: " + qname + ")";
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    return;
+                }
+
+                bool is_transparent = false;
+                ty::TypeId builtin_ty = ty::kInvalidType;
+                if (!core_builtin_use_type(s.use_name, is_transparent, builtin_ty) ||
+                    builtin_ty == ty::kInvalidType) {
+                    const std::string msg = "unknown core builtin use target: " + std::string(s.use_name);
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    return;
+                }
+                (void)is_transparent;
+
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kType) {
+                        err_(s.span, "duplicate symbol (type): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else {
+                        (void)sym_.update_declared_type(*existing, builtin_ty);
+                    }
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, builtin_ty, s.span);
+                    if (!ins.ok && ins.is_duplicate) {
+                        err_(s.span, "duplicate symbol (type): " + qname);
+                        diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    }
+                }
+                return;
+            }
+
             if (s.kind == ast::StmtKind::kFnDecl) {
                 if (s.fn_generic_param_count > 0) {
                     generic_fn_template_sid_set_.insert(sid);
@@ -182,16 +270,38 @@
                     }
                     (void)ensure_generic_field_instance_from_type_(ret_ty, s.span);
                     if (!is_c_abi_safe_type_(ret_ty, /*allow_void=*/true)) {
+                        const ty::TypeId canon = canonicalize_transparent_external_typedef_(ret_ty);
+                        const bool is_text =
+                            canon != ty::kInvalidType &&
+                            types_.get(canon).kind == ty::Kind::kBuiltin &&
+                            types_.get(canon).builtin == ty::Builtin::kText;
                         diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("return type of '") + std::string(s.name) + "'", types_.to_string(ret_ty));
-                        err_(s.span, "C ABI return type is not FFI-safe: " + types_.to_string(ret_ty));
+                        if (is_text) {
+                            diag_(diag::Code::kTypeErrorGeneric, s.span,
+                                  "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                        }
+                        std::string msg = "C ABI return type is not FFI-safe: " + types_.to_string(ret_ty);
+                        if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                        err_(s.span, msg);
                     }
 
                     for (uint32_t pi = 0; pi < s.param_count; ++pi) {
                         const auto& p = ast_.params()[s.param_begin + pi];
                         (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                         if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
+                            const ty::TypeId canon = canonicalize_transparent_external_typedef_(p.type);
+                            const bool is_text =
+                                canon != ty::kInvalidType &&
+                                types_.get(canon).kind == ty::Kind::kBuiltin &&
+                                types_.get(canon).builtin == ty::Builtin::kText;
                             diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span, std::string("parameter '") + std::string(p.name) + "'", types_.to_string(p.type));
-                            err_(p.span, "C ABI parameter type is not FFI-safe: " + std::string(p.name));
+                            if (is_text) {
+                                diag_(diag::Code::kTypeErrorGeneric, p.span,
+                                      "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                            }
+                            std::string msg = "C ABI parameter type is not FFI-safe: " + std::string(p.name);
+                            if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                            err_(p.span, msg);
                         }
                     }
                 }
@@ -2031,6 +2141,30 @@
             // 추후 TargetConfig로 분리.
             case B::kISize: return v.fits_i64();
             case B::kUSize: return v.fits_u64();
+            case B::kCChar:
+            case B::kCSChar:
+                return v.fits_i8();
+            case B::kCUChar:
+                return v.fits_u8();
+            case B::kCShort:
+                return v.fits_i16();
+            case B::kCUShort:
+                return v.fits_u16();
+            case B::kCInt:
+                return v.fits_i32();
+            case B::kCUInt:
+                return v.fits_u32();
+            case B::kCLong:
+            case B::kCLongLong:
+                return v.fits_i64();
+            case B::kCULong:
+            case B::kCULongLong:
+                return v.fits_u64();
+            case B::kCSize:
+                return v.fits_u64();
+            case B::kCSSize:
+            case B::kCPtrDiff:
+                return v.fits_i64();
 
             default: return false;
         }
@@ -2065,6 +2199,24 @@
             case B::kF32:
             case B::kF64:
             case B::kF128:
+            case B::kCVoid:
+            case B::kCChar:
+            case B::kCSChar:
+            case B::kCUChar:
+            case B::kCShort:
+            case B::kCUShort:
+            case B::kCInt:
+            case B::kCUInt:
+            case B::kCLong:
+            case B::kCULong:
+            case B::kCLongLong:
+            case B::kCULongLong:
+            case B::kCFloat:
+            case B::kCDouble:
+            case B::kCSize:
+            case B::kCSSize:
+            case B::kCPtrDiff:
+            case B::kVaList:
                 return true;
 
             case B::kNull:
@@ -2170,7 +2322,8 @@
         if (et.kind != ty::Kind::kBuiltin) return false;
 
         // float 컨텍스트면 즉시 에러 (암시적 int->float 금지)
-        if (et.builtin == ty::Builtin::kF32 || et.builtin == ty::Builtin::kF64 || et.builtin == ty::Builtin::kF128) {
+        if (et.builtin == ty::Builtin::kF32 || et.builtin == ty::Builtin::kF64 || et.builtin == ty::Builtin::kF128 ||
+            et.builtin == ty::Builtin::kCFloat || et.builtin == ty::Builtin::kCDouble) {
             diag_(diag::Code::kIntToFloatNotAllowed, ast_.expr(eid).span, types_.to_string(expected));
             return false;
         }
@@ -2180,7 +2333,14 @@
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
                 b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
                 b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
-                b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+                b == ty::Builtin::kISize || b == ty::Builtin::kUSize ||
+                b == ty::Builtin::kCChar || b == ty::Builtin::kCSChar || b == ty::Builtin::kCUChar ||
+                b == ty::Builtin::kCShort || b == ty::Builtin::kCUShort ||
+                b == ty::Builtin::kCInt || b == ty::Builtin::kCUInt ||
+                b == ty::Builtin::kCLong || b == ty::Builtin::kCULong ||
+                b == ty::Builtin::kCLongLong || b == ty::Builtin::kCULongLong ||
+                b == ty::Builtin::kCSize || b == ty::Builtin::kCSSize ||
+                b == ty::Builtin::kCPtrDiff;
         };
         if (!is_int_builtin(et.builtin)) return false;
 

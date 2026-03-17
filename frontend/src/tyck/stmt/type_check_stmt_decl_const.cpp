@@ -38,6 +38,22 @@
             sig = types_.make_fn(ret, params.data(), (uint32_t)params.size());
         }
 
+        if (is_va_list_type_(ret)) {
+            const std::string msg = "vaList return type is not supported; use C ABI parameter pass-through only";
+            diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+            err_(s.span, msg);
+        }
+        for (uint32_t i = 0; i < s.param_count; ++i) {
+            const auto& p = ast_.params()[s.param_begin + i];
+            if (!is_va_list_type_(p.type)) continue;
+            if (s.link_abi != ast::LinkAbi::kC) {
+                const std::string msg =
+                    "vaList parameter is allowed only on C ABI function signatures";
+                diag_(diag::Code::kTypeErrorGeneric, p.span, msg);
+                err_(p.span, msg);
+            }
+        }
+
         if (s.link_abi == ast::LinkAbi::kC) {
             if (s.is_throwing) {
                 diag_(diag::Code::kAbiCThrowingFnNotAllowed, s.span, s.name);
@@ -60,10 +76,21 @@
             check_enum_direct_c_abi(ret, s.span, std::string("return type of '") + std::string(s.name) + "'");
             (void)ensure_generic_field_instance_from_type_(ret, s.span);
             if (!is_c_abi_safe_type_(ret, /*allow_void=*/true)) {
+                const ty::TypeId canon = canonicalize_transparent_external_typedef_(ret);
+                const bool is_text =
+                    canon != ty::kInvalidType &&
+                    types_.get(canon).kind == ty::Kind::kBuiltin &&
+                    types_.get(canon).builtin == ty::Builtin::kText;
                 diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span,
                     std::string("return type of '") + std::string(s.name) + "'",
                     types_.to_string(ret));
-                err_(s.span, "C ABI return type is not FFI-safe");
+                if (is_text) {
+                    diag_(diag::Code::kTypeErrorGeneric, s.span,
+                          "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                }
+                std::string msg = "C ABI return type is not FFI-safe";
+                if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                err_(s.span, msg);
             }
 
             for (uint32_t i = 0; i < s.param_count; ++i) {
@@ -71,10 +98,21 @@
                 check_enum_direct_c_abi(p.type, p.span, std::string("parameter '") + std::string(p.name) + "'");
                 (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                 if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
+                    const ty::TypeId canon = canonicalize_transparent_external_typedef_(p.type);
+                    const bool is_text =
+                        canon != ty::kInvalidType &&
+                        types_.get(canon).kind == ty::Kind::kBuiltin &&
+                        types_.get(canon).builtin == ty::Builtin::kText;
                     diag_(diag::Code::kAbiCTypeNotFfiSafe, p.span,
                         std::string("parameter '") + std::string(p.name) + "'",
                         types_.to_string(p.type));
-                    err_(p.span, "C ABI parameter type is not FFI-safe: " + std::string(p.name));
+                    if (is_text) {
+                        diag_(diag::Code::kTypeErrorGeneric, p.span,
+                              "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                    }
+                    std::string msg = "C ABI parameter type is not FFI-safe: " + std::string(p.name);
+                    if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                    err_(p.span, msg);
                 }
             }
         }

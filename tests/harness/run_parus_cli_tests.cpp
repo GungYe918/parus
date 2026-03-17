@@ -12,7 +12,7 @@ namespace {
 
 std::pair<int, std::string> run_capture(const std::string& command) {
     const std::string tmp = "/tmp/parus_cli_capture.txt";
-    const std::string full = "(export PARUS_NO_CORE=1; " + command + ") > " + tmp + " 2>&1";
+    const std::string full = "(" + command + ") > " + tmp + " 2>&1";
     const int rc = std::system(full.c_str());
 
     std::ifstream ifs(tmp, std::ios::binary);
@@ -992,6 +992,162 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
     return true;
 }
 
+bool test_core_ext_scaffold_and_auto_injection() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-core-ext";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "sysroot/.cache/exports", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
+    const std::filesystem::path core_root = repo_root / "sysroot/core";
+    const std::filesystem::path ext_types = core_root / "ext/types.pr";
+    const std::filesystem::path ext_cstr = core_root / "ext/cstr.pr";
+    const std::filesystem::path ext_errors = core_root / "ext/errors.pr";
+    if (!std::filesystem::exists(ext_types, ec) ||
+        !std::filesystem::exists(ext_cstr, ec) ||
+        !std::filesystem::exists(ext_errors, ec)) {
+        std::cerr << "core::ext scaffold source files are missing\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto core_index = temp_root / "sysroot/.cache/exports/core.exports.json";
+    const std::string emit_core_index_cmd =
+        "\"" + bin + "\" tool parusc -- \"" + ext_types.string() + "\"" +
+        " --bundle-name core" +
+        " --bundle-root \"" + core_root.string() + "\"" +
+        " --module-head ext" +
+        " --bundle-source \"" + ext_types.string() + "\"" +
+        " --bundle-source \"" + ext_cstr.string() + "\"" +
+        " --bundle-source \"" + ext_errors.string() + "\"" +
+        " --emit-export-index \"" + core_index.string() + "\"";
+    auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
+    if (rc_emit != 0) {
+        std::cerr << "failed to emit core export-index from core::ext scaffold\n" << out_emit;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string core_index_text = read_text(core_index);
+    if (!contains(core_index_text, "\"path\":\"c_int\"")) {
+        std::cerr << "core export-index must include core::ext::c_int\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto app_main = temp_root / "main.pr";
+    const std::string app_src =
+        "def main() -> i32 {\n"
+        "  let x: core::ext::c_int = 7;\n"
+        "  let sz: core::ext::c_size = 10;\n"
+        "  let ssz: core::ext::c_ssize = 2;\n"
+        "  let diff: core::ext::c_ptrdiff = 3;\n"
+        "  if (sz == 10 and ssz == 2 and diff == 3) {\n"
+        "    return x;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(app_main, app_src)) {
+        std::cerr << "failed to write core::ext app source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string compile_with_core_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + app_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main.o").string() + "\"";
+    auto [rc_with_core, out_with_core] = run_capture(compile_with_core_cmd);
+    if (rc_with_core != 0) {
+        std::cerr << "non-core bundle must resolve core::ext via auto-injected core index\n" << out_with_core;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string compile_no_core_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + app_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main.no_core.o").string() + "\" -fno-core";
+    auto [rc_no_core, out_no_core] = run_capture(compile_no_core_cmd);
+    (void)rc_no_core;
+    (void)out_no_core;
+
+    const auto va_ok_main = temp_root / "main_va_ok.pr";
+    const std::string va_ok_src =
+        "extern \"C\" def vprintf(fmt: ptr core::ext::c_char, ap: core::ext::vaList) -> core::ext::c_int;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(va_ok_main, va_ok_src)) {
+        std::cerr << "failed to write core::ext vaList allowed-usage test source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string va_ok_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + va_ok_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_va_ok.o").string() + "\"";
+    auto [rc_va_ok, out_va_ok] = run_capture(va_ok_cmd);
+    if (rc_va_ok != 0) {
+        std::cerr << "core::ext vaList should be allowed on C ABI parameter signatures\n" << out_va_ok;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto va_fail_main = temp_root / "main_va_fail.pr";
+    const std::string va_fail_src =
+        "def main() -> i32 {\n"
+        "  let x: core::ext::vaList;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(va_fail_main, va_fail_src)) {
+        std::cerr << "failed to write core::ext vaList forbidden-usage test source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string va_fail_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + va_fail_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_va_fail.o").string() + "\"";
+    auto [rc_va_fail, out_va_fail] = run_capture(va_fail_cmd);
+    if (rc_va_fail == 0 || !contains(out_va_fail, "vaList may only appear in C ABI function parameter types")) {
+        std::cerr << "core::ext vaList local binding must be rejected\n" << out_va_fail;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto cimport_main = temp_root / "main_stdio.pr";
+    const std::string cimport_src =
+        "import \"stdio.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  c::printf(\"%d\\n\", 5);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(cimport_main, cimport_src)) {
+        std::cerr << "failed to write cimport/core::ext integration source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string cimport_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + cimport_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_stdio.o").string() + "\"";
+    auto [rc_cimport, out_cimport] = run_capture(cimport_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_cimport != 0) {
+        std::cerr << "stdio + core::ext interop syntax/type check must pass\n" << out_cimport;
+        return false;
+    }
+    return true;
+}
+
 bool test_bundle_alias_proto_impl_path_resolves() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -1214,13 +1370,13 @@ bool test_core_marker_bare_use_special_form() {
 
     const std::string marker_src =
         "$![Impl::Core];\n"
-        "use Equatable;\n"
+        "use c_int;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return 0i32;\n"
         "}\n";
     const std::string no_marker_src =
-        "use Equatable;\n"
+        "use c_int;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return 0i32;\n"
@@ -1240,7 +1396,7 @@ bool test_core_marker_bare_use_special_form() {
             "\"" + bin + "\" tool parusc -- \"" + pr.string() + "\" -fsyntax-only" +
             " --bundle-name " + bundle_name +
             " --bundle-root \"" + temp_root.string() + "\"" +
-            " --module-head " + bundle_name +
+            " --module-head ext" +
             " --bundle-source \"" + pr.string() + "\"";
         return run_capture(cmd);
     };
@@ -3202,12 +3358,13 @@ int main() {
     const bool ok52 = test_actor_allowed_in_freestanding_profile();
     const bool ok53 = test_hosted_actor_link_uses_clang_driver();
     const bool ok54 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok55 = test_core_ext_scaffold_and_auto_injection();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
-        !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54) {
+        !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55) {
         return 1;
     }
 

@@ -18,6 +18,7 @@ add_library(parus_frontend STATIC
     src/cimport/libclang_probe.cpp
     src/cimport/c_header_import.cpp
     src/cimport/cimport_payload.cpp
+    src/cimport/type_repr_normalize.cpp
     src/cimport/toolchain_resolver.cpp
 
     src/passes/check_pipe_hole.cpp

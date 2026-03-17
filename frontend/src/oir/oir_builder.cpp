@@ -2688,14 +2688,22 @@ namespace parus::oir {
                         case TB::kBool:
                         case TB::kI8:
                         case TB::kU8:
+                        case TB::kCChar:
+                        case TB::kCSChar:
+                        case TB::kCUChar:
                             return {1u, 1u};
                         case TB::kI16:
                         case TB::kU16:
+                        case TB::kCShort:
+                        case TB::kCUShort:
                             return {2u, 2u};
                         case TB::kI32:
                         case TB::kU32:
                         case TB::kF32:
                         case TB::kChar:
+                        case TB::kCInt:
+                        case TB::kCUInt:
+                        case TB::kCFloat:
                             return {4u, 4u};
                         case TB::kText:
                             return {16u, 8u};
@@ -2704,7 +2712,20 @@ namespace parus::oir {
                         case TB::kF128:
                             return {16u, 16u};
                         case TB::kUnit:
+                        case TB::kCVoid:
                             return {1u, 1u};
+                        case TB::kCLong:
+                        case TB::kCULong:
+                            return {static_cast<uint32_t>(sizeof(long)), static_cast<uint32_t>(alignof(long))};
+                        case TB::kCLongLong:
+                        case TB::kCULongLong:
+                        case TB::kCDouble:
+                            return {8u, 8u};
+                        case TB::kCSize:
+                        case TB::kCSSize:
+                        case TB::kCPtrDiff:
+                        case TB::kVaList:
+                            return {8u, 8u};
                         case TB::kNever:
                         case TB::kI64:
                         case TB::kU64:

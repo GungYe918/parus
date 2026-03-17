@@ -292,6 +292,14 @@ namespace parus::tyck {
             ? qualify_decl_name_(s.name)
             : std::string(s.name);
 
+        if (s.type != ty::kInvalidType && is_va_list_type_(s.type)) {
+            const std::string msg = "vaList may only appear in C ABI function parameter types";
+            diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+            err_(s.span, msg);
+            if (s.init != ast::k_invalid_expr) (void)check_expr_(s.init, Slot::kValue);
+            return;
+        }
+
         // ----------------------------------------
         // extern variable declaration:
         // - declaration only (no initializer)

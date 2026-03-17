@@ -407,6 +407,30 @@ namespace parus::ty {
             return false;
         }
 
+        // core::ext builtin-use helper names.
+        // NOTE: this does not participate in parser-level builtin recognition.
+        static bool c_builtin_from_name(std::string_view name, Builtin& out) {
+            if (name == "c_void")      { out = Builtin::kCVoid; return true; }
+            if (name == "c_char")      { out = Builtin::kCChar; return true; }
+            if (name == "c_schar")     { out = Builtin::kCSChar; return true; }
+            if (name == "c_uchar")     { out = Builtin::kCUChar; return true; }
+            if (name == "c_short")     { out = Builtin::kCShort; return true; }
+            if (name == "c_ushort")    { out = Builtin::kCUShort; return true; }
+            if (name == "c_int")       { out = Builtin::kCInt; return true; }
+            if (name == "c_uint")      { out = Builtin::kCUInt; return true; }
+            if (name == "c_long")      { out = Builtin::kCLong; return true; }
+            if (name == "c_ulong")     { out = Builtin::kCULong; return true; }
+            if (name == "c_longlong")  { out = Builtin::kCLongLong; return true; }
+            if (name == "c_ulonglong") { out = Builtin::kCULongLong; return true; }
+            if (name == "c_float")     { out = Builtin::kCFloat; return true; }
+            if (name == "c_double")    { out = Builtin::kCDouble; return true; }
+            if (name == "c_size")      { out = Builtin::kCSize; return true; }
+            if (name == "c_ssize")     { out = Builtin::kCSSize; return true; }
+            if (name == "c_ptrdiff")   { out = Builtin::kCPtrDiff; return true; }
+            if (name == "vaList")      { out = Builtin::kVaList; return true; }
+            return false;
+        }
+
         // --------------------
         // Debug helpers
         // --------------------
@@ -440,6 +464,25 @@ namespace parus::ty {
                 case Builtin::kF32: return "f32";
                 case Builtin::kF64: return "f64";
                 case Builtin::kF128: return "f128";
+
+                case Builtin::kCVoid: return "c_void";
+                case Builtin::kCChar: return "c_char";
+                case Builtin::kCSChar: return "c_schar";
+                case Builtin::kCUChar: return "c_uchar";
+                case Builtin::kCShort: return "c_short";
+                case Builtin::kCUShort: return "c_ushort";
+                case Builtin::kCInt: return "c_int";
+                case Builtin::kCUInt: return "c_uint";
+                case Builtin::kCLong: return "c_long";
+                case Builtin::kCULong: return "c_ulong";
+                case Builtin::kCLongLong: return "c_longlong";
+                case Builtin::kCULongLong: return "c_ulonglong";
+                case Builtin::kCFloat: return "c_float";
+                case Builtin::kCDouble: return "c_double";
+                case Builtin::kCSize: return "c_size";
+                case Builtin::kCSSize: return "c_ssize";
+                case Builtin::kCPtrDiff: return "c_ptrdiff";
+                case Builtin::kVaList: return "vaList";
 
                 case Builtin::kInferInteger: return "unsuffixed integer literal";
             }

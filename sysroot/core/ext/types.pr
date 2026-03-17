@@ -1,0 +1,38 @@
+$![Impl::Core];
+
+// C ABI void type used for pointers and opaque FFI boundaries.
+use c_void;
+// C ABI 'char' (target-dependent signedness).
+use c_char;
+// C ABI 'signed char'.
+use c_schar;
+// C ABI 'unsigned char'.
+use c_uchar;
+// C ABI 'short'.
+use c_short;
+// C ABI 'unsigned short'.
+use c_ushort;
+// C ABI 'int'.
+use c_int;
+// C ABI 'unsigned int'.
+use c_uint;
+// C ABI 'long' (target ABI width).
+use c_long;
+// C ABI 'unsigned long' (target ABI width).
+use c_ulong;
+// C ABI 'long long'.
+use c_longlong;
+// C ABI 'unsigned long long'.
+use c_ulonglong;
+// C ABI 'float'.
+use c_float;
+// C ABI 'double'.
+use c_double;
+// C ABI size type (typically size_t).
+use c_size;
+// C ABI signed size type (typically ssize_t).
+use c_ssize;
+// C ABI pointer-difference type (typically ptrdiff_t).
+use c_ptrdiff;
+// Opaque C va_list type; valid only at C ABI signature boundaries.
+use vaList;

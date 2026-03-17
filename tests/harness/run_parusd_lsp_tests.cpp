@@ -225,14 +225,26 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
         "      \"inst_payload\": \"parus_builtin_acts|owner=i32|member=size|self=1\",\n"
         "      \"decl_span\": {\"file\": \"sysroot/core/num/i32.pr\", \"line\": 3, \"col\": 3},\n"
         "      \"is_export\": true\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"type\",\n"
+        "      \"path\": \"c_int\",\n"
+        "      \"link_name\": \"\",\n"
+        "      \"module_head\": \"ext\",\n"
+        "      \"decl_dir\": \"sysroot/core/ext\",\n"
+        "      \"type_repr\": \"core::ext::c_int\",\n"
+        "      \"inst_payload\": \"parus_core_builtin_use|name=c_int\",\n"
+        "      \"decl_span\": {\"file\": \"sysroot/core/ext/types.pr\", \"line\": 1, \"col\": 1},\n"
+        "      \"is_export\": false\n"
         "    }\n"
         "  ]\n"
         "}\n";
     const std::string main_text =
         "def main() -> i32 {\n"
+        "  let y: core::ext::c_int = 10;\n"
         "  let x: i32 = 10i32;\n"
         "  x.size();\n"
-        "  return 0i32;\n"
+        "  return y;\n"
         "}\n";
     if (!write_text(core_index, core_index_text) || !write_text(main_pr, main_text)) {
         std::cerr << "failed to write core export-index fixture\n";

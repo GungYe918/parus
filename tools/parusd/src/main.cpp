@@ -2,6 +2,7 @@
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
 #include <parus/cimport/CImportPayload.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
@@ -2233,6 +2234,7 @@ namespace {
     std::optional<parus::sema::SymbolKind> export_kind_from_string_(std::string_view kind) {
         if (kind == "fn") return parus::sema::SymbolKind::kFn;
         if (kind == "var") return parus::sema::SymbolKind::kVar;
+        if (kind == "type") return parus::sema::SymbolKind::kType;
         if (kind == "field" || kind == "struct") return parus::sema::SymbolKind::kField;
         if (kind == "act") return parus::sema::SymbolKind::kAct;
         return std::nullopt;
@@ -2240,22 +2242,10 @@ namespace {
 
     parus::ty::TypeId parse_type_repr_for_lint_(
         std::string_view type_repr,
+        std::string_view inst_payload,
         parus::ty::TypePool& types
     ) {
-        if (type_repr.empty()) return parus::ty::kInvalidType;
-
-        parus::diag::Bag bag{};
-        parus::Lexer lexer(type_repr, /*file_id=*/1u, &bag);
-        auto toks = lexer.lex_all();
-        if (bag.has_error()) return parus::ty::kInvalidType;
-
-        parus::ast::AstArena ast{};
-        parus::ParserFeatureFlags flags{};
-        parus::Parser parser(toks, ast, types, &bag, /*max_errors=*/16, flags);
-        parus::ty::TypeId out = parus::ty::kInvalidType;
-        (void)parser.parse_type_full_for_macro(&out);
-        if (bag.has_error()) return parus::ty::kInvalidType;
-        return out;
+        return parus::cimport::parse_external_type_repr(type_repr, inst_payload, types);
     }
 
     bool load_export_index_for_lint_(
@@ -2327,7 +2317,6 @@ namespace {
             }
 
             const bool is_export = *is_export_s;
-            if (!is_export) continue;
 
             const auto mapped_kind = export_kind_from_string_(*kind_s);
             if (!mapped_kind.has_value()) continue;
@@ -2356,7 +2345,7 @@ namespace {
             ex.decl_bundle_name = bundle_name;
             ex.module_head = std::move(module_head);
             ex.decl_source_dir_norm = std::move(decl_source_dir);
-            ex.is_export = true;
+            ex.is_export = is_export;
             if (inst_payload_s.has_value()) {
                 ex.inst_payload = std::string(*inst_payload_s);
             }
@@ -3111,7 +3100,11 @@ namespace {
                     for (auto& ex : popt.name_resolve.external_exports) {
                         if (ex.declared_type == parus::ty::kInvalidType) {
                             if (!ex.declared_type_repr.empty()) {
-                                ex.declared_type = parse_type_repr_for_lint_(ex.declared_type_repr, types);
+                                ex.declared_type = parse_type_repr_for_lint_(
+                                    ex.declared_type_repr,
+                                    ex.inst_payload,
+                                    types
+                                );
                             }
                             if (ex.declared_type == parus::ty::kInvalidType) {
                                 if (ex.kind == parus::sema::SymbolKind::kFn) {

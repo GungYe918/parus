@@ -30,6 +30,26 @@ namespace parus::ty {
 
         kF32, kF64, kF128,
 
+        // C ABI builtin family (core::ext::c_*)
+        kCVoid,
+        kCChar,
+        kCSChar,
+        kCUChar,
+        kCShort,
+        kCUShort,
+        kCInt,
+        kCUInt,
+        kCLong,
+        kCULong,
+        kCLongLong,
+        kCULongLong,
+        kCFloat,
+        kCDouble,
+        kCSize,
+        kCSSize,
+        kCPtrDiff,
+        kVaList,
+
         // -------------------------------------------------
         // INTERNAL ONLY (user cannot spell these type names)
         // -------------------------------------------------

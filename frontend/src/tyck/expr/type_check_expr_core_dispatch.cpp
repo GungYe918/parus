@@ -1054,11 +1054,19 @@ namespace parus::tyck {
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
                 b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
                 b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
-                b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+                b == ty::Builtin::kISize || b == ty::Builtin::kUSize ||
+                b == ty::Builtin::kCChar || b == ty::Builtin::kCSChar || b == ty::Builtin::kCUChar ||
+                b == ty::Builtin::kCShort || b == ty::Builtin::kCUShort ||
+                b == ty::Builtin::kCInt || b == ty::Builtin::kCUInt ||
+                b == ty::Builtin::kCLong || b == ty::Builtin::kCULong ||
+                b == ty::Builtin::kCLongLong || b == ty::Builtin::kCULongLong ||
+                b == ty::Builtin::kCSize || b == ty::Builtin::kCSSize ||
+                b == ty::Builtin::kCPtrDiff;
         };
 
         auto is_float_builtin = [&](ty::Builtin b) -> bool {
-            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
+            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128 ||
+                   b == ty::Builtin::kCFloat || b == ty::Builtin::kCDouble;
         };
 
         const bool dst_is_builtin = (dt.kind == ty::Kind::kBuiltin);
@@ -1343,6 +1351,24 @@ namespace parus::tyck {
             case ty::Builtin::kF32:
             case ty::Builtin::kF64:
             case ty::Builtin::kF128:
+            case ty::Builtin::kCVoid:
+            case ty::Builtin::kCChar:
+            case ty::Builtin::kCSChar:
+            case ty::Builtin::kCUChar:
+            case ty::Builtin::kCShort:
+            case ty::Builtin::kCUShort:
+            case ty::Builtin::kCInt:
+            case ty::Builtin::kCUInt:
+            case ty::Builtin::kCLong:
+            case ty::Builtin::kCULong:
+            case ty::Builtin::kCLongLong:
+            case ty::Builtin::kCULongLong:
+            case ty::Builtin::kCFloat:
+            case ty::Builtin::kCDouble:
+            case ty::Builtin::kCSize:
+            case ty::Builtin::kCSSize:
+            case ty::Builtin::kCPtrDiff:
+            case ty::Builtin::kVaList:
                 return true;
             default:
                 return false;
@@ -1498,6 +1524,20 @@ namespace parus::tyck {
             case ty::Builtin::kU128:
             case ty::Builtin::kISize:
             case ty::Builtin::kUSize:
+            case ty::Builtin::kCChar:
+            case ty::Builtin::kCSChar:
+            case ty::Builtin::kCUChar:
+            case ty::Builtin::kCShort:
+            case ty::Builtin::kCUShort:
+            case ty::Builtin::kCInt:
+            case ty::Builtin::kCUInt:
+            case ty::Builtin::kCLong:
+            case ty::Builtin::kCULong:
+            case ty::Builtin::kCLongLong:
+            case ty::Builtin::kCULongLong:
+            case ty::Builtin::kCSize:
+            case ty::Builtin::kCSSize:
+            case ty::Builtin::kCPtrDiff:
                 return true;
             default:
                 return false;

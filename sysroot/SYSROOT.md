@@ -109,9 +109,10 @@ Parus 기본 설치 루트:
 표준 라이브러리 위치는 다음으로 고정한다.
 
 1. 소스: `sysroot/std/src` (프로젝트) / `.../toolchains/<id>/sysroot/std/src` (설치본)
-2. core 소스: 현재 라운드에서는 보류 상태이며 저장소 기본 sysroot에 포함하지 않는다.
+2. core 소스: `sysroot/core`에 최소 v0 스캐폴드(`core::ext`)를 포함한다.
    - core export-index(`sysroot/.cache/exports/core.exports.json`)가 없으면 자동 주입은 조용히 skip된다.
    - `-fno-core` 또는 `PARUS_NO_CORE=1`이면 자동 주입을 명시적으로 비활성화한다.
+   - core 소스 `.pr` 파일은 `$![Impl::Core];` 파일 마커를 사용한다.
 3. target별 파생 산출물:
    - `.../targets/<triple>/std/parlib`
    - `.../targets/<triple>/std/obj`

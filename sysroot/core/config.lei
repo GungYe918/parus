@@ -1,0 +1,11 @@
+import core from "./core.lei";
+
+plan master = master & {
+  project = {
+    name: "parus-core",
+    version: "0.1.0",
+  };
+  bundles = [core::core_bundle];
+  tasks = [];
+  codegens = [];
+};

@@ -202,3 +202,8 @@ export def add(a: i32, b: i32) -> i32 {
 10. 미지원/부분지원 처리 정책:
 10-a. `##`, `#`, statement macro, compiler-extension macro, variadic function-like macro는 skip+warning으로 처리한다.
 10-b. silent skip은 금지하며 skip 항목은 reason code와 함께 진단에 노출한다.
+11. C ABI 호출 인자/타입은 `core::ext::c_*` 및 `core::ext::vaList` 표면을 사용한다.
+11-a. non-core 번들에서는 core auto injection이 활성화된 경우 `core::ext` 경로를 import 없이 사용할 수 있다.
+11-b. `core::ext::vaList`는 opaque 타입이며 C ABI 함수 시그니처 파라미터 위치에서만 허용한다.
+11-c. `-fno-core`(또는 `PARUS_NO_CORE=1`)에서 c-import를 사용하면 하드 에러다.
+11-d. `text`는 C ABI 타입으로 허용하지 않으며, 문자열 경계는 `ptr core::ext::c_char`와 명시 변환으로 처리한다.

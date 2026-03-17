@@ -723,6 +723,7 @@ namespace parus::tyck {
 
         bool is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const;
         bool is_c_abi_safe_type_impl_(ty::TypeId t, bool allow_void, std::unordered_set<ty::TypeId>& visiting) const;
+        bool is_va_list_type_(ty::TypeId t) const;
         void check_c_abi_global_decl_(const ast::Stmt& s);
         std::vector<std::string> collect_generic_param_names_(const ast::Stmt& fn_decl) const;
         ty::TypeId substitute_generic_type_(

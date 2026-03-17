@@ -136,12 +136,43 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 2. optional, actor, class 직접 값 전달
 3. 구현 의존 내부 타입
 4. 표준 라이브러리 `String` 직접 값 전달 (`Utf8Span`/`Utf8Buf`로 변환해야 함)
+5. `text` 직접 C ABI 전달 (`ptr core::ext::c_char` + 명시 변환 경계 사용)
 
 ### 7.3 오버로딩/심볼 규칙
 
 1. C ABI 경계 함수는 오버로딩을 허용하지 않는다
 2. 동일 C 심볼의 중복 선언/정의는 컴파일 에러다
 3. `export "C"` 심볼은 C ABI용 비맹글 심볼로 취급한다
+
+### 7.4 `core::ext` C ABI 타입 규칙 (v0)
+
+1. C ABI 경계 타입은 `core::ext::c_*` 및 `core::ext::vaList`를 표준 표면으로 사용한다.
+2. `core::ext::c_*`는 대응 C ABI 원시 타입과 동치(transparent alias)로 취급한다.
+3. `vaList`는 opaque 타입이며 C ABI 시그니처 경계에서만 허용한다.
+4. `$c_str` 매크로와 `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
+
+`core::ext` 매핑 표(요약):
+
+| Parus type | C counterpart | ABI 폭 규칙 |
+| --- | --- | --- |
+| `core::ext::c_void` | `void` | 값 타입이 아니라 경계 표기용 |
+| `core::ext::c_char` | `char` | target signedness 따름 |
+| `core::ext::c_schar` | `signed char` | 8-bit |
+| `core::ext::c_uchar` | `unsigned char` | 8-bit |
+| `core::ext::c_short` | `short` | 16-bit |
+| `core::ext::c_ushort` | `unsigned short` | 16-bit |
+| `core::ext::c_int` | `int` | 32-bit |
+| `core::ext::c_uint` | `unsigned int` | 32-bit |
+| `core::ext::c_long` | `long` | target ABI(LP64/LLP64) |
+| `core::ext::c_ulong` | `unsigned long` | target ABI(LP64/LLP64) |
+| `core::ext::c_longlong` | `long long` | 64-bit |
+| `core::ext::c_ulonglong` | `unsigned long long` | 64-bit |
+| `core::ext::c_float` | `float` | 32-bit IEEE |
+| `core::ext::c_double` | `double` | 64-bit IEEE |
+| `core::ext::c_size` | `size_t` | target pointer-width |
+| `core::ext::c_ssize` | `ssize_t` | target pointer-width signed |
+| `core::ext::c_ptrdiff` | `ptrdiff_t` | target pointer-width signed |
+| `core::ext::vaList` | `va_list` | opaque, C ABI parameter 경계 전용 |
 
 ---
 

@@ -704,12 +704,24 @@ namespace parus::tyck {
         return is_c_abi_safe_type_impl_(t, allow_void, visiting);
     }
 
+    bool TypeChecker::is_va_list_type_(ty::TypeId t) const {
+        if (t == ty::kInvalidType) return false;
+        t = canonicalize_transparent_external_typedef_(t);
+        if (t == ty::kInvalidType) return false;
+        const auto& tt = types_.get(t);
+        return tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kVaList;
+    }
+
     bool TypeChecker::is_c_abi_safe_type_impl_(
         ty::TypeId t,
         bool allow_void,
         std::unordered_set<ty::TypeId>& visiting
     ) const {
         if (t == ty::kInvalidType) return false;
+        const ty::TypeId canon = canonicalize_transparent_external_typedef_(t);
+        if (canon != t) {
+            return is_c_abi_safe_type_impl_(canon, allow_void, visiting);
+        }
         const auto& tt = types_.get(t);
 
         switch (tt.kind) {
@@ -731,9 +743,26 @@ namespace parus::tyck {
                     case B::kUSize:
                     case B::kF32:
                     case B::kF64:
-                    case B::kText:
+                    case B::kCChar:
+                    case B::kCSChar:
+                    case B::kCUChar:
+                    case B::kCShort:
+                    case B::kCUShort:
+                    case B::kCInt:
+                    case B::kCUInt:
+                    case B::kCLong:
+                    case B::kCULong:
+                    case B::kCLongLong:
+                    case B::kCULongLong:
+                    case B::kCFloat:
+                    case B::kCDouble:
+                    case B::kCSize:
+                    case B::kCSSize:
+                    case B::kCPtrDiff:
+                    case B::kVaList:
                         return true;
                     case B::kUnit:
+                    case B::kCVoid:
                         return allow_void;
                     default:
                         return false;
@@ -742,7 +771,7 @@ namespace parus::tyck {
 
             case ty::Kind::kPtr:
                 // ptr T / ptr mut T: pointee도 FFI-safe여야 한다.
-                return is_c_abi_safe_type_impl_(tt.elem, /*allow_void=*/false, visiting);
+                return is_c_abi_safe_type_impl_(tt.elem, /*allow_void=*/true, visiting);
 
             case ty::Kind::kBorrow:
             case ty::Kind::kEscape:
@@ -798,8 +827,21 @@ namespace parus::tyck {
         }
 
         if (!is_c_abi_safe_type_(s.type, /*allow_void=*/false)) {
+            const ty::TypeId canon = canonicalize_transparent_external_typedef_(s.type);
+            const bool is_text =
+                canon != ty::kInvalidType &&
+                types_.get(canon).kind == ty::Kind::kBuiltin &&
+                types_.get(canon).builtin == ty::Builtin::kText;
             diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("global '") + std::string(s.name) + "'", types_.to_string(s.type));
-            err_(s.span, "C ABI global type is not FFI-safe: " + types_.to_string(s.type));
+            if (is_text) {
+                diag_(diag::Code::kTypeErrorGeneric, s.span,
+                      "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+            }
+            std::string msg = "C ABI global type is not FFI-safe: " + types_.to_string(s.type);
+            if (is_text) {
+                msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+            }
+            err_(s.span, msg);
         }
     }
 

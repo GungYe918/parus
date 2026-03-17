@@ -105,7 +105,8 @@
         }
 
         ty::Builtin builtin{};
-        if (ty::TypePool::builtin_from_name(repr, builtin)) {
+        if (ty::TypePool::builtin_from_name(repr, builtin) ||
+            ty::TypePool::c_builtin_from_name(repr, builtin)) {
             out = types_.builtin(builtin);
             return out != ty::kInvalidType;
         }
@@ -128,6 +129,11 @@
             begin = split + 2;
         }
         if (segs.empty()) return false;
+        ty::Builtin cb{};
+        if (ty::TypePool::c_builtin_from_name(segs.back(), cb)) {
+            out = types_.builtin(cb);
+            return out != ty::kInvalidType;
+        }
         out = types_.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
         return out != ty::kInvalidType;
     }
@@ -386,13 +392,53 @@
         ty::TypeId cur = t;
         for (uint32_t depth = 0; depth < 8; ++depth) {
             if (cur == ty::kInvalidType) break;
+            const auto& cur_ty = types_.get(cur);
+            if (cur_ty.kind == ty::Kind::kBuiltin) {
+                using B = ty::Builtin;
+                switch (cur_ty.builtin) {
+                    case B::kCChar:
+#if defined(__CHAR_UNSIGNED__)
+                        cur = types_.builtin(B::kU8); continue;
+#else
+                        cur = types_.builtin(B::kI8); continue;
+#endif
+                    case B::kCSChar:    cur = types_.builtin(B::kI8); continue;
+                    case B::kCUChar:    cur = types_.builtin(B::kU8); continue;
+                    case B::kCShort:     cur = types_.builtin(B::kI16); continue;
+                    case B::kCUShort:    cur = types_.builtin(B::kU16); continue;
+                    case B::kCInt:       cur = types_.builtin(B::kI32); continue;
+                    case B::kCUInt:      cur = types_.builtin(B::kU32); continue;
+#if defined(_WIN64)
+                    case B::kCLong:      cur = types_.builtin(B::kI32); continue;
+                    case B::kCULong:     cur = types_.builtin(B::kU32); continue;
+#else
+                    case B::kCLong:      cur = types_.builtin(B::kI64); continue;
+                    case B::kCULong:     cur = types_.builtin(B::kU64); continue;
+#endif
+                    case B::kCLongLong:  cur = types_.builtin(B::kI64); continue;
+                    case B::kCULongLong: cur = types_.builtin(B::kU64); continue;
+                    case B::kCFloat:     cur = types_.builtin(B::kF32); continue;
+                    case B::kCDouble:    cur = types_.builtin(B::kF64); continue;
+                    case B::kCSize:      cur = types_.builtin(B::kUSize); continue;
+                    case B::kCSSize:     cur = types_.builtin(B::kISize); continue;
+                    case B::kCPtrDiff:   cur = types_.builtin(B::kISize); continue;
+                    default: break;
+                }
+            }
             const auto& tt = types_.get(cur);
             if (tt.kind != ty::Kind::kNamedUser) break;
 
             auto sid = lookup_symbol_(types_.to_string(cur));
             if (!sid.has_value()) break;
             const auto& sym = sym_.symbol(*sid);
-            if (!sym.is_external || sym.kind != sema::SymbolKind::kType || sym.external_payload.empty()) {
+            if (sym.kind != sema::SymbolKind::kType) {
+                break;
+            }
+            if (sym.declared_type != ty::kInvalidType && sym.declared_type != cur) {
+                cur = sym.declared_type;
+                continue;
+            }
+            if (!sym.is_external || sym.external_payload.empty()) {
                 break;
             }
 
@@ -1337,6 +1383,8 @@
         ty::TypeId rt = check_expr_(e.b);
         lt = read_decay_borrow_(types_, lt);
         rt = read_decay_borrow_(types_, rt);
+        lt = canonicalize_transparent_external_typedef_(lt);
+        rt = canonicalize_transparent_external_typedef_(rt);
         const ActiveActsSelection* forced_selection = nullptr;
         if (auto sid = root_place_symbol_(e.a)) {
             forced_selection = lookup_symbol_acts_selection_(*sid);
@@ -1357,7 +1405,8 @@
         auto is_float = [&](ty::TypeId t) -> bool {
             if (!is_builtin(t)) return false;
             auto b = builtin_of(t);
-            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128;
+            return b == ty::Builtin::kF32 || b == ty::Builtin::kF64 || b == ty::Builtin::kF128 ||
+                   b == ty::Builtin::kCFloat || b == ty::Builtin::kCDouble;
         };
 
         auto is_int = [&](ty::TypeId t) -> bool {
@@ -1367,7 +1416,14 @@
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
                 b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
                 b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
-                b == ty::Builtin::kISize || b == ty::Builtin::kUSize;
+                b == ty::Builtin::kISize || b == ty::Builtin::kUSize ||
+                b == ty::Builtin::kCChar || b == ty::Builtin::kCSChar || b == ty::Builtin::kCUChar ||
+                b == ty::Builtin::kCShort || b == ty::Builtin::kCUShort ||
+                b == ty::Builtin::kCInt || b == ty::Builtin::kCUInt ||
+                b == ty::Builtin::kCLong || b == ty::Builtin::kCULong ||
+                b == ty::Builtin::kCLongLong || b == ty::Builtin::kCULongLong ||
+                b == ty::Builtin::kCSize || b == ty::Builtin::kCSSize ||
+                b == ty::Builtin::kCPtrDiff;
         };
 
         // ------------------------------------------------------------

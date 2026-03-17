@@ -1,0 +1,11 @@
+export plan ext_module = module & {
+  sources = [
+    "ext/types.pr",
+    "ext/errors.pr",
+    "ext/cstr.pr",
+  ];
+  imports = [];
+  cimport = {
+    isystem: [],
+  };
+};

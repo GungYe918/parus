@@ -68,18 +68,6 @@ namespace parus::cimport {
             return out;
         }
 
-        static bool map_c_integer_by_size_(CXType t, bool is_unsigned, std::string& out) {
-            const long long size = clang_Type_getSizeOf(t);
-            if (size <= 0) return false;
-            switch (size) {
-                case 1: out = is_unsigned ? "u8" : "i8"; return true;
-                case 2: out = is_unsigned ? "u16" : "i16"; return true;
-                case 4: out = is_unsigned ? "u32" : "i32"; return true;
-                case 8: out = is_unsigned ? "u64" : "i64"; return true;
-                default: return false;
-            }
-        }
-
         static bool is_char_like_type_(CXType t) {
             const CXType ct = clang_getCanonicalType(t);
             switch (ct.kind) {
@@ -1290,6 +1278,11 @@ namespace parus::cimport {
         static bool map_c_type_to_parus_(CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth) {
             if (depth > 8) return false;
 
+            if (is_va_list_type_(t)) {
+                out = "core::ext::vaList";
+                return true;
+            }
+
             if (t.kind == CXType_Typedef) {
                 const CXCursor td = clang_getTypeDeclaration(t);
                 const std::string td_name = to_std_string_(clang_getCursorSpelling(td));
@@ -1302,55 +1295,57 @@ namespace parus::cimport {
             const CXType ct = clang_getCanonicalType(t);
             switch (ct.kind) {
                 case CXType_Void:
-                    out = "void";
+                    out = "core::ext::c_void";
                     return true;
                 case CXType_Bool:
                     out = "bool";
                     return true;
                 case CXType_Char_U:
                 case CXType_UChar:
-                    out = "u8";
+                    out = "core::ext::c_uchar";
                     return true;
                 case CXType_Char_S:
                 case CXType_SChar:
-                    out = "i8";
+                    out = "core::ext::c_schar";
                     return true;
                 case CXType_UShort:
-                    out = "u16";
+                    out = "core::ext::c_ushort";
                     return true;
                 case CXType_UInt:
-                    out = "u32";
+                    out = "core::ext::c_uint";
                     return true;
                 case CXType_ULong:
-                    return map_c_integer_by_size_(ct, /*is_unsigned=*/true, out);
+                    out = "core::ext::c_ulong";
+                    return true;
                 case CXType_ULongLong:
-                    out = "u64";
+                    out = "core::ext::c_ulonglong";
                     return true;
                 case CXType_UInt128:
                     out = "u128";
                     return true;
                 case CXType_Short:
-                    out = "i16";
+                    out = "core::ext::c_short";
                     return true;
                 case CXType_Int:
-                    out = "i32";
+                    out = "core::ext::c_int";
                     return true;
                 case CXType_Long:
-                    return map_c_integer_by_size_(ct, /*is_unsigned=*/false, out);
+                    out = "core::ext::c_long";
+                    return true;
                 case CXType_LongLong:
-                    out = "i64";
+                    out = "core::ext::c_longlong";
                     return true;
                 case CXType_Int128:
                     out = "i128";
                     return true;
                 case CXType_Float:
-                    out = "f32";
+                    out = "core::ext::c_float";
                     return true;
                 case CXType_Double:
-                    out = "f64";
+                    out = "core::ext::c_double";
                     return true;
                 case CXType_LongDouble:
-                    out = "f64";
+                    out = "core::ext::c_double";
                     return true;
                 case CXType_FunctionProto:
                 case CXType_FunctionNoProto:
@@ -1379,9 +1374,7 @@ namespace parus::cimport {
                     if (elem.kind == CXType_Invalid) return false;
 
                     std::string elem_repr{};
-                    if (elem.kind == CXType_Void) {
-                        elem_repr = "u8";
-                    } else if (elem.kind == CXType_FunctionProto || elem.kind == CXType_FunctionNoProto) {
+                    if (elem.kind == CXType_FunctionProto || elem.kind == CXType_FunctionNoProto) {
                         if (!map_c_fn_type_to_parus_(elem, elem_repr, ctx, depth + 1)) {
                             return false;
                         }

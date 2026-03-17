@@ -188,11 +188,29 @@ namespace parus::backend::aot {
                         case B::kNever: return "void";
                         case B::kBool:  return "i1";
                         case B::kChar:  return "i32";
+                        case B::kCVoid: return "void";
                         case B::kText:  return "{ ptr, i64 }";
                         case B::kI8:    return "i8";
+                        case B::kCChar:
+                        case B::kCSChar: return "i8";
+                        case B::kCUChar: return "i8";
                         case B::kI16:   return "i16";
+                        case B::kCShort: return "i16";
+                        case B::kCUShort: return "i16";
                         case B::kI32:   return "i32";
+                        case B::kCInt: return "i32";
+                        case B::kCUInt: return "i32";
                         case B::kI64:   return "i64";
+                        case B::kCLong:
+                        case B::kCULong:
+#if defined(_WIN64)
+                            return "i32";
+#else
+                            return "i64";
+#endif
+                        case B::kCLongLong:
+                        case B::kCULongLong:
+                            return "i64";
                         case B::kI128:  return "i128";
                         case B::kU8:    return "i8";
                         case B::kU16:   return "i16";
@@ -201,8 +219,14 @@ namespace parus::backend::aot {
                         case B::kU128:  return "i128";
                         case B::kISize: return "i64";
                         case B::kUSize: return "i64";
+                        case B::kCSize: return "i64";
+                        case B::kCSSize: return "i64";
+                        case B::kCPtrDiff: return "i64";
+                        case B::kVaList: return "ptr";
                         case B::kF32:   return "float";
+                        case B::kCFloat: return "float";
                         case B::kF64:   return "double";
+                        case B::kCDouble: return "double";
                         case B::kF128:  return "fp128";
                         case B::kNull:  return "ptr";
                         case B::kInferInteger: return "i64";
@@ -280,24 +304,51 @@ namespace parus::backend::aot {
                     switch (t.builtin) {
                         case B::kBool: return 1;
                         case B::kI8:
-                        case B::kU8: return 1;
+                        case B::kU8:
+                        case B::kCChar:
+                        case B::kCSChar:
+                        case B::kCUChar:
+                            return 1;
                         case B::kI16:
-                        case B::kU16: return 2;
+                        case B::kU16:
+                        case B::kCShort:
+                        case B::kCUShort:
+                            return 2;
                         case B::kI32:
                         case B::kU32:
                         case B::kF32:
-                        case B::kChar: return 4;
+                        case B::kChar:
+                        case B::kCInt:
+                        case B::kCUInt:
+                        case B::kCFloat:
+                            return 4;
                         case B::kText: return 16;
+                        case B::kCLong:
+                        case B::kCULong:
+#if defined(_WIN64)
+                            return 4;
+#else
+                            return 8;
+#endif
                         case B::kI64:
                         case B::kU64:
                         case B::kF64:
                         case B::kISize:
                         case B::kUSize:
+                        case B::kCLongLong:
+                        case B::kCULongLong:
+                        case B::kCDouble:
+                        case B::kCSize:
+                        case B::kCSSize:
+                        case B::kCPtrDiff:
+                        case B::kVaList:
                         case B::kNull:
                         case B::kInferInteger:
                         case B::kUnit:
                         case B::kNever:
                             return 8;
+                        case B::kCVoid:
+                            return 1;
                         case B::kI128:
                         case B::kU128:
                         case B::kF128:

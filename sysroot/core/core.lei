@@ -1,0 +1,11 @@
+import ext from "./ext/ext.lei";
+
+export plan core_bundle = bundle & {
+  name = "core";
+  kind = "lib";
+  modules = [ext::ext_module];
+  deps = [];
+  cimport = {
+    isystem: [],
+  };
+};

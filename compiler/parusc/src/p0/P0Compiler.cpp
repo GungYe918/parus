@@ -7,6 +7,7 @@
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
 #include <parus/cimport/CImportPayload.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
@@ -328,6 +329,24 @@ namespace parusc::p0 {
             out += "::";
             out += std::string(base);
             return out;
+        }
+
+        bool core_builtin_use_type_repr_(std::string_view name,
+                                         std::string& out_type_repr,
+                                         std::string& out_payload) {
+            static const std::unordered_set<std::string> kAllowed = {
+                "c_void", "c_char", "c_schar", "c_uchar",
+                "c_short", "c_ushort", "c_int", "c_uint",
+                "c_long", "c_ulong", "c_longlong", "c_ulonglong",
+                "c_float", "c_double",
+                "c_size", "c_ssize", "c_ptrdiff",
+                "vaList"
+            };
+            if (kAllowed.find(std::string(name)) == kAllowed.end()) return false;
+            out_type_repr = "core::ext::";
+            out_type_repr += std::string(name);
+            out_payload = "parus_core_builtin_use|name=" + std::string(name);
+            return true;
         }
 
         std::string parent_dir_norm_(std::string_view path) {
@@ -728,6 +747,30 @@ namespace parusc::p0 {
                             s.span,
                             /*link_name=*/{},
                             std::move(payload));
+                return;
+            }
+
+            if (s.kind == parus::ast::StmtKind::kUse &&
+                s.use_kind == parus::ast::UseKind::kCoreBuiltinUse &&
+                !s.use_name.empty()) {
+                std::string type_repr{};
+                std::string payload{};
+                if (!core_builtin_use_type_repr_(s.use_name, type_repr, payload)) return;
+                ExportSurfaceEntry e{};
+                e.kind = parus::sema::SymbolKind::kType;
+                e.kind_text = symbol_kind_to_text_(e.kind);
+                e.path = qualify_name_(ns, s.use_name);
+                e.module_head = module_head;
+                e.decl_dir = decl_dir;
+                e.type_repr = std::move(type_repr);
+                e.inst_payload = std::move(payload);
+                e.decl_file = decl_file;
+                const auto lc = sm.line_col(s.span.file_id, s.span.lo);
+                e.decl_line = lc.line;
+                e.decl_col = lc.col;
+                e.decl_bundle = bundle_name;
+                e.is_export = s.is_export;
+                out.push_back(std::move(e));
                 return;
             }
         }
@@ -1150,23 +1193,10 @@ namespace parusc::p0 {
 
         parus::ty::TypeId parse_type_repr_into_(
             std::string_view type_repr,
+            std::string_view inst_payload,
             parus::ty::TypePool& types
         ) {
-            if (type_repr.empty()) return parus::ty::kInvalidType;
-
-            parus::SourceManager sm{};
-            parus::diag::Bag bag{};
-            const uint32_t fid = sm.add("<export-index:type>", std::string(type_repr));
-            auto toks = lex_with_sm_(sm, fid, &bag);
-            if (bag.has_error()) return parus::ty::kInvalidType;
-
-            parus::ast::AstArena ast{};
-            parus::ParserFeatureFlags flags{};
-            parus::Parser p(toks, ast, types, &bag, /*max_errors=*/16, flags);
-            parus::ty::TypeId out = parus::ty::kInvalidType;
-            (void)p.parse_type_full_for_macro(&out);
-            if (bag.has_error()) return parus::ty::kInvalidType;
-            return out;
+            return parus::cimport::parse_external_type_repr(type_repr, inst_payload, types);
         }
 
 #if PARUSC_HAS_AOT_BACKEND
@@ -1718,6 +1748,17 @@ namespace parusc::p0 {
         std::string auto_core_export_index_path{};
         if (auto_core_injection) {
             auto_core_export_index_path = resolve_core_export_index_path_(opt);
+        }
+        if (!c_header_imports.empty() && disable_auto_core) {
+            parus::diag::Diagnostic d(
+                parus::diag::Severity::kError,
+                parus::diag::Code::kTypeErrorGeneric,
+                root_span
+            );
+            d.add_arg("c-import requires implicit core injection; disable '-fno-core'/PARUS_NO_CORE or avoid C header import");
+            bag.add(std::move(d));
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
         }
 
         const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, opt.macro_budget);
@@ -2419,7 +2460,7 @@ namespace parusc::p0 {
             x.kind = e.kind;
             x.path = std::move(lookup_path);
             x.link_name = e.link_name;
-            x.declared_type = parse_type_repr_into_(e.type_repr, types);
+            x.declared_type = parse_type_repr_into_(e.type_repr, e.inst_payload, types);
             x.declared_type_repr = e.type_repr;
             x.decl_span = root_span;
             x.decl_bundle_name = e.decl_bundle;

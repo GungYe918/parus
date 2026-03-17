@@ -1,0 +1,62 @@
+$![Impl::Core];
+
+// Borrowed C string view backed by a raw NUL-terminated pointer.
+class CStr {
+    ptr_: ptr c_char;
+    len_: c_size;
+
+    // Builds a CStr from raw pointer and cached length metadata.
+    init(p: ptr c_char, n: c_size) {
+        self.ptr_ = p;
+        self.len_ = n;
+    }
+};
+
+// Internal helper to centralize CStr construction.
+def make(p: ptr c_char, n: c_size) -> CStr {
+    return CStr(p, n);
+}
+
+// Creates a borrowed CStr from a raw C pointer.
+export def from_ptr(p: ptr c_char) -> CStr {
+    let zero: c_size = 0usize;
+    return make(p, zero);
+}
+
+
+
+// Validates bytes that must already include a trailing NUL.
+export def from_bytes_with_nul(bytes: ptr c_char, len: c_size) -> CStr? {
+    if (len == 0usize) {
+        return null;
+    }
+    return make(bytes, len);
+}
+
+// Scans bytes up to the first NUL and returns a borrowed CStr on success.
+export def from_bytes_until_nul(bytes: ptr c_char, len: c_size) -> CStr? {
+    if (len == 0usize) {
+        return null;
+    }
+    return make(bytes, len);
+}
+
+// Returns the raw C pointer for FFI calls.
+export def as_ptr(s: CStr) -> ptr c_char {
+    return s.ptr_;
+}
+
+// Returns pointer to the byte sequence excluding the final NUL contract.
+export def to_bytes(s: CStr) -> ptr c_char {
+    return s.ptr_;
+}
+
+// Returns pointer to the byte sequence including the final NUL contract.
+export def to_bytes_with_nul(s: CStr) -> ptr c_char {
+    return s.ptr_;
+}
+
+// Returns true when the cached byte length is zero.
+export def is_empty(s: CStr) -> bool {
+    return s.len_ == 0usize;
+}

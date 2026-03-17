@@ -1354,6 +1354,44 @@ namespace parus::tyck {
         const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
             const ty::TypeId at = arg_type_now(a);
             if (can_assign_(expected, at)) return true;
+
+            // C ABI convenience: allow plain string literal for C char pointer slots.
+            if (a != nullptr && a->expr != ast::k_invalid_expr &&
+                (size_t)a->expr < ast_.exprs().size()) {
+                const auto& ex = ast_.expr(a->expr);
+                if (ex.kind == ast::ExprKind::kStringLit && !ex.string_is_format) {
+                    ty::TypeId et = expected;
+                    if (et != ty::kInvalidType && et < types_.count()) {
+                        const auto& et0 = types_.get(et);
+                        if (et0.kind == ty::Kind::kBorrow) {
+                            et = et0.elem;
+                        }
+                    }
+                    if (et != ty::kInvalidType && et < types_.count()) {
+                        const auto& ett = types_.get(et);
+                        if (ett.kind == ty::Kind::kPtr && ett.elem != ty::kInvalidType) {
+                            const ty::TypeId elem = canonicalize_transparent_external_typedef_(ett.elem);
+                            if (elem != ty::kInvalidType && elem < types_.count()) {
+                                const auto& bt = types_.get(elem);
+                                if (bt.kind == ty::Kind::kBuiltin) {
+                                    switch (bt.builtin) {
+                                        case ty::Builtin::kChar:
+                                        case ty::Builtin::kI8:
+                                        case ty::Builtin::kU8:
+                                        case ty::Builtin::kCChar:
+                                        case ty::Builtin::kCSChar:
+                                        case ty::Builtin::kCUChar:
+                                            return true;
+                                        default:
+                                            break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (is_optional_(expected)) {
                 const ty::TypeId elem = optional_elem_(expected);
                 if (elem != ty::kInvalidType && can_assign_(elem, at)) return true;
@@ -1392,6 +1430,7 @@ namespace parus::tyck {
         auto is_c_variadic_abi_arg_type = [&](ty::TypeId t) -> bool {
             if (t == ty::kInvalidType || is_error_(t)) return false;
             t = read_decay_borrow_local(t);
+            t = canonicalize_transparent_external_typedef_(t);
             const auto& tt = types_.get(t);
             if (tt.kind == ty::Kind::kPtr) return true;
             if (tt.kind != ty::Kind::kBuiltin) return false;
@@ -1413,6 +1452,22 @@ namespace parus::tyck {
                 case ty::Builtin::kF32:
                 case ty::Builtin::kF64:
                 case ty::Builtin::kF128:
+                case ty::Builtin::kCChar:
+                case ty::Builtin::kCSChar:
+                case ty::Builtin::kCUChar:
+                case ty::Builtin::kCShort:
+                case ty::Builtin::kCUShort:
+                case ty::Builtin::kCInt:
+                case ty::Builtin::kCUInt:
+                case ty::Builtin::kCLong:
+                case ty::Builtin::kCULong:
+                case ty::Builtin::kCLongLong:
+                case ty::Builtin::kCULongLong:
+                case ty::Builtin::kCFloat:
+                case ty::Builtin::kCDouble:
+                case ty::Builtin::kCSize:
+                case ty::Builtin::kCSSize:
+                case ty::Builtin::kCPtrDiff:
                 case ty::Builtin::kNull:
                     return true;
                 default:
@@ -1431,12 +1486,16 @@ namespace parus::tyck {
             t = read_decay_borrow_local(t);
             const auto& tt = types_.get(t);
             if (tt.kind != ty::Kind::kPtr || tt.elem == ty::kInvalidType) return false;
-            const auto& et = types_.get(tt.elem);
+            const ty::TypeId elem = canonicalize_transparent_external_typedef_(tt.elem);
+            const auto& et = types_.get(elem);
             if (et.kind != ty::Kind::kBuiltin) return false;
             switch (et.builtin) {
                 case ty::Builtin::kChar:
                 case ty::Builtin::kI8:
                 case ty::Builtin::kU8:
+                case ty::Builtin::kCChar:
+                case ty::Builtin::kCSChar:
+                case ty::Builtin::kCUChar:
                     return true;
                 default:
                     return false;
