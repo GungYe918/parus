@@ -1126,6 +1126,8 @@ bool test_core_ext_scaffold_and_auto_injection() {
         "import \"stdio.h\" as c;\n"
         "\n"
         "def main() -> i32 {\n"
+        "  c::puts($c\"hi\");\n"
+        "  c::printf(\"%s\\n\", $cr\"ok\");\n"
         "  c::printf(\"%d\\n\", 5);\n"
         "  return 0i32;\n"
         "}\n";
@@ -1572,6 +1574,7 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
     const auto main_ok = temp_root / "main_ok.pr";
     const auto main_ok_infer = temp_root / "main_ok_infer.pr";
     const auto main_fail = temp_root / "main_fail.pr";
+    const auto main_text_fail = temp_root / "main_text_fail.pr";
     const auto llvm_out = temp_root / "printf_call.ll";
     const auto stdio_h = temp_root / "stdio.h";
     const std::string header_src =
@@ -1600,10 +1603,19 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "  stdio::printf($\"sum={1i32 + 2i32}\");\n"
         "  return 0i32;\n"
         "}\n";
+    const std::string text_fail_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let msg: text = \"hello\";\n"
+        "  stdio::printf(msg);\n"
+        "  return 0i32;\n"
+        "}\n";
     if (!write_text(stdio_h, header_src) ||
         !write_text(main_ok, ok_src) ||
         !write_text(main_ok_infer, ok_infer_src) ||
-        !write_text(main_fail, fail_src)) {
+        !write_text(main_fail, fail_src) ||
+        !write_text(main_text_fail, text_fail_src)) {
         std::cerr << "failed to write c-header format bridge test files\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1615,6 +1627,8 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "\"" + bin + "\" tool parusc -- \"" + main_ok_infer.string() + "\" -fsyntax-only");
     auto [rc_fail, out_fail] = run_capture(
         "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    auto [rc_text_fail, out_text_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_text_fail.string() + "\" -fsyntax-only");
     auto [rc_ir, out_ir_cmd] = run_capture(
         "\"" + bin + "\" tool parusc -- \"" + main_ok.string() +
         "\" -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
@@ -1638,12 +1652,20 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         std::cerr << "stdio::printf($\"...\") should be rejected in C ABI call\n" << out_fail;
         return false;
     }
-    if (!contains(out_fail, "CAbiFormatStringForbidden")) {
-        std::cerr << "stdio::printf($\"...\") rejection must report CAbiFormatStringForbidden\n" << out_fail;
+    if (!contains(out_fail, "BareDollarStringRemoved")) {
+        std::cerr << "stdio::printf($\"...\") rejection must report BareDollarStringRemoved\n" << out_fail;
         return false;
     }
     if (rc_ir != 0) {
         std::cerr << "stdio::printf llvm-ir emission should succeed\n" << out_ir_cmd;
+        return false;
+    }
+    if (rc_text_fail == 0) {
+        std::cerr << "stdio::printf(text) should be rejected at C ABI boundary\n" << out_text_fail;
+        return false;
+    }
+    if (!contains(out_text_fail, "text value is not C ABI-safe; use ptr core::ext::c_char")) {
+        std::cerr << "stdio::printf(text) rejection must provide explicit C boundary guidance\n" << out_text_fail;
         return false;
     }
     if (!contains(llvm_ir, "call i32 (ptr, ...) @printf(")) {

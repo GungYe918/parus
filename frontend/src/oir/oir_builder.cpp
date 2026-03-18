@@ -837,6 +837,73 @@ namespace parus::oir {
                 const TypeId src_ty = out->values[src].ty;
                 if (src_ty == dst_ty) return src;
 
+                auto is_c_char_like_type = [&](TypeId t) -> bool {
+                    if (t == kInvalidId) return false;
+                    const auto& et = types->get(t);
+                    if (et.kind == parus::ty::Kind::kNamedUser) {
+                        std::vector<std::string_view> path{};
+                        std::vector<TypeId> args{};
+                        if (!types->decompose_named_user(t, path, args)) return false;
+                        if (!args.empty() || path.empty()) return false;
+                        const std::string_view leaf = path.back();
+                        if (!(leaf == "c_char" || leaf == "c_schar" || leaf == "c_uchar")) {
+                            return false;
+                        }
+                        if (path.size() == 1) return true;
+                        return path[path.size() - 2] == "ext";
+                    }
+                    if (et.kind != parus::ty::Kind::kBuiltin) return false;
+                    using B = parus::ty::Builtin;
+                    switch (et.builtin) {
+                        case B::kChar:
+                        case B::kI8:
+                        case B::kU8:
+                        case B::kCChar:
+                        case B::kCSChar:
+                        case B::kCUChar:
+                            return true;
+                        default:
+                            return false;
+                    }
+                };
+
+                auto is_c_char_ptr_type = [&](TypeId t) -> bool {
+                    if (t == kInvalidId) return false;
+                    const auto& tt0 = types->get(t);
+                    if (tt0.kind == parus::ty::Kind::kBorrow) t = tt0.elem;
+                    if (t == kInvalidId) return false;
+                    const auto& tt = types->get(t);
+                    if (tt.kind != parus::ty::Kind::kPtr || tt.elem == kInvalidId) return false;
+                    return is_c_char_like_type(tt.elem);
+                };
+
+                auto is_core_ext_cstr_type = [&](TypeId t) -> bool {
+                    if (t == kInvalidId) return false;
+                    const auto& tt0 = types->get(t);
+                    if (tt0.kind == parus::ty::Kind::kBorrow) t = tt0.elem;
+                    if (t == kInvalidId) return false;
+                    const auto& tt = types->get(t);
+                    if (tt.kind != parus::ty::Kind::kNamedUser) return false;
+                    std::vector<std::string_view> path{};
+                    std::vector<TypeId> args{};
+                    if (!types->decompose_named_user(t, path, args)) return false;
+                    if (!args.empty() || path.empty()) return false;
+                    if (path.back() != "CStr") return false;
+                    if (path.size() == 1) return true;
+                    return path[path.size() - 2] == "ext";
+                };
+
+                if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
+                    if (const FieldLayoutDecl* layout = find_field_layout_(src_ty)) {
+                        for (const auto& m : layout->members) {
+                            if (m.name == "ptr_" && m.type != kInvalidId) {
+                                return emit_field(m.type, src, "ptr_");
+                            }
+                        }
+                    }
+                    return emit_field(dst_ty, src, "ptr_");
+                }
+
                 const auto& dt = types->get(dst_ty);
                 if (dt.kind == parus::ty::Kind::kOptional) {
                     const TypeId elem_ty = dt.elem;
@@ -1656,12 +1723,46 @@ namespace parus::oir {
                         (size_t)direct_target->entry >= out->blocks.size()) {
                         return;
                     }
+                    auto is_core_ext_cstr_type = [&](TypeId t) -> bool {
+                        if (t == kInvalidId) return false;
+                        const auto& tt0 = types->get(t);
+                        if (tt0.kind == parus::ty::Kind::kBorrow) t = tt0.elem;
+                        if (t == kInvalidId) return false;
+                        const auto& tt = types->get(t);
+                        if (tt.kind != parus::ty::Kind::kNamedUser) return false;
+                        std::vector<std::string_view> path{};
+                        std::vector<TypeId> args{};
+                        if (!types->decompose_named_user(t, path, args)) return false;
+                        if (!args.empty() || path.empty()) return false;
+                        if (path.back() != "CStr") return false;
+                        if (path.size() == 1) return true;
+                        return path[path.size() - 2] == "ext";
+                    };
                     const auto& entry = out->blocks[direct_target->entry];
                     const size_t n = std::min(entry.params.size(), inout_args.size());
                     for (size_t ai = 0; ai < n; ++ai) {
                         const ValueId p = entry.params[ai];
                         if ((size_t)p >= out->values.size()) continue;
                         inout_args[ai] = coerce_value_for_target(out->values[p].ty, inout_args[ai]);
+                    }
+
+                    if (direct_target->abi == FunctionAbi::C &&
+                        direct_target->is_c_variadic &&
+                        inout_args.size() > n) {
+                        for (size_t ai = n; ai < inout_args.size(); ++ai) {
+                            const ValueId v = inout_args[ai];
+                            if ((size_t)v >= out->values.size()) continue;
+                            const TypeId vty = out->values[v].ty;
+                            if (!is_core_ext_cstr_type(vty)) continue;
+                            if (const FieldLayoutDecl* layout = find_field_layout_(vty)) {
+                                for (const auto& m : layout->members) {
+                                    if (m.name == "ptr_" && m.type != kInvalidId) {
+                                        inout_args[ai] = emit_field(m.type, v, "ptr_");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 };
 

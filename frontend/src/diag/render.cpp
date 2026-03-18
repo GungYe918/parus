@@ -52,6 +52,9 @@ namespace parus::diag {
             case Code::kMacroTokenPatternInvalid: return "MacroTokenPatternInvalid";
             case Code::kMacroTokenRepeatLengthMismatch: return "MacroTokenRepeatLengthMismatch";
             case Code::kMacroTokenVariadicOutsideRepeat: return "MacroTokenVariadicOutsideRepeat";
+            case Code::kMacroPayloadExpected: return "MacroPayloadExpected";
+            case Code::kMacroStringPayloadPlainOnly: return "MacroStringPayloadPlainOnly";
+            case Code::kBareDollarStringRemoved: return "BareDollarStringRemoved";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
             case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
@@ -400,6 +403,9 @@ namespace parus::diag {
             case Code::kMacroTokenPatternInvalid: return "invalid 'with token' pattern/template: {0}";
             case Code::kMacroTokenRepeatLengthMismatch: return "token repetition capture length mismatch: {0}";
             case Code::kMacroTokenVariadicOutsideRepeat: return "variadic capture '{0}' must be expanded with repetition context";
+            case Code::kMacroPayloadExpected: return "macro call payload is required after '$path' (use (...), \"...\", or { ... })";
+            case Code::kMacroStringPayloadPlainOnly: return "string payload form accepts plain string literal only (\"...\")";
+            case Code::kBareDollarStringRemoved: return "bare $\"...\" is removed; use $foo\"...\"";
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
             case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
@@ -487,7 +493,7 @@ namespace parus::diag {
             case Code::kCImportFormatBridgeTypeUnsupported: return "unsupported interpolation type in C format bridge";
             case Code::kCImportFormatBridgeNoVariadicSibling: return "vlist format target has no variadic sibling for bridge rewrite";
             case Code::kCImportFormatBridgeDynamicTextUnsupported: return "dynamic text interpolation for %s is not supported in v1";
-            case Code::kFStringShortFormUnsupported: return "F\"...\" is not supported; use $\"...\" or F\"\"\"...\"\"\"";
+            case Code::kFStringShortFormUnsupported: return "F\"...\" is not supported; use F\"\"\"...\"\"\"";
             case Code::kFStringRuntimeShapeUnsupported: return "runtime f-string supports only a single interpolation in the form $\"{text_expr}\" in v1";
             case Code::kFStringRuntimeExprMustBeText: return "runtime f-string interpolation expression must have type text";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default only supports an empty parameter list";
@@ -754,6 +760,9 @@ namespace parus::diag {
             case Code::kMacroTokenPatternInvalid: return "'with token' 패턴/템플릿이 올바르지 않습니다: {0}";
             case Code::kMacroTokenRepeatLengthMismatch: return "token 반복 캡처 길이가 일치하지 않습니다: {0}";
             case Code::kMacroTokenVariadicOutsideRepeat: return "variadic 캡처 '{0}'는 반복 문맥에서만 단일 항목으로 사용할 수 있습니다";
+            case Code::kMacroPayloadExpected: return "매크로 호출 '$path' 뒤에는 payload가 필요합니다 ((...), \"...\", 또는 { ... })";
+            case Code::kMacroStringPayloadPlainOnly: return "문자열 payload 형태는 일반 문자열 리터럴(\"...\")만 허용됩니다";
+            case Code::kBareDollarStringRemoved: return "bare $\"...\" 형식은 제거되었습니다. $foo\"...\"를 사용하세요";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";
@@ -841,7 +850,7 @@ namespace parus::diag {
             case Code::kCImportFormatBridgeTypeUnsupported: return "C format 브리지에서 지원되지 않는 보간 타입입니다";
             case Code::kCImportFormatBridgeNoVariadicSibling: return "vlist format 대상에 대응되는 variadic sibling을 찾을 수 없습니다";
             case Code::kCImportFormatBridgeDynamicTextUnsupported: return "v1에서는 %s용 동적 text 보간을 지원하지 않습니다";
-            case Code::kFStringShortFormUnsupported: return "F\"...\"는 지원되지 않습니다. $\"...\" 또는 F\"\"\"...\"\"\"를 사용하세요";
+            case Code::kFStringShortFormUnsupported: return "F\"...\"는 지원되지 않습니다. F\"\"\"...\"\"\"를 사용하세요";
             case Code::kFStringRuntimeShapeUnsupported: return "v1 런타임 f-string은 $\"{text_expr}\" 형태의 단일 보간만 지원합니다";
             case Code::kFStringRuntimeExprMustBeText: return "런타임 f-string 보간 식의 타입은 text여야 합니다";
             case Code::kClassLifecycleDefaultParamNotAllowed: return "init()/deinit() = default 는 빈 파라미터 목록만 허용합니다";

@@ -2622,6 +2622,30 @@ namespace {
 #endif
         std::unordered_set<uint32_t> core_impl_marker_file_ids{};
         collect_core_impl_marker_file_ids_(ast, root, core_impl_marker_file_ids);
+#if PARUSD_ENABLE_LEI
+        if (!lint_ctx_for_doc.has_value() && !core_impl_marker_file_ids.empty()) {
+            constexpr std::string_view kCoreRootNeedle = "/sysroot/core/";
+            const size_t pos = normalized_current.find(kCoreRootNeedle);
+            if (pos != std::string::npos) {
+                ParusBundleLintContext fallback{};
+                fallback.bundle_name = "core";
+                fallback.current_source_dir_norm = parent_dir_norm_(normalized_current);
+                fallback.allowed_import_heads.insert("core");
+
+                std::string rel = normalized_current.substr(pos + kCoreRootNeedle.size());
+                if (!rel.empty()) {
+                    const size_t slash = rel.find('/');
+                    if (slash != std::string::npos && slash > 0) {
+                        fallback.current_module_head = rel.substr(0, slash);
+                    } else if (slash == std::string::npos) {
+                        fallback.current_module_head = rel;
+                    }
+                }
+                if (fallback.current_module_head.empty()) fallback.current_module_head = "core";
+                lint_ctx_for_doc = std::move(fallback);
+            }
+        }
+#endif
         std::vector<CHeaderImportSpec> c_header_imports{};
         collect_c_header_imports_(ast, root, c_header_imports);
 

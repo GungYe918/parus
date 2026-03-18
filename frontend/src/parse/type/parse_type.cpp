@@ -247,7 +247,7 @@ namespace parus {
                 return out;
             }
 
-            // ---- Type macro call: $path(...) ----
+            // ---- Type macro call: $path(...) / $path"..." / $path { ... } ----
             if (cursor_.at(K::kDollar)) {
                 const Token dol = cursor_.bump();
 
@@ -258,8 +258,13 @@ namespace parus {
                     return make_error_type_(span_join(dol.span, cursor_.prev().span));
                 }
 
-                const auto [arg_begin, arg_count] = parse_macro_call_arg_tokens();
-                const Span out_sp = span_join(dol.span, cursor_.prev().span);
+                uint32_t arg_begin = 0;
+                uint32_t arg_count = 0;
+                Span payload_sp = path_span;
+                if (!parse_macro_call_payload_tokens(arg_begin, arg_count, payload_sp)) {
+                    return make_error_type_(span_join(dol.span, payload_sp));
+                }
+                const Span out_sp = span_join(dol.span, payload_sp);
 
                 ast::TypeNode n{};
                 n.kind = ast::TypeNodeKind::kMacroCall;

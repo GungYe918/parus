@@ -817,6 +817,7 @@ namespace parus::tyck {
         std::unordered_map<std::string, std::unordered_map<std::string, ty::TypeId>> external_c_union_fields_by_name_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, ExternalCFieldMeta>> external_c_struct_fields_by_type_;
         std::unordered_map<std::string, std::unordered_map<std::string, ExternalCFieldMeta>> external_c_struct_fields_by_name_;
+        bool core_context_invalid_ = false;
 
     };
 

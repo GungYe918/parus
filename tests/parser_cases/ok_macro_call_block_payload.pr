@@ -1,0 +1,12 @@
+//@expect-no-parser-error
+macro id -> {
+    with expr {
+        (x: expr) => expr { $0 };
+    }
+}
+
+def main() -> i32 {
+    let v: i32 = $id { 40i32 + 2i32 };
+    return v;
+}
+

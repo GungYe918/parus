@@ -257,7 +257,7 @@ namespace parus {
         ast::Arg parse_call_arg(int ternary_depth);
         ast::ExprId parse_macro_call_expr();
         bool parse_macro_call_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
-        std::pair<uint32_t, uint32_t> parse_macro_call_arg_tokens();
+        bool parse_macro_call_payload_tokens(uint32_t& out_begin, uint32_t& out_count, Span& out_span);
         bool parse_compiler_directive_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
         bool is_core_impl_marker_path_(uint32_t path_begin, uint32_t path_count) const;
 

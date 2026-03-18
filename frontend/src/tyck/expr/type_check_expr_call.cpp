@@ -1351,44 +1351,80 @@ namespace parus::tyck {
             return check_expr_(a->expr);
         };
 
+        auto is_c_char_like_type = [&](ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType || is_error_(t)) return false;
+            const ty::TypeId elem = canonicalize_transparent_external_typedef_(t);
+            if (elem == ty::kInvalidType || elem >= types_.count()) return false;
+            const auto& et = types_.get(elem);
+            if (et.kind == ty::Kind::kBuiltin) {
+                switch (et.builtin) {
+                    case ty::Builtin::kChar:
+                    case ty::Builtin::kI8:
+                    case ty::Builtin::kU8:
+                    case ty::Builtin::kCChar:
+                    case ty::Builtin::kCSChar:
+                    case ty::Builtin::kCUChar:
+                        return true;
+                    default:
+                        break;
+                }
+            }
+            if (et.kind == ty::Kind::kNamedUser) {
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (!types_.decompose_named_user(elem, path, args)) return false;
+                if (!args.empty() || path.empty()) return false;
+                const std::string_view leaf = path.back();
+                if (!(leaf == "c_char" || leaf == "c_schar" || leaf == "c_uchar")) {
+                    return false;
+                }
+                if (path.size() == 1) return true;
+                return path[path.size() - 2] == "ext";
+            }
+            return false;
+        };
+
+        auto is_c_char_ptr_type = [&](ty::TypeId t) -> bool {
+            if (t == ty::kInvalidType || is_error_(t)) return false;
+            if (t < types_.count()) {
+                const auto& t0 = types_.get(t);
+                if (t0.kind == ty::Kind::kBorrow) t = t0.elem;
+            }
+            if (t == ty::kInvalidType || t >= types_.count()) return false;
+            const auto& tt = types_.get(t);
+            if (tt.kind != ty::Kind::kPtr || tt.elem == ty::kInvalidType) return false;
+            return is_c_char_like_type(tt.elem);
+        };
+
+        auto is_core_ext_cstr_type = [&](ty::TypeId t) -> bool {
+            if (t != ty::kInvalidType && t < types_.count()) {
+                const auto& t0 = types_.get(t);
+                if (t0.kind == ty::Kind::kBorrow) t = t0.elem;
+            }
+            t = canonicalize_transparent_external_typedef_(t);
+            if (t == ty::kInvalidType || t >= types_.count()) return false;
+            const auto& tt = types_.get(t);
+            if (tt.kind != ty::Kind::kNamedUser) return false;
+            std::vector<std::string_view> path{};
+            std::vector<ty::TypeId> args{};
+            if (!types_.decompose_named_user(t, path, args)) return false;
+            if (!args.empty() || path.empty()) return false;
+            if (path.back() != "CStr") return false;
+            if (path.size() == 1) return true;
+            return path[path.size() - 2] == "ext";
+        };
+
         const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {
             const ty::TypeId at = arg_type_now(a);
             if (can_assign_(expected, at)) return true;
+            if (is_c_char_ptr_type(expected) && is_core_ext_cstr_type(at)) return true;
 
             // C ABI convenience: allow plain string literal for C char pointer slots.
             if (a != nullptr && a->expr != ast::k_invalid_expr &&
                 (size_t)a->expr < ast_.exprs().size()) {
                 const auto& ex = ast_.expr(a->expr);
                 if (ex.kind == ast::ExprKind::kStringLit && !ex.string_is_format) {
-                    ty::TypeId et = expected;
-                    if (et != ty::kInvalidType && et < types_.count()) {
-                        const auto& et0 = types_.get(et);
-                        if (et0.kind == ty::Kind::kBorrow) {
-                            et = et0.elem;
-                        }
-                    }
-                    if (et != ty::kInvalidType && et < types_.count()) {
-                        const auto& ett = types_.get(et);
-                        if (ett.kind == ty::Kind::kPtr && ett.elem != ty::kInvalidType) {
-                            const ty::TypeId elem = canonicalize_transparent_external_typedef_(ett.elem);
-                            if (elem != ty::kInvalidType && elem < types_.count()) {
-                                const auto& bt = types_.get(elem);
-                                if (bt.kind == ty::Kind::kBuiltin) {
-                                    switch (bt.builtin) {
-                                        case ty::Builtin::kChar:
-                                        case ty::Builtin::kI8:
-                                        case ty::Builtin::kU8:
-                                        case ty::Builtin::kCChar:
-                                        case ty::Builtin::kCSChar:
-                                        case ty::Builtin::kCUChar:
-                                            return true;
-                                        default:
-                                            break;
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    if (is_c_char_ptr_type(expected)) return true;
                 }
             }
 
@@ -1481,27 +1517,6 @@ namespace parus::tyck {
             return ex.kind == ast::ExprKind::kStringLit && !ex.string_is_format;
         };
 
-        auto is_c_char_ptr_type = [&](ty::TypeId t) -> bool {
-            if (t == ty::kInvalidType || is_error_(t)) return false;
-            t = read_decay_borrow_local(t);
-            const auto& tt = types_.get(t);
-            if (tt.kind != ty::Kind::kPtr || tt.elem == ty::kInvalidType) return false;
-            const ty::TypeId elem = canonicalize_transparent_external_typedef_(tt.elem);
-            const auto& et = types_.get(elem);
-            if (et.kind != ty::Kind::kBuiltin) return false;
-            switch (et.builtin) {
-                case ty::Builtin::kChar:
-                case ty::Builtin::kI8:
-                case ty::Builtin::kU8:
-                case ty::Builtin::kCChar:
-                case ty::Builtin::kCSChar:
-                case ty::Builtin::kCUChar:
-                    return true;
-                default:
-                    return false;
-            }
-        };
-
         auto is_infer_integer_type = [&](ty::TypeId t) -> bool {
             if (t == ty::kInvalidType || is_error_(t)) return false;
             t = read_decay_borrow_local(t);
@@ -1563,9 +1578,25 @@ namespace parus::tyck {
                         if (is_error_(lit_ty)) return types_.error();
                         continue;
                     }
+                    if (is_c_char_ptr_type(expected)) {
+                        const ty::TypeId src_ty = check_expr_(arg_eid);
+                        if (is_error_(src_ty)) return types_.error();
+                        if (is_core_ext_cstr_type(src_ty)) continue;
+                    }
                     const CoercionPlan plan = classify_assign_with_coercion_(
                         AssignSite::CallArg, expected, arg_eid, ast_.expr(arg_eid).span);
                     if (!plan.ok) {
+                        const ty::TypeId src_canon =
+                            canonicalize_transparent_external_typedef_(read_decay_borrow_local(plan.src_after));
+                        const bool src_is_text =
+                            src_canon != ty::kInvalidType &&
+                            src_canon < types_.count() &&
+                            types_.get(src_canon).kind == ty::Kind::kBuiltin &&
+                            types_.get(src_canon).builtin == ty::Builtin::kText;
+                        if (src_is_text && is_c_char_ptr_type(expected)) {
+                            diag_(diag::Code::kTypeErrorGeneric, ast_.expr(arg_eid).span,
+                                  "text value is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                        }
                         diag_(diag::Code::kTypeArgTypeMismatch, ast_.expr(arg_eid).span,
                               std::to_string(i), types_.to_string(expected),
                               type_for_user_diag_(plan.src_after, arg_eid));
@@ -1603,6 +1634,9 @@ namespace parus::tyck {
                             // This keeps printf("%d", 5) usable while preserving explicit typing elsewhere.
                             (void)resolve_infer_int_in_context_(arg_eid, types_.builtin(ty::Builtin::kI32));
                             checked_ty = check_expr_(arg_eid);
+                        }
+                        if (is_core_ext_cstr_type(checked_ty)) {
+                            continue;
                         }
                         if (!is_c_variadic_abi_arg_type(checked_ty)) {
                             diag_(diag::Code::kCImportVariadicArgTypeUnsupported,
@@ -1841,6 +1875,12 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeArgTypeMismatch, a.span,
                         std::to_string(idx), types_.to_string(expected), "<missing>");
                     err_(a.span, "argument type mismatch");
+                    return;
+                }
+                if (is_c_char_ptr_type(expected) && is_plain_string_literal_expr(a.expr)) {
+                    return;
+                }
+                if (is_c_char_ptr_type(expected) && is_core_ext_cstr_type(check_expr_(a.expr))) {
                     return;
                 }
 
@@ -2593,15 +2633,18 @@ namespace parus::tyck {
                 return;
             }
 
-            if (selected_is_c_abi &&
-                (size_t)a.expr < ast_.exprs().size()) {
+            if ((size_t)a.expr < ast_.exprs().size()) {
                 const auto& ax = ast_.expr(a.expr);
-                if (ax.kind == ast::ExprKind::kStringLit && ax.string_is_format) {
+                if (selected_is_c_abi &&
+                    ax.kind == ast::ExprKind::kStringLit && ax.string_is_format) {
                     diag_(diag::Code::kCAbiFormatStringForbidden, a.span);
                     err_(a.span, "format-string literal is forbidden in C ABI call");
                     return;
                 }
                 if (is_c_char_ptr_type(p.type) && is_plain_string_literal_expr(a.expr)) {
+                    return;
+                }
+                if (is_c_char_ptr_type(p.type) && is_core_ext_cstr_type(check_expr_(a.expr))) {
                     return;
                 }
             }

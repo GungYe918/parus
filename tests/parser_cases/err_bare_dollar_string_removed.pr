@@ -1,0 +1,6 @@
+//@expect-error BareDollarStringRemoved
+def main() -> i32 {
+    let s: text = $"hello";
+    return 0i32;
+}
+

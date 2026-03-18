@@ -168,8 +168,9 @@ export def add(a: i32, b: i32) -> i32 {
 3-d. variadic 구간의 unsuffixed integer literal은 v1에서 `C int(i32)` 컨텍스트로 확정한다.
 4. C ABI 호출은 positional-only다(import C / extern "C" 공통).
 4-a. labeled/named-group 인자는 허용하지 않는다.
-4-b. `$/F` format string literal(`$"..."`, `F"""..."""`)은 C ABI 인자에서 금지한다.
-4-c. C `char*`(및 `const char*`) 기대 슬롯에서는 plain string literal(`"..."`)을 자동 허용한다.
+4-b. format string literal(`F"""..."""`)은 C ABI 인자에서 금지한다.
+4-c. `bare $"..."` 형식은 문법에서 제거되었으므로 C ABI 경계에서도 허용되지 않는다.
+4-d. C `char*`(및 `const char*`) 기대 슬롯에서는 plain string literal(`"..."`)을 자동 허용한다. 이 경로는 `core::ext::c_char` 계열 포인터 슬롯을 기준으로 적용한다.
 5. C union import는 2차 규칙을 따른다.
 5-a. union field dot 접근은 `manual[...]` 내부에서만 허용한다.
 5-b. read는 `manual[get]` 또는 `manual[set]`가 필요하다.

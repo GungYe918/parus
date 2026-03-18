@@ -23,7 +23,7 @@
 2. opaque 타입: `vaList`
 3. 문자열 경계 타입: `CStr`
 4. 에러 타입: `FromBytesWithNulError`, `FromBytesUntilNulError`
-5. CStr helper: `from_ptr`, `from_bytes_with_nul`, `from_bytes_until_nul`, `as_ptr`, `to_bytes`, `to_bytes_with_nul`, `is_empty`
+5. CStr helper: `from_ptr`, `from_raw_parts`, `from_bytes_with_nul`, `from_bytes_until_nul`, `as_ptr`, `to_bytes`, `to_bytes_with_nul`, `len`, `len_with_nul`, `is_empty`
 
 타입 매핑 원칙:
 
@@ -37,6 +37,18 @@
 1. `$c_str` 매크로
 2. alloc 의존 타입(`CString`)
 3. C 매크로 고급 변환(`##`, `#`, statement macro)
+
+## Rust `core::ffi` parity (v1.5)
+
+| Rust `core::ffi` surface | Parus `core::ext` status | Notes |
+| --- | --- | --- |
+| `c_void`, `c_char`, `c_int`, ... | Implemented | Exposed via `use c_*;` builtin aliases |
+| `VaList` | Implemented (restricted) | Opaque type, C ABI parameter boundary only |
+| `CStr` | Implemented (subset) | Borrowed view API only |
+| `FromBytesWithNulError` | Implemented | Minimal error enum |
+| `FromBytesUntilNulError` | Implemented | Minimal error enum |
+| `CString` | Excluded | Requires allocator/owned buffer model |
+| `c_str!` macro | Excluded | Deferred to macro round |
 
 ## 안전 규칙
 

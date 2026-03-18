@@ -149,7 +149,10 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 1. C ABI 경계 타입은 `core::ext::c_*` 및 `core::ext::vaList`를 표준 표면으로 사용한다.
 2. `core::ext::c_*`는 대응 C ABI 원시 타입과 동치(transparent alias)로 취급한다.
 3. `vaList`는 opaque 타입이며 C ABI 시그니처 경계에서만 허용한다.
-4. `$c_str` 매크로와 `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
+4. plain string literal(`"..."`)은 C `char*` 기대 슬롯에서만 암묵 허용한다(주로 `ptr core::ext::c_char` 계열).
+5. `text` 변수/고수준 Parus 타입은 C ABI 경계에서 암묵 변환하지 않는다.
+6. `$c"..."` / `$cr"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
+7. `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
 
 `core::ext` 매핑 표(요약):
 
@@ -173,6 +176,17 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 | `core::ext::c_ssize` | `ssize_t` | target pointer-width signed |
 | `core::ext::c_ptrdiff` | `ptrdiff_t` | target pointer-width signed |
 | `core::ext::vaList` | `va_list` | opaque, C ABI parameter 경계 전용 |
+
+`core::ext` Rust `core::ffi` parity 상태(요약):
+
+| Rust `core::ffi` item | Parus status | Notes |
+| --- | --- | --- |
+| C scalar aliases (`c_int`, ...) | Implemented | `core::ext::c_*` |
+| `VaList` | Implemented (restricted) | C ABI parameter boundary only |
+| `CStr` | Implemented (subset) | Borrowed view helpers only |
+| `CString` | Excluded | allocator 의존으로 v0 제외 |
+| `$c"..."`, `$cr"..."` | Implemented (literal-only) | compile-time C string literal helper |
+| `c_str!` | Excluded | 이름 기반 매크로 표면은 미도입 |
 
 ---
 

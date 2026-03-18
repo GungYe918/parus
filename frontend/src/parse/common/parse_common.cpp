@@ -318,75 +318,115 @@ namespace parus {
         return segs[path_begin] == "Impl" && segs[path_begin + 1] == "Core";
     }
 
-    std::pair<uint32_t, uint32_t> Parser::parse_macro_call_arg_tokens() {
+    bool Parser::parse_macro_call_payload_tokens(uint32_t& out_begin, uint32_t& out_count, Span& out_span) {
         using K = syntax::TokenKind;
-        const uint32_t begin = static_cast<uint32_t>(ast_.macro_tokens().size());
-        uint32_t count = 0;
+        out_begin = static_cast<uint32_t>(ast_.macro_tokens().size());
+        out_count = 0;
+        out_span = cursor_.peek().span;
 
-        if (!cursor_.eat(K::kLParen)) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-            return {begin, count};
-        }
+        // ( ... ) form
+        if (cursor_.eat(K::kLParen)) {
+            int paren = 1;
+            int brace = 0;
+            int bracket = 0;
 
-        int paren = 1;
-        int brace = 0;
-        int bracket = 0;
+            while (!cursor_.at(K::kEof) && paren > 0) {
+                const Token t = cursor_.peek();
 
-        while (!cursor_.at(K::kEof) && paren > 0) {
-            const Token t = cursor_.peek();
-
-            if (t.kind == K::kLParen) {
-                ++paren;
-                ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
-            }
-            if (t.kind == K::kRParen) {
-                --paren;
-                if (paren == 0) {
-                    cursor_.bump(); // consume closing ')'
-                    break;
+                if (t.kind == K::kLParen) {
+                    ++paren;
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
                 }
+                if (t.kind == K::kRParen) {
+                    --paren;
+                    if (paren == 0) {
+                        const Token rp = cursor_.bump(); // consume closing ')'
+                        out_span = rp.span;
+                        break;
+                    }
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
+                }
+                if (t.kind == K::kLBrace) {
+                    ++brace;
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
+                }
+                if (t.kind == K::kRBrace) {
+                    if (brace > 0) --brace;
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
+                }
+                if (t.kind == K::kLBracket) {
+                    ++bracket;
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
+                }
+                if (t.kind == K::kRBracket) {
+                    if (bracket > 0) --bracket;
+                    ast_.add_macro_token(cursor_.bump());
+                    ++out_count;
+                    continue;
+                }
+
+                if (t.kind == K::kEof) break;
+
                 ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
-            }
-            if (t.kind == K::kLBrace) {
-                ++brace;
-                ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
-            }
-            if (t.kind == K::kRBrace) {
-                if (brace > 0) --brace;
-                ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
-            }
-            if (t.kind == K::kLBracket) {
-                ++bracket;
-                ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
-            }
-            if (t.kind == K::kRBracket) {
-                if (bracket > 0) --bracket;
-                ast_.add_macro_token(cursor_.bump());
-                ++count;
-                continue;
+                ++out_count;
             }
 
-            if (t.kind == K::kEof) break;
-
-            ast_.add_macro_token(cursor_.bump());
-            ++count;
+            if (paren != 0) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                return false;
+            }
+            return true;
         }
 
-        if (paren != 0) {
-            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+        // "..." form (plain string literal only)
+        if (cursor_.at(K::kStringLit)) {
+            const Token lit = cursor_.peek();
+            out_span = lit.span;
+            cursor_.bump();
+            if (lit.lexeme.size() < 2 || lit.lexeme.front() != '"' || lit.lexeme.back() != '"') {
+                diag_report(diag::Code::kMacroStringPayloadPlainOnly, lit.span);
+                return false;
+            }
+            ast_.add_macro_token(lit);
+            out_count = 1;
+            return true;
         }
 
-        return {begin, count};
+        // { ... } form (single block token slice, braces included)
+        if (cursor_.at(K::kLBrace)) {
+            int depth = 0;
+            while (!cursor_.at(K::kEof)) {
+                const Token t = cursor_.peek();
+                if (t.kind == K::kLBrace) ++depth;
+                ast_.add_macro_token(cursor_.bump());
+                ++out_count;
+                if (t.kind == K::kRBrace) {
+                    --depth;
+                    if (depth == 0) {
+                        out_span = t.span;
+                        break;
+                    }
+                }
+            }
+            if (depth != 0) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "}");
+                return false;
+            }
+            return true;
+        }
+
+        diag_report(diag::Code::kMacroPayloadExpected, cursor_.peek().span);
+        return false;
     }
 
     ast::ExprId Parser::parse_macro_call_expr() {
@@ -412,7 +452,16 @@ namespace parus {
             return ast_.add_expr(e);
         }
 
-        auto [arg_begin, arg_count] = parse_macro_call_arg_tokens();
+        uint32_t arg_begin = 0;
+        uint32_t arg_count = 0;
+        Span payload_sp = path_sp;
+        if (!parse_macro_call_payload_tokens(arg_begin, arg_count, payload_sp)) {
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = span_join(dol.span, payload_sp);
+            e.text = "macro_call_bad_payload";
+            return ast_.add_expr(e);
+        }
 
         ast::Expr e{};
         e.kind = ast::ExprKind::kMacroCall;
@@ -420,7 +469,7 @@ namespace parus {
         e.macro_path_count = path_count;
         e.macro_token_begin = arg_begin;
         e.macro_token_count = arg_count;
-        e.span = span_join(dol.span, cursor_.prev().span);
+        e.span = span_join(dol.span, payload_sp);
         return ast_.add_expr(e);
     }
 

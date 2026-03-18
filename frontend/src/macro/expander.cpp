@@ -5,6 +5,7 @@
 #include <parus/syntax/TokenKind.hpp>
 
 #include <charconv>
+#include <cctype>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -151,6 +152,103 @@ namespace parus::macro {
             return out;
         }
 
+        static bool is_plain_string_literal_lexeme_(std::string_view lexeme) {
+            return lexeme.size() >= 2 && lexeme.front() == '"' && lexeme.back() == '"';
+        }
+
+        static bool has_interior_nul_in_plain_string_lit_(std::string_view lexeme) {
+            if (!is_plain_string_literal_lexeme_(lexeme)) return true;
+            const std::string_view body = lexeme.substr(1, lexeme.size() - 2);
+            auto hex_val = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            for (size_t i = 0; i < body.size(); ++i) {
+                const char c = body[i];
+                if (c != '\\') {
+                    if (c == '\0') return true;
+                    continue;
+                }
+                if (i + 1 >= body.size()) break;
+                const char esc = body[++i];
+                switch (esc) {
+                    case '0':
+                        return true;
+                    case 'x': {
+                        if (i + 2 < body.size()) {
+                            const int hi = hex_val(body[i + 1]);
+                            const int lo = hex_val(body[i + 2]);
+                            if (hi >= 0 && lo >= 0) {
+                                if (((hi << 4) | lo) == 0) return true;
+                                i += 2;
+                            }
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                }
+            }
+            return false;
+        }
+
+        static bool expand_builtin_ext_cstr_lit_(
+            const ast::AstArena& ast,
+            uint32_t arg_begin,
+            uint32_t arg_count,
+            Span call_span,
+            diag::Bag& diags,
+            std::vector<Token>& out_tokens
+        ) {
+            const auto args = split_top_level_args_(ast, arg_begin, arg_count);
+            if (args.size() != 1) {
+                add_diag_(diags, diag::Code::kTypeErrorGeneric, call_span,
+                          "c-string macro expects exactly one plain string literal argument");
+                return false;
+            }
+            const auto arg = args.front();
+            const auto& toks = ast.macro_tokens();
+            if (arg.count != 1 || arg.begin >= toks.size()) {
+                add_diag_(diags, diag::Code::kTypeErrorGeneric, call_span,
+                          "c-string macro expects exactly one plain string literal argument");
+                return false;
+            }
+            const Token lit = toks[arg.begin];
+            if (lit.kind != K::kStringLit || !is_plain_string_literal_lexeme_(lit.lexeme)) {
+                add_diag_(diags, diag::Code::kTypeErrorGeneric, call_span,
+                          "c-string macro requires a plain string literal argument");
+                return false;
+            }
+            if (has_interior_nul_in_plain_string_lit_(lit.lexeme)) {
+                add_diag_(diags, diag::Code::kTypeErrorGeneric, lit.span,
+                          "c-string literal must not contain interior NUL bytes");
+                return false;
+            }
+
+            auto make_tok = [&](K kind, std::string_view lexeme) -> Token {
+                Token t{};
+                t.kind = kind;
+                t.lexeme = lexeme;
+                t.span = call_span;
+                return t;
+            };
+
+            out_tokens.clear();
+            out_tokens.reserve(9);
+            out_tokens.push_back(make_tok(K::kIdent, "core"));
+            out_tokens.push_back(make_tok(K::kColonColon, "::"));
+            out_tokens.push_back(make_tok(K::kIdent, "ext"));
+            out_tokens.push_back(make_tok(K::kColonColon, "::"));
+            out_tokens.push_back(make_tok(K::kIdent, "from_ptr"));
+            out_tokens.push_back(make_tok(K::kLParen, "("));
+            out_tokens.push_back(lit);
+            out_tokens.push_back(make_tok(K::kRParen, ")"));
+            return true;
+        }
+
         static bool is_path_tokens_(const ast::AstArena& ast, MacroTokenRange r) {
             const auto& toks = ast.macro_tokens();
             if (r.count == 0) return false;
@@ -208,6 +306,13 @@ namespace parus::macro {
                 const uint32_t end = r.begin + r.count - 1;
                 if (end >= toks.size()) return false;
                 return toks[r.begin].kind == K::kLBrace && toks[end].kind == K::kRBrace;
+            }
+            if (frag == ast::MacroFragKind::kStrLit) {
+                const auto& toks = ast.macro_tokens();
+                if (r.count != 1 || r.begin >= toks.size()) return false;
+                const auto& t = toks[r.begin];
+                if (t.kind != K::kStringLit) return false;
+                return t.lexeme.size() >= 2 && t.lexeme.front() == '"' && t.lexeme.back() == '"';
             }
             (void)call_span;
             return false;
@@ -436,6 +541,25 @@ namespace parus::macro {
 
             const auto decl_index = find_decl_index_(ctx.ast, macro_name, scope_depth);
             if (!decl_index.has_value()) {
+                if (macro_name == "__builtin_ext_cstr_lit" ||
+                    macro_name == "c" ||
+                    macro_name == "cr") {
+                    std::vector<Token> sub{};
+                    if (!expand_builtin_ext_cstr_lit_(
+                            ctx.ast,
+                            arg_begin,
+                            arg_count,
+                            call_span,
+                            ctx.diags,
+                            sub)) {
+                        return false;
+                    }
+                    out.ok = true;
+                    out.out_kind = ast::MacroOutKind::kExpr;
+                    out.tokens = std::move(sub);
+                    out.macro_name = macro_name;
+                    return true;
+                }
                 add_diag_(ctx.diags, diag::Code::kMacroNoMatch, call_span, macro_name);
                 return false;
             }
@@ -667,7 +791,6 @@ namespace parus::macro {
                     }
                     case ast::ExprKind::kBinary:
                     case ast::ExprKind::kAssign:
-                    case ast::ExprKind::kCall:
                     case ast::ExprKind::kIndex: {
                         auto a = e.a;
                         auto b = e.b;
@@ -677,6 +800,27 @@ namespace parus::macro {
                         auto& em = ctx.ast.expr_mut(eid);
                         em.a = a;
                         em.b = b;
+                        break;
+                    }
+                    case ast::ExprKind::kCall: {
+                        auto a = e.a;
+                        if (!expand_expr(a, scope_depth, depth)) return false;
+                        if (eid >= ctx.ast.exprs().size()) return false;
+                        ctx.ast.expr_mut(eid).a = a;
+
+                        const uint64_t begin = e.arg_begin;
+                        const uint64_t end = begin + e.arg_count;
+                        auto& args = ctx.ast.args_mut();
+                        if (begin <= args.size() && end <= args.size()) {
+                            for (uint32_t i = 0; i < e.arg_count; ++i) {
+                                const uint32_t ai = e.arg_begin + i;
+                                if (ai >= args.size()) break;
+                                auto ae = args[ai].expr;
+                                if (!expand_expr(ae, scope_depth, depth)) return false;
+                                if (ai >= args.size()) return false;
+                                args[ai].expr = ae;
+                            }
+                        }
                         break;
                     }
                     case ast::ExprKind::kTernary:

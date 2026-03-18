@@ -350,6 +350,7 @@ namespace parus::ast {
         kPath,
         kIdent,
         kBlock,
+        kStrLit,
         kTt,
     };
 

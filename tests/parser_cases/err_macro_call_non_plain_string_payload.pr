@@ -1,0 +1,5 @@
+//@expect-error MacroStringPayloadPlainOnly
+def main() -> i32 {
+    let s: text = $id R"""hello""";
+    return 0i32;
+}

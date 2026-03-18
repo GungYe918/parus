@@ -28,6 +28,7 @@
 
         const std::string current_bundle = current_bundle_name_();
         if (!core_impl_marker_file_ids_.empty() && current_bundle != "core") {
+            Span marker_span = prog.span;
             const auto& kids = ast_.stmt_children();
             const uint64_t begin = prog.stmt_begin;
             const uint64_t end = begin + prog.stmt_count;
@@ -37,13 +38,19 @@
                     if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
                     const auto& s = ast_.stmt(sid);
                     if (!is_core_impl_marker_stmt_(s)) continue;
-                    std::ostringstream oss;
-                    oss << "$![Impl::Core]; is allowed only when bundle-name is 'core' (current bundle: '"
-                        << (current_bundle.empty() ? "<unknown>" : current_bundle) << "')";
-                    diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
-                    err_(s.span, oss.str());
+                    marker_span = s.span;
+                    break;
                 }
             }
+            std::ostringstream oss;
+            oss << "$![Impl::Core]; is allowed only when bundle-name is 'core' (current bundle: '"
+                << (current_bundle.empty() ? "<unknown>" : current_bundle)
+                << "'); core file requires bundle context (use parus check sysroot/core/config.lei)";
+            const std::string msg = oss.str();
+            diag_(diag::Code::kTypeErrorGeneric, marker_span, msg);
+            err_(marker_span, msg);
+            core_context_invalid_ = true;
+            return;
         }
 
         auto build_fn_sig = [&](const ast::Stmt& s) -> ty::TypeId {

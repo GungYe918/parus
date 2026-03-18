@@ -387,6 +387,16 @@ namespace parus {
         }
 
         if (t.kind == syntax::TokenKind::kStringLit) {
+            if (starts_with_(t.lexeme, "$\"")) {
+                cursor_.bump();
+                diag_report(diag::Code::kBareDollarStringRemoved, t.span);
+                ast::Expr e{};
+                e.kind = ast::ExprKind::kError;
+                e.span = t.span;
+                e.text = "bare_dollar_string_removed";
+                return ast_.add_expr(e);
+            }
+
             cursor_.bump();
             ast::Expr e{};
             e.kind = ast::ExprKind::kStringLit;
@@ -394,9 +404,8 @@ namespace parus {
             e.text = t.lexeme;
             const bool is_raw_triple = starts_with_(t.lexeme, "R\"\"\"");
             const bool is_format_triple = starts_with_(t.lexeme, "F\"\"\"");
-            const bool is_format_short = starts_with_(t.lexeme, "$\"");
             e.string_is_raw = is_raw_triple;
-            e.string_is_format = is_format_triple || is_format_short;
+            e.string_is_format = is_format_triple;
 
             // format string parsing:
             // - literal braces: '{{' / '}}'
@@ -408,10 +417,6 @@ namespace parus {
             if (is_format_triple && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
                 body = t.lexeme.substr(4, t.lexeme.size() - 7);
                 base_lo = t.span.lo + 4;
-                has_format_body = true;
-            } else if (is_format_short && t.lexeme.size() >= 3 && t.lexeme.back() == '"') {
-                body = t.lexeme.substr(2, t.lexeme.size() - 3);
-                base_lo = t.span.lo + 2;
                 has_format_body = true;
             }
 

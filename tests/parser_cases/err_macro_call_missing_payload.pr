@@ -1,0 +1,6 @@
+//@expect-error MacroPayloadExpected
+def main() -> i32 {
+    let s: text = $id;
+    return 0i32;
+}
+

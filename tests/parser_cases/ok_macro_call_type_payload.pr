@@ -1,0 +1,11 @@
+//@expect-no-parser-error
+macro pick -> {
+    with token {
+        ($x: tt) => type { i32 };
+    }
+}
+
+def main() -> i32 {
+    let a: $pick { any_tokens_here } = 1i32;
+    return a;
+}

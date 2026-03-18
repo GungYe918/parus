@@ -92,6 +92,7 @@ namespace parus::tyck {
         proto_member_fn_sid_set_.clear();
         enum_decl_by_name_.clear();
         enum_decl_by_type_.clear();
+        core_context_invalid_ = false;
         block_depth_ = 0;
         in_actor_method_ = false;
         in_actor_pub_method_ = false;
@@ -171,6 +172,10 @@ namespace parus::tyck {
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
         first_pass_collect_top_level_(program_stmt);
+        if (core_context_invalid_) {
+            result_.ok = false;
+            return result_;
+        }
 
         // ---------------------------------------------------------
         // PASS 1.5: proto/type/acts dependency cycle check
