@@ -1190,7 +1190,7 @@ bool test_core_ext_scaffold_and_auto_injection() {
         "def main() -> i32 {\n"
         "  c::puts($c\"hi\");\n"
         "  manual[abi] {\n"
-        "    c::printf(\"%s\\n\", $crR\"\"\"ok\"\"\");\n"
+        "    c::printf(\"%s\\n\", $c\"ok\");\n"
         "    c::printf(\"%d\\n\", 5);\n"
         "  }\n"
         "  return 0i32;\n"

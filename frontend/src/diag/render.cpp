@@ -54,7 +54,6 @@ namespace parus::diag {
             case Code::kMacroTokenVariadicOutsideRepeat: return "MacroTokenVariadicOutsideRepeat";
             case Code::kMacroPayloadExpected: return "MacroPayloadExpected";
             case Code::kMacroStringPayloadPlainOnly: return "MacroStringPayloadPlainOnly";
-            case Code::kMacroCrRawPayloadRequired: return "MacroCrRawPayloadRequired";
             case Code::kBareDollarStringRemoved: return "BareDollarStringRemoved";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
@@ -405,7 +404,6 @@ namespace parus::diag {
             case Code::kMacroTokenVariadicOutsideRepeat: return "variadic capture '{0}' must be expanded with repetition context";
             case Code::kMacroPayloadExpected: return "macro call payload is required after '$path' (use (...), \"...\", or { ... })";
             case Code::kMacroStringPayloadPlainOnly: return "string payload form accepts plain string literal only (\"...\")";
-            case Code::kMacroCrRawPayloadRequired: return "$cr requires raw string payload; use $crR\"\"\"...\"\"\"";
             case Code::kBareDollarStringRemoved: return "bare $\"...\" is removed; use $foo\"...\"";
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
@@ -762,7 +760,6 @@ namespace parus::diag {
             case Code::kMacroTokenVariadicOutsideRepeat: return "variadic 캡처 '{0}'는 반복 문맥에서만 단일 항목으로 사용할 수 있습니다";
             case Code::kMacroPayloadExpected: return "매크로 호출 '$path' 뒤에는 payload가 필요합니다 ((...), \"...\", 또는 { ... })";
             case Code::kMacroStringPayloadPlainOnly: return "문자열 payload 형태는 일반 문자열 리터럴(\"...\")만 허용됩니다";
-            case Code::kMacroCrRawPayloadRequired: return "$cr는 raw 문자열 payload가 필요합니다. $crR\"\"\"...\"\"\"를 사용하세요";
             case Code::kBareDollarStringRemoved: return "bare $\"...\" 형식은 제거되었습니다. $foo\"...\"를 사용하세요";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";

@@ -39,7 +39,6 @@ namespace parus::diag {
         kMacroTokenVariadicOutsideRepeat, // variadic capture used outside repetition context
         kMacroPayloadExpected,         // macro call payload is required: (...), "...", or {...}
         kMacroStringPayloadPlainOnly,  // string payload form accepts plain string literal only
-        kMacroCrRawPayloadRequired,    // $cr requires raw string payload: R"""..."""
         kBareDollarStringRemoved,      // bare $"..." form is removed; use $foo"..."
 
         // pipe + hole rules
