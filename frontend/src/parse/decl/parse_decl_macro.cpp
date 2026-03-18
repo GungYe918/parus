@@ -48,8 +48,6 @@ namespace parus {
             if (t.lexeme == "path") return ast::MacroFragKind::kPath;
             if (t.lexeme == "ident") return ast::MacroFragKind::kIdent;
             if (t.lexeme == "block") return ast::MacroFragKind::kBlock;
-            if (t.lexeme == "strlit") return ast::MacroFragKind::kStrLit;
-            if (t.lexeme == "rawstrlit") return ast::MacroFragKind::kRawStrLit;
             if (t.lexeme == "tt") return ast::MacroFragKind::kTt;
             ok = false;
             return ast::MacroFragKind::kExpr;

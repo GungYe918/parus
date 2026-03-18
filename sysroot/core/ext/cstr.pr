@@ -1,12 +1,5 @@
 $![Impl::Core];
 
-// Expands a plain string literal into a static CStr value.
-export macro c -> {
-    with expr {
-        (s:strlit) => expr { core::ext::from_ptr($s) };
-    }
-}
-
 // Borrowed C string view backed by a raw NUL-terminated pointer.
 export class CStr {
     ptr_: ptr c_char;

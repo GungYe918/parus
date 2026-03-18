@@ -1,6 +1,6 @@
 export macro id -> {
     with expr {
-        (s:rawstrlit) => expr { 1i32 };
+        (s:expr) => expr { 1i32 };
     }
 }
 

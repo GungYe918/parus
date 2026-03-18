@@ -953,7 +953,8 @@ namespace parus::oir {
                     if (!args.empty() || path.empty()) return false;
                     if (path.back() != "CStr") return false;
                     if (path.size() == 1) return true;
-                    return path[path.size() - 2] == "ext";
+                    const std::string_view parent = path[path.size() - 2];
+                    return parent == "ext" || parent == "core";
                 };
 
                 if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
@@ -1207,6 +1208,15 @@ namespace parus::oir {
         }
 
         std::string parse_string_literal_bytes_(std::string_view text) {
+            if (starts_with_(text, "c\"") && text.size() >= 3 && text.back() == '"') {
+                const auto body = text.substr(2, text.size() - 3);
+                return decode_escaped_string_body_(body);
+            }
+
+            if (starts_with_(text, "cr\"") && text.size() >= 4 && text.back() == '"') {
+                return std::string(text.substr(3, text.size() - 4));
+            }
+
             if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
                 const auto body = text.substr(1, text.size() - 2);
                 return decode_escaped_string_body_(body);
@@ -1813,7 +1823,8 @@ namespace parus::oir {
                         if (!args.empty() || path.empty()) return false;
                         if (path.back() != "CStr") return false;
                         if (path.size() == 1) return true;
-                        return path[path.size() - 2] == "ext";
+                        const std::string_view parent = path[path.size() - 2];
+                        return parent == "ext" || parent == "core";
                     };
                     const auto& entry = out->blocks[direct_target->entry];
                     const size_t n = std::min(entry.params.size(), inout_args.size());

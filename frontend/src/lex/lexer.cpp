@@ -306,6 +306,29 @@ namespace parus {
         return t;
     }
 
+    Token Lexer::lex_c_prefixed_string(bool raw_mode) {
+        const size_t start = pos_;
+        bump(); // 'c'
+        if (raw_mode) bump(); // 'r'
+        bump(); // opening '"'
+
+        while (!eof()) {
+            const char c = bump();
+            if (!raw_mode && c == '\\') {
+                if (!eof()) bump(); // escape next
+                continue;
+            }
+            if (c == '"') break;
+        }
+
+        const size_t end = pos_;
+        Token t;
+        t.span = Span{file_id_, static_cast<uint32_t>(start), static_cast<uint32_t>(end)};
+        t.lexeme = source_.substr(start, end - start);
+        t.kind = syntax::TokenKind::kStringLit;
+        return t;
+    }
+
     Token Lexer::lex_char() {
         // assumes current char is '\''
         const size_t start = pos_;
@@ -531,6 +554,15 @@ namespace parus {
             if ((c == 'R' || c == 'F') &&
                 peek(1) == '"' && peek(2) == '"' && peek(3) == '"') {
                 out.push_back(lex_prefixed_triple_string(c));
+                continue;
+            }
+
+            if (c == 'c' && peek(1) == 'r' && peek(2) == '"') {
+                out.push_back(lex_c_prefixed_string(/*raw_mode=*/true));
+                continue;
+            }
+            if (c == 'c' && peek(1) == '"') {
+                out.push_back(lex_c_prefixed_string(/*raw_mode=*/false));
                 continue;
             }
 

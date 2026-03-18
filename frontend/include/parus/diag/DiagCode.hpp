@@ -40,6 +40,8 @@ namespace parus::diag {
         kMacroPayloadExpected,         // macro call payload is required: (...), "...", or {...}
         kMacroStringPayloadPlainOnly,  // string payload form accepts plain string literal only
         kBareDollarStringRemoved,      // bare $"..." form is removed; use $foo"..."
+        kCStringInteriorNulForbidden,  // c"..." / cr"..." must not contain interior NUL
+        kCStringLiteralRequiresCoreExt, // c"..." / cr"..." requires core::ext::CStr
 
         // pipe + hole rules
         kPipeRhsMustBeCall,

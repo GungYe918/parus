@@ -151,7 +151,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 3. `vaList`는 opaque 타입이며 C ABI 시그니처 경계에서만 허용한다.
 4. plain string literal(`"..."`)은 C `char*` 기대 슬롯에서만 암묵 허용한다(주로 `ptr core::ext::c_char` 계열).
 5. `text` 변수/고수준 Parus 타입은 C ABI 경계에서 암묵 변환하지 않는다.
-6. `$c"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
+6. `c"..."`, `cr"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
 7. `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
 8. C variadic(`...`)는 `extern "C"` 선언과 `cimport`된 함수 표면에서만 허용한다.
 9. C variadic call site는 `manual[abi]`가 필요하다. ordinary fixed-arg C 호출은 `manual[abi]`를 요구하지 않는다.
@@ -190,7 +190,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 | `VaList` | Implemented (restricted) | C ABI parameter boundary only |
 | `CStr` | Implemented (subset) | Borrowed view helpers only |
 | `CString` | Excluded | allocator 의존으로 v0 제외 |
-| `$c"..."`, `$cr"..."` | Implemented (literal-only) | compile-time C string literal helper |
+| `c"..."`, `cr"..."` | Implemented (literal-only) | compiler builtin C string literals |
 | `c_str!` | Excluded | 이름 기반 매크로 표면은 미도입 |
 
 ---

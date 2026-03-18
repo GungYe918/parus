@@ -1450,7 +1450,8 @@ namespace parus::tyck {
             if (!args.empty() || path.empty()) return false;
             if (path.back() != "CStr") return false;
             if (path.size() == 1) return true;
-            return path[path.size() - 2] == "ext";
+            const std::string_view parent = path[path.size() - 2];
+            return parent == "ext" || parent == "core";
         };
 
         const auto arg_assignable_now = [&](const ast::Arg* a, ty::TypeId expected) -> bool {

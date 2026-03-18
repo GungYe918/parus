@@ -86,14 +86,6 @@ namespace parus::macro {
                 out = ast::MacroFragKind::kBlock;
                 return true;
             }
-            if (t.lexeme == "strlit") {
-                out = ast::MacroFragKind::kStrLit;
-                return true;
-            }
-            if (t.lexeme == "rawstrlit") {
-                out = ast::MacroFragKind::kRawStrLit;
-                return true;
-            }
             if (t.lexeme == "tt") {
                 out = ast::MacroFragKind::kTt;
                 return true;
@@ -696,23 +688,6 @@ namespace parus::macro {
                     if (toks[begin].kind != K::kLBrace) return out;
                     const auto close = find_matching_close_token_(toks, begin, end, K::kLBrace, K::kRBrace);
                     if (close.has_value()) out.push_back(*close + 1);
-                    return out;
-                }
-                if (frag == ast::MacroFragKind::kStrLit) {
-                    if (toks[begin].kind != K::kStringLit) return out;
-                    const auto lex = toks[begin].lexeme;
-                    if (lex.size() >= 2 && lex.front() == '"' && lex.back() == '"') {
-                        out.push_back(begin + 1);
-                    }
-                    return out;
-                }
-                if (frag == ast::MacroFragKind::kRawStrLit) {
-                    if (toks[begin].kind != K::kStringLit) return out;
-                    const auto lex = toks[begin].lexeme;
-                    if (lex.size() >= 7 && lex.rfind("R\"\"\"", 0) == 0 &&
-                        lex.substr(lex.size() - 3) == "\"\"\"") {
-                        out.push_back(begin + 1);
-                    }
                     return out;
                 }
                 if (frag == ast::MacroFragKind::kTt) {

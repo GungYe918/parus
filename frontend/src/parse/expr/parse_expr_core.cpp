@@ -402,9 +402,11 @@ namespace parus {
             e.kind = ast::ExprKind::kStringLit;
             e.span = t.span;
             e.text = t.lexeme;
+            const bool is_c_plain = starts_with_(t.lexeme, "c\"");
+            const bool is_c_raw = starts_with_(t.lexeme, "cr\"");
             const bool is_raw_triple = starts_with_(t.lexeme, "R\"\"\"");
             const bool is_format_triple = starts_with_(t.lexeme, "F\"\"\"");
-            e.string_is_raw = is_raw_triple;
+            e.string_is_raw = is_raw_triple || is_c_raw;
             e.string_is_format = is_format_triple;
 
             // format string parsing:
@@ -414,7 +416,8 @@ namespace parus {
             std::string_view body{};
             uint32_t base_lo = t.span.lo;
             bool has_format_body = false;
-            if (is_format_triple && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
+            if (!is_c_plain && !is_c_raw &&
+                is_format_triple && ends_with_(t.lexeme, "\"\"\"") && t.lexeme.size() >= 7) {
                 body = t.lexeme.substr(4, t.lexeme.size() - 7);
                 base_lo = t.span.lo + 4;
                 has_format_body = true;

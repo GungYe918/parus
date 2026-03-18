@@ -55,6 +55,8 @@ namespace parus::diag {
             case Code::kMacroPayloadExpected: return "MacroPayloadExpected";
             case Code::kMacroStringPayloadPlainOnly: return "MacroStringPayloadPlainOnly";
             case Code::kBareDollarStringRemoved: return "BareDollarStringRemoved";
+            case Code::kCStringInteriorNulForbidden: return "CStringInteriorNulForbidden";
+            case Code::kCStringLiteralRequiresCoreExt: return "CStringLiteralRequiresCoreExt";
             case Code::kPipeRhsMustBeCall: return "PipeRhsMustBeCall";
             case Code::kPipeFwdRhsMustBeCall: return "PipeFwdRhsMustBeCall";
             case Code::kPipeRevLhsMustBeCall: return "PipeRevLhsMustBeCall";
@@ -405,6 +407,8 @@ namespace parus::diag {
             case Code::kMacroPayloadExpected: return "macro call payload is required after '$path' (use (...), \"...\", or { ... })";
             case Code::kMacroStringPayloadPlainOnly: return "string payload form accepts plain string literal only (\"...\")";
             case Code::kBareDollarStringRemoved: return "bare $\"...\" is removed; use $foo\"...\"";
+            case Code::kCStringInteriorNulForbidden: return "c\"...\"/cr\"...\" must not contain interior NUL byte";
+            case Code::kCStringLiteralRequiresCoreExt: return "c\"...\"/cr\"...\" requires core::ext::CStr (core injection unavailable)";
             case Code::kPipeRhsMustBeCall: return "pipe operator requires a function call on the required side";
             case Code::kPipeFwdRhsMustBeCall: return "pipe operator '|>' requires a function call on the right-hand side";
             case Code::kPipeRevLhsMustBeCall: return "pipe operator '<|' requires a function call on the left-hand side";
@@ -761,6 +765,8 @@ namespace parus::diag {
             case Code::kMacroPayloadExpected: return "매크로 호출 '$path' 뒤에는 payload가 필요합니다 ((...), \"...\", 또는 { ... })";
             case Code::kMacroStringPayloadPlainOnly: return "문자열 payload 형태는 일반 문자열 리터럴(\"...\")만 허용됩니다";
             case Code::kBareDollarStringRemoved: return "bare $\"...\" 형식은 제거되었습니다. $foo\"...\"를 사용하세요";
+            case Code::kCStringInteriorNulForbidden: return "c\"...\"/cr\"...\"에는 중간 NUL 바이트를 포함할 수 없습니다";
+            case Code::kCStringLiteralRequiresCoreExt: return "c\"...\"/cr\"...\"는 core::ext::CStr가 필요합니다 (core 주입 불가)";
             case Code::kPipeRhsMustBeCall: return "파이프 연산자는 필요한 쪽에 함수 호출이 있어야 합니다";
             case Code::kPipeFwdRhsMustBeCall: return "파이프 연산자 '|>'의 오른쪽은 함수 호출이어야 합니다";
             case Code::kPipeRevLhsMustBeCall: return "파이프 연산자 '<|'의 왼쪽은 함수 호출이어야 합니다";

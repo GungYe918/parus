@@ -190,6 +190,18 @@ namespace parus::tyck {
             return false;
         }
 
+        bool decode_c_string_bytes_(std::string_view text, std::string& out) {
+            if (starts_with_(text, "c\"") && text.size() >= 3 && text.back() == '"') {
+                out = decode_escaped_string_body_(text.substr(2, text.size() - 3));
+                return true;
+            }
+            if (starts_with_(text, "cr\"") && text.size() >= 4 && text.back() == '"') {
+                out = std::string(text.substr(3, text.size() - 4));
+                return true;
+            }
+            return false;
+        }
+
         /// @brief 타입이 borrow(`&T`/`&mut T`)인지 판정하고, 내부 요소 타입/가변 여부를 반환한다.
         bool borrow_info_(
             const ty::TypePool& types,
@@ -788,6 +800,57 @@ namespace parus::tyck {
             }
 
             case ast::ExprKind::kStringLit: {
+                const bool is_c_literal =
+                    starts_with_(e.text, "c\"") || starts_with_(e.text, "cr\"");
+                if (is_c_literal) {
+                    std::string c_bytes{};
+                    if (!decode_c_string_bytes_(e.text, c_bytes)) {
+                        diag_(diag::Code::kTypeErrorGeneric, e.span, "invalid C string literal");
+                        err_(e.span, "invalid C string literal");
+                        t = types_.error();
+                        break;
+                    }
+
+                    bool has_nul = false;
+                    for (size_t i = 0; i < c_bytes.size(); ++i) {
+                        if (c_bytes[i] == '\0') {
+                            has_nul = true;
+                            break;
+                        }
+                    }
+                    if (has_nul) {
+                        diag_(diag::Code::kCStringInteriorNulForbidden, e.span);
+                        err_(e.span, "C string literal must not contain interior NUL byte");
+                        t = types_.error();
+                        break;
+                    }
+
+                    const std::string quoted = quote_bytes_as_string_lit_(c_bytes);
+                    auto& me = ast_.expr_mut(eid);
+                    me.string_folded_text = ast_.add_owned_string(quoted);
+
+                    auto lookup_cstr = [&](std::string_view qname) -> ty::TypeId {
+                        if (auto sid = sym_.lookup(std::string(qname))) {
+                            const auto& ss = sym_.symbol(*sid);
+                            if (ss.kind == sema::SymbolKind::kType &&
+                                ss.declared_type != ty::kInvalidType) {
+                                return ss.declared_type;
+                            }
+                        }
+                        return ty::kInvalidType;
+                    };
+                    t = lookup_cstr("core::ext::CStr");
+                    if (t == ty::kInvalidType) t = lookup_cstr("core::CStr");
+                    if (t == ty::kInvalidType) t = lookup_cstr("ext::CStr");
+                    if (t == ty::kInvalidType) t = lookup_cstr("CStr");
+                    if (t == ty::kInvalidType) {
+                        diag_(diag::Code::kCStringLiteralRequiresCoreExt, e.span);
+                        err_(e.span, "C string literal requires core::ext::CStr (core injection unavailable)");
+                        t = types_.error();
+                    }
+                    break;
+                }
+
                 if (e.string_is_format) {
                     std::string folded;
                     if (try_fold_fstring_expr_no_diag_(eid, folded)) {
