@@ -2953,7 +2953,7 @@ bool test_c_header_import_function_like_macro_skip_warning() {
     return true;
 }
 
-bool test_c_header_import_function_like_macro_shim_ir_only_rejected() {
+bool test_c_header_import_function_like_macro_ir_only_supported() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fn-macro-shim-ir-only";
@@ -2993,12 +2993,8 @@ bool test_c_header_import_function_like_macro_shim_ir_only_rejected() {
     if (contains(out, "CImportLibClangUnavailable")) {
         return rc != 0;
     }
-    if (rc == 0) {
-        std::cerr << "IR-only emit must reject generated c-import shim requirement\n" << out;
-        return false;
-    }
-    if (!contains(out, "CImportShimIrOnlyUnsupported")) {
-        std::cerr << "IR-only shim rejection must report CImportShimIrOnlyUnsupported\n" << out;
+    if (rc != 0) {
+        std::cerr << "IR-only emit must support cimport wrapper lowering without C shim\n" << out;
         return false;
     }
     return true;
@@ -3189,7 +3185,7 @@ bool test_c_header_import_function_like_macro_nested_paren_cast_forwarding() {
     return true;
 }
 
-bool test_c_header_import_bitfield_read_write_shim() {
+bool test_c_header_import_bitfield_read_write_no_shim() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-bitfield-shim";
@@ -3241,8 +3237,8 @@ bool test_c_header_import_bitfield_read_write_shim() {
     }
 
     const auto shim_o = std::filesystem::path(out_o.string() + ".cimport_shim.o");
-    if (!std::filesystem::exists(shim_o)) {
-        std::cerr << "bitfield cimport must emit shim object sidecar\n";
+    if (std::filesystem::exists(shim_o)) {
+        std::cerr << "bitfield cimport must not emit shim object sidecar\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -3470,7 +3466,7 @@ bool test_hosted_actor_link_uses_clang_driver() {
     return true;
 }
 
-bool test_hosted_actor_parus_lld_mode_rejected() {
+bool test_hosted_actor_parus_lld_mode_succeeds() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parusc-hosted-actor-parus-lld";
@@ -3516,12 +3512,8 @@ bool test_hosted_actor_parus_lld_mode_rejected() {
         " -o \"" + exe.string() + "\"");
     std::filesystem::remove_all(temp_root, ec);
 
-    if (rc == 0) {
-        std::cerr << "hosted actor link with -fuse-linker=parus-lld must fail\n" << out;
-        return false;
-    }
-    if (!contains(out, "hosted actor runtime requires a system clang++ driver link")) {
-        std::cerr << "hosted actor parus-lld rejection did not report the expected policy error\n" << out;
+    if (rc != 0) {
+        std::cerr << "hosted actor link with -fuse-linker=parus-lld must succeed\n" << out;
         return false;
     }
     return true;
@@ -3573,19 +3565,19 @@ int main() {
     const bool ok41 = test_c_header_import_function_like_macro_direct_alias_call();
     const bool ok42 = test_c_header_import_function_like_macro_shim_link_success();
     const bool ok43 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok44 = test_c_header_import_function_like_macro_shim_ir_only_rejected();
+    const bool ok44 = test_c_header_import_function_like_macro_ir_only_supported();
     const bool ok45 = test_c_header_import_function_like_macro_chain_promoted();
     const bool ok46 = test_c_header_import_object_macro_const_expr_resolved();
     const bool ok47 = test_c_header_import_function_like_macro_chain_cycle_warns();
     const bool ok48 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
-    const bool ok49 = test_c_header_import_bitfield_read_write_shim();
+    const bool ok49 = test_c_header_import_bitfield_read_write_no_shim();
     const bool ok50 = test_c_header_import_flatten_collision_hard_error();
     const bool ok51 = test_c_header_import_macos_opengl_isystem();
     const bool ok52 = test_c_header_import_macos_moltenvk_isystem();
     const bool ok53 = test_actor_rejected_in_no_std_profile();
     const bool ok54 = test_actor_allowed_in_freestanding_profile();
     const bool ok55 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok56 = test_hosted_actor_parus_lld_mode_rejected();
+    const bool ok56 = test_hosted_actor_parus_lld_mode_succeeds();
     const bool ok57 = test_core_ext_scaffold_and_auto_injection();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||

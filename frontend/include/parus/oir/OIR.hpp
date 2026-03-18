@@ -93,6 +93,14 @@ namespace parus::oir {
         Abi,
     };
 
+    struct ExternalCBitfieldAccess {
+        bool is_valid = false;
+        uint32_t storage_offset_bytes = 0;
+        uint32_t bit_offset = 0;
+        uint32_t bit_width = 0;
+        bool bit_signed = false;
+    };
+
     // ----------------------
     // Inst payloads (v0)
     // ----------------------
@@ -127,8 +135,7 @@ namespace parus::oir {
     struct InstField      {
         ValueId base;
         std::string field;
-        FuncId c_bitfield_getter = kInvalidId;
-        FuncId c_bitfield_setter = kInvalidId;
+        ExternalCBitfieldAccess c_bitfield{};
     };
     struct InstDrop       { ValueId slot; TypeId owner_ty = kInvalidId; };
 

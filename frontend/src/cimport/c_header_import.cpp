@@ -1,12 +1,16 @@
 #include <parus/cimport/CHeaderImport.hpp>
 #include <parus/cimport/CImportPayload.hpp>
+#include <parus/cimport/LibClangProbe.hpp>
+#include <parus/os/File.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <limits>
 #include <optional>
@@ -32,6 +36,10 @@ namespace parus::cimport {
             ImportedFunctionDecl api{};
             std::vector<std::string> arg_type_reprs{};
             std::string ret_type_repr{};
+        };
+
+        struct InclusionCollectCtx {
+            std::vector<std::string>* deps = nullptr;
         };
 
         static std::string to_std_string_(CXString s) {
@@ -147,6 +155,19 @@ namespace parus::cimport {
                 default:
                     return ImportedGlobalTlsKind::kNone;
             }
+        }
+
+        static void collect_inclusion_visitor_(
+            CXFile included_file,
+            CXSourceLocation*,
+            unsigned,
+            CXClientData client_data
+        ) {
+            auto* ctx = static_cast<InclusionCollectCtx*>(client_data);
+            if (ctx == nullptr || ctx->deps == nullptr || included_file == nullptr) return;
+            const std::string name = to_std_string_(clang_getFileName(included_file));
+            if (name.empty()) return;
+            ctx->deps->push_back(parus::normalize_path(name));
         }
 
         static bool parse_macro_int_literal_text_(std::string_view text, std::string& out) {
@@ -1680,6 +1701,14 @@ namespace parus::cimport {
                             }
                             fd.bit_offset = static_cast<uint32_t>(abs_off_bits);
                             fd.bit_signed = is_signed_integer_type_(child_ty_can);
+                            const long long storage_size = clang_Type_getSizeOf(child_ty_can);
+                            if (storage_size > 0) {
+                                const auto unit = static_cast<uint64_t>(storage_size);
+                                const auto byte_off = static_cast<uint64_t>(abs_off_bits / 8u);
+                                fd.bit_storage_offset_bytes = static_cast<uint32_t>((byte_off / unit) * unit);
+                            } else {
+                                fd.bit_storage_offset_bytes = fd.offset_bytes;
+                            }
                         }
 
                         if (!add_struct_field(std::move(fd), trace_path)) {
@@ -2020,6 +2049,9 @@ namespace parus::cimport {
     HeaderImportResult import_c_header_functions(
         const std::string& importer_source_path,
         const std::string& header_path,
+        const std::string& target_triple,
+        const std::string& sysroot_path,
+        const std::string& apple_sdk_root,
         const std::vector<std::string>& include_dirs,
         const std::vector<std::string>& isystem_dirs,
         const std::vector<std::string>& defines,
@@ -2032,6 +2064,9 @@ namespace parus::cimport {
 #if !defined(PARUS_HAS_LIBCLANG) || !PARUS_HAS_LIBCLANG
         (void)importer_source_path;
         (void)header_path;
+        (void)target_triple;
+        (void)sysroot_path;
+        (void)apple_sdk_root;
         (void)include_dirs;
         (void)isystem_dirs;
         (void)defines;
@@ -2045,10 +2080,13 @@ namespace parus::cimport {
         const std::string escaped = escape_include_text_(header_path);
         const std::string source = "#include \"" + escaped + "\"\n";
         const std::string tu_name = importer_source_path + ".parus_cimport.c";
+        (void)sysroot_path;
 
         std::vector<std::string> args_storage{};
         args_storage.reserve(
-            8 +
+            12 +
+            (target_triple.empty() ? 0u : 2u) +
+            (apple_sdk_root.empty() ? 0u : 2u) +
             include_dirs.size() +
             isystem_dirs.size() * 2u +
             defines.size() +
@@ -2059,6 +2097,14 @@ namespace parus::cimport {
         args_storage.emplace_back("c");
         args_storage.emplace_back("-std=c17");
         args_storage.emplace_back("-fsyntax-only");
+        if (!target_triple.empty()) {
+            args_storage.emplace_back("-target");
+            args_storage.emplace_back(target_triple);
+        }
+        if (!apple_sdk_root.empty()) {
+            args_storage.emplace_back("-isysroot");
+            args_storage.emplace_back(apple_sdk_root);
+        }
         for (const auto& dir : include_dirs) {
             if (dir.empty()) continue;
             args_storage.emplace_back("-I" + dir);
@@ -2121,6 +2167,34 @@ namespace parus::cimport {
             out.error_text = "failed to parse C header '" + header_path + "'";
             clang_disposeIndex(idx);
             return out;
+        }
+
+        out.libclang_version = probe_libclang().version;
+
+        {
+            std::vector<std::string> dep_paths{};
+            InclusionCollectCtx deps_ctx{};
+            deps_ctx.deps = &dep_paths;
+            clang_getInclusions(tu, collect_inclusion_visitor_, &deps_ctx);
+            std::sort(dep_paths.begin(), dep_paths.end());
+            dep_paths.erase(std::unique(dep_paths.begin(), dep_paths.end()), dep_paths.end());
+            out.dependency_files.reserve(dep_paths.size());
+            for (const auto& dep_path : dep_paths) {
+                std::error_code stat_ec{};
+                const std::filesystem::path dep_fs(dep_path);
+                if (!std::filesystem::exists(dep_fs, stat_ec) || stat_ec) continue;
+                ImportedDependencyFile dep{};
+                dep.path = dep_path;
+                dep.mtime_ns = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        std::filesystem::last_write_time(dep_fs, stat_ec).time_since_epoch()).count());
+                if (stat_ec) dep.mtime_ns = 0;
+                if (std::filesystem::is_regular_file(dep_fs, stat_ec) && !stat_ec) {
+                    dep.size_bytes = static_cast<uint64_t>(std::filesystem::file_size(dep_fs, stat_ec));
+                }
+                if (stat_ec) dep.size_bytes = 0;
+                out.dependency_files.push_back(std::move(dep));
+            }
         }
 
         for (unsigned i = 0; i < clang_getNumDiagnostics(tu); ++i) {
@@ -2316,9 +2390,9 @@ namespace parus::cimport {
         }
 
         // Promote strictly-convertible function-like macros:
-        //   - DirectAlias:  MACRO(a,b) -> callee(a,b)
-        //   - ShimForward:  MACRO(y,x) -> callee(x,y) or cast forwarding
-        //   - 1-step chain: MACRO(...) -> OTHER_MACRO(...) -> callee(...)
+        //   - DirectAlias:   MACRO(a,b) -> callee(a,b)
+        //   - IRWrapperCall: MACRO(y,x) -> callee(x,y) or cast forwarding
+        //   - 1-step chain:  MACRO(...) -> OTHER_MACRO(...) -> callee(...)
         std::unordered_multimap<std::string, size_t> fn_idx_by_name{};
         fn_idx_by_name.reserve(collected_fns.size() * 2u + 1u);
         for (size_t i = 0; i < collected_fns.size(); ++i) {
@@ -2388,6 +2462,9 @@ namespace parus::cimport {
 
                 mc.promote_callee_link_name = selected.api.link_name;
                 mc.promote_c_return_type = selected.api.c_return_type;
+                mc.promote_is_c_abi = selected.api.is_c_abi;
+                mc.promote_is_variadic = selected.api.is_variadic;
+                mc.promote_callconv = selected.api.callconv;
                 mc.promote_type_repr = "def(";
                 for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
                     if (i) mc.promote_type_repr += ", ";
@@ -2398,7 +2475,7 @@ namespace parus::cimport {
 
                 mc.promote_kind = (identity_order && !has_cast)
                     ? ImportedMacroPromoteKind::kDirectAlias
-                    : ImportedMacroPromoteKind::kShimForward;
+                    : ImportedMacroPromoteKind::kIRWrapperCall;
                 return true;
             };
 
@@ -2485,6 +2562,9 @@ namespace parus::cimport {
                 mc.promote_callee_name = callee_macro.promote_callee_name;
                 mc.promote_callee_link_name = callee_macro.promote_callee_link_name;
                 mc.promote_c_return_type = callee_macro.promote_c_return_type;
+                mc.promote_is_c_abi = callee_macro.promote_is_c_abi;
+                mc.promote_is_variadic = callee_macro.promote_is_variadic;
+                mc.promote_callconv = callee_macro.promote_callconv;
 
                 mc.promote_type_repr = "def(";
                 for (size_t i = 0; i < mc.promote_param_type_reprs.size(); ++i) {
@@ -2496,7 +2576,7 @@ namespace parus::cimport {
 
                 mc.promote_kind = (identity_order && !has_cast)
                     ? ImportedMacroPromoteKind::kDirectAlias
-                    : ImportedMacroPromoteKind::kShimForward;
+                    : ImportedMacroPromoteKind::kIRWrapperCall;
                 return true;
             };
 
@@ -2640,7 +2720,7 @@ namespace parus::cimport {
 
             ++out.coverage.total_function_macros;
             if (mc.promote_kind == ImportedMacroPromoteKind::kDirectAlias ||
-                mc.promote_kind == ImportedMacroPromoteKind::kShimForward) {
+                mc.promote_kind == ImportedMacroPromoteKind::kIRWrapperCall) {
                 ++out.coverage.promoted_function_macros;
             } else {
                 ++out.coverage.skipped_function_macros;

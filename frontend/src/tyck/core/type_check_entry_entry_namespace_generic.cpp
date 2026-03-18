@@ -118,8 +118,7 @@ namespace parus::tyck {
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
-        expr_external_c_bitfield_getter_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
-        expr_external_c_bitfield_setter_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_external_c_bitfield_cache_.assign(ast_.exprs().size(), ExternalCBitfieldAccess{});
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_external_const_value_cache_.clear();
         param_resolved_symbol_cache_.assign(ast_.params().size(), sema::SymbolTable::kNoScope);
@@ -133,8 +132,7 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
-        result_.expr_external_c_bitfield_getter_symbol = expr_external_c_bitfield_getter_symbol_cache_;
-        result_.expr_external_c_bitfield_setter_symbol = expr_external_c_bitfield_setter_symbol_cache_;
+        result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
@@ -607,8 +605,7 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
-        result_.expr_external_c_bitfield_getter_symbol = expr_external_c_bitfield_getter_symbol_cache_;
-        result_.expr_external_c_bitfield_setter_symbol = expr_external_c_bitfield_setter_symbol_cache_;
+        result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
@@ -1557,11 +1554,8 @@ namespace parus::tyck {
         if (expr_proto_const_decl_cache_.size() < expr_size) {
             expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         }
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) {
-            expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        }
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) {
-            expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) {
+            expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         }
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) {
             expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
@@ -1996,8 +1990,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -2146,8 +2139,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -2484,8 +2476,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -2616,8 +2607,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
@@ -2858,8 +2848,7 @@ namespace parus::tyck {
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
-        if (expr_external_c_bitfield_getter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_getter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
-        if (expr_external_c_bitfield_setter_symbol_cache_.size() < expr_size) expr_external_c_bitfield_setter_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);

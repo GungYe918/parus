@@ -24,8 +24,6 @@ namespace parusc::cli {
     enum class LinkerMode : uint8_t {
         kAuto,
         kParusLld,
-        kSystemLld,
-        kSystemClang,
     };
 
     /// @brief CLI 진단 출력 포맷.

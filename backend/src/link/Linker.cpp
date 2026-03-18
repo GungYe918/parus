@@ -29,13 +29,6 @@ namespace parus::backend::link {
             return name_or_path;
         }
 
-        /// @brief 시스템 clang++ 도구 후보를 결정한다.
-        std::string select_clangxx_() {
-            namespace fs = std::filesystem;
-            if (fs::exists("/usr/bin/clang++")) return "/usr/bin/clang++";
-            return "clang++";
-        }
-
         /// @brief 환경 변수 문자열을 읽는다.
         std::string getenv_string_(const char* key) {
             if (key == nullptr) return {};
@@ -97,17 +90,12 @@ namespace parus::backend::link {
             const std::string& linker,
             const std::vector<std::string>& objects,
             const std::string& output,
-            bool use_lld_via_clang,
             const LinkOptions& opt,
             bool is_parus_lld_mode
         ) {
             std::vector<std::string> argv;
             argv.reserve(objects.size() + 16);
             argv.push_back(linker);
-
-            if (use_lld_via_clang) {
-                argv.push_back("-fuse-ld=lld");
-            }
 
             if (is_parus_lld_mode) {
                 const std::string sysroot = !opt.sysroot_path.empty()
@@ -164,7 +152,6 @@ namespace parus::backend::link {
             const std::string& linker,
             const std::vector<std::string>& objects,
             const std::string& output,
-            bool use_lld_via_clang,
             const LinkOptions& opt
         ) {
             if (linker.empty()) {
@@ -178,13 +165,11 @@ namespace parus::backend::link {
             }
 
             const bool is_parus_lld_mode =
-                !use_lld_via_clang &&
                 basename_(linker).find("parus-lld") != std::string::npos;
             const std::vector<std::string> argv = build_link_argv_(
                 linker,
                 objects,
                 output,
-                use_lld_via_clang,
                 opt,
                 is_parus_lld_mode
             );
@@ -235,83 +220,30 @@ namespace parus::backend::link {
         const std::string parus_lld = resolve_tool_candidate_(
             env_parus_lld.empty() ? std::string("parus-lld") : env_parus_lld
         );
-        const std::string clangxx = resolve_tool_candidate_(select_clangxx_());
-
-        struct Candidate {
-            std::string tool{};
-            bool use_lld_via_clang = false;
-        };
-        std::vector<Candidate> candidates{};
-
-        auto append_auto_policy = [&]() {
-            if (opt.requires_cpp_runtime) {
-                candidates.push_back(Candidate{clangxx, true});
-                if (opt.allow_fallback) {
-                    candidates.push_back(Candidate{clangxx, false});
-                }
-                return;
-            }
-            if (!opt.requires_cpp_runtime) {
-                candidates.push_back(Candidate{parus_lld, false});
-            }
-            if (opt.allow_fallback) {
-                candidates.push_back(Candidate{clangxx, true});
-                candidates.push_back(Candidate{clangxx, false});
-            }
-        };
-
-        switch (opt.mode) {
-            case LinkerMode::kAuto:
-                append_auto_policy();
-                break;
-            case LinkerMode::kParusLld:
-                if (opt.requires_cpp_runtime) {
-                    out.messages.push_back(CompileMessage{
-                        true,
-                        "hosted actor runtime requires a system clang++ driver link; "
-                        "'-fuse-linker=parus-lld' is not supported for this link step."
-                    });
-                    return out;
-                }
-                candidates.push_back(Candidate{parus_lld, false});
-                if (opt.allow_fallback) {
-                    candidates.push_back(Candidate{clangxx, true});
-                    candidates.push_back(Candidate{clangxx, false});
-                }
-                break;
-            case LinkerMode::kSystemLld:
-                candidates.push_back(Candidate{clangxx, true});
-                if (opt.allow_fallback) {
-                    candidates.push_back(Candidate{clangxx, false});
-                }
-                break;
-            case LinkerMode::kSystemClang:
-                candidates.push_back(Candidate{clangxx, false});
-                break;
+        if (opt.mode != LinkerMode::kAuto && opt.mode != LinkerMode::kParusLld) {
+            out.messages.push_back(CompileMessage{true, "unsupported linker mode for current backend policy."});
+            return out;
         }
 
-        for (const auto& cand : candidates) {
+        {
             auto [ok, msg] = try_link_once_(
-                cand.tool,
+                parus_lld,
                 opt.object_paths,
                 opt.output_path,
-                cand.use_lld_via_clang,
                 opt
             );
             out.messages.push_back(std::move(msg));
-            if (!ok) continue;
-
-            out.ok = true;
-            out.linker_used = cand.use_lld_via_clang
-                ? (cand.tool + " (-fuse-ld=lld)")
-                : cand.tool;
-            return out;
+            if (ok) {
+                out.ok = true;
+                out.linker_used = parus_lld;
+                return out;
+            }
         }
 
         out.ok = false;
         out.messages.push_back(CompileMessage{
             true,
-            "all linker candidates failed. Consider setting PARUS_LLD or using -fuse-linker to select an explicit linker mode."
+            "parus-lld link failed. Consider setting PARUS_LLD or validating sysroot/native deps."
         });
         return out;
     }

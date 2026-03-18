@@ -26,6 +26,54 @@ namespace parus::oir {
             kPub = 2,
         };
 
+        struct ParsedCImportWrapperPayload {
+            bool is_wrapper = false;
+            std::string callee_link_name{};
+            std::vector<uint32_t> arg_map{};
+        };
+
+        ParsedCImportWrapperPayload parse_cimport_wrapper_payload_(std::string_view payload) {
+            ParsedCImportWrapperPayload out{};
+            if (!payload.starts_with("parus_c_import|")) return out;
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "wrapper") {
+                        out.is_wrapper = (val == "1" || val == "true");
+                    } else if (key == "wrapper_callee") {
+                        out.callee_link_name.assign(val);
+                    } else if (key == "wrapper_argmap") {
+                        size_t begin = 0;
+                        while (begin <= val.size()) {
+                            const size_t comma = val.find(',', begin);
+                            const size_t end = (comma == std::string_view::npos) ? val.size() : comma;
+                            if (end > begin) {
+                                try {
+                                    out.arg_map.push_back(static_cast<uint32_t>(
+                                        std::stoul(std::string(val.substr(begin, end - begin)))));
+                                } catch (...) {
+                                    out.arg_map.clear();
+                                    return out;
+                                }
+                            }
+                            if (comma == std::string_view::npos) break;
+                            begin = comma + 1;
+                        }
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        }
+
         struct ActorRuntimeFuncs {
             FuncId new_fn = kInvalidId;
             FuncId clone_fn = kInvalidId;
@@ -469,10 +517,10 @@ namespace parus::oir {
                 return r;
             }
 
-            ValueId emit_field(TypeId ty, ValueId base, std::string field, FuncId bit_getter = kInvalidId, FuncId bit_setter = kInvalidId) {
+            ValueId emit_field(TypeId ty, ValueId base, std::string field, ExternalCBitfieldAccess c_bitfield = {}) {
                 ValueId r = make_value(ty, Effect::MayReadMem);
                 Inst inst{};
-                inst.data = InstField{base, std::move(field), bit_getter, bit_setter};
+                inst.data = InstField{base, std::move(field), c_bitfield};
                 inst.eff = Effect::MayReadMem;
                 inst.result = r;
                 emit_inst(inst);
@@ -1961,19 +2009,13 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kField: {
                 ValueId base = lower_value(v.a);
-                FuncId bit_getter = kInvalidId;
-                FuncId bit_setter = kInvalidId;
-                if (fn_symbol_to_func != nullptr) {
-                    if (v.external_c_bitfield_getter_sym != parus::sir::k_invalid_symbol) {
-                        auto it = fn_symbol_to_func->find(v.external_c_bitfield_getter_sym);
-                        if (it != fn_symbol_to_func->end()) bit_getter = it->second;
-                    }
-                    if (v.external_c_bitfield_setter_sym != parus::sir::k_invalid_symbol) {
-                        auto it = fn_symbol_to_func->find(v.external_c_bitfield_setter_sym);
-                        if (it != fn_symbol_to_func->end()) bit_setter = it->second;
-                    }
-                }
-                return emit_field(v.type, base, std::string(v.text), bit_getter, bit_setter);
+                return emit_field(v.type, base, std::string(v.text), {
+                    .is_valid = v.external_c_bitfield.is_valid,
+                    .storage_offset_bytes = v.external_c_bitfield.storage_offset_bytes,
+                    .bit_offset = v.external_c_bitfield.bit_offset,
+                    .bit_width = v.external_c_bitfield.bit_width,
+                    .bit_signed = v.external_c_bitfield.bit_signed,
+                });
             }
 
             case parus::sir::ValueKind::kAssign: {
@@ -3122,10 +3164,12 @@ namespace parus::oir {
         std::unordered_map<parus::sir::SymbolId, FuncId> fn_symbol_to_func;
         std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>> fn_symbol_to_funcs;
         std::unordered_map<uint32_t, FuncId> fn_decl_to_func;
+        std::unordered_map<std::string, FuncId> fn_link_name_to_func;
         std::unordered_set<FuncId> throwing_func_ids;
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
+            const auto wrapper_payload = parse_cimport_wrapper_payload_(sf.external_payload);
 
             Function f{};
             // C ABI 함수는 심볼을 비맹글 기반으로 유지한다.
@@ -3139,7 +3183,7 @@ namespace parus::oir {
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
             f.c_callconv = map_c_callconv_(sf.c_callconv);
-            f.is_extern = sf.is_extern;
+            f.is_extern = sf.is_extern && !wrapper_payload.is_wrapper;
             f.is_c_variadic = sf.is_c_variadic;
             f.c_fixed_param_count = sf.c_fixed_param_count;
             f.is_pure = sf.is_pure;
@@ -3157,6 +3201,7 @@ namespace parus::oir {
             const FuncId fid = out.mod.add_func(f);
             sir_to_oir_func[i] = fid;
             sir_to_entry[i] = entry;
+            fn_link_name_to_func[out.mod.funcs[fid].name] = fid;
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
             if (pend <= (uint64_t)sir_.params.size()) {
                 for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
@@ -3279,6 +3324,43 @@ namespace parus::oir {
                 fb.def->actor_ctx_param_index != kInvalidId &&
                 (size_t)fb.def->actor_ctx_param_index < out.mod.blocks[entry].params.size()) {
                 fb.current_actor_ctx = out.mod.blocks[entry].params[fb.def->actor_ctx_param_index];
+            }
+
+            const auto wrapper_payload = parse_cimport_wrapper_payload_(sf.external_payload);
+            if (wrapper_payload.is_wrapper) {
+                auto callee_it = fn_link_name_to_func.find(wrapper_payload.callee_link_name);
+                if (callee_it == fn_link_name_to_func.end()) {
+                    out.gate_errors.push_back({
+                        "cimport wrapper lowering failed: unresolved callee '" + wrapper_payload.callee_link_name + "'"
+                    });
+                    ValueId rv = fb.emit_const_null((TypeId)sf.ret);
+                    fb.ret(rv);
+                    fb.pop_scope();
+                    continue;
+                }
+                std::vector<ValueId> args{};
+                args.reserve(wrapper_payload.arg_map.size());
+                bool bad_argmap = false;
+                for (const uint32_t param_index : wrapper_payload.arg_map) {
+                    if (param_index >= out.mod.blocks[entry].params.size()) {
+                        bad_argmap = true;
+                        break;
+                    }
+                    args.push_back(out.mod.blocks[entry].params[param_index]);
+                }
+                if (bad_argmap) {
+                    out.gate_errors.push_back({
+                        "cimport wrapper lowering failed: invalid wrapper_argmap for '" + std::string(sf.name) + "'"
+                    });
+                    ValueId rv = fb.emit_const_null((TypeId)sf.ret);
+                    fb.ret(rv);
+                    fb.pop_scope();
+                    continue;
+                }
+                ValueId rv = fb.emit_direct_call((TypeId)sf.ret, callee_it->second, std::move(args));
+                fb.ret(rv);
+                fb.pop_scope();
+                continue;
             }
 
             fb.lower_block(sf.entry);

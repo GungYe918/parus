@@ -222,19 +222,15 @@ namespace parus::sir::detail {
                         const auto& rhs = ast.expr(e.b);
                         v.text = rhs.text;
                     }
-                    if ((size_t)eid < tyck.expr_external_c_bitfield_getter_symbol.size()) {
-                        const auto getter = tyck.expr_external_c_bitfield_getter_symbol[eid];
-                        if (getter != sema::SymbolTable::kNoScope &&
-                            getter != k_invalid_symbol) {
-                            v.external_c_bitfield_getter_sym = getter;
-                        }
-                    }
-                    if ((size_t)eid < tyck.expr_external_c_bitfield_setter_symbol.size()) {
-                        const auto setter = tyck.expr_external_c_bitfield_setter_symbol[eid];
-                        if (setter != sema::SymbolTable::kNoScope &&
-                            setter != k_invalid_symbol) {
-                            v.external_c_bitfield_setter_sym = setter;
-                        }
+                    if ((size_t)eid < tyck.expr_external_c_bitfield.size()) {
+                        const auto& access = tyck.expr_external_c_bitfield[eid];
+                        v.external_c_bitfield = {
+                            .is_valid = access.is_valid,
+                            .storage_offset_bytes = access.storage_offset_bytes,
+                            .bit_offset = access.bit_offset,
+                            .bit_width = access.bit_width,
+                            .bit_signed = access.bit_signed,
+                        };
                     }
                     break;
                 }

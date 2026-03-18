@@ -21,7 +21,7 @@ parusc lsp --stdio
 10. `--lang en|ko`
 11. `--context <N>`
 12. `-fmax-errors=<N>`
-13. `-fuse-linker=auto|parus-lld|lld|clang`
+13. `-fuse-linker=auto|parus-lld`
 14. `--no-link-fallback`
 15. `-Wshadow`, `-Werror=shadow`
 

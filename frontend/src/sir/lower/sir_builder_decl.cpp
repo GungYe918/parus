@@ -826,6 +826,7 @@ namespace parus::sir {
             f.span = ss.decl_span;
             f.name = ss.name;
             f.external_link_name = ss.link_name;
+            f.external_payload = ss.external_payload;
             f.sym = sid;
             f.sig = ss.declared_type;
             f.ret = types.get(ss.declared_type).ret;

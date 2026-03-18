@@ -15,13 +15,6 @@ export macro cr -> {
     }
 }
 
-// Internal macro used by core::ext tests; intentionally not exported.
-macro __core_ext_identity -> {
-    with expr {
-        (x:expr) => expr { $0 };
-    }
-}
-
 // Borrowed C string view backed by a raw NUL-terminated pointer.
 export class CStr {
     ptr_: ptr c_char;

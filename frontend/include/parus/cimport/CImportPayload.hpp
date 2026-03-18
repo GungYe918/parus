@@ -20,6 +20,12 @@ namespace parus::cimport {
         const ImportedFunctionDecl& fn
     );
 
+    std::string make_c_import_wrapper_payload(
+        std::string_view header,
+        std::string_view alias,
+        const ImportedMacroDecl& mc
+    );
+
     std::string make_c_import_global_payload(
         std::string_view header,
         const ImportedGlobalDecl& gv
@@ -46,6 +52,12 @@ namespace parus::cimport {
         std::string_view alias,
         const std::unordered_set<std::string>& known_type_names,
         const ImportedTypedefDecl& td
+    );
+
+    std::string make_c_import_wrapper_symbol(
+        std::string_view header,
+        std::string_view alias,
+        std::string_view macro_name
     );
 
     std::string imported_macro_skip_code_text(ImportedMacroSkipKind kind);

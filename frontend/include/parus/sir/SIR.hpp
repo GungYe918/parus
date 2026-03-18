@@ -121,6 +121,14 @@ namespace parus::sir {
     inline constexpr uint8_t kManualPermSet = 1u << 1;
     inline constexpr uint8_t kManualPermAbi = 1u << 2;
 
+    struct ExternalCBitfieldAccess {
+        bool is_valid = false;
+        uint32_t storage_offset_bytes = 0;
+        uint32_t bit_offset = 0;
+        uint32_t bit_width = 0;
+        bool bit_signed = false;
+    };
+
     // ---------------------------------------------
     // Value node
     // ---------------------------------------------
@@ -184,8 +192,7 @@ namespace parus::sir {
         bool borrow_is_mut = false;
 
         // external C bitfield metadata (kField only)
-        SymbolId external_c_bitfield_getter_sym = k_invalid_symbol;
-        SymbolId external_c_bitfield_setter_sym = k_invalid_symbol;
+        ExternalCBitfieldAccess external_c_bitfield{};
     };
 
     // ---------------------------------------------
@@ -373,6 +380,7 @@ namespace parus::sir {
         parus::Span span{};
         std::string_view name{};
         std::string external_link_name{};
+        std::string external_payload{};
         SymbolId sym = k_invalid_symbol;
 
         // signature types

@@ -124,8 +124,6 @@ namespace parus::diag {
         kCImportHeaderLiteralExpected,    // import "<header>" expects plain string literal
         kCImportLibClangUnavailable,      // c-import requested but libclang is unavailable
         kCImportFnMacroSkipped,           // function-like C macro was skipped during strict promotion (warning)
-        kCImportShimCompileFailed,        // generated C shim compile failed
-        kCImportShimIrOnlyUnsupported,    // generated C shim requires object/link mode
         kCAbiCallPositionalOnly,          // C ABI call accepts positional arguments only
         kCAbiFormatStringForbidden,       // C ABI call does not allow $"..."/F"""...""" argument
         kCallLabeledNotAllowedForPositionalFn, // labeled call used for positional-only function

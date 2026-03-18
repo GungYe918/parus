@@ -1,9 +1,10 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/CImportManifest.hpp>
 #include <parus/cimport/CImportPayload.hpp>
-#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
@@ -1839,19 +1840,72 @@ namespace {
         return {};
     }
 
+    std::optional<std::string> read_json_string_field_from_file_(const std::filesystem::path& path,
+                                                                 std::string_view key) {
+        std::string text{};
+        std::string io_err{};
+        if (!parus::open_file(path.string(), text, io_err)) return std::nullopt;
+
+        JsonValue root{};
+        JsonParser parser(text);
+        if (!parser.parse(root)) return std::nullopt;
+
+        if (const auto value = as_string_(obj_get_(root, key)); value.has_value()) {
+            return std::string(*value);
+        }
+        return std::nullopt;
+    }
+
     std::string resolve_lsp_sysroot_() {
+        namespace fs = std::filesystem;
         std::string sysroot = getenv_string_("PARUS_SYSROOT");
         if (!sysroot.empty()) return sysroot;
 
         const std::string toolchain_root = getenv_string_("PARUS_TOOLCHAIN_ROOT");
         if (!toolchain_root.empty()) {
-            namespace fs = std::filesystem;
             std::error_code ec{};
             fs::path p = fs::path(toolchain_root) / "sysroot";
             const fs::path canonical = fs::weakly_canonical(p, ec);
             if (!ec) return canonical.string();
             return p.lexically_normal().string();
         }
+
+        const std::string home = getenv_string_("HOME");
+        if (home.empty()) return {};
+
+        std::error_code ec{};
+        fs::path p = fs::path(home) / ".local" / "share" / "parus" / "active-toolchain" / "sysroot";
+        const fs::path canonical = fs::weakly_canonical(p, ec);
+        if (!ec) return canonical.string();
+        ec.clear();
+        if (fs::exists(p, ec) && !ec) return p.lexically_normal().string();
+        return {};
+    }
+
+    std::string resolve_lsp_target_triple_() {
+        const std::string sysroot = resolve_lsp_sysroot_();
+        if (sysroot.empty()) return {};
+        const auto target = read_json_string_field_from_file_(
+            std::filesystem::path(sysroot) / "manifest.json",
+            "default_target_triple");
+        return target.value_or(std::string{});
+    }
+
+    std::string resolve_lsp_apple_sdk_root_() {
+        const std::string env_sdk = getenv_string_("PARUS_APPLE_SDK_ROOT");
+        if (!env_sdk.empty()) return env_sdk;
+
+        const std::string sysroot = resolve_lsp_sysroot_();
+        const std::string target = resolve_lsp_target_triple_();
+        if (!sysroot.empty() && !target.empty()) {
+            const auto sdk = read_json_string_field_from_file_(
+                std::filesystem::path(sysroot) / "targets" / target / "native" / "apple-sdk.ref",
+                "sdk_root");
+            if (sdk.has_value() && !sdk->empty()) return *sdk;
+        }
+
+        const std::string sdkroot_env = getenv_string_("SDKROOT");
+        if (!sdkroot_env.empty()) return sdkroot_env;
         return {};
     }
 
@@ -2920,17 +2974,7 @@ namespace {
                         for (const auto& d : cimport_cfg.isystem_dirs) {
                             if (!d.empty()) cimport_isystem_dirs.push_back(parus::normalize_path(d));
                         }
-                        const auto auto_isystem = parus::cimport::probe_default_c_system_include_dirs();
-                        if (!auto_isystem.warning.empty()) {
-                            parus::diag::Diagnostic d(
-                                parus::diag::Severity::kWarning,
-                                parus::diag::Code::kTypeErrorGeneric,
-                                parus::Span{file_id, 0, 0}
-                            );
-                            d.add_arg(auto_isystem.warning);
-                            bag.add(std::move(d));
-                        }
-                        parus::cimport::append_unique_normalized_paths(cimport_isystem_dirs, auto_isystem.isystem_dirs);
+                        parus::cimport::append_unique_normalized_paths(cimport_isystem_dirs, {});
                         for (const auto& d : cimport_cfg.defines) {
                             if (!d.empty()) cimport_defines.push_back(d);
                         }
@@ -2969,6 +3013,9 @@ namespace {
                         append_vec_to_key("U", cimport_undefines);
                         append_vec_to_key("F", cimport_forced_includes);
                         append_vec_to_key("M", cimport_imacros);
+                        append_vec_to_key("TARGET", std::vector<std::string>{resolve_lsp_target_triple_()});
+                        append_vec_to_key("SYSROOT", std::vector<std::string>{resolve_lsp_sysroot_()});
+                        append_vec_to_key("SDKROOT", std::vector<std::string>{resolve_lsp_apple_sdk_root_()});
 
                         if (auto it = g_lsp_cimport_cache.find(cache_key); it != g_lsp_cimport_cache.end()) {
                             for (const auto& ex : it->second.exports) {
@@ -3024,16 +3071,21 @@ namespace {
                             };
 
                             for (const auto& spec : c_header_imports) {
-                            const auto imported = parus::cimport::import_c_header_functions(
-                                normalized_current,
-                                spec.header,
-                                cimport_include_dirs,
-                                cimport_isystem_dirs,
-                                cimport_defines,
-                                cimport_undefines,
-                                cimport_forced_includes,
-                                cimport_imacros
-                            );
+                            const auto cached = parus::cimport::load_or_translate_c_header_cached({
+                                .importer_source_path = normalized_current,
+                                .header_path = spec.header,
+                                .cache_root = current_dir + "/.parus-cache/cimport",
+                                .target_triple = resolve_lsp_target_triple_(),
+                                .sysroot_path = resolve_lsp_sysroot_(),
+                                .apple_sdk_root = resolve_lsp_apple_sdk_root_(),
+                                .include_dirs = cimport_include_dirs,
+                                .isystem_dirs = cimport_isystem_dirs,
+                                .defines = cimport_defines,
+                                .undefines = cimport_undefines,
+                                .forced_includes = cimport_forced_includes,
+                                .imacros = cimport_imacros,
+                            });
+                            const auto& imported = cached.import;
                             if (imported.error != parus::cimport::ImportErrorKind::kNone) {
                                 parus::diag::Diagnostic d(
                                     parus::diag::Severity::kError,
@@ -3211,21 +3263,15 @@ namespace {
                                             );
                                             add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
                                         }
-                                    } else if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kShimForward &&
+                                    } else if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kIRWrapperCall &&
                                                !mc.promote_type_repr.empty()) {
                                         const std::string mpath = spec.alias + "::" + mc.name;
-                                        parus::cimport::ImportedFunctionDecl shim_fn{};
-                                        shim_fn.name = mc.name;
-                                        shim_fn.link_name = "__parusd_lsp_cimport_shim_" + spec.alias + "_" + mc.name;
-                                        shim_fn.type_repr = mc.promote_type_repr;
-                                        shim_fn.is_c_abi = true;
-                                        shim_fn.is_variadic = false;
                                         add_external(
                                             parus::sema::SymbolKind::kFn,
                                             mpath,
                                             parus::cimport::rewrite_cimport_type_with_alias(mc.promote_type_repr, spec.alias, known_type_names),
-                                            shim_fn.link_name,
-                                            parus::cimport::make_c_import_payload(spec.header, spec.alias, shim_fn)
+                                            parus::cimport::make_c_import_wrapper_symbol(spec.header, spec.alias, mc.name),
+                                            parus::cimport::make_c_import_wrapper_payload(spec.header, spec.alias, mc)
                                         );
                                         add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
                                     }

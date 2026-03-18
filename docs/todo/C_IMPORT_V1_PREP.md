@@ -23,7 +23,7 @@
 | object-like macro | partial (constant-only) |
 | function-like macro | partial (strict promotable subset + 1-step macro-chain) |
 | union | partial (`manual[get/set]` gated dot access) |
-| bitfield | partial (getter/setter shim 기반 read/write) |
+| bitfield | partial (direct IR/LLVM lowering 기반 read/write) |
 | anonymous record/enum | partial (synthetic `__anon_*` name import) |
 | variadic call lowering | partial (ABI-safe scalar/pointer only, unsuffixed int literal -> i32 in v1) |
 
@@ -42,11 +42,11 @@
 - Add C ABI backend tests for packing and cross-compiler parity.
 
 ### 3) function-like macro support
-- Current v2.2+ strict mode:
+- Current manifest/recipe strict mode:
   - Promote only single-call forwarding forms (`CALLEE(args...)`).
   - Argument forms are limited to direct parameter forwarding or simple cast forwarding (`(T)param`).
   - `DirectAlias` uses original C symbol without shim.
-  - `ShimForward` auto-generates a C shim object and links it.
+  - `IRWrapperCall` lowers reorder/cast forwarding directly into Parus IR/OIR wrapper bodies.
 - Excluded in this round:
   - token paste/stringize (`##`, `#`)
   - statement macro / GNU extension dependent macro
@@ -63,14 +63,15 @@
 ## Build/dependency policy
 - Vendored headers live in `third_party/libclang/include/clang-c`.
 - Shared library path is discovered at CMake configure time.
+- `cimport` 결과는 target/sysroot/sdk/include/define fingerprint 기반 manifest cache로 저장한다.
+- Parus compiler는 generated C shim을 만들지 않으며 C compiler/clang driver를 호출하지 않는다.
 - CMake option gates:
   - `PARUS_ENABLE_CIMPORT`
   - `PARUS_CIMPORT_REQUIRE_LIBCLANG`
   - `PARUS_LIBCLANG_ROOT`, `PARUS_LIBCLANG_INCLUDE_DIR`, `PARUS_LIBCLANG_LIBRARY`
 
 ## Next implementation step
-1. Parse `import "Header.h" as alias;` into dedicated AST kind.
-2. Call libclang to build a declaration manifest.
-3. Inject manifest symbols into name-resolve external surface.
-4. Map supported declarations to Parus types/symbols.
-5. Add diagnostics for unsupported features listed above.
+1. Expand unsupported macro handling into explicit `c bridge` library affordances.
+2. Tighten bitfield lowering coverage for packed/exotic layouts.
+3. Keep manifest schema stable across compiler/LSP cache readers.
+4. Add more target-specific ABI regression coverage.

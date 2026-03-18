@@ -77,12 +77,10 @@ namespace parusc::cli {
                     : LinkerMode::kParusLld;
                 return true;
             }
-            if (mode == "lld" || mode == "system-lld") {
-                out.linker_mode = LinkerMode::kSystemLld;
-                return true;
-            }
-            if (mode == "clang" || mode == "system-clang") {
-                out.linker_mode = LinkerMode::kSystemClang;
+            if (mode == "lld" || mode == "system-lld" ||
+                mode == "clang" || mode == "system-clang") {
+                out.ok = false;
+                out.error = "unsupported linker mode: " + std::string(mode) + " (supported: auto, parus-lld)";
                 return true;
             }
 
@@ -400,7 +398,7 @@ namespace parusc::cli {
             << "  -fmacro-max-depth=<N>\n"
             << "  -fmacro-max-steps=<N>\n"
             << "  -fmacro-max-output-tokens=<N>\n"
-            << "  -fuse-linker=auto|parus-lld|lld|clang\n"
+            << "  -fuse-linker=auto|parus-lld\n"
             << "  --no-link-fallback   Disable linker fallback chain\n"
             << "  --bundle-name <name>\n"
             << "  --bundle-root <path>\n"

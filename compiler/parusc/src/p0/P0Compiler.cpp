@@ -6,9 +6,10 @@
 #include <parus/ast/Nodes.hpp>
 #include <parus/cap/CapabilityCheck.hpp>
 #include <parus/cimport/CHeaderImport.hpp>
+#include <parus/cimport/CImportManifest.hpp>
 #include <parus/cimport/CImportPayload.hpp>
-#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
@@ -37,6 +38,7 @@
 #include <cctype>
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -48,14 +50,6 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <spawn.h>
-#include <sys/wait.h>
-extern char** environ;
-#endif
 
 namespace parusc::p0 {
 
@@ -1282,6 +1276,31 @@ namespace parusc::p0 {
             return getenv_string_("PARUS_SYSROOT");
         }
 
+        std::string resolve_active_toolchain_sysroot_() {
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+
+            const std::string env_toolchain = getenv_string_("PARUS_TOOLCHAIN_ROOT");
+            if (!env_toolchain.empty()) {
+                const fs::path candidate = fs::path(env_toolchain) / "sysroot";
+                const fs::path canonical = fs::weakly_canonical(candidate, ec);
+                if (!ec && !canonical.empty()) return canonical.string();
+                ec.clear();
+                if (fs::exists(candidate, ec) && !ec) return candidate.lexically_normal().string();
+            }
+
+            const std::string home = getenv_string_("HOME");
+            if (home.empty()) return {};
+
+            const fs::path active = fs::path(home) / ".local" / "share" / "parus" / "active-toolchain";
+            const fs::path candidate = active / "sysroot";
+            const fs::path canonical = fs::weakly_canonical(candidate, ec);
+            if (!ec && !canonical.empty()) return canonical.string();
+            ec.clear();
+            if (fs::exists(candidate, ec) && !ec) return candidate.lexically_normal().string();
+            return {};
+        }
+
         std::string read_manifest_default_target_triple_(const std::string& sysroot) {
             namespace fs = std::filesystem;
             if (sysroot.empty()) return {};
@@ -1300,6 +1319,20 @@ namespace parusc::p0 {
             const size_t quote1 = text.find('"', quote0 + 1);
             if (quote1 == std::string::npos || quote1 <= quote0 + 1) return {};
             return text.substr(quote0 + 1, quote1 - quote0 - 1);
+        }
+
+        std::string read_sysroot_apple_sdk_ref_(const std::string& sysroot, const std::string& target) {
+            namespace fs = std::filesystem;
+            if (sysroot.empty() || target.empty()) return {};
+
+            const fs::path ref = fs::path(sysroot) / "targets" / target / "native" / "apple-sdk.ref";
+            std::string text{};
+            std::string io_err{};
+            if (!parus::open_file(ref.string(), text, io_err)) return {};
+
+            std::string sdk_root{};
+            if (!parse_json_string_field_(text, "sdk_root", sdk_root)) return {};
+            return sdk_root;
         }
 
         std::string effective_target_triple_(const cli::Options& opt) {
@@ -1590,37 +1623,6 @@ namespace parusc::p0 {
             parus::Span span{};
         };
 
-        struct CImportShimArg {
-            std::string name{};
-            std::string c_type{};
-        };
-
-        struct CImportShimCallArg {
-            uint32_t param_index = 0;
-            std::string cast_prefix{};
-        };
-
-        enum class CImportShimKind : uint8_t {
-            kMacroForward = 0,
-            kBitfieldGetter,
-            kBitfieldSetter,
-        };
-
-        struct CImportShimTask {
-            CImportShimKind kind = CImportShimKind::kMacroForward;
-            std::string header{};
-            std::string alias{};
-            std::string macro_name{};
-            std::string shim_symbol{};
-            std::string callee_link_name{};
-            std::string c_return_type{};
-            std::vector<CImportShimArg> params{};
-            std::vector<CImportShimCallArg> call_args{};
-            std::string owner_c_type{};
-            std::string owner_field_name{};
-            parus::Span span{};
-        };
-
         void collect_c_header_imports_(const parus::ast::AstArena& ast,
                                        parus::ast::StmtId root_sid,
                                        std::vector<CHeaderImportSpec>& out) {
@@ -1658,182 +1660,57 @@ namespace parusc::p0 {
             }
         }
 
-        std::string escape_c_include_text_(std::string_view s) {
+
+        std::string query_macos_sdk_root_from_xcrun_() {
+#if defined(__APPLE__) && !defined(_WIN32)
+            FILE* pipe = popen("xcrun --sdk macosx --show-sdk-path 2>/dev/null", "r");
+            if (pipe == nullptr) return {};
+
             std::string out{};
-            out.reserve(s.size() + 8u);
-            for (const char ch : s) {
-                if (ch == '\\' || ch == '"') out.push_back('\\');
-                out.push_back(ch);
+            char buf[512];
+            while (fgets(buf, static_cast<int>(sizeof(buf)), pipe) != nullptr) {
+                out.append(buf);
+            }
+            (void)pclose(pipe);
+
+            while (!out.empty() &&
+                   (out.back() == '\n' || out.back() == '\r' ||
+                    std::isspace(static_cast<unsigned char>(out.back())))) {
+                out.pop_back();
             }
             return out;
-        }
-
-        std::string sanitize_c_ident_(std::string_view s) {
-            std::string out{};
-            out.reserve(s.size() + 8u);
-            for (const char ch : s) {
-                if ((ch >= 'a' && ch <= 'z') ||
-                    (ch >= 'A' && ch <= 'Z') ||
-                    (ch >= '0' && ch <= '9') ||
-                    ch == '_') {
-                    out.push_back(ch);
-                } else {
-                    out.push_back('_');
-                }
-            }
-            if (out.empty() || (out[0] >= '0' && out[0] <= '9')) {
-                out.insert(out.begin(), '_');
-            }
-            return out;
-        }
-
-        int run_argv_(const std::vector<std::string>& argv, std::string& err) {
-            if (argv.empty()) {
-                err = "empty argv for process spawn";
-                return 1;
-            }
-#if defined(_WIN32)
-            std::vector<const char*> cargs{};
-            cargs.reserve(argv.size() + 1u);
-            for (const auto& a : argv) cargs.push_back(a.c_str());
-            cargs.push_back(nullptr);
-            const int rc = _spawnvp(_P_WAIT, argv[0].c_str(), cargs.data());
-            if (rc < 0) {
-                err = "failed to spawn process: " + argv[0];
-                return 1;
-            }
-            return rc;
 #else
-            std::vector<char*> cargs{};
-            cargs.reserve(argv.size() + 1u);
-            for (const auto& a : argv) cargs.push_back(const_cast<char*>(a.c_str()));
-            cargs.push_back(nullptr);
-
-            pid_t pid = -1;
-            const int sp = posix_spawnp(&pid, argv[0].c_str(), nullptr, nullptr, cargs.data(), environ);
-            if (sp != 0) {
-                err = "failed to spawn process: " + argv[0];
-                return 1;
-            }
-
-            int status = 0;
-            if (waitpid(pid, &status, 0) < 0) {
-                err = "failed to wait process: " + argv[0];
-                return 1;
-            }
-            if (WIFEXITED(status)) return WEXITSTATUS(status);
-            if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
-            err = "process terminated abnormally: " + argv[0];
-            return 1;
+            return {};
 #endif
-        }
-
-        std::vector<std::string> split_ws_tokens_(std::string_view s) {
-            std::vector<std::string> out{};
-            size_t i = 0;
-            while (i < s.size()) {
-                while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
-                if (i >= s.size()) break;
-                const size_t b = i;
-                while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
-                out.emplace_back(s.substr(b, i - b));
-            }
-            return out;
-        }
-
-        std::string build_cimport_shim_source_(const std::vector<CImportShimTask>& tasks) {
-            std::string src{};
-            src.reserve(1024u + tasks.size() * 128u);
-            src += "/* parusc auto-generated cimport shim */\n";
-            std::unordered_set<std::string> seen_headers{};
-            for (const auto& t : tasks) {
-                if (t.header.empty()) continue;
-                if (!seen_headers.insert(t.header).second) continue;
-                src += "#include \"";
-                src += escape_c_include_text_(t.header);
-                src += "\"\n";
-            }
-            src += "\n";
-
-            for (const auto& t : tasks) {
-                if (t.shim_symbol.empty()) continue;
-                if (t.kind == CImportShimKind::kMacroForward) {
-                    if (t.callee_link_name.empty()) continue;
-                    src += t.c_return_type.empty() ? "void" : t.c_return_type;
-                    src += " ";
-                    src += t.shim_symbol;
-                    src += "(";
-                    for (size_t i = 0; i < t.params.size(); ++i) {
-                        if (i) src += ", ";
-                        src += t.params[i].c_type.empty() ? "int" : t.params[i].c_type;
-                        src += " ";
-                        src += t.params[i].name;
-                    }
-                    src += ") {\n";
-
-                    const bool ret_void = (t.c_return_type == "void");
-                    if (!ret_void) src += "  return ";
-                    else src += "  ";
-                    src += t.callee_link_name;
-                    src += "(";
-                    for (size_t ai = 0; ai < t.call_args.size(); ++ai) {
-                        if (ai) src += ", ";
-                        const auto& ca = t.call_args[ai];
-                        if (ca.param_index >= t.params.size()) {
-                            src += "0";
-                            continue;
-                        }
-                        if (!ca.cast_prefix.empty()) {
-                            src += ca.cast_prefix;
-                            src += " ";
-                        }
-                        src += t.params[ca.param_index].name;
-                    }
-                    src += ");\n";
-                    if (ret_void) src += "  return;\n";
-                    src += "}\n\n";
-                    continue;
-                }
-
-                if ((t.kind == CImportShimKind::kBitfieldGetter ||
-                     t.kind == CImportShimKind::kBitfieldSetter) &&
-                    !t.owner_c_type.empty() &&
-                    !t.owner_field_name.empty() &&
-                    !t.c_return_type.empty()) {
-                    src += t.c_return_type;
-                    src += " ";
-                    src += t.shim_symbol;
-                    src += "(";
-                    src += t.owner_c_type;
-                    src += "* __obj";
-                    if (t.kind == CImportShimKind::kBitfieldSetter) {
-                        src += ", ";
-                        src += t.c_return_type;
-                        src += " __v";
-                    }
-                    src += ") {\n";
-                    if (t.kind == CImportShimKind::kBitfieldGetter) {
-                        src += "  return __obj->";
-                        src += t.owner_field_name;
-                        src += ";\n";
-                    } else {
-                        src += "  __obj->";
-                        src += t.owner_field_name;
-                        src += " = __v;\n";
-                        src += "  return __obj->";
-                        src += t.owner_field_name;
-                        src += ";\n";
-                    }
-                    src += "}\n\n";
-                }
-            }
-
-            return src;
         }
 
         std::string select_apple_sdk_root_(const cli::Options& opt) {
             if (!opt.apple_sdk_root.empty()) return opt.apple_sdk_root;
-            return getenv_string_("PARUS_APPLE_SDK_ROOT");
+
+            const std::string env_sdk = getenv_string_("PARUS_APPLE_SDK_ROOT");
+            if (!env_sdk.empty()) return env_sdk;
+
+            auto resolve_from_sysroot = [&](const std::string& sysroot) -> std::string {
+                if (sysroot.empty()) return {};
+                const std::string target = !opt.target_triple.empty()
+                    ? opt.target_triple
+                    : read_manifest_default_target_triple_(sysroot);
+                return read_sysroot_apple_sdk_ref_(sysroot, target);
+            };
+
+            if (const std::string from_explicit = resolve_from_sysroot(select_sysroot_(opt));
+                !from_explicit.empty()) {
+                return from_explicit;
+            }
+            if (const std::string from_active = resolve_from_sysroot(resolve_active_toolchain_sysroot_());
+                !from_active.empty()) {
+                return from_active;
+            }
+
+            const std::string sdkroot_env = getenv_string_("SDKROOT");
+            if (!sdkroot_env.empty()) return sdkroot_env;
+
+            return query_macos_sdk_root_from_xcrun_();
         }
 
         /// @brief 백엔드 메시지를 표준 에러로 출력하고 실패 여부를 반환한다.
@@ -1856,8 +1733,6 @@ namespace parusc::p0 {
             using Out = parus::backend::link::LinkerMode;
             switch (mode) {
                 case In::kParusLld: return Out::kParusLld;
-                case In::kSystemLld: return Out::kSystemLld;
-                case In::kSystemClang: return Out::kSystemClang;
                 case In::kAuto:
                 default:
                     return Out::kAuto;
@@ -1978,7 +1853,6 @@ namespace parusc::p0 {
 
         const std::string current_dir = parent_dir_norm_(current_norm);
         std::vector<ExportSurfaceEntry> cimport_surface{};
-        std::vector<CImportShimTask> cimport_shim_tasks{};
         std::vector<std::string> cimport_include_dirs_norm{};
         std::vector<std::string> cimport_isystem_dirs_norm{};
         std::vector<std::string> cimport_defines{};
@@ -1997,14 +1871,7 @@ namespace parusc::p0 {
             for (const auto& d : opt.cimport_isystem_dirs) {
                 if (!d.empty()) cimport_isystem_dirs_norm.push_back(parus::normalize_path(d));
             }
-            const auto auto_isystem = parus::cimport::probe_default_c_system_include_dirs();
-            if (!auto_isystem.warning.empty()) {
-                std::cerr << "warning: " << auto_isystem.warning << "\n";
-            }
-            parus::cimport::append_unique_normalized_paths(
-                cimport_isystem_dirs_norm,
-                auto_isystem.isystem_dirs
-            );
+            parus::cimport::append_unique_normalized_paths(cimport_isystem_dirs_norm, {});
             for (const auto& d : opt.cimport_defines) {
                 if (!d.empty()) cimport_defines.push_back(d);
             }
@@ -2022,15 +1889,26 @@ namespace parusc::p0 {
 
             std::unordered_set<std::string> cimport_seen{};
             for (const auto& spec : c_header_imports) {
-                const auto imported = parus::cimport::import_c_header_functions(
-                    current_norm,
-                    spec.header,
-                    cimport_include_dirs_norm,
-                    cimport_isystem_dirs_norm,
-                    cimport_defines,
-                    cimport_undefines,
-                    cimport_forced_includes_norm,
-                    cimport_imacros_norm);
+                const std::string cimport_cache_root =
+                    ((!inv.bundle_root.empty()
+                        ? parus::normalize_path(inv.bundle_root)
+                        : current_dir)
+                     + "/.parus-cache/cimport");
+                const auto cached = parus::cimport::load_or_translate_c_header_cached({
+                    .importer_source_path = current_norm,
+                    .header_path = spec.header,
+                    .cache_root = cimport_cache_root,
+                    .target_triple = effective_target_triple_(opt),
+                    .sysroot_path = select_sysroot_(opt),
+                    .apple_sdk_root = select_apple_sdk_root_(opt),
+                    .include_dirs = cimport_include_dirs_norm,
+                    .isystem_dirs = cimport_isystem_dirs_norm,
+                    .defines = cimport_defines,
+                    .undefines = cimport_undefines,
+                    .forced_includes = cimport_forced_includes_norm,
+                    .imacros = cimport_imacros_norm,
+                });
+                const auto& imported = cached.import;
                 if (imported.error != parus::cimport::ImportErrorKind::kNone) {
                     if (imported.error == parus::cimport::ImportErrorKind::kLibClangUnavailable) {
                         parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kCImportLibClangUnavailable, spec.span);
@@ -2190,113 +2068,8 @@ namespace parusc::p0 {
 
                 for (const auto& st_src : imported.structs) {
                     if (st_src.name.empty()) continue;
-                    auto st = st_src;
+                    const auto& st = st_src;
                     const std::string type_path = spec.alias + "::" + st.name;
-
-                    for (auto& fld : st.fields) {
-                        if (!fld.is_bitfield) continue;
-                        if (fld.name.empty() || fld.type_repr.empty() || fld.c_type.empty() ||
-                            st.c_type_spelling.empty()) {
-                            parus::diag::Diagnostic d(
-                                parus::diag::Severity::kWarning,
-                                parus::diag::Code::kCImportFnMacroSkipped,
-                                spec.span
-                            );
-                            d.add_arg("bitfield shim skipped for '" + st.name + "." + fld.name +
-                                      "': incomplete C type metadata");
-                            bag.add(std::move(d));
-                            continue;
-                        }
-
-                        const std::string getter_name = "__parus_cimport_bitget_" +
-                            sanitize_c_ident_(spec.alias) + "_" +
-                            sanitize_c_ident_(st.name) + "_" +
-                            sanitize_c_ident_(fld.name);
-                        const std::string setter_name = "__parus_cimport_bitset_" +
-                            sanitize_c_ident_(spec.alias) + "_" +
-                            sanitize_c_ident_(st.name) + "_" +
-                            sanitize_c_ident_(fld.name);
-                        fld.bit_getter_name = spec.alias + "::" + getter_name;
-                        fld.bit_setter_name = spec.alias + "::" + setter_name;
-
-                        CImportShimTask gtask{};
-                        gtask.kind = CImportShimKind::kBitfieldGetter;
-                        gtask.header = spec.header;
-                        gtask.alias = spec.alias;
-                        gtask.shim_symbol = getter_name;
-                        gtask.owner_c_type = st.c_type_spelling;
-                        gtask.owner_field_name = fld.name;
-                        gtask.c_return_type = fld.c_type;
-                        gtask.span = spec.span;
-                        cimport_shim_tasks.push_back(std::move(gtask));
-
-                        CImportShimTask stask{};
-                        stask.kind = CImportShimKind::kBitfieldSetter;
-                        stask.header = spec.header;
-                        stask.alias = spec.alias;
-                        stask.shim_symbol = setter_name;
-                        stask.owner_c_type = st.c_type_spelling;
-                        stask.owner_field_name = fld.name;
-                        stask.c_return_type = fld.c_type;
-                        stask.span = spec.span;
-                        cimport_shim_tasks.push_back(std::move(stask));
-
-                        parus::cimport::ImportedFunctionDecl getter_fn{};
-                        getter_fn.name = getter_name;
-                        getter_fn.link_name = getter_name;
-                        getter_fn.type_repr = "def(ptr mut " + type_path + ") -> " + fld.type_repr;
-                        getter_fn.c_return_type = fld.c_type;
-                        getter_fn.c_arg_types = {st.c_type_spelling + "*"};
-                        getter_fn.is_c_abi = true;
-                        getter_fn.is_variadic = false;
-                        getter_fn.callconv = parus::cimport::CCallConvKind::kCdecl;
-
-                        ExportSurfaceEntry ge{};
-                        ge.kind = parus::sema::SymbolKind::kFn;
-                        ge.kind_text = "fn";
-                        ge.path = spec.alias + "::" + getter_name;
-                        ge.link_name = getter_name;
-                        ge.module_head.clear();
-                        ge.decl_dir = current_dir;
-                        ge.type_repr = getter_fn.type_repr;
-                        ge.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, getter_fn);
-                        ge.decl_file = current_norm;
-                        ge.decl_line = 1;
-                        ge.decl_col = 1;
-                        ge.decl_bundle = "__cimport__";
-                        ge.is_export = true;
-                        if (cimport_seen.insert("fn|" + ge.path).second) {
-                            cimport_surface.push_back(std::move(ge));
-                        }
-
-                        parus::cimport::ImportedFunctionDecl setter_fn{};
-                        setter_fn.name = setter_name;
-                        setter_fn.link_name = setter_name;
-                        setter_fn.type_repr = "def(ptr mut " + type_path + ", " + fld.type_repr + ") -> " + fld.type_repr;
-                        setter_fn.c_return_type = fld.c_type;
-                        setter_fn.c_arg_types = {st.c_type_spelling + "*", fld.c_type};
-                        setter_fn.is_c_abi = true;
-                        setter_fn.is_variadic = false;
-                        setter_fn.callconv = parus::cimport::CCallConvKind::kCdecl;
-
-                        ExportSurfaceEntry se{};
-                        se.kind = parus::sema::SymbolKind::kFn;
-                        se.kind_text = "fn";
-                        se.path = spec.alias + "::" + setter_name;
-                        se.link_name = setter_name;
-                        se.module_head.clear();
-                        se.decl_dir = current_dir;
-                        se.type_repr = setter_fn.type_repr;
-                        se.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, setter_fn);
-                        se.decl_file = current_norm;
-                        se.decl_line = 1;
-                        se.decl_col = 1;
-                        se.decl_bundle = "__cimport__";
-                        se.is_export = true;
-                        if (cimport_seen.insert("fn|" + se.path).second) {
-                            cimport_surface.push_back(std::move(se));
-                        }
-                    }
 
                     if (!cimport_seen.insert("type|" + type_path).second) continue;
 
@@ -2477,79 +2250,36 @@ namespace parusc::p0 {
                         continue;
                     }
 
-                    if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kShimForward) {
+                    if (mc.promote_kind == parus::cimport::ImportedMacroPromoteKind::kIRWrapperCall) {
                         if (mc.promote_type_repr.empty() ||
-                            mc.promote_param_c_types.size() != mc.params.size() ||
                             mc.promote_call_args.empty() ||
-                            mc.promote_c_return_type.empty() ||
                             mc.promote_callee_link_name.empty()) {
-                            macro_skip_reasons.push_back(mc.name + ": incomplete shim metadata");
+                            macro_skip_reasons.push_back(mc.name + ": incomplete wrapper metadata");
                             continue;
                         }
                         if (!cimport_seen.insert("fn|" + macro_path).second) {
                             macro_skip_reasons.push_back(mc.name + ": symbol collision on alias path");
                             continue;
                         }
-
-                        CImportShimTask task{};
-                        task.kind = CImportShimKind::kMacroForward;
-                        task.header = spec.header;
-                        task.alias = spec.alias;
-                        task.macro_name = mc.name;
-                        task.shim_symbol = "__parus_cimport_shim_" +
-                            sanitize_c_ident_(spec.alias) + "_" +
-                            sanitize_c_ident_(mc.name) + "_" +
-                            std::to_string(cimport_shim_tasks.size());
-                        task.callee_link_name = mc.promote_callee_link_name;
-                        task.c_return_type = mc.promote_c_return_type;
-                        task.span = spec.span;
-                        task.params.reserve(mc.params.size());
-                        for (size_t pi = 0; pi < mc.params.size(); ++pi) {
-                            CImportShimArg one{};
-                            one.name = "__p" + std::to_string(pi);
-                            one.c_type = mc.promote_param_c_types[pi];
-                            task.params.push_back(std::move(one));
-                        }
-                        task.call_args.reserve(mc.promote_call_args.size());
-                        for (const auto& ca : mc.promote_call_args) {
-                            CImportShimCallArg one{};
-                            if (ca.param_index < 0 ||
-                                static_cast<size_t>(ca.param_index) >= mc.params.size()) {
-                                macro_skip_reasons.push_back(mc.name + ": invalid shim call argument index");
-                                task.call_args.clear();
-                                break;
-                            }
-                            one.param_index = static_cast<uint32_t>(ca.param_index);
-                            one.cast_prefix = ca.cast_prefix;
-                            task.call_args.push_back(std::move(one));
-                        }
-                        if (task.call_args.empty() && !mc.promote_call_args.empty()) {
-                            continue;
-                        }
+                        const std::string wrapper_symbol = parus::cimport::make_c_import_wrapper_symbol(
+                            spec.header, spec.alias, mc.name);
 
                         ExportSurfaceEntry e{};
                         e.kind = parus::sema::SymbolKind::kFn;
                         e.kind_text = "fn";
                         e.path = macro_path;
-                        e.link_name = task.shim_symbol;
+                        e.link_name = wrapper_symbol;
                         e.module_head.clear();
                         e.decl_dir = current_dir;
                         e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                             mc.promote_type_repr, spec.alias, known_type_names);
-                        parus::cimport::ImportedFunctionDecl shim_fn{};
-                        shim_fn.name = mc.name;
-                        shim_fn.link_name = task.shim_symbol;
-                        shim_fn.type_repr = mc.promote_type_repr;
-                        shim_fn.is_c_abi = true;
-                        shim_fn.is_variadic = false;
-                        e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, shim_fn);
+                        e.inst_payload = parus::cimport::make_c_import_wrapper_payload(spec.header, spec.alias, mc);
                         e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
                         e.decl_line = mc.decl_line;
                         e.decl_col = mc.decl_col;
                         e.decl_bundle = "__cimport__";
                         e.is_export = true;
                         cimport_surface.push_back(std::move(e));
-                        cimport_shim_tasks.push_back(std::move(task));
                         continue;
                     }
 
@@ -2876,117 +2606,9 @@ namespace parusc::p0 {
         const bool has_backend_error = print_backend_messages_(cr);
         if (!cr.ok || has_backend_error) return 1;
 
-        std::string cimport_shim_object_path{};
-        std::string cimport_shim_source_path{};
-        if (!cimport_shim_tasks.empty()) {
-            if (emit_llvm_ir) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kCImportShimIrOnlyUnsupported,
-                    root_span
-                );
-                d.add_arg("c-import macro shim requires object emission; IR-only mode cannot link generated shim objects");
-                bag.add(std::move(d));
-                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-                return (diag_rc != 0) ? 1 : 0;
-            }
-
-            cimport_shim_object_path = emit_executable
-                ? (object_for_link + ".cimport_shim.o")
-                : (opt.output_path + ".cimport_shim.o");
-            cimport_shim_source_path = cimport_shim_object_path + ".c";
-
-            const std::string shim_src = build_cimport_shim_source_(cimport_shim_tasks);
-            {
-                std::ofstream ofs(cimport_shim_source_path, std::ios::binary | std::ios::trunc);
-                if (!ofs.is_open()) {
-                    parus::diag::Diagnostic d(
-                        parus::diag::Severity::kError,
-                        parus::diag::Code::kCImportShimCompileFailed,
-                        root_span
-                    );
-                    d.add_arg("failed to create c-import shim source: " + cimport_shim_source_path);
-                    bag.add(std::move(d));
-                    const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-                    return (diag_rc != 0) ? 1 : 0;
-                }
-                ofs << shim_src;
-            }
-
-            std::vector<std::string> cc_argv{};
-            const std::string cc_env = getenv_string_("PARUS_CC");
-            if (!cc_env.empty()) {
-                cc_argv = split_ws_tokens_(cc_env);
-            }
-            if (cc_argv.empty()) cc_argv.push_back("cc");
-            cc_argv.push_back("-x");
-            cc_argv.push_back("c");
-            cc_argv.push_back("-std=c17");
-            cc_argv.push_back("-c");
-            cc_argv.push_back(cimport_shim_source_path);
-            cc_argv.push_back("-o");
-            cc_argv.push_back(cimport_shim_object_path);
-
-            for (const auto& d : cimport_include_dirs_norm) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-I" + d);
-            }
-            for (const auto& d : cimport_isystem_dirs_norm) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-isystem");
-                cc_argv.push_back(d);
-            }
-            for (const auto& d : cimport_defines) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-D" + d);
-            }
-            for (const auto& d : cimport_undefines) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-U" + d);
-            }
-            for (const auto& d : cimport_forced_includes_norm) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-include");
-                cc_argv.push_back(d);
-            }
-            for (const auto& d : cimport_imacros_norm) {
-                if (d.empty()) continue;
-                cc_argv.push_back("-imacros");
-                cc_argv.push_back(d);
-            }
-
-            std::string proc_err{};
-            const int cc_rc = run_argv_(cc_argv, proc_err);
-            std::error_code ec{};
-            std::filesystem::remove(cimport_shim_source_path, ec);
-            if (cc_rc != 0) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kCImportShimCompileFailed,
-                    root_span
-                );
-                std::string msg = "failed to compile generated c-import shim";
-                if (!proc_err.empty()) {
-                    msg += ": ";
-                    msg += proc_err;
-                }
-                d.add_arg(msg);
-                bag.add(std::move(d));
-                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-                return (diag_rc != 0) ? 1 : 0;
-            }
-
-            if (!emit_executable) {
-                std::cout << "generated c-import shim object to " << cimport_shim_object_path << "\n";
-            }
-        }
-
         if (emit_executable) {
             parus::backend::link::LinkOptions link_opt{};
             link_opt.object_paths = {object_for_link};
-            if (!cimport_shim_object_path.empty()) {
-                link_opt.object_paths.push_back(cimport_shim_object_path);
-            }
             link_opt.output_path = final_exe_output;
             link_opt.target_triple = effective_target_triple_(opt);
             link_opt.sysroot_path = select_sysroot_(opt);
@@ -3028,7 +2650,6 @@ namespace parusc::p0 {
                     return 1;
                 }
                 link_opt.object_paths.push_back(prt_archive);
-                link_opt.requires_cpp_runtime = !opt.freestanding;
             }
 
             const auto link_res = parus::backend::link::link_executable(link_opt);
@@ -3038,9 +2659,6 @@ namespace parusc::p0 {
             }
             std::error_code ec;
             std::filesystem::remove(object_for_link, ec);
-            if (!cimport_shim_object_path.empty()) {
-                std::filesystem::remove(cimport_shim_object_path, ec);
-            }
             std::cout << "linked executable to " << final_exe_output;
             if (!link_res.linker_used.empty()) {
                 std::cout << " (via " << link_res.linker_used << ")";

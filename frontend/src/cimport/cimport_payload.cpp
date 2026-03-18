@@ -5,6 +5,29 @@
 namespace parus::cimport {
     namespace {
 
+        uint64_t fnv1a64_(std::string_view s) {
+            uint64_t h = 1469598103934665603ull;
+            for (const unsigned char ch : s) {
+                h ^= static_cast<uint64_t>(ch);
+                h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        std::string callconv_text_(CCallConvKind cc) {
+            switch (cc) {
+                case CCallConvKind::kCdecl: return "cdecl";
+                case CCallConvKind::kStdCall: return "stdcall";
+                case CCallConvKind::kFastCall: return "fastcall";
+                case CCallConvKind::kVectorCall: return "vectorcall";
+                case CCallConvKind::kWin64: return "win64";
+                case CCallConvKind::kSysV: return "sysv";
+                case CCallConvKind::kDefault:
+                default:
+                    return "default";
+            }
+        }
+
         bool is_ident_start_(char ch) {
             return (ch == '_') ||
                    (ch >= 'a' && ch <= 'z') ||
@@ -94,19 +117,6 @@ namespace parus::cimport {
                     return "none";
             }
         };
-        auto callconv_text = [](CCallConvKind cc) -> std::string_view {
-            switch (cc) {
-                case CCallConvKind::kCdecl: return "cdecl";
-                case CCallConvKind::kStdCall: return "stdcall";
-                case CCallConvKind::kFastCall: return "fastcall";
-                case CCallConvKind::kVectorCall: return "vectorcall";
-                case CCallConvKind::kWin64: return "win64";
-                case CCallConvKind::kSysV: return "sysv";
-                case CCallConvKind::kDefault:
-                default:
-                    return "default";
-            }
-        };
 
         std::string out = "parus_c_import|header=";
         out += std::string(header);
@@ -121,12 +131,39 @@ namespace parus::cimport {
         out += "|va_idx=";
         out += std::to_string(fn.va_list_param_index);
         out += "|callconv=";
-        out += std::string(callconv_text(fn.callconv));
+        out += callconv_text_(fn.callconv);
         if (!fn.variadic_sibling_name.empty()) {
             out += "|sibling=";
             out += std::string(alias);
             out += "::";
             out += fn.variadic_sibling_name;
+        }
+        return out;
+    }
+
+    std::string make_c_import_wrapper_payload(
+        std::string_view header,
+        std::string_view alias,
+        const ImportedMacroDecl& mc
+    ) {
+        std::string out = "parus_c_import|header=";
+        out += std::string(header);
+        out += "|is_c_abi=";
+        out += mc.promote_is_c_abi ? "1" : "0";
+        out += "|variadic=";
+        out += mc.promote_is_variadic ? "1" : "0";
+        out += "|format=none|fmt_idx=-1|va_idx=-1|callconv=";
+        out += callconv_text_(mc.promote_callconv);
+        out += "|wrapper=1|wrapper_callee=";
+        out += mc.promote_callee_link_name;
+        out += "|wrapper_argmap=";
+        for (size_t i = 0; i < mc.promote_call_args.size(); ++i) {
+            if (i) out += ",";
+            out += std::to_string(mc.promote_call_args[i].param_index);
+        }
+        if (!alias.empty()) {
+            out += "|wrapper_alias=";
+            out += std::string(alias);
         }
         return out;
     }
@@ -186,10 +223,6 @@ namespace parus::cimport {
         const std::unordered_set<std::string>& known_type_names,
         const ImportedStructDecl& st
     ) {
-        auto dash_if_empty = [](std::string_view s) -> std::string {
-            if (s.empty()) return "-";
-            return std::string(s);
-        };
         std::string payload = "parus_c_import_struct|header=" + std::string(header);
         payload += "|size=" + std::to_string(st.size_bytes);
         payload += "|align=" + std::to_string(st.align_bytes);
@@ -208,14 +241,12 @@ namespace parus::cimport {
             payload += f.union_origin ? "1" : "0";
             payload += "@";
             payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
-            payload += "@";
-            payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
-            payload += "@";
-            payload += f.bit_signed ? "1" : "0";
-            payload += "@";
-            payload += dash_if_empty(f.bit_getter_name);
-            payload += "@";
-            payload += dash_if_empty(f.bit_setter_name);
+        payload += "@";
+        payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
+        payload += "@";
+        payload += f.bit_signed ? "1" : "0";
+        payload += "@";
+        payload += std::to_string(f.is_bitfield ? f.bit_storage_offset_bytes : f.offset_bytes);
         }
         return payload;
     }
@@ -243,6 +274,21 @@ namespace parus::cimport {
                 td.transparent_type_repr, alias, known_type_names);
         }
         return payload;
+    }
+
+    std::string make_c_import_wrapper_symbol(
+        std::string_view header,
+        std::string_view alias,
+        std::string_view macro_name
+    ) {
+        std::string seed;
+        seed.reserve(header.size() + alias.size() + macro_name.size() + 3u);
+        seed += header;
+        seed.push_back('|');
+        seed += alias;
+        seed.push_back('|');
+        seed += macro_name;
+        return "__parus_cimport_wrapper_" + std::to_string(fnv1a64_(seed));
     }
 
     std::string imported_macro_skip_code_text(ImportedMacroSkipKind kind) {

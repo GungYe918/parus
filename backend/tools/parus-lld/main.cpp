@@ -531,6 +531,10 @@ namespace {
         return false;
     }
 
+    [[maybe_unused]] bool has_native_arg_(const std::vector<std::string>& args, std::string_view needle) {
+        return std::find(args.begin(), args.end(), needle) != args.end();
+    }
+
 #if defined(__APPLE__)
     struct DarwinVersion {
         uint32_t major = 0;
@@ -718,6 +722,10 @@ namespace {
 #if defined(__APPLE__)
         if (!has_system_lib_flag_(argv)) {
             argv.push_back("-lSystem");
+        }
+#elif defined(__linux__)
+        if (!has_native_arg_(argv, "-lpthread") && !has_native_arg_(argv, "-pthread")) {
+            argv.push_back("-lpthread");
         }
 #endif
 

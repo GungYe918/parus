@@ -1523,53 +1523,11 @@ namespace parus::backend::aot {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
 
-                if (x.c_bitfield_getter != kInvalidId &&
-                    static_cast<size_t>(x.c_bitfield_getter) < m_.funcs.size()) {
-                    const auto& getter = m_.funcs[x.c_bitfield_getter];
-                    const std::string sym = sanitize_symbol_(getter.name);
-                    const std::string cc = llvm_callconv_prefix_(getter.c_callconv);
-                    const std::string ret_ty = map_type_(types_, getter.ret_ty, &named_layouts_, &actor_types_);
-                    const std::string base_ptr = slot_ptr_ref_(os, x.base);
-
-                    if (is_value_read_(inst.result)) {
-                        const std::string want_ty = value_ty_(inst.result);
-                        if (ret_ty == "void") {
-                            os << "  call " << cc << "void @" << sym << "(ptr " << base_ptr << ")\n";
-                            if (is_int_ty_(want_ty)) {
-                                os << "  " << vref_(inst.result) << " = add " << want_ty << " 0, 0\n";
-                            } else if (is_float_ty_(want_ty)) {
-                                os << "  " << vref_(inst.result) << " = fadd " << want_ty << " " << zero_literal_(want_ty)
-                                   << ", " << zero_literal_(want_ty) << "\n";
-                            } else {
-                                os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
-                            }
-                        } else if (want_ty == ret_ty) {
-                            os << "  " << vref_(inst.result) << " = call " << cc << ret_ty
-                               << " @" << sym << "(ptr " << base_ptr << ")\n";
-                        } else {
-                            const std::string tmp = next_tmp_();
-                            os << "  " << tmp << " = call " << cc << ret_ty
-                               << " @" << sym << "(ptr " << base_ptr << ")\n";
-                            const std::string coerced = coerce_ref_(os, tmp, ret_ty, want_ty);
-                            os << "  " << vref_(inst.result) << " = " << copy_expr_(want_ty, coerced) << "\n";
-                        }
-                    } else {
-                        const std::string rty = value_ty_(inst.result);
-                        if (is_int_ty_(rty)) {
-                            os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
-                        } else if (is_float_ty_(rty)) {
-                            os << "  " << vref_(inst.result) << " = fadd " << rty << " " << zero_literal_(rty)
-                               << ", " << zero_literal_(rty) << "\n";
-                        } else {
-                            os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
-                        }
-                    }
-                    return;
-                }
-
                 const auto base_ptr = slot_ptr_ref_(os, x.base);
                 const auto base_ty_id = field_base_type_id_(x.base);
-                const uint64_t field_off = field_offset_bytes_(base_ty_id, x.field);
+                const uint64_t field_off = x.c_bitfield.is_valid
+                    ? static_cast<uint64_t>(x.c_bitfield.storage_offset_bytes)
+                    : field_offset_bytes_(base_ty_id, x.field);
 
                 const std::string byte_ptr = next_tmp_();
                 os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << field_off << "\n";
@@ -1579,6 +1537,38 @@ namespace parus::backend::aot {
                 address_ref_by_value_[inst.result] = typed_ptr;
 
                 const std::string rty = value_ty_(inst.result);
+                if (x.c_bitfield.is_valid && is_value_read_(inst.result) && is_int_ty_(rty)) {
+                    const uint32_t storage_bits = std::max<uint32_t>(1u, int_bits_(rty));
+                    const uint32_t shift = (x.c_bitfield.bit_offset >= x.c_bitfield.storage_offset_bytes * 8u)
+                        ? (x.c_bitfield.bit_offset - x.c_bitfield.storage_offset_bytes * 8u)
+                        : x.c_bitfield.bit_offset;
+                    const std::string loaded = next_tmp_();
+                    os << "  " << loaded << " = load " << rty << ", ptr " << typed_ptr << "\n";
+                    std::string current = loaded;
+                    if (shift != 0u) {
+                        const std::string shifted = next_tmp_();
+                        os << "  " << shifted << " = lshr " << rty << " " << current << ", " << shift << "\n";
+                        current = shifted;
+                    }
+                    if (x.c_bitfield.bit_width != 0u && x.c_bitfield.bit_width < storage_bits) {
+                        const uint64_t mask = (uint64_t{1} << x.c_bitfield.bit_width) - 1u;
+                        const std::string masked = next_tmp_();
+                        os << "  " << masked << " = and " << rty << " " << current << ", " << mask << "\n";
+                        current = masked;
+                    }
+                    if (x.c_bitfield.bit_signed &&
+                        x.c_bitfield.bit_width != 0u &&
+                        x.c_bitfield.bit_width < storage_bits) {
+                        const uint32_t sext_shift = storage_bits - x.c_bitfield.bit_width;
+                        const std::string shl = next_tmp_();
+                        const std::string ashr = next_tmp_();
+                        os << "  " << shl << " = shl " << rty << " " << current << ", " << sext_shift << "\n";
+                        os << "  " << ashr << " = ashr " << rty << " " << shl << ", " << sext_shift << "\n";
+                        current = ashr;
+                    }
+                    os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, current) << "\n";
+                    return;
+                }
                 if (is_value_read_(inst.result)) {
                     os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
                     return;
@@ -2219,33 +2209,45 @@ namespace parus::backend::aot {
                                 if (slot_v.def_a != kInvalidId &&
                                     static_cast<size_t>(slot_v.def_a) < m_.insts.size()) {
                                     const auto* fld = std::get_if<InstField>(&m_.insts[slot_v.def_a].data);
-                                    if (fld != nullptr &&
-                                        fld->c_bitfield_setter != kInvalidId &&
-                                        static_cast<size_t>(fld->c_bitfield_setter) < m_.funcs.size()) {
-                                        const auto& setter = m_.funcs[fld->c_bitfield_setter];
-                                        const std::string cc = llvm_callconv_prefix_(setter.c_callconv);
-                                        const std::string sym = sanitize_symbol_(setter.name);
+                                    if (fld != nullptr && fld->c_bitfield.is_valid) {
                                         const std::string base_ptr = slot_ptr_ref_(os, fld->base);
+                                        const uint64_t field_off = static_cast<uint64_t>(fld->c_bitfield.storage_offset_bytes);
+                                        const std::string byte_ptr = next_tmp_();
+                                        os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr
+                                           << ", i64 " << field_off << "\n";
+                                        const std::string typed_ptr = next_tmp_();
+                                        os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
 
-                                        std::string arg_ty = value_ty_(x.value);
-                                        if (setter.entry != kInvalidId &&
-                                            static_cast<size_t>(setter.entry) < m_.blocks.size()) {
-                                            const auto& entry = m_.blocks[setter.entry];
-                                            if (entry.params.size() >= 2 &&
-                                                static_cast<size_t>(entry.params[1]) < value_types_.size()) {
-                                                arg_ty = value_types_[entry.params[1]];
-                                            }
+                                        const auto slot_tid = value_type_id_(x.slot);
+                                        const std::string storage_ty = map_type_(types_, slot_tid, &named_layouts_, &actor_types_);
+                                        const uint32_t storage_bits = int_bits_(storage_ty);
+                                        const uint32_t shift = (fld->c_bitfield.bit_offset >= fld->c_bitfield.storage_offset_bytes * 8u)
+                                            ? (fld->c_bitfield.bit_offset - fld->c_bitfield.storage_offset_bytes * 8u)
+                                            : fld->c_bitfield.bit_offset;
+                                        const std::string old_bits = next_tmp_();
+                                        os << "  " << old_bits << " = load " << storage_ty << ", ptr " << typed_ptr << "\n";
+                                        const std::string new_val = coerce_value_(os, x.value, storage_ty);
+                                        const uint64_t field_mask =
+                                            (fld->c_bitfield.bit_width == 0u || fld->c_bitfield.bit_width >= storage_bits)
+                                                ? ~uint64_t{0}
+                                                : ((uint64_t{1} << fld->c_bitfield.bit_width) - 1u);
+                                        const uint64_t shifted_mask = (shift == 0u) ? field_mask : (field_mask << shift);
+                                        const std::string cleared = next_tmp_();
+                                        os << "  " << cleared << " = and " << storage_ty << " " << old_bits
+                                           << ", " << (~shifted_mask) << "\n";
+                                        const std::string masked_new = next_tmp_();
+                                        os << "  " << masked_new << " = and " << storage_ty << " " << new_val
+                                           << ", " << field_mask << "\n";
+                                        std::string shifted_new = masked_new;
+                                        if (shift != 0u) {
+                                            shifted_new = next_tmp_();
+                                            os << "  " << shifted_new << " = shl " << storage_ty << " "
+                                               << masked_new << ", " << shift << "\n";
                                         }
-                                        const std::string arg_val = coerce_value_(os, x.value, arg_ty);
-                                        const std::string set_ret = map_type_(types_, setter.ret_ty, &named_layouts_, &actor_types_);
-                                        if (set_ret == "void") {
-                                            os << "  call " << cc << "void @" << sym
-                                               << "(ptr " << base_ptr << ", " << arg_ty << " " << arg_val << ")\n";
-                                        } else {
-                                            const std::string sink = next_tmp_();
-                                            os << "  " << sink << " = call " << cc << set_ret << " @" << sym
-                                               << "(ptr " << base_ptr << ", " << arg_ty << " " << arg_val << ")\n";
-                                        }
+                                        const std::string merged = next_tmp_();
+                                        os << "  " << merged << " = or " << storage_ty << " " << cleared
+                                           << ", " << shifted_new << "\n";
+                                        os << "  store " << storage_ty << " " << merged << ", ptr " << typed_ptr << "\n";
                                         return;
                                     }
                                 }

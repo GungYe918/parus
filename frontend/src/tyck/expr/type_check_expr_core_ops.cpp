@@ -266,11 +266,12 @@
                         if (parts.size() >= 5) {
                             meta.bit_signed = (parts[4] == "1");
                         }
-                        if (parts.size() >= 6 && parts[5] != "-" && !parts[5].empty()) {
-                            meta.getter_path.assign(parts[5]);
-                        }
-                        if (parts.size() >= 7 && parts[6] != "-" && !parts[6].empty()) {
-                            meta.setter_path.assign(parts[6]);
+                        if (parts.size() >= 6) {
+                            try {
+                                meta.storage_offset_bytes = static_cast<uint32_t>(std::stoul(std::string(parts[5])));
+                            } catch (...) {
+                                meta.storage_offset_bytes = 0;
+                            }
                         }
                     }
 
@@ -903,12 +904,8 @@
             expr_overload_target_cache_[current_expr_id_] = ast::k_invalid_stmt;
         }
         if (current_expr_id_ != ast::k_invalid_expr &&
-            current_expr_id_ < expr_external_c_bitfield_getter_symbol_cache_.size()) {
-            expr_external_c_bitfield_getter_symbol_cache_[current_expr_id_] = sema::SymbolTable::kNoScope;
-        }
-        if (current_expr_id_ != ast::k_invalid_expr &&
-            current_expr_id_ < expr_external_c_bitfield_setter_symbol_cache_.size()) {
-            expr_external_c_bitfield_setter_symbol_cache_[current_expr_id_] = sema::SymbolTable::kNoScope;
+            current_expr_id_ < expr_external_c_bitfield_cache_.size()) {
+            expr_external_c_bitfield_cache_[current_expr_id_] = ExternalCBitfieldAccess{};
         }
 
         auto resolve_member_owner_type = [&](ast::ExprId recv_eid, Span member_span) -> ty::TypeId {
@@ -1225,31 +1222,14 @@
                     return types_.error();
                 }
                 if (imported_struct_field.is_bitfield) {
-                    uint32_t getter_sym = sema::SymbolTable::kNoScope;
-                    uint32_t setter_sym = sema::SymbolTable::kNoScope;
-                    if (!imported_struct_field.getter_path.empty()) {
-                        if (auto sid = lookup_symbol_(imported_struct_field.getter_path)) {
-                            getter_sym = *sid;
-                        }
-                    }
-                    if (!imported_struct_field.setter_path.empty()) {
-                        if (auto sid = lookup_symbol_(imported_struct_field.setter_path)) {
-                            setter_sym = *sid;
-                        }
-                    }
-                    if (getter_sym == sema::SymbolTable::kNoScope) {
-                        diag_(diag::Code::kTypeErrorGeneric, rhs.span,
-                              "missing imported C bitfield getter symbol");
-                        err_(rhs.span, "imported C bitfield getter symbol is not resolved");
-                        return types_.error();
-                    }
                     if (current_expr_id_ != ast::k_invalid_expr &&
-                        current_expr_id_ < expr_external_c_bitfield_getter_symbol_cache_.size()) {
-                        expr_external_c_bitfield_getter_symbol_cache_[current_expr_id_] = getter_sym;
-                    }
-                    if (current_expr_id_ != ast::k_invalid_expr &&
-                        current_expr_id_ < expr_external_c_bitfield_setter_symbol_cache_.size()) {
-                        expr_external_c_bitfield_setter_symbol_cache_[current_expr_id_] = setter_sym;
+                        current_expr_id_ < expr_external_c_bitfield_cache_.size()) {
+                        auto& access = expr_external_c_bitfield_cache_[current_expr_id_];
+                        access.is_valid = true;
+                        access.storage_offset_bytes = imported_struct_field.storage_offset_bytes;
+                        access.bit_offset = imported_struct_field.bit_offset;
+                        access.bit_width = imported_struct_field.bit_width;
+                        access.bit_signed = imported_struct_field.bit_signed;
                     }
                 }
                 return imported_struct_field.type;
@@ -1677,12 +1657,6 @@
                     diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
                           "writing flattened union-origin field is only allowed inside manual[set] block");
                     err_(rhs_member.span, "flattened union-origin field write requires manual[set]");
-                    return false;
-                }
-                if (struct_meta.setter_path.empty() || !lookup_symbol_(struct_meta.setter_path).has_value()) {
-                    diag_(diag::Code::kTypeErrorGeneric, rhs_member.span,
-                          "missing imported C bitfield setter symbol");
-                    err_(rhs_member.span, "imported C bitfield setter symbol is not resolved");
                     return false;
                 }
             }

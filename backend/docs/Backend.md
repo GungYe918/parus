@@ -127,7 +127,8 @@ LLVM lane 선택/탐색/버전 가드는 `backend/llvmconfig`에만 둔다.
    - target triple/cpu/opt level 옵션을 그대로 반영
 7. 실행 파일 링크는 `backend/link` API를 통해 수행
    - 기본: `parus-lld`
-   - 실패 시 정책에 따라 `clang++ -fuse-ld=lld`, `clang++` 순으로 fallback
+   - fallback driver는 없으며 최종 링크는 항상 `parus-lld` 단일 경로로 수행
+   - hosted actor runtime archive는 C++ 런타임 없이 링크 가능하도록 유지한다
    - `parusc`는 직접 링커 명령을 조립하지 않고 backend API만 호출
    - `parus-lld` 바이너리는 빌드 시 `build/compiler/parusc/`로 배치되어 드라이버가 자동 발견
 

@@ -406,7 +406,7 @@ namespace {
             opt.object_paths.push_back(o.string());
         }
         opt.output_path = exe_path.string();
-        opt.mode = parus::backend::link::LinkerMode::kSystemClang;
+        opt.mode = parus::backend::link::LinkerMode::kParusLld;
         opt.allow_fallback = false;
 
         const auto link_res = parus::backend::link::link_executable(opt);

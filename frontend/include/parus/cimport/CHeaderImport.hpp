@@ -46,7 +46,7 @@ namespace parus::cimport {
     enum class ImportedMacroPromoteKind : uint8_t {
         kNone = 0,
         kDirectAlias,
-        kShimForward,
+        kIRWrapperCall,
     };
 
     enum class ImportedMacroSkipKind : uint8_t {
@@ -138,8 +138,7 @@ namespace parus::cimport {
         uint32_t bit_offset = 0;
         uint32_t bit_width = 0;
         bool bit_signed = false;
-        std::string bit_getter_name{};
-        std::string bit_setter_name{};
+        uint32_t bit_storage_offset_bytes = 0;
     };
 
     struct ImportedStructDecl {
@@ -193,6 +192,15 @@ namespace parus::cimport {
         std::vector<std::string> replacement_tokens{};
         ImportedMacroSkipKind skip_kind = ImportedMacroSkipKind::kNone;
         std::string skip_reason{};
+        bool promote_is_c_abi = true;
+        bool promote_is_variadic = false;
+        CCallConvKind promote_callconv = CCallConvKind::kDefault;
+    };
+
+    struct ImportedDependencyFile {
+        std::string path{};
+        uint64_t mtime_ns = 0;
+        uint64_t size_bytes = 0;
     };
 
     struct ImportCoverageReport {
@@ -221,12 +229,17 @@ namespace parus::cimport {
         std::vector<ImportedStructDecl> structs{};
         std::vector<ImportedEnumDecl> enums{};
         std::vector<ImportedMacroDecl> macros{};
+        std::vector<ImportedDependencyFile> dependency_files{};
+        std::string libclang_version{};
         ImportCoverageReport coverage{};
     };
 
     HeaderImportResult import_c_header_functions(
         const std::string& importer_source_path,
         const std::string& header_path,
+        const std::string& target_triple,
+        const std::string& sysroot_path,
+        const std::string& apple_sdk_root,
         const std::vector<std::string>& include_dirs,
         const std::vector<std::string>& isystem_dirs,
         const std::vector<std::string>& defines,
