@@ -1084,6 +1084,52 @@ bool test_core_ext_scaffold_and_auto_injection() {
         return false;
     }
 
+    const auto hidden_fn_main = temp_root / "main_hidden_fn.pr";
+    const std::string hidden_fn_src =
+        "def main() -> i32 {\n"
+        "  set x = core::ext::make(\"x\", 1usize);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(hidden_fn_main, hidden_fn_src)) {
+        std::cerr << "failed to write hidden core::ext fn visibility source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string hidden_fn_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + hidden_fn_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_hidden_fn.o").string() + "\"";
+    auto [rc_hidden_fn, out_hidden_fn] = run_capture(hidden_fn_cmd);
+    if (rc_hidden_fn == 0 ||
+        (!contains(out_hidden_fn, "SymbolNotExportedFileScope") &&
+         !contains(out_hidden_fn, "UndefinedName"))) {
+        std::cerr << "non-export core function must not be visible externally\n" << out_hidden_fn;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto hidden_macro_main = temp_root / "main_hidden_macro.pr";
+    const std::string hidden_macro_src =
+        "def main() -> i32 {\n"
+        "  set x = $__core_ext_identity(1i32);\n"
+        "  return x;\n"
+        "}\n";
+    if (!write_text(hidden_macro_main, hidden_macro_src)) {
+        std::cerr << "failed to write hidden core::ext macro visibility source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string hidden_macro_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + hidden_macro_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_hidden_macro.o").string() + "\"";
+    auto [rc_hidden_macro, out_hidden_macro] = run_capture(hidden_macro_cmd);
+    if (rc_hidden_macro == 0 || !contains(out_hidden_macro, "MacroNoMatch")) {
+        std::cerr << "non-export core macro must not be visible externally\n" << out_hidden_macro;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
     const std::string compile_no_core_cmd =
         "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + app_main.string() + "\"" +
         " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
@@ -1724,7 +1770,7 @@ bool test_c_header_import_cstr_runtime_prints_consistent_output() {
         "import \"stdio.h\" as c;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set x = $c\"Hello, World!!\";\n"
+        "  set x = core::ext::from_ptr(\"Hello, World!!\");\n"
         "  c::printf(x);\n"
         "  c::printf(\"\\n\");\n"
         "  c::printf(\"%s\\n\", x);\n"

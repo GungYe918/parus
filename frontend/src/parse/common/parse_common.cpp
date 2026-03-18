@@ -173,7 +173,9 @@ namespace parus {
     }
 
     bool Parser::is_macro_decl_start() const {
-        return cursor_.peek().kind == syntax::TokenKind::kKwMacro;
+        using K = syntax::TokenKind;
+        if (cursor_.peek().kind == K::kKwMacro) return true;
+        return cursor_.peek().kind == K::kKwExport && cursor_.peek(1).kind == K::kKwMacro;
     }
 
     bool Parser::is_expr_with_block_kind(ast::ExprKind k) {

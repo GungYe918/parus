@@ -384,6 +384,7 @@ namespace parus::ast {
         uint32_t group_begin = 0; // slice in AstArena::macro_groups_
         uint32_t group_count = 0;
         uint32_t scope_depth = 0;
+        bool is_export = false;
         Span span{};
     };
 

@@ -23,7 +23,10 @@
 2. opaque 타입: `vaList`
 3. 문자열 경계 타입: `CStr`
 4. 에러 타입: `FromBytesWithNulError`, `FromBytesUntilNulError`
-5. CStr helper: `from_ptr`, `from_raw_parts`, `from_bytes_with_nul`, `from_bytes_until_nul`, `as_ptr`, `to_bytes`, `to_bytes_with_nul`, `len`, `len_with_nul`, `is_empty`
+5. CStr helper:
+   - static: `from_ptr`, `from_raw_parts`, `from_bytes_with_nul`, `from_bytes_until_nul`, `from_bytes_with_nul_unchecked`
+   - instance: `as_ptr`, `to_bytes`, `to_bytes_with_nul`, `len`, `len_with_nul`, `is_empty`, `count_bytes`
+   - free forwarding wrapper: 유지(legacy core caller compatibility)
 
 타입 매핑 원칙:
 
@@ -44,11 +47,20 @@
 | --- | --- | --- |
 | `c_void`, `c_char`, `c_int`, ... | Implemented | Exposed via `use c_*;` builtin aliases |
 | `VaList` | Implemented (restricted) | Opaque type, C ABI parameter boundary only |
-| `CStr` | Implemented (subset) | Borrowed view API only |
+| `CStr` | Implemented (expanded subset) | Borrowed view API with static/instance helpers |
 | `FromBytesWithNulError` | Implemented | Minimal error enum |
 | `FromBytesUntilNulError` | Implemented | Minimal error enum |
 | `CString` | Excluded | Requires allocator/owned buffer model |
 | `c_str!` macro | Excluded | Deferred to macro round |
+
+미지원(다음 라운드) 항목:
+
+| 영역 | 상태 | 비고 |
+| --- | --- | --- |
+| `CString`/owned C string | 미지원 | alloc 의존 |
+| `CStr::to_str` UTF-8 변환 | 미지원 | text/UTF-8 policy 확정 후 추가 |
+| `c_str!`-equivalent compile-time macro | 부분 | 현재 `$c""/$cr""` literal-only 경로 |
+| raw literal strict `cr` semantics 분리 | 미지원 | 현재 `cr`는 `c` alias |
 
 ## 안전 규칙
 

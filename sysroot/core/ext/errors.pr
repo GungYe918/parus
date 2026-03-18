@@ -1,7 +1,7 @@
 $![Impl::Core];
 
 // Error variants for strict C string construction from NUL-terminated bytes.
-enum FromBytesWithNulError {
+export enum FromBytesWithNulError {
     // Input bytes contained an interior NUL before the expected terminator.
     case InteriorNul,
     // Input bytes were expected to contain a trailing NUL but did not.
@@ -9,7 +9,7 @@ enum FromBytesWithNulError {
 };
 
 // Error variants for scanning bytes until the first NUL.
-enum FromBytesUntilNulError {
+export enum FromBytesUntilNulError {
     // No NUL byte was found within the given range.
     case NotFound,
 };

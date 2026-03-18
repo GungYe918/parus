@@ -1442,10 +1442,12 @@ namespace parusc::p0 {
 
             for (const auto& d : src_decls) {
                 if (d.scope_depth != 0) continue; // top-level only
+                if (!d.is_export) continue;       // external prelude only exports public macros
 
                 parus::ast::MacroDecl nd{};
                 nd.name = clone_sv_into_ast_(dst, d.name);
                 nd.scope_depth = 0;
+                nd.is_export = true;
                 nd.span = d.span;
                 nd.group_begin = static_cast<uint32_t>(dst.macro_groups().size());
                 nd.group_count = 0;

@@ -66,6 +66,14 @@ namespace parus {
     bool Parser::parse_decl_macro() {
         using K = syntax::TokenKind;
 
+        bool is_export = false;
+        Token decl_start = cursor_.peek();
+        if (cursor_.peek().kind == K::kKwExport) {
+            is_export = true;
+            decl_start = cursor_.peek();
+            cursor_.bump(); // export
+        }
+
         const Token macro_kw = cursor_.peek();
         if (macro_kw.kind != K::kKwMacro) {
             diag_report(diag::Code::kExpectedToken, macro_kw.span, "macro");
@@ -321,7 +329,8 @@ namespace parus {
         decl.group_begin = group_begin;
         decl.group_count = group_count;
         decl.scope_depth = macro_scope_depth_;
-        decl.span = span_join(macro_kw.span, cursor_.prev().span);
+        decl.is_export = is_export;
+        decl.span = span_join(decl_start.span, cursor_.prev().span);
         ast_.add_macro_decl(decl);
 
         return true;
