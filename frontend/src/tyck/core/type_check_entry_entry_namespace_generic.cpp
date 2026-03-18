@@ -118,6 +118,10 @@ namespace parus::tyck {
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
+        expr_call_is_c_abi_cache_.assign(ast_.exprs().size(), 0u);
+        expr_call_is_c_variadic_cache_.assign(ast_.exprs().size(), 0u);
+        expr_call_c_callconv_cache_.assign(ast_.exprs().size(), ty::CCallConv::kDefault);
+        expr_call_c_fixed_param_count_cache_.assign(ast_.exprs().size(), 0u);
         expr_external_c_bitfield_cache_.assign(ast_.exprs().size(), ExternalCBitfieldAccess{});
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_external_const_value_cache_.clear();
@@ -132,6 +136,10 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
+        result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
+        result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
+        result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
+        result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -605,6 +613,10 @@ namespace parus::tyck {
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
+        result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
+        result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
+        result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
+        result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -988,7 +1000,10 @@ namespace parus::tyck {
                     pc,
                     types_.fn_positional_count(src),
                     labels.empty() ? nullptr : labels.data(),
-                    has_default.empty() ? nullptr : has_default.data()
+                    has_default.empty() ? nullptr : has_default.data(),
+                    types_.fn_is_c_abi(src),
+                    types_.fn_is_c_variadic(src),
+                    types_.fn_callconv(src)
                 );
             }
             default:

@@ -64,6 +64,16 @@ namespace parus::cimport {
         kConstExprUnsupported,
     };
 
+    enum class ImportedDeclDropKind : uint8_t {
+        kNone = 0,
+        kUnsupportedFunctionType,
+        kUnsupportedFieldType,
+        kUnsupportedGlobalType,
+        kUnsupportedTypedefType,
+        kTransparentTargetUnresolved,
+        kIncompatibleAliasRewrite,
+    };
+
     struct ImportedMacroCallArg {
         int32_t param_index = -1;
         std::string cast_prefix{}; // e.g. "(int)" for simple cast forwarding
@@ -73,6 +83,7 @@ namespace parus::cimport {
         std::string name{};
         std::string link_name{};
         std::string type_repr{};
+        std::string type_semantic{};
         std::string c_return_type{};
         std::vector<std::string> c_arg_types{};
         std::string decl_file{};
@@ -91,6 +102,7 @@ namespace parus::cimport {
         std::string name{};
         std::string link_name{};
         std::string type_repr{};
+        std::string type_semantic{};
         std::string c_type{};
         std::string decl_file{};
         uint32_t decl_line = 1;
@@ -105,6 +117,7 @@ namespace parus::cimport {
     struct ImportedUnionFieldDecl {
         std::string name{};
         std::string type_repr{};
+        std::string type_semantic{};
     };
 
     struct ImportedUnionDecl {
@@ -120,8 +133,10 @@ namespace parus::cimport {
     struct ImportedTypedefDecl {
         std::string name{};
         std::string type_repr{};
+        std::string type_semantic{};
         bool is_transparent = false;
         std::string transparent_type_repr{};
+        std::string transparent_type_semantic{};
         std::string decl_file{};
         uint32_t decl_line = 1;
         uint32_t decl_col = 1;
@@ -130,6 +145,7 @@ namespace parus::cimport {
     struct ImportedStructFieldDecl {
         std::string name{};
         std::string type_repr{};
+        std::string type_semantic{};
         std::string c_type{};
         uint32_t offset_bytes = 0;
         bool from_flatten = false;
@@ -184,6 +200,7 @@ namespace parus::cimport {
         std::string promote_callee_name{};
         std::string promote_callee_link_name{};
         std::string promote_type_repr{};
+        std::string promote_type_semantic{};
         std::string promote_c_return_type{};
         std::vector<std::string> params{};
         std::vector<std::string> promote_param_type_reprs{};
@@ -217,6 +234,8 @@ namespace parus::cimport {
         uint32_t skipped_function_macros = 0;
         std::vector<std::string> skipped_reasons{};
         std::vector<std::string> skipped_reason_codes{};
+        std::vector<std::string> dropped_decl_reasons{};
+        std::vector<std::string> dropped_decl_reason_codes{};
     };
 
     struct HeaderImportResult {

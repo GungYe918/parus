@@ -2931,6 +2931,298 @@ bool test_c_header_import_function_pointer_alias_call() {
     return true;
 }
 
+bool test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-variadic-fnptr-alias";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "F.h";
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_fail = temp_root / "main_fail.pr";
+    const auto llvm_out = temp_root / "main_ok.ll";
+    const std::string header_src =
+        "#ifndef PARUS_VARIADIC_FPTR_H\n"
+        "#define PARUS_VARIADIC_FPTR_H\n"
+        "typedef int (*PrintfLike)(const char*, ...);\n"
+        "typedef PrintfLike PrintfAlias;\n"
+        "PrintfAlias get_logger(void);\n"
+        "#endif\n";
+    const std::string ok_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set f = c::get_logger();\n"
+        "  set out = 0i32;\n"
+        "  manual[abi] {\n"
+        "    set out = f(\"%d\", 5i32);\n"
+        "  }\n"
+        "  return out;\n"
+        "}\n";
+    const std::string fail_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set f = c::get_logger();\n"
+        "  return f(\"%d\", 5i32);\n"
+        "}\n";
+    if (!write_text(header_h, header_src) ||
+        !write_text(main_ok, ok_src) ||
+        !write_text(main_fail, fail_src)) {
+        std::cerr << "failed to write variadic function pointer alias cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok_first, out_ok_first] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() +
+        "\" -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    auto [rc_ok_second, out_ok_second] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    const std::string llvm_ir = read_text(llvm_out);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok_first, "CImportLibClangUnavailable") ||
+        contains(out_fail, "CImportLibClangUnavailable") ||
+        contains(out_ok_second, "CImportLibClangUnavailable")) {
+        return rc_ok_first != 0;
+    }
+    if (rc_ok_first != 0) {
+        std::cerr << "variadic function pointer typedef alias call should compile with manual[abi]\n" << out_ok_first;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "variadic function pointer alias call without manual[abi] must fail\n" << out_fail;
+        return false;
+    }
+    if (!contains(out_fail, "ManualAbiRequired")) {
+        std::cerr << "variadic function pointer alias call must report ManualAbiRequired\n" << out_fail;
+        return false;
+    }
+    if (rc_ok_second != 0) {
+        std::cerr << "cache-hit variadic function pointer alias compile should succeed\n" << out_ok_second;
+        return false;
+    }
+    if (!contains(llvm_ir, "call i32 (ptr, ...) %")) {
+        std::cerr << "indirect variadic alias call must lower as typed variadic indirect call\n" << llvm_ir;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_variadic_function_pointer_global_and_field_calls() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-variadic-fnptr-global-field";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "F.h";
+    const auto main_global = temp_root / "main_global.pr";
+    const auto main_field = temp_root / "main_field.pr";
+    const std::string header_src =
+        "#ifndef PARUS_VARIADIC_FPTR_GLOBAL_FIELD_H\n"
+        "#define PARUS_VARIADIC_FPTR_GLOBAL_FIELD_H\n"
+        "typedef int (*PrintfLike)(const char*, ...);\n"
+        "extern PrintfLike global_logger;\n"
+        "typedef struct LoggerBox {\n"
+        "  PrintfLike log;\n"
+        "} LoggerBox;\n"
+        "LoggerBox get_box(void);\n"
+        "#endif\n";
+    const std::string global_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set out = 0i32;\n"
+        "  manual[abi] {\n"
+        "    set out = c::global_logger(\"%d\", 1i32);\n"
+        "  }\n"
+        "  return out;\n"
+        "}\n";
+    const std::string field_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set box = c::get_box();\n"
+        "  set out = 0i32;\n"
+        "  manual[abi] {\n"
+        "    set out = box.log(\"%d\", 2i32);\n"
+        "  }\n"
+        "  return out;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) ||
+        !write_text(main_global, global_src) ||
+        !write_text(main_field, field_src)) {
+        std::cerr << "failed to write variadic global/field function pointer cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_global, out_global] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_global.string() + "\" -fsyntax-only");
+    auto [rc_field, out_field] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_field.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_global, "CImportLibClangUnavailable") ||
+        contains(out_field, "CImportLibClangUnavailable")) {
+        return rc_global != 0;
+    }
+    if (rc_global != 0) {
+        std::cerr << "variadic imported global function pointer call should compile\n" << out_global;
+        return false;
+    }
+    if (rc_field != 0) {
+        std::cerr << "variadic imported struct field function pointer call should compile\n" << out_field;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_dropped_global_decl_preserves_supported_imports() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-drop-global";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Drop.h";
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_fail = temp_root / "main_fail.pr";
+    const std::string header_src =
+        "#ifndef PARUS_DROP_GLOBAL_H\n"
+        "#define PARUS_DROP_GLOBAL_H\n"
+        "int ok_fn(void);\n"
+        "extern int bad_global[4];\n"
+        "#endif\n";
+    const std::string ok_src =
+        "import \"Drop.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::ok_fn();\n"
+        "}\n";
+    const std::string fail_src =
+        "import \"Drop.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set x = c::bad_global;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) ||
+        !write_text(main_ok, ok_src) ||
+        !write_text(main_fail, fail_src)) {
+        std::cerr << "failed to write dropped global cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "PARUS_CIMPORT_REPORT=1 \"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable") || contains(out_fail, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "supported decls must remain importable when one global is dropped\n" << out_ok;
+        return false;
+    }
+    if (!contains(out_ok, "dropped global 'bad_global'") || !contains(out_ok, "unsupported_global_type")) {
+        std::cerr << "dropped global import must report reason and reason code\n" << out_ok;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "referencing dropped global decl must fail\n" << out_fail;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_dropped_owner_record_preserves_supported_imports() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-drop-record";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "Drop.h";
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_fail = temp_root / "main_fail.pr";
+    const std::string header_src =
+        "#ifndef PARUS_DROP_RECORD_H\n"
+        "#define PARUS_DROP_RECORD_H\n"
+        "typedef struct BadBox {\n"
+        "  int data[4];\n"
+        "} BadBox;\n"
+        "int ok_fn(void);\n"
+        "#endif\n";
+    const std::string ok_src =
+        "import \"Drop.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return c::ok_fn();\n"
+        "}\n";
+    const std::string fail_src =
+        "import \"Drop.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let x: c::BadBox = 0i32;\n"
+        "  return c::ok_fn();\n"
+        "}\n";
+    if (!write_text(header_h, header_src) ||
+        !write_text(main_ok, ok_src) ||
+        !write_text(main_fail, fail_src)) {
+        std::cerr << "failed to write dropped record cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "PARUS_CIMPORT_REPORT=1 \"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\" -fsyntax-only");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out_ok, "CImportLibClangUnavailable") || contains(out_fail, "CImportLibClangUnavailable")) {
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "supported decls must remain importable when one record owner is dropped\n" << out_ok;
+        return false;
+    }
+    if (!contains(out_ok, "dropped struct 'BadBox'") || !contains(out_ok, "unsupported_field_type")) {
+        std::cerr << "dropped record import must report owner-drop reason and code\n" << out_ok;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "materializing dropped owner record type must fail\n" << out_fail;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_function_like_macro_not_imported() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -3809,13 +4101,17 @@ int main() {
     const bool ok59 = test_hosted_actor_link_uses_clang_driver();
     const bool ok60 = test_hosted_actor_parus_lld_mode_succeeds();
     const bool ok61 = test_core_ext_scaffold_and_auto_injection();
+    const bool ok62 = test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit();
+    const bool ok63 = test_c_header_import_variadic_function_pointer_global_and_field_calls();
+    const bool ok64 = test_c_header_import_dropped_global_decl_preserves_supported_imports();
+    const bool ok65 = test_c_header_import_dropped_owner_record_preserves_supported_imports();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
-        !ok60 || !ok61) {
+        !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65) {
         return 1;
     }
 

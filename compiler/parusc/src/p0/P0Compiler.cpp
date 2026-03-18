@@ -10,6 +10,7 @@
 #include <parus/cimport/CImportPayload.hpp>
 #include <parus/cimport/ToolchainResolver.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
+#include <parus/cimport/TypeSemantic.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/Render.hpp>
 #include <parus/lex/Lexer.hpp>
@@ -170,6 +171,7 @@ namespace parusc::p0 {
             std::string module_head{};
             std::string decl_dir{};
             std::string type_repr{};
+            std::string type_semantic{};
             std::string inst_payload{};
             std::string decl_file{};
             uint32_t decl_line = 1;
@@ -607,6 +609,7 @@ namespace parusc::p0 {
                 e.decl_dir = decl_dir;
                 if (tid != parus::ty::kInvalidType) {
                     e.type_repr = types.to_export_string(tid);
+                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(tid, types);
                 }
                 e.inst_payload = std::move(inst_payload);
                 e.decl_file = decl_file;
@@ -906,7 +909,7 @@ namespace parusc::p0 {
             }
 
             ofs << "{\n";
-            ofs << "  \"version\": 5,\n";
+            ofs << "  \"version\": 6,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"exports\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
@@ -917,6 +920,7 @@ namespace parusc::p0 {
                     << "\",\"module_head\":\"" << json_escape_text_(e.module_head)
                     << "\",\"decl_dir\":\"" << json_escape_text_(e.decl_dir)
                     << "\",\"type_repr\":\"" << json_escape_text_(e.type_repr)
+                    << "\",\"type_semantic\":\"" << json_escape_text_(e.type_semantic)
                     << "\",\"inst_payload\":\"" << json_escape_text_(e.inst_payload)
                     << "\",\"decl_span\":{\"file\":\"" << json_escape_text_(e.decl_file)
                     << "\",\"line\":" << e.decl_line
@@ -1087,7 +1091,7 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || version != 5) {
+            if (!parse_json_uint_field_(text, "version", version) || (version != 5 && version != 6)) {
                 out_err = "unsupported export-index version in: " + path;
                 return false;
             }
@@ -1109,6 +1113,7 @@ namespace parusc::p0 {
                 std::string module_head_raw{};
                 std::string decl_dir{};
                 std::string type_repr{};
+                std::string type_semantic{};
                 std::string inst_payload{};
                 std::string decl_file{};
                 uint32_t decl_line = 1;
@@ -1137,6 +1142,10 @@ namespace parusc::p0 {
                 }
                 if (!parse_json_string_field_(obj, "type_repr", type_repr)) {
                     out_err = "invalid export-index entry field 'type_repr' in: " + path;
+                    return false;
+                }
+                if (!parse_json_string_field_optional_(obj, "type_semantic", type_semantic)) {
+                    out_err = "invalid export-index entry field 'type_semantic' in: " + path;
                     return false;
                 }
                 if (!parse_json_string_field_optional_(obj, "inst_payload", inst_payload)) {
@@ -1174,6 +1183,7 @@ namespace parusc::p0 {
                 e.module_head = normalize_core_public_module_head_(bundle_name, module_head_raw);
                 e.decl_dir = std::move(decl_dir);
                 e.type_repr = std::move(type_repr);
+                e.type_semantic = std::move(type_semantic);
                 e.inst_payload = std::move(inst_payload);
                 e.decl_file = std::move(decl_file);
                 e.decl_line = decl_line;
@@ -1187,10 +1197,11 @@ namespace parusc::p0 {
 
         parus::ty::TypeId parse_type_repr_into_(
             std::string_view type_repr,
+            std::string_view type_semantic,
             std::string_view inst_payload,
             parus::ty::TypePool& types
         ) {
-            return parus::cimport::parse_external_type_repr(type_repr, inst_payload, types);
+            return parus::cimport::parse_external_type_repr(type_repr, type_semantic, inst_payload, types);
         }
 
 #if PARUSC_HAS_AOT_BACKEND
@@ -1943,6 +1954,7 @@ namespace parusc::p0 {
                         << " type=" << cov.imported_type_decls << "/" << cov.total_type_decls
                         << " const=" << cov.imported_const_decls << "/" << cov.total_const_decls
                         << " fn_macro=" << cov.promoted_function_macros << "/" << cov.total_function_macros
+                        << " dropped_decl=" << cov.dropped_decl_reasons.size()
                         << " skipped_fn_macro=" << cov.skipped_function_macros
                         << "\n";
                     constexpr size_t kMaxReasons = 8;
@@ -1954,9 +1966,21 @@ namespace parusc::p0 {
                     for (size_t i = 0; i < code_n; ++i) {
                         std::cerr << "  - code: " << cov.skipped_reason_codes[i] << "\n";
                     }
+                    const size_t dropped_reason_n = std::min(cov.dropped_decl_reasons.size(), kMaxReasons);
+                    for (size_t i = 0; i < dropped_reason_n; ++i) {
+                        std::cerr << "  - dropped: " << cov.dropped_decl_reasons[i] << "\n";
+                    }
+                    const size_t dropped_code_n = std::min(cov.dropped_decl_reason_codes.size(), kMaxReasons);
+                    for (size_t i = 0; i < dropped_code_n; ++i) {
+                        std::cerr << "  - dropped-code: " << cov.dropped_decl_reason_codes[i] << "\n";
+                    }
                     if (cov.skipped_reasons.size() > kMaxReasons) {
                         std::cerr << "  - ... (" << (cov.skipped_reasons.size() - kMaxReasons)
                                   << " more skipped reasons)\n";
+                    }
+                    if (cov.dropped_decl_reasons.size() > kMaxReasons) {
+                        std::cerr << "  - ... (" << (cov.dropped_decl_reasons.size() - kMaxReasons)
+                                  << " more dropped decl reasons)\n";
                     }
                 }
                 if (imported.functions.empty() &&
@@ -2011,6 +2035,8 @@ namespace parusc::p0 {
                     e.decl_dir = current_dir;
                     e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                         fn.type_repr, spec.alias, known_type_names);
+                    e.type_semantic = parus::cimport::rewrite_cimport_type_semantic_with_alias(
+                        fn.type_semantic, spec.alias, known_type_names);
                     e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, fn);
                     e.decl_file = fn.decl_file.empty() ? current_norm : parus::normalize_path(fn.decl_file);
                     e.decl_line = fn.decl_line;
@@ -2034,6 +2060,8 @@ namespace parusc::p0 {
                     e.decl_dir = current_dir;
                     e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                         gv.type_repr, spec.alias, known_type_names);
+                    e.type_semantic = parus::cimport::rewrite_cimport_type_semantic_with_alias(
+                        gv.type_semantic, spec.alias, known_type_names);
                     e.inst_payload = parus::cimport::make_c_import_global_payload(spec.header, gv);
                     e.decl_file = gv.decl_file.empty() ? current_norm : parus::normalize_path(gv.decl_file);
                     e.decl_line = gv.decl_line;
@@ -2105,6 +2133,8 @@ namespace parusc::p0 {
                     e.decl_dir = current_dir;
                     e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                         td.type_repr, spec.alias, known_type_names);
+                    e.type_semantic = parus::cimport::rewrite_cimport_type_semantic_with_alias(
+                        td.type_semantic, spec.alias, known_type_names);
                     e.inst_payload = parus::cimport::make_c_import_typedef_payload(
                         spec.header, spec.alias, known_type_names, td);
                     e.decl_file = td.decl_file.empty() ? current_norm : parus::normalize_path(td.decl_file);
@@ -2240,6 +2270,8 @@ namespace parusc::p0 {
                         e.decl_dir = current_dir;
                         e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                             callee->type_repr, spec.alias, known_type_names);
+                        e.type_semantic = parus::cimport::rewrite_cimport_type_semantic_with_alias(
+                            callee->type_semantic, spec.alias, known_type_names);
                         e.inst_payload = parus::cimport::make_c_import_payload(spec.header, spec.alias, *callee);
                         e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
                         e.decl_line = mc.decl_line;
@@ -2273,6 +2305,8 @@ namespace parusc::p0 {
                         e.decl_dir = current_dir;
                         e.type_repr = parus::cimport::rewrite_cimport_type_with_alias(
                             mc.promote_type_repr, spec.alias, known_type_names);
+                        e.type_semantic = parus::cimport::rewrite_cimport_type_semantic_with_alias(
+                            mc.promote_type_semantic, spec.alias, known_type_names);
                         e.inst_payload = parus::cimport::make_c_import_wrapper_payload(spec.header, spec.alias, mc);
                         e.decl_file = mc.decl_file.empty() ? current_norm : parus::normalize_path(mc.decl_file);
                         e.decl_line = mc.decl_line;
@@ -2304,6 +2338,40 @@ namespace parusc::p0 {
                     parus::diag::Diagnostic d(
                         parus::diag::Severity::kWarning,
                         parus::diag::Code::kCImportFnMacroSkipped,
+                        spec.span
+                    );
+                    d.add_arg(msg);
+                    bag.add(std::move(d));
+                }
+                if (!imported.coverage.dropped_decl_reasons.empty() ||
+                    !imported.coverage.dropped_decl_reason_codes.empty()) {
+                    std::string msg = "some C declarations were dropped during import: ";
+                    constexpr size_t kPreview = 3;
+                    size_t printed = 0;
+                    for (size_t i = 0;
+                         i < imported.coverage.dropped_decl_reasons.size() && printed < kPreview;
+                         ++i, ++printed) {
+                        if (printed) msg += "; ";
+                        msg += imported.coverage.dropped_decl_reasons[i];
+                    }
+                    if (printed == 0) {
+                        for (size_t i = 0;
+                             i < imported.coverage.dropped_decl_reason_codes.size() && printed < kPreview;
+                             ++i, ++printed) {
+                            if (printed) msg += "; ";
+                            msg += imported.coverage.dropped_decl_reason_codes[i];
+                        }
+                    }
+                    const size_t dropped_n = std::max(
+                        imported.coverage.dropped_decl_reasons.size(),
+                        imported.coverage.dropped_decl_reason_codes.size()
+                    );
+                    if (dropped_n > printed) {
+                        msg += "; ...";
+                    }
+                    parus::diag::Diagnostic d(
+                        parus::diag::Severity::kWarning,
+                        parus::diag::Code::kTypeErrorGeneric,
                         spec.span
                     );
                     d.add_arg(msg);
@@ -2393,8 +2461,9 @@ namespace parusc::p0 {
             x.kind = e.kind;
             x.path = std::move(lookup_path);
             x.link_name = e.link_name;
-            x.declared_type = parse_type_repr_into_(e.type_repr, e.inst_payload, types);
+            x.declared_type = parse_type_repr_into_(e.type_repr, e.type_semantic, e.inst_payload, types);
             x.declared_type_repr = e.type_repr;
+            x.declared_type_semantic = e.type_semantic;
             x.decl_span = root_span;
             x.decl_bundle_name = e.decl_bundle;
             x.module_head = e.module_head;

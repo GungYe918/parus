@@ -114,6 +114,22 @@ namespace parus::tyck {
             current_expr_id_ < expr_external_receiver_expr_cache_.size()) {
             expr_external_receiver_expr_cache_[current_expr_id_] = ast::k_invalid_expr;
         }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_call_is_c_abi_cache_.size()) {
+            expr_call_is_c_abi_cache_[current_expr_id_] = 0u;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_call_is_c_variadic_cache_.size()) {
+            expr_call_is_c_variadic_cache_[current_expr_id_] = 0u;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_call_c_callconv_cache_.size()) {
+            expr_call_c_callconv_cache_[current_expr_id_] = ty::CCallConv::kDefault;
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            current_expr_id_ < expr_call_c_fixed_param_count_cache_.size()) {
+            expr_call_c_fixed_param_count_cache_[current_expr_id_] = 0u;
+        }
 
         // Snapshot call-site args before any generic instantiation can mutate AST storage.
         std::vector<ast::Arg> call_args;
@@ -293,7 +309,10 @@ namespace parus::tyck {
                         param_count,
                         types_.fn_positional_count(t),
                         labels.empty() ? nullptr : labels.data(),
-                        has_default_flags.empty() ? nullptr : has_default_flags.data()
+                        has_default_flags.empty() ? nullptr : has_default_flags.data(),
+                        types_.fn_is_c_abi(t),
+                        types_.fn_is_c_variadic(t),
+                        types_.fn_callconv(t)
                     );
                 }
                 default:
@@ -1226,10 +1245,13 @@ namespace parus::tyck {
                             callee_name = sym.name;
                             if (!sym.external_payload.empty()) {
                                 cimport_meta = parse_cimport_call_meta_(sym.external_payload);
-                                if (cimport_meta.is_c_abi) {
-                                    is_cimport_call = true;
-                                    cimport_callee_symbol = *sid;
-                                }
+                            }
+                            if (cimport_meta.is_c_abi ||
+                                (sym.declared_type != ty::kInvalidType &&
+                                 types_.get(sym.declared_type).kind == ty::Kind::kFn &&
+                                 types_.fn_is_c_abi(sym.declared_type))) {
+                                is_cimport_call = true;
+                                cimport_callee_symbol = *sid;
                             }
                             auto it = fn_decl_by_name_.find(callee_name);
                             if (it != fn_decl_by_name_.end()) {
@@ -1549,21 +1571,35 @@ namespace parus::tyck {
             return tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger;
         };
 
-        auto check_cimport_call_with_positions =
-            [&](const sema::Symbol& callee_sym,
+        auto classify_c_abi_fn_type = [&](ty::TypeId fn_t,
+                                          bool& out_is_c_abi,
+                                          bool& out_is_variadic,
+                                          ty::CCallConv& out_callconv) {
+            out_is_c_abi = false;
+            out_is_variadic = false;
+            out_callconv = ty::CCallConv::kDefault;
+            if (fn_t == ty::kInvalidType || fn_t >= types_.count()) return;
+            if (types_.get(fn_t).kind != ty::Kind::kFn) return;
+            out_is_c_abi = types_.fn_is_c_abi(fn_t);
+            out_is_variadic = types_.fn_is_c_variadic(fn_t);
+            out_callconv = types_.fn_callconv(fn_t);
+        };
+
+        auto check_c_abi_call_with_positions =
+            [&](ty::TypeId fn_t,
+                uint32_t direct_callee_symbol,
                 const std::vector<ast::ExprId>& arg_exprs,
                 Span diag_span) -> ty::TypeId {
-                if (callee_sym.declared_type == ty::kInvalidType ||
-                    types_.get(callee_sym.declared_type).kind != ty::Kind::kFn) {
+                if (fn_t == ty::kInvalidType || types_.get(fn_t).kind != ty::Kind::kFn) {
                     diag_(diag::Code::kTypeNotCallable, diag_span, callee_name);
                     err_(diag_span, "invalid C import callee signature");
                     return types_.error();
                 }
 
-                const ty::TypeId fn_t = callee_sym.declared_type;
                 const auto& fn_sig = types_.get(fn_t);
                 const uint32_t fixed_param_count = fn_sig.param_count;
-                if (!cimport_meta.is_variadic) {
+                const bool is_c_variadic = types_.fn_is_c_variadic(fn_t);
+                if (!is_c_variadic) {
                     if (arg_exprs.size() != fixed_param_count) {
                         diag_(diag::Code::kTypeArgCountMismatch, diag_span,
                               std::to_string(fixed_param_count), std::to_string(arg_exprs.size()));
@@ -1628,7 +1664,7 @@ namespace parus::tyck {
                     }
                 }
 
-                if (cimport_meta.is_variadic) {
+                if (is_c_variadic) {
                     if (!has_manual_permission_(ast::kManualPermAbi)) {
                         diag_(diag::Code::kManualAbiRequired, diag_span);
                         err_(diag_span, "C variadic call requires manual[abi]");
@@ -1677,8 +1713,15 @@ namespace parus::tyck {
 
                 if (current_expr_id_ != ast::k_invalid_expr &&
                     current_expr_id_ < expr_external_callee_symbol_cache_.size() &&
-                    cimport_callee_symbol != sema::SymbolTable::kNoScope) {
-                    expr_external_callee_symbol_cache_[current_expr_id_] = cimport_callee_symbol;
+                    direct_callee_symbol != sema::SymbolTable::kNoScope) {
+                    expr_external_callee_symbol_cache_[current_expr_id_] = direct_callee_symbol;
+                }
+                if (current_expr_id_ != ast::k_invalid_expr &&
+                    current_expr_id_ < expr_call_is_c_abi_cache_.size()) {
+                    expr_call_is_c_abi_cache_[current_expr_id_] = 1u;
+                    expr_call_is_c_variadic_cache_[current_expr_id_] = is_c_variadic ? 1u : 0u;
+                    expr_call_c_callconv_cache_[current_expr_id_] = types_.fn_callconv(fn_t);
+                    expr_call_c_fixed_param_count_cache_[current_expr_id_] = fixed_param_count;
                 }
                 return fn_sig.ret;
             };
@@ -1700,7 +1743,18 @@ namespace parus::tyck {
             for (const auto* a : outside_positional) {
                 if (a != nullptr) arg_exprs.push_back(a->expr);
             }
-            return check_cimport_call_with_positions(sym_.symbol(cimport_callee_symbol), arg_exprs, e.span);
+            ty::TypeId c_abi_fn_t = callee_t;
+            if (cimport_callee_symbol != sema::SymbolTable::kNoScope &&
+                cimport_callee_symbol < sym_.symbols().size()) {
+                const auto& callee_sym = sym_.symbol(cimport_callee_symbol);
+                if (callee_sym.declared_type != ty::kInvalidType &&
+                    callee_sym.declared_type < types_.count() &&
+                    types_.get(callee_sym.declared_type).kind == ty::Kind::kFn &&
+                    types_.fn_is_c_abi(callee_sym.declared_type)) {
+                    c_abi_fn_t = callee_sym.declared_type;
+                }
+            }
+            return check_c_abi_call_with_positions(c_abi_fn_t, cimport_callee_symbol, arg_exprs, e.span);
         }
 
         // ------------------------------------------------------------
@@ -1793,6 +1847,30 @@ namespace parus::tyck {
                 expr_external_receiver_expr_cache_[current_expr_id_] = receiver_eid;
             }
             return types_.get(selected_external_fn_type).ret;
+        }
+
+        // ------------------------------------------------------------
+        // 2.75) indirect C ABI call via function value / fnptr alias
+        // ------------------------------------------------------------
+        if (overload_decl_ids.empty()) {
+            bool callee_is_c_abi = false;
+            bool callee_is_c_variadic = false;
+            ty::CCallConv callee_c_callconv = ty::CCallConv::kDefault;
+            classify_c_abi_fn_type(callee_t, callee_is_c_abi, callee_is_c_variadic, callee_c_callconv);
+            if (callee_is_c_abi) {
+                if (form != CallForm::kPositionalOnly) {
+                    diag_(diag::Code::kCAbiCallPositionalOnly, e.span);
+                    err_(e.span, "C ABI call currently supports positional arguments only");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+                std::vector<ast::ExprId> arg_exprs{};
+                arg_exprs.reserve(outside_positional.size());
+                for (const auto* a : outside_positional) {
+                    if (a != nullptr) arg_exprs.push_back(a->expr);
+                }
+                return check_c_abi_call_with_positions(callee_t, cimport_callee_symbol, arg_exprs, e.span);
+            }
         }
 
         // ------------------------------------------------------------

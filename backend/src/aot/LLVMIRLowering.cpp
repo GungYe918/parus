@@ -1987,6 +1987,38 @@ namespace parus::backend::aot {
                             arg_vals.reserve(x.args.size());
 
                             const auto direct = resolve_direct_callee_(x);
+                            std::vector<std::string> indirect_c_param_tys{};
+                            auto collect_indirect_c_param_tys_ = [&]() -> bool {
+                                if (!x.call_is_c_abi) return false;
+                                auto callee_tid = value_type_id_(x.callee);
+                                if (callee_tid == parus::ty::kInvalidType ||
+                                    callee_tid >= types_.count()) {
+                                    return false;
+                                }
+                                const auto& callee_tt0 = types_.get(callee_tid);
+                                if ((callee_tt0.kind == parus::ty::Kind::kPtr ||
+                                     callee_tt0.kind == parus::ty::Kind::kBorrow ||
+                                     callee_tt0.kind == parus::ty::Kind::kEscape) &&
+                                    callee_tt0.elem != parus::ty::kInvalidType) {
+                                    callee_tid = callee_tt0.elem;
+                                }
+                                if (callee_tid == parus::ty::kInvalidType ||
+                                    callee_tid >= types_.count()) {
+                                    return false;
+                                }
+                                const auto& callee_tt = types_.get(callee_tid);
+                                if (callee_tt.kind != parus::ty::Kind::kFn) return false;
+                                indirect_c_param_tys.reserve(callee_tt.param_count);
+                                for (uint32_t i = 0; i < callee_tt.param_count; ++i) {
+                                    indirect_c_param_tys.push_back(map_type_(
+                                        types_,
+                                        types_.fn_param_at(callee_tid, i),
+                                        &named_layouts_,
+                                        &actor_types_));
+                                }
+                                return true;
+                            };
+                            const bool have_indirect_c_sig = !direct.has_value() && collect_indirect_c_param_tys_();
                             auto promote_c_variadic_abi_ty = [](const std::string& ty) -> std::string {
                                 if (ty == "half" || ty == "float") return "double";
                                 if (ty == "i1" || ty == "i8" || ty == "i16") return "i32";
@@ -2001,6 +2033,13 @@ namespace parus::backend::aot {
                                         want = direct->param_tys[ai];
                                     } else if (direct->is_variadic &&
                                                ai >= static_cast<size_t>(direct->fixed_param_count)) {
+                                        want = promote_c_variadic_abi_ty(src_ty);
+                                    }
+                                } else if (have_indirect_c_sig) {
+                                    if (ai < indirect_c_param_tys.size()) {
+                                        want = indirect_c_param_tys[ai];
+                                    } else if (x.call_is_c_variadic &&
+                                               ai >= static_cast<size_t>(x.call_c_fixed_param_count)) {
                                         want = promote_c_variadic_abi_ty(src_ty);
                                     }
                                 }
@@ -2141,6 +2180,22 @@ namespace parus::backend::aot {
                                 }
                             } else {
                                 callee_ptr = coerce_value_(os, x.callee, "ptr");
+                                if (have_indirect_c_sig) {
+                                    indirect_cc = llvm_callconv_prefix_(x.call_c_callconv);
+                                    std::ostringstream sig;
+                                    const std::string ret_ty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
+                                    sig << ret_ty << " (";
+                                    for (size_t i = 0; i < indirect_c_param_tys.size(); ++i) {
+                                        if (i) sig << ", ";
+                                        sig << indirect_c_param_tys[i];
+                                    }
+                                    if (x.call_is_c_variadic) {
+                                        if (!indirect_c_param_tys.empty()) sig << ", ";
+                                        sig << "...";
+                                    }
+                                    sig << ")";
+                                    indirect_sig = sig.str();
+                                }
                             }
                             const std::string rty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
                             if (rty == "void") {

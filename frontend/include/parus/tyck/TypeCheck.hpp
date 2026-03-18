@@ -67,6 +67,10 @@ namespace parus::tyck {
         std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
         std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
         std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
+        std::vector<uint8_t> expr_call_is_c_abi; // expr index -> call lowers with C ABI
+        std::vector<uint8_t> expr_call_is_c_variadic; // expr index -> call is C variadic
+        std::vector<ty::CCallConv> expr_call_c_callconv; // expr index -> callsite C callconv
+        std::vector<uint32_t> expr_call_c_fixed_param_count; // expr index -> fixed parameter count for C calls
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield; // expr index -> imported C bitfield access metadata
         std::vector<ast::ExprId> expr_fstring_runtime_expr; // expr index -> runtime passthrough expr for non-folded f-string, invalid otherwise
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
@@ -336,6 +340,10 @@ namespace parus::tyck {
         std::vector<ast::StmtId> expr_proto_const_decl_cache_;
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
+        std::vector<uint8_t> expr_call_is_c_abi_cache_;
+        std::vector<uint8_t> expr_call_is_c_variadic_cache_;
+        std::vector<ty::CCallConv> expr_call_c_callconv_cache_;
+        std::vector<uint32_t> expr_call_c_fixed_param_count_cache_;
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;
@@ -374,6 +382,11 @@ namespace parus::tyck {
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
         static bool is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id);
         bool has_manual_permission_(uint8_t perm) const;
+        bool parse_external_c_type_with_semantic_(
+            std::string_view type_repr,
+            std::string_view type_semantic,
+            ty::TypeId& out
+        ) const;
         void collect_external_c_record_fields_();
         bool parse_external_c_union_payload_(
             std::string_view payload,

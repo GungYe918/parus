@@ -18,8 +18,8 @@ namespace parus::cimport {
     namespace {
 
         constexpr std::string_view kManifestMagic = "parus-cimport-manifest";
-        constexpr uint32_t kManifestVersion = 1;
-        constexpr std::string_view kTranslatorVersion = "parus-cimport-v1";
+        constexpr uint32_t kManifestVersion = 2;
+        constexpr std::string_view kTranslatorVersion = "parus-cimport-v2";
 
         void fnv1a64_append_(uint64_t& h, std::string_view s) {
             for (const unsigned char ch : s) {
@@ -147,6 +147,7 @@ namespace parus::cimport {
             write_string_(os, fn.name);
             write_string_(os, fn.link_name);
             write_string_(os, fn.type_repr);
+            write_string_(os, fn.type_semantic);
             write_string_(os, fn.c_return_type);
             write_vector_(os, fn.c_arg_types, [&](const std::string& s) { write_string_(os, s); });
             write_string_(os, fn.decl_file);
@@ -165,6 +166,7 @@ namespace parus::cimport {
             return read_string_(is, fn.name) &&
                    read_string_(is, fn.link_name) &&
                    read_string_(is, fn.type_repr) &&
+                   read_string_(is, fn.type_semantic) &&
                    read_string_(is, fn.c_return_type) &&
                    read_vector_(is, fn.c_arg_types, [&](std::string& s) { return read_string_(is, s); }) &&
                    read_string_(is, fn.decl_file) &&
@@ -183,6 +185,7 @@ namespace parus::cimport {
             write_string_(os, gv.name);
             write_string_(os, gv.link_name);
             write_string_(os, gv.type_repr);
+            write_string_(os, gv.type_semantic);
             write_string_(os, gv.c_type);
             write_string_(os, gv.decl_file);
             write_pod_(os, gv.decl_line);
@@ -198,6 +201,7 @@ namespace parus::cimport {
             return read_string_(is, gv.name) &&
                    read_string_(is, gv.link_name) &&
                    read_string_(is, gv.type_repr) &&
+                   read_string_(is, gv.type_semantic) &&
                    read_string_(is, gv.c_type) &&
                    read_string_(is, gv.decl_file) &&
                    read_pod_(is, gv.decl_line) &&
@@ -212,11 +216,13 @@ namespace parus::cimport {
         void write_union_field_(std::ostream& os, const ImportedUnionFieldDecl& field) {
             write_string_(os, field.name);
             write_string_(os, field.type_repr);
+            write_string_(os, field.type_semantic);
         }
 
         bool read_union_field_(std::istream& is, ImportedUnionFieldDecl& field) {
             return read_string_(is, field.name) &&
-                   read_string_(is, field.type_repr);
+                   read_string_(is, field.type_repr) &&
+                   read_string_(is, field.type_semantic);
         }
 
         void write_union_(std::ostream& os, const ImportedUnionDecl& un) {
@@ -242,8 +248,10 @@ namespace parus::cimport {
         void write_typedef_(std::ostream& os, const ImportedTypedefDecl& td) {
             write_string_(os, td.name);
             write_string_(os, td.type_repr);
+            write_string_(os, td.type_semantic);
             write_bool_(os, td.is_transparent);
             write_string_(os, td.transparent_type_repr);
+            write_string_(os, td.transparent_type_semantic);
             write_string_(os, td.decl_file);
             write_pod_(os, td.decl_line);
             write_pod_(os, td.decl_col);
@@ -252,8 +260,10 @@ namespace parus::cimport {
         bool read_typedef_(std::istream& is, ImportedTypedefDecl& td) {
             return read_string_(is, td.name) &&
                    read_string_(is, td.type_repr) &&
+                   read_string_(is, td.type_semantic) &&
                    read_bool_(is, td.is_transparent) &&
                    read_string_(is, td.transparent_type_repr) &&
+                   read_string_(is, td.transparent_type_semantic) &&
                    read_string_(is, td.decl_file) &&
                    read_pod_(is, td.decl_line) &&
                    read_pod_(is, td.decl_col);
@@ -262,6 +272,7 @@ namespace parus::cimport {
         void write_struct_field_(std::ostream& os, const ImportedStructFieldDecl& field) {
             write_string_(os, field.name);
             write_string_(os, field.type_repr);
+            write_string_(os, field.type_semantic);
             write_string_(os, field.c_type);
             write_pod_(os, field.offset_bytes);
             write_bool_(os, field.from_flatten);
@@ -276,6 +287,7 @@ namespace parus::cimport {
         bool read_struct_field_(std::istream& is, ImportedStructFieldDecl& field) {
             return read_string_(is, field.name) &&
                    read_string_(is, field.type_repr) &&
+                   read_string_(is, field.type_semantic) &&
                    read_string_(is, field.c_type) &&
                    read_pod_(is, field.offset_bytes) &&
                    read_bool_(is, field.from_flatten) &&
@@ -358,6 +370,7 @@ namespace parus::cimport {
             write_string_(os, mc.promote_callee_name);
             write_string_(os, mc.promote_callee_link_name);
             write_string_(os, mc.promote_type_repr);
+            write_string_(os, mc.promote_type_semantic);
             write_string_(os, mc.promote_c_return_type);
             write_vector_(os, mc.params, [&](const std::string& s) { write_string_(os, s); });
             write_vector_(os, mc.promote_param_type_reprs, [&](const std::string& s) { write_string_(os, s); });
@@ -384,6 +397,7 @@ namespace parus::cimport {
                    read_string_(is, mc.promote_callee_name) &&
                    read_string_(is, mc.promote_callee_link_name) &&
                    read_string_(is, mc.promote_type_repr) &&
+                   read_string_(is, mc.promote_type_semantic) &&
                    read_string_(is, mc.promote_c_return_type) &&
                    read_vector_(is, mc.params, [&](std::string& s) { return read_string_(is, s); }) &&
                    read_vector_(is, mc.promote_param_type_reprs, [&](std::string& s) { return read_string_(is, s); }) &&
@@ -423,6 +437,8 @@ namespace parus::cimport {
             write_pod_(os, cov.skipped_function_macros);
             write_vector_(os, cov.skipped_reasons, [&](const std::string& s) { write_string_(os, s); });
             write_vector_(os, cov.skipped_reason_codes, [&](const std::string& s) { write_string_(os, s); });
+            write_vector_(os, cov.dropped_decl_reasons, [&](const std::string& s) { write_string_(os, s); });
+            write_vector_(os, cov.dropped_decl_reason_codes, [&](const std::string& s) { write_string_(os, s); });
         }
 
         bool read_coverage_(std::istream& is, ImportCoverageReport& cov) {
@@ -438,7 +454,9 @@ namespace parus::cimport {
                    read_pod_(is, cov.promoted_function_macros) &&
                    read_pod_(is, cov.skipped_function_macros) &&
                    read_vector_(is, cov.skipped_reasons, [&](std::string& s) { return read_string_(is, s); }) &&
-                   read_vector_(is, cov.skipped_reason_codes, [&](std::string& s) { return read_string_(is, s); });
+                   read_vector_(is, cov.skipped_reason_codes, [&](std::string& s) { return read_string_(is, s); }) &&
+                   read_vector_(is, cov.dropped_decl_reasons, [&](std::string& s) { return read_string_(is, s); }) &&
+                   read_vector_(is, cov.dropped_decl_reason_codes, [&](std::string& s) { return read_string_(is, s); });
         }
 
         bool write_manifest_(const std::filesystem::path& path,

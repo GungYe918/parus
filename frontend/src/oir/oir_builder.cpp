@@ -471,10 +471,25 @@ namespace parus::oir {
                 return r;
             }
 
-            ValueId emit_call(TypeId ty, ValueId callee, std::vector<ValueId> args, FuncId direct_callee = kInvalidId) {
+            ValueId emit_call(TypeId ty,
+                              ValueId callee,
+                              std::vector<ValueId> args,
+                              FuncId direct_callee = kInvalidId,
+                              bool call_is_c_abi = false,
+                              bool call_is_c_variadic = false,
+                              CCallConv call_c_callconv = CCallConv::Default,
+                              uint32_t call_c_fixed_param_count = 0) {
                 ValueId r = make_value(ty, Effect::Call);
                 Inst inst{};
-                inst.data = InstCall{callee, std::move(args), direct_callee};
+                inst.data = InstCall{
+                    callee,
+                    std::move(args),
+                    direct_callee,
+                    call_is_c_abi,
+                    call_is_c_variadic,
+                    call_c_callconv,
+                    call_c_fixed_param_count
+                };
                 inst.eff = Effect::Call;
                 inst.result = r;
                 emit_inst(inst);
@@ -1316,6 +1331,20 @@ namespace parus::oir {
             }
         }
 
+        CCallConv map_c_callconv_(parus::ty::CCallConv cc) {
+            switch (cc) {
+                case parus::ty::CCallConv::kCdecl: return CCallConv::Cdecl;
+                case parus::ty::CCallConv::kStdCall: return CCallConv::StdCall;
+                case parus::ty::CCallConv::kFastCall: return CCallConv::FastCall;
+                case parus::ty::CCallConv::kVectorCall: return CCallConv::VectorCall;
+                case parus::ty::CCallConv::kWin64: return CCallConv::Win64;
+                case parus::ty::CCallConv::kSysV: return CCallConv::SysV;
+                case parus::ty::CCallConv::kDefault:
+                default:
+                    return CCallConv::Default;
+            }
+        }
+
         FieldLayout map_field_layout_(parus::sir::FieldLayout layout) {
             switch (layout) {
                 case parus::sir::FieldLayout::kC:
@@ -1917,12 +1946,30 @@ namespace parus::oir {
                         (types != nullptr)
                             ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
                             : kInvalidId;
-                    (void)emit_call(unit_ty, callee, std::move(args), direct_callee);
+                    (void)emit_call(
+                        unit_ty,
+                        callee,
+                        std::move(args),
+                        direct_callee,
+                        v.call_is_c_abi,
+                        v.call_is_c_variadic,
+                        map_c_callconv_(v.call_c_callconv),
+                        v.call_c_fixed_param_count
+                    );
                     if (ctor_tmp_slot != kInvalidId) return ctor_tmp_slot;
                     return emit_const_null(v.type);
                 }
 
-                return emit_call(v.type, callee, std::move(args), direct_callee);
+                return emit_call(
+                    v.type,
+                    callee,
+                    std::move(args),
+                    direct_callee,
+                    v.call_is_c_abi,
+                    v.call_is_c_variadic,
+                    map_c_callconv_(v.call_c_callconv),
+                    v.call_c_fixed_param_count
+                );
             }
 
             case parus::sir::ValueKind::kEnumCtor: {

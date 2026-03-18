@@ -2478,10 +2478,11 @@ namespace {
 
     parus::ty::TypeId parse_type_repr_for_lint_(
         std::string_view type_repr,
+        std::string_view type_semantic,
         std::string_view inst_payload,
         parus::ty::TypePool& types
     ) {
-        return parus::cimport::parse_external_type_repr(type_repr, inst_payload, types);
+        return parus::cimport::parse_external_type_repr(type_repr, type_semantic, inst_payload, types);
     }
 
     bool load_export_index_for_lint_(
@@ -2519,8 +2520,8 @@ namespace {
         }
 
         const auto version = as_i64_(obj_get_(root, "version"));
-        if (!version.has_value() || (*version != 4 && *version != 5)) {
-            return fail("unsupported export-index version (expected v4 or v5): " + index_path.string());
+        if (!version.has_value() || (*version != 4 && *version != 5 && *version != 6)) {
+            return fail("unsupported export-index version (expected v4, v5, or v6): " + index_path.string());
         }
 
         const auto* exports_node = obj_get_(root, "exports");
@@ -2537,6 +2538,7 @@ namespace {
             const auto module_head_s = as_string_(obj_get_(ev, "module_head"));
             const auto decl_dir_s = as_string_(obj_get_(ev, "decl_dir"));
             const auto type_repr_s = as_string_(obj_get_(ev, "type_repr"));
+            const auto type_semantic_s = as_string_(obj_get_(ev, "type_semantic"));
             const auto inst_payload_s = as_string_(obj_get_(ev, "inst_payload"));
             const auto is_export_s = as_bool_(obj_get_(ev, "is_export"));
             const auto* decl_span_node = obj_get_(ev, "decl_span");
@@ -2578,6 +2580,9 @@ namespace {
             ex.path = lookup_path;
             ex.link_name = std::string(*link_name_s);
             ex.declared_type_repr = std::string(*type_repr_s);
+            if (type_semantic_s.has_value()) {
+                ex.declared_type_semantic = std::string(*type_semantic_s);
+            }
             ex.decl_bundle_name = bundle_name;
             ex.module_head = std::move(module_head);
             ex.decl_source_dir_norm = std::move(decl_source_dir);
@@ -3049,6 +3054,7 @@ namespace {
                             auto add_external = [&](parus::sema::SymbolKind kind,
                                                     std::string path,
                                                     std::string type_repr,
+                                                    std::string type_semantic,
                                                     std::string link_name,
                                                     std::string inst_payload) {
                                 if (path.empty() || type_repr.empty()) return;
@@ -3059,6 +3065,7 @@ namespace {
                                 ex.path = std::move(path);
                                 ex.link_name = std::move(link_name);
                                 ex.declared_type_repr = std::move(type_repr);
+                                ex.declared_type_semantic = std::move(type_semantic);
                                 ex.declared_type = parus::ty::kInvalidType;
                                 ex.decl_span = parus::Span{0, 0, 0};
                                 ex.decl_bundle_name = "__cimport__";
@@ -3136,6 +3143,40 @@ namespace {
                                 d.add_arg(msg);
                                 bag.add(std::move(d));
                             }
+                            if (!imported.coverage.dropped_decl_reasons.empty() ||
+                                !imported.coverage.dropped_decl_reason_codes.empty()) {
+                                std::string msg = "some C declarations were dropped during import: ";
+                                constexpr size_t kPreview = 3;
+                                size_t printed = 0;
+                                for (size_t i = 0;
+                                     i < imported.coverage.dropped_decl_reasons.size() && printed < kPreview;
+                                     ++i, ++printed) {
+                                    if (printed) msg += "; ";
+                                    msg += imported.coverage.dropped_decl_reasons[i];
+                                }
+                                if (printed == 0) {
+                                    for (size_t i = 0;
+                                         i < imported.coverage.dropped_decl_reason_codes.size() && printed < kPreview;
+                                         ++i, ++printed) {
+                                        if (printed) msg += "; ";
+                                        msg += imported.coverage.dropped_decl_reason_codes[i];
+                                    }
+                                }
+                                const size_t dropped_n = std::max(
+                                    imported.coverage.dropped_decl_reasons.size(),
+                                    imported.coverage.dropped_decl_reason_codes.size()
+                                );
+                                if (dropped_n > printed) {
+                                    msg += "; ...";
+                                }
+                                parus::diag::Diagnostic d(
+                                    parus::diag::Severity::kWarning,
+                                    parus::diag::Code::kTypeErrorGeneric,
+                                    spec.span
+                                );
+                                d.add_arg(msg);
+                                bag.add(std::move(d));
+                            }
 
                             std::unordered_set<std::string> known_type_names{};
                             for (const auto& un : imported.unions) {
@@ -3161,6 +3202,7 @@ namespace {
                                     parus::sema::SymbolKind::kFn,
                                     path,
                                     parus::cimport::rewrite_cimport_type_with_alias(fn.type_repr, spec.alias, known_type_names),
+                                    parus::cimport::rewrite_cimport_type_semantic_with_alias(fn.type_semantic, spec.alias, known_type_names),
                                     fn.link_name,
                                     parus::cimport::make_c_import_payload(spec.header, spec.alias, fn)
                                 );
@@ -3174,6 +3216,7 @@ namespace {
                                     parus::sema::SymbolKind::kVar,
                                     path,
                                     parus::cimport::rewrite_cimport_type_with_alias(gv.type_repr, spec.alias, known_type_names),
+                                    parus::cimport::rewrite_cimport_type_semantic_with_alias(gv.type_semantic, spec.alias, known_type_names),
                                     gv.link_name.empty() ? gv.name : gv.link_name,
                                     parus::cimport::make_c_import_global_payload(spec.header, gv)
                                 );
@@ -3188,6 +3231,7 @@ namespace {
                                     type_path,
                                     type_path,
                                     {},
+                                    {},
                                     parus::cimport::make_c_import_union_payload(spec.header, spec.alias, known_type_names, un)
                                 );
                                 add_decl_loc(type_path, un.decl_file, un.decl_line, un.decl_col);
@@ -3201,6 +3245,7 @@ namespace {
                                     type_path,
                                     type_path,
                                     {},
+                                    {},
                                     parus::cimport::make_c_import_struct_payload(spec.header, spec.alias, known_type_names, st)
                                 );
                                 add_decl_loc(type_path, st.decl_file, st.decl_line, st.decl_col);
@@ -3213,6 +3258,7 @@ namespace {
                                     parus::sema::SymbolKind::kType,
                                     type_path,
                                     parus::cimport::rewrite_cimport_type_with_alias(td.type_repr, spec.alias, known_type_names),
+                                    parus::cimport::rewrite_cimport_type_semantic_with_alias(td.type_semantic, spec.alias, known_type_names),
                                     {},
                                     parus::cimport::make_c_import_typedef_payload(spec.header, spec.alias, known_type_names, td)
                                 );
@@ -3222,7 +3268,7 @@ namespace {
                             for (const auto& en : imported.enums) {
                                 if (en.name.empty()) continue;
                                 const std::string enum_path = spec.alias + "::" + en.name;
-                                add_external(parus::sema::SymbolKind::kType, enum_path, enum_path, {}, {});
+                                add_external(parus::sema::SymbolKind::kType, enum_path, enum_path, {}, {}, {});
                                 add_decl_loc(enum_path, en.decl_file, en.decl_line, en.decl_col);
 
                                 const std::string const_ty = parus::cimport::rewrite_cimport_type_with_alias(
@@ -3239,6 +3285,7 @@ namespace {
                                         parus::sema::SymbolKind::kVar,
                                         cpath,
                                         const_ty,
+                                        {},
                                         {},
                                         parus::cimport::make_c_import_const_payload("int", cst.value_text)
                                     );
@@ -3258,6 +3305,7 @@ namespace {
                                                 parus::sema::SymbolKind::kFn,
                                                 mpath,
                                                 parus::cimport::rewrite_cimport_type_with_alias(callee->type_repr, spec.alias, known_type_names),
+                                                parus::cimport::rewrite_cimport_type_semantic_with_alias(callee->type_semantic, spec.alias, known_type_names),
                                                 callee->link_name,
                                                 parus::cimport::make_c_import_payload(spec.header, spec.alias, *callee)
                                             );
@@ -3269,10 +3317,11 @@ namespace {
                                         add_external(
                                             parus::sema::SymbolKind::kFn,
                                             mpath,
-                                            parus::cimport::rewrite_cimport_type_with_alias(mc.promote_type_repr, spec.alias, known_type_names),
-                                            parus::cimport::make_c_import_wrapper_symbol(spec.header, spec.alias, mc.name),
-                                            parus::cimport::make_c_import_wrapper_payload(spec.header, spec.alias, mc)
-                                        );
+                                                parus::cimport::rewrite_cimport_type_with_alias(mc.promote_type_repr, spec.alias, known_type_names),
+                                                parus::cimport::rewrite_cimport_type_semantic_with_alias(mc.promote_type_semantic, spec.alias, known_type_names),
+                                                parus::cimport::make_c_import_wrapper_symbol(spec.header, spec.alias, mc.name),
+                                                parus::cimport::make_c_import_wrapper_payload(spec.header, spec.alias, mc)
+                                            );
                                         add_decl_loc(mpath, mc.decl_file, mc.decl_line, mc.decl_col);
                                     }
                                     continue;
@@ -3310,6 +3359,7 @@ namespace {
                                     parus::sema::SymbolKind::kVar,
                                     cpath,
                                     ty,
+                                    {},
                                     {},
                                     parus::cimport::make_c_import_const_payload(payload_kind, mc.value_text)
                                 );
@@ -3370,11 +3420,12 @@ namespace {
                     for (auto& ex : popt.name_resolve.external_exports) {
                         if (ex.declared_type == parus::ty::kInvalidType) {
                             if (!ex.declared_type_repr.empty()) {
-                                ex.declared_type = parse_type_repr_for_lint_(
-                                    ex.declared_type_repr,
-                                    ex.inst_payload,
-                                    types
-                                );
+                                    ex.declared_type = parse_type_repr_for_lint_(
+                                        ex.declared_type_repr,
+                                        ex.declared_type_semantic,
+                                        ex.inst_payload,
+                                        types
+                                    );
                             }
                             if (ex.declared_type == parus::ty::kInvalidType) {
                                 if (ex.kind == parus::sema::SymbolKind::kFn) {

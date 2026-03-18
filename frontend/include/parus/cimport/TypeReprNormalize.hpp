@@ -14,9 +14,17 @@ namespace parus::cimport {
 
     ty::TypeId parse_external_type_repr(
         std::string_view type_repr,
+        std::string_view type_semantic,
         std::string_view inst_payload,
         ty::TypePool& types
     );
 
-} // namespace parus::cimport
+    inline ty::TypeId parse_external_type_repr(
+        std::string_view type_repr,
+        std::string_view inst_payload,
+        ty::TypePool& types
+    ) {
+        return parse_external_type_repr(type_repr, {}, inst_payload, types);
+    }
 
+} // namespace parus::cimport

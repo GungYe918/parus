@@ -152,6 +152,10 @@ namespace parus::sir {
         // direct callee symbol (for kCall)
         SymbolId callee_sym = k_invalid_symbol;
         uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
+        bool call_is_c_abi = false;
+        bool call_is_c_variadic = false;
+        ty::CCallConv call_c_callconv = ty::CCallConv::kDefault;
+        uint32_t call_c_fixed_param_count = 0;
         bool call_is_ctor = false; // true when this call is lowered from `Class(...)` ctor expression
         TypeId ctor_owner_type = k_invalid_type; // owner class type for ctor call, invalid when call_is_ctor=false
         bool call_is_enum_ctor = false; // true when lowered from `Enum::Variant(...)`

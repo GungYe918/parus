@@ -87,6 +87,20 @@ namespace parus::sir::detail {
             }
             return out;
         }
+
+        CCallConv lower_ty_callconv_(parus::ty::CCallConv cc) {
+            switch (cc) {
+                case parus::ty::CCallConv::kCdecl: return CCallConv::kCdecl;
+                case parus::ty::CCallConv::kStdCall: return CCallConv::kStdCall;
+                case parus::ty::CCallConv::kFastCall: return CCallConv::kFastCall;
+                case parus::ty::CCallConv::kVectorCall: return CCallConv::kVectorCall;
+                case parus::ty::CCallConv::kWin64: return CCallConv::kWin64;
+                case parus::ty::CCallConv::kSysV: return CCallConv::kSysV;
+                case parus::ty::CCallConv::kDefault:
+                default:
+                    return CCallConv::kDefault;
+            }
+        }
     } // namespace
 
     FnMode lower_fn_mode(parus::ast::FnMode m) {
@@ -115,6 +129,7 @@ namespace parus::sir::detail {
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
+        const parus::ty::TypePool& types,
         parus::ast::StmtId sid,
         bool is_acts_member,
         ActsId owner_acts,
@@ -157,8 +172,12 @@ namespace parus::sir::detail {
         f.is_extern = s.is_extern;
         f.fn_mode = lower_fn_mode(s.fn_mode);
         f.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
-        f.c_callconv = CCallConv::kDefault;
-        f.is_c_variadic = s.fn_is_c_variadic;
+        f.c_callconv = (s.type != parus::ty::kInvalidType && types.is_fn(s.type))
+            ? lower_ty_callconv_(types.fn_callconv(s.type))
+            : CCallConv::kDefault;
+        f.is_c_variadic = (s.type != parus::ty::kInvalidType && types.is_fn(s.type))
+            ? types.fn_is_c_variadic(s.type)
+            : s.fn_is_c_variadic;
         f.c_fixed_param_count = s.param_count;
 
         f.is_pure = s.is_pure;
@@ -553,7 +572,7 @@ namespace parus::sir {
                 return k_invalid_func;
             }
             return lower_func_decl_(
-                m, ast, sym, nres, tyck, fn_sid, is_acts_member, owner_acts,
+                m, ast, sym, nres, tyck, types, fn_sid, is_acts_member, owner_acts,
                 is_actor_member, is_actor_init, actor_owner_type);
         };
 
@@ -863,11 +882,16 @@ namespace parus::sir {
 
             const auto& sig = types.get(ss.declared_type);
             f.c_fixed_param_count = sig.param_count;
+            const bool type_is_c_abi = types.fn_is_c_abi(ss.declared_type);
             const auto parsed = parse_cimport_payload_(ss.external_payload);
-            if (parsed.is_c_abi) {
+            if (type_is_c_abi || parsed.is_c_abi) {
                 f.abi = FuncAbi::kC;
-                f.c_callconv = parsed.callconv;
-                f.is_c_variadic = parsed.is_variadic;
+                f.c_callconv = type_is_c_abi
+                    ? lower_ty_callconv_(types.fn_callconv(ss.declared_type))
+                    : parsed.callconv;
+                f.is_c_variadic = type_is_c_abi
+                    ? types.fn_is_c_variadic(ss.declared_type)
+                    : parsed.is_variadic;
             }
             f.param_begin = static_cast<uint32_t>(m.params.size());
             f.param_count = 0;

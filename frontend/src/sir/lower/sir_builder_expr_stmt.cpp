@@ -337,6 +337,18 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kCall: {
                 v.kind = e.call_from_pipe ? ValueKind::kPipeCall : ValueKind::kCall;
+                if ((size_t)eid < tyck.expr_call_is_c_abi.size()) {
+                    v.call_is_c_abi = (tyck.expr_call_is_c_abi[eid] != 0u);
+                }
+                if ((size_t)eid < tyck.expr_call_is_c_variadic.size()) {
+                    v.call_is_c_variadic = (tyck.expr_call_is_c_variadic[eid] != 0u);
+                }
+                if ((size_t)eid < tyck.expr_call_c_callconv.size()) {
+                    v.call_c_callconv = tyck.expr_call_c_callconv[eid];
+                }
+                if ((size_t)eid < tyck.expr_call_c_fixed_param_count.size()) {
+                    v.call_c_fixed_param_count = tyck.expr_call_c_fixed_param_count[eid];
+                }
                 if ((size_t)eid < tyck.expr_enum_ctor_owner_type.size()) {
                     const auto owner_ty = tyck.expr_enum_ctor_owner_type[eid];
                     if (owner_ty != parus::ty::kInvalidType) {

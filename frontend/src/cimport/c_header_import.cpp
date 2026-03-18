@@ -1,6 +1,7 @@
 #include <parus/cimport/CHeaderImport.hpp>
 #include <parus/cimport/CImportPayload.hpp>
 #include <parus/cimport/LibClangProbe.hpp>
+#include <parus/cimport/TypeSemantic.hpp>
 #include <parus/os/File.hpp>
 
 #include <algorithm>
@@ -1263,6 +1264,9 @@ namespace parus::cimport {
         static bool map_c_type_to_parus_(
             CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth = 0);
 
+        static bool build_c_type_semantic_(
+            CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth = 0);
+
         static bool map_c_fn_type_to_parus_(
             CXType fn_ty, std::string& out, ImportCollectCtx* ctx, uint32_t depth) {
             if (depth > 8) return false;
@@ -1274,7 +1278,6 @@ namespace parus::cimport {
 
             const int arg_n = clang_getNumArgTypes(ct);
             if (arg_n < 0) return false;
-            if (clang_isFunctionTypeVariadic(ct) != 0) return false;
 
             std::string ret_repr{};
             if (!map_c_type_to_parus_(clang_getResultType(ct), ret_repr, ctx, depth + 1)) {
@@ -1429,10 +1432,6 @@ namespace parus::cimport {
             }
         }
 
-        static bool map_c_type_to_parus_(CXType t, std::string& out, uint32_t depth = 0) {
-            return map_c_type_to_parus_(t, out, nullptr, depth);
-        }
-
         static std::string format_family_key_(std::string_view name) {
             if (name.size() >= 2 && name.front() == 'v') {
                 return std::string(name.substr(1));
@@ -1458,6 +1457,133 @@ namespace parus::cimport {
                 default:
                     return CCallConvKind::kDefault;
             }
+        }
+
+        static ty::CCallConv map_ty_callconv_(CXCallingConv cc) {
+            switch (map_callconv_kind_(cc)) {
+                case CCallConvKind::kCdecl: return ty::CCallConv::kCdecl;
+                case CCallConvKind::kStdCall: return ty::CCallConv::kStdCall;
+                case CCallConvKind::kFastCall: return ty::CCallConv::kFastCall;
+                case CCallConvKind::kVectorCall: return ty::CCallConv::kVectorCall;
+                case CCallConvKind::kWin64: return ty::CCallConv::kWin64;
+                case CCallConvKind::kSysV: return ty::CCallConv::kSysV;
+                case CCallConvKind::kDefault:
+                default:
+                    return ty::CCallConv::kDefault;
+            }
+        }
+
+        static void record_decl_drop_(
+            ImportCollectCtx& ctx,
+            ImportedDeclDropKind kind,
+            std::string text
+        );
+
+        static bool build_c_type_semantic_(
+            CXType t, std::string& out, ImportCollectCtx* ctx, uint32_t depth) {
+            (void)ctx;
+            if (depth > 8) return false;
+
+            TypeSemanticNode node{};
+            auto fill = [&](auto&& self, CXType ty, TypeSemanticNode& dst, uint32_t d) -> bool {
+                if (d > 8) return false;
+                if (is_va_list_type_(ty)) {
+                    dst = {};
+                    dst.kind = TypeSemanticKind::kNamed;
+                    dst.name = "core::ext::vaList";
+                    return true;
+                }
+
+                const CXType ct = clang_getCanonicalType(ty);
+                auto set_builtin = [&](std::string_view name) {
+                    dst = {};
+                    dst.kind = TypeSemanticKind::kBuiltin;
+                    dst.name = std::string(name);
+                    return true;
+                };
+
+                switch (ct.kind) {
+                    case CXType_Void: return set_builtin("core::ext::c_void");
+                    case CXType_Bool: return set_builtin("bool");
+                    case CXType_Char_U:
+                    case CXType_UChar: return set_builtin("core::ext::c_uchar");
+                    case CXType_Char_S:
+                    case CXType_SChar: return set_builtin("core::ext::c_schar");
+                    case CXType_UShort: return set_builtin("core::ext::c_ushort");
+                    case CXType_UInt: return set_builtin("core::ext::c_uint");
+                    case CXType_ULong: return set_builtin("core::ext::c_ulong");
+                    case CXType_ULongLong: return set_builtin("core::ext::c_ulonglong");
+                    case CXType_UInt128: return set_builtin("u128");
+                    case CXType_Short: return set_builtin("core::ext::c_short");
+                    case CXType_Int: return set_builtin("core::ext::c_int");
+                    case CXType_Long: return set_builtin("core::ext::c_long");
+                    case CXType_LongLong: return set_builtin("core::ext::c_longlong");
+                    case CXType_Int128: return set_builtin("i128");
+                    case CXType_Float: return set_builtin("core::ext::c_float");
+                    case CXType_Double:
+                    case CXType_LongDouble: return set_builtin("core::ext::c_double");
+                    case CXType_Enum: {
+                        const CXCursor decl = clang_getTypeDeclaration(ct);
+                        std::string name = to_std_string_(clang_getCursorSpelling(decl));
+                        if (name.empty() && ctx != nullptr && !clang_Cursor_isNull(decl)) {
+                            name = ensure_enum_name_(decl, *ctx);
+                        }
+                        if (name.empty()) return false;
+                        dst = {};
+                        dst.kind = TypeSemanticKind::kNamed;
+                        dst.name = std::move(name);
+                        return true;
+                    }
+                    case CXType_Pointer: {
+                        const CXType elem = clang_getPointeeType(ct);
+                        if (elem.kind == CXType_Invalid) return false;
+                        dst = {};
+                        dst.kind = TypeSemanticKind::kPtr;
+                        dst.ptr_is_mut = (clang_isConstQualifiedType(elem) == 0);
+                        dst.children.resize(1);
+                        return self(self, elem, dst.children[0], d + 1);
+                    }
+                    case CXType_FunctionProto:
+                    case CXType_FunctionNoProto: {
+                        const int arg_n = clang_getNumArgTypes(ct);
+                        if (arg_n < 0) return false;
+                        dst = {};
+                        dst.kind = TypeSemanticKind::kFn;
+                        dst.fn_is_c_abi = true;
+                        dst.fn_is_variadic = (clang_isFunctionTypeVariadic(ct) != 0);
+                        dst.fn_callconv = map_ty_callconv_(clang_getFunctionTypeCallingConv(ct));
+                        dst.children.resize(static_cast<size_t>(arg_n) + 1u);
+                        if (!self(self, clang_getResultType(ct), dst.children[0], d + 1)) return false;
+                        for (int i = 0; i < arg_n; ++i) {
+                            if (!self(self, clang_getArgType(ct, i), dst.children[static_cast<size_t>(i) + 1u], d + 1)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    case CXType_Record:
+                    case CXType_Elaborated: {
+                        const CXCursor decl = clang_getTypeDeclaration(ct);
+                        if (clang_Cursor_isNull(decl)) return false;
+                        std::string name = to_std_string_(clang_getCursorSpelling(decl));
+                        if (name.empty() && ctx != nullptr) {
+                            name = ensure_record_name_(decl, *ctx);
+                        }
+                        if (name.empty()) return false;
+                        dst = {};
+                        dst.kind = TypeSemanticKind::kNamed;
+                        dst.name = std::move(name);
+                        return true;
+                    }
+                    default:
+                        break;
+                }
+                return false;
+            };
+
+            if (!fill(fill, t, node, depth)) return false;
+            out = serialize_type_semantic(node);
+            return true;
         }
 
         static bool is_signed_integer_type_(CXType ty) {
@@ -1549,9 +1675,47 @@ namespace parus::cimport {
             std::vector<ImportedEnumDecl>* out_enums = nullptr;
             std::vector<ImportedTypedefDecl>* out_typedefs = nullptr;
             std::vector<ImportedMacroDecl>* out_macros = nullptr;
+            uint32_t total_function_decls = 0;
+            uint32_t total_global_decls = 0;
+            uint32_t total_type_decls = 0;
+            std::vector<std::string> dropped_decl_reasons{};
+            std::vector<std::string> dropped_decl_reason_codes{};
+            std::unordered_set<std::string> dropped_record_names{};
             std::string hard_error_text{};
             bool had_hard_error = false;
         };
+
+        static void record_decl_drop_(
+            ImportCollectCtx& ctx,
+            ImportedDeclDropKind kind,
+            std::string text
+        ) {
+            if (kind == ImportedDeclDropKind::kNone || text.empty()) return;
+            ctx.dropped_decl_reasons.push_back(std::move(text));
+            switch (kind) {
+                case ImportedDeclDropKind::kUnsupportedFunctionType:
+                    ctx.dropped_decl_reason_codes.push_back("unsupported_function_type");
+                    break;
+                case ImportedDeclDropKind::kUnsupportedFieldType:
+                    ctx.dropped_decl_reason_codes.push_back("unsupported_field_type");
+                    break;
+                case ImportedDeclDropKind::kUnsupportedGlobalType:
+                    ctx.dropped_decl_reason_codes.push_back("unsupported_global_type");
+                    break;
+                case ImportedDeclDropKind::kUnsupportedTypedefType:
+                    ctx.dropped_decl_reason_codes.push_back("unsupported_typedef_type");
+                    break;
+                case ImportedDeclDropKind::kTransparentTargetUnresolved:
+                    ctx.dropped_decl_reason_codes.push_back("transparent_target_unresolved");
+                    break;
+                case ImportedDeclDropKind::kIncompatibleAliasRewrite:
+                    ctx.dropped_decl_reason_codes.push_back("incompatible_alias_rewrite");
+                    break;
+                case ImportedDeclDropKind::kNone:
+                default:
+                    break;
+            }
+        }
 
         static std::string ensure_enum_name_(CXCursor decl, ImportCollectCtx& ctx) {
             const std::string key = cursor_identity_key_(decl);
@@ -1574,6 +1738,7 @@ namespace parus::cimport {
         static bool collect_union_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_UnionDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
+            ++ctx.total_type_decls;
 
             std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) name = ensure_record_name_(c, ctx);
@@ -1588,11 +1753,22 @@ namespace parus::cimport {
             const long long al = clang_Type_getAlignOf(union_ty);
             if (sz > 0) u.size_bytes = static_cast<uint32_t>(sz);
             if (al > 0) u.align_bytes = static_cast<uint32_t>(al);
+            bool drop_union = false;
 
+            struct UnionVisitBundle {
+                ImportedUnionDecl* out = nullptr;
+                ImportCollectCtx* ctx = nullptr;
+                bool* drop_union = nullptr;
+            } union_bundle{&u, &ctx, &drop_union};
             clang_visitChildren(
                 c,
                 [](CXCursor child, CXCursor, CXClientData data) -> CXChildVisitResult {
-                    auto* out = static_cast<ImportedUnionDecl*>(data);
+                    auto* bundle = static_cast<UnionVisitBundle*>(data);
+                    if (bundle == nullptr || bundle->out == nullptr || bundle->ctx == nullptr) {
+                        return CXChildVisit_Continue;
+                    }
+                    auto* out = bundle->out;
+                    auto* ctx = bundle->ctx;
                     if (out == nullptr) return CXChildVisit_Continue;
                     if (clang_getCursorKind(child) != CXCursor_FieldDecl) {
                         return CXChildVisit_Continue;
@@ -1602,19 +1778,36 @@ namespace parus::cimport {
                     if (field_name.empty()) return CXChildVisit_Continue;
 
                     std::string field_ty{};
-                    if (!map_c_type_to_parus_(clang_getCursorType(child), field_ty)) {
-                        return CXChildVisit_Continue;
+                    std::string field_semantic{};
+                    if (!map_c_type_to_parus_(clang_getCursorType(child), field_ty, ctx) ||
+                        !build_c_type_semantic_(clang_getCursorType(child), field_semantic, ctx)) {
+                        out->fields.clear();
+                        if (bundle->drop_union != nullptr) {
+                            *bundle->drop_union = true;
+                        }
+                        ctx->dropped_record_names.insert(out->name);
+                        record_decl_drop_(
+                            *ctx,
+                            ImportedDeclDropKind::kUnsupportedFieldType,
+                            "dropped union '" + out->name + "' due to unsupported field type '" + field_name + "'"
+                        );
+                        return CXChildVisit_Break;
                     }
 
                     ImportedUnionFieldDecl fd{};
                     fd.name = field_name;
                     fd.type_repr = std::move(field_ty);
+                    fd.type_semantic = std::move(field_semantic);
                     out->fields.push_back(std::move(fd));
                     return CXChildVisit_Continue;
                 },
-                &u
+                &union_bundle
             );
 
+            if (drop_union) return true;
+            if (u.fields.empty()) {
+                return true;
+            }
             if (ctx.out_unions != nullptr) {
                 ctx.out_unions->push_back(std::move(u));
             }
@@ -1624,6 +1817,7 @@ namespace parus::cimport {
         static bool collect_struct_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_StructDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
+            ++ctx.total_type_decls;
 
             std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) name = ensure_record_name_(c, ctx);
@@ -1640,6 +1834,7 @@ namespace parus::cimport {
             if (sz > 0) s.size_bytes = static_cast<uint32_t>(sz);
             if (al > 0) s.align_bytes = static_cast<uint32_t>(al);
             s.is_packed = false;
+            bool drop_struct = false;
 
             auto add_struct_field = [&](ImportedStructFieldDecl one, std::string_view source_path) -> bool {
                 for (const auto& existing : s.fields) {
@@ -1663,7 +1858,7 @@ namespace parus::cimport {
                                                 uint64_t base_offset_bits,
                                                 bool union_origin,
                                                 std::string_view trace_path) -> bool {
-                if (ctx.had_hard_error) return false;
+                if (ctx.had_hard_error || drop_struct) return false;
                 const CXCursorKind record_kind = clang_getCursorKind(record_decl);
                 const bool nested_union_origin = union_origin || (record_kind == CXCursor_UnionDecl);
                 std::function<CXChildVisitResult(CXCursor)> visit_one =
@@ -1704,13 +1899,23 @@ namespace parus::cimport {
                         }
 
                         std::string field_ty{};
-                        if (!map_c_type_to_parus_(child_ty, field_ty, &ctx)) {
-                            return CXChildVisit_Continue;
+                        std::string field_semantic{};
+                        if (!map_c_type_to_parus_(child_ty, field_ty, &ctx) ||
+                            !build_c_type_semantic_(child_ty, field_semantic, &ctx)) {
+                            drop_struct = true;
+                            ctx.dropped_record_names.insert(s.name);
+                            record_decl_drop_(
+                                ctx,
+                                ImportedDeclDropKind::kUnsupportedFieldType,
+                                "dropped struct '" + s.name + "' due to unsupported field type '" + field_name + "'"
+                            );
+                            return CXChildVisit_Break;
                         }
 
                         ImportedStructFieldDecl fd{};
                         fd.name = field_name;
                         fd.type_repr = std::move(field_ty);
+                        fd.type_semantic = std::move(field_semantic);
                         fd.c_type = to_std_string_(clang_getTypeSpelling(child_ty));
                         fd.offset_bytes = static_cast<uint32_t>(abs_off_bits / 8u);
                         fd.from_flatten = !std::string(trace_path).empty() && std::string(trace_path) != s.name;
@@ -1774,11 +1979,11 @@ namespace parus::cimport {
                     },
                     &visit_one
                 );
-                return !ctx.had_hard_error;
+                return !ctx.had_hard_error && !drop_struct;
             };
 
             (void)collect_fields_recursive(collect_fields_recursive, c, 0u, false, s.name);
-            if (ctx.had_hard_error) return true;
+            if (ctx.had_hard_error || drop_struct) return true;
 
             if (ctx.out_structs != nullptr) {
                 ctx.out_structs->push_back(std::move(s));
@@ -1789,6 +1994,7 @@ namespace parus::cimport {
         static bool collect_enum_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_EnumDecl) return false;
             if (clang_isCursorDefinition(c) == 0) return true;
+            ++ctx.total_type_decls;
 
             std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) name = ensure_enum_name_(c, ctx);
@@ -1831,6 +2037,7 @@ namespace parus::cimport {
 
         static bool collect_typedef_decl_(CXCursor c, ImportCollectCtx& ctx) {
             if (clang_getCursorKind(c) != CXCursor_TypedefDecl) return false;
+            ++ctx.total_type_decls;
 
             const std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) return true;
@@ -1839,22 +2046,37 @@ namespace parus::cimport {
             const CXType under_ty = clang_getTypedefDeclUnderlyingType(c);
 
             std::string type_repr{};
-            if (!map_c_type_to_parus_(under_ty, type_repr, &ctx)) {
+            std::string type_semantic{};
+            if (!map_c_type_to_parus_(under_ty, type_repr, &ctx) ||
+                !build_c_type_semantic_(under_ty, type_semantic, &ctx)) {
+                record_decl_drop_(
+                    ctx,
+                    ImportedDeclDropKind::kUnsupportedTypedefType,
+                    "dropped typedef '" + name + "' due to unsupported underlying type"
+                );
                 return true;
             }
 
             ImportedTypedefDecl td{};
             td.name = name;
             td.type_repr = std::move(type_repr);
+            td.type_semantic = std::move(type_semantic);
             td.is_transparent = is_transparent_typedef_underlying_(under_ty);
             if (td.is_transparent) {
                 std::string canonical_repr{};
+                std::string canonical_semantic{};
                 if (map_c_type_to_parus_(clang_getCanonicalType(under_ty), canonical_repr, &ctx) &&
+                    build_c_type_semantic_(clang_getCanonicalType(under_ty), canonical_semantic, &ctx) &&
                     !canonical_repr.empty()) {
                     td.transparent_type_repr = std::move(canonical_repr);
+                    td.transparent_type_semantic = std::move(canonical_semantic);
                 } else {
-                    td.is_transparent = false;
-                    td.transparent_type_repr.clear();
+                    record_decl_drop_(
+                        ctx,
+                        ImportedDeclDropKind::kTransparentTargetUnresolved,
+                        "dropped typedef '" + name + "' because transparent target could not be reconstructed"
+                    );
+                    return true;
                 }
             }
             fill_decl_location_(c, td.decl_file, td.decl_line, td.decl_col);
@@ -1871,6 +2093,7 @@ namespace parus::cimport {
             if (linkage == CXLinkage_Internal || linkage == CXLinkage_NoLinkage) {
                 return true;
             }
+            ++ctx.total_function_decls;
 
             const std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) return true;
@@ -1886,7 +2109,14 @@ namespace parus::cimport {
             }
 
             std::string ret_repr{};
-            if (!map_c_type_to_parus_(clang_getResultType(fn_ty), ret_repr, &ctx)) {
+            std::string type_semantic{};
+            if (!map_c_type_to_parus_(clang_getResultType(fn_ty), ret_repr, &ctx) ||
+                !build_c_type_semantic_(fn_ty, type_semantic, &ctx)) {
+                record_decl_drop_(
+                    ctx,
+                    ImportedDeclDropKind::kUnsupportedFunctionType,
+                    "dropped function '" + name + "' due to unsupported signature"
+                );
                 return true;
             }
 
@@ -1922,6 +2152,7 @@ namespace parus::cimport {
             fn.api.name = name;
             fn.api.link_name = name;
             fn.api.type_repr = std::move(type_repr);
+            fn.api.type_semantic = std::move(type_semantic);
             fill_decl_location_(c, fn.api.decl_file, fn.api.decl_line, fn.api.decl_col);
             fn.api.c_return_type = to_std_string_(clang_getTypeSpelling(clang_getResultType(fn_ty)));
             fn.api.is_c_abi = true;
@@ -1963,6 +2194,7 @@ namespace parus::cimport {
             if (linkage == CXLinkage_Internal || linkage == CXLinkage_NoLinkage) {
                 return true;
             }
+            ++ctx.total_global_decls;
 
             const std::string name = to_std_string_(clang_getCursorSpelling(c));
             if (name.empty()) return true;
@@ -1970,7 +2202,14 @@ namespace parus::cimport {
 
             const CXType var_ty = clang_getCursorType(c);
             std::string type_repr{};
-            if (!map_c_type_to_parus_(var_ty, type_repr, &ctx)) {
+            std::string type_semantic{};
+            if (!map_c_type_to_parus_(var_ty, type_repr, &ctx) ||
+                !build_c_type_semantic_(var_ty, type_semantic, &ctx)) {
+                record_decl_drop_(
+                    ctx,
+                    ImportedDeclDropKind::kUnsupportedGlobalType,
+                    "dropped global '" + name + "' due to unsupported type"
+                );
                 return true;
             }
 
@@ -1978,6 +2217,7 @@ namespace parus::cimport {
             gv.name = name;
             gv.link_name = name;
             gv.type_repr = std::move(type_repr);
+            gv.type_semantic = std::move(type_semantic);
             gv.c_type = to_std_string_(clang_getTypeSpelling(var_ty));
             gv.is_c_abi = true;
             gv.is_const = clang_isConstQualifiedType(var_ty) != 0;
@@ -2742,13 +2982,34 @@ namespace parus::cimport {
             out.functions.push_back(std::move(f.api));
         }
 
-        out.coverage.total_function_decls = static_cast<uint32_t>(collected_fns.size());
+        if (!ctx.dropped_record_names.empty()) {
+            std::vector<ImportedTypedefDecl> kept_typedefs{};
+            kept_typedefs.reserve(out.typedefs.size());
+            for (auto& td : out.typedefs) {
+                TypeSemanticNode node{};
+                if (!td.type_semantic.empty() &&
+                    parse_type_semantic(td.type_semantic, node) &&
+                    node.kind == TypeSemanticKind::kNamed &&
+                    ctx.dropped_record_names.find(node.name) != ctx.dropped_record_names.end()) {
+                    record_decl_drop_(
+                        ctx,
+                        ImportedDeclDropKind::kTransparentTargetUnresolved,
+                        "dropped typedef '" + td.name + "' because owner type '" + node.name + "' was not imported"
+                    );
+                    continue;
+                }
+                kept_typedefs.push_back(std::move(td));
+            }
+            out.typedefs = std::move(kept_typedefs);
+        }
+
+        out.coverage.total_function_decls = ctx.total_function_decls;
         out.coverage.imported_function_decls = static_cast<uint32_t>(out.functions.size());
-        out.coverage.total_global_decls = static_cast<uint32_t>(out.globals.size());
+        out.coverage.total_global_decls = ctx.total_global_decls;
         out.coverage.imported_global_decls = static_cast<uint32_t>(out.globals.size());
-        out.coverage.total_type_decls = static_cast<uint32_t>(
+        out.coverage.total_type_decls = ctx.total_type_decls;
+        out.coverage.imported_type_decls = static_cast<uint32_t>(
             out.structs.size() + out.unions.size() + out.enums.size() + out.typedefs.size());
-        out.coverage.imported_type_decls = out.coverage.total_type_decls;
 
         uint32_t enum_const_count = 0;
         for (const auto& e : out.enums) {
@@ -2779,6 +3040,8 @@ namespace parus::cimport {
                     mc.name + ": " + imported_macro_skip_code_text(mc.skip_kind));
             }
         }
+        out.coverage.dropped_decl_reasons = std::move(ctx.dropped_decl_reasons);
+        out.coverage.dropped_decl_reason_codes = std::move(ctx.dropped_decl_reason_codes);
 
         clang_disposeTranslationUnit(tu);
         clang_disposeIndex(idx);

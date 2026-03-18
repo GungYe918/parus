@@ -1,5 +1,6 @@
 // frontend/src/tyck/type_check_expr_core.cpp
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/DiagCode.hpp>

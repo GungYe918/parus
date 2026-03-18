@@ -91,7 +91,10 @@
                 (uint32_t)params.size(),
                 s.positional_param_count,
                 labels.empty() ? nullptr : labels.data(),
-                has_default_flags.empty() ? nullptr : has_default_flags.data()
+                has_default_flags.empty() ? nullptr : has_default_flags.data(),
+                s.link_abi == ast::LinkAbi::kC,
+                s.fn_is_c_variadic,
+                ty::CCallConv::kDefault
             );
         };
 
@@ -676,7 +679,10 @@
                             static_cast<uint32_t>(params.size()),
                             mm.positional_param_count,
                             labels.empty() ? nullptr : labels.data(),
-                            has_default_flags.empty() ? nullptr : has_default_flags.data()
+                            has_default_flags.empty() ? nullptr : has_default_flags.data(),
+                            mm.link_abi == ast::LinkAbi::kC,
+                            mm.fn_is_c_variadic,
+                            ty::CCallConv::kDefault
                         );
 
                         std::string mqname = qname;
@@ -803,7 +809,10 @@
                             static_cast<uint32_t>(params.size()),
                             mm.positional_param_count,
                             labels.empty() ? nullptr : labels.data(),
-                            has_default_flags.empty() ? nullptr : has_default_flags.data()
+                            has_default_flags.empty() ? nullptr : has_default_flags.data(),
+                            mm.link_abi == ast::LinkAbi::kC,
+                            mm.fn_is_c_variadic,
+                            ty::CCallConv::kDefault
                         );
 
                         std::string mqname = qname;
@@ -973,7 +982,17 @@
                                 params.push_back(pt);
                             }
 
-                            ty::TypeId sig = types_.make_fn(ret, params.data(), (uint32_t)params.size());
+                            ty::TypeId sig = types_.make_fn(
+                                ret,
+                                params.data(),
+                                (uint32_t)params.size(),
+                                (uint32_t)params.size(),
+                                nullptr,
+                                nullptr,
+                                ms.link_abi == ast::LinkAbi::kC,
+                                ms.fn_is_c_variadic,
+                                ty::CCallConv::kDefault
+                            );
                             ast_.stmt_mut(msid).type = sig;
 
                             const std::string qfn = fn_qualified_name_by_stmt_[msid];

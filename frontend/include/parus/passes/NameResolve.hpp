@@ -38,6 +38,7 @@ namespace parus::passes {
             std::string link_name{};
             ty::TypeId declared_type = ty::kInvalidType;
             std::string declared_type_repr{};
+            std::string declared_type_semantic{};
             Span decl_span{};
             std::string decl_bundle_name{};
             std::string module_head{};

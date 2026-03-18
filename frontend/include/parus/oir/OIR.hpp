@@ -93,6 +93,16 @@ namespace parus::oir {
         Abi,
     };
 
+    enum class CCallConv : uint8_t {
+        Default = 0,
+        Cdecl,
+        StdCall,
+        FastCall,
+        VectorCall,
+        Win64,
+        SysV,
+    };
+
     struct ExternalCBitfieldAccess {
         bool is_valid = false;
         uint32_t storage_offset_bytes = 0;
@@ -122,6 +132,10 @@ namespace parus::oir {
         // 오버로드/정적 해소된 direct callee를 ID로 고정한다.
         // kInvalidId면 기존 callee 값 기반(함수 값/간접 호출) 경로를 사용한다.
         FuncId direct_callee = kInvalidId;
+        bool call_is_c_abi = false;
+        bool call_is_c_variadic = false;
+        CCallConv call_c_callconv = CCallConv::Default;
+        uint32_t call_c_fixed_param_count = 0;
     };
     struct InstActorCommit { ValueId ctx = kInvalidId; };
     struct InstActorRecast { ValueId ctx = kInvalidId; };
@@ -222,16 +236,6 @@ namespace parus::oir {
     enum class FunctionAbi : uint8_t {
         Parus = 0,
         C,
-    };
-
-    enum class CCallConv : uint8_t {
-        Default = 0,
-        Cdecl,
-        StdCall,
-        FastCall,
-        VectorCall,
-        Win64,
-        SysV,
     };
 
     enum class FieldLayout : uint8_t {

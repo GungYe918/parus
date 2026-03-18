@@ -1,4 +1,5 @@
 #include <parus/cimport/TypeReprNormalize.hpp>
+#include <parus/cimport/TypeSemantic.hpp>
 
 #include <parus/ast/Nodes.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -97,7 +98,10 @@ namespace parus::cimport {
                         static_cast<uint32_t>(params.size()),
                         tt.positional_param_count,
                         labels.empty() ? nullptr : labels.data(),
-                        defaults.empty() ? nullptr : defaults.data()
+                        defaults.empty() ? nullptr : defaults.data(),
+                        tt.fn_is_c_abi,
+                        tt.fn_is_c_variadic,
+                        tt.fn_callconv
                     );
                 }
             }
@@ -111,11 +115,21 @@ namespace parus::cimport {
 
     ty::TypeId parse_external_type_repr(
         std::string_view type_repr,
+        std::string_view type_semantic,
         std::string_view inst_payload,
         ty::TypePool& types
     ) {
         if (const auto builtin = parse_core_builtin_use_payload(inst_payload); builtin.has_value()) {
             return types.builtin(*builtin);
+        }
+        if (!type_semantic.empty()) {
+            TypeSemanticNode node{};
+            if (parse_type_semantic(type_semantic, node)) {
+                const ty::TypeId semantic_ty = build_type_from_semantic(node, types);
+                if (semantic_ty != ty::kInvalidType) {
+                    return canonicalize_core_ext_type_repr(semantic_ty, types);
+                }
+            }
         }
         if (type_repr.empty()) return ty::kInvalidType;
 
@@ -135,4 +149,3 @@ namespace parus::cimport {
     }
 
 } // namespace parus::cimport
-

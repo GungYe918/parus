@@ -821,7 +821,10 @@ namespace parus {
                 (uint32_t)pts.size(),
                 positional_count,
                 labels.empty() ? nullptr : labels.data(),
-                has_default_flags.empty() ? nullptr : has_default_flags.data()
+                has_default_flags.empty() ? nullptr : has_default_flags.data(),
+                is_extern && link_abi == ast::LinkAbi::kC,
+                fn_is_c_variadic,
+                ty::CCallConv::kDefault
             );
         }
 

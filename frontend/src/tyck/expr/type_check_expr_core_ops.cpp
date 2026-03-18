@@ -1,4 +1,17 @@
+    bool TypeChecker::parse_external_c_type_with_semantic_(
+        std::string_view type_repr,
+        std::string_view type_semantic,
+        ty::TypeId& out
+    ) const {
+        out = parus::cimport::parse_external_type_repr(type_repr, type_semantic, {}, types_);
+        return out != ty::kInvalidType;
+    }
+
     bool TypeChecker::parse_cimport_type_repr_(std::string_view repr, ty::TypeId& out) const {
+        return parse_external_c_type_with_semantic_(repr, {}, out);
+    }
+
+    #if 0
         out = ty::kInvalidType;
 
         auto trim = [](std::string_view s) -> std::string_view {
@@ -137,6 +150,7 @@
         out = types_.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
         return out != ty::kInvalidType;
     }
+    #endif
 
     bool TypeChecker::parse_external_c_union_payload_(
         std::string_view payload,
@@ -173,9 +187,15 @@
             const size_t colon = one.find(':');
             if (colon != std::string_view::npos && colon > 0 && colon + 1 < one.size()) {
                 const std::string_view name = one.substr(0, colon);
-                const std::string_view type_text = one.substr(colon + 1);
+                std::string_view type_text = one.substr(colon + 1);
+                std::string_view type_semantic{};
+                if (const size_t at = type_text.find('@'); at != std::string_view::npos && at + 1 < type_text.size()) {
+                    type_semantic = type_text.substr(at + 1);
+                    type_text = type_text.substr(0, at);
+                }
                 ty::TypeId field_ty = ty::kInvalidType;
-                if (parse_cimport_type_repr_(type_text, field_ty) && field_ty != ty::kInvalidType) {
+                if (parse_external_c_type_with_semantic_(type_text, type_semantic, field_ty) &&
+                    field_ty != ty::kInvalidType) {
                     out_fields.emplace(std::string(name), field_ty);
                 }
             }
@@ -226,7 +246,25 @@
                     type_text = type_text.substr(0, at);
                 }
                 ty::TypeId field_ty = ty::kInvalidType;
-                if (parse_cimport_type_repr_(type_text, field_ty) && field_ty != ty::kInvalidType) {
+                std::string_view type_semantic{};
+                if (!encoded_suffix.empty()) {
+                    size_t sb = 0;
+                    uint32_t part_idx = 0;
+                    while (sb <= encoded_suffix.size()) {
+                        const size_t sep = encoded_suffix.find('@', sb);
+                        const size_t stop = (sep == std::string_view::npos) ? encoded_suffix.size() : sep;
+                        if (part_idx == 6) {
+                            type_semantic = encoded_suffix.substr(sb, stop - sb);
+                            encoded_suffix = encoded_suffix.substr(0, sb == 0 ? 0 : sb - 1);
+                            break;
+                        }
+                        ++part_idx;
+                        if (sep == std::string_view::npos) break;
+                        sb = sep + 1;
+                    }
+                }
+                if (parse_external_c_type_with_semantic_(type_text, type_semantic, field_ty) &&
+                    field_ty != ty::kInvalidType) {
                     ExternalCFieldMeta meta{};
                     meta.type = field_ty;
 
@@ -364,6 +402,7 @@
 
         std::string_view transparent{};
         std::string_view target{};
+        std::string_view target_semantic{};
         size_t pos = 0;
         while (pos < payload.size()) {
             size_t next = payload.find('|', pos);
@@ -377,6 +416,8 @@
                     transparent = val;
                 } else if (key == "target") {
                     target = val;
+                } else if (key == "target_sem") {
+                    target_semantic = val;
                 }
             }
             if (next == payload.size()) break;
@@ -386,7 +427,8 @@
         out_transparent = (transparent == "1" || transparent == "true");
         if (!out_transparent) return true;
         if (target.empty()) return false;
-        return parse_cimport_type_repr_(target, out_target) && out_target != ty::kInvalidType;
+        return parse_external_c_type_with_semantic_(target, target_semantic, out_target) &&
+               out_target != ty::kInvalidType;
     }
 
     ty::TypeId TypeChecker::canonicalize_transparent_external_typedef_(ty::TypeId t) const {

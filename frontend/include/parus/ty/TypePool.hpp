@@ -250,7 +250,10 @@ namespace parus::ty {
                        uint32_t param_count,
                        uint32_t positional_param_count = 0xFFFF'FFFFu,
                        const std::string_view* labels = nullptr,
-                       const uint8_t* has_default = nullptr) {
+                       const uint8_t* has_default = nullptr,
+                       bool fn_is_c_abi = false,
+                       bool fn_is_c_variadic = false,
+                       CCallConv fn_callconv = CCallConv::kDefault) {
             if (positional_param_count == 0xFFFF'FFFFu) {
                 positional_param_count = param_count;
             }
@@ -265,6 +268,9 @@ namespace parus::ty {
                 if (t.ret != ret) continue;
                 if (t.param_count != param_count) continue;
                 if (t.positional_param_count != positional_param_count) continue;
+                if (t.fn_is_c_abi != fn_is_c_abi) continue;
+                if (t.fn_is_c_variadic != fn_is_c_variadic) continue;
+                if (t.fn_callconv != fn_callconv) continue;
 
                 bool same = true;
                 for (uint32_t k = 0; k < param_count; ++k) {
@@ -297,6 +303,9 @@ namespace parus::ty {
             t.positional_param_count = positional_param_count;
             t.label_begin = (uint32_t)fn_param_labels_.size();
             t.default_begin = (uint32_t)fn_param_has_default_.size();
+            t.fn_is_c_abi = fn_is_c_abi;
+            t.fn_is_c_variadic = fn_is_c_variadic;
+            t.fn_callconv = fn_callconv;
 
             for (uint32_t k = 0; k < param_count; ++k) {
                 fn_params_.push_back(params ? params[k] : error());
@@ -339,6 +348,21 @@ namespace parus::ty {
             const Type& t = types_[def];
             if (i >= t.param_count) return false;
             return fn_param_has_default_[t.default_begin + i] != 0;
+        }
+
+        bool fn_is_c_abi(TypeId def) const {
+            if (!is_fn(def)) return false;
+            return types_[def].fn_is_c_abi;
+        }
+
+        bool fn_is_c_variadic(TypeId def) const {
+            if (!is_fn(def)) return false;
+            return types_[def].fn_is_c_variadic;
+        }
+
+        CCallConv fn_callconv(TypeId def) const {
+            if (!is_fn(def)) return CCallConv::kDefault;
+            return types_[def].fn_callconv;
         }
 
         // convenience: ident -> (builtin or named_user)

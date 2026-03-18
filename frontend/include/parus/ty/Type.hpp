@@ -70,6 +70,16 @@ namespace parus::ty {
         kFn,        // def(T1, T2, ...) -> R
     };
 
+    enum class CCallConv : uint8_t {
+        kDefault = 0,
+        kCdecl,
+        kStdCall,
+        kFastCall,
+        kVectorCall,
+        kWin64,
+        kSysV,
+    };
+
     struct Type {
         Kind kind = Kind::kError;
 
@@ -103,6 +113,9 @@ namespace parus::ty {
         uint32_t positional_param_count = 0;
         uint32_t label_begin = 0;
         uint32_t default_begin = 0;
+        bool fn_is_c_abi = false;
+        bool fn_is_c_variadic = false;
+        CCallConv fn_callconv = CCallConv::kDefault;
     };
 
 } // namespace parus::ty

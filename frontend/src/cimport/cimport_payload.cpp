@@ -1,4 +1,5 @@
 #include <parus/cimport/CImportPayload.hpp>
+#include <parus/cimport/TypeSemantic.hpp>
 
 #include <unordered_set>
 
@@ -101,6 +102,14 @@ namespace parus::cimport {
         }
 
         return out;
+    }
+
+    std::string rewrite_cimport_type_semantic_with_alias(
+        std::string_view type_semantic,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names
+    ) {
+        return rewrite_type_semantic_with_alias(type_semantic, alias, known_type_names);
     }
 
     std::string make_c_import_payload(
@@ -213,6 +222,11 @@ namespace parus::cimport {
             payload += ":";
             payload += rewrite_cimport_type_with_alias(
                 un.fields[fi].type_repr, alias, known_type_names);
+            if (!un.fields[fi].type_semantic.empty()) {
+                payload += "@";
+                payload += rewrite_cimport_type_semantic_with_alias(
+                    un.fields[fi].type_semantic, alias, known_type_names);
+            }
         }
         return payload;
     }
@@ -241,12 +255,17 @@ namespace parus::cimport {
             payload += f.union_origin ? "1" : "0";
             payload += "@";
             payload += std::to_string(f.is_bitfield ? f.bit_offset : 0u);
-        payload += "@";
-        payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
-        payload += "@";
-        payload += f.bit_signed ? "1" : "0";
-        payload += "@";
-        payload += std::to_string(f.is_bitfield ? f.bit_storage_offset_bytes : f.offset_bytes);
+            payload += "@";
+            payload += std::to_string(f.is_bitfield ? f.bit_width : 0u);
+            payload += "@";
+            payload += f.bit_signed ? "1" : "0";
+            payload += "@";
+            payload += std::to_string(f.is_bitfield ? f.bit_storage_offset_bytes : f.offset_bytes);
+            if (!f.type_semantic.empty()) {
+                payload += "@";
+                payload += rewrite_cimport_type_semantic_with_alias(
+                    f.type_semantic, alias, known_type_names);
+            }
         }
         return payload;
     }
@@ -272,6 +291,11 @@ namespace parus::cimport {
             payload += "|target=";
             payload += rewrite_cimport_type_with_alias(
                 td.transparent_type_repr, alias, known_type_names);
+            if (!td.transparent_type_semantic.empty()) {
+                payload += "|target_sem=";
+                payload += rewrite_cimport_type_semantic_with_alias(
+                    td.transparent_type_semantic, alias, known_type_names);
+            }
         }
         return payload;
     }

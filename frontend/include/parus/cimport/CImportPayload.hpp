@@ -14,6 +14,12 @@ namespace parus::cimport {
         const std::unordered_set<std::string>& known_type_names
     );
 
+    std::string rewrite_cimport_type_semantic_with_alias(
+        std::string_view type_semantic,
+        std::string_view alias,
+        const std::unordered_set<std::string>& known_type_names
+    );
+
     std::string make_c_import_payload(
         std::string_view header,
         std::string_view alias,
