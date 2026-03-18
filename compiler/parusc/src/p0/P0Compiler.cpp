@@ -1321,6 +1321,20 @@ namespace parusc::p0 {
             return {};
         }
 
+        std::string resolve_core_ext_archive_path_(const cli::Options& opt) {
+            namespace fs = std::filesystem;
+            const std::string sysroot = select_sysroot_(opt);
+            const std::string target = effective_target_triple_(opt);
+            if (sysroot.empty() || target.empty()) return {};
+            const fs::path libdir = fs::path(sysroot) / "targets" / target / "lib";
+            const fs::path archive = libdir / "libcore_ext.a";
+            std::error_code ec{};
+            if (fs::exists(archive, ec) && !ec && fs::is_regular_file(archive, ec)) {
+                return archive.string();
+            }
+            return {};
+        }
+
         bool program_uses_actor_runtime_(const parus::tyck::TyckResult& tyck_res) {
             std::unordered_set<parus::ty::TypeId> actor_types(
                 tyck_res.actor_type_ids.begin(),
@@ -1363,6 +1377,176 @@ namespace parusc::p0 {
                 return parus::normalize_path(idx.string());
             }
             return {};
+        }
+
+        std::string resolve_core_macro_prelude_path_(const cli::Options& opt) {
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+
+            const std::string sysroot = select_sysroot_(opt);
+            if (sysroot.empty()) return {};
+
+            const fs::path p = fs::path(sysroot) / "core" / "ext" / "cstr.pr";
+            const fs::path normalized = fs::weakly_canonical(p, ec);
+            if (!ec && fs::exists(normalized, ec) && !ec && fs::is_regular_file(normalized, ec)) {
+                return parus::normalize_path(normalized.string());
+            }
+            ec.clear();
+            if (fs::exists(p, ec) && !ec && fs::is_regular_file(p, ec)) {
+                return parus::normalize_path(p.string());
+            }
+            return {};
+        }
+
+        std::string_view clone_sv_into_ast_(parus::ast::AstArena& dst, std::string_view s) {
+            if (s.empty()) return {};
+            return dst.add_owned_string(std::string(s));
+        }
+
+        parus::Token clone_token_into_ast_(parus::ast::AstArena& dst, const parus::Token& src) {
+            parus::Token out = src;
+            out.lexeme = clone_sv_into_ast_(dst, src.lexeme);
+            return out;
+        }
+
+        void copy_macro_token_range_into_ast_(
+            const parus::ast::AstArena& src,
+            parus::ast::AstArena& dst,
+            uint32_t in_begin,
+            uint32_t in_count,
+            uint32_t& out_begin,
+            uint32_t& out_count
+        ) {
+            out_begin = static_cast<uint32_t>(dst.macro_tokens().size());
+            out_count = 0;
+
+            const auto& toks = src.macro_tokens();
+            const uint64_t begin = in_begin;
+            const uint64_t end = begin + in_count;
+            if (begin > toks.size() || end > toks.size()) return;
+            for (uint32_t i = 0; i < in_count; ++i) {
+                const auto& t = toks[in_begin + i];
+                (void)dst.add_macro_token(clone_token_into_ast_(dst, t));
+                ++out_count;
+            }
+        }
+
+        void append_top_level_macro_decls_(
+            const parus::ast::AstArena& src,
+            parus::ast::AstArena& dst
+        ) {
+            const auto& src_decls = src.macro_decls();
+            const auto& src_groups = src.macro_groups();
+            const auto& src_arms = src.macro_arms();
+            const auto& src_caps = src.macro_captures();
+
+            for (const auto& d : src_decls) {
+                if (d.scope_depth != 0) continue; // top-level only
+
+                parus::ast::MacroDecl nd{};
+                nd.name = clone_sv_into_ast_(dst, d.name);
+                nd.scope_depth = 0;
+                nd.span = d.span;
+                nd.group_begin = static_cast<uint32_t>(dst.macro_groups().size());
+                nd.group_count = 0;
+
+                const uint64_t g_begin = d.group_begin;
+                const uint64_t g_end = g_begin + d.group_count;
+                if (g_begin > src_groups.size() || g_end > src_groups.size()) continue;
+
+                for (uint32_t gi = 0; gi < d.group_count; ++gi) {
+                    const auto& g = src_groups[d.group_begin + gi];
+                    parus::ast::MacroGroup ng{};
+                    ng.match_kind = g.match_kind;
+                    ng.span = g.span;
+                    ng.arm_begin = static_cast<uint32_t>(dst.macro_arms().size());
+                    ng.arm_count = 0;
+
+                    const uint64_t a_begin = g.arm_begin;
+                    const uint64_t a_end = a_begin + g.arm_count;
+                    if (a_begin > src_arms.size() || a_end > src_arms.size()) continue;
+
+                    for (uint32_t ai = 0; ai < g.arm_count; ++ai) {
+                        const auto& a = src_arms[g.arm_begin + ai];
+                        parus::ast::MacroArm na{};
+                        na.out_kind = a.out_kind;
+                        na.span = a.span;
+                        na.capture_begin = static_cast<uint32_t>(dst.macro_captures().size());
+                        na.capture_count = 0;
+
+                        const uint64_t c_begin = a.capture_begin;
+                        const uint64_t c_end = c_begin + a.capture_count;
+                        if (c_begin <= src_caps.size() && c_end <= src_caps.size()) {
+                            for (uint32_t ci = 0; ci < a.capture_count; ++ci) {
+                                auto cap = src_caps[a.capture_begin + ci];
+                                cap.name = clone_sv_into_ast_(dst, cap.name);
+                                (void)dst.add_macro_capture(cap);
+                                ++na.capture_count;
+                            }
+                        }
+
+                        copy_macro_token_range_into_ast_(
+                            src, dst, a.pattern_token_begin, a.pattern_token_count,
+                            na.pattern_token_begin, na.pattern_token_count
+                        );
+                        copy_macro_token_range_into_ast_(
+                            src, dst, a.template_token_begin, a.template_token_count,
+                            na.template_token_begin, na.template_token_count
+                        );
+
+                        (void)dst.add_macro_arm(na);
+                        ++ng.arm_count;
+                    }
+
+                    (void)dst.add_macro_group(ng);
+                    ++nd.group_count;
+                }
+
+                (void)dst.add_macro_decl(nd);
+            }
+        }
+
+        bool load_core_macro_prelude_into_ast_(
+            const cli::Options& opt,
+            parus::ast::AstArena& dst_ast,
+            parus::SourceManager& sm,
+            parus::diag::Bag& bag,
+            std::string& out_err
+        ) {
+            out_err.clear();
+            const std::string prelude_path = resolve_core_macro_prelude_path_(opt);
+            if (prelude_path.empty()) {
+                return true; // core macro prelude is optional unless user actually uses those macros
+            }
+
+            std::string text{};
+            std::string io_err{};
+            if (!parus::open_file(prelude_path, text, io_err)) {
+                out_err = "failed to read core macro prelude '" + prelude_path + "': " + io_err;
+                return false;
+            }
+
+            const uint32_t fid = sm.add(prelude_path, text);
+            auto tokens = lex_with_sm_(sm, fid, &bag);
+            if (bag.has_error()) {
+                out_err = "failed to lex core macro prelude: " + prelude_path;
+                return false;
+            }
+
+            parus::ast::AstArena src_ast{};
+            parus::ty::TypePool src_types{};
+            parus::diag::Bag local_bag{};
+            parus::ParserFeatureFlags flags{};
+            parus::Parser p(tokens, src_ast, src_types, &local_bag, 128, flags);
+            (void)p.parse_program();
+            if (local_bag.has_error()) {
+                for (const auto& d : local_bag.diags()) bag.add(d);
+                out_err = "failed to parse core macro prelude: " + prelude_path;
+                return false;
+            }
+
+            append_top_level_macro_decls_(src_ast, dst_ast);
+            return true;
         }
 
         bool is_core_impl_marker_stmt_(const parus::ast::AstArena& ast, const parus::ast::Stmt& s) {
@@ -1759,6 +1943,23 @@ namespace parusc::p0 {
             bag.add(std::move(d));
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0) ? 1 : 0;
+        }
+
+        if (auto_core_injection) {
+            std::string macro_prelude_err{};
+            if (!load_core_macro_prelude_into_ast_(opt, ast, sm, bag, macro_prelude_err)) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kTypeErrorGeneric,
+                    root_span
+                );
+                d.add_arg(macro_prelude_err.empty()
+                    ? std::string("failed to load core macro prelude")
+                    : macro_prelude_err);
+                bag.add(std::move(d));
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
         }
 
         const bool macro_ok = parus::macro::expand_program(ast, types, root, bag, opt.macro_budget);
@@ -2796,6 +2997,25 @@ namespace parusc::p0 {
             }
             link_opt.mode = to_backend_linker_mode_(opt.linker_mode);
             link_opt.allow_fallback = opt.allow_link_fallback;
+
+            if (auto_core_injection) {
+                const std::string core_ext_archive = resolve_core_ext_archive_path_(opt);
+                if (core_ext_archive.empty()) {
+                    parus::diag::Diagnostic d(
+                        parus::diag::Severity::kError,
+                        parus::diag::Code::kTypeErrorGeneric,
+                        root_span
+                    );
+                    d.add_arg(
+                        "missing core runtime archive 'libcore_ext.a' in sysroot target lib dir; "
+                        "run ./install.sh to build/install core artifacts"
+                    );
+                    bag.add(std::move(d));
+                    const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                    return (diag_rc != 0) ? 1 : 0;
+                }
+                link_opt.object_paths.push_back(core_ext_archive);
+            }
 
             if (actor_runtime_used) {
                 const std::string prt_archive = resolve_prt_archive_path_(opt);

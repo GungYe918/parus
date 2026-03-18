@@ -3,7 +3,7 @@ $![Impl::Core];
 // Expands a plain string literal into a static CStr value.
 macro c -> {
     with expr {
-        (s:strlit) => expr { $__builtin_ext_cstr_lit($s) };
+        (s:strlit) => expr { core::ext::from_ptr($s) };
     }
 }
 
@@ -11,45 +11,45 @@ macro c -> {
 // v1.2 keeps this equivalent to `$c"..."`.
 macro cr -> {
     with expr {
-        (s:strlit) => expr { $__builtin_ext_cstr_lit($s) };
+        (s:strlit) => expr { core::ext::from_ptr($s) };
     }
 }
 
 // Borrowed C string view backed by a raw NUL-terminated pointer.
-class CStr {
+export class CStr {
     ptr_: ptr c_char;
-    len_: c_size;
+    len_: usize;
 
     // Builds a CStr from raw pointer and cached length metadata.
-    init(p: ptr c_char, n: c_size) {
+    init(p: ptr c_char, n: usize) {
         self.ptr_ = p;
         self.len_ = n;
     }
 };
 
 // Internal helper to centralize CStr construction.
-def make(p: ptr c_char, n: c_size) -> CStr {
+def make(p: ptr c_char, n: usize) -> CStr {
     return CStr(p, n);
 }
 
 // Creates a borrowed CStr from a raw C pointer.
 export def from_ptr(p: ptr c_char) -> CStr {
-    let zero: c_size = 0;
+    let zero: usize = 0usize;
     return make(p, zero);
 }
 
 // Creates a borrowed CStr from explicit raw parts.
-export def from_raw_parts(p: ptr c_char, n: c_size) -> CStr {
+export def from_raw_parts(p: ptr c_char, n: usize) -> CStr {
     return make(p, n);
 }
 
 // Returns cached byte length metadata including the trailing NUL when known.
-export def len_with_nul(s: CStr) -> c_size {
+export def len_with_nul(s: CStr) -> usize {
     return s.len_;
 }
 
 // Returns cached byte length metadata excluding the trailing NUL when known.
-export def len(s: CStr) -> c_size {
+export def len(s: CStr) -> usize {
     if (s.len_ <= 1) {
         return 0;
     }
@@ -57,7 +57,7 @@ export def len(s: CStr) -> c_size {
 }
 
 // Validates bytes that must already include a trailing NUL.
-export def from_bytes_with_nul(bytes: ptr c_char, len: c_size) -> CStr? {
+export def from_bytes_with_nul(bytes: ptr c_char, len: usize) -> CStr? {
     if (len == 0) {
         return null;
     }
@@ -65,7 +65,7 @@ export def from_bytes_with_nul(bytes: ptr c_char, len: c_size) -> CStr? {
 }
 
 // Scans bytes up to the first NUL and returns a borrowed CStr on success.
-export def from_bytes_until_nul(bytes: ptr c_char, len: c_size) -> CStr? {
+export def from_bytes_until_nul(bytes: ptr c_char, len: usize) -> CStr? {
     if (len == 0) {
         return null;
     }

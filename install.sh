@@ -223,6 +223,79 @@ if [[ -d "${ROOT_DIR}/sysroot/.cache/exports" ]]; then
   cp -R "${ROOT_DIR}/sysroot/.cache/exports/." "${SYSROOT_DIR}/.cache/exports/"
 fi
 
+echo "[install] build core bundle artifacts (export-index + libcore_ext.a)"
+CORE_SRC_ROOT="${ROOT_DIR}/sysroot/core"
+CORE_CONFIG_LEI="${CORE_SRC_ROOT}/config.lei"
+if [[ ! -f "${CORE_CONFIG_LEI}" ]]; then
+  echo "install.sh: missing core config: ${CORE_CONFIG_LEI}" >&2
+  exit 1
+fi
+
+CORE_WORK_DIR="${BUILD_DIR}/install-core"
+CORE_OBJ_DIR="${CORE_WORK_DIR}/obj"
+rm -rf "${CORE_WORK_DIR}"
+mkdir -p "${CORE_OBJ_DIR}" "${SYSROOT_DIR}/.cache/exports"
+
+CORE_UNITS_TEXT="$("${LEI_BIN}" "${CORE_CONFIG_LEI}" --list_sources --format text)"
+if [[ -z "${CORE_UNITS_TEXT}" ]]; then
+  echo "install.sh: failed to resolve core source units via lei --list_sources" >&2
+  exit 1
+fi
+
+CORE_SOURCES=()
+CORE_MODULES=()
+while IFS=$'\t' read -r BUNDLE_NAME MODULE_HEAD SOURCE_REL; do
+  [[ -z "${SOURCE_REL}" ]] && continue
+  if [[ "${BUNDLE_NAME}" != "core" ]]; then
+    continue
+  fi
+  CORE_SOURCES+=("${CORE_SRC_ROOT}/${SOURCE_REL}")
+  CORE_MODULES+=("${MODULE_HEAD}")
+done <<< "${CORE_UNITS_TEXT}"
+
+if [[ "${#CORE_SOURCES[@]}" -eq 0 ]]; then
+  echo "install.sh: no core sources were discovered from ${CORE_CONFIG_LEI}" >&2
+  exit 1
+fi
+
+CORE_INDEX_PATH="${SYSROOT_DIR}/.cache/exports/core.exports.json"
+CORE_INDEX_CMD=(
+  "${PARUSC_BIN}" "${CORE_SOURCES[0]}"
+  -fsyntax-only
+  --bundle-name core
+  --bundle-root "${CORE_SRC_ROOT}"
+  --module-head "${CORE_MODULES[0]}"
+  --emit-export-index "${CORE_INDEX_PATH}"
+)
+for src in "${CORE_SOURCES[@]}"; do
+  CORE_INDEX_CMD+=(--bundle-source "${src}")
+done
+"${CORE_INDEX_CMD[@]}"
+
+CORE_OBJECTS=()
+for i in "${!CORE_SOURCES[@]}"; do
+  src="${CORE_SOURCES[$i]}"
+  module_head="${CORE_MODULES[$i]}"
+  obj="${CORE_OBJ_DIR}/core_${i}.o"
+  CORE_COMPILE_CMD=(
+    "${PARUSC_BIN}" "${src}"
+    --emit-object
+    -o "${obj}"
+    --bundle-name core
+    --bundle-root "${CORE_SRC_ROOT}"
+    --module-head "${module_head}"
+  )
+  for all_src in "${CORE_SOURCES[@]}"; do
+    CORE_COMPILE_CMD+=(--bundle-source "${all_src}")
+  done
+  "${CORE_COMPILE_CMD[@]}"
+  CORE_OBJECTS+=("${obj}")
+done
+
+CORE_ARCHIVE_PATH="${TARGET_SYSROOT_DIR}/lib/libcore_ext.a"
+"${LLVM_PREFIX}/bin/llvm-ar" rcs "${CORE_ARCHIVE_PATH}" "${CORE_OBJECTS[@]}"
+"${LLVM_PREFIX}/bin/llvm-ranlib" "${CORE_ARCHIVE_PATH}" || true
+
 PRT_HOSTED_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_hosted.a"
 PRT_FREESTANDING_ARCHIVE="${BUILD_DIR}/backend/src/prt/libparus_backend_prt_freestanding.a"
 if [ ! -f "${PRT_HOSTED_ARCHIVE}" ] || [ ! -f "${PRT_FREESTANDING_ARCHIVE}" ]; then

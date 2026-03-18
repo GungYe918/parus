@@ -793,8 +793,20 @@ namespace parus::sir {
         // for cross-module/cross-bundle calls without materializing null callee placeholders.
         std::unordered_set<SymbolId> lowered_fn_symbols{};
         lowered_fn_symbols.reserve(m.funcs.size());
+        std::unordered_set<std::string> lowered_fn_decl_keys{};
+        lowered_fn_decl_keys.reserve(m.funcs.size());
+        auto make_fn_decl_key = [](std::string_view link_name, std::string_view fallback_name, ty::TypeId sig) {
+            std::string key{};
+            const auto head = !link_name.empty() ? link_name : fallback_name;
+            key.reserve(head.size() + 24u);
+            key.append(head);
+            key.push_back('#');
+            key.append(std::to_string(static_cast<uint64_t>(sig)));
+            return key;
+        };
         for (const auto& f : m.funcs) {
             if (f.sym != k_invalid_symbol) lowered_fn_symbols.insert(f.sym);
+            lowered_fn_decl_keys.insert(make_fn_decl_key(f.external_link_name, f.name, f.sig));
         }
 
         const auto& symbols = sym.symbols();
@@ -805,6 +817,10 @@ namespace parus::sir {
             if (!lowered_fn_symbols.insert(sid).second) continue;
             if (ss.declared_type == k_invalid_type) continue;
             if (!types.is_fn(ss.declared_type)) continue;
+            if (!lowered_fn_decl_keys.insert(
+                    make_fn_decl_key(ss.link_name, ss.name, ss.declared_type)).second) {
+                continue;
+            }
 
             Func f{};
             f.span = ss.decl_span;
@@ -866,8 +882,21 @@ namespace parus::sir {
 
         std::unordered_set<SymbolId> lowered_global_symbols{};
         lowered_global_symbols.reserve(m.globals.size());
+        std::unordered_set<std::string> lowered_global_decl_keys{};
+        lowered_global_decl_keys.reserve(m.globals.size());
+        auto make_global_decl_key = [](std::string_view name, ty::TypeId ty, CThreadLocalKind tls_kind) {
+            std::string key{};
+            key.reserve(name.size() + 32u);
+            key.append(name);
+            key.push_back('#');
+            key.append(std::to_string(static_cast<uint64_t>(ty)));
+            key.push_back('#');
+            key.append(std::to_string(static_cast<uint32_t>(tls_kind)));
+            return key;
+        };
         for (const auto& g : m.globals) {
             if (g.sym != k_invalid_symbol) lowered_global_symbols.insert(g.sym);
+            lowered_global_decl_keys.insert(make_global_decl_key(g.name, g.declared_type, g.c_tls_kind));
         }
 
         for (uint32_t sid = 0; sid < static_cast<uint32_t>(symbols.size()); ++sid) {
@@ -880,9 +909,15 @@ namespace parus::sir {
             const auto parsed = parse_cimport_global_payload_(ss.external_payload);
             if (!parsed.is_c_import_global) continue;
 
+            const std::string gname = ss.link_name.empty() ? ss.name : ss.link_name;
+            if (!lowered_global_decl_keys.insert(
+                    make_global_decl_key(gname, ss.declared_type, parsed.tls_kind)).second) {
+                continue;
+            }
+
             GlobalVarDecl g{};
             g.span = ss.decl_span;
-            g.name = ss.link_name.empty() ? ss.name : ss.link_name;
+            g.name = gname;
             g.sym = sid;
             g.is_set = false;
             g.is_mut = !parsed.is_const;

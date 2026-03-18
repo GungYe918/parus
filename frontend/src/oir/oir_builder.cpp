@@ -1754,13 +1754,18 @@ namespace parus::oir {
                             if ((size_t)v >= out->values.size()) continue;
                             const TypeId vty = out->values[v].ty;
                             if (!is_core_ext_cstr_type(vty)) continue;
+                            bool converted = false;
                             if (const FieldLayoutDecl* layout = find_field_layout_(vty)) {
                                 for (const auto& m : layout->members) {
                                     if (m.name == "ptr_" && m.type != kInvalidId) {
                                         inout_args[ai] = emit_field(m.type, v, "ptr_");
+                                        converted = true;
                                         break;
                                     }
                                 }
+                            }
+                            if (!converted) {
+                                inout_args[ai] = emit_field(ptr_type_(), v, "ptr_");
                             }
                         }
                     }

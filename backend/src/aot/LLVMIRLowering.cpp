@@ -1375,11 +1375,6 @@ namespace parus::backend::aot {
                 address_ref_by_value_[inst.result] = typed_ptr;
 
                 const std::string rty = value_ty_(inst.result);
-                if (rty == "ptr") {
-                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
-                    return;
-                }
-
                 if (is_value_read_(inst.result)) {
                     os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
                     return;
@@ -1396,6 +1391,11 @@ namespace parus::backend::aot {
                     } else {
                         os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                     }
+                    return;
+                }
+
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
                     return;
                 }
 
@@ -1579,11 +1579,6 @@ namespace parus::backend::aot {
                 address_ref_by_value_[inst.result] = typed_ptr;
 
                 const std::string rty = value_ty_(inst.result);
-                if (rty == "ptr") {
-                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
-                    return;
-                }
-
                 if (is_value_read_(inst.result)) {
                     os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
                     return;
@@ -1599,6 +1594,11 @@ namespace parus::backend::aot {
                     } else {
                         os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                     }
+                    return;
+                }
+
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
                     return;
                 }
 
