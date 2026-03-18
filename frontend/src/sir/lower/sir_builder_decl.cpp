@@ -9,6 +9,8 @@ namespace parus::sir::detail {
     namespace {
         struct ParsedCImportPayload {
             bool is_c_import = false;
+            bool is_c_decl = false;
+            bool is_c_abi = false;
             bool is_variadic = false;
             CCallConv callconv = CCallConv::kDefault;
         };
@@ -21,8 +23,15 @@ namespace parus::sir::detail {
 
         ParsedCImportPayload parse_cimport_payload_(std::string_view payload) {
             ParsedCImportPayload out{};
-            if (!payload.starts_with("parus_c_import|")) return out;
-            out.is_c_import = true;
+            if (payload.starts_with("parus_c_import|")) {
+                out.is_c_import = true;
+                out.is_c_abi = true;
+            } else if (payload.starts_with("parus_c_abi_decl|")) {
+                out.is_c_decl = true;
+                out.is_c_abi = true;
+            } else {
+                return out;
+            }
 
             size_t pos = 0;
             while (pos < payload.size()) {
@@ -149,7 +158,7 @@ namespace parus::sir::detail {
         f.fn_mode = lower_fn_mode(s.fn_mode);
         f.abi = (s.link_abi == parus::ast::LinkAbi::kC) ? FuncAbi::kC : FuncAbi::kParus;
         f.c_callconv = CCallConv::kDefault;
-        f.is_c_variadic = false;
+        f.is_c_variadic = s.fn_is_c_variadic;
         f.c_fixed_param_count = s.param_count;
 
         f.is_pure = s.is_pure;
@@ -855,7 +864,7 @@ namespace parus::sir {
             const auto& sig = types.get(ss.declared_type);
             f.c_fixed_param_count = sig.param_count;
             const auto parsed = parse_cimport_payload_(ss.external_payload);
-            if (parsed.is_c_import) {
+            if (parsed.is_c_abi) {
                 f.abi = FuncAbi::kC;
                 f.c_callconv = parsed.callconv;
                 f.is_c_variadic = parsed.is_variadic;

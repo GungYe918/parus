@@ -1106,7 +1106,6 @@ namespace parus::tyck {
         ast::ExprId src_eid,
         Span diag_span
     ) {
-        (void)site;
         (void)diag_span;
 
         CoercionPlan plan{};
@@ -1132,6 +1131,22 @@ namespace parus::tyck {
         const ty::TypeId dst_elem = dst_is_opt ? optional_elem_(dst) : ty::kInvalidType;
         plan.optional_elem = dst_elem;
 
+        const auto assign_site_allows_null_to_ptr_boundary = [&](AssignSite s) -> bool {
+            switch (s) {
+                case AssignSite::LetInit:
+                case AssignSite::SetInit:
+                case AssignSite::Assign:
+                case AssignSite::FieldInit:
+                case AssignSite::CallArg:
+                case AssignSite::Return:
+                    return true;
+                case AssignSite::DefaultArg:
+                case AssignSite::NullCoalesceAssign:
+                    return false;
+            }
+            return false;
+        };
+
         bool infer_resolved = false;
         if (!is_error_(src)) {
             const auto& st = types_.get(src);
@@ -1149,6 +1164,21 @@ namespace parus::tyck {
         if (can_assign_(dst, src)) {
             plan.ok = true;
             plan.kind = infer_resolved ? CoercionKind::InferThenExact : CoercionKind::Exact;
+            return plan;
+        }
+
+        const bool src_is_null_literal =
+            src_eid != ast::k_invalid_expr &&
+            static_cast<size_t>(src_eid) < ast_.exprs().size() &&
+            ast_.expr(src_eid).kind == ast::ExprKind::kNullLit;
+        if (src_is_null_literal &&
+            assign_site_allows_null_to_ptr_boundary(site) &&
+            dst != ty::kInvalidType &&
+            dst < types_.count() &&
+            types_.get(dst).kind == ty::Kind::kPtr) {
+            plan.ok = true;
+            plan.kind = CoercionKind::NullToPtrBoundary;
+            plan.src_after = src;
             return plan;
         }
 

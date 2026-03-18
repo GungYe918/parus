@@ -240,7 +240,9 @@ namespace parus {
         void parse_decl_fn_params(uint32_t& out_param_begin,
                                   uint32_t& out_param_count,
                                   uint32_t& out_positional_count,
-                                  bool& out_has_named_group);
+                                  bool& out_has_named_group,
+                                  bool allow_c_variadic = false,
+                                  bool* out_is_c_variadic = nullptr);
 
         //  파라미터 1개(Ident ':' Type ['=' Expr])를 파싱
         //  반환값: 성공 여부(이름/타입까지 정상 파싱되었는지)

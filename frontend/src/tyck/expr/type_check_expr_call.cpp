@@ -22,6 +22,7 @@ namespace parus::tyck {
     namespace {
         struct CImportCallMeta {
             bool is_c_import = false;
+            bool is_c_decl = false;
             bool is_c_abi = false;
             bool is_variadic = false;
             std::string callconv{}; // default|cdecl|stdcall|fastcall|vectorcall|win64|sysv
@@ -33,8 +34,15 @@ namespace parus::tyck {
 
         static CImportCallMeta parse_cimport_call_meta_(std::string_view payload) {
             CImportCallMeta out{};
-            if (!payload.starts_with("parus_c_import|")) return out;
-            out.is_c_import = true;
+            if (payload.starts_with("parus_c_import|")) {
+                out.is_c_import = true;
+                out.is_c_abi = true;
+            } else if (payload.starts_with("parus_c_abi_decl|")) {
+                out.is_c_decl = true;
+                out.is_c_abi = true;
+            } else {
+                return out;
+            }
 
             size_t pos = 0;
             while (pos < payload.size()) {
@@ -1216,9 +1224,9 @@ namespace parus::tyck {
                             }
                         } else if (sym.kind == sema::SymbolKind::kFn) {
                             callee_name = sym.name;
-                            if (sym.is_external) {
+                            if (!sym.external_payload.empty()) {
                                 cimport_meta = parse_cimport_call_meta_(sym.external_payload);
-                                if (cimport_meta.is_c_import) {
+                                if (cimport_meta.is_c_abi) {
                                     is_cimport_call = true;
                                     cimport_callee_symbol = *sid;
                                 }
@@ -1233,16 +1241,25 @@ namespace parus::tyck {
 
                 if (!is_ctor_call) {
                     callee_t = check_expr_(e.a);
+                    ty::TypeId callable_sig = callee_t;
                     const auto& ct = types_.get(callee_t);
-                    if (ct.kind != ty::Kind::kFn) {
+                    if (ct.kind == ty::Kind::kPtr &&
+                        ct.elem != ty::kInvalidType &&
+                        ct.elem < types_.count() &&
+                        types_.get(ct.elem).kind == ty::Kind::kFn) {
+                        callable_sig = ct.elem;
+                    }
+                    const auto& callable_tt = types_.get(callable_sig);
+                    if (callable_tt.kind != ty::Kind::kFn) {
                         diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
                         err_(e.span, "call target is not a function");
                         check_all_arg_exprs_only();
                         return types_.error();
                     }
 
-                    fallback_ret = ct.ret;
-                    callee_param_count = ct.param_count;
+                    callee_t = callable_sig;
+                    fallback_ret = callable_tt.ret;
+                    callee_param_count = callable_tt.param_count;
                 }
             }
 
@@ -1465,7 +1482,14 @@ namespace parus::tyck {
 
         auto is_c_variadic_abi_arg_type = [&](ty::TypeId t) -> bool {
             if (t == ty::kInvalidType || is_error_(t)) return false;
-            t = read_decay_borrow_local(t);
+            if (t < types_.count()) {
+                const auto& raw_tt = types_.get(t);
+                if (raw_tt.kind == ty::Kind::kBorrow ||
+                    raw_tt.kind == ty::Kind::kEscape ||
+                    raw_tt.kind == ty::Kind::kOptional) {
+                    return false;
+                }
+            }
             t = canonicalize_transparent_external_typedef_(t);
             const auto& tt = types_.get(t);
             if (tt.kind == ty::Kind::kPtr) return true;
@@ -1504,7 +1528,6 @@ namespace parus::tyck {
                 case ty::Builtin::kCSize:
                 case ty::Builtin::kCSSize:
                 case ty::Builtin::kCPtrDiff:
-                case ty::Builtin::kNull:
                     return true;
                 default:
                     return false;
@@ -1606,6 +1629,11 @@ namespace parus::tyck {
                 }
 
                 if (cimport_meta.is_variadic) {
+                    if (!has_manual_permission_(ast::kManualPermAbi)) {
+                        diag_(diag::Code::kManualAbiRequired, diag_span);
+                        err_(diag_span, "C variadic call requires manual[abi]");
+                        return types_.error();
+                    }
                     for (size_t ai = fixed_param_count; ai < arg_exprs.size(); ++ai) {
                         const ast::ExprId arg_eid = arg_exprs[ai];
                         if (arg_eid == ast::k_invalid_expr || (size_t)arg_eid >= ast_.exprs().size()) {
@@ -1655,7 +1683,7 @@ namespace parus::tyck {
                 return fn_sig.ret;
             };
 
-        if (is_cimport_call && overload_decl_ids.empty()) {
+        if (is_cimport_call) {
             if (form != CallForm::kPositionalOnly) {
                 diag_(diag::Code::kCAbiCallPositionalOnly, e.span);
                 err_(e.span, "C ABI call currently supports positional arguments only");

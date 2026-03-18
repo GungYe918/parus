@@ -90,6 +90,10 @@ namespace parus::macro {
                 out = ast::MacroFragKind::kStrLit;
                 return true;
             }
+            if (t.lexeme == "rawstrlit") {
+                out = ast::MacroFragKind::kRawStrLit;
+                return true;
+            }
             if (t.lexeme == "tt") {
                 out = ast::MacroFragKind::kTt;
                 return true;
@@ -698,6 +702,15 @@ namespace parus::macro {
                     if (toks[begin].kind != K::kStringLit) return out;
                     const auto lex = toks[begin].lexeme;
                     if (lex.size() >= 2 && lex.front() == '"' && lex.back() == '"') {
+                        out.push_back(begin + 1);
+                    }
+                    return out;
+                }
+                if (frag == ast::MacroFragKind::kRawStrLit) {
+                    if (toks[begin].kind != K::kStringLit) return out;
+                    const auto lex = toks[begin].lexeme;
+                    if (lex.size() >= 7 && lex.rfind("R\"\"\"", 0) == 0 &&
+                        lex.substr(lex.size() - 3) == "\"\"\"") {
                         out.push_back(begin + 1);
                     }
                     return out;

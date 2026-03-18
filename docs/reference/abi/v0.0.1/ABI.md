@@ -151,8 +151,13 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 3. `vaList`는 opaque 타입이며 C ABI 시그니처 경계에서만 허용한다.
 4. plain string literal(`"..."`)은 C `char*` 기대 슬롯에서만 암묵 허용한다(주로 `ptr core::ext::c_char` 계열).
 5. `text` 변수/고수준 Parus 타입은 C ABI 경계에서 암묵 변환하지 않는다.
-6. `$c"..."` / `$cr"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
+6. `$c"..."` / `$crR"""..."""`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
 7. `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
+8. C variadic(`...`)는 `extern "C"` 선언과 `cimport`된 함수 표면에서만 허용한다.
+9. C variadic call site는 `manual[abi]`가 필요하다. ordinary fixed-arg C 호출은 `manual[abi]`를 요구하지 않는다.
+10. variadic tail은 ABI-safe scalar/raw pointer/`core::ext::CStr`/plain string literal만 허용한다.
+11. variadic tail에서는 `null` literal, borrow, escape, optional, aggregate, direct enum을 허용하지 않는다.
+12. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> ptr T` 자동 변환은 계속 금지한다.
 
 `core::ext` 매핑 표(요약):
 
@@ -264,6 +269,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `T?`는 1급 값 타입이다.
    - `T -> T?`는 대입 경계에서만 허용한다.
    - `T <: T?` 전역 승격은 허용하지 않는다.
+   - `null` literal은 typed pointer slot 경계에서만 예외적으로 허용한다.
 7. OOP 모델은 역할 분리를 고정한다.
    - `acts for` 부착 대상: `struct`, `class`
    - `actor`는 `commit/recast` 상태머신 보호를 위해 `acts for` 부착 금지

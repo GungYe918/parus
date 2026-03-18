@@ -390,15 +390,11 @@ namespace parus {
             return true;
         }
 
-        // "..." form (plain string literal only)
+        // string literal payload form ("..." / R"""...""" / F"""...""" token payload)
         if (cursor_.at(K::kStringLit)) {
             const Token lit = cursor_.peek();
             out_span = lit.span;
             cursor_.bump();
-            if (lit.lexeme.size() < 2 || lit.lexeme.front() != '"' || lit.lexeme.back() != '"') {
-                diag_report(diag::Code::kMacroStringPayloadPlainOnly, lit.span);
-                return false;
-            }
             ast_.add_macro_token(lit);
             out_count = 1;
             return true;
@@ -462,6 +458,32 @@ namespace parus {
             e.kind = ast::ExprKind::kError;
             e.span = span_join(dol.span, payload_sp);
             e.text = "macro_call_bad_payload";
+            return ast_.add_expr(e);
+        }
+
+        auto macro_path_last_is = [&](std::string_view seg) -> bool {
+            if (path_count == 0) return false;
+            const auto& segs = ast_.path_segs();
+            const uint64_t last = static_cast<uint64_t>(path_begin) + static_cast<uint64_t>(path_count) - 1;
+            if (last >= segs.size()) return false;
+            return segs[static_cast<uint32_t>(last)] == seg;
+        };
+        auto payload_is_single_plain_string = [&]() -> bool {
+            if (arg_count != 1) return false;
+            const auto& toks = ast_.macro_tokens();
+            if (arg_begin >= toks.size()) return false;
+            const auto& t = toks[arg_begin];
+            if (t.kind != K::kStringLit) return false;
+            return t.lexeme.size() >= 2 && t.lexeme.front() == '"' && t.lexeme.back() == '"';
+        };
+
+        if (macro_path_last_is("cr") && payload_is_single_plain_string()) {
+            const auto& toks = ast_.macro_tokens();
+            diag_report(diag::Code::kMacroCrRawPayloadRequired, toks[arg_begin].span);
+            ast::Expr e{};
+            e.kind = ast::ExprKind::kError;
+            e.span = span_join(dol.span, payload_sp);
+            e.text = "macro_call_cr_requires_raw";
             return ast_.add_expr(e);
         }
 

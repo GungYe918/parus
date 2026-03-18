@@ -217,6 +217,14 @@ namespace parus::macro {
                 if (t.kind != K::kStringLit) return false;
                 return t.lexeme.size() >= 2 && t.lexeme.front() == '"' && t.lexeme.back() == '"';
             }
+            if (frag == ast::MacroFragKind::kRawStrLit) {
+                const auto& toks = ast.macro_tokens();
+                if (r.count != 1 || r.begin >= toks.size()) return false;
+                const auto& t = toks[r.begin];
+                if (t.kind != K::kStringLit) return false;
+                return t.lexeme.size() >= 7 && t.lexeme.rfind("R\"\"\"", 0) == 0 &&
+                    t.lexeme.substr(t.lexeme.size() - 3) == "\"\"\"";
+            }
             (void)call_span;
             return false;
         }

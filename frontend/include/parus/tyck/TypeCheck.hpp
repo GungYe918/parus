@@ -123,6 +123,7 @@ namespace parus::tyck {
         enum class CoercionKind : uint8_t {
             Exact = 0,
             NullToOptionalNone,
+            NullToPtrBoundary,
             LiftToOptionalSome,
             InferThenExact,
             InferThenLiftToOptionalSome,

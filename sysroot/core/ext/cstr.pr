@@ -7,11 +7,11 @@ export macro c -> {
     }
 }
 
-// Raw alias placeholder for C string literal macro.
-// v1.2 keeps this equivalent to `$c"..."`.
+// Expands a raw string literal into a static CStr value.
+// Use `$crR"""..."""`.
 export macro cr -> {
     with expr {
-        (s:strlit) => expr { core::ext::from_ptr($s) };
+        (s:rawstrlit) => expr { core::ext::from_ptr($s) };
     }
 }
 

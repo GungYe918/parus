@@ -1189,8 +1189,10 @@ bool test_core_ext_scaffold_and_auto_injection() {
         "\n"
         "def main() -> i32 {\n"
         "  c::puts($c\"hi\");\n"
-        "  c::printf(\"%s\\n\", $cr\"ok\");\n"
-        "  c::printf(\"%d\\n\", 5);\n"
+        "  manual[abi] {\n"
+        "    c::printf(\"%s\\n\", $crR\"\"\"ok\"\"\");\n"
+        "    c::printf(\"%d\\n\", 5);\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(cimport_main, cimport_src)) {
@@ -1622,6 +1624,55 @@ bool test_c_header_import_stdio_variadic_fixed_arg_count_checked() {
     return true;
 }
 
+bool test_c_header_import_stdio_variadic_requires_manual_abi() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-stdio-manual-abi";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto stdio_h = temp_root / "stdio.h";
+    const std::string header_src =
+        "#ifndef PARUS_STDIO_H\n"
+        "#define PARUS_STDIO_H\n"
+        "int printf(const char* fmt, ...);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  stdio::printf(\"%d\", 5i32);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write manual[abi] cimport test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "C variadic call without manual[abi] must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "ManualAbiRequired")) {
+        std::cerr << "C variadic call without manual[abi] must report ManualAbiRequired\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_stdio_format_bridge_single_arg() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -1648,21 +1699,27 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "import \"stdio.h\" as stdio;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  stdio::printf(\"%d\", 5i32);\n"
+        "  manual[abi] {\n"
+        "    stdio::printf(\"%d\", 5i32);\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     const std::string ok_infer_src =
         "import \"stdio.h\" as stdio;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  stdio::printf(\"%d\", 5);\n"
+        "  manual[abi] {\n"
+        "    stdio::printf(\"%d\", 5);\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     const std::string fail_src =
         "import \"stdio.h\" as stdio;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  stdio::printf($\"sum={1i32 + 2i32}\");\n"
+        "  manual[abi] {\n"
+        "    stdio::printf($\"sum={1i32 + 2i32}\");\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     const std::string text_fail_src =
@@ -1670,7 +1727,9 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         "\n"
         "def main() -> i32 {\n"
         "  let msg: text = \"hello\";\n"
-        "  stdio::printf(msg);\n"
+        "  manual[abi] {\n"
+        "    stdio::printf(msg);\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(stdio_h, header_src) ||
@@ -1741,6 +1800,75 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
     return true;
 }
 
+bool test_extern_c_variadic_manual_abi_and_null_boundary() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-extern-c-variadic";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_fail = temp_root / "main_fail.pr";
+    const auto llvm_out = temp_root / "main_ok.ll";
+    const std::string ok_src =
+        "extern \"C\" def take_ptr(p: ptr i32) -> i32;\n"
+        "extern \"C\" def variad(first: ptr i8, ...) -> i32;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let p: ptr i32 = null;\n"
+        "  take_ptr(null);\n"
+        "  take_ptr(p);\n"
+        "  manual[abi] {\n"
+        "    variad(null, 5);\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    const std::string fail_src =
+        "extern \"C\" def variad(first: ptr i8, ...) -> i32;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  manual[abi] {\n"
+        "    variad(null, null);\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_ok, ok_src) || !write_text(main_fail, fail_src)) {
+        std::cerr << "failed to write extern C variadic test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() +
+        "\" -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
+    auto [rc_fail, out_fail] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_fail.string() + "\" -fsyntax-only");
+    const std::string llvm_ir = read_text(llvm_out);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_ok != 0) {
+        std::cerr << "extern C variadic declaration with manual[abi] and null->ptr boundary should compile\n" << out_ok;
+        return false;
+    }
+    if (rc_fail == 0) {
+        std::cerr << "null literal in variadic tail must fail\n" << out_fail;
+        return false;
+    }
+    if (!contains(out_fail, "CImportVariadicArgTypeUnsupported")) {
+        std::cerr << "null literal in variadic tail must report variadic arg type rejection\n" << out_fail;
+        return false;
+    }
+    if (!contains(llvm_ir, "call i32 (ptr, ...) @variad(")) {
+        std::cerr << "extern C variadic call must lower as typed variadic call\n" << llvm_ir;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_cstr_runtime_prints_consistent_output() {
     const std::string bin = PARUS_BUILD_BIN;
     const auto sysroot_and_target = resolve_installed_sysroot_and_target();
@@ -1771,9 +1899,11 @@ bool test_c_header_import_cstr_runtime_prints_consistent_output() {
         "\n"
         "def main() -> i32 {\n"
         "  set x = core::ext::from_ptr(\"Hello, World!!\");\n"
-        "  c::printf(x);\n"
-        "  c::printf(\"\\n\");\n"
-        "  c::printf(\"%s\\n\", x);\n"
+        "  manual[abi] {\n"
+        "    c::printf(x);\n"
+        "    c::printf(\"\\n\");\n"
+        "    c::printf(\"%s\\n\", x);\n"
+        "  }\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
@@ -2755,6 +2885,52 @@ bool test_c_header_import_nominal_typedef_record_stays_nominal() {
     return true;
 }
 
+bool test_c_header_import_function_pointer_alias_call() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-fnptr-alias";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "F.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_F_H\n"
+        "#define PARUS_F_H\n"
+        "typedef int (*Adder)(int, int);\n"
+        "Adder get_adder(void);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set f = c::get_adder();\n"
+        "  return f(1i32, 2i32);\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write function pointer alias cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "function pointer typedef alias call should compile\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_function_like_macro_not_imported() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -3247,6 +3423,56 @@ bool test_c_header_import_bitfield_read_write_no_shim() {
     return true;
 }
 
+bool test_c_header_import_bitfield_exotic_layout_hard_error() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-bitfield-hard-error";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "B.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_B_H\n"
+        "#define PARUS_B_H\n"
+        "struct WeirdBits {\n"
+        "  _Bool a : 1;\n"
+        "};\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"B.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write exotic bitfield cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc == 0) {
+        std::cerr << "unsupported exotic bitfield layout must fail during import\n" << out;
+        return false;
+    }
+    if (!contains(out, "unsupported C bitfield layout")) {
+        std::cerr << "unsupported exotic bitfield layout must report hard import diagnostic\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_flatten_collision_hard_error() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -3545,46 +3771,51 @@ int main() {
     const bool ok21 = test_import_keyword_path_rejected();
     const bool ok22 = test_c_header_import_local_non_variadic();
     const bool ok23 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
-    const bool ok24 = test_c_header_import_stdio_format_bridge_single_arg();
-    const bool ok25 = test_c_header_import_cstr_runtime_prints_consistent_output();
-    const bool ok26 = test_c_header_import_include_dir_option();
-    const bool ok27 = test_lei_module_bundle_cimport_isystem_option();
-    const bool ok28 = test_c_header_import_union_manual_get_gate();
-    const bool ok29 = test_c_header_import_union_manual_set_gate();
-    const bool ok30 = test_c_header_import_struct_borrow_escape_rules();
-    const bool ok31 = test_c_header_import_enum_constant_usage();
-    const bool ok32 = test_c_header_import_global_and_tls_usage();
-    const bool ok33 = test_c_header_import_const_global_write_rejected();
-    const bool ok34 = test_c_header_import_define_undefine_options();
-    const bool ok35 = test_c_header_import_imacros_option();
-    const bool ok36 = test_c_header_import_forced_include_option();
-    const bool ok37 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok38 = test_c_header_import_transparent_typedef_uint32_assign();
-    const bool ok39 = test_c_header_import_nominal_typedef_record_stays_nominal();
-    const bool ok40 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok41 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok42 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok43 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok44 = test_c_header_import_function_like_macro_ir_only_supported();
-    const bool ok45 = test_c_header_import_function_like_macro_chain_promoted();
-    const bool ok46 = test_c_header_import_object_macro_const_expr_resolved();
-    const bool ok47 = test_c_header_import_function_like_macro_chain_cycle_warns();
-    const bool ok48 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
-    const bool ok49 = test_c_header_import_bitfield_read_write_no_shim();
-    const bool ok50 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok51 = test_c_header_import_macos_opengl_isystem();
-    const bool ok52 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok53 = test_actor_rejected_in_no_std_profile();
-    const bool ok54 = test_actor_allowed_in_freestanding_profile();
-    const bool ok55 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok56 = test_hosted_actor_parus_lld_mode_succeeds();
-    const bool ok57 = test_core_ext_scaffold_and_auto_injection();
+    const bool ok24 = test_c_header_import_stdio_variadic_requires_manual_abi();
+    const bool ok25 = test_c_header_import_stdio_format_bridge_single_arg();
+    const bool ok26 = test_extern_c_variadic_manual_abi_and_null_boundary();
+    const bool ok27 = test_c_header_import_cstr_runtime_prints_consistent_output();
+    const bool ok28 = test_c_header_import_include_dir_option();
+    const bool ok29 = test_lei_module_bundle_cimport_isystem_option();
+    const bool ok30 = test_c_header_import_union_manual_get_gate();
+    const bool ok31 = test_c_header_import_union_manual_set_gate();
+    const bool ok32 = test_c_header_import_struct_borrow_escape_rules();
+    const bool ok33 = test_c_header_import_enum_constant_usage();
+    const bool ok34 = test_c_header_import_global_and_tls_usage();
+    const bool ok35 = test_c_header_import_const_global_write_rejected();
+    const bool ok36 = test_c_header_import_define_undefine_options();
+    const bool ok37 = test_c_header_import_imacros_option();
+    const bool ok38 = test_c_header_import_forced_include_option();
+    const bool ok39 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok40 = test_c_header_import_transparent_typedef_uint32_assign();
+    const bool ok41 = test_c_header_import_nominal_typedef_record_stays_nominal();
+    const bool ok42 = test_c_header_import_function_pointer_alias_call();
+    const bool ok43 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok44 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok45 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok46 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok47 = test_c_header_import_function_like_macro_ir_only_supported();
+    const bool ok48 = test_c_header_import_function_like_macro_chain_promoted();
+    const bool ok49 = test_c_header_import_object_macro_const_expr_resolved();
+    const bool ok50 = test_c_header_import_function_like_macro_chain_cycle_warns();
+    const bool ok51 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
+    const bool ok52 = test_c_header_import_bitfield_read_write_no_shim();
+    const bool ok53 = test_c_header_import_bitfield_exotic_layout_hard_error();
+    const bool ok54 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok55 = test_c_header_import_macos_opengl_isystem();
+    const bool ok56 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok57 = test_actor_rejected_in_no_std_profile();
+    const bool ok58 = test_actor_allowed_in_freestanding_profile();
+    const bool ok59 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok60 = test_hosted_actor_parus_lld_mode_succeeds();
+    const bool ok61 = test_core_ext_scaffold_and_auto_injection();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
-        !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57) {
+        !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
+        !ok60 || !ok61) {
         return 1;
     }
 

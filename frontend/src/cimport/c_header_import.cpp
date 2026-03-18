@@ -1476,6 +1476,29 @@ namespace parus::cimport {
             }
         }
 
+        static bool is_supported_c_bitfield_base_type_(CXType ty) {
+            const CXType ct = clang_getCanonicalType(ty);
+            switch (ct.kind) {
+                case CXType_Char_U:
+                case CXType_UChar:
+                case CXType_Char_S:
+                case CXType_SChar:
+                case CXType_UShort:
+                case CXType_UInt:
+                case CXType_ULong:
+                case CXType_ULongLong:
+                case CXType_UInt128:
+                case CXType_Short:
+                case CXType_Int:
+                case CXType_Long:
+                case CXType_LongLong:
+                case CXType_Int128:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         static bool is_transparent_typedef_underlying_(CXType ty) {
             const CXType ct = clang_getCanonicalType(ty);
             switch (ct.kind) {
@@ -1696,19 +1719,44 @@ namespace parus::cimport {
                         if (clang_Cursor_isBitField(child) != 0) {
                             fd.is_bitfield = true;
                             const int width = clang_getFieldDeclBitWidth(child);
-                            if (width > 0) {
-                                fd.bit_width = static_cast<uint32_t>(width);
+                            const long long storage_size = clang_Type_getSizeOf(child_ty_can);
+                            if (!is_supported_c_bitfield_base_type_(child_ty_can) ||
+                                storage_size <= 0) {
+                                ctx.had_hard_error = true;
+                                ctx.hard_error_text =
+                                    "unsupported C bitfield layout in struct '" + s.name +
+                                    "': field '" + field_name +
+                                    "' requires an integer storage type supported by direct Parus lowering";
+                                return CXChildVisit_Break;
                             }
+                            if (width <= 0) {
+                                ctx.had_hard_error = true;
+                                ctx.hard_error_text =
+                                    "unsupported C bitfield layout in struct '" + s.name +
+                                    "': field '" + field_name + "' has non-positive bit width";
+                                return CXChildVisit_Break;
+                            }
+                            const uint32_t storage_bits = static_cast<uint32_t>(storage_size * 8);
+                            const uint32_t shift =
+                                static_cast<uint32_t>(abs_off_bits - (abs_off_bits / 8u / static_cast<uint64_t>(storage_size)) *
+                                                                      static_cast<uint64_t>(storage_size) * 8u);
+                            if (static_cast<uint32_t>(width) > storage_bits ||
+                                shift >= storage_bits ||
+                                shift + static_cast<uint32_t>(width) > storage_bits) {
+                                ctx.had_hard_error = true;
+                                ctx.hard_error_text =
+                                    "unsupported C bitfield layout in struct '" + s.name +
+                                    "': field '" + field_name +
+                                    "' crosses or exceeds its storage unit and cannot be lowered directly";
+                                return CXChildVisit_Break;
+                            }
+
+                            fd.bit_width = static_cast<uint32_t>(width);
                             fd.bit_offset = static_cast<uint32_t>(abs_off_bits);
                             fd.bit_signed = is_signed_integer_type_(child_ty_can);
-                            const long long storage_size = clang_Type_getSizeOf(child_ty_can);
-                            if (storage_size > 0) {
-                                const auto unit = static_cast<uint64_t>(storage_size);
-                                const auto byte_off = static_cast<uint64_t>(abs_off_bits / 8u);
-                                fd.bit_storage_offset_bytes = static_cast<uint32_t>((byte_off / unit) * unit);
-                            } else {
-                                fd.bit_storage_offset_bytes = fd.offset_bytes;
-                            }
+                            const auto unit = static_cast<uint64_t>(storage_size);
+                            const auto byte_off = static_cast<uint64_t>(abs_off_bits / 8u);
+                            fd.bit_storage_offset_bytes = static_cast<uint32_t>((byte_off / unit) * unit);
                         }
 
                         if (!add_struct_field(std::move(fd), trace_path)) {

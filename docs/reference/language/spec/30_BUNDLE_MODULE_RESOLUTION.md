@@ -161,16 +161,19 @@ export def add(a: i32, b: i32) -> i32 {
 2-d. libclang 기본 시스템 include 경로
 2-e. C import 전처리 옵션은 다음을 지원한다: `-D`, `-U`, `-include`, `-imacros`.
 2-f. 전처리 옵션은 Parus 소스 파싱에는 영향을 주지 않고 C header import 단계에만 적용한다.
-3. C variadic 함수 호출은 제한적으로 허용한다.
-3-a. fixed parameter 구간은 일반 호출과 동일 타입검사를 적용한다.
-3-b. variadic 구간은 ABI-safe scalar/pointer만 허용한다.
-3-c. default promotion(`f32 -> f64`, small int/bool/char -> int 계열)은 lowering에서 적용한다.
-3-d. variadic 구간의 unsuffixed integer literal은 v1에서 `C int(i32)` 컨텍스트로 확정한다.
+3. C variadic 함수 호출은 제한적으로 허용한다(`cimport` + handwritten `extern "C"` 선언 공통).
+3-a. call site는 `manual[abi]`가 필요하다.
+3-b. fixed parameter 구간은 일반 호출과 동일 타입검사를 적용한다.
+3-c. variadic 구간은 ABI-safe scalar/raw pointer/`core::ext::CStr`/plain string literal만 허용한다.
+3-d. variadic 구간에서는 `text`, borrow, escape, optional, aggregate(`layout(c)` struct 포함), direct enum, `null` literal을 허용하지 않는다.
+3-e. default promotion(`f32 -> f64`, small int/bool/char -> int 계열)은 lowering에서 적용한다.
+3-f. variadic 구간의 unsuffixed integer literal은 v1에서 `C int(i32)` 컨텍스트로 확정한다.
 4. C ABI 호출은 positional-only다(import C / extern "C" 공통).
 4-a. labeled/named-group 인자는 허용하지 않는다.
 4-b. format string literal(`F"""..."""`)은 C ABI 인자에서 금지한다.
 4-c. `bare $"..."` 형식은 문법에서 제거되었으므로 C ABI 경계에서도 허용되지 않는다.
 4-d. C `char*`(및 `const char*`) 기대 슬롯에서는 plain string literal(`"..."`)을 자동 허용한다. 이 경로는 `core::ext::c_char` 계열 포인터 슬롯을 기준으로 적용한다.
+4-e. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> ptr T` 자동 변환은 허용하지 않는다.
 5. C union import는 2차 규칙을 따른다.
 5-a. union field dot 접근은 `manual[...]` 내부에서만 허용한다.
 5-b. read는 `manual[get]` 또는 `manual[set]`가 필요하다.
@@ -187,10 +190,11 @@ export def add(a: i32, b: i32) -> i32 {
 7. 익명 선언/bitfield v2.3 규칙:
 7-a. 이름 없는 `struct/union/enum`은 synthetic internal 이름(`__anon_*`)으로 수집한다.
 7-b. typedef가 익명 선언을 가리키는 경우 동일 선언 identity를 공유하도록 연결한다.
-7-c. bitfield 필드는 import 메타에 포함되며 read/write 모두 지원한다.
-7-d. bitfield 접근 lowering은 field metadata를 바탕으로 load/store + mask/shift/sign-extend/merge로 직접 수행한다.
-7-e. anonymous flatten으로 유입된 union-origin field는 기존 union 정책과 동일하게 `manual[...]` gate를 적용한다.
-7-f. anonymous flatten 결과 필드명이 충돌하면 c-import를 hard error로 중단한다.
+7-c. bitfield는 importer가 `offset/width/signedness/storage-unit`를 손실 없이 계산할 수 있는 경우만 지원한다.
+7-d. packed/exotic/ambiguous bitfield layout은 partial로 남기지 않고 import hard error로 중단한다.
+7-e. bitfield 접근 lowering은 field metadata를 바탕으로 load/store + mask/shift/sign-extend/merge로 직접 수행한다.
+7-f. anonymous flatten으로 유입된 union-origin field는 기존 union 정책과 동일하게 `manual[...]` gate를 적용한다.
+7-g. anonymous flatten 결과 필드명이 충돌하면 c-import를 hard error로 중단한다.
 8. ABI 속성 반영(v2.3):
 8-a. 함수 calling convention 메타를 importer payload에 보존하고 extern decl/call lowering에 실제 반영한다.
 8-b. record layout은 effective `size/align` 기준으로 유지하며 packed/aligned 속성은 payload 메타로 보존한다.

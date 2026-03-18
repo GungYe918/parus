@@ -39,6 +39,7 @@ namespace parus::diag {
         kMacroTokenVariadicOutsideRepeat, // variadic capture used outside repetition context
         kMacroPayloadExpected,         // macro call payload is required: (...), "...", or {...}
         kMacroStringPayloadPlainOnly,  // string payload form accepts plain string literal only
+        kMacroCrRawPayloadRequired,    // $cr requires raw string payload: R"""..."""
         kBareDollarStringRemoved,      // bare $"..." form is removed; use $foo"..."
 
         // pipe + hole rules
@@ -126,6 +127,7 @@ namespace parus::diag {
         kCImportFnMacroSkipped,           // function-like C macro was skipped during strict promotion (warning)
         kCAbiCallPositionalOnly,          // C ABI call accepts positional arguments only
         kCAbiFormatStringForbidden,       // C ABI call does not allow $"..."/F"""...""" argument
+        kManualAbiRequired,               // ABI-risk operation requires manual[abi]
         kCallLabeledNotAllowedForPositionalFn, // labeled call used for positional-only function
         kCallPositionalNotAllowedForNamedGroupFn, // positional call used for named-group-only function
         kCImportVariadicCallUnsupported,  // c variadic function calls are unsupported in v1

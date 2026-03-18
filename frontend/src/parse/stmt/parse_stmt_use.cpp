@@ -309,6 +309,10 @@ namespace parus {
 
         uint32_t relative_dot_count = 0;
         for (;;) {
+            if (cursor_.eat(K::kEllipsis)) {
+                relative_dot_count += 3;
+                continue;
+            }
             if (cursor_.eat(K::kDot)) {
                 ++relative_dot_count;
                 continue;

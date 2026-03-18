@@ -104,7 +104,8 @@ ABI 경계 호출 허용:
 1. `&`, `&mut`는 기존 비탈출/배타 규칙 그대로 검사한다.
 2. `&&`는 기존 escape 규칙 그대로 검사한다.
 3. `manual` 내부에서도 borrow를 ABI 경계로 넘길 수 없다.
-4. 즉 `manual`은 “포인터 표현력 확장”, “수명/권한 규칙 해제”가 아니다.
+4. `T? -> ptr T`, `&T -> ptr T`, `~T -> void*` 같은 암시 변환은 `manual`로 열리지 않는다.
+5. 즉 `manual`은 “포인터 표현력 확장”, “수명/권한 규칙 해제”가 아니다.
 
 ---
 
@@ -114,18 +115,16 @@ ABI 경계 호출 허용:
 extern "C" def c_write(fd: i32, buf: ptr u8, len: usize) -> isize;
 
 def write_chunk(fd: i32, buf: ptr u8, len: usize) -> isize {
-    manual[get, abi] {
-        return c_write(fd: fd, buf: buf, len: len);
-    }
+    return c_write(fd: fd, buf: buf, len: len);
 }
 ```
 
 ```parus
-extern "C" def c_fill(dst: ptr mut u8, len: usize, v: u8) -> void;
+extern "C" def c_printf(fmt: ptr i8, ...) -> i32;
 
-def fill_zero(dst: ptr mut u8, len: usize) -> void {
-    manual[set, abi] {
-        c_fill(dst: dst, len: len, v: 0u8);
+def log_num(v: i32) -> i32 {
+    manual[abi] {
+        return c_printf(fmt: null, v);
     }
 }
 ```
@@ -138,7 +137,7 @@ def fill_zero(dst: ptr mut u8, len: usize) -> void {
    - `manual[perm,...] { ... }`를 독립 stmt로 파싱
 2. 타입체커/CapCheck:
    - 블록별 manual permission stack 유지
-   - 권한 없는 raw pointer 연산/ABI 호출을 진단
+   - 권한 없는 raw pointer 연산/ABI-risk 호출을 진단
 3. SIR/OIR:
    - manual 권한을 블록 메타로 보존(최적화 힌트/진단용)
    - 의미론은 기존 안전 규칙을 우회하지 않음

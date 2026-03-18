@@ -55,6 +55,11 @@
         }
 
         if (s.link_abi == ast::LinkAbi::kC) {
+            if (s.fn_is_c_variadic && !s.is_extern) {
+                const std::string msg = "C variadic declaration is allowed only on extern \"C\" declarations";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
             if (s.is_throwing) {
                 diag_(diag::Code::kAbiCThrowingFnNotAllowed, s.span, s.name);
                 err_(s.span, "C ABI function must not be throwing ('?'); convert exception channel at boundary");

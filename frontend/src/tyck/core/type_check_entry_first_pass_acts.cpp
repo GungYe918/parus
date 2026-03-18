@@ -127,6 +127,11 @@
         };
 
         std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;
+        const auto make_c_abi_decl_payload = [](const ast::Stmt& s) {
+            std::string payload = "parus_c_abi_decl|is_c_abi=1|callconv=default";
+            payload += s.fn_is_c_variadic ? "|variadic=1" : "|variadic=0";
+            return payload;
+        };
 
         auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
             if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
@@ -255,6 +260,9 @@
                     if (!ins.ok && ins.is_duplicate) {
                         err_(s.span, "duplicate symbol (function): " + qname);
                         diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                    } else if (ins.ok && s.link_abi == ast::LinkAbi::kC) {
+                        auto& sym = sym_.symbol_mut(ins.symbol_id);
+                        sym.external_payload = make_c_abi_decl_payload(s);
                     }
                 }
 

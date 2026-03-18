@@ -351,6 +351,7 @@ namespace parus::ast {
         kIdent,
         kBlock,
         kStrLit,
+        kRawStrLit,
         kTt,
     };
 
@@ -564,6 +565,7 @@ namespace parus::ast {
         // 나머지: named-group
         uint32_t positional_param_count = 0;
         bool has_named_group = false;
+        bool fn_is_c_variadic = false;
         bool fn_is_proto_sig = false; // true when parsed from proto member signature (body-less)
         uint32_t fn_generic_param_begin = 0;
         uint32_t fn_generic_param_count = 0;

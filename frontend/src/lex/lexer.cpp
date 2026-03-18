@@ -363,7 +363,15 @@ namespace parus {
     Token Lexer::lex_ident_or_kw() {
         size_t start = pos_;
         bump(); // first char
-        while (!eof() && is_ident_cont(peek())) bump();
+        while (!eof() && is_ident_cont(peek())) {
+            // Allow compact macro payload form like `$fooR"""..."""` / `$fooF"""..."""`.
+            // Stop identifier scan before the prefixed triple-string token.
+            if ((peek() == 'R' || peek() == 'F') &&
+                peek(1) == '"' && peek(2) == '"' && peek(3) == '"') {
+                break;
+            }
+            bump();
+        }
         size_t end = pos_;
 
         Token t;

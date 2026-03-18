@@ -239,7 +239,9 @@ namespace parus {
         uint32_t& out_param_begin,
         uint32_t& out_param_count,
         uint32_t& out_positional_count,
-        bool& out_has_named_group
+        bool& out_has_named_group,
+        bool allow_c_variadic,
+        bool* out_is_c_variadic
     ) {
         using K = syntax::TokenKind;
 
@@ -247,6 +249,7 @@ namespace parus {
         out_param_count = 0;
         out_positional_count = 0;
         out_has_named_group = false;
+        if (out_is_c_variadic != nullptr) *out_is_c_variadic = false;
 
         if (!cursor_.eat(K::kLParen)) {
             diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
@@ -322,6 +325,29 @@ namespace parus {
             // allow: "(, { ... })" or "(..., { ... })"  => optional comma before '{' (SPEC NamedGroupOpt)
             if (cursor_.at(K::kComma) && cursor_.peek(1).kind == K::kLBrace) {
                 cursor_.bump();
+            }
+
+            if (cursor_.at(K::kEllipsis)) {
+                const Token ellipsis_tok = cursor_.bump();
+                if (!allow_c_variadic) {
+                    diag_report(diag::Code::kUnexpectedToken,
+                                ellipsis_tok.span,
+                                "variadic '...' is allowed only in extern \"C\" declarations");
+                } else if (consumed_named_group) {
+                    diag_report(diag::Code::kUnexpectedToken,
+                                ellipsis_tok.span,
+                                "variadic '...' must appear before any named-group section");
+                } else {
+                    if (out_is_c_variadic != nullptr) *out_is_c_variadic = true;
+                }
+
+                if (cursor_.eat(K::kComma)) {
+                    diag_report(diag::Code::kUnexpectedToken,
+                                cursor_.prev().span,
+                                "no parameters allowed after variadic '...'");
+                    recover_to_delim(K::kRParen, K::kArrow, K::kLBrace);
+                }
+                break;
             }
 
             // named-group section
@@ -622,6 +648,7 @@ namespace parus {
         s.param_count = param_count;
         s.positional_param_count = positional_count;
         s.has_named_group = has_named_group;
+        s.fn_is_c_variadic = false;
         s.fn_is_proto_sig = true;
         s.proto_fn_role = role;
         s.fn_generic_param_begin = generic_begin;
@@ -737,7 +764,15 @@ namespace parus {
         // 7) params
         uint32_t param_begin = 0, param_count = 0, positional_count = 0;
         bool has_named_group = false;
-        parse_decl_fn_params(param_begin, param_count, positional_count, has_named_group);
+        bool fn_is_c_variadic = false;
+        parse_decl_fn_params(
+            param_begin,
+            param_count,
+            positional_count,
+            has_named_group,
+            is_extern && link_abi == ast::LinkAbi::kC,
+            &fn_is_c_variadic
+        );
 
         // 7.5) optional constraint clause: with [T: Proto, ...]
         uint32_t constraint_begin = 0;
@@ -844,6 +879,7 @@ namespace parus {
         s.param_count = param_count;                 // total params (positional + named-group)
         s.positional_param_count = positional_count; // positional only
         s.has_named_group = has_named_group;
+        s.fn_is_c_variadic = fn_is_c_variadic;
         s.fn_generic_param_begin = generic_begin;
         s.fn_generic_param_count = generic_count;
         s.fn_constraint_begin = constraint_begin;

@@ -108,6 +108,7 @@ namespace parus::syntax {
         kQuestion,  // ?
         kQuestionQuestion,        // ??     (null-coalescing)
         kQuestionQuestionAssign,  // ??=    (null-coalescing assign)
+        kEllipsis,  // ...
         kDot,       // .
 
         // operators
@@ -254,6 +255,7 @@ namespace parus::syntax {
             case TokenKind::kQuestion: return "?";
             case TokenKind::kQuestionQuestion: return "??";
             case TokenKind::kQuestionQuestionAssign: return "?" "?="; // "??=" but avoids trigraph
+            case TokenKind::kEllipsis: return "...";
             case TokenKind::kDot: return ".";
 
             case TokenKind::kAssign: return "=";
