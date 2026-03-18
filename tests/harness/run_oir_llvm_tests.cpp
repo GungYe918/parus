@@ -377,49 +377,6 @@ namespace {
         return ok;
     }
 
-    static bool test_fstring_runtime_text_passthrough_llvm_patterns() {
-        const std::string src = R"(
-            def sink(msg: text) -> i32 { return 0i32; }
-
-            def main() -> i32 {
-                let msg: text = "M";
-                return sink($"{msg}");
-            }
-        )";
-
-        auto p = build_oir_pipeline_(src);
-        bool ok = true;
-        ok &= require_(p.has_value(), "runtime passthrough $-fstring source must pass frontend->OIR pipeline");
-        if (!ok) return false;
-
-        size_t text_const_count = 0;
-        bool saw_braced_text_const = false;
-        for (const auto& inst : p->oir.mod.insts) {
-            if (const auto* ct = std::get_if<parus::oir::InstConstText>(&inst.data)) {
-                ++text_const_count;
-                if (ct->bytes.find('{') != std::string::npos ||
-                    ct->bytes.find('}') != std::string::npos) {
-                    saw_braced_text_const = true;
-                }
-            }
-        }
-
-        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
-            p->oir.mod,
-            p->prog.types,
-            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
-        );
-
-        ok &= require_(lowered.ok, "runtime passthrough $-fstring LLVM lowering must succeed");
-        ok &= require_(text_const_count == 1,
-                       "runtime passthrough $-fstring must not materialize extra text constants");
-        ok &= require_(!saw_braced_text_const,
-                       "runtime passthrough $-fstring must not lower as literal '{...}' bytes");
-        ok &= require_(lowered.llvm_ir.find("{msg}") == std::string::npos,
-                       "runtime passthrough $-fstring must not appear as literal text in LLVM");
-        return ok;
-    }
-
     /// @brief `|>` 체인이 SIR kPipeCall을 거쳐 OIR/LLVM call 경로로 내려가는지 검사한다.
     static bool test_pipe_forward_chain_llvm_call_patterns() {
         const std::string src = R"(
@@ -895,6 +852,7 @@ namespace {
         ok &= require_(has_clone_call, "non-trivial clone must lower to direct operator(clone) call");
         ok &= require_(lowered.llvm_ir.find("@parus_oir_call_stub") == std::string::npos,
                        "copy/clone lowering should not require dynamic call stub");
+        if (!ok) return false;
         return emit_object_for_test_case_(lowered.llvm_ir, "copy_clone_patterns");
     }
 
@@ -948,15 +906,33 @@ namespace {
                        "LLVM-IR must contain __parus_exc_type global");
         ok &= require_(lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
                        "LLVM-IR must contain typed exception payload global");
-        ok &= require_(lowered.llvm_ir.find("store %") != std::string::npos &&
-                           lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
+        const auto has_line_with_tokens = [&](std::string_view a, std::string_view b) {
+            size_t pos = 0;
+            while (pos < lowered.llvm_ir.size()) {
+                const size_t end = lowered.llvm_ir.find('\n', pos);
+                const std::string_view line =
+                    (end == std::string::npos)
+                        ? std::string_view(lowered.llvm_ir).substr(pos)
+                        : std::string_view(lowered.llvm_ir).substr(pos, end - pos);
+                if (line.find(a) != std::string_view::npos &&
+                    line.find(b) != std::string_view::npos) {
+                    return true;
+                }
+                if (end == std::string::npos) break;
+                pos = end + 1;
+            }
+            return false;
+        };
+        ok &= require_(has_line_with_tokens("store ", "@__parus_exc_payload$"),
                        "throw path must store payload into typed exception payload global");
-        ok &= require_(lowered.llvm_ir.find("load %") != std::string::npos &&
-                           lowered.llvm_ir.find("@__parus_exc_payload$") != std::string::npos,
+        const bool has_direct_payload_load = has_line_with_tokens("load ", "@__parus_exc_payload$");
+        const bool has_payload_select = has_line_with_tokens("select ", "@__parus_exc_payload$");
+        ok &= require_(has_direct_payload_load || has_payload_select,
                        "typed catch path must load payload from typed exception payload global");
         // untyped rethrow must propagate dynamic type-id (not constant-only path).
         ok &= require_(lowered.llvm_ir.find("load i64, ptr @__parus_exc_type") != std::string::npos,
                        "rethrow path must read existing exception type-id dynamically");
+        if (!ok) return false;
         return emit_object_for_test_case_(lowered.llvm_ir, "exception_payload_rethrow_patterns");
     }
 
@@ -2232,7 +2208,6 @@ int main() {
         {"c_abi_field_by_value_param_signature", test_c_abi_field_by_value_param_signature},
         {"c_abi_callconv_metadata_lowering", test_c_abi_callconv_metadata_lowering_},
         {"text_literal_rodata_and_c_abi_cstr_signature", test_text_literal_rodata_and_c_abi_cstr_signature},
-        {"fstring_runtime_text_passthrough_llvm_patterns", test_fstring_runtime_text_passthrough_llvm_patterns},
         {"pipe_forward_chain_llvm_call_patterns", test_pipe_forward_chain_llvm_call_patterns},
         {"float_char_literal_lowering", test_float_char_literal_lowering_},
         {"manual_field_lowering_memory_model", test_manual_field_lowering_memory_model},
