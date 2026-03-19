@@ -263,9 +263,13 @@ std::string hex64(uint64_t v) {
     return out;
 }
 
-std::string obj_path_for(const std::string& bundle_name, const std::string& source) {
+std::string obj_path_for(const std::string& bundle_root,
+                         const std::string& bundle_name,
+                         const std::string& source) {
     const auto h = hex64(fnv1a64(source));
-    return ".lei/out/obj/" + sanitize(bundle_name) + "/" + h + ".o";
+    return (parus_tools::paths::out_obj_dir(bundle_root) / sanitize(bundle_name) / (h + ".o"))
+        .lexically_normal()
+        .string();
 }
 
 std::string tool_from_env(const char* key, std::string_view fallback) {

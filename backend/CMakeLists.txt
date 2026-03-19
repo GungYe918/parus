@@ -25,7 +25,6 @@ endif()
 add_subdirectory(src/prt)
 add_subdirectory(src/link)
 add_subdirectory(src/parlib)
-add_subdirectory(tools/parus-lld)
 
 if(PARUS_ENABLE_JIT_BACKEND)
     add_subdirectory(src/jit)

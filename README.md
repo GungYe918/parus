@@ -22,7 +22,7 @@ Compiler implementation docs (source-tree adjacent):
 2. `backend/docs/README.md`
 3. `compiler/parusc/docs/README.md`
 4. `tools/parusd/docs/README.md`
-5. `backend/tools/parus-lld/docs/README.md`
+5. `tools/parus-lld/docs/README.md`
 
 Internal hub index:
 
@@ -35,7 +35,7 @@ Internal hub index:
 - `compiler/parusc/`: compiler driver
 - `tools/parus/`: orchestrator CLI (`parus`)
 - `tools/parusd/`: standalone LSP server
-- `backend/tools/parus-lld/`: linker driver
+- `tools/parus-lld/`: linker driver
 - `docs/`: reference and hub documentation
 - `tests/`: language and FFI tests
 

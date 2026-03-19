@@ -1,4 +1,4 @@
-# backend/tools/parus-lld/CMakeLists.txt
+# tools/parus-lld/CMakeLists.txt
 
 add_executable(parus-lld
     ${CMAKE_CURRENT_LIST_DIR}/main.cpp

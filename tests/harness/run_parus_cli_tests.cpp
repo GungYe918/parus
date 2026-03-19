@@ -674,7 +674,7 @@ bool test_cross_bundle_export_runtime_call() {
     }
 
     const std::string run_cmd =
-        "cd \"" + temp_root.string() + "\" && \".lei/out/bin/app\"; echo EXIT:$?";
+        "cd \"" + temp_root.string() + "\" && \"target/parus/out/bin/app\"; echo EXIT:$?";
     auto [rc_run, out_run] = run_capture(run_cmd);
     std::filesystem::remove_all(temp_root, ec);
 
@@ -762,7 +762,7 @@ bool test_same_bundle_multi_module_runtime_call() {
     }
 
     const std::string run_cmd =
-        "cd \"" + temp_root.string() + "\" && \".lei/out/bin/app\"; echo EXIT:$?";
+        "cd \"" + temp_root.string() + "\" && \"target/parus/out/bin/app\"; echo EXIT:$?";
     auto [rc_run, out_run] = run_capture(run_cmd);
     std::filesystem::remove_all(temp_root, ec);
 

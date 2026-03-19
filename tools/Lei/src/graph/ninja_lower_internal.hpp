@@ -1,6 +1,7 @@
 #pragma once
 
 #include <lei/graph/BuildGraph.hpp>
+#include <parus_tools/StateRoot.hpp>
 
 #include <algorithm>
 #include <cstdint>

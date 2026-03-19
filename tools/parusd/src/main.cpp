@@ -23,6 +23,7 @@
 #include <lei/eval/Evaluator.hpp>
 #include <lei/graph/BuildGraph.hpp>
 #include <lei/parse/Parser.hpp>
+#include <parus_tools/StateRoot.hpp>
 #endif
 
 #include <algorithm>
@@ -2276,7 +2277,7 @@ namespace {
     ) {
         namespace fs = std::filesystem;
         std::error_code ec{};
-        const fs::path index_dir = config_dir / ".lei-cache" / "index";
+        const fs::path index_dir = parus_tools::paths::index_dir(config_dir);
         fs::create_directories(index_dir, ec);
         if (ec) return false;
         out_index_path = index_dir / (unit.bundle_name + ".exports.json");

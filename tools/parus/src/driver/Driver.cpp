@@ -4,6 +4,7 @@
 #include <parus_tool/doctor/Doctor.hpp>
 #include <parus_tool/proc/Process.hpp>
 #include <parus_tool/toolchain/Resolver.hpp>
+#include <parus_tools/StateRoot.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -771,7 +772,7 @@ int run_check(const cli::Options& opt,
         info.deps.erase(std::unique(info.deps.begin(), info.deps.end()), info.deps.end());
     }
 
-    const auto index_dir = (entry_base / ".lei-cache" / "index").lexically_normal();
+    const auto index_dir = parus_tools::paths::index_dir(entry_base).lexically_normal();
     ec.clear();
     std::filesystem::create_directories(index_dir, ec);
     if (ec) {

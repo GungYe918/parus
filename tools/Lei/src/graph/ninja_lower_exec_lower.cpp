@@ -6,6 +6,11 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
     ctx.g.project_version = graph.project_version;
     const std::string parusc_cmd = tool_from_env("PARUSC", "parusc");
     const std::string parus_lld_cmd = tool_from_env("PARUS_LLD", "parus-lld");
+    const auto index_dir = parus_tools::paths::index_dir(bundle_root).lexically_normal();
+    const auto out_codegen_dir = parus_tools::paths::out_codegen_dir(bundle_root).lexically_normal();
+    const auto out_lib_dir = parus_tools::paths::out_lib_dir(bundle_root).lexically_normal();
+    const auto out_bin_dir = parus_tools::paths::out_bin_dir(bundle_root).lexically_normal();
+    const auto out_task_dir = parus_tools::paths::out_task_dir(bundle_root).lexically_normal();
 
     std::unordered_set<std::string> names{};
     for (const auto& b : graph.bundles) {
@@ -27,7 +32,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
             outs.push_back(out_file);
             add_artifact(ctx, out_file, ArtifactKind::kGeneratedFile);
         }
-        const std::string stamp_path = ".lei/out/codegen/" + sanitize(c.name) + ".stamp";
+        const std::string stamp_path = (out_codegen_dir / (sanitize(c.name) + ".stamp")).string();
         outs.push_back(stamp_path);
         add_artifact(ctx, stamp_path, ArtifactKind::kStampFile);
 
@@ -97,7 +102,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         std::vector<std::string> obj_paths{};
         obj_paths.reserve(resolved_sources.size());
 
-        const std::string index_path = ".lei-cache/index/" + sanitize(b.name) + ".exports.json";
+        const std::string index_path = (index_dir / (sanitize(b.name) + ".exports.json")).string();
         ctx.bundle_index_path_by_name[b.name] = index_path;
         add_artifact(ctx, index_path, ArtifactKind::kGeneratedFile);
 
@@ -153,7 +158,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         ctx.bundle_compile_actions_by_name[b.name] = {};
 
         for (const auto& src : resolved_sources) {
-            const std::string obj = obj_path_for(b.name, src);
+            const std::string obj = obj_path_for(bundle_root, b.name, src);
             obj_paths.push_back(obj);
             add_artifact(ctx, obj, ArtifactKind::kObjectFile);
 
@@ -203,7 +208,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
             for (const auto& dep : b.deps) {
                 cmd.push_back("--bundle-dep");
                 cmd.push_back(dep);
-                const std::string dep_index = ".lei-cache/index/" + sanitize(dep) + ".exports.json";
+                const std::string dep_index = (index_dir / (sanitize(dep) + ".exports.json")).string();
                 cmd.push_back("--load-export-index");
                 cmd.push_back(dep_index);
             }
@@ -230,7 +235,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         ctx.bundle_dep_names[b.name] = b.deps;
 
         if (b.kind == "lib") {
-            const std::string lib_stamp = ".lei/out/lib/" + sanitize(b.name) + ".stamp";
+            const std::string lib_stamp = (out_lib_dir / (sanitize(b.name) + ".stamp")).string();
             add_artifact(ctx, lib_stamp, ArtifactKind::kStampFile);
 
             const std::string lib_action = add_action(ctx,
@@ -279,8 +284,8 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         std::sort(all_objs.begin(), all_objs.end());
         all_objs.erase(std::unique(all_objs.begin(), all_objs.end()), all_objs.end());
 
-        const std::string bin_out = ".lei/out/bin/" + sanitize(b.name);
-        const std::string bin_stamp = ".lei/out/bin/" + sanitize(b.name) + ".stamp";
+        const std::string bin_out = (out_bin_dir / sanitize(b.name)).string();
+        const std::string bin_stamp = (out_bin_dir / (sanitize(b.name) + ".stamp")).string();
         add_artifact(ctx, bin_out, ArtifactKind::kBinaryFile);
         add_artifact(ctx, bin_stamp, ArtifactKind::kStampFile);
 
@@ -304,7 +309,7 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         std::vector<std::string> outs = t.outputs;
         for (const auto& out : t.outputs) add_artifact(ctx, out, ArtifactKind::kGeneratedFile);
 
-        const std::string stamp = ".lei/out/task/" + sanitize(t.name) + ".stamp";
+        const std::string stamp = (out_task_dir / (sanitize(t.name) + ".stamp")).string();
         outs.push_back(stamp);
         add_artifact(ctx, stamp, ArtifactKind::kStampFile);
 

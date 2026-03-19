@@ -104,10 +104,28 @@ CMAKE_EXTRA_ARGS=(
 )
 
 HAS_LLD_LINKER=0
-if [ -x "${LLVM_PREFIX}/bin/ld64.lld" ] || [ -x "${LLVM_PREFIX}/bin/ld.lld" ]; then
-  HAS_LLD_LINKER=1
-elif command -v ld64.lld >/dev/null 2>&1 || command -v ld.lld >/dev/null 2>&1; then
-  HAS_LLD_LINKER=1
+HOST_OS="$(uname -s)"
+USE_HOST_LLD=0
+case "${PARUS_USE_HOST_LLD:-}" in
+  1|ON|on|true|TRUE)
+    USE_HOST_LLD=1
+    ;;
+esac
+
+if [ "${HOST_OS}" != "Darwin" ] || [ "${USE_HOST_LLD}" -eq 1 ]; then
+  if [ -x "${LLVM_PREFIX}/bin/ld64.lld" ] || [ -x "${LLVM_PREFIX}/bin/ld.lld" ]; then
+    HAS_LLD_LINKER=1
+  elif command -v ld64.lld >/dev/null 2>&1 || command -v ld.lld >/dev/null 2>&1; then
+    HAS_LLD_LINKER=1
+  fi
+fi
+
+if [ "${HOST_OS}" = "Darwin" ] && [ "${USE_HOST_LLD}" -eq 0 ]; then
+  CMAKE_EXTRA_ARGS+=(
+    "-DCMAKE_EXE_LINKER_FLAGS=-Wl,-w"
+    "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-w"
+    "-DCMAKE_MODULE_LINKER_FLAGS=-Wl,-w"
+  )
 fi
 
 if [ "${HAS_LLD_LINKER}" -eq 1 ]; then

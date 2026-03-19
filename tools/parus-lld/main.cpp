@@ -1,4 +1,4 @@
-// backend/tools/parus-lld/main.cpp
+// tools/parus-lld/main.cpp
 #include <parus/backend/parlib/Parlib.hpp>
 
 #include <algorithm>

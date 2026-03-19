@@ -25,7 +25,7 @@
 
 1. `compiler/parusc/docs/README.md`
 2. `tools/parusd/docs/README.md`
-3. `backend/tools/parus-lld/docs/README.md`
+3. `tools/parus-lld/docs/README.md`
 
 ## Toolchain/Sysroot
 

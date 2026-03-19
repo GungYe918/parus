@@ -27,6 +27,7 @@ add_library(lei_core
 target_include_directories(lei_core
     PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/tools/common/include
 )
 
 target_compile_features(lei_core PUBLIC cxx_std_23)
@@ -42,6 +43,7 @@ add_library(lei_parser
 )
 target_link_libraries(lei_parser PUBLIC lei_core)
 target_include_directories(lei_parser PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(lei_parser PUBLIC ${CMAKE_SOURCE_DIR}/tools/common/include)
 target_compile_features(lei_parser PUBLIC cxx_std_23)
 if (MSVC)
     target_compile_options(lei_parser PRIVATE /W4 /permissive-)
@@ -62,6 +64,7 @@ add_library(lei_eval
 )
 target_link_libraries(lei_eval PUBLIC lei_parser)
 target_include_directories(lei_eval PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(lei_eval PUBLIC ${CMAKE_SOURCE_DIR}/tools/common/include)
 target_compile_features(lei_eval PUBLIC cxx_std_23)
 
 set(LEI_PARUS_ENABLE_AOT_BACKEND_DEF 1)
@@ -125,6 +128,7 @@ add_library(lei_graph
 )
 target_link_libraries(lei_graph PUBLIC lei_eval)
 target_include_directories(lei_graph PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(lei_graph PUBLIC ${CMAKE_SOURCE_DIR}/tools/common/include)
 target_compile_features(lei_graph PUBLIC cxx_std_23)
 if (MSVC)
     target_compile_options(lei_graph PRIVATE /W4 /permissive-)
@@ -136,6 +140,7 @@ add_executable(lei
     src/cli/main.cpp
 )
 target_link_libraries(lei PRIVATE lei_graph)
+target_include_directories(lei PRIVATE ${CMAKE_SOURCE_DIR}/tools/common/include)
 target_compile_features(lei PRIVATE cxx_std_23)
 if (MSVC)
     target_compile_options(lei PRIVATE /W4 /permissive-)

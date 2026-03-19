@@ -1,7 +1,9 @@
 #include <parus_tool/doctor/Doctor.hpp>
 
+#include <parus_tool/config/Config.hpp>
 #include <parus_tool/proc/Process.hpp>
 #include <parus_tool/toolchain/Resolver.hpp>
+#include <parus_tools/StateRoot.hpp>
 
 #include <cstdlib>
 #include <cstdio>
@@ -188,7 +190,7 @@ std::vector<std::string> default_hints_for(std::string_view id, std::string_view
     if (id == "fs.cache_writable") {
         return {
             "Ensure the working directory is writable.",
-            "Or run from a writable project root so .lei-cache can be created.",
+            "Or run from a writable project root so target/parus/cache can be created.",
         };
     }
     if (id == "smoke.lei_check") {
@@ -450,7 +452,11 @@ Report run(const cli::DoctorOptions& doctor_opt,
 
     {
         std::error_code ec{};
-        const auto cache_dir = std::filesystem::path(".lei-cache");
+        auto cache_dir = parus_tools::paths::cache_root(std::filesystem::current_path(ec));
+        if (ec) {
+            ec.clear();
+            cache_dir = std::filesystem::path("target") / "parus" / "cache";
+        }
         std::filesystem::create_directories(cache_dir, ec);
         const auto probe_file = cache_dir / "doctor_write_probe.tmp";
         if (!ec && write_text(probe_file, "probe")) {
@@ -461,7 +467,7 @@ Report run(const cli::DoctorOptions& doctor_opt,
                      "fs.cache_writable",
                      Category::kFilesystem,
                      Level::kFail,
-                     "failed to write .lei-cache",
+                     "failed to write " + cache_dir.string(),
                      default_hints_for("fs.cache_writable"));
         }
     }

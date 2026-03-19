@@ -38,4 +38,4 @@
 
 ## 코드 근거
 
-1. `backend/tools/parus-lld/main.cpp`
+1. `tools/parus-lld/main.cpp`

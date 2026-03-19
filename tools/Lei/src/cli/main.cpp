@@ -413,7 +413,7 @@ int main(int argc, char** argv) {
     std::string ninja_out = out_set ? out_path : "build.ninja";
     if (build_now && !out_set) {
         const auto key = lei::cache::make_cache_key(entry_norm, entry_plan);
-        ninja_out = (lei::cache::ninja_cache_dir() / (key + ".ninja")).string();
+        ninja_out = (lei::cache::ninja_cache_dir(entry_norm) / (key + ".ninja")).string();
     }
 
     if (!write_text_file(ninja_out, *ninja)) {

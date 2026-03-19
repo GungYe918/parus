@@ -13,6 +13,7 @@ target_include_directories(parus
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/frontend/include
+    ${CMAKE_SOURCE_DIR}/tools/common/include
 )
 
 target_compile_features(parus PRIVATE cxx_std_23)

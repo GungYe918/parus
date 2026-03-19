@@ -33,5 +33,5 @@
 
 ## 코드 근거
 
-1. `backend/tools/parus-lld/main.cpp` (`plan_inputs_`)
+1. `tools/parus-lld/main.cpp` (`plan_inputs_`)
 2. `backend/include/parus/backend/parlib/Parlib.hpp`

@@ -34,8 +34,8 @@ std::string hash_text(std::string_view text);
 std::string hash_file(const std::filesystem::path& path);
 
 std::string make_cache_key(const std::string& entry_file, const std::string& entry_plan);
-std::filesystem::path graph_cache_dir();
-std::filesystem::path ninja_cache_dir();
+std::filesystem::path graph_cache_dir(const std::filesystem::path& anchor);
+std::filesystem::path ninja_cache_dir(const std::filesystem::path& anchor);
 
 bool validate_cache_meta(const GraphCacheMeta& meta, lei::diag::Bag& diags);
 std::optional<GraphCacheLoad> load_graph_cache(const std::string& entry_file,

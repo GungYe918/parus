@@ -14,7 +14,7 @@ Parus 문서는 역할별로 분리한다.
 2. backend: `backend/docs/README.md`
 3. parusc: `compiler/parusc/docs/README.md`
 4. parusd: `tools/parusd/docs/README.md`
-5. parus-lld: `backend/tools/parus-lld/docs/README.md`
+5. parus-lld: `tools/parus-lld/docs/README.md`
 6. sysroot/toolchain: `sysroot/SYSROOT.md`
 
 ## 3. 허브 문서

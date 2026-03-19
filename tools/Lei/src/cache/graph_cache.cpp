@@ -1,6 +1,7 @@
 #include <lei/cache/GraphCache.hpp>
 
 #include <lei/os/File.hpp>
+#include <parus_tools/StateRoot.hpp>
 
 #include <algorithm>
 #include <cstdint>
@@ -39,20 +40,16 @@ std::string trim(std::string s) {
     return s;
 }
 
-std::filesystem::path cache_root() {
-    return std::filesystem::path(".lei-cache");
+std::filesystem::path meta_path_for(std::string_view key, const std::filesystem::path& anchor) {
+    return graph_cache_dir(anchor) / (std::string(key) + ".meta.json");
 }
 
-std::filesystem::path meta_path_for(std::string_view key) {
-    return graph_cache_dir() / (std::string(key) + ".meta.json");
+std::filesystem::path graph_json_path_for(std::string_view key, const std::filesystem::path& anchor) {
+    return graph_cache_dir(anchor) / (std::string(key) + ".json");
 }
 
-std::filesystem::path graph_json_path_for(std::string_view key) {
-    return graph_cache_dir() / (std::string(key) + ".json");
-}
-
-std::filesystem::path ninja_path_for(std::string_view key) {
-    return ninja_cache_dir() / (std::string(key) + ".ninja");
+std::filesystem::path ninja_path_for(std::string_view key, const std::filesystem::path& anchor) {
+    return ninja_cache_dir(anchor) / (std::string(key) + ".ninja");
 }
 
 bool write_atomic_text(const std::filesystem::path& path, const std::string& text, lei::diag::Bag& diags) {
@@ -175,12 +172,12 @@ std::string make_cache_key(const std::string& entry_file, const std::string& ent
     return hex64(fnv1a64(entry_file + "::" + entry_plan));
 }
 
-std::filesystem::path graph_cache_dir() {
-    return cache_root() / "graph";
+std::filesystem::path graph_cache_dir(const std::filesystem::path& anchor) {
+    return parus_tools::paths::graph_cache_dir(anchor);
 }
 
-std::filesystem::path ninja_cache_dir() {
-    return cache_root() / "ninja";
+std::filesystem::path ninja_cache_dir(const std::filesystem::path& anchor) {
+    return parus_tools::paths::ninja_cache_dir(anchor);
 }
 
 bool validate_cache_meta(const GraphCacheMeta& meta, lei::diag::Bag& diags) {
@@ -210,9 +207,9 @@ std::optional<GraphCacheLoad> load_graph_cache(const std::string& entry_file,
                                                const std::string& entry_plan,
                                                lei::diag::Bag& diags) {
     const auto key = make_cache_key(entry_file, entry_plan);
-    const auto meta_file = meta_path_for(key);
-    const auto graph_file = graph_json_path_for(key);
-    const auto ninja_file = ninja_path_for(key);
+    const auto meta_file = meta_path_for(key, entry_file);
+    const auto graph_file = graph_json_path_for(key, entry_file);
+    const auto ninja_file = ninja_path_for(key, entry_file);
 
     const auto read_meta = lei::os::read_text_file(meta_file.string());
     const auto read_graph = lei::os::read_text_file(graph_file.string());
@@ -247,9 +244,9 @@ bool store_graph_cache(const std::string& entry_file,
     write_meta.graph_json_hash = hash_text(graph_json);
     write_meta.ninja_hash = hash_text(ninja_text);
 
-    const auto meta_file = meta_path_for(key);
-    const auto graph_file = graph_json_path_for(key);
-    const auto ninja_file = ninja_path_for(key);
+    const auto meta_file = meta_path_for(key, entry_file);
+    const auto graph_file = graph_json_path_for(key, entry_file);
+    const auto ninja_file = ninja_path_for(key, entry_file);
 
     if (!write_atomic_text(graph_file, graph_json, diags)) return false;
     if (!write_atomic_text(ninja_file, ninja_text, diags)) return false;

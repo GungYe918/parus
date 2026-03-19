@@ -341,9 +341,9 @@ bool run_cli_cache_smoke(const std::filesystem::path& path) {
     const auto abs = std::filesystem::weakly_canonical(path, ec);
     const std::string entry = ec ? path.string() : abs.string();
     const std::string key = lei::cache::make_cache_key(entry, "master");
-    const auto graph_meta = lei::cache::graph_cache_dir() / (key + ".meta.json");
-    const auto graph_json = lei::cache::graph_cache_dir() / (key + ".json");
-    const auto ninja = lei::cache::ninja_cache_dir() / (key + ".ninja");
+    const auto graph_meta = lei::cache::graph_cache_dir(path) / (key + ".meta.json");
+    const auto graph_json = lei::cache::graph_cache_dir(path) / (key + ".json");
+    const auto ninja = lei::cache::ninja_cache_dir(path) / (key + ".ninja");
 
     if (!std::filesystem::exists(graph_meta) ||
         !std::filesystem::exists(graph_json) ||
