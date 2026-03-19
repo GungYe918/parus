@@ -489,9 +489,17 @@
                     types_.get(rhs_t).builtin == ty::Builtin::kInferInteger;
 
                 if (lhs_infer && rhs_infer) {
-                    diag_(diag::Code::kLoopRangeNeedsTypedBound, e.loop_iter == ast::k_invalid_expr ? e.span : ast_.expr(e.loop_iter).span);
-                    err_(e.span, "loop range requires at least one typed integer bound");
-                    lhs_t = rhs_t = types_.error();
+                    const ty::TypeId default_range_int = types_.builtin(ty::Builtin::kI32);
+                    if (!resolve_infer_int_in_context_(r.a, default_range_int)) {
+                        lhs_t = types_.error();
+                    } else {
+                        lhs_t = check_expr_(r.a, Slot::kValue);
+                    }
+                    if (!resolve_infer_int_in_context_(r.b, default_range_int)) {
+                        rhs_t = types_.error();
+                    } else {
+                        rhs_t = check_expr_(r.b, Slot::kValue);
+                    }
                 } else if (lhs_infer && !is_error_(rhs_t)) {
                     if (!resolve_infer_int_in_context_(r.a, rhs_t)) {
                         lhs_t = types_.error();

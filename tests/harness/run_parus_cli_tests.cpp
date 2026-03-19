@@ -1942,7 +1942,7 @@ bool test_iteration_unsupported_iterable_hard_error() {
     return true;
 }
 
-bool test_iteration_pure_infer_range_hard_error() {
+bool test_iteration_pure_infer_range_runtime_and_regressions() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
     const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-pure-infer-range";
@@ -1953,35 +1953,108 @@ bool test_iteration_pure_infer_range_hard_error() {
         return false;
     }
 
-    const auto main_pr = temp_root / "main.pr";
-    const std::string main_src =
+    const auto main_ok = temp_root / "main_ok.pr";
+    const auto main_bad_mismatch = temp_root / "main_bad_mismatch.pr";
+    const auto main_bad_float = temp_root / "main_bad_float.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_ok_src =
+        "import \"stdio.h\" as std;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  set mut s = 0i32;\n"
-        "  loop(i in 0..:10) {\n"
-        "    s = s + i;\n"
+        "  set mut exclusive = 0i32;\n"
+        "  set mut inclusive = 0i32;\n"
+        "  loop(i in 1..4) {\n"
+        "    exclusive = exclusive + i;\n"
         "  }\n"
-        "  return s;\n"
+        "  loop(i in 1..:4) {\n"
+        "    inclusive = inclusive + i;\n"
+        "    manual[abi] {\n"
+        "      std::printf(\"%d\\n\", i);\n"
+        "    }\n"
+        "  }\n"
+        "  return exclusive + inclusive;\n"
         "}\n";
-    if (!write_text(main_pr, main_src)) {
-        std::cerr << "failed to write pure infer range test file\n";
+    const std::string main_bad_mismatch_src =
+        "def main() -> i32 {\n"
+        "  loop(i in 1i32..:4i64) {\n"
+        "    return i;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    const std::string main_bad_float_src =
+        "def main() -> i32 {\n"
+        "  loop(i in 1.0f64..:4.0f64) {\n"
+        "    return 0i32;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_ok, main_ok_src) ||
+        !write_text(main_bad_mismatch, main_bad_mismatch_src) ||
+        !write_text(main_bad_float, main_bad_float_src)) {
+        std::cerr << "failed to write pure infer range test files\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
-    auto [rc, out] = run_capture(
-        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for pure infer range test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_ok, out_ok] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_ok.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (contains(out_ok, "CImportLibClangUnavailable")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return rc_ok != 0;
+    }
+    if (rc_ok != 0) {
+        std::cerr << "pure infer range loop sample should compile/link\n" << out_ok;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    if (rc_run != 0) {
+        std::cerr << "pure infer range loop sample should execute\n" << out_run;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_mismatch, out_mismatch] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_bad_mismatch.string() + "\" -fsyntax-only");
+    auto [rc_float, out_float] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_bad_float.string() + "\" -fsyntax-only");
+
     std::filesystem::remove_all(temp_root, ec);
 
-    if (rc == 0) {
-        std::cerr << "pure infer range loop must fail\n" << out;
+    if (!contains(out_run, "1\n2\n3\n4\n")) {
+        std::cerr << "pure infer inclusive range loop should print 1..4 in order\n" << out_run;
         return false;
     }
-    if (!contains(out, "LoopRangeNeedsTypedBound")) {
-        std::cerr << "pure infer range loop must report LoopRangeNeedsTypedBound\n" << out;
+    if (!contains(out_run, "EXIT:16")) {
+        std::cerr << "pure infer range loop sample exit mismatch (expected 16)\n" << out_run;
         return false;
     }
-    if (contains(out, "TypeErrorGeneric")) {
-        std::cerr << "pure infer range loop should fail at the header without cascading arithmetic errors\n" << out;
+    if (rc_mismatch == 0) {
+        std::cerr << "typed-mismatch range loop must fail\n" << out_mismatch;
+        return false;
+    }
+    if (!contains(out_mismatch, "LoopRangeBoundTypeMismatch")) {
+        std::cerr << "typed-mismatch range loop must report LoopRangeBoundTypeMismatch\n" << out_mismatch;
+        return false;
+    }
+    if (rc_float == 0) {
+        std::cerr << "non-integer range loop must fail\n" << out_float;
+        return false;
+    }
+    if (!contains(out_float, "LoopRangeBoundMustBeInteger")) {
+        std::cerr << "non-integer range loop must report LoopRangeBoundMustBeInteger\n" << out_float;
         return false;
     }
     return true;
@@ -2044,6 +2117,259 @@ bool test_iteration_loop_binder_variadic_typedef_arg_compiles() {
     }
     if (rc != 0) {
         std::cerr << "loop binder value should remain valid as a C variadic typedef argument\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_unsuffixed_array_literal_slice_runtime_and_llvm() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-unsuffixed-array-slice";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const auto llvm_out = temp_root / "main.ll";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let xs: i32[] = [1, 2, 3, 4];\n"
+        "  set mut s = 0i32;\n"
+        "  loop(x in xs) {\n"
+        "    s = s + x;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write unsuffixed array literal slice test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for unsuffixed array literal slice test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    auto [rc_ir, out_ir] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " -Xparus -emit-llvm-ir -o \"" + llvm_out.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "unsuffixed array literal slice sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    if (rc_ir != 0) {
+        std::cerr << "unsuffixed array literal slice llvm-ir emission should succeed\n" << out_ir;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    const std::string llvm_ir = read_text(llvm_out);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "unsuffixed array literal slice sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:10")) {
+        std::cerr << "unsuffixed array literal slice exit mismatch (expected 10)\n" << out_run;
+        return false;
+    }
+    if (!contains(llvm_ir, "[4 x i32]")) {
+        std::cerr << "unsuffixed array literal slice llvm-ir must materialize [4 x i32]\n" << llvm_ir;
+        return false;
+    }
+    if (contains(llvm_ir, "[4 x i64]")) {
+        std::cerr << "unsuffixed array literal slice llvm-ir must not materialize [4 x i64]\n" << llvm_ir;
+        return false;
+    }
+    if (!contains(llvm_ir, "store i32") || !contains(llvm_ir, "load i32")) {
+        std::cerr << "unsuffixed array literal slice llvm-ir must use typed i32 stores/loads\n" << llvm_ir;
+        return false;
+    }
+    if (contains(llvm_ir, "store i8")) {
+        std::cerr << "unsuffixed array literal slice llvm-ir must not degrade element stores to i8\n" << llvm_ir;
+        return false;
+    }
+    return true;
+}
+
+bool test_unsuffixed_named_array_to_slice_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-unsuffixed-array-named-slice";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let arr: i32[4] = [1, 2, 3, 4];\n"
+        "  let xs: i32[] = arr;\n"
+        "  set mut s = 0i32;\n"
+        "  loop(x in xs) {\n"
+        "    s = s + x;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write unsuffixed named array slice test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for unsuffixed named array slice test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "unsuffixed named array slice sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "unsuffixed named array slice sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:10")) {
+        std::cerr << "unsuffixed named array slice exit mismatch (expected 10)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_unsuffixed_array_literal_call_arg_and_return_contexts() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-unsuffixed-array-call-return";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def take(xs: i32[]) -> i32 {\n"
+        "  set mut s = 0i32;\n"
+        "  loop(x in xs) {\n"
+        "    s = s + x;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n"
+        "\n"
+        "def mk() -> i32[3] {\n"
+        "  return [1, 2, 3];\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let xs: i32[3] = mk();\n"
+        "  return take([1, 2, 3]) + xs[1i32];\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write unsuffixed array call/return test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for unsuffixed array call/return test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "unsuffixed array call/return sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "unsuffixed array call/return sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:8")) {
+        std::cerr << "unsuffixed array call/return exit mismatch (expected 8)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_unsuffixed_array_literal_float_context_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-unsuffixed-array-float-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let xs: f32[] = [1, 2, 3];\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write unsuffixed array float reject test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "unsuffixed integer array literal must not coerce to float array context\n" << out;
+        return false;
+    }
+    if (!contains(out, "IntToFloatNotAllowed")) {
+        std::cerr << "unsuffixed array float rejection must report IntToFloatNotAllowed\n" << out;
         return false;
     }
     return true;
@@ -4551,8 +4877,12 @@ int main() {
     const bool ok69 = test_iteration_slice_loop_runtime();
     const bool ok70 = test_iteration_range_loop_runtime();
     const bool ok71 = test_iteration_unsupported_iterable_hard_error();
-    const bool ok72 = test_iteration_pure_infer_range_hard_error();
+    const bool ok72 = test_iteration_pure_infer_range_runtime_and_regressions();
     const bool ok73 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
+    const bool ok74 = test_unsuffixed_array_literal_slice_runtime_and_llvm();
+    const bool ok75 = test_unsuffixed_named_array_to_slice_runtime();
+    const bool ok76 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
+    const bool ok77 = test_unsuffixed_array_literal_float_context_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -4560,7 +4890,7 @@ int main() {
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 ||
-        !ok71 || !ok72 || !ok73) {
+        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77) {
         return 1;
     }
 

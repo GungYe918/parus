@@ -310,7 +310,7 @@ namespace parus {
         const Token lb = cursor_.peek();
         diag_expect(K::kLBracket);
 
-        const uint32_t begin = static_cast<uint32_t>(ast_.args().size());
+        std::vector<ast::Arg> items{};
         uint32_t count = 0;
 
         if (!cursor_.at(K::kRBracket)) {
@@ -322,7 +322,7 @@ namespace parus {
                 a.kind = ast::ArgKind::kPositional;
                 a.expr = item;
                 a.span = ast_.expr(item).span;
-                ast_.add_arg(a);
+                items.push_back(std::move(a));
                 ++count;
 
                 if (cursor_.eat(K::kComma)) {
@@ -343,6 +343,8 @@ namespace parus {
 
         ast::Expr out{};
         out.kind = ast::ExprKind::kArrayLit;
+        const uint32_t begin = static_cast<uint32_t>(ast_.args().size());
+        for (auto& a : items) ast_.add_arg(a);
         out.arg_begin = begin;
         out.arg_count = count;
         out.span = span_join(lb.span, rb.span);

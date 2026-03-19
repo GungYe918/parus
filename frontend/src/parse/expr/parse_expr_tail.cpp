@@ -4,6 +4,7 @@
 #include <parus/diag/DiagCode.hpp>
 
 #include <string_view>
+#include <vector>
 
 
 namespace parus {
@@ -199,7 +200,7 @@ namespace parus {
         }
 
         (void)lparen_tok;
-        uint32_t begin = static_cast<uint32_t>(ast_.args().size());
+        std::vector<ast::Arg> parsed_args{};
         uint32_t count = 0;
 
         // ------------------------------------------------------------
@@ -261,7 +262,7 @@ namespace parus {
                     }
                 }
 
-                ast_.add_arg(a);
+                parsed_args.push_back(std::move(a));
                 ++count;
 
                 if (cursor_.eat(K::kComma)) {
@@ -292,6 +293,8 @@ namespace parus {
         out.kind = ast::ExprKind::kCall;
         out.span = span_join(ast_.expr(callee).span, rp.span);
         out.a = callee;
+        const uint32_t begin = static_cast<uint32_t>(ast_.args().size());
+        for (auto& a : parsed_args) ast_.add_arg(a);
         out.arg_begin = begin;
         out.arg_count = count;
         out.call_type_arg_begin = call_type_arg_begin;

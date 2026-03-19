@@ -980,6 +980,18 @@ namespace parus::oir {
                 }
 
                 const auto& dt = types->get(dst_ty);
+                if (dt.kind == parus::ty::Kind::kArray && !dt.array_has_size &&
+                    src_ty != kInvalidId) {
+                    const auto& st = types->get(src_ty);
+                    if (st.kind == parus::ty::Kind::kArray &&
+                        st.array_has_size &&
+                        st.elem == dt.elem) {
+                        const ValueId zero = emit_const_int(i64_type_(), "0");
+                        const ValueId hi = emit_array_len(src);
+                        return emit_slice_view(dst_ty, src, zero, hi, /*hi_inclusive=*/false);
+                    }
+                }
+
                 if (dt.kind == parus::ty::Kind::kOptional) {
                     const TypeId elem_ty = dt.elem;
                     const TypeId null_ty = (TypeId)types->builtin(parus::ty::Builtin::kNull);

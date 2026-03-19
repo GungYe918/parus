@@ -2310,6 +2310,11 @@
             if (e.kind != ast::ExprKind::kArrayLit) return false;
             if (et.array_has_size && e.arg_count != et.array_size) return false;
 
+            ty::TypeId value_expected = expected;
+            if (!et.array_has_size) {
+                value_expected = types_.make_array(et.elem, /*has_size=*/true, e.arg_count);
+            }
+
             auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
                 if (tid == ty::kInvalidType) return false;
                 const auto& tt = types_.get(tid);
@@ -2345,7 +2350,7 @@
 
             if (ok_all) {
                 if ((size_t)eid < expr_type_cache_.size()) {
-                    expr_type_cache_[eid] = expected;
+                    expr_type_cache_[eid] = value_expected;
                 }
                 return true;
             }

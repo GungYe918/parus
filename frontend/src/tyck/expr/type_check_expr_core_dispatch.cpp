@@ -1212,16 +1212,43 @@ namespace parus::tyck {
         };
 
         bool infer_resolved = false;
+        const auto resolve_array_literal_in_context = [&](ty::TypeId expected) -> bool {
+            if (src_eid == ast::k_invalid_expr ||
+                static_cast<size_t>(src_eid) >= ast_.exprs().size() ||
+                expected == ty::kInvalidType) {
+                return false;
+            }
+            const ast::Expr& src_expr = ast_.expr(src_eid);
+            if (src_expr.kind != ast::ExprKind::kArrayLit) return false;
+
+            expected = canonicalize_transparent_external_typedef_(expected);
+            if (expected == ty::kInvalidType || expected >= types_.count()) return false;
+
+            const auto& expected_t = types_.get(expected);
+            if (expected_t.kind != ty::Kind::kArray) return false;
+
+            ty::TypeId array_expected = expected;
+            if (!expected_t.array_has_size) {
+                array_expected = types_.make_array(expected_t.elem, /*has_size=*/true, src_expr.arg_count);
+            }
+            return resolve_infer_int_in_context_(src_eid, array_expected);
+        };
+
         if (!is_error_(src)) {
+            const ty::TypeId infer_expected =
+                (dst_is_opt && dst_elem != ty::kInvalidType) ? dst_elem : dst;
             const auto& st = types_.get(src);
             if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                const ty::TypeId infer_expected =
-                    (dst_is_opt && dst_elem != ty::kInvalidType) ? dst_elem : dst;
                 if (infer_expected != ty::kInvalidType) {
                     infer_resolved = resolve_infer_int_in_context_(src_eid, infer_expected);
                     src = check_expr_(src_eid);
                     plan.src_after = src;
                 }
+            } else if (infer_expected != ty::kInvalidType &&
+                       resolve_array_literal_in_context(infer_expected)) {
+                infer_resolved = true;
+                src = check_expr_(src_eid);
+                plan.src_after = src;
             }
         }
 
