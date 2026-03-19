@@ -2314,6 +2314,92 @@
                     return false;
             }
         };
+        auto is_int_builtin = [&](ty::Builtin b) -> bool {
+            return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
+                b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
+                b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
+                b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
+                b == ty::Builtin::kISize || b == ty::Builtin::kUSize ||
+                b == ty::Builtin::kCChar || b == ty::Builtin::kCSChar || b == ty::Builtin::kCUChar ||
+                b == ty::Builtin::kCShort || b == ty::Builtin::kCUShort ||
+                b == ty::Builtin::kCInt || b == ty::Builtin::kCUInt ||
+                b == ty::Builtin::kCLong || b == ty::Builtin::kCULong ||
+                b == ty::Builtin::kCLongLong || b == ty::Builtin::kCULongLong ||
+                b == ty::Builtin::kCSize || b == ty::Builtin::kCSSize ||
+                b == ty::Builtin::kCPtrDiff;
+        };
+        const auto rewrite_infer_shape = [&](ty::TypeId src, ty::TypeId dst, const auto& self) -> ty::TypeId {
+            src = canonicalize_transparent_external_typedef_(src);
+            dst = canonicalize_transparent_external_typedef_(dst);
+            if (src == ty::kInvalidType || dst == ty::kInvalidType) return ty::kInvalidType;
+            if (src == dst) return dst;
+
+            const auto& st = types_.get(src);
+            const auto& dt = types_.get(dst);
+            if (st.kind == ty::Kind::kBuiltin && dt.kind == ty::Kind::kBuiltin &&
+                st.builtin == ty::Builtin::kInferInteger && is_int_builtin(dt.builtin)) {
+                return dst;
+            }
+
+            if (st.kind != dt.kind) return ty::kInvalidType;
+            switch (st.kind) {
+                case ty::Kind::kOptional: {
+                    const ty::TypeId elem = self(st.elem, dt.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_optional(elem);
+                }
+                case ty::Kind::kArray: {
+                    if (st.array_has_size != dt.array_has_size) return ty::kInvalidType;
+                    if (st.array_has_size && st.array_size != dt.array_size) return ty::kInvalidType;
+                    const ty::TypeId elem = self(st.elem, dt.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_array(elem, st.array_has_size, st.array_size);
+                }
+                case ty::Kind::kBorrow: {
+                    if (st.borrow_is_mut != dt.borrow_is_mut) return ty::kInvalidType;
+                    const ty::TypeId elem = self(st.elem, dt.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_borrow(elem, st.borrow_is_mut);
+                }
+                case ty::Kind::kEscape: {
+                    const ty::TypeId elem = self(st.elem, dt.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_escape(elem);
+                }
+                default:
+                    return ty::kInvalidType;
+            }
+        };
+        const auto resolve_ident_in_context = [&](ty::TypeId ctx) -> bool {
+            if ((size_t)eid >= ast_.exprs().size()) return false;
+            const ast::Expr& ex = ast_.expr(eid);
+            if (ex.kind != ast::ExprKind::kIdent) return false;
+
+            auto sid = lookup_symbol_(ex.text);
+            if (!sid) return false;
+
+            const ty::TypeId current = canonicalize_transparent_external_typedef_(sym_.symbol(*sid).declared_type);
+            const ty::TypeId rewritten = rewrite_infer_shape(current, ctx, rewrite_infer_shape);
+            if (rewritten == ty::kInvalidType) return false;
+
+            sym_.update_declared_type(*sid, rewritten);
+            if ((size_t)eid < expr_type_cache_.size()) {
+                expr_type_cache_[eid] = rewritten;
+            }
+
+            auto pit = pending_int_sym_.find(*sid);
+            if (pit != pending_int_sym_.end()) {
+                pit->second.resolved = true;
+                pit->second.resolved_type = rewritten;
+            }
+
+            auto& pe = pending_int_expr_[(uint32_t)eid];
+            pe.has_value = false;
+            pe.resolved = true;
+            pe.resolved_type = rewritten;
+            return true;
+        };
+        if (resolve_ident_in_context(expected)) return true;
 
         // ------------------------------------------------------------
         // (0) aggregate context: array
@@ -2356,6 +2442,16 @@
             return false;
         }
 
+        if (et.kind == ty::Kind::kOptional) {
+            if (et.elem != ty::kInvalidType) {
+                const ast::Expr& e = ast_.expr(eid);
+                if (e.kind == ast::ExprKind::kLoop) {
+                    return resolve_infer_int_in_context_(eid, et.elem);
+                }
+            }
+            return false;
+        }
+
         // expected는 builtin int여야 한다.
         if (et.kind != ty::Kind::kBuiltin) return false;
 
@@ -2366,20 +2462,6 @@
             return false;
         }
 
-        auto is_int_builtin = [&](ty::Builtin b) -> bool {
-            return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
-                b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
-                b == ty::Builtin::kU8 || b == ty::Builtin::kU16 || b == ty::Builtin::kU32 ||
-                b == ty::Builtin::kU64 || b == ty::Builtin::kU128 ||
-                b == ty::Builtin::kISize || b == ty::Builtin::kUSize ||
-                b == ty::Builtin::kCChar || b == ty::Builtin::kCSChar || b == ty::Builtin::kCUChar ||
-                b == ty::Builtin::kCShort || b == ty::Builtin::kCUShort ||
-                b == ty::Builtin::kCInt || b == ty::Builtin::kCUInt ||
-                b == ty::Builtin::kCLong || b == ty::Builtin::kCULong ||
-                b == ty::Builtin::kCLongLong || b == ty::Builtin::kCULongLong ||
-                b == ty::Builtin::kCSize || b == ty::Builtin::kCSSize ||
-                b == ty::Builtin::kCPtrDiff;
-        };
         if (!is_int_builtin(et.builtin)) return false;
 
         const ast::Expr& e = ast_.expr(eid);
@@ -2463,6 +2545,36 @@
                 pe.resolved = true;
                 pe.resolved_type = loop_t;
                 return true;
+            }
+
+            case ast::ExprKind::kBinary: {
+                if (e.op != K::kQuestionQuestion) break;
+
+                ty::TypeId lhs_t = (e.a != ast::k_invalid_expr) ? check_expr_(e.a, Slot::kValue) : ty::kInvalidType;
+                lhs_t = canonicalize_transparent_external_typedef_(lhs_t);
+
+                bool ok_lhs = true;
+                if (!is_error_(lhs_t) && type_contains_infer_int(lhs_t, type_contains_infer_int)) {
+                    if (is_optional_(lhs_t)) {
+                        ok_lhs = resolve_infer_int_in_context_(e.a, types_.make_optional(expected));
+                    } else if (!is_null_(lhs_t)) {
+                        ok_lhs = false;
+                    }
+                }
+
+                bool ok_rhs = true;
+                if (e.b != ast::k_invalid_expr) {
+                    ty::TypeId rhs_t = check_expr_(e.b, Slot::kValue);
+                    if (!is_error_(rhs_t) && type_contains_infer_int(rhs_t, type_contains_infer_int)) {
+                        ok_rhs = resolve_infer_int_in_context_(e.b, expected);
+                    }
+                }
+
+                if (ok_lhs && ok_rhs) {
+                    mark_resolved_here(/*has_value=*/false, num::BigInt{});
+                    return true;
+                }
+                return false;
             }
 
             default:

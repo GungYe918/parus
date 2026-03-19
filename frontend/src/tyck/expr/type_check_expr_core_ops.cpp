@@ -1363,13 +1363,14 @@
         // ------------------------------------------------------------
         if (e.op == K::kQuestionQuestion) {
             ty::TypeId lt = check_expr_(e.a);
-            ty::TypeId rt = check_expr_(e.b);
 
             // error short-circuit
-            if (is_error_(lt) || is_error_(rt)) return types_.error();
+            if (is_error_(lt)) return types_.error();
 
             // lhs가 null이면 rhs로 수렴(정책)
             if (is_null_(lt)) {
+                ty::TypeId rt = check_expr_(e.b);
+                if (is_error_(rt)) return types_.error();
                 return rt;
             }
 
@@ -1389,10 +1390,9 @@
 
             const CoercionPlan rhs_plan = classify_assign_with_coercion_(
                 AssignSite::Assign, elem, e.b, e.span);
-            rt = rhs_plan.src_after;
             if (!rhs_plan.ok) {
                 diag_(diag::Code::kTypeNullCoalesceRhsMismatch, e.span,
-                    types_.to_string(elem), type_for_user_diag_(rt, e.b));
+                    types_.to_string(elem), type_for_user_diag_(rhs_plan.src_after, e.b));
                 err_(e.span, "operator '?" "?' rhs mismatch");
                 return types_.error();
             }

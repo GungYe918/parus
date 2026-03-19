@@ -781,6 +781,81 @@ namespace {
         return ok;
     }
 
+    static bool test_nullable_coalesce_rhs_context_propagates() {
+        const std::string src = R"(
+            def main() -> i32 {
+                set inferred = loop (x in 1..:4) {
+                    if (x == 4) {
+                        break 42;
+                    }
+                };
+                let inferred_value: i32 = inferred ?? 0;
+
+                let a: i32? = loop (x in 1..:4) {
+                    if (x == 4) {
+                        break 42;
+                    }
+                };
+                let b: i32 = a ?? 0;
+
+                let arr_opt: i32[3]? = null;
+                let arr: i32[3] = arr_opt ?? [1, 2, 3];
+
+                let c: i32? = 1i32;
+                let d: i32 = c ?? loop {
+                    break 42;
+                };
+
+                return inferred_value + b + arr[0i32] + d;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "nullable coalesce rhs context propagation program must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "nullable coalesce rhs context propagation program must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_nullable_coalesce_rhs_context_negative_regressions() {
+        const std::string float_src = R"(
+            def main() -> i32 {
+                let y: i32? = 1i32;
+                let t: i32 = y ?? 0.0f;
+                return t;
+            }
+        )";
+        const std::string lhs_src = R"(
+            def main() -> i32 {
+                let y: i32 = 1i32;
+                let t: i32 = y ?? 0;
+                return t;
+            }
+        )";
+
+        auto p_float = parse_program(float_src);
+        (void)run_passes(p_float);
+        auto ty_float = run_tyck(p_float);
+
+        auto p_lhs = parse_program(lhs_src);
+        (void)run_passes(p_lhs);
+        auto ty_lhs = run_tyck(p_lhs);
+
+        bool ok = true;
+        ok &= require_(p_float.bag.has_code(parus::diag::Code::kTypeNullCoalesceRhsMismatch),
+            "nullable coalesce must still reject float rhs when lhs element is integer");
+        ok &= require_(!ty_float.errors.empty(),
+            "nullable coalesce float rhs rejection must produce tyck error entry");
+        ok &= require_(p_lhs.bag.has_code(parus::diag::Code::kTypeNullCoalesceLhsMustBeOptional),
+            "nullable coalesce must still reject non-optional lhs");
+        ok &= require_(!ty_lhs.errors.empty(),
+            "nullable coalesce non-optional lhs rejection must produce tyck error entry");
+        return ok;
+    }
+
     static bool test_while_break_value_rejected() {
         // while 같은 statement-loop에서는 break 값이 금지되어야 한다.
         const std::string src = R"(
@@ -1973,6 +2048,8 @@ int main() {
         {"loop_expr_break_infer_context_propagates", test_loop_expr_break_infer_context_propagates},
         {"loop_expr_break_nested_statement_loop_isolated", test_loop_expr_break_nested_statement_loop_isolated},
         {"loop_expr_break_infer_context_negative_regressions", test_loop_expr_break_infer_context_negative_regressions},
+        {"nullable_coalesce_rhs_context_propagates", test_nullable_coalesce_rhs_context_propagates},
+        {"nullable_coalesce_rhs_context_negative_regressions", test_nullable_coalesce_rhs_context_negative_regressions},
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
         {"diag_legacy_escape_token_rejected", test_diag_legacy_escape_token_rejected},

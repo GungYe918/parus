@@ -2141,14 +2141,21 @@ bool test_iteration_loop_break_value_context_syntax_only() {
         "}\n"
         "\n"
         "def main() -> i32 {\n"
+        "  set inferred = loop (x in 1..:4) {\n"
+        "    if (x == 4) {\n"
+        "      break 42;\n"
+        "    }\n"
+        "  };\n"
+        "  let inferred_value: i32 = inferred ?? 0;\n"
         "  let y: i32? = loop (x in 1..:4) {\n"
         "    if (x == 4) {\n"
         "      break 42;\n"
         "    }\n"
         "  };\n"
-        "  return take(loop {\n"
+        "  let t: i32 = y ?? 0;\n"
+        "  return inferred_value + t + take(loop {\n"
         "    break 42;\n"
-        "  });\n"
+        "  }) - 42i32;\n"
         "}\n";
     if (!write_text(main_pr, main_src)) {
         std::cerr << "failed to write loop break context test file\n";
