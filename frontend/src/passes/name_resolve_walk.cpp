@@ -315,13 +315,17 @@
                     }
 
                     if (e.loop_has_header && !e.loop_var.empty()) {
-                        (void)declare_(
+                        const auto ins = declare_(
                             sema::SymbolKind::kVar,
                             e.loop_var,
                             ast::k_invalid_type,
                             e.span,
                             sym, bag, opt
                         );
+                        if (ins.ok && !ins.is_duplicate) {
+                            const auto rid = add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, e.span);
+                            out.expr_loop_var_to_resolved[(uint32_t)id] = rid;
+                        }
                     }
 
                     // IMPORTANT: loop body is StmtId.

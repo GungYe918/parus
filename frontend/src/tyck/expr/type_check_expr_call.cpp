@@ -1666,7 +1666,8 @@ namespace parus::tyck {
                 }
 
                 if (is_c_variadic) {
-                    if (!has_manual_permission_(ast::kManualPermAbi)) {
+                    const bool has_variadic_tail = arg_exprs.size() > fixed_param_count;
+                    if (has_variadic_tail && !has_manual_permission_(ast::kManualPermAbi)) {
                         diag_(diag::Code::kManualAbiRequired, diag_span);
                         err_(diag_span, "C variadic call requires manual[abi]");
                         return types_.error();

@@ -1079,6 +1079,7 @@ namespace parus::sir {
 
                     case ValueKind::kLoopExpr: {
                         if (v.a != k_invalid_value) analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
+                        if (v.c != k_invalid_value) analyze_value_(v.c, ValueUse::kValue, k_invalid_symbol);
                         const BlockId body = (BlockId)v.b;
                         analyze_block_(body);
                         return;

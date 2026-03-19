@@ -211,6 +211,10 @@ namespace parus::diag {
         kLoopHeaderExpectedIn,      // loop (v in xs)에서 'in' 필요
         kLoopHeaderExpectedRParen,  // header ')' 필요
         kLoopBodyExpectedBlock,     // loop body '{...}' 필요
+        kLoopIterableUnsupported,   // loop header iterable is unsupported in current v0 subset
+        kLoopRangeBoundMustBeInteger, // loop range bound must be integer
+        kLoopRangeBoundTypeMismatch,  // loop range bounds must have same concrete integer type
+        kLoopRangeNeedsTypedBound,    // loop range with two infer-int bounds is rejected
 
         // ---- if-expr parsing ----
         kIfExprThenExpectedBlock,   // if expr then must be "{ ... }"

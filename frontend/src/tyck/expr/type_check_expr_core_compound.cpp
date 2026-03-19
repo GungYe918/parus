@@ -442,19 +442,132 @@
         lc.may_natural_end = e.loop_has_header; // iter loop => natural end => null
         lc.joined_value = ty::kInvalidType;
 
+        parus::LoopSourceKind loop_source_kind = parus::LoopSourceKind::kNone;
+        ty::TypeId loop_binder_type = ty::kInvalidType;
+
+        auto cache_loop_meta = [&]() {
+            if (current_expr_id_ == ast::k_invalid_expr) return;
+            if ((size_t)current_expr_id_ < expr_loop_source_kind_cache_.size()) {
+                expr_loop_source_kind_cache_[current_expr_id_] =
+                    static_cast<uint8_t>(loop_source_kind);
+            }
+            if ((size_t)current_expr_id_ < expr_loop_binder_type_cache_.size()) {
+                expr_loop_binder_type_cache_[current_expr_id_] = loop_binder_type;
+            }
+        };
+
+        auto set_loop_binder = [&](ty::TypeId t) {
+            loop_binder_type = t;
+            if (!e.loop_var.empty()) {
+                sym_.insert(sema::SymbolKind::kVar, e.loop_var, t, e.span);
+            }
+        };
+
         // loop scope: variable binding + body scope
         const OwnershipStateMap before = capture_ownership_state_();
         sym_.push_scope();
 
         // header: loop (v in xs) { ... }
         if (e.loop_has_header) {
-            // v0: loop var type unknown => error (until iter protocol exists)
-            if (!e.loop_var.empty()) {
-                sym_.insert(sema::SymbolKind::kVar, e.loop_var, types_.error(), e.span);
+            if (e.loop_iter == ast::k_invalid_expr || (size_t)e.loop_iter >= ast_.exprs().size()) {
+                diag_(diag::Code::kLoopIterableUnsupported, e.span);
+                err_(e.span, "loop header is missing iterable expression");
+                set_loop_binder(types_.error());
+                loop_source_kind = parus::LoopSourceKind::kIteratorFutureUnsupported;
+            } else if (is_range_expr_(e.loop_iter)) {
+                const auto& r = ast_.expr(e.loop_iter);
+                ty::TypeId lhs_t = check_expr_(r.a, Slot::kValue);
+                ty::TypeId rhs_t = check_expr_(r.b, Slot::kValue);
+
+                const bool lhs_infer =
+                    !is_error_(lhs_t) &&
+                    types_.get(lhs_t).kind == ty::Kind::kBuiltin &&
+                    types_.get(lhs_t).builtin == ty::Builtin::kInferInteger;
+                const bool rhs_infer =
+                    !is_error_(rhs_t) &&
+                    types_.get(rhs_t).kind == ty::Kind::kBuiltin &&
+                    types_.get(rhs_t).builtin == ty::Builtin::kInferInteger;
+
+                if (lhs_infer && rhs_infer) {
+                    diag_(diag::Code::kLoopRangeNeedsTypedBound, e.loop_iter == ast::k_invalid_expr ? e.span : ast_.expr(e.loop_iter).span);
+                    err_(e.span, "loop range requires at least one typed integer bound");
+                    lhs_t = rhs_t = types_.error();
+                } else if (lhs_infer && !is_error_(rhs_t)) {
+                    if (!resolve_infer_int_in_context_(r.a, rhs_t)) {
+                        lhs_t = types_.error();
+                    } else {
+                        lhs_t = check_expr_(r.a, Slot::kValue);
+                    }
+                } else if (rhs_infer && !is_error_(lhs_t)) {
+                    if (!resolve_infer_int_in_context_(r.b, lhs_t)) {
+                        rhs_t = types_.error();
+                    } else {
+                        rhs_t = check_expr_(r.b, Slot::kValue);
+                    }
+                }
+
+                lhs_t = canonicalize_transparent_external_typedef_(lhs_t);
+                rhs_t = canonicalize_transparent_external_typedef_(rhs_t);
+
+                if (!is_error_(lhs_t) && !is_index_int_type_(lhs_t)) {
+                    diag_(diag::Code::kLoopRangeBoundMustBeInteger, ast_.expr(r.a).span);
+                    err_(ast_.expr(r.a).span, "loop range lower bound must be integer");
+                    lhs_t = types_.error();
+                }
+                if (!is_error_(rhs_t) && !is_index_int_type_(rhs_t)) {
+                    diag_(diag::Code::kLoopRangeBoundMustBeInteger, ast_.expr(r.b).span);
+                    err_(ast_.expr(r.b).span, "loop range upper bound must be integer");
+                    rhs_t = types_.error();
+                }
+                if (!is_error_(lhs_t) && !is_error_(rhs_t) && lhs_t != rhs_t) {
+                    diag_(diag::Code::kLoopRangeBoundTypeMismatch, ast_.expr(e.loop_iter).span);
+                    err_(e.span, "loop range bounds must have the same concrete integer type");
+                    lhs_t = rhs_t = types_.error();
+                }
+
+                loop_source_kind =
+                    (r.op == parus::syntax::TokenKind::kDotDotColon)
+                        ? parus::LoopSourceKind::kRangeInclusive
+                        : parus::LoopSourceKind::kRangeExclusive;
+                set_loop_binder(lhs_t);
+            } else {
+                ty::TypeId iter_t = canonicalize_transparent_external_typedef_(check_expr_(e.loop_iter, Slot::kValue));
+                ty::TypeId array_t = iter_t;
+
+                if (!is_error_(iter_t)) {
+                    const auto& it = types_.get(iter_t);
+                    if (it.kind == ty::Kind::kBorrow && it.elem != ty::kInvalidType) {
+                        const ty::TypeId inner_t = canonicalize_transparent_external_typedef_(it.elem);
+                        if (types_.get(inner_t).kind == ty::Kind::kArray) {
+                            array_t = inner_t;
+                        }
+                    }
+                }
+
+                if (!is_error_(array_t) &&
+                    array_t != ty::kInvalidType &&
+                    types_.get(array_t).kind == ty::Kind::kArray) {
+                    const auto& at = types_.get(array_t);
+                    loop_source_kind =
+                        at.array_has_size
+                            ? parus::LoopSourceKind::kSizedArray
+                            : parus::LoopSourceKind::kSliceView;
+                    set_loop_binder(at.elem);
+                } else {
+                    loop_source_kind = parus::LoopSourceKind::kIteratorFutureUnsupported;
+                    diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                    err_(e.span, "loop iterable is unsupported in v0 (iterator protocol is deferred)");
+                    set_loop_binder(types_.error());
+                }
             }
-            if (e.loop_iter != ast::k_invalid_expr) {
-                (void)check_expr_(e.loop_iter, Slot::kValue);
-            }
+        }
+
+        cache_loop_meta();
+
+        if (e.loop_has_header && is_error_(loop_binder_type)) {
+            sym_.pop_scope();
+            restore_ownership_state_(before);
+            return types_.error();
         }
 
         // push loop ctx

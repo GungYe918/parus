@@ -314,15 +314,34 @@ namespace parus::sir::detail {
 
             case parus::ast::ExprKind::kLoop: {
                 // loop expr lowering:
-                // - v.op   : loop_has_header (0/1)
-                // - v.text : loop_var (if any)
-                // - v.a    : iter value
-                // - v.b    : BlockId (stored in ValueId slot)
+                // - v.op               : loop_has_header (0/1)
+                // - v.loop_source_kind : loop iterable classification
+                // - v.loop_binder_type : binder type (header loop only)
+                // - v.sym              : resolved loop binder symbol
+                // - v.a                : iter value or range start
+                // - v.c                : range end (range loops only)
+                // - v.b                : BlockId (stored in ValueId slot)
                 v.kind = ValueKind::kLoopExpr;
                 v.op = e.loop_has_header ? 1u : 0u;
                 v.text = e.loop_var;
+                v.sym = resolve_loop_symbol_from_expr(nres, eid);
+                if ((size_t)eid < tyck.expr_loop_source_kind.size()) {
+                    v.loop_source_kind =
+                        static_cast<parus::LoopSourceKind>(tyck.expr_loop_source_kind[eid]);
+                }
+                if ((size_t)eid < tyck.expr_loop_binder_type.size()) {
+                    v.loop_binder_type = tyck.expr_loop_binder_type[eid];
+                }
 
-                v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.loop_iter);
+                if (e.loop_has_header && e.loop_iter != parus::ast::k_invalid_expr &&
+                    (v.loop_source_kind == parus::LoopSourceKind::kRangeExclusive ||
+                     v.loop_source_kind == parus::LoopSourceKind::kRangeInclusive)) {
+                    const auto& range_expr = ast.expr(e.loop_iter);
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, range_expr.a);
+                    v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, range_expr.b);
+                } else {
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.loop_iter);
+                }
 
                 const parus::ast::StmtId body = e.loop_body;
                 if (is_valid_stmt_id_(ast, body)) {
@@ -651,6 +670,7 @@ namespace parus::sir::detail {
 
             case ValueKind::kLoopExpr: {
                 join_child(v.a);
+                join_child(v.c);
                 const BlockId body = (BlockId)v.b;
                 v.effect = join_effect_(v.effect, effect_of_block_(m, body));
                 break;

@@ -1,5 +1,6 @@
 // frontend/include/parus/sir/SIR.hpp
 #pragma once
+#include <parus/common/LoopSourceKind.hpp>
 #include <parus/text/Span.hpp>
 #include <parus/ty/Type.hpp>
 #include <parus/syntax/TokenKind.hpp>
@@ -148,6 +149,8 @@ namespace parus::sir {
 
         // resolved symbol (for kLocal)
         SymbolId sym = k_invalid_symbol;
+        parus::LoopSourceKind loop_source_kind = parus::LoopSourceKind::kNone;
+        TypeId loop_binder_type = k_invalid_type;
 
         // direct callee symbol (for kCall)
         SymbolId callee_sym = k_invalid_symbol;

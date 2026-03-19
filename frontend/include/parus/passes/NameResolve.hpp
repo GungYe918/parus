@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include <parus/ast/Nodes.hpp>
+#include <parus/common/LoopSourceKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/sema/SymbolTable.hpp>
 
@@ -104,6 +105,7 @@ namespace parus::passes {
         std::vector<ResolvedSymbol> resolved;
 
         std::vector<ResolvedId> expr_to_resolved;  // size = ast.exprs().size()
+        std::vector<ResolvedId> expr_loop_var_to_resolved;  // size = ast.exprs().size(), loop binder only
         std::vector<ResolvedId> stmt_to_resolved;  // size = ast.stmts().size()
         std::vector<ResolvedId> param_to_resolved; // size = ast.params().size()
 
@@ -112,6 +114,7 @@ namespace parus::passes {
             resolved.reserve(expr_count / 2);
 
             expr_to_resolved.assign(expr_count, k_invalid_resolved);
+            expr_loop_var_to_resolved.assign(expr_count, k_invalid_resolved);
             stmt_to_resolved.assign(stmt_count, k_invalid_resolved);
             param_to_resolved.assign(param_count, k_invalid_resolved);
         }

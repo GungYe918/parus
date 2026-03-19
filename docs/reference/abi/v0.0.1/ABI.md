@@ -154,7 +154,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 6. `c"..."`, `cr"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
 7. `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
 8. C variadic(`...`)는 `extern "C"` 선언과 `cimport`된 함수 표면에서만 허용한다.
-9. C variadic call site는 `manual[abi]`가 필요하다. ordinary fixed-arg C 호출은 `manual[abi]`를 요구하지 않는다.
+9. `manual[abi]`는 variadic 함수 자체가 아니라 실제 variadic tail 인자를 넘기는 call site에만 필요하다. zero-tail 호출과 ordinary fixed-arg C 호출은 `manual[abi]`를 요구하지 않는다.
 10. variadic tail은 ABI-safe scalar/raw pointer/`core::ext::CStr`/plain string literal만 허용한다.
 11. variadic tail에서는 `null` literal, borrow, escape, optional, aggregate, direct enum을 허용하지 않는다.
 12. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> ptr T` 자동 변환은 계속 금지한다.

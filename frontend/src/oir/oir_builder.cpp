@@ -123,6 +123,7 @@ namespace parus::oir {
                 BlockId continue_bb = kInvalidId;
                 bool expects_break_value = false;
                 TypeId break_ty = kInvalidId;
+                ValueId continue_value = kInvalidId;
                 size_t scope_depth_base = 0; // number of active scopes to keep on break/continue
             };
 
@@ -511,6 +512,16 @@ namespace parus::oir {
                 ValueId r = make_value(ty, Effect::MayReadMem);
                 Inst inst{};
                 inst.data = InstIndex{base, index};
+                inst.eff = Effect::MayReadMem;
+                inst.result = r;
+                emit_inst(inst);
+                return r;
+            }
+
+            ValueId emit_array_len(ValueId base) {
+                ValueId r = make_value(i64_type_(), Effect::MayReadMem);
+                Inst inst{};
+                inst.data = InstArrayLen{base};
                 inst.eff = Effect::MayReadMem;
                 inst.result = r;
                 emit_inst(inst);
@@ -2168,33 +2179,217 @@ namespace parus::oir {
                 return lower_if_expr(vid);
 
             case parus::sir::ValueKind::kLoopExpr: {
-                const BlockId body_bb = new_block();
                 const BlockId exit_bb = new_block();
+                const bool has_header = (v.op != 0u);
+                const bool expects_break_value =
+                    (types != nullptr &&
+                     v.type != parus::sir::k_invalid_type &&
+                     v.type != kInvalidId &&
+                     !(types->get(v.type).kind == parus::ty::Kind::kBuiltin &&
+                       (types->get(v.type).builtin == parus::ty::Builtin::kNull ||
+                        types->get(v.type).builtin == parus::ty::Builtin::kNever)));
+                const ValueId break_param =
+                    expects_break_value ? add_block_param(exit_bb, v.type) : kInvalidId;
 
-                const bool has_value = (v.type != parus::sir::k_invalid_type);
-                const ValueId break_param = has_value ? add_block_param(exit_bb, v.type) : kInvalidId;
+                if (!has_header) {
+                    const BlockId body_bb = new_block();
+                    if (!has_term()) br(body_bb, {});
 
-                if (!has_term()) br(body_bb, {});
+                    def->blocks.push_back(body_bb);
+                    cur_bb = body_bb;
+                    const size_t loop_scope_base = env_stack.size();
+                    loop_stack.push_back(LoopContext{
+                        .break_bb = exit_bb,
+                        .continue_bb = body_bb,
+                        .expects_break_value = expects_break_value,
+                        .break_ty = (TypeId)v.type,
+                        .scope_depth_base = loop_scope_base
+                    });
+                    push_scope();
+                    lower_block((parus::sir::BlockId)v.b);
+                    pop_scope();
+                    loop_stack.pop_back();
+                    if (!has_term()) br(body_bb, {});
 
-                def->blocks.push_back(body_bb);
-                cur_bb = body_bb;
-                const size_t loop_scope_base = env_stack.size();
-                loop_stack.push_back(LoopContext{
-                    .break_bb = exit_bb,
-                    .continue_bb = body_bb,
-                    .expects_break_value = has_value,
-                    .break_ty = (TypeId)v.type,
-                    .scope_depth_base = loop_scope_base
-                });
-                push_scope();
-                lower_block((parus::sir::BlockId)v.b);
-                pop_scope();
-                loop_stack.pop_back();
-                if (!has_term()) br(body_bb, {});
+                    def->blocks.push_back(exit_bb);
+                    cur_bb = exit_bb;
+                    if (expects_break_value) return break_param;
+                    return emit_const_null(v.type);
+                }
+
+                const auto loop_kind = v.loop_source_kind;
+                const TypeId binder_ty = v.loop_binder_type;
+                if (loop_kind == parus::LoopSourceKind::kNone ||
+                    loop_kind == parus::LoopSourceKind::kIteratorFutureUnsupported) {
+                    report_lowering_error("loop lowering failed: unsupported header loop source reached OIR");
+                    def->blocks.push_back(exit_bb);
+                    cur_bb = exit_bb;
+                    return emit_const_null(v.type);
+                }
+                if (binder_ty == kInvalidId || types == nullptr || v.sym == parus::sir::k_invalid_symbol) {
+                    report_lowering_error("loop lowering failed: missing binder metadata");
+                    def->blocks.push_back(exit_bb);
+                    cur_bb = exit_bb;
+                    return emit_const_null(v.type);
+                }
+
+                auto array_static_len_of = [&](ValueId base) -> std::optional<uint32_t> {
+                    if (out == nullptr || types == nullptr || base == kInvalidId) return std::nullopt;
+                    if ((size_t)base >= out->values.size()) return std::nullopt;
+                    TypeId tid = out->values[base].ty;
+                    for (uint32_t depth = 0; depth < 6 && tid != kInvalidId; ++depth) {
+                        const auto& tt = types->get(tid);
+                        if (tt.kind == parus::ty::Kind::kArray) {
+                            if (tt.array_has_size) return tt.array_size;
+                            return std::nullopt;
+                        }
+                        if ((tt.kind == parus::ty::Kind::kBorrow ||
+                             tt.kind == parus::ty::Kind::kEscape ||
+                             tt.kind == parus::ty::Kind::kPtr) &&
+                            tt.elem != kInvalidId) {
+                            tid = tt.elem;
+                            continue;
+                        }
+                        break;
+                    }
+                    return std::nullopt;
+                };
+
+                if (loop_kind == parus::LoopSourceKind::kSizedArray ||
+                    loop_kind == parus::LoopSourceKind::kSliceView) {
+                    const ValueId base = lower_value(v.a);
+                    if (base == kInvalidId) {
+                        report_lowering_error("loop lowering failed: iterable value did not lower");
+                        def->blocks.push_back(exit_bb);
+                        cur_bb = exit_bb;
+                        return emit_const_null(v.type);
+                    }
+
+                    const TypeId idx_ty = i64_type_();
+                    ValueId len_v = kInvalidId;
+                    if (loop_kind == parus::LoopSourceKind::kSizedArray) {
+                        const auto maybe_len = array_static_len_of(base);
+                        if (!maybe_len.has_value()) {
+                            report_lowering_error("loop lowering failed: sized array length metadata missing");
+                            def->blocks.push_back(exit_bb);
+                            cur_bb = exit_bb;
+                            return emit_const_null(v.type);
+                        }
+                        len_v = emit_const_int(idx_ty, std::to_string(*maybe_len));
+                    } else {
+                        len_v = emit_array_len(base);
+                    }
+
+                    const BlockId cond_bb = new_block();
+                    const BlockId body_bb = new_block();
+                    const BlockId latch_bb = new_block();
+                    const ValueId cond_idx = add_block_param(cond_bb, idx_ty);
+                    const ValueId body_idx = add_block_param(body_bb, idx_ty);
+                    const ValueId latch_idx = add_block_param(latch_bb, idx_ty);
+
+                    if (!has_term()) br(cond_bb, {emit_const_int(idx_ty, "0")});
+
+                    def->blocks.push_back(cond_bb);
+                    cur_bb = cond_bb;
+                    const ValueId cond = emit_binop(bool_type_(), Effect::Pure, BinOp::Lt, cond_idx, len_v);
+                    condbr(cond, body_bb, {cond_idx}, exit_bb, expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{});
+
+                    def->blocks.push_back(body_bb);
+                    cur_bb = body_bb;
+                    const size_t loop_scope_base = env_stack.size();
+                    const ValueId elem = emit_index(binder_ty, base, body_idx);
+                    loop_stack.push_back(LoopContext{
+                        .break_bb = exit_bb,
+                        .continue_bb = latch_bb,
+                        .expects_break_value = expects_break_value,
+                        .break_ty = (TypeId)v.type,
+                        .continue_value = body_idx,
+                        .scope_depth_base = loop_scope_base
+                    });
+                    push_scope();
+                    bind(v.sym, Binding{false, false, elem, kInvalidId});
+                    lower_block((parus::sir::BlockId)v.b);
+                    pop_scope();
+                    loop_stack.pop_back();
+                    if (!has_term()) br(latch_bb, {body_idx});
+
+                    def->blocks.push_back(latch_bb);
+                    cur_bb = latch_bb;
+                    const ValueId next_idx = emit_binop(idx_ty, Effect::Pure, BinOp::Add, latch_idx, emit_const_int(idx_ty, "1"));
+                    if (!has_term()) br(cond_bb, {next_idx});
+                } else {
+                    const ValueId start_v = lower_value(v.a);
+                    const ValueId end_v = lower_value(v.c);
+
+                    const BlockId cond_bb = new_block();
+                    const BlockId body_bb = new_block();
+                    const BlockId latch_bb = new_block();
+                    const BlockId step_bb =
+                        (loop_kind == parus::LoopSourceKind::kRangeInclusive) ? new_block() : kInvalidId;
+                    const ValueId cond_cur = add_block_param(cond_bb, binder_ty);
+                    const ValueId body_cur = add_block_param(body_bb, binder_ty);
+                    const ValueId latch_cur = add_block_param(latch_bb, binder_ty);
+                    const ValueId step_cur =
+                        (step_bb != kInvalidId) ? add_block_param(step_bb, binder_ty) : kInvalidId;
+
+                    if (!has_term()) br(cond_bb, {start_v});
+
+                    def->blocks.push_back(cond_bb);
+                    cur_bb = cond_bb;
+                    {
+                        const ValueId cond =
+                            emit_binop(
+                                bool_type_(),
+                                Effect::Pure,
+                                loop_kind == parus::LoopSourceKind::kRangeInclusive ? BinOp::Le : BinOp::Lt,
+                                cond_cur,
+                                end_v
+                            );
+                        condbr(cond, body_bb, {cond_cur}, exit_bb, expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{});
+                    }
+
+                    def->blocks.push_back(body_bb);
+                    cur_bb = body_bb;
+                    const size_t loop_scope_base = env_stack.size();
+                    loop_stack.push_back(LoopContext{
+                        .break_bb = exit_bb,
+                        .continue_bb = latch_bb,
+                        .expects_break_value = expects_break_value,
+                        .break_ty = (TypeId)v.type,
+                        .continue_value = body_cur,
+                        .scope_depth_base = loop_scope_base
+                    });
+                    push_scope();
+                    bind(v.sym, Binding{false, false, body_cur, kInvalidId});
+                    lower_block((parus::sir::BlockId)v.b);
+                    pop_scope();
+                    loop_stack.pop_back();
+                    if (!has_term()) br(latch_bb, {body_cur});
+
+                    def->blocks.push_back(latch_bb);
+                    cur_bb = latch_bb;
+                    if (loop_kind == parus::LoopSourceKind::kRangeInclusive) {
+                        const ValueId at_end = emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, latch_cur, end_v);
+                        condbr(at_end, exit_bb, expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{},
+                               step_bb, {latch_cur});
+
+                        def->blocks.push_back(step_bb);
+                        cur_bb = step_bb;
+                    }
+                    const ValueId next_v =
+                        emit_binop(
+                            binder_ty,
+                            Effect::Pure,
+                            BinOp::Add,
+                            (step_cur != kInvalidId) ? step_cur : latch_cur,
+                            emit_const_int(binder_ty, "1")
+                        );
+                    if (!has_term()) br(cond_bb, {next_v});
+                }
 
                 def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
-                if (has_value) return break_param;
+                if (expects_break_value) return break_param;
                 return emit_const_null(v.type);
             }
 
@@ -2767,6 +2962,7 @@ namespace parus::oir {
                     ValueId bv = (s.expr != parus::sir::k_invalid_value)
                                ? lower_value(s.expr)
                                : emit_const_null(lc.break_ty);
+                    bv = coerce_value_for_target(lc.break_ty, bv);
                     emit_cleanups_to_depth(lc.scope_depth_base);
                     br(lc.break_bb, {bv});
                 } else {
@@ -2780,7 +2976,11 @@ namespace parus::oir {
                 if (loop_stack.empty()) return;
                 const auto& lc = loop_stack.back();
                 emit_cleanups_to_depth(lc.scope_depth_base);
-                br(lc.continue_bb, {});
+                if (lc.continue_value != kInvalidId) {
+                    br(lc.continue_bb, {lc.continue_value});
+                } else {
+                    br(lc.continue_bb, {});
+                }
                 return;
             }
 

@@ -140,6 +140,7 @@ namespace parus::oir {
     struct InstActorCommit { ValueId ctx = kInvalidId; };
     struct InstActorRecast { ValueId ctx = kInvalidId; };
     struct InstIndex      { ValueId base; ValueId index; };
+    struct InstArrayLen   { ValueId base; };
     struct InstSliceView  {
         ValueId base = kInvalidId;
         ValueId lo = kInvalidId;
@@ -173,6 +174,7 @@ namespace parus::oir {
         InstActorCommit,
         InstActorRecast,
         InstIndex,
+        InstArrayLen,
         InstSliceView,
         InstField,
         InstDrop,

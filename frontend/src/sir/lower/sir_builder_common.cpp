@@ -36,6 +36,18 @@ namespace parus::sir::detail {
         return k_invalid_symbol;
     }
 
+    SymbolId resolve_loop_symbol_from_expr(
+        const passes::NameResolveResult& nres,
+        parus::ast::ExprId eid
+    ) {
+        if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
+        if ((size_t)eid >= nres.expr_loop_var_to_resolved.size()) return k_invalid_symbol;
+        const auto rid = nres.expr_loop_var_to_resolved[(uint32_t)eid];
+        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
+        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
+        return (SymbolId)nres.resolved[rid].sym;
+    }
+
     SymbolId resolve_root_place_symbol_from_expr(
         const parus::ast::AstArena& ast,
         const passes::NameResolveResult& nres,

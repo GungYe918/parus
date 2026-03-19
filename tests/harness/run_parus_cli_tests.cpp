@@ -1673,6 +1673,382 @@ bool test_c_header_import_stdio_variadic_requires_manual_abi() {
     return true;
 }
 
+bool test_c_header_import_stdio_variadic_zero_tail_no_manual_abi() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-stdio-zero-tail";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto stdio_h = temp_root / "stdio.h";
+    const std::string header_src =
+        "#ifndef PARUS_STDIO_H\n"
+        "#define PARUS_STDIO_H\n"
+        "int printf(const char* fmt, ...);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"stdio.h\" as stdio;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return stdio::printf(\"hello\\n\");\n"
+        "}\n";
+    if (!write_text(stdio_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write zero-tail cimport test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "zero-tail C variadic cimport call should compile without manual[abi]\n" << out;
+        return false;
+    }
+    if (contains(out, "ManualAbiRequired")) {
+        std::cerr << "zero-tail C variadic cimport call must not require manual[abi]\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_array_loop_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-array-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let xs: i32[3] = [1i32, 2i32, 3i32];\n"
+        "  set mut s = 0i32;\n"
+        "  loop(x in xs) {\n"
+        "    s = s + x;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write array loop runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for array loop runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "array loop runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "array loop runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:6")) {
+        std::cerr << "array loop runtime exit mismatch (expected 6)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_slice_loop_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-slice-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
+        "  let xs: i32[] = arr[1i32..3i32];\n"
+        "  set mut s = 0i32;\n"
+        "  loop(x in xs) {\n"
+        "    s = s + x;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write slice loop runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for slice loop runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "slice loop runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "slice loop runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:5")) {
+        std::cerr << "slice loop runtime exit mismatch (expected 5)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_range_loop_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-range-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  set mut s = 0i32;\n"
+        "  loop(i in 0i32..:3i32) {\n"
+        "    s = s + i;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write range loop runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for range loop runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "range loop runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "range loop runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:6")) {
+        std::cerr << "range loop runtime exit mismatch (expected 6)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_unsupported_iterable_hard_error() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-unsupported-iter";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 1i32;\n"
+        "  loop(v in x) {\n"
+        "    return v;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write unsupported iterable test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "unsupported loop iterable must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "LoopIterableUnsupported")) {
+        std::cerr << "unsupported loop iterable must report LoopIterableUnsupported\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_pure_infer_range_hard_error() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-pure-infer-range";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  set mut s = 0i32;\n"
+        "  loop(i in 0..:10) {\n"
+        "    s = s + i;\n"
+        "  }\n"
+        "  return s;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write pure infer range test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "pure infer range loop must fail\n" << out;
+        return false;
+    }
+    if (!contains(out, "LoopRangeNeedsTypedBound")) {
+        std::cerr << "pure infer range loop must report LoopRangeNeedsTypedBound\n" << out;
+        return false;
+    }
+    if (contains(out, "TypeErrorGeneric")) {
+        std::cerr << "pure infer range loop should fail at the header without cascading arithmetic errors\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_iteration_loop_binder_variadic_typedef_arg_compiles() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-binder-variadic-typedef";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto sizes_h = temp_root / "sizes.h";
+    const auto stdio_h = temp_root / "stdio.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string sizes_src =
+        "#ifndef PARUS_LOOP_BINDER_VARIADIC_SIZES_H\n"
+        "#define PARUS_LOOP_BINDER_VARIADIC_SIZES_H\n"
+        "typedef unsigned long parus_size;\n"
+        "parus_size size_a(void);\n"
+        "parus_size size_b(void);\n"
+        "parus_size size_c(void);\n"
+        "#endif\n";
+    const std::string stdio_src =
+        "#ifndef PARUS_LOOP_BINDER_VARIADIC_STDIO_H\n"
+        "#define PARUS_LOOP_BINDER_VARIADIC_STDIO_H\n"
+        "int printf(const char* fmt, ...);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"sizes.h\" as c;\n"
+        "import \"stdio.h\" as std;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let xs: c::parus_size[3] = [c::size_a(), c::size_b(), c::size_c()];\n"
+        "  loop(x in xs) {\n"
+        "    manual[abi] {\n"
+        "      std::printf(\"%zu \", x);\n"
+        "    }\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(sizes_h, sizes_src) ||
+        !write_text(stdio_h, stdio_src) ||
+        !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write loop binder variadic typedef test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "loop binder value should remain valid as a C variadic typedef argument\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_c_header_import_stdio_format_bridge_single_arg() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -1822,10 +2198,11 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
         "  let p: ptr i32 = null;\n"
         "  take_ptr(null);\n"
         "  take_ptr(p);\n"
+        "  let z: i32 = variad(null);\n"
         "  manual[abi] {\n"
         "    variad(null, 5);\n"
         "  }\n"
-        "  return 0i32;\n"
+        "  return z;\n"
         "}\n";
     const std::string fail_src =
         "extern \"C\" def variad(first: ptr i8, ...) -> i32;\n"
@@ -1854,6 +2231,10 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
         std::cerr << "extern C variadic declaration with manual[abi] and null->ptr boundary should compile\n" << out_ok;
         return false;
     }
+    if (contains(out_ok, "ManualAbiRequired")) {
+        std::cerr << "zero-tail extern C variadic call must not require manual[abi]\n" << out_ok;
+        return false;
+    }
     if (rc_fail == 0) {
         std::cerr << "null literal in variadic tail must fail\n" << out_fail;
         return false;
@@ -1864,6 +2245,65 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
     }
     if (!contains(llvm_ir, "call i32 (ptr, ...) @variad(")) {
         std::cerr << "extern C variadic call must lower as typed variadic call\n" << llvm_ir;
+        return false;
+    }
+    return true;
+}
+
+bool test_c_header_import_variadic_function_pointer_zero_tail_calls_without_manual_abi() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-cimport-variadic-fnptr-zero-tail";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto header_h = temp_root / "F.h";
+    const auto main_pr = temp_root / "main.pr";
+    const std::string header_src =
+        "#ifndef PARUS_VARIADIC_FPTR_ZERO_TAIL_H\n"
+        "#define PARUS_VARIADIC_FPTR_ZERO_TAIL_H\n"
+        "typedef int (*PrintfLike)(const char*, ...);\n"
+        "extern PrintfLike global_logger;\n"
+        "typedef struct LoggerBox {\n"
+        "  PrintfLike log;\n"
+        "} LoggerBox;\n"
+        "PrintfLike get_logger(void);\n"
+        "LoggerBox get_box(void);\n"
+        "#endif\n";
+    const std::string main_src =
+        "import \"F.h\" as c;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set f = c::get_logger();\n"
+        "  set box = c::get_box();\n"
+        "  set a = f(\"one\\n\");\n"
+        "  set b = c::global_logger(\"two\\n\");\n"
+        "  set d = box.log(\"three\\n\");\n"
+        "  return a + b + d;\n"
+        "}\n";
+    if (!write_text(header_h, header_src) || !write_text(main_pr, main_src)) {
+        std::cerr << "failed to write zero-tail variadic function pointer cimport test files\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (contains(out, "CImportLibClangUnavailable")) {
+        return rc != 0;
+    }
+    if (rc != 0) {
+        std::cerr << "zero-tail variadic function pointer calls should compile without manual[abi]\n" << out;
+        return false;
+    }
+    if (contains(out, "ManualAbiRequired")) {
+        std::cerr << "zero-tail variadic function pointer calls must not require manual[abi]\n" << out;
         return false;
     }
     return true;
@@ -4064,54 +4504,63 @@ int main() {
     const bool ok22 = test_c_header_import_local_non_variadic();
     const bool ok23 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
     const bool ok24 = test_c_header_import_stdio_variadic_requires_manual_abi();
-    const bool ok25 = test_c_header_import_stdio_format_bridge_single_arg();
-    const bool ok26 = test_extern_c_variadic_manual_abi_and_null_boundary();
-    const bool ok27 = test_c_header_import_cstr_runtime_prints_consistent_output();
-    const bool ok28 = test_c_header_import_include_dir_option();
-    const bool ok29 = test_lei_module_bundle_cimport_isystem_option();
-    const bool ok30 = test_c_header_import_union_manual_get_gate();
-    const bool ok31 = test_c_header_import_union_manual_set_gate();
-    const bool ok32 = test_c_header_import_struct_borrow_escape_rules();
-    const bool ok33 = test_c_header_import_enum_constant_usage();
-    const bool ok34 = test_c_header_import_global_and_tls_usage();
-    const bool ok35 = test_c_header_import_const_global_write_rejected();
-    const bool ok36 = test_c_header_import_define_undefine_options();
-    const bool ok37 = test_c_header_import_imacros_option();
-    const bool ok38 = test_c_header_import_forced_include_option();
-    const bool ok39 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok40 = test_c_header_import_transparent_typedef_uint32_assign();
-    const bool ok41 = test_c_header_import_nominal_typedef_record_stays_nominal();
-    const bool ok42 = test_c_header_import_function_pointer_alias_call();
-    const bool ok43 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok44 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok45 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok46 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok47 = test_c_header_import_function_like_macro_ir_only_supported();
-    const bool ok48 = test_c_header_import_function_like_macro_chain_promoted();
-    const bool ok49 = test_c_header_import_object_macro_const_expr_resolved();
-    const bool ok50 = test_c_header_import_function_like_macro_chain_cycle_warns();
-    const bool ok51 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
-    const bool ok52 = test_c_header_import_bitfield_read_write_no_shim();
-    const bool ok53 = test_c_header_import_bitfield_exotic_layout_hard_error();
-    const bool ok54 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok55 = test_c_header_import_macos_opengl_isystem();
-    const bool ok56 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok57 = test_actor_rejected_in_no_std_profile();
-    const bool ok58 = test_actor_allowed_in_freestanding_profile();
-    const bool ok59 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok60 = test_hosted_actor_parus_lld_mode_succeeds();
-    const bool ok61 = test_core_ext_scaffold_and_auto_injection();
-    const bool ok62 = test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit();
-    const bool ok63 = test_c_header_import_variadic_function_pointer_global_and_field_calls();
-    const bool ok64 = test_c_header_import_dropped_global_decl_preserves_supported_imports();
-    const bool ok65 = test_c_header_import_dropped_owner_record_preserves_supported_imports();
+    const bool ok25 = test_c_header_import_stdio_variadic_zero_tail_no_manual_abi();
+    const bool ok26 = test_c_header_import_stdio_format_bridge_single_arg();
+    const bool ok27 = test_extern_c_variadic_manual_abi_and_null_boundary();
+    const bool ok28 = test_c_header_import_cstr_runtime_prints_consistent_output();
+    const bool ok29 = test_c_header_import_include_dir_option();
+    const bool ok30 = test_lei_module_bundle_cimport_isystem_option();
+    const bool ok31 = test_c_header_import_union_manual_get_gate();
+    const bool ok32 = test_c_header_import_union_manual_set_gate();
+    const bool ok33 = test_c_header_import_struct_borrow_escape_rules();
+    const bool ok34 = test_c_header_import_enum_constant_usage();
+    const bool ok35 = test_c_header_import_global_and_tls_usage();
+    const bool ok36 = test_c_header_import_const_global_write_rejected();
+    const bool ok37 = test_c_header_import_define_undefine_options();
+    const bool ok38 = test_c_header_import_imacros_option();
+    const bool ok39 = test_c_header_import_forced_include_option();
+    const bool ok40 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok41 = test_c_header_import_transparent_typedef_uint32_assign();
+    const bool ok42 = test_c_header_import_nominal_typedef_record_stays_nominal();
+    const bool ok43 = test_c_header_import_function_pointer_alias_call();
+    const bool ok44 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok45 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok46 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok47 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok48 = test_c_header_import_function_like_macro_ir_only_supported();
+    const bool ok49 = test_c_header_import_function_like_macro_chain_promoted();
+    const bool ok50 = test_c_header_import_object_macro_const_expr_resolved();
+    const bool ok51 = test_c_header_import_function_like_macro_chain_cycle_warns();
+    const bool ok52 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
+    const bool ok53 = test_c_header_import_bitfield_read_write_no_shim();
+    const bool ok54 = test_c_header_import_bitfield_exotic_layout_hard_error();
+    const bool ok55 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok56 = test_c_header_import_macos_opengl_isystem();
+    const bool ok57 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok58 = test_actor_rejected_in_no_std_profile();
+    const bool ok59 = test_actor_allowed_in_freestanding_profile();
+    const bool ok60 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok61 = test_hosted_actor_parus_lld_mode_succeeds();
+    const bool ok62 = test_core_ext_scaffold_and_auto_injection();
+    const bool ok63 = test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit();
+    const bool ok64 = test_c_header_import_variadic_function_pointer_global_and_field_calls();
+    const bool ok65 = test_c_header_import_variadic_function_pointer_zero_tail_calls_without_manual_abi();
+    const bool ok66 = test_c_header_import_dropped_global_decl_preserves_supported_imports();
+    const bool ok67 = test_c_header_import_dropped_owner_record_preserves_supported_imports();
+    const bool ok68 = test_iteration_array_loop_runtime();
+    const bool ok69 = test_iteration_slice_loop_runtime();
+    const bool ok70 = test_iteration_range_loop_runtime();
+    const bool ok71 = test_iteration_unsupported_iterable_hard_error();
+    const bool ok72 = test_iteration_pure_infer_range_hard_error();
+    const bool ok73 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
         !ok24 || !ok25 || !ok26 || !ok27 || !ok28 || !ok29 || !ok30 || !ok31 || !ok32 || !ok33 || !ok34 || !ok35 ||
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
-        !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65) {
+        !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 ||
+        !ok71 || !ok72 || !ok73) {
         return 1;
     }
 

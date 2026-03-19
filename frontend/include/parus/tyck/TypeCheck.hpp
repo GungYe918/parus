@@ -1,6 +1,7 @@
 // frontend/include/parus/tyck/TypeCheck.hpp
 #pragma once
 #include <parus/ast/Nodes.hpp>
+#include <parus/common/LoopSourceKind.hpp>
 #include <parus/ty/TypePool.hpp>
 #include <parus/sema/SymbolTable.hpp>
 #include <parus/text/Span.hpp>
@@ -71,6 +72,8 @@ namespace parus::tyck {
         std::vector<uint8_t> expr_call_is_c_variadic; // expr index -> call is C variadic
         std::vector<ty::CCallConv> expr_call_c_callconv; // expr index -> callsite C callconv
         std::vector<uint32_t> expr_call_c_fixed_param_count; // expr index -> fixed parameter count for C calls
+        std::vector<uint8_t> expr_loop_source_kind; // expr index -> parus::LoopSourceKind
+        std::vector<ty::TypeId> expr_loop_binder_type; // expr index -> loop binder type
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield; // expr index -> imported C bitfield access metadata
         std::vector<ast::ExprId> expr_fstring_runtime_expr; // expr index -> runtime passthrough expr for non-folded f-string, invalid otherwise
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
@@ -344,6 +347,8 @@ namespace parus::tyck {
         std::vector<uint8_t> expr_call_is_c_variadic_cache_;
         std::vector<ty::CCallConv> expr_call_c_callconv_cache_;
         std::vector<uint32_t> expr_call_c_fixed_param_count_cache_;
+        std::vector<uint8_t> expr_loop_source_kind_cache_;
+        std::vector<ty::TypeId> expr_loop_binder_type_cache_;
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;

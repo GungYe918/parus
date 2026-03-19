@@ -1618,6 +1618,43 @@ namespace parus::oir {
             return true;
         }
 
+        /// @brief loop 내부에서 관찰되는 slot은 보수적으로 mem2reg 승격 대상에서 제외한다.
+        bool slot_touches_loop_(const Module& m, const Function& f, ValueId slot) {
+            const auto dom = build_dom_info_(m, f);
+            if (dom.entry_index == UINT32_MAX) return false;
+
+            const auto loops = collect_loops_(m, f, dom);
+            if (loops.empty()) return false;
+
+            std::unordered_set<BlockId> loop_blocks;
+            for (const auto& loop : loops) {
+                loop_blocks.insert(loop.blocks.begin(), loop.blocks.end());
+            }
+
+            for (auto bb : f.blocks) {
+                if (!loop_blocks.count(bb)) continue;
+                if (bb == kInvalidId || (size_t)bb >= m.blocks.size()) continue;
+
+                const auto& block = m.blocks[bb];
+                for (auto iid : block.insts) {
+                    if ((size_t)iid >= m.insts.size()) continue;
+                    const auto& inst = m.insts[iid];
+
+                    if (std::holds_alternative<InstLoad>(inst.data)) {
+                        const auto& ld = std::get<InstLoad>(inst.data);
+                        if (ld.slot == slot) return true;
+                        continue;
+                    }
+                    if (std::holds_alternative<InstStore>(inst.data)) {
+                        const auto& st = std::get<InstStore>(inst.data);
+                        if (st.slot == slot) return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// @brief dominance 기반 전역 mem2reg를 수행한다.
         [[maybe_unused]] bool global_mem2reg_ssa_(Module& m) {
             bool changed = false;
@@ -1641,6 +1678,7 @@ namespace parus::oir {
 
                     for (const auto& [slot, slot_ty] : candidates) {
                         if (!is_non_escaping_slot_(m, f, slot)) continue;
+                        if (slot_touches_loop_(m, f, slot)) continue;
                         round_changed |= promote_slot_mem2reg_(m, f, slot, slot_ty);
                     }
 

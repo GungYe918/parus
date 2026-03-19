@@ -122,6 +122,8 @@ namespace parus::tyck {
         expr_call_is_c_variadic_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_c_callconv_cache_.assign(ast_.exprs().size(), ty::CCallConv::kDefault);
         expr_call_c_fixed_param_count_cache_.assign(ast_.exprs().size(), 0u);
+        expr_loop_source_kind_cache_.assign(ast_.exprs().size(), static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        expr_loop_binder_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_external_c_bitfield_cache_.assign(ast_.exprs().size(), ExternalCBitfieldAccess{});
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_external_const_value_cache_.clear();
@@ -140,6 +142,8 @@ namespace parus::tyck {
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
         result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
+        result_.expr_loop_source_kind = expr_loop_source_kind_cache_;
+        result_.expr_loop_binder_type = expr_loop_binder_type_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -617,6 +621,8 @@ namespace parus::tyck {
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
         result_.expr_call_c_callconv = expr_call_c_callconv_cache_;
         result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
+        result_.expr_loop_source_kind = expr_loop_source_kind_cache_;
+        result_.expr_loop_binder_type = expr_loop_binder_type_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;

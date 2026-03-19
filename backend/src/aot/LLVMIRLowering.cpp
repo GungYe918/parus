@@ -425,6 +425,8 @@ namespace parus::backend::aot {
                     } else if constexpr (std::is_same_v<T, parus::oir::InstIndex>) {
                         as_value(x.base);
                         as_value(x.index);
+                    } else if constexpr (std::is_same_v<T, parus::oir::InstArrayLen>) {
+                        as_value(x.base);
                     } else if constexpr (std::is_same_v<T, parus::oir::InstSliceView>) {
                         as_value(x.base);
                         as_value(x.lo);
@@ -1409,6 +1411,21 @@ namespace parus::backend::aot {
                 }
             }
 
+            void emit_array_len_(
+                std::ostringstream& os,
+                const parus::oir::Inst& inst,
+                const parus::oir::InstArrayLen& x
+            ) {
+                using namespace parus::oir;
+                if (inst.result == kInvalidId) return;
+                auto av = materialize_array_view_(os, x.base);
+                if (!av.has_value()) {
+                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                    return;
+                }
+                os << "  " << vref_(inst.result) << " = add i64 " << av->len_i64 << ", 0\n";
+            }
+
             /// @brief range slice를 `{ptr,len}` view 생성으로 lowering한다.
             void emit_slice_view_(
                 std::ostringstream& os,
@@ -2219,6 +2236,8 @@ namespace parus::backend::aot {
                             }
                         } else if constexpr (std::is_same_v<T, InstIndex>) {
                             emit_index_(os, inst, x);
+                        } else if constexpr (std::is_same_v<T, InstArrayLen>) {
+                            emit_array_len_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstSliceView>) {
                             emit_slice_view_(os, inst, x);
                         } else if constexpr (std::is_same_v<T, InstField>) {

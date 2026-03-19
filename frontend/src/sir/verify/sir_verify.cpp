@@ -299,9 +299,31 @@ namespace parus::sir {
                     break;
 
                 case ValueKind::kLoopExpr: {
+                    const bool has_header = (v.op != 0u);
+                    if (has_header &&
+                        v.loop_source_kind != parus::LoopSourceKind::kNone &&
+                        v.loop_source_kind != parus::LoopSourceKind::kIteratorFutureUnsupported &&
+                        v.a == k_invalid_value) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid << " loop header is missing primary iterable/start value";
+                        push_error_(errs, oss.str());
+                    }
                     if (v.a != k_invalid_value && !valid_value_id_(m, v.a)) {
                         std::ostringstream oss;
-                        oss << "value #" << vid << " loop has invalid iter value id " << v.a;
+                        oss << "value #" << vid << " loop has invalid iter/start value id " << v.a;
+                        push_error_(errs, oss.str());
+                    }
+                    const bool needs_end =
+                        v.loop_source_kind == parus::LoopSourceKind::kRangeExclusive ||
+                        v.loop_source_kind == parus::LoopSourceKind::kRangeInclusive;
+                    if (needs_end && v.c == k_invalid_value) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid << " range loop is missing end value";
+                        push_error_(errs, oss.str());
+                    }
+                    if (v.c != k_invalid_value && !valid_value_id_(m, v.c)) {
+                        std::ostringstream oss;
+                        oss << "value #" << vid << " loop has invalid range end value id " << v.c;
                         push_error_(errs, oss.str());
                     }
                     const BlockId body = (BlockId)v.b;

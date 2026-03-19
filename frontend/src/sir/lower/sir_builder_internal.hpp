@@ -15,6 +15,12 @@ namespace parus::sir::detail {
         parus::ast::ExprId eid
     );
 
+    /// @brief loop header binder에 대응하는 name-resolve 심볼을 찾는다.
+    SymbolId resolve_loop_symbol_from_expr(
+        const passes::NameResolveResult& nres,
+        parus::ast::ExprId eid
+    );
+
     /// @brief place expression의 root 심볼(ident/index.base)을 찾는다.
     SymbolId resolve_root_place_symbol_from_expr(
         const parus::ast::AstArena& ast,

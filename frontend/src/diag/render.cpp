@@ -208,6 +208,10 @@ namespace parus::diag {
             case Code::kLoopHeaderExpectedIn:        return "LoopHeaderExpectedIn";
             case Code::kLoopHeaderExpectedRParen:    return "LoopHeaderExpectedRParen";
             case Code::kLoopBodyExpectedBlock:       return "LoopBodyExpectedBlock";
+            case Code::kLoopIterableUnsupported:     return "LoopIterableUnsupported";
+            case Code::kLoopRangeBoundMustBeInteger: return "LoopRangeBoundMustBeInteger";
+            case Code::kLoopRangeBoundTypeMismatch:  return "LoopRangeBoundTypeMismatch";
+            case Code::kLoopRangeNeedsTypedBound:    return "LoopRangeNeedsTypedBound";
             case Code::kIfExprThenExpectedBlock: return "IfExprThenExpectedBlock";
             case Code::kIfExprElseExpectedBlock: return "IfExprElseExpectedBlock";
             case Code::kIfExprMissingElse: return "IfExprMissingElse";
@@ -560,6 +564,10 @@ namespace parus::diag {
             case Code::kLoopHeaderExpectedIn:       return "expected 'in' in loop header (e.g., loop (v in xs))";
             case Code::kLoopHeaderExpectedRParen:   return "expected ')' to close loop header";
             case Code::kLoopBodyExpectedBlock:      return "expected loop body block '{ ... }'";
+            case Code::kLoopIterableUnsupported:    return "loop header iterable is unsupported in v0; only T[N], T[], and range forms are currently accepted";
+            case Code::kLoopRangeBoundMustBeInteger:return "loop range bounds must use builtin integer types";
+            case Code::kLoopRangeBoundTypeMismatch: return "loop range bounds must have the same concrete integer type";
+            case Code::kLoopRangeNeedsTypedBound:   return "loop range needs at least one typed integer bound; two infer-integer bounds are not allowed";
             
             case Code::kIfExprThenExpectedBlock: return "if-expression requires a then-branch block '{ ... }'";
             case Code::kIfExprElseExpectedBlock: return "if-expression requires an else-branch block '{ ... }' or 'else if ...'";
@@ -919,6 +927,10 @@ namespace parus::diag {
             case Code::kLoopHeaderExpectedIn:       return "loop 헤더에는 'in'이(가) 필요합니다 (예: loop (v in xs))";
             case Code::kLoopHeaderExpectedRParen:   return "loop 헤더를 닫는 ')'이(가) 필요합니다";
             case Code::kLoopBodyExpectedBlock:      return "loop 본문 블록 '{ ... }'이(가) 필요합니다";
+            case Code::kLoopIterableUnsupported:    return "loop 헤더 iterable은 현재 v0에서 지원되지 않습니다; 지금은 T[N], T[], 범위(a..b, a..:b)만 허용됩니다";
+            case Code::kLoopRangeBoundMustBeInteger:return "loop 범위 경계는 builtin 정수 타입이어야 합니다";
+            case Code::kLoopRangeBoundTypeMismatch: return "loop 범위 경계는 같은 구체 정수 타입이어야 합니다";
+            case Code::kLoopRangeNeedsTypedBound:   return "loop 범위에는 최소 하나의 typed integer 경계가 필요합니다; 양쪽이 infer-int인 범위는 허용되지 않습니다";
 
             case Code::kIfExprThenExpectedBlock: return "if 표현식의 then 분기는 블록 '{ ... }' 이어야 합니다";
             case Code::kIfExprElseExpectedBlock: return "if 표현식의 else 분기는 블록 '{ ... }' 또는 'else if ...' 이어야 합니다";
