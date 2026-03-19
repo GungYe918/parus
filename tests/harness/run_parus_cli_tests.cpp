@@ -2122,6 +2122,51 @@ bool test_iteration_loop_binder_variadic_typedef_arg_compiles() {
     return true;
 }
 
+bool test_iteration_loop_break_value_context_syntax_only() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-loop-break-context";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "def take(x: i32?) -> i32 {\n"
+        "  if (x == null) { return 0i32; }\n"
+        "  return 42i32;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let y: i32? = loop (x in 1..:4) {\n"
+        "    if (x == 4) {\n"
+        "      break 42;\n"
+        "    }\n"
+        "  };\n"
+        "  return take(loop {\n"
+        "    break 42;\n"
+        "  });\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write loop break context test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc != 0) {
+        std::cerr << "loop break infer-context syntax-only sample should succeed\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_unsuffixed_array_literal_slice_runtime_and_llvm() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -4883,6 +4928,7 @@ int main() {
     const bool ok75 = test_unsuffixed_named_array_to_slice_runtime();
     const bool ok76 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
     const bool ok77 = test_unsuffixed_array_literal_float_context_rejected();
+    const bool ok78 = test_iteration_loop_break_value_context_syntax_only();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -4890,7 +4936,7 @@ int main() {
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 ||
-        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77) {
+        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78) {
         return 1;
     }
 

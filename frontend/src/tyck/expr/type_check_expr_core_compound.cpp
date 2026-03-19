@@ -441,6 +441,13 @@
         LoopCtx lc{};
         lc.may_natural_end = e.loop_has_header; // iter loop => natural end => null
         lc.joined_value = ty::kInvalidType;
+        lc.break_expected_type = canonicalize_transparent_external_typedef_(e.target_type);
+        if (is_optional_(lc.break_expected_type)) {
+            lc.break_expected_type = optional_elem_(lc.break_expected_type);
+        }
+        if (lc.break_expected_type != ty::kInvalidType && is_error_(lc.break_expected_type)) {
+            lc.break_expected_type = ty::kInvalidType;
+        }
 
         parus::LoopSourceKind loop_source_kind = parus::LoopSourceKind::kNone;
         ty::TypeId loop_binder_type = ty::kInvalidType;
@@ -580,6 +587,7 @@
 
         // push loop ctx
         loop_stack_.push_back(lc);
+        break_target_stack_.push_back(BreakTargetKind::kLoopExpr);
 
         // body is a block stmt
         if (e.loop_body != ast::k_invalid_stmt) {
@@ -591,6 +599,7 @@
         }
 
         // pop loop ctx
+        if (!break_target_stack_.empty()) break_target_stack_.pop_back();
         LoopCtx done = loop_stack_.back();
         loop_stack_.pop_back();
 

@@ -2299,6 +2299,21 @@
         if (expected == ty::kInvalidType) return false;
 
         const auto& et = types_.get(expected);
+        auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
+            if (tid == ty::kInvalidType) return false;
+            const auto& tt = types_.get(tid);
+            switch (tt.kind) {
+                case ty::Kind::kBuiltin:
+                    return tt.builtin == ty::Builtin::kInferInteger;
+                case ty::Kind::kOptional:
+                case ty::Kind::kArray:
+                case ty::Kind::kBorrow:
+                case ty::Kind::kEscape:
+                    return self(tt.elem, self);
+                default:
+                    return false;
+            }
+        };
 
         // ------------------------------------------------------------
         // (0) aggregate context: array
@@ -2314,22 +2329,6 @@
             if (!et.array_has_size) {
                 value_expected = types_.make_array(et.elem, /*has_size=*/true, e.arg_count);
             }
-
-            auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
-                if (tid == ty::kInvalidType) return false;
-                const auto& tt = types_.get(tid);
-                switch (tt.kind) {
-                    case ty::Kind::kBuiltin:
-                        return tt.builtin == ty::Builtin::kInferInteger;
-                    case ty::Kind::kOptional:
-                    case ty::Kind::kArray:
-                    case ty::Kind::kBorrow:
-                    case ty::Kind::kEscape:
-                        return self(tt.elem, self);
-                    default:
-                        return false;
-                }
-            };
 
             bool ok_all = true;
             const auto& args = ast_.args();
@@ -2445,6 +2444,25 @@
                 }
                 // tail이 없으면 null로 수렴하므로 integer expected로는 해소 불가
                 return false;
+            }
+
+            case ast::ExprKind::kLoop: {
+                auto& me = ast_.expr_mut(eid);
+                me.target_type = expected;
+                if ((size_t)eid < expr_type_cache_.size()) {
+                    expr_type_cache_[eid] = ty::kInvalidType;
+                }
+
+                const ty::TypeId loop_t = check_expr_(eid, Slot::kValue);
+                if (is_error_(loop_t) || type_contains_infer_int(loop_t, type_contains_infer_int)) {
+                    return false;
+                }
+
+                auto& pe = pending_int_expr_[(uint32_t)eid];
+                pe.has_value = false;
+                pe.resolved = true;
+                pe.resolved_type = loop_t;
+                return true;
             }
 
             default:

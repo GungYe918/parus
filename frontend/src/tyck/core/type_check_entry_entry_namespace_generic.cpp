@@ -26,6 +26,7 @@ namespace parus::tyck {
         // -----------------------------
         result_ = TyckResult{};
         loop_stack_.clear();
+        break_target_stack_.clear();
         stmt_loop_depth_ = 0;
         fn_ctx_ = FnCtx{};
         pending_int_sym_.clear();

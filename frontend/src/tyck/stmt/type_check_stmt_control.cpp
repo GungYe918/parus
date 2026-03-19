@@ -91,13 +91,15 @@ namespace parus::tyck {
 
                 if (s.expr == ast::k_invalid_expr) {
                     // break;
-                    note_break_(types_.builtin(ty::Builtin::kNull), /*is_value_break=*/false);
+                    if (current_break_target_accepts_value_()) {
+                        note_break_(types_.builtin(ty::Builtin::kNull), /*is_value_break=*/false);
+                    }
                     return;
                 }
 
                 // value-break는 "loop expression" 컨텍스트에서만 허용한다.
                 // (while 같은 statement-loop에서는 break 값을 받을 곳이 없다.)
-                if (loop_stack_.empty()) {
+                if (!current_break_target_accepts_value_() || loop_stack_.empty()) {
                     diag_(diag::Code::kTypeBreakValueOnlyInLoopExpr, s.span);
                     err_(s.span, "break value is not allowed in a statement loop");
                     (void)check_expr_(s.expr, Slot::kValue);
@@ -105,7 +107,31 @@ namespace parus::tyck {
                 }
 
                 // break expr;
+                auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
+                    if (tid == ty::kInvalidType) return false;
+                    const auto& tt = types_.get(tid);
+                    switch (tt.kind) {
+                        case ty::Kind::kBuiltin:
+                            return tt.builtin == ty::Builtin::kInferInteger;
+                        case ty::Kind::kOptional:
+                        case ty::Kind::kArray:
+                        case ty::Kind::kBorrow:
+                        case ty::Kind::kEscape:
+                            return self(tt.elem, self);
+                        default:
+                            return false;
+                    }
+                };
                 ty::TypeId bt = check_expr_(s.expr, Slot::kValue);
+                if (!loop_stack_.empty()) {
+                    const ty::TypeId expected = loop_stack_.back().break_expected_type;
+                    if (expected != ty::kInvalidType &&
+                        !is_error_(expected) &&
+                        type_contains_infer_int(bt, type_contains_infer_int)) {
+                        (void)resolve_infer_int_in_context_(s.expr, expected);
+                        bt = check_expr_(s.expr, Slot::kValue);
+                    }
+                }
                 note_break_(bt, /*is_value_break=*/true);
                 return;
             }
@@ -641,9 +667,11 @@ namespace parus::tyck {
         std::vector<OwnershipStateMap> branches{};
         if (s.a != ast::k_invalid_stmt) {
             restore_ownership_state_(before);
+            break_target_stack_.push_back(BreakTargetKind::kStmtLoop);
             ++stmt_loop_depth_;
             check_stmt_(s.a);
             if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+            if (!break_target_stack_.empty()) break_target_stack_.pop_back();
             branches.push_back(capture_ownership_state_());
         }
         restore_ownership_state_(before);
@@ -664,9 +692,11 @@ namespace parus::tyck {
         std::vector<OwnershipStateMap> branches{};
         if (s.a != ast::k_invalid_stmt) {
             restore_ownership_state_(before);
+            break_target_stack_.push_back(BreakTargetKind::kStmtLoop);
             ++stmt_loop_depth_;
             check_stmt_(s.a);
             if (stmt_loop_depth_ > 0) --stmt_loop_depth_;
+            if (!break_target_stack_.empty()) break_target_stack_.pop_back();
         }
 
         if (s.expr != ast::k_invalid_expr) {

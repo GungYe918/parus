@@ -74,7 +74,8 @@ nullable 관련 사항에서 `docs/reference/language/SPEC.md`와 충돌하면, 
 
 1. unsuffixed integer literal은 내부적으로 `{integer}` placeholder를 갖는다.
 2. nullable 대상(`T?`)으로 대입할 때 infer 컨텍스트는 `T`(element)를 사용한다.
-3. 사용자 진단에서는 `{integer}` 내부명을 직접 노출하지 않는다.
+3. 이 규칙은 `loop` 표현식의 `break expr`가 nullable destination으로 흐를 때도 동일하게 적용된다.
+4. 사용자 진단에서는 `{integer}` 내부명을 직접 노출하지 않는다.
 
 ---
 

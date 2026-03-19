@@ -175,15 +175,22 @@ namespace parus::tyck {
         // --------------------
         // Loop context stack (break type collection)
         // --------------------
+        enum class BreakTargetKind : uint8_t {
+            kLoopExpr = 0,
+            kStmtLoop,
+        };
+
         struct LoopCtx {
             bool has_any_break = false;        // break; or break expr;
             bool has_value_break = false;      // break expr; existed
             bool has_null_break = false;       // break; existed
             bool may_natural_end = false;      // iter-loop natural end -> null
             ty::TypeId joined_value = ty::kInvalidType; // join of break expr types
+            ty::TypeId break_expected_type = ty::kInvalidType; // typed destination for break expr infer-int
         };
 
         std::vector<LoopCtx> loop_stack_;
+        std::vector<BreakTargetKind> break_target_stack_;
         uint32_t stmt_loop_depth_ = 0; // while/loop-stmt style depth (non-value loops)
 
         // --------------------
@@ -268,7 +275,11 @@ namespace parus::tyck {
         bool is_move_only_type_(ty::TypeId t) const;
         bool is_trivial_copy_clone_type_(ty::TypeId t) const;
 
-        bool in_loop_() const { return !loop_stack_.empty() || stmt_loop_depth_ != 0; }
+        bool in_loop_() const { return !break_target_stack_.empty(); }
+        bool current_break_target_accepts_value_() const {
+            return !break_target_stack_.empty() &&
+                   break_target_stack_.back() == BreakTargetKind::kLoopExpr;
+        }
         void note_break_(ty::TypeId t, bool is_value_break);
         enum class OwnershipState : uint8_t {
             kInitialized = 0,

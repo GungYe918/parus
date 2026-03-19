@@ -653,6 +653,134 @@ namespace {
         return ok;
     }
 
+    static bool test_loop_expr_break_infer_context_propagates() {
+        const std::string src = R"(
+            def take(x: i32?) -> i32 {
+                if (x == null) { return 0i32; }
+                return 42i32;
+            }
+
+            def ret_loop() -> i32? {
+                return loop {
+                    break 42;
+                };
+            }
+
+            def main() -> i32 {
+                let a: i32 = loop {
+                    break 42;
+                };
+                let b: i32? = loop {
+                    break 42;
+                };
+                let c: i32? = loop (x in 1..:4) {
+                    if (x == 4) {
+                        break 42;
+                    }
+                };
+                let d: i32 = loop {
+                    break (loop {
+                        break 42;
+                    });
+                };
+                return take(loop {
+                    break 42;
+                });
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "loop break infer-context program must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "loop break infer-context program must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_loop_expr_break_nested_statement_loop_isolated() {
+        const std::string ok_src = R"(
+            def main() -> i32 {
+                let y: i32 = loop {
+                    while (true) {
+                        break;
+                    }
+                    break 42i32;
+                };
+                return y;
+            }
+        )";
+        const std::string bad_src = R"(
+            def main() -> i32 {
+                let y: i32 = loop {
+                    while (true) {
+                        break 1i32;
+                    }
+                    break 42i32;
+                };
+                return y;
+            }
+        )";
+
+        auto p_ok = parse_program(ok_src);
+        (void)run_passes(p_ok);
+        auto ty_ok = run_tyck(p_ok);
+
+        auto p_bad = parse_program(bad_src);
+        (void)run_passes(p_bad);
+        auto ty_bad = run_tyck(p_bad);
+
+        bool ok = true;
+        ok &= require_(!p_ok.bag.has_error(), "nested statement-loop break isolation positive case must not emit diagnostics");
+        ok &= require_(ty_ok.errors.empty(), "nested statement-loop break isolation positive case must not emit tyck errors");
+        ok &= require_(p_bad.bag.has_code(parus::diag::Code::kTypeBreakValueOnlyInLoopExpr),
+            "inner statement-loop break value must still be rejected");
+        ok &= require_(!ty_bad.errors.empty(),
+            "inner statement-loop break value rejection must produce tyck error entry");
+        return ok;
+    }
+
+    static bool test_loop_expr_break_infer_context_negative_regressions() {
+        const std::string float_src = R"(
+            def main() -> i32 {
+                let y: f32? = loop {
+                    break 42;
+                };
+                return 0i32;
+            }
+        )";
+        const std::string mismatch_src = R"(
+            def main() -> i32 {
+                let y: i32 = loop (x in 1..:4) {
+                    if (x == 4) {
+                        break 42;
+                    }
+                };
+                return y;
+            }
+        )";
+
+        auto p_float = parse_program(float_src);
+        (void)run_passes(p_float);
+        auto ty_float = run_tyck(p_float);
+
+        auto p_mismatch = parse_program(mismatch_src);
+        (void)run_passes(p_mismatch);
+        auto ty_mismatch = run_tyck(p_mismatch);
+
+        bool ok = true;
+        ok &= require_(p_float.bag.has_code(parus::diag::Code::kIntToFloatNotAllowed),
+            "loop break infer-context must not allow int-to-float coercion");
+        ok &= require_(!ty_float.errors.empty(),
+            "loop break infer-context float rejection must produce tyck error entry");
+        ok &= require_(p_mismatch.bag.has_code(parus::diag::Code::kTypeLetInitMismatch),
+            "iter loop with natural end must still require optional destination");
+        ok &= require_(!ty_mismatch.errors.empty(),
+            "iter loop natural-end mismatch must produce tyck error entry");
+        return ok;
+    }
+
     static bool test_while_break_value_rejected() {
         // while 같은 statement-loop에서는 break 값이 금지되어야 한다.
         const std::string src = R"(
@@ -1842,6 +1970,9 @@ int main() {
         {"pipe_reverse_not_supported_yet", test_pipe_reverse_not_supported_yet},
         {"null_coalesce_assign_parsed_as_assign", test_null_coalesce_assign_parsed_as_assign},
         {"loop_expr_break_value_allowed", test_loop_expr_break_value_allowed},
+        {"loop_expr_break_infer_context_propagates", test_loop_expr_break_infer_context_propagates},
+        {"loop_expr_break_nested_statement_loop_isolated", test_loop_expr_break_nested_statement_loop_isolated},
+        {"loop_expr_break_infer_context_negative_regressions", test_loop_expr_break_infer_context_negative_regressions},
         {"while_break_value_rejected", test_while_break_value_rejected},
         {"loop_header_var_name_resolved", test_loop_header_var_name_resolved},
         {"diag_legacy_escape_token_rejected", test_diag_legacy_escape_token_rejected},

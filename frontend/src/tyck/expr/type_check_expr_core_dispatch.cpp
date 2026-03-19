@@ -1237,6 +1237,21 @@ namespace parus::tyck {
         if (!is_error_(src)) {
             const ty::TypeId infer_expected =
                 (dst_is_opt && dst_elem != ty::kInvalidType) ? dst_elem : dst;
+            auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
+                if (tid == ty::kInvalidType) return false;
+                const auto& tt = types_.get(tid);
+                switch (tt.kind) {
+                    case ty::Kind::kBuiltin:
+                        return tt.builtin == ty::Builtin::kInferInteger;
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kEscape:
+                        return self(tt.elem, self);
+                    default:
+                        return false;
+                }
+            };
             const auto& st = types_.get(src);
             if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
                 if (infer_expected != ty::kInvalidType) {
@@ -1244,6 +1259,14 @@ namespace parus::tyck {
                     src = check_expr_(src_eid);
                     plan.src_after = src;
                 }
+            } else if (infer_expected != ty::kInvalidType &&
+                       src_eid != ast::k_invalid_expr &&
+                       static_cast<size_t>(src_eid) < ast_.exprs().size() &&
+                       ast_.expr(src_eid).kind == ast::ExprKind::kLoop &&
+                       type_contains_infer_int(src, type_contains_infer_int)) {
+                infer_resolved = resolve_infer_int_in_context_(src_eid, infer_expected);
+                src = check_expr_(src_eid);
+                plan.src_after = src;
             } else if (infer_expected != ty::kInvalidType &&
                        resolve_array_literal_in_context(infer_expected)) {
                 infer_resolved = true;
