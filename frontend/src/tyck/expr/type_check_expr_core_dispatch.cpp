@@ -1235,43 +1235,65 @@ namespace parus::tyck {
         };
 
         if (!is_error_(src)) {
-            const ty::TypeId infer_expected =
+            const ty::TypeId infer_expected_elem =
                 (dst_is_opt && dst_elem != ty::kInvalidType) ? dst_elem : dst;
-            auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
-                if (tid == ty::kInvalidType) return false;
-                const auto& tt = types_.get(tid);
-                switch (tt.kind) {
-                    case ty::Kind::kBuiltin:
-                        return tt.builtin == ty::Builtin::kInferInteger;
-                    case ty::Kind::kOptional:
-                    case ty::Kind::kArray:
-                    case ty::Kind::kBorrow:
-                    case ty::Kind::kEscape:
-                        return self(tt.elem, self);
-                    default:
-                        return false;
+            const ty::TypeId infer_expected_full = dst;
+            if (type_contains_infer_int_(src)) {
+                bool resolved_now = false;
+
+                if (dst_is_opt && infer_expected_full != ty::kInvalidType) {
+                    resolved_now = resolve_infer_int_in_context_(src_eid, infer_expected_full);
                 }
-            };
-            const auto& st = types_.get(src);
-            if (st.kind == ty::Kind::kBuiltin && st.builtin == ty::Builtin::kInferInteger) {
-                if (infer_expected != ty::kInvalidType) {
-                    infer_resolved = resolve_infer_int_in_context_(src_eid, infer_expected);
+
+                if (!resolved_now &&
+                    infer_expected_elem != ty::kInvalidType &&
+                    resolve_array_literal_in_context(infer_expected_elem)) {
+                    resolved_now = true;
+                }
+
+                if (!resolved_now && infer_expected_elem != ty::kInvalidType) {
+                    resolved_now = resolve_infer_int_in_context_(src_eid, infer_expected_elem);
+                }
+
+                if (!resolved_now &&
+                    dst_is_opt &&
+                    src_eid != ast::k_invalid_expr &&
+                    static_cast<size_t>(src_eid) < ast_.exprs().size()) {
+                    const ast::Expr& src_expr = ast_.expr(src_eid);
+                    if (src_expr.kind == ast::ExprKind::kIdent) {
+                        auto sid = lookup_symbol_(src_expr.text);
+                        if (sid) {
+                            auto origin_it = pending_int_sym_origin_.find(*sid);
+                            if (origin_it != pending_int_sym_origin_.end()) {
+                                ty::TypeId finalized = ty::kInvalidType;
+                                if (finalize_infer_int_shape_(origin_it->second, src, finalized)) {
+                                    sym_.update_declared_type(*sid, finalized);
+                                    resolved_now = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!resolved_now) {
+                    ty::TypeId finalized = ty::kInvalidType;
+                    if (finalize_infer_int_shape_(src_eid, src, finalized)) {
+                        if (static_cast<size_t>(src_eid) < expr_type_cache_.size()) {
+                            expr_type_cache_[src_eid] = finalized;
+                        }
+                        auto& pe = pending_int_expr_[(uint32_t)src_eid];
+                        pe.has_value = false;
+                        pe.resolved = true;
+                        pe.resolved_type = finalized;
+                        resolved_now = true;
+                    }
+                }
+
+                if (resolved_now) {
+                    infer_resolved = true;
                     src = check_expr_(src_eid);
                     plan.src_after = src;
                 }
-            } else if (infer_expected != ty::kInvalidType &&
-                       src_eid != ast::k_invalid_expr &&
-                       static_cast<size_t>(src_eid) < ast_.exprs().size() &&
-                       ast_.expr(src_eid).kind == ast::ExprKind::kLoop &&
-                       type_contains_infer_int(src, type_contains_infer_int)) {
-                infer_resolved = resolve_infer_int_in_context_(src_eid, infer_expected);
-                src = check_expr_(src_eid);
-                plan.src_after = src;
-            } else if (infer_expected != ty::kInvalidType &&
-                       resolve_array_literal_in_context(infer_expected)) {
-                infer_resolved = true;
-                src = check_expr_(src_eid);
-                plan.src_after = src;
             }
         }
 

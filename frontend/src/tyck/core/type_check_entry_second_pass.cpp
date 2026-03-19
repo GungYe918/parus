@@ -11,22 +11,25 @@
             const uint32_t sym_id = kv.first;
             PendingInt& pi = kv.second;
 
-            if (!pi.has_value) continue;
             if (pi.resolved) continue;
+            if (pi.has_value) {
+                pi.resolved = true;
+                pi.resolved_type = choose_smallest_signed_type_(pi.value);
+                sym_.update_declared_type(sym_id, pi.resolved_type);
+                continue;
+            }
 
-            // pick smallest signed type
-            ty::Builtin b = ty::Builtin::kI128;
-            if      (pi.value.fits_i8())   b = ty::Builtin::kI8;
-            else if (pi.value.fits_i16())  b = ty::Builtin::kI16;
-            else if (pi.value.fits_i32())  b = ty::Builtin::kI32;
-            else if (pi.value.fits_i64())  b = ty::Builtin::kI64;
-            else                           b = ty::Builtin::kI128;
+            const auto origin_it = pending_int_sym_origin_.find(sym_id);
+            if (origin_it == pending_int_sym_origin_.end()) continue;
+
+            ty::TypeId finalized = ty::kInvalidType;
+            if (!finalize_infer_int_shape_(origin_it->second, sym_.symbol(sym_id).declared_type, finalized)) {
+                continue;
+            }
 
             pi.resolved = true;
-            pi.resolved_type = types_.builtin(b);
-
-            // NEW: SymbolTable에 확정 타입 반영
-            sym_.update_declared_type(sym_id, pi.resolved_type);
+            pi.resolved_type = finalized;
+            sym_.update_declared_type(sym_id, finalized);
         }
     }
 

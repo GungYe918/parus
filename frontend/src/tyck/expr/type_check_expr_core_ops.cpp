@@ -1388,6 +1388,26 @@
                 return types_.error();
             }
 
+            if (type_contains_infer_int_(elem)) {
+                ty::TypeId rt = check_expr_(e.b);
+                if (is_error_(rt)) return types_.error();
+
+                if (type_contains_infer_int_(rt)) {
+                    return elem;
+                }
+
+                if (rt != ty::kInvalidType &&
+                    resolve_infer_int_in_context_(e.a, types_.make_optional(rt))) {
+                    lt = check_expr_(e.a);
+                    if (is_optional_(lt)) {
+                        elem = optional_elem_(lt);
+                        if (elem != ty::kInvalidType && can_assign_(elem, rt)) {
+                            return elem;
+                        }
+                    }
+                }
+            }
+
             const CoercionPlan rhs_plan = classify_assign_with_coercion_(
                 AssignSite::Assign, elem, e.b, e.span);
             if (!rhs_plan.ok) {

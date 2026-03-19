@@ -583,6 +583,13 @@ namespace parus::tyck {
             sym_is_mut_[ins.symbol_id] = s.is_mut;
         }
 
+        if (ins.ok && type_contains_infer_int_(inferred)) {
+            pending_int_sym_origin_[ins.symbol_id] = s.init;
+            auto& pi = pending_int_sym_[ins.symbol_id];
+            pi.resolved = false;
+            pi.resolved_type = ty::kInvalidType;
+        }
+
         // (E) set x = <int literal> 이면: declared_type을 "{integer}"로 바꾸고 pending을 sym-id로 저장
         if (init_e.kind == ast::ExprKind::kIntLit) {
             const ParsedIntLiteral lit = parse_int_literal_(init_e.text);

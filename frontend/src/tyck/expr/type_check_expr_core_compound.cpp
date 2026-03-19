@@ -466,7 +466,16 @@
         auto set_loop_binder = [&](ty::TypeId t) {
             loop_binder_type = t;
             if (!e.loop_var.empty()) {
-                sym_.insert(sema::SymbolKind::kVar, e.loop_var, t, e.span);
+                auto ins = sym_.insert(sema::SymbolKind::kVar, e.loop_var, t, e.span);
+                if (!ins.ok) {
+                    diag_(diag::Code::kDuplicateDecl, e.span, e.loop_var);
+                    err_(e.span, "failed to bind loop variable '" + std::string(e.loop_var) + "'");
+                    loop_binder_type = types_.error();
+                    return;
+                }
+                if (ins.is_shadowing) {
+                    diag_(diag::Code::kShadowing, e.span, e.loop_var);
+                }
             }
         };
 

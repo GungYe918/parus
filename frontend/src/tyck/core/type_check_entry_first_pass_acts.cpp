@@ -2264,6 +2264,187 @@
         return false;
     }
 
+    bool TypeChecker::type_contains_infer_int_(ty::TypeId tid) const {
+        tid = canonicalize_transparent_external_typedef_(tid);
+        if (tid == ty::kInvalidType) return false;
+
+        const auto& tt = types_.get(tid);
+        switch (tt.kind) {
+            case ty::Kind::kBuiltin:
+                return tt.builtin == ty::Builtin::kInferInteger;
+            case ty::Kind::kOptional:
+            case ty::Kind::kArray:
+            case ty::Kind::kBorrow:
+            case ty::Kind::kEscape:
+                return tt.elem != ty::kInvalidType && type_contains_infer_int_(tt.elem);
+            default:
+                return false;
+        }
+    }
+
+    ty::TypeId TypeChecker::choose_smallest_signed_type_(const num::BigInt& v) const {
+        ty::Builtin b = ty::Builtin::kI128;
+        if      (v.fits_i8())  b = ty::Builtin::kI8;
+        else if (v.fits_i16()) b = ty::Builtin::kI16;
+        else if (v.fits_i32()) b = ty::Builtin::kI32;
+        else if (v.fits_i64()) b = ty::Builtin::kI64;
+        return types_.builtin(b);
+    }
+
+    bool TypeChecker::collect_infer_int_leaf_values_(ast::ExprId eid, std::vector<num::BigInt>& out) const {
+        if (eid == ast::k_invalid_expr || static_cast<size_t>(eid) >= ast_.exprs().size()) return false;
+
+        num::BigInt one{};
+        if (infer_int_value_of_expr_(eid, one)) {
+            out.push_back(one);
+            return true;
+        }
+
+        const ast::Expr& e = ast_.expr(eid);
+        auto collect_from_stmt = [&](auto&& self, ast::StmtId sid) -> bool {
+            if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) return false;
+            const ast::Stmt& s = ast_.stmt(sid);
+            bool any = false;
+
+            if (s.kind == ast::StmtKind::kBlock) {
+                const auto& items = ast_.stmt_children();
+                const uint32_t end = s.stmt_begin + s.stmt_count;
+                if (s.stmt_begin < items.size() && end <= items.size()) {
+                    for (uint32_t i = s.stmt_begin; i < end; ++i) {
+                        const ast::StmtId child = items[i];
+                        if (child == ast::k_invalid_stmt) continue;
+                        any = self(self, child) || any;
+                    }
+                }
+                return any;
+            }
+
+            if (s.kind == ast::StmtKind::kBreak) {
+                if (s.expr != ast::k_invalid_expr) {
+                    any = collect_infer_int_leaf_values_(s.expr, out) || any;
+                }
+                return any;
+            }
+
+            if (s.a != ast::k_invalid_stmt) any = self(self, s.a) || any;
+            if (s.b != ast::k_invalid_stmt) any = self(self, s.b) || any;
+            return any;
+        };
+
+        switch (e.kind) {
+            case ast::ExprKind::kArrayLit: {
+                bool any = false;
+                const auto& args = ast_.args();
+                const uint32_t end = e.arg_begin + e.arg_count;
+                if (e.arg_begin >= args.size() || end > args.size()) return false;
+                for (uint32_t i = e.arg_begin; i < end; ++i) {
+                    if (args[i].expr == ast::k_invalid_expr) continue;
+                    any = collect_infer_int_leaf_values_(args[i].expr, out) || any;
+                }
+                return any;
+            }
+            case ast::ExprKind::kIfExpr:
+                return (e.b != ast::k_invalid_expr && collect_infer_int_leaf_values_(e.b, out)) ||
+                       (e.c != ast::k_invalid_expr && collect_infer_int_leaf_values_(e.c, out));
+            case ast::ExprKind::kTernary:
+                return (e.b != ast::k_invalid_expr && collect_infer_int_leaf_values_(e.b, out)) ||
+                       (e.c != ast::k_invalid_expr && collect_infer_int_leaf_values_(e.c, out));
+            case ast::ExprKind::kBlockExpr:
+                return e.block_tail != ast::k_invalid_expr && collect_infer_int_leaf_values_(e.block_tail, out);
+            case ast::ExprKind::kBinary:
+                if (e.op == parus::syntax::TokenKind::kQuestionQuestion) {
+                    bool any = false;
+                    if (e.a != ast::k_invalid_expr) any = collect_infer_int_leaf_values_(e.a, out) || any;
+                    if (e.b != ast::k_invalid_expr) any = collect_infer_int_leaf_values_(e.b, out) || any;
+                    return any;
+                }
+                return false;
+            case ast::ExprKind::kLoop:
+                return collect_from_stmt(collect_from_stmt, e.loop_body);
+            case ast::ExprKind::kIdent: {
+                auto sid = lookup_symbol_(e.text);
+                if (!sid) return false;
+                auto origin_it = pending_int_sym_origin_.find(*sid);
+                if (origin_it == pending_int_sym_origin_.end()) return false;
+                if (origin_it->second == eid) return false;
+                return collect_infer_int_leaf_values_(origin_it->second, out);
+            }
+            default:
+                return false;
+        }
+    }
+
+    bool TypeChecker::finalize_infer_int_shape_(ast::ExprId origin_eid, ty::TypeId current, ty::TypeId& out) const {
+        out = canonicalize_transparent_external_typedef_(current);
+        if (out == ty::kInvalidType) return false;
+        if (!type_contains_infer_int_(out)) return true;
+
+        std::vector<num::BigInt> leaves{};
+        if (!collect_infer_int_leaf_values_(origin_eid, leaves) || leaves.empty()) {
+            return false;
+        }
+
+        ty::TypeId chosen = choose_smallest_signed_type_(leaves.front());
+        for (size_t i = 1; i < leaves.size(); ++i) {
+            const ty::TypeId leaf_ty = choose_smallest_signed_type_(leaves[i]);
+            if (leaf_ty == chosen) continue;
+            const auto& cur_t = types_.get(chosen);
+            const auto& next_t = types_.get(leaf_ty);
+            if (cur_t.kind != ty::Kind::kBuiltin || next_t.kind != ty::Kind::kBuiltin) {
+                return false;
+            }
+            auto rank = [](ty::Builtin b) -> int {
+                switch (b) {
+                    case ty::Builtin::kI8: return 1;
+                    case ty::Builtin::kI16: return 2;
+                    case ty::Builtin::kI32: return 3;
+                    case ty::Builtin::kI64: return 4;
+                    case ty::Builtin::kI128: return 5;
+                    default: return 5;
+                }
+            };
+            if (rank(next_t.builtin) > rank(cur_t.builtin)) {
+                chosen = leaf_ty;
+            }
+        }
+
+        const auto rewrite = [&](ty::TypeId src, const auto& self) -> ty::TypeId {
+            src = canonicalize_transparent_external_typedef_(src);
+            if (src == ty::kInvalidType) return ty::kInvalidType;
+            const auto& st = types_.get(src);
+            switch (st.kind) {
+                case ty::Kind::kBuiltin:
+                    if (st.builtin == ty::Builtin::kInferInteger) return chosen;
+                    return src;
+                case ty::Kind::kOptional: {
+                    const ty::TypeId elem = self(st.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_optional(elem);
+                }
+                case ty::Kind::kArray: {
+                    const ty::TypeId elem = self(st.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_array(elem, st.array_has_size, st.array_size);
+                }
+                case ty::Kind::kBorrow: {
+                    const ty::TypeId elem = self(st.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_borrow(elem, st.borrow_is_mut);
+                }
+                case ty::Kind::kEscape: {
+                    const ty::TypeId elem = self(st.elem, self);
+                    if (elem == ty::kInvalidType) return ty::kInvalidType;
+                    return types_.make_escape(elem);
+                }
+                default:
+                    return src;
+            }
+        };
+
+        out = rewrite(out, rewrite);
+        return out != ty::kInvalidType && !type_contains_infer_int_(out);
+    }
+
     bool TypeChecker::infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const {
         auto it = pending_int_expr_.find((uint32_t)eid);
         if (it != pending_int_expr_.end() && it->second.has_value) {
@@ -2299,21 +2480,6 @@
         if (expected == ty::kInvalidType) return false;
 
         const auto& et = types_.get(expected);
-        auto type_contains_infer_int = [&](ty::TypeId tid, const auto& self) -> bool {
-            if (tid == ty::kInvalidType) return false;
-            const auto& tt = types_.get(tid);
-            switch (tt.kind) {
-                case ty::Kind::kBuiltin:
-                    return tt.builtin == ty::Builtin::kInferInteger;
-                case ty::Kind::kOptional:
-                case ty::Kind::kArray:
-                case ty::Kind::kBorrow:
-                case ty::Kind::kEscape:
-                    return self(tt.elem, self);
-                default:
-                    return false;
-            }
-        };
         auto is_int_builtin = [&](ty::Builtin b) -> bool {
             return b == ty::Builtin::kI8 || b == ty::Builtin::kI16 || b == ty::Builtin::kI32 ||
                 b == ty::Builtin::kI64 || b == ty::Builtin::kI128 ||
@@ -2379,7 +2545,24 @@
             if (!sid) return false;
 
             const ty::TypeId current = canonicalize_transparent_external_typedef_(sym_.symbol(*sid).declared_type);
-            const ty::TypeId rewritten = rewrite_infer_shape(current, ctx, rewrite_infer_shape);
+            ty::TypeId rewritten = rewrite_infer_shape(current, ctx, rewrite_infer_shape);
+            if (rewritten == ty::kInvalidType) {
+                auto origin_it = pending_int_sym_origin_.find(*sid);
+                if (origin_it != pending_int_sym_origin_.end() &&
+                    origin_it->second != ast::k_invalid_expr &&
+                    origin_it->second != eid) {
+                    if (!resolve_infer_int_in_context_(origin_it->second, ctx)) {
+                        ty::TypeId finalized = ty::kInvalidType;
+                        if (!finalize_infer_int_shape_(origin_it->second, current, finalized)) {
+                            return false;
+                        }
+                        rewritten = finalized;
+                    } else {
+                        const ty::TypeId origin_ty = check_expr_(origin_it->second);
+                        rewritten = rewrite_infer_shape(origin_ty, ctx, rewrite_infer_shape);
+                    }
+                }
+            }
             if (rewritten == ty::kInvalidType) return false;
 
             sym_.update_declared_type(*sid, rewritten);
@@ -2426,7 +2609,7 @@
                 if (a.expr == ast::k_invalid_expr) continue;
 
                 ty::TypeId elem_t = check_expr_(a.expr);
-                if (!type_contains_infer_int(elem_t, type_contains_infer_int)) continue;
+                if (!type_contains_infer_int_(elem_t)) continue;
 
                 if (!resolve_infer_int_in_context_(a.expr, et.elem)) {
                     ok_all = false;
@@ -2445,7 +2628,12 @@
         if (et.kind == ty::Kind::kOptional) {
             if (et.elem != ty::kInvalidType) {
                 const ast::Expr& e = ast_.expr(eid);
-                if (e.kind == ast::ExprKind::kLoop) {
+                if (e.kind == ast::ExprKind::kLoop ||
+                    e.kind == ast::ExprKind::kIfExpr ||
+                    e.kind == ast::ExprKind::kTernary ||
+                    e.kind == ast::ExprKind::kBlockExpr ||
+                    (e.kind == ast::ExprKind::kBinary &&
+                     e.op == parus::syntax::TokenKind::kQuestionQuestion)) {
                     return resolve_infer_int_in_context_(eid, et.elem);
                 }
             }
@@ -2536,7 +2724,7 @@
                 }
 
                 const ty::TypeId loop_t = check_expr_(eid, Slot::kValue);
-                if (is_error_(loop_t) || type_contains_infer_int(loop_t, type_contains_infer_int)) {
+                if (is_error_(loop_t) || type_contains_infer_int_(loop_t)) {
                     return false;
                 }
 
@@ -2554,7 +2742,7 @@
                 lhs_t = canonicalize_transparent_external_typedef_(lhs_t);
 
                 bool ok_lhs = true;
-                if (!is_error_(lhs_t) && type_contains_infer_int(lhs_t, type_contains_infer_int)) {
+                if (!is_error_(lhs_t) && type_contains_infer_int_(lhs_t)) {
                     if (is_optional_(lhs_t)) {
                         ok_lhs = resolve_infer_int_in_context_(e.a, types_.make_optional(expected));
                     } else if (!is_null_(lhs_t)) {
@@ -2565,7 +2753,7 @@
                 bool ok_rhs = true;
                 if (e.b != ast::k_invalid_expr) {
                     ty::TypeId rhs_t = check_expr_(e.b, Slot::kValue);
-                    if (!is_error_(rhs_t) && type_contains_infer_int(rhs_t, type_contains_infer_int)) {
+                    if (!is_error_(rhs_t) && type_contains_infer_int_(rhs_t)) {
                         ok_rhs = resolve_infer_int_in_context_(e.b, expected);
                     }
                 }

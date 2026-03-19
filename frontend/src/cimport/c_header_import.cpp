@@ -1869,7 +1869,11 @@ namespace parus::cimport {
 
                         const long long rel_off_bits = clang_Cursor_getOffsetOfField(child);
                         if (rel_off_bits < 0) {
-                            return CXChildVisit_Continue;
+                            ctx.had_hard_error = true;
+                            ctx.hard_error_text =
+                                "anonymous field flatten failed in struct '" + s.name +
+                                "': field offset is unavailable for an anonymous nested field";
+                            return CXChildVisit_Break;
                         }
                         const uint64_t abs_off_bits = base_offset_bits + static_cast<uint64_t>(rel_off_bits);
                         const CXType child_ty = clang_getCursorType(child);
@@ -1882,11 +1886,19 @@ namespace parus::cimport {
                                 nested_decl = clang_getTypeDeclaration(child_ty);
                             }
                             if (clang_Cursor_isNull(nested_decl)) {
-                                return CXChildVisit_Continue;
+                                ctx.had_hard_error = true;
+                                ctx.hard_error_text =
+                                    "anonymous field flatten failed in struct '" + s.name +
+                                    "': anonymous nested declaration is unavailable";
+                                return CXChildVisit_Break;
                             }
                             const CXCursorKind nk = clang_getCursorKind(nested_decl);
                             if (nk != CXCursor_StructDecl && nk != CXCursor_UnionDecl) {
-                                return CXChildVisit_Continue;
+                                ctx.had_hard_error = true;
+                                ctx.hard_error_text =
+                                    "anonymous field flatten failed in struct '" + s.name +
+                                    "': anonymous nested field is not a struct/union record";
+                                return CXChildVisit_Break;
                             }
                             const std::string nested_name = to_std_string_(clang_getCursorSpelling(nested_decl));
                             const bool ok = self(

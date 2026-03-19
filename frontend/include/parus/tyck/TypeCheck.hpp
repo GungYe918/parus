@@ -388,11 +388,16 @@ namespace parus::tyck {
 
         // By SymbolId: set x = <int literal> ;  (var-level origin)
         std::unordered_map<uint32_t, PendingInt> pending_int_sym_;
+        std::unordered_map<uint32_t, ast::ExprId> pending_int_sym_origin_;
 
         // By ExprId: any integer literal expression (and optionally propagated)
         std::unordered_map<uint32_t, PendingInt> pending_int_expr_;
 
         // (TypeChecker private) inferred integer("{integer}")를 expected 정수 타입으로 확정 시도
+        bool type_contains_infer_int_(ty::TypeId tid) const;
+        ty::TypeId choose_smallest_signed_type_(const num::BigInt& v) const;
+        bool collect_infer_int_leaf_values_(ast::ExprId eid, std::vector<num::BigInt>& out) const;
+        bool finalize_infer_int_shape_(ast::ExprId origin_eid, ty::TypeId current, ty::TypeId& out) const;
         bool resolve_infer_int_in_context_(ast::ExprId eid, ty::TypeId expected);
         bool infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const;
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);

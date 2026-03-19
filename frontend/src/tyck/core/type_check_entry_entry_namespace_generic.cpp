@@ -30,6 +30,7 @@ namespace parus::tyck {
         stmt_loop_depth_ = 0;
         fn_ctx_ = FnCtx{};
         pending_int_sym_.clear();
+        pending_int_sym_origin_.clear();
         pending_int_expr_.clear();
         fn_sid_stack_.clear();
         sym_is_mut_.clear();
@@ -564,32 +565,38 @@ namespace parus::tyck {
         //   pick the smallest signed integer type that fits.
         // - Finalization applies to both symbol-backed and expression-backed pending integers.
         // ----------------------------------------
-        auto choose_smallest_signed = [&](const num::BigInt& v) -> ty::TypeId {
-            ty::Builtin b = ty::Builtin::kI128;
-            if      (v.fits_i8())  b = ty::Builtin::kI8;
-            else if (v.fits_i16()) b = ty::Builtin::kI16;
-            else if (v.fits_i32()) b = ty::Builtin::kI32;
-            else if (v.fits_i64()) b = ty::Builtin::kI64;
-            return types_.builtin(b);
-        };
-
         for (auto& kv : pending_int_sym_) {
             const uint32_t sym_id = kv.first;
             PendingInt& pi = kv.second;
 
-            if (!pi.has_value || pi.resolved) continue;
+            if (pi.resolved) continue;
+            if (pi.has_value) {
+                pi.resolved = true;
+                pi.resolved_type = choose_smallest_signed_type_(pi.value);
+                sym_.update_declared_type(sym_id, pi.resolved_type);
+                continue;
+            }
+
+            const auto origin_it = pending_int_sym_origin_.find(sym_id);
+            if (origin_it == pending_int_sym_origin_.end()) continue;
+
+            ty::TypeId finalized = ty::kInvalidType;
+            if (!finalize_infer_int_shape_(origin_it->second, sym_.symbol(sym_id).declared_type, finalized)) {
+                continue;
+            }
             pi.resolved = true;
-            pi.resolved_type = choose_smallest_signed(pi.value);
-            sym_.update_declared_type(sym_id, pi.resolved_type);
+            pi.resolved_type = finalized;
+            sym_.update_declared_type(sym_id, finalized);
         }
 
         for (auto& kv : pending_int_expr_) {
             const uint32_t eid = kv.first;
             PendingInt& pi = kv.second;
 
-            if (!pi.has_value || pi.resolved) continue;
+            if (pi.resolved) continue;
+            if (!pi.has_value) continue;
             pi.resolved = true;
-            pi.resolved_type = choose_smallest_signed(pi.value);
+            pi.resolved_type = choose_smallest_signed_type_(pi.value);
 
             if (eid < expr_type_cache_.size()) {
                 expr_type_cache_[eid] = pi.resolved_type;

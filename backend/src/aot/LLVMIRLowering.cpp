@@ -1078,6 +1078,26 @@ namespace parus::backend::aot {
             std::string slot_ptr_ref_(std::ostringstream& os, parus::oir::ValueId slot) {
                 auto it = address_ref_by_value_.find(slot);
                 if (it != address_ref_by_value_.end()) return it->second;
+
+                const auto tid = value_type_id_(slot);
+                if (tid != parus::ty::kInvalidType) {
+                    const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                    if (is_aggregate_llvm_ty_(full_ty)) {
+                        const std::string tmp_slot = next_tmp_();
+                        const std::string cur = value_ty_(slot);
+                        const std::string src =
+                            (cur == full_ty) ? vref_(slot) : coerce_value_(os, slot, full_ty);
+                        os << "  " << tmp_slot << " = alloca " << full_ty << "\n";
+                        os << "  store " << full_ty << " " << src << ", ptr " << tmp_slot << "\n";
+                        address_ref_by_value_[slot] = tmp_slot;
+                        return tmp_slot;
+                    }
+                }
+
+                const std::string cur = value_ty_(slot);
+                if (cur == "ptr") {
+                    return vref_(slot);
+                }
                 return coerce_value_(os, slot, "ptr");
             }
 
