@@ -12,60 +12,120 @@ def f64_value_(x: &f64) -> f64 {
     return x + 0.0f64;
 }
 
+def f32_is_nan_(x: f32) -> bool {
+    return x != x;
+}
+
+def f64_is_nan_(x: f64) -> bool {
+    return x != x;
+}
+
 export acts for f32 {
-    def cmp(self, rhs: f32) -> cmp::Ordering {
-        if (f32_value_(self) < rhs) { return cmp::ordering_less(); }
-        if (f32_value_(self) > rhs) { return cmp::ordering_greater(); }
+    def partial_cmp(self, rhs: f32) -> cmp::Ordering? {
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs) or f32_is_nan_(rhs)) { return null; }
+        if (lhs < rhs) { return cmp::ordering_less(); }
+        if (lhs > rhs) { return cmp::ordering_greater(); }
         return cmp::ordering_equal();
     }
 
     def min(self, rhs: f32) -> f32 {
-        if (f32_value_(self) < rhs) { return f32_value_(self); }
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs)) { return rhs; }
+        if (f32_is_nan_(rhs)) { return lhs; }
+        if (lhs < rhs) { return lhs; }
         return rhs;
     }
 
     def max(self, rhs: f32) -> f32 {
-        if (f32_value_(self) > rhs) { return f32_value_(self); }
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs)) { return rhs; }
+        if (f32_is_nan_(rhs)) { return lhs; }
+        if (lhs > rhs) { return lhs; }
         return rhs;
     }
 
     def clamp(self, lo: f32, hi: f32) -> f32 {
-        if (f32_value_(self) < lo) { return lo; }
-        if (f32_value_(self) > hi) { return hi; }
-        return f32_value_(self);
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs)) { return lhs; }
+        if (f32_is_nan_(lo) or f32_is_nan_(hi) or hi < lo) { return lhs; }
+        if (lhs < lo) { return lo; }
+        if (lhs > hi) { return hi; }
+        return lhs;
     }
 
     def abs(self) -> f32 {
-        if (f32_value_(self) < 0.0f32) { return 0.0f32 - self; }
-        return f32_value_(self);
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs)) { return lhs; }
+        if (lhs < 0.0f32) { return 0.0f32 - lhs; }
+        if (lhs == 0.0f32) { return 0.0f32; }
+        return lhs;
+    }
+
+    def is_nan(self) -> bool {
+        return f32_is_nan_(f32_value_(self));
+    }
+
+    def signum(self) -> f32 {
+        let lhs: f32 = f32_value_(self);
+        if (f32_is_nan_(lhs)) { return lhs; }
+        if (lhs == 0.0f32) { return lhs; }
+        if (lhs < 0.0f32) { return -1.0f32; }
+        return 1.0f32;
     }
 };
 
 export acts for f64 {
-    def cmp(self, rhs: f64) -> cmp::Ordering {
-        if (f64_value_(self) < rhs) { return cmp::ordering_less(); }
-        if (f64_value_(self) > rhs) { return cmp::ordering_greater(); }
+    def partial_cmp(self, rhs: f64) -> cmp::Ordering? {
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs) or f64_is_nan_(rhs)) { return null; }
+        if (lhs < rhs) { return cmp::ordering_less(); }
+        if (lhs > rhs) { return cmp::ordering_greater(); }
         return cmp::ordering_equal();
     }
 
     def min(self, rhs: f64) -> f64 {
-        if (f64_value_(self) < rhs) { return f64_value_(self); }
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs)) { return rhs; }
+        if (f64_is_nan_(rhs)) { return lhs; }
+        if (lhs < rhs) { return lhs; }
         return rhs;
     }
 
     def max(self, rhs: f64) -> f64 {
-        if (f64_value_(self) > rhs) { return f64_value_(self); }
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs)) { return rhs; }
+        if (f64_is_nan_(rhs)) { return lhs; }
+        if (lhs > rhs) { return lhs; }
         return rhs;
     }
 
     def clamp(self, lo: f64, hi: f64) -> f64 {
-        if (f64_value_(self) < lo) { return lo; }
-        if (f64_value_(self) > hi) { return hi; }
-        return f64_value_(self);
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs)) { return lhs; }
+        if (f64_is_nan_(lo) or f64_is_nan_(hi) or hi < lo) { return lhs; }
+        if (lhs < lo) { return lo; }
+        if (lhs > hi) { return hi; }
+        return lhs;
     }
 
     def abs(self) -> f64 {
-        if (f64_value_(self) < 0.0f64) { return 0.0f64 - self; }
-        return f64_value_(self);
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs)) { return lhs; }
+        if (lhs < 0.0f64) { return 0.0f64 - lhs; }
+        if (lhs == 0.0f64) { return 0.0f64; }
+        return lhs;
+    }
+
+    def is_nan(self) -> bool {
+        return f64_is_nan_(f64_value_(self));
+    }
+
+    def signum(self) -> f64 {
+        let lhs: f64 = f64_value_(self);
+        if (f64_is_nan_(lhs)) { return lhs; }
+        if (lhs == 0.0f64) { return lhs; }
+        if (lhs < 0.0f64) { return -1.0f64; }
+        return 1.0f64;
     }
 };

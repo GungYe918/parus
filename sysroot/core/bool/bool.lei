@@ -1,0 +1,9 @@
+export plan bool_module = module & {
+  sources = [
+    "bool/bool.pr",
+  ];
+  imports = ["cmp"];
+  cimport = {
+    isystem: [],
+  };
+};

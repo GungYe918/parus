@@ -32,6 +32,26 @@ bool contains(std::string_view haystack, std::string_view needle) {
     return haystack.find(needle) != std::string_view::npos;
 }
 
+struct TextPos {
+    int line = 0;
+    int character = 0;
+};
+
+std::optional<TextPos> find_text_pos(std::string_view text, std::string_view needle) {
+    const auto idx = text.find(needle);
+    if (idx == std::string_view::npos) return std::nullopt;
+    TextPos pos{};
+    for (size_t i = 0; i < idx; ++i) {
+        if (text[i] == '\n') {
+            ++pos.line;
+            pos.character = 0;
+        } else {
+            ++pos.character;
+        }
+    }
+    return pos;
+}
+
 std::string json_escape(std::string_view s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -412,13 +432,19 @@ bool test_core_impl_bundle_alias_resolves_exported_helper() {
     const std::string uri = to_file_uri(ascii_pr);
     const std::string ordering_uri = to_file_uri(ordering_pr);
     const std::string ascii_text = read_text(ascii_pr);
+    const auto helper_pos = find_text_pos(ascii_text, "cmp::ordering_less()");
+    if (!helper_pos) {
+        std::cerr << "failed to locate cmp::ordering_less() in ascii fixture\n";
+        return false;
+    }
     std::vector<std::string> payloads{
         R"({"jsonrpc":"2.0","id":41,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
         R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
             + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(ascii_text) + "\"}}}",
         "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
-            + json_escape(uri) + "\"},\"position\":{\"line\":89,\"character\":58}}}",
+            + json_escape(uri) + "\"},\"position\":{\"line\":" + std::to_string(helper_pos->line)
+            + ",\"character\":" + std::to_string(helper_pos->character + 6) + "}}}",
         R"({"jsonrpc":"2.0","id":43,"method":"shutdown","params":{}})",
         R"({"jsonrpc":"2.0","method":"exit","params":{}})",
     };
@@ -454,13 +480,19 @@ bool test_core_impl_same_file_helper_stays_local_in_lsp() {
 
     const std::string uri = to_file_uri(ascii_pr);
     const std::string ascii_text = read_text(ascii_pr);
+    const auto helper_pos = find_text_pos(ascii_text, "char_value_(self)");
+    if (!helper_pos) {
+        std::cerr << "failed to locate char_value_(self) in ascii fixture\n";
+        return false;
+    }
     std::vector<std::string> payloads{
         R"({"jsonrpc":"2.0","id":51,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
         R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
         "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
             + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(ascii_text) + "\"}}}",
         "{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
-            + json_escape(uri) + "\"},\"position\":{\"line\":89,\"character\":13}}}",
+            + json_escape(uri) + "\"},\"position\":{\"line\":" + std::to_string(helper_pos->line)
+            + ",\"character\":" + std::to_string(helper_pos->character + 2) + "}}}",
         R"({"jsonrpc":"2.0","id":53,"method":"shutdown","params":{}})",
         R"({"jsonrpc":"2.0","method":"exit","params":{}})",
     };

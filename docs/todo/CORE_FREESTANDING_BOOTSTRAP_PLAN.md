@@ -2,6 +2,8 @@
 
 문서 상태: `active`
 
+primitive별 실제 구현 우선순위와 후속 phase는 `docs/todo/CORE_PRIMITIVE_ROADMAP.md`를 따른다.
+
 ## 목표
 
 `std`가 올라가기 전에, `core`를 다음 성질로 고정한다.
@@ -127,9 +129,10 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 
 1. `core::fmt`
 2. `core::hash`
-3. `core::iter`
-4. `core::slice`
-5. `core::result`
+3. `core::slice`
+4. `core::result`
+
+`core::iter`는 보류 대상이지만, 계층상으로는 장기적으로 `std`가 아니라 `core`에 둔다. 구체적인 도입 순서는 roadmap 문서를 따른다.
 
 ## 1차 함수셋
 
@@ -448,4 +451,3 @@ Parus에는 `T[]`가 있지만, Rust `core::slice` 수준의 알고리즘 표면
 4. checked/wrapping/saturating arithmetic
 5. `std::c`
 6. `std::io`
-

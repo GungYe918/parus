@@ -1,0 +1,20 @@
+$![Impl::Core];
+
+import cmp as cmp;
+
+def bool_value_(x: &bool) -> bool {
+    return x or false;
+}
+
+// Default comparison acts for the builtin bool type.
+export acts for bool {
+    def cmp(self, rhs: bool) -> cmp::Ordering {
+        let lhs: bool = bool_value_(self);
+        if (lhs) {
+            if (rhs) { return cmp::ordering_equal(); }
+            return cmp::ordering_greater();
+        }
+        if (rhs) { return cmp::ordering_less(); }
+        return cmp::ordering_equal();
+    }
+};

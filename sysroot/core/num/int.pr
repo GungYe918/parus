@@ -17,6 +17,180 @@ def u64_value_(x: &u64) -> u64 { return x + 0u64; }
 def u128_value_(x: &u128) -> u128 { return x + 0u128; }
 def usize_value_(x: &usize) -> usize { return x + 0usize; }
 
+def i8_div_euclid_(lhs: i8, rhs: i8) -> i8 {
+    let q: i8 = lhs / rhs;
+    let r: i8 = lhs % rhs;
+    if (r < 0i8) {
+        if (rhs > 0i8) { return q - 1i8; }
+        return q + 1i8;
+    }
+    return q;
+}
+
+def i16_div_euclid_(lhs: i16, rhs: i16) -> i16 {
+    let q: i16 = lhs / rhs;
+    let r: i16 = lhs % rhs;
+    if (r < 0i16) {
+        if (rhs > 0i16) { return q - 1i16; }
+        return q + 1i16;
+    }
+    return q;
+}
+
+def i32_div_euclid_(lhs: i32, rhs: i32) -> i32 {
+    let q: i32 = lhs / rhs;
+    let r: i32 = lhs % rhs;
+    if (r < 0i32) {
+        if (rhs > 0i32) { return q - 1i32; }
+        return q + 1i32;
+    }
+    return q;
+}
+
+def i64_div_euclid_(lhs: i64, rhs: i64) -> i64 {
+    let q: i64 = lhs / rhs;
+    let r: i64 = lhs % rhs;
+    if (r < 0i64) {
+        if (rhs > 0i64) { return q - 1i64; }
+        return q + 1i64;
+    }
+    return q;
+}
+
+def i128_div_euclid_(lhs: i128, rhs: i128) -> i128 {
+    let q: i128 = lhs / rhs;
+    let r: i128 = lhs % rhs;
+    if (r < 0i128) {
+        if (rhs > 0i128) { return q - 1i128; }
+        return q + 1i128;
+    }
+    return q;
+}
+
+def isize_div_euclid_(lhs: isize, rhs: isize) -> isize {
+    let q: isize = lhs / rhs;
+    let r: isize = lhs % rhs;
+    if (r < 0isize) {
+        if (rhs > 0isize) { return q - 1isize; }
+        return q + 1isize;
+    }
+    return q;
+}
+
+def i8_rem_euclid_(lhs: i8, rhs: i8) -> i8 {
+    let r: i8 = lhs % rhs;
+    if (r < 0i8) {
+        if (rhs > 0i8) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def i16_rem_euclid_(lhs: i16, rhs: i16) -> i16 {
+    let r: i16 = lhs % rhs;
+    if (r < 0i16) {
+        if (rhs > 0i16) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def i32_rem_euclid_(lhs: i32, rhs: i32) -> i32 {
+    let r: i32 = lhs % rhs;
+    if (r < 0i32) {
+        if (rhs > 0i32) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def i64_rem_euclid_(lhs: i64, rhs: i64) -> i64 {
+    let r: i64 = lhs % rhs;
+    if (r < 0i64) {
+        if (rhs > 0i64) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def i128_rem_euclid_(lhs: i128, rhs: i128) -> i128 {
+    let r: i128 = lhs % rhs;
+    if (r < 0i128) {
+        if (rhs > 0i128) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def isize_rem_euclid_(lhs: isize, rhs: isize) -> isize {
+    let r: isize = lhs % rhs;
+    if (r < 0isize) {
+        if (rhs > 0isize) { return r + rhs; }
+        return r - rhs;
+    }
+    return r;
+}
+
+def u8_is_power_of_two_(x: u8) -> bool {
+    if (x == 0u8) { return false; }
+    set mut cur = x;
+    while (cur > 1u8) {
+        if ((cur % 2u8) != 0u8) { return false; }
+        cur = cur / 2u8;
+    }
+    return true;
+}
+
+def u16_is_power_of_two_(x: u16) -> bool {
+    if (x == 0u16) { return false; }
+    set mut cur = x;
+    while (cur > 1u16) {
+        if ((cur % 2u16) != 0u16) { return false; }
+        cur = cur / 2u16;
+    }
+    return true;
+}
+
+def u32_is_power_of_two_(x: u32) -> bool {
+    if (x == 0u32) { return false; }
+    set mut cur = x;
+    while (cur > 1u32) {
+        if ((cur % 2u32) != 0u32) { return false; }
+        cur = cur / 2u32;
+    }
+    return true;
+}
+
+def u64_is_power_of_two_(x: u64) -> bool {
+    if (x == 0u64) { return false; }
+    set mut cur = x;
+    while (cur > 1u64) {
+        if ((cur % 2u64) != 0u64) { return false; }
+        cur = cur / 2u64;
+    }
+    return true;
+}
+
+def u128_is_power_of_two_(x: u128) -> bool {
+    if (x == 0u128) { return false; }
+    set mut cur = x;
+    while (cur > 1u128) {
+        if ((cur % 2u128) != 0u128) { return false; }
+        cur = cur / 2u128;
+    }
+    return true;
+}
+
+def usize_is_power_of_two_(x: usize) -> bool {
+    if (x == 0usize) { return false; }
+    set mut cur = x;
+    while (cur > 1usize) {
+        if ((cur % 2usize) != 0usize) { return false; }
+        cur = cur / 2usize;
+    }
+    return true;
+}
+
 export acts for i8 {
     def cmp(self, rhs: i8) -> cmp::Ordering {
         if (i8_value_(self) < rhs) { return cmp::ordering_less(); }
@@ -42,6 +216,14 @@ export acts for i8 {
 
     def is_zero(self) -> bool {
         return i8_value_(self) == 0i8;
+    }
+
+    def div_euclid(self, rhs: i8) -> i8 {
+        return i8_div_euclid_(i8_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: i8) -> i8 {
+        return i8_rem_euclid_(i8_value_(self), rhs);
     }
 
     def abs(self) -> i8 {
@@ -91,6 +273,14 @@ export acts for i16 {
         return i16_value_(self) == 0i16;
     }
 
+    def div_euclid(self, rhs: i16) -> i16 {
+        return i16_div_euclid_(i16_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: i16) -> i16 {
+        return i16_rem_euclid_(i16_value_(self), rhs);
+    }
+
     def abs(self) -> i16 {
         if (i16_value_(self) < 0i16) { return 0i16 - i16_value_(self); }
         return i16_value_(self);
@@ -136,6 +326,14 @@ export acts for i32 {
 
     def is_zero(self) -> bool {
         return i32_value_(self) == 0i32;
+    }
+
+    def div_euclid(self, rhs: i32) -> i32 {
+        return i32_div_euclid_(i32_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: i32) -> i32 {
+        return i32_rem_euclid_(i32_value_(self), rhs);
     }
 
     def abs(self) -> i32 {
@@ -185,6 +383,14 @@ export acts for i64 {
         return i64_value_(self) == 0i64;
     }
 
+    def div_euclid(self, rhs: i64) -> i64 {
+        return i64_div_euclid_(i64_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: i64) -> i64 {
+        return i64_rem_euclid_(i64_value_(self), rhs);
+    }
+
     def abs(self) -> i64 {
         if (i64_value_(self) < 0i64) { return 0i64 - i64_value_(self); }
         return i64_value_(self);
@@ -230,6 +436,14 @@ export acts for i128 {
 
     def is_zero(self) -> bool {
         return i128_value_(self) == 0i128;
+    }
+
+    def div_euclid(self, rhs: i128) -> i128 {
+        return i128_div_euclid_(i128_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: i128) -> i128 {
+        return i128_rem_euclid_(i128_value_(self), rhs);
     }
 
     def abs(self) -> i128 {
@@ -279,6 +493,14 @@ export acts for isize {
         return isize_value_(self) == 0isize;
     }
 
+    def div_euclid(self, rhs: isize) -> isize {
+        return isize_div_euclid_(isize_value_(self), rhs);
+    }
+
+    def rem_euclid(self, rhs: isize) -> isize {
+        return isize_rem_euclid_(isize_value_(self), rhs);
+    }
+
     def abs(self) -> isize {
         if (isize_value_(self) < 0isize) { return 0isize - isize_value_(self); }
         return isize_value_(self);
@@ -325,6 +547,18 @@ export acts for u8 {
     def is_zero(self) -> bool {
         return u8_value_(self) == 0u8;
     }
+
+    def div_euclid(self, rhs: u8) -> u8 {
+        return u8_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: u8) -> u8 {
+        return u8_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return u8_is_power_of_two_(u8_value_(self));
+    }
 };
 
 export acts for u16 {
@@ -352,6 +586,18 @@ export acts for u16 {
 
     def is_zero(self) -> bool {
         return u16_value_(self) == 0u16;
+    }
+
+    def div_euclid(self, rhs: u16) -> u16 {
+        return u16_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: u16) -> u16 {
+        return u16_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return u16_is_power_of_two_(u16_value_(self));
     }
 };
 
@@ -381,6 +627,18 @@ export acts for u32 {
     def is_zero(self) -> bool {
         return u32_value_(self) == 0u32;
     }
+
+    def div_euclid(self, rhs: u32) -> u32 {
+        return u32_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: u32) -> u32 {
+        return u32_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return u32_is_power_of_two_(u32_value_(self));
+    }
 };
 
 export acts for u64 {
@@ -408,6 +666,18 @@ export acts for u64 {
 
     def is_zero(self) -> bool {
         return u64_value_(self) == 0u64;
+    }
+
+    def div_euclid(self, rhs: u64) -> u64 {
+        return u64_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: u64) -> u64 {
+        return u64_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return u64_is_power_of_two_(u64_value_(self));
     }
 };
 
@@ -437,6 +707,18 @@ export acts for u128 {
     def is_zero(self) -> bool {
         return u128_value_(self) == 0u128;
     }
+
+    def div_euclid(self, rhs: u128) -> u128 {
+        return u128_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: u128) -> u128 {
+        return u128_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return u128_is_power_of_two_(u128_value_(self));
+    }
 };
 
 export acts for usize {
@@ -464,5 +746,17 @@ export acts for usize {
 
     def is_zero(self) -> bool {
         return usize_value_(self) == 0usize;
+    }
+
+    def div_euclid(self, rhs: usize) -> usize {
+        return usize_value_(self) / rhs;
+    }
+
+    def rem_euclid(self, rhs: usize) -> usize {
+        return usize_value_(self) % rhs;
+    }
+
+    def is_power_of_two(self) -> bool {
+        return usize_is_power_of_two_(usize_value_(self));
     }
 };

@@ -1231,6 +1231,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path ext_cstr = core_root / "ext/cstr.pr";
     const std::filesystem::path ext_errors = core_root / "ext/errors.pr";
     const std::filesystem::path cmp_ordering = core_root / "cmp/ordering.pr";
+    const std::filesystem::path bool_acts = core_root / "bool/bool.pr";
     const std::filesystem::path num_int = core_root / "num/int.pr";
     const std::filesystem::path num_float = core_root / "num/float.pr";
     const std::filesystem::path char_ascii = core_root / "char/ascii.pr";
@@ -1238,6 +1239,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(ext_cstr, ec) ||
         !std::filesystem::exists(ext_errors, ec) ||
         !std::filesystem::exists(cmp_ordering, ec) ||
+        !std::filesystem::exists(bool_acts, ec) ||
         !std::filesystem::exists(num_int, ec) ||
         !std::filesystem::exists(num_float, ec) ||
         !std::filesystem::exists(char_ascii, ec)) {
@@ -1256,6 +1258,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         " --bundle-source \"" + ext_cstr.string() + "\"" +
         " --bundle-source \"" + ext_errors.string() + "\"" +
         " --bundle-source \"" + cmp_ordering.string() + "\"" +
+        " --bundle-source \"" + bool_acts.string() + "\"" +
         " --bundle-source \"" + num_int.string() + "\"" +
         " --bundle-source \"" + num_float.string() + "\"" +
         " --bundle-source \"" + char_ascii.string() + "\"" +
@@ -1273,18 +1276,23 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
+    if (!contains(core_index_text, "parus_builtin_acts|owner=bool|member=cmp|self=1")) {
+        std::cerr << "core export-index must include bool.cmp builtin acts payload\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
     if (!contains(core_index_text, "parus_builtin_acts|owner=i32|member=min|self=1")) {
         std::cerr << "core export-index must include i32.min builtin acts payload\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    if (!contains(core_index_text, "parus_builtin_acts|owner=f32|member=abs|self=1")) {
-        std::cerr << "core export-index must include f32.abs builtin acts payload\n" << core_index_text;
+    if (!contains(core_index_text, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1")) {
+        std::cerr << "core export-index must include f32.partial_cmp builtin acts payload\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_alpha|self=1")) {
-        std::cerr << "core export-index must include char.is_ascii_alpha builtin acts payload\n" << core_index_text;
+    if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_hexdigit|self=1")) {
+        std::cerr << "core export-index must include char.is_ascii_hexdigit builtin acts payload\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -1292,21 +1300,35 @@ bool test_core_seed_export_index_and_auto_injection() {
     const auto app_main = temp_root / "main.pr";
     const std::string app_src =
         "def main() -> i32 {\n"
+        "  let truth: bool = true;\n"
+        "  let bool_ord: core::cmp::Ordering = truth.cmp(false);\n"
         "  let lhs: i32 = 1i32;\n"
         "  let rhs: i32 = 2i32;\n"
         "  let a: i32 = lhs.min(rhs);\n"
-        "  let raw: f32 = -2.0f32;\n"
-        "  let b: f32 = raw.abs();\n"
-        "  let c: char = 'a';\n"
-        "  let up: char = c.to_ascii_upper();\n"
+        "  let raw: f32 = 1.0f32;\n"
+        "  let b: core::cmp::Ordering? = raw.partial_cmp(2.0f32);\n"
+        "  let b0: core::cmp::Ordering = b ?? core::cmp::ordering_equal();\n"
+        "  let raw_nan: bool = raw.is_nan();\n"
+        "  let c: char = 'f';\n"
+        "  let hex: bool = c.is_ascii_hexdigit();\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
-        "  switch (ord) {\n"
-        "  case core::cmp::Ordering::Greater: {\n"
-        "    if (b == 2.0f32 and up == 'A') {\n"
-        "      return 42i32;\n"
-        "    }\n"
-        "  }\n"
+        "  set mut bool_ok = false;\n"
+        "  switch (bool_ord) {\n"
+        "  case core::cmp::Ordering::Greater: { bool_ok = true; }\n"
         "  default: {}\n"
+        "  }\n"
+        "  set mut ord_ok = false;\n"
+        "  switch (ord) {\n"
+        "  case core::cmp::Ordering::Greater: { ord_ok = true; }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  set mut partial_ok = false;\n"
+        "  switch (b0) {\n"
+        "  case core::cmp::Ordering::Less: { partial_ok = true; }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  if (bool_ok and ord_ok and partial_ok and hex and not raw_nan) {\n"
+        "    return 42i32;\n"
         "  }\n"
         "  return 0i32;\n"
         "}\n";
@@ -1321,9 +1343,37 @@ bool test_core_seed_export_index_and_auto_injection() {
         " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
         " --emit-object -o \"" + (temp_root / "main.o").string() + "\"";
     auto [rc_with_core, out_with_core] = run_capture(compile_with_core_cmd);
+    const auto app_fail = temp_root / "main_float_cmp_fail.pr";
+    const std::string fail_src =
+        "def main() -> i32 {\n"
+        "  let x: f32 = 1.0f32;\n"
+        "  let ord: core::cmp::Ordering = x.cmp(2.0f32);\n"
+        "  switch (ord) {\n"
+        "  case core::cmp::Ordering::Less: { return 42i32; }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(app_fail, fail_src)) {
+        std::cerr << "failed to write float cmp rejection sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const std::string compile_fail_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + app_fail.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main_fail.o").string() + "\"";
+    auto [rc_fail, out_fail] = run_capture(compile_fail_cmd);
     std::filesystem::remove_all(temp_root, ec);
     if (rc_with_core != 0) {
         std::cerr << "non-core bundle must resolve core seed acts via auto-injected core index\n" << out_with_core;
+        return false;
+    }
+    if (rc_fail == 0 ||
+        (!contains(out_fail, "member access is only available") &&
+         !contains(out_fail, "UndefinedName") &&
+         !contains(out_fail, "undeclared"))) {
+        std::cerr << "float.cmp must be rejected after core float acts redesign\n" << out_fail;
         return false;
     }
     return true;
@@ -1344,22 +1394,51 @@ bool test_core_seed_runtime_smoke() {
     const auto exe = temp_root / "main";
     const std::string main_src =
         "def main() -> i32 {\n"
+        "  let bo: core::cmp::Ordering = true.cmp(false);\n"
         "  let neg: i32 = -3i32;\n"
         "  let mag: i32 = neg.abs();\n"
         "  let pos: i32 = 7i32;\n"
         "  let s: i32 = pos.signum();\n"
+        "  let q: i32 = (-7i32).div_euclid(3i32);\n"
+        "  let r: i32 = (-7i32).rem_euclid(3i32);\n"
         "  let zero: usize = 0usize;\n"
         "  let z: bool = zero.is_zero();\n"
+        "  let pow7: bool = 7u32.is_power_of_two();\n"
+        "  let pow8: bool = 8u32.is_power_of_two();\n"
         "  let hi0: f32 = 1.5f32;\n"
         "  let lo: f32 = 0.5f32;\n"
         "  let hi: f32 = hi0.max(lo);\n"
+        "  let sigf: f32 = (-2.0f32).signum();\n"
         "  let c: char = 'a';\n"
         "  let up: char = c.to_ascii_upper();\n"
+        "  let upper: bool = 'A'.is_ascii_upper();\n"
+        "  let hex: bool = 'f'.is_ascii_hexdigit();\n"
+        "  let ws: bool = '\\n'.is_ascii_whitespace();\n"
+        "  let eqic: bool = 'a'.eq_ignore_ascii_case('A');\n"
         "  let lhs: i32 = 3i32;\n"
         "  let rhs: i32 = 2i32;\n"
         "  let ord: core::cmp::Ordering = lhs.cmp(rhs);\n"
         "  set mut out = 0i32;\n"
-        "  if (mag == 3i32 and s == 1i32 and z and hi == 1.5f32 and up == 'A') {\n"
+        "  set mut bo_ok = false;\n"
+        "  switch (bo) {\n"
+        "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  if (bo_ok\n"
+        "      and mag == 3i32\n"
+        "      and s == 1i32\n"
+        "      and q == -3i32\n"
+        "      and r == 2i32\n"
+        "      and z\n"
+        "      and not pow7\n"
+        "      and pow8\n"
+        "      and hi == 1.5f32\n"
+        "      and sigf == -1.0f32\n"
+        "      and up == 'A'\n"
+        "      and upper\n"
+        "      and hex\n"
+        "      and ws\n"
+        "      and eqic) {\n"
         "    out = out + 10i32;\n"
         "  }\n"
         "  switch (ord) {\n"
@@ -1383,9 +1462,11 @@ bool test_core_seed_runtime_smoke() {
     const auto& [sysroot, target] = *sysroot_and_target;
     const std::string installed_core_index =
         read_text(std::filesystem::path(sysroot) / ".cache/exports/core.exports.json");
-    if (!contains(installed_core_index, "parus_builtin_acts|owner=i32|member=abs|self=1") ||
-        !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=max|self=1") ||
-        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=to_ascii_upper|self=1")) {
+    if (!contains(installed_core_index, "parus_builtin_acts|owner=bool|member=cmp|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=i32|member=div_euclid|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=u32|member=is_power_of_two|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=eq_ignore_ascii_case|self=1")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }

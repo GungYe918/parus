@@ -18,6 +18,20 @@ def ascii_is_digit_(c: char) -> bool {
     return c >= '0' and c <= '9';
 }
 
+def ascii_is_hexdigit_(c: char) -> bool {
+    return ascii_is_digit_(c)
+        or (c >= 'A' and c <= 'F')
+        or (c >= 'a' and c <= 'f');
+}
+
+def ascii_is_whitespace_(c: char) -> bool {
+    return c == ' ' or (c >= '\t' and c <= '\r');
+}
+
+def ascii_is_control_(c: char) -> bool {
+    return c < ' ';
+}
+
 def ascii_to_lower_(c: char) -> char {
     switch (c) {
     case 'A': { return 'a'; }
@@ -100,6 +114,14 @@ export acts for char {
         return ascii_is_digit_(char_value_(self));
     }
 
+    def is_ascii_upper(self) -> bool {
+        return ascii_is_upper_(char_value_(self));
+    }
+
+    def is_ascii_lower(self) -> bool {
+        return ascii_is_lower_(char_value_(self));
+    }
+
     def is_ascii_alpha(self) -> bool {
         return ascii_is_upper_(char_value_(self)) or ascii_is_lower_(char_value_(self));
     }
@@ -108,6 +130,22 @@ export acts for char {
         return ascii_is_upper_(char_value_(self))
             or ascii_is_lower_(char_value_(self))
             or ascii_is_digit_(char_value_(self));
+    }
+
+    def is_ascii_hexdigit(self) -> bool {
+        return ascii_is_hexdigit_(char_value_(self));
+    }
+
+    def is_ascii_whitespace(self) -> bool {
+        return ascii_is_whitespace_(char_value_(self));
+    }
+
+    def is_ascii_control(self) -> bool {
+        return ascii_is_control_(char_value_(self));
+    }
+
+    def eq_ignore_ascii_case(self, rhs: char) -> bool {
+        return ascii_to_lower_(char_value_(self)) == ascii_to_lower_(rhs);
     }
 
     def to_ascii_lower(self) -> char {
