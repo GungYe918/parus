@@ -2,13 +2,15 @@ import bool_mod from "./bool/bool.lei";
 import char from "./char/char.lei";
 import cmp from "./cmp/cmp.lei";
 import ext from "./ext/ext.lei";
+import hint_mod from "./hint/hint.lei";
+import mem_mod from "./mem/mem.lei";
 import num from "./num/num.lei";
 import text_mod from "./text/text.lei";
 
 export plan core_bundle = bundle & {
   name = "core";
   kind = "lib";
-  modules = [ext::ext_module, cmp::cmp_module, bool_mod::bool_module, num::num_module, char::char_module, text_mod::text_module];
+  modules = [ext::ext_module, cmp::cmp_module, bool_mod::bool_module, num::num_module, char::char_module, text_mod::text_module, mem_mod::mem_module, hint_mod::hint_module];
   deps = [];
   cimport = {
     isystem: [],

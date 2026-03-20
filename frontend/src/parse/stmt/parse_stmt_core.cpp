@@ -112,7 +112,7 @@ namespace parus {
         if (tok.kind == K::kDollar &&
             cursor_.peek(1).kind == K::kBang &&
             cursor_.peek(2).kind == K::kLBracket) {
-            return parse_stmt_compiler_intrinsic_directive();
+            return parse_stmt_compiler_intrinsic_directive_or_attached();
         }
 
         // decl start => decl 파서로 위임
@@ -326,6 +326,122 @@ namespace parus {
         }
 
         return sid;
+    }
+
+    ast::StmtId Parser::parse_stmt_compiler_intrinsic_directive_or_attached() {
+        using K = syntax::TokenKind;
+
+        const Token start = cursor_.peek();
+
+        (void)cursor_.eat(K::kDollar);
+        if (!cursor_.eat(K::kBang)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "!");
+            return ast::k_invalid_stmt;
+        }
+        if (!cursor_.eat(K::kLBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "[");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+            return ast::k_invalid_stmt;
+        }
+
+        uint32_t key_begin = 0;
+        uint32_t key_count = 0;
+        Span key_span = start.span;
+        const bool key_ok = parse_compiler_directive_path(key_begin, key_count, key_span);
+
+        bool has_target = false;
+        if (cursor_.eat(K::kAssign)) {
+            has_target = true;
+        } else if (!cursor_.at(K::kRBracket)) {
+            diag_report(diag::Code::kDirectiveIntrinsicSyntax, cursor_.peek().span, "expected '=' or ']'");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+        }
+
+        uint32_t target_begin = 0;
+        uint32_t target_count = 0;
+        Span target_span = key_span;
+        bool target_ok = false;
+        if (has_target) {
+            target_ok = parse_compiler_directive_path(target_begin, target_count, target_span);
+        }
+
+        if (!cursor_.eat(K::kRBracket)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "]");
+            recover_to_delim(K::kRBracket, K::kSemicolon, K::kRBrace);
+            (void)cursor_.eat(K::kRBracket);
+        }
+
+        Span end = target_ok ? target_span : key_span;
+        const bool is_tag_form = key_ok && !has_target;
+        const bool is_core_marker = is_tag_form && is_core_impl_marker_path_(key_begin, key_count);
+        const bool is_recognized_impl = is_tag_form && is_recognized_impl_binding_path_(key_begin, key_count);
+
+        if (cursor_.at(K::kSemicolon)) {
+            end = cursor_.bump().span;
+
+            ast::Stmt s{};
+            s.kind = ast::StmtKind::kCompilerIntrinsicDirective;
+            s.span = span_join(start.span, end);
+            if (key_ok) {
+                s.directive_key_path_begin = key_begin;
+                s.directive_key_path_count = key_count;
+            }
+            if (target_ok) {
+                s.directive_target_path_begin = target_begin;
+                s.directive_target_path_count = target_count;
+            }
+            const ast::StmtId sid = ast_.add_stmt(s);
+
+            if (is_core_marker) {
+                if (seen_core_impl_marker_) {
+                    diag_report(diag::Code::kDirectiveCoreMarkerDuplicate, s.span);
+                } else if (!(in_parse_program_ && stmt_block_depth_ == 0 && top_level_stmt_count_ == 0)) {
+                    diag_report(diag::Code::kDirectiveCoreMarkerMustBeHeader, s.span);
+                } else {
+                    seen_core_impl_marker_ = true;
+                    core_impl_file_mode_ = true;
+                }
+            } else if (!is_recognized_impl) {
+                diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, s.span);
+            }
+
+            return sid;
+        }
+
+        if (!is_decl_start(cursor_.peek().kind)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ";");
+            stmt_sync_to_boundary();
+            if (cursor_.at(K::kSemicolon)) (void)cursor_.bump();
+            return ast::k_invalid_stmt;
+        }
+
+        if (is_core_marker) {
+            diag_report(diag::Code::kDirectiveCoreMarkerMustBeHeader, span_join(start.span, end));
+        } else if (!is_recognized_impl) {
+            diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, span_join(start.span, end));
+        }
+
+        const PendingAttachedIntrinsicBinding saved = pending_attached_intrinsic_;
+        pending_attached_intrinsic_.active = true;
+        pending_attached_intrinsic_.key_begin = key_begin;
+        pending_attached_intrinsic_.key_count = key_count;
+        pending_attached_intrinsic_.target_begin = target_begin;
+        pending_attached_intrinsic_.target_count = target_count;
+
+        const ast::StmtId item_sid = parse_decl_any();
+        pending_attached_intrinsic_ = saved;
+
+        if (item_sid == ast::k_invalid_stmt || static_cast<size_t>(item_sid) >= ast_.stmts().size()) {
+            return item_sid;
+        }
+
+        auto& item = ast_.stmt_mut(item_sid);
+        item.directive_key_path_begin = key_begin;
+        item.directive_key_path_count = key_count;
+        item.directive_target_path_begin = target_begin;
+        item.directive_target_path_count = target_count;
+        return item_sid;
     }
     // '{ ... }' 블록 파싱
     ast::StmtId Parser::parse_stmt_block(bool allow_macro_decl) {

@@ -5,6 +5,24 @@
 
 namespace parus::sir::detail {
 
+    namespace {
+        enum class ImplBindingKind : uint8_t {
+            kNone = 0,
+            kSpinLoop,
+            kSizeOf,
+            kAlignOf,
+        };
+
+        ImplBindingKind parse_impl_binding_payload_(std::string_view payload) {
+            if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
+            const std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
+            if (key == "Impl::SizeOf") return ImplBindingKind::kSizeOf;
+            if (key == "Impl::AlignOf") return ImplBindingKind::kAlignOf;
+            return ImplBindingKind::kNone;
+        }
+    } // namespace
+
     static SwitchCasePatKind lower_switch_pat_kind_(parus::ast::CasePatKind k) {
         using A = parus::ast::CasePatKind;
         switch (k) {
@@ -432,6 +450,57 @@ namespace parus::sir::detail {
                 if (use_external_callee) {
                     v.callee_sym = external_callee_sym;
                     v.callee_decl_stmt = ast::k_invalid_stmt;
+                }
+                if (v.callee_sym != k_invalid_symbol && v.callee_sym < sym.symbols().size()) {
+                    const auto& callee_sym = sym.symbol(v.callee_sym);
+                    const ImplBindingKind impl_binding = parse_impl_binding_payload_(callee_sym.external_payload);
+                    auto trailing_name_segment_ = [](std::string_view name) -> std::string_view {
+                        const size_t pos = name.rfind("::");
+                        return (pos == std::string_view::npos) ? name : name.substr(pos + 2);
+                    };
+                    const auto& type_args = ast.type_args();
+                    const uint64_t begin = e.call_type_arg_begin;
+                    const uint64_t end = begin + e.call_type_arg_count;
+                    switch (impl_binding) {
+                        case ImplBindingKind::kSpinLoop:
+                            v.core_call_kind = CoreCallKind::kHintSpinLoop;
+                            break;
+                        case ImplBindingKind::kSizeOf:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kMemSizeOf;
+                            }
+                            break;
+                        case ImplBindingKind::kAlignOf:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kMemAlignOf;
+                            }
+                            break;
+                        case ImplBindingKind::kNone:
+                            break;
+                    }
+                    if (v.core_call_kind == CoreCallKind::kNone) {
+                        const bool is_core_mem =
+                            callee_sym.kind == parus::sema::SymbolKind::kFn &&
+                            callee_sym.decl_bundle_name == "core" &&
+                            (callee_sym.decl_module_head == "mem" ||
+                             callee_sym.decl_module_head == "core::mem");
+                        if (is_core_mem) {
+                            const std::string_view tail = trailing_name_segment_(callee_sym.name);
+                            if (tail == "swap") {
+                                if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                    v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                    v.core_call_kind = CoreCallKind::kMemSwap;
+                                }
+                            } else if (tail == "replace") {
+                                if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                    v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                    v.core_call_kind = CoreCallKind::kMemReplace;
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // callee

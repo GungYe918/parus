@@ -225,6 +225,7 @@ namespace parus::tyck {
         bool is_cimport_call = false;
         CImportCallMeta cimport_meta{};
         uint32_t cimport_callee_symbol = sema::SymbolTable::kNoScope;
+        uint32_t direct_ident_symbol = sema::SymbolTable::kNoScope;
         ty::TypeId ctor_owner_type = ty::kInvalidType;
         ty::TypeId dot_owner_type = ty::kInvalidType;
         bool dot_needs_self_normalization = false;
@@ -318,6 +319,30 @@ namespace parus::tyck {
                 default:
                     return t;
             }
+        };
+
+        auto trailing_name_segment_ = [](std::string_view name) -> std::string_view {
+            const size_t pos = name.rfind("::");
+            return (pos == std::string_view::npos) ? name : name.substr(pos + 2);
+        };
+
+        auto cache_external_callee_ = [&](uint32_t sid) {
+            if (current_expr_id_ != ast::k_invalid_expr &&
+                current_expr_id_ < expr_external_callee_symbol_cache_.size()) {
+                expr_external_callee_symbol_cache_[current_expr_id_] = sid;
+            }
+        };
+
+        auto is_core_module_fn_ = [&](uint32_t sid, std::string_view module_head, std::string_view leaf) -> bool {
+            if (sid == sema::SymbolTable::kNoScope || sid >= sym_.symbols().size()) return false;
+            const auto& ss = sym_.symbol(sid);
+            const bool module_match =
+                ss.decl_module_head == module_head ||
+                ss.decl_module_head == ("core::" + std::string(module_head));
+            return ss.kind == sema::SymbolKind::kFn &&
+                   ss.decl_bundle_name == "core" &&
+                   module_match &&
+                   trailing_name_segment_(ss.name) == leaf;
         };
 
         auto is_class_lifecycle_decl = [&](ast::StmtId sid) -> bool {
@@ -1156,6 +1181,7 @@ namespace parus::tyck {
 
                     callee_name = lookup_name;
                     if (auto sid = lookup_symbol_(lookup_name)) {
+                        direct_ident_symbol = *sid;
                         const auto& sym = sym_.symbol(*sid);
                         if (sym.kind == sema::SymbolKind::kType) {
                             const bool is_class_type =
@@ -1858,6 +1884,111 @@ namespace parus::tyck {
                 expr_external_receiver_expr_cache_[current_expr_id_] = receiver_eid;
             }
             return types_.get(selected_external_fn_type).ret;
+        }
+
+        // ------------------------------------------------------------
+        // 2.6) core impl-bound helpers and external core::mem generics
+        // ------------------------------------------------------------
+        if (!is_ctor_call &&
+            direct_ident_symbol != sema::SymbolTable::kNoScope &&
+            direct_ident_symbol < sym_.symbols().size()) {
+            auto fail_core_shape_ = [&](std::string_view message) -> ty::TypeId {
+                diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                err_(e.span, std::string(message));
+                check_all_arg_exprs_only();
+                return types_.error();
+            };
+
+            const auto& direct_sym = sym_.symbol(direct_ident_symbol);
+            const ImplBindingKind impl_binding = parse_impl_binding_payload_(direct_sym.external_payload);
+
+            if (impl_binding == ImplBindingKind::kSpinLoop) {
+                if (form != CallForm::kPositionalOnly || !outside_positional.empty() || !outside_labeled.empty()) {
+                    return fail_core_shape_("core::hint::spin_loop requires zero runtime arguments");
+                }
+                if (!explicit_call_type_args.empty()) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span, "0",
+                          std::to_string(explicit_call_type_args.size()));
+                    err_(e.span, "core::hint::spin_loop does not accept explicit type arguments");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+                if (direct_sym.is_external) {
+                    cache_external_callee_(direct_ident_symbol);
+                }
+                return types_.builtin(ty::Builtin::kUnit);
+            }
+
+            if (impl_binding == ImplBindingKind::kSizeOf ||
+                impl_binding == ImplBindingKind::kAlignOf) {
+                if (form != CallForm::kPositionalOnly || !outside_positional.empty() || !outside_labeled.empty()) {
+                    return fail_core_shape_("core::mem metadata helpers require zero runtime arguments");
+                }
+                if (explicit_call_type_args.size() != 1) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span, "1",
+                          std::to_string(explicit_call_type_args.size()));
+                    err_(e.span, "core::mem metadata helper requires one explicit type argument");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+                if (direct_sym.is_external) {
+                    cache_external_callee_(direct_ident_symbol);
+                }
+                return types_.builtin(ty::Builtin::kUSize);
+            }
+
+            if (overload_decl_ids.empty() &&
+                is_core_module_fn_(direct_ident_symbol, "mem", "replace")) {
+                if (form != CallForm::kPositionalOnly || outside_positional.size() != 2 || !outside_labeled.empty()) {
+                    return fail_core_shape_("core::mem::replace expects positional(&mut T, T)");
+                }
+                if (explicit_call_type_args.size() != 1) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span, "1",
+                          std::to_string(explicit_call_type_args.size()));
+                    err_(e.span, "core::mem::replace requires one explicit type argument");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+                const ty::TypeId value_ty = explicit_call_type_args[0];
+                const ty::TypeId place_ty = types_.make_borrow(value_ty, /*is_mut=*/true);
+                const CoercionPlan place_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, place_ty, outside_positional[0]->expr, outside_positional[0]->span);
+                if (!place_plan.ok) {
+                    return fail_core_shape_("core::mem::replace first argument must be &mut T");
+                }
+                const CoercionPlan value_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, value_ty, outside_positional[1]->expr, outside_positional[1]->span);
+                if (!value_plan.ok) {
+                    return fail_core_shape_("core::mem::replace second argument must be assignable to T");
+                }
+                cache_external_callee_(direct_ident_symbol);
+                return value_ty;
+            }
+
+            if (overload_decl_ids.empty() &&
+                is_core_module_fn_(direct_ident_symbol, "mem", "swap")) {
+                if (form != CallForm::kPositionalOnly || outside_positional.size() != 2 || !outside_labeled.empty()) {
+                    return fail_core_shape_("core::mem::swap expects positional(&mut T, &mut T)");
+                }
+                if (explicit_call_type_args.size() != 1) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span, "1",
+                          std::to_string(explicit_call_type_args.size()));
+                    err_(e.span, "core::mem::swap requires one explicit type argument");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+                const ty::TypeId value_ty = explicit_call_type_args[0];
+                const ty::TypeId place_ty = types_.make_borrow(value_ty, /*is_mut=*/true);
+                const CoercionPlan lhs_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, place_ty, outside_positional[0]->expr, outside_positional[0]->span);
+                const CoercionPlan rhs_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg, place_ty, outside_positional[1]->expr, outside_positional[1]->span);
+                if (!lhs_plan.ok || !rhs_plan.ok) {
+                    return fail_core_shape_("core::mem::swap arguments must both be &mut T");
+                }
+                cache_external_callee_(direct_ident_symbol);
+                return types_.builtin(ty::Builtin::kUnit);
+            }
         }
 
         // ------------------------------------------------------------

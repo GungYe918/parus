@@ -1,0 +1,10 @@
+$![Impl::Core];
+
+// Core hint helpers are freestanding and do not require runtime support.
+export def unreachable() -> never {
+    return loop {
+    };
+}
+
+$![Impl::SpinLoop]
+export def spin_loop() -> void;

@@ -141,6 +141,12 @@
         auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
             if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
             const ast::Stmt& s = ast_.stmt(sid);
+            ImplBindingKind stmt_impl_binding = ImplBindingKind::kNone;
+            if (stmt_impl_binding_kind_(s, stmt_impl_binding) && s.kind != ast::StmtKind::kFnDecl) {
+                const std::string msg = "recognized $![Impl::*] binding is only allowed on function declarations";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
 
             if (s.kind == ast::StmtKind::kNestDecl) {
                 if (s.nest_is_file_directive) return;
@@ -253,6 +259,9 @@
                 fn_decl_by_name_[qname].push_back(sid);
 
                 const ty::TypeId sig = build_fn_sig(s);
+                ImplBindingKind impl_binding = ImplBindingKind::kNone;
+                (void)stmt_impl_binding_kind_(s, impl_binding);
+                const std::string impl_payload = make_impl_binding_payload_(impl_binding);
 
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
@@ -261,13 +270,24 @@
                         diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     }
                 } else {
-                    auto ins = sym_.insert(sema::SymbolKind::kFn, qname, sig, s.span);
+                    auto ins = sym_.insert(sema::SymbolKind::kFn, qname, sig, s.span,
+                                           /*decl_file_id=*/0,
+                                           /*decl_bundle_name=*/{},
+                                           /*is_export=*/false,
+                                           /*is_external=*/false,
+                                           /*decl_module_head=*/{},
+                                           /*decl_source_dir_norm=*/{},
+                                           /*link_name=*/{},
+                                           impl_payload);
                     if (!ins.ok && ins.is_duplicate) {
                         err_(s.span, "duplicate symbol (function): " + qname);
                         diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     } else if (ins.ok && s.link_abi == ast::LinkAbi::kC) {
                         auto& sym = sym_.symbol_mut(ins.symbol_id);
                         sym.external_payload = make_c_abi_decl_payload(s);
+                    } else if (ins.ok && !impl_payload.empty()) {
+                        auto& sym = sym_.symbol_mut(ins.symbol_id);
+                        sym.external_payload = impl_payload;
                     }
                 }
 
@@ -1669,6 +1689,44 @@
         if (begin > segs.size() || end > segs.size()) return false;
         return segs[s.directive_key_path_begin] == "Impl" &&
                segs[s.directive_key_path_begin + 1] == "Core";
+    }
+
+    TypeChecker::ImplBindingKind TypeChecker::parse_impl_binding_payload_(std::string_view payload) const {
+        if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
+        const std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+        if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
+        if (key == "Impl::SizeOf") return ImplBindingKind::kSizeOf;
+        if (key == "Impl::AlignOf") return ImplBindingKind::kAlignOf;
+        return ImplBindingKind::kNone;
+    }
+
+    bool TypeChecker::stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const {
+        out_kind = ImplBindingKind::kNone;
+        if (s.directive_target_path_count != 0) return false;
+        if (s.directive_key_path_count != 2) return false;
+
+        const auto& segs = ast_.path_segs();
+        const uint64_t begin = s.directive_key_path_begin;
+        const uint64_t end = begin + s.directive_key_path_count;
+        if (begin > segs.size() || end > segs.size()) return false;
+        if (segs[s.directive_key_path_begin] != "Impl") return false;
+
+        const std::string_view leaf = segs[s.directive_key_path_begin + 1];
+        if (leaf == "SpinLoop") out_kind = ImplBindingKind::kSpinLoop;
+        else if (leaf == "SizeOf") out_kind = ImplBindingKind::kSizeOf;
+        else if (leaf == "AlignOf") out_kind = ImplBindingKind::kAlignOf;
+        else return false;
+        return true;
+    }
+
+    std::string TypeChecker::make_impl_binding_payload_(ImplBindingKind kind) const {
+        switch (kind) {
+            case ImplBindingKind::kSpinLoop: return "parus_impl_binding|key=Impl::SpinLoop";
+            case ImplBindingKind::kSizeOf: return "parus_impl_binding|key=Impl::SizeOf";
+            case ImplBindingKind::kAlignOf: return "parus_impl_binding|key=Impl::AlignOf";
+            case ImplBindingKind::kNone: break;
+        }
+        return {};
     }
 
     void TypeChecker::collect_core_impl_marker_file_ids_(ast::StmtId program_stmt) {

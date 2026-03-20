@@ -596,6 +596,13 @@ namespace parus::tyck {
             Span span{};
         };
 
+        enum class ImplBindingKind : uint8_t {
+            kNone = 0,
+            kSpinLoop,
+            kSizeOf,
+            kAlignOf,
+        };
+
         std::vector<std::unordered_map<ty::TypeId, ActiveActsSelection>> acts_selection_scope_stack_;
         std::unordered_map<uint32_t, ActiveActsSelection> acts_selection_by_symbol_;
 
@@ -620,6 +627,9 @@ namespace parus::tyck {
         std::string current_bundle_name_() const;
         void collect_core_impl_marker_file_ids_(ast::StmtId program_stmt);
         bool is_core_impl_marker_stmt_(const ast::Stmt& s) const;
+        ImplBindingKind parse_impl_binding_payload_(std::string_view payload) const;
+        bool stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const;
+        std::string make_impl_binding_payload_(ImplBindingKind kind) const;
         bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,

@@ -1,0 +1,19 @@
+$![Impl::Core];
+
+// Core memory helpers stay freestanding and allocator-free.
+$![Impl::SizeOf]
+export def size_of<T>() -> usize;
+
+$![Impl::AlignOf]
+export def align_of<T>() -> usize;
+
+export def replace<T>(dst: &mut T, value: T) -> T {
+    let old: T = *dst;
+    *dst = value;
+    return old;
+}
+
+export def swap<T>(a: &mut T, b: &mut T) -> void {
+    let tmp: T = replace<T>(a, *b);
+    *b = tmp;
+}

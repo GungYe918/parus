@@ -1367,6 +1367,42 @@ namespace {
         return ok;
     }
 
+    static bool test_core_mem_and_hint_surface_ok() {
+        const std::string attached_src = R"(
+            $![Impl::Core];
+
+            $![Impl::SizeOf]
+            export def size_of<T>() -> usize;
+
+            $![Impl::AlignOf]
+            export def align_of<T>() -> usize;
+
+            $![Impl::SpinLoop]
+            export def spin_loop() -> void;
+        )";
+
+        const std::string ordinary_bodyless_src = R"(
+            export def nope() -> void;
+        )";
+
+        const std::string impl_with_body_src = R"(
+            $![Impl::SpinLoop]
+            export def spin_loop() -> void {
+            }
+        )";
+
+        auto attached = parse_program(attached_src);
+        auto ordinary = parse_program(ordinary_bodyless_src);
+        auto impl_with_body = parse_program(impl_with_body_src);
+
+        bool ok = true;
+        ok &= require_(!attached.bag.has_error(), "attached Impl::* declarations must parse without syntax errors");
+        ok &= require_(ordinary.bag.has_error(), "ordinary bodyless def must remain a syntax error");
+        ok &= require_(!impl_with_body.bag.has_error(),
+                       "attached Impl::* declaration with body should remain syntactically valid and fail in tyck");
+        return ok;
+    }
+
     static bool test_class_private_visibility_enforced() {
         const std::string ok_src = R"(
             class SecretBox {
@@ -2312,6 +2348,7 @@ int main() {
         {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
         {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
+        {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},
         {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},

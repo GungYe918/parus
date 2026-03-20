@@ -3,7 +3,8 @@
 문서 상태: `active`
 
 primitive별 실제 구현 우선순위와 후속 phase는 `docs/todo/CORE_PRIMITIVE_ROADMAP.md`를 따른다.  
-`core::text`의 현재 구현 경계와 언어 코어 기반 surface는 `docs/todo/CORE_TEXT_PLAN.md`를 따른다.
+`core::text`의 현재 구현 경계와 언어 코어 기반 surface는 `docs/todo/CORE_TEXT_PLAN.md`를 따른다.  
+`Impl::*`와 `inst`의 장기 역할 분리는 `docs/todo/INST_V2_MODEL.md`를 따른다.
 
 ## 목표
 
@@ -70,9 +71,9 @@ Parus 차이는 다음과 같다.
 ### 1. core는 두 레인으로 나눈다
 
 1. pure Parus로 구현 가능한 레인
-2. compiler/codegen intrinsic가 필요한 레인
+2. compiler/codegen contract가 필요한 레인
 
-초기 구현은 pure Parus 레인을 먼저 닫고, intrinsic 레인은 표면만 먼저 고정한 뒤 순차 구현한다.
+초기 구현은 pure Parus 레인을 먼저 닫고, compiler-owned 레인은 `Impl::*` attached binding으로 표면을 먼저 고정한 뒤 순차 구현한다.
 
 ### 2. primitive acts는 `core` 번들 안에서만 정의한다
 
@@ -118,6 +119,17 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 6. `core::mem`
 7. `core::hint`
 8. `core::ops`
+
+현재 최소 구현이 들어간 모듈:
+
+1. `core::ext`
+2. `core::cmp`
+3. `core::bool`
+4. `core::num`
+5. `core::char`
+6. `core::text`
+7. `core::mem`
+8. `core::hint`
 
 선택적 2차 모듈:
 
@@ -294,6 +306,12 @@ primitive acts 대상: `text`
 1. `size_of<T>() -> usize`
 2. `align_of<T>() -> usize`
 
+현재 구현 정책:
+
+1. `size_of<T>()`는 fake body를 두지 않는다
+2. `$![Impl::SizeOf] export def size_of<T>() -> usize;`로 선언한다
+3. compiler가 ABI/layout contract를 책임진다
+
 2차 free fn:
 
 1. `swap<T>(a: &mut T, b: &mut T) -> void`
@@ -318,6 +336,12 @@ primitive acts 대상: `text`
 2. `spin_loop() -> void`
 
 이 둘은 freestanding/core에서 유용하고, `std` 의존이 없다.
+
+현재 구현 정책:
+
+1. `spin_loop()`는 fake body를 두지 않는다
+2. `$![Impl::SpinLoop] export def spin_loop() -> void;`로 선언한다
+3. `unreachable()`는 의미가 아직 trap/unchecked로 고정되지 않았으므로 별도 라운드까지 fake body를 유지한다
 
 ### G. `core::ops`
 
@@ -393,7 +417,7 @@ Parus에는 `T[]`가 있지만, Rust `core::slice` 수준의 알고리즘 표면
 
 다음 intrinsic family를 언어/백엔드 contract로 확정한다.
 
-1. `size_of/align_of`
+1. `size_of/align_of` (`Impl::*` binding으로 먼저 고정)
 2. bit ops
 3. checked/wrapping/saturating arithmetic
 4. float classification and rounding
@@ -454,7 +478,7 @@ Parus에는 `T[]`가 있지만, Rust `core::slice` 수준의 알고리즘 표면
 
 위 1차 세트가 끝나면 다음은 이 순서가 맞다.
 
-1. `size_of/align_of` intrinsic contract
+1. `size_of/align_of`는 현재 `Impl::SizeOf`, `Impl::AlignOf`로 선언하고, 장기적으로는 `inst` query surface 성숙 이후 이관 가능성을 검토한다
 2. optional helper free fn
 3. text prefix/suffix API
 4. checked/wrapping/saturating arithmetic

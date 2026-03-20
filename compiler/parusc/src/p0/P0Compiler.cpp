@@ -728,7 +728,21 @@ namespace parusc::p0 {
                     sig_repr,
                     s.link_abi == parus::ast::LinkAbi::kC
                 );
-                push_export(parus::sema::SymbolKind::kFn, qname, s.type, s.is_export, s.span, link_name);
+                std::string inst_payload{};
+                if (s.directive_target_path_count == 0 && s.directive_key_path_count == 2) {
+                    const auto& segs = ast.path_segs();
+                    const uint64_t begin = s.directive_key_path_begin;
+                    const uint64_t end = begin + s.directive_key_path_count;
+                    if (begin <= segs.size() && end <= segs.size() &&
+                        segs[s.directive_key_path_begin] == "Impl") {
+                        const std::string_view leaf = segs[s.directive_key_path_begin + 1];
+                        if (leaf == "SpinLoop" || leaf == "SizeOf" || leaf == "AlignOf") {
+                            inst_payload = "parus_impl_binding|key=Impl::";
+                            inst_payload += leaf;
+                        }
+                    }
+                }
+                push_export(parus::sema::SymbolKind::kFn, qname, s.type, s.is_export, s.span, link_name, std::move(inst_payload));
                 return;
             }
 

@@ -320,6 +320,27 @@ namespace parus {
         return segs[path_begin] == "Impl" && segs[path_begin + 1] == "Core";
     }
 
+    bool Parser::is_recognized_impl_binding_path_(uint32_t path_begin, uint32_t path_count) const {
+        if (path_count != 2) return false;
+        const auto& segs = ast_.path_segs();
+        const uint64_t begin = path_begin;
+        const uint64_t end = begin + path_count;
+        if (begin > segs.size() || end > segs.size()) return false;
+        if (segs[path_begin] != "Impl") return false;
+        return segs[path_begin + 1] == "SpinLoop" ||
+               segs[path_begin + 1] == "SizeOf" ||
+               segs[path_begin + 1] == "AlignOf";
+    }
+
+    bool Parser::pending_attached_impl_binding_recognized_() const {
+        if (!pending_attached_intrinsic_.active) return false;
+        if (pending_attached_intrinsic_.target_count != 0) return false;
+        return is_recognized_impl_binding_path_(
+            pending_attached_intrinsic_.key_begin,
+            pending_attached_intrinsic_.key_count
+        );
+    }
+
     bool Parser::parse_macro_call_payload_tokens(uint32_t& out_begin, uint32_t& out_count, Span& out_span) {
         using K = syntax::TokenKind;
         out_begin = static_cast<uint32_t>(ast_.macro_tokens().size());

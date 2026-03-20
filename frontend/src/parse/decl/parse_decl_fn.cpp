@@ -844,10 +844,14 @@ namespace parus {
                 end_sp = stmt_consume_semicolon_or_recover(end_sp);
             }
         } else {
-            body = parse_stmt_required_block("def");
-            end_sp = ast_.stmt(body).span;
-            if (cursor_.at(K::kSemicolon)) {
+            if (pending_attached_impl_binding_recognized_() && cursor_.at(K::kSemicolon)) {
                 end_sp = cursor_.bump().span;
+            } else {
+                body = parse_stmt_required_block("def");
+                end_sp = ast_.stmt(body).span;
+                if (cursor_.at(K::kSemicolon)) {
+                    end_sp = cursor_.bump().span;
+                }
             }
         }
 

@@ -3,6 +3,7 @@
 #include <parus/oir/OIR.hpp>
 
 #include <parus/ast/Nodes.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/sir/Verify.hpp>
 #include <parus/syntax/TokenKind.hpp>
 
@@ -186,6 +187,22 @@ namespace parus::oir {
             return out;
         }
 
+        std::string_view trailing_name_segment_(std::string_view name) {
+            const size_t pos = name.rfind("::");
+            return (pos == std::string_view::npos) ? name : name.substr(pos + 2);
+        }
+
+        std::optional<std::string_view> trailing_instantiated_type_arg_(
+            std::string_view name,
+            std::string_view leaf
+        ) {
+            const std::string_view tail = trailing_name_segment_(name);
+            if (!tail.ends_with(">")) return std::nullopt;
+            const std::string prefix = std::string(leaf) + "<";
+            if (!tail.starts_with(prefix)) return std::nullopt;
+            return tail.substr(prefix.size(), tail.size() - prefix.size() - 1);
+        }
+
         struct ActorRuntimeFuncs {
             FuncId new_fn = kInvalidId;
             FuncId clone_fn = kInvalidId;
@@ -203,6 +220,7 @@ namespace parus::oir {
             const parus::sir::Module* sir = nullptr;
             const parus::ty::TypePool* types = nullptr;
             const parus::sema::SymbolTable* symtab = nullptr;
+            const std::unordered_map<parus::ty::TypeId, std::pair<uint32_t, uint32_t>>* named_layout_by_type = nullptr;
             const std::unordered_set<TypeId>* actor_types = nullptr;
             const ActorRuntimeFuncs* actor_runtime = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
@@ -277,6 +295,114 @@ namespace parus::oir {
                     if (f.self_type == t) return &f;
                 }
                 return nullptr;
+            }
+
+            std::pair<uint32_t, uint32_t> type_size_align_(TypeId tid) const {
+                using TK = parus::ty::Kind;
+                using TB = parus::ty::Builtin;
+                auto align_to_local = [](uint32_t value, uint32_t align) -> uint32_t {
+                    if (align == 0 || align == 1) return value;
+                    const uint32_t rem = value % align;
+                    return (rem == 0) ? value : (value + (align - rem));
+                };
+
+                if (types == nullptr || tid == parus::ty::kInvalidType) return {8u, 8u};
+                const auto& t = types->get(tid);
+
+                switch (t.kind) {
+                    case TK::kError:
+                        return {8u, 8u};
+
+                    case TK::kBuiltin:
+                        switch (t.builtin) {
+                            case TB::kBool:
+                            case TB::kI8:
+                            case TB::kU8:
+                            case TB::kCChar:
+                            case TB::kCSChar:
+                            case TB::kCUChar:
+                                return {1u, 1u};
+                            case TB::kI16:
+                            case TB::kU16:
+                            case TB::kCShort:
+                            case TB::kCUShort:
+                                return {2u, 2u};
+                            case TB::kI32:
+                            case TB::kU32:
+                            case TB::kF32:
+                            case TB::kChar:
+                            case TB::kCInt:
+                            case TB::kCUInt:
+                            case TB::kCFloat:
+                                return {4u, 4u};
+                            case TB::kText:
+                                return {16u, 8u};
+                            case TB::kI128:
+                            case TB::kU128:
+                            case TB::kF128:
+                                return {16u, 16u};
+                            case TB::kUnit:
+                            case TB::kCVoid:
+                                return {1u, 1u};
+                            case TB::kCLong:
+                            case TB::kCULong:
+                                return {static_cast<uint32_t>(sizeof(long)), static_cast<uint32_t>(alignof(long))};
+                            case TB::kCLongLong:
+                            case TB::kCULongLong:
+                            case TB::kCDouble:
+                                return {8u, 8u};
+                            case TB::kCSize:
+                            case TB::kCSSize:
+                            case TB::kCPtrDiff:
+                            case TB::kVaList:
+                                return {8u, 8u};
+                            case TB::kNever:
+                            case TB::kI64:
+                            case TB::kU64:
+                            case TB::kF64:
+                            case TB::kISize:
+                            case TB::kUSize:
+                            case TB::kNull:
+                            case TB::kInferInteger:
+                                return {8u, 8u};
+                        }
+                        return {8u, 8u};
+
+                    case TK::kPtr:
+                    case TK::kBorrow:
+                    case TK::kEscape:
+                    case TK::kFn:
+                        return {8u, 8u};
+
+                    case TK::kOptional: {
+                        const auto [elem_size, elem_align] = type_size_align_(t.elem);
+                        const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                        const uint32_t body =
+                            align_to_local(1u, a) + std::max<uint32_t>(1u, elem_size);
+                        return {body, a};
+                    }
+
+                    case TK::kArray: {
+                        const auto [elem_size, elem_align] = type_size_align_(t.elem);
+                        const uint32_t e = std::max<uint32_t>(1u, elem_size);
+                        const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                        if (!t.array_has_size) return {16u, 8u};
+                        return {e * std::max<uint32_t>(1u, t.array_size), a};
+                    }
+
+                    case TK::kNamedUser: {
+                        if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
+                            return {8u, 8u};
+                        }
+                        if (named_layout_by_type != nullptr) {
+                            auto it = named_layout_by_type->find(tid);
+                            if (it != named_layout_by_type->end()) return it->second;
+                        }
+                        return {8u, 8u};
+                    }
+                }
+
+                return {8u, 8u};
             }
 
             bool lookup_user_deinit_for_class_(TypeId t, FuncId& out_fid) const {
@@ -1944,6 +2070,64 @@ namespace parus::oir {
                         arg_value_ids.push_back(a.value);
                     }
                     ++i;
+                }
+
+                if (v.core_call_kind != parus::sir::CoreCallKind::kNone) {
+                    switch (v.core_call_kind) {
+                        case parus::sir::CoreCallKind::kMemSizeOf: {
+                            const auto [size_bytes, align_bytes] = type_size_align_(v.core_call_type_arg);
+                            (void)align_bytes;
+                            return emit_const_int(v.type, std::to_string(std::max<uint32_t>(1u, size_bytes)));
+                        }
+                        case parus::sir::CoreCallKind::kMemAlignOf: {
+                            const auto [size_bytes, align_bytes] = type_size_align_(v.core_call_type_arg);
+                            (void)size_bytes;
+                            return emit_const_int(v.type, std::to_string(std::max<uint32_t>(1u, align_bytes)));
+                        }
+                        case parus::sir::CoreCallKind::kHintSpinLoop: {
+                            return emit_const_null(v.type);
+                        }
+                        case parus::sir::CoreCallKind::kMemReplace: {
+                            if (args.size() != 2u) {
+                                report_lowering_error("core::mem::replace lowering failed: expected 2 arguments");
+                                return emit_const_null(v.type);
+                            }
+                            const ValueId slot = args[0];
+                            if (!value_is_address_like_(slot)) {
+                                report_lowering_error("core::mem::replace lowering failed: first argument is not addressable");
+                                return emit_const_null(v.type);
+                            }
+                            const TypeId elem_ty =
+                                (v.core_call_type_arg != kInvalidId) ? v.core_call_type_arg : v.type;
+                            const ValueId oldv = emit_load(elem_ty, slot);
+                            const ValueId newv = coerce_value_for_target(elem_ty, args[1]);
+                            emit_store(slot, newv);
+                            return oldv;
+                        }
+                        case parus::sir::CoreCallKind::kMemSwap: {
+                            if (args.size() != 2u) {
+                                report_lowering_error("core::mem::swap lowering failed: expected 2 arguments");
+                                return emit_const_null(v.type);
+                            }
+                            const ValueId lhs = args[0];
+                            const ValueId rhs = args[1];
+                            if (!value_is_address_like_(lhs) || !value_is_address_like_(rhs)) {
+                                report_lowering_error("core::mem::swap lowering failed: arguments must both be addressable");
+                                return emit_const_null(v.type);
+                            }
+                            const TypeId elem_ty =
+                                (v.core_call_type_arg != kInvalidId)
+                                    ? v.core_call_type_arg
+                                    : ((types != nullptr) ? (TypeId)types->builtin(parus::ty::Builtin::kUnit) : kInvalidId);
+                            const ValueId lhs_v = emit_load(elem_ty, lhs);
+                            const ValueId rhs_v = emit_load(elem_ty, rhs);
+                            emit_store(lhs, rhs_v);
+                            emit_store(rhs, lhs_v);
+                            return emit_const_null(v.type);
+                        }
+                        case parus::sir::CoreCallKind::kNone:
+                            break;
+                    }
                 }
 
                 const bool ctor_call =
@@ -3768,6 +3952,48 @@ namespace parus::oir {
                       return a.first < b.first;
                   });
 
+        auto symbol_is_core_module_fn_ = [&](const parus::sir::Func& sf, std::string_view module_head) -> bool {
+            if (sym_ == nullptr ||
+                sf.sym == parus::sir::k_invalid_symbol ||
+                static_cast<size_t>(sf.sym) >= sym_->symbols().size()) {
+                return false;
+            }
+            const auto& ss = sym_->symbol(sf.sym);
+            const bool module_match =
+                ss.decl_module_head == module_head ||
+                ss.decl_module_head == ("core::" + std::string(module_head));
+            return ss.kind == parus::sema::SymbolKind::kFn &&
+                   ss.decl_bundle_name == "core" &&
+                   module_match;
+        };
+
+        auto parse_impl_binding_payload_ = [](std::string_view payload) -> std::string_view {
+            if (!payload.starts_with("parus_impl_binding|key=")) return {};
+            return payload.substr(std::string_view("parus_impl_binding|key=").size());
+        };
+
+        auto func_has_impl_binding_ = [&](const parus::sir::Func& sf, std::string_view key) -> bool {
+            if (parse_impl_binding_payload_(sf.external_payload) == key) return true;
+            if (sym_ == nullptr ||
+                sf.sym == parus::sir::k_invalid_symbol ||
+                static_cast<size_t>(sf.sym) >= sym_->symbols().size()) {
+                return false;
+            }
+            return parse_impl_binding_payload_(sym_->symbol(sf.sym).external_payload) == key;
+        };
+
+        auto parse_core_mem_intrinsic_ty_ = [&](const parus::sir::Func& sf, std::string_view leaf) -> std::optional<TypeId> {
+            if (!func_has_impl_binding_(sf, leaf == "size_of" ? "Impl::SizeOf" : "Impl::AlignOf")) {
+                return std::nullopt;
+            }
+            const auto type_arg = trailing_instantiated_type_arg_(sf.name, leaf);
+            if (!type_arg.has_value()) return std::nullopt;
+            auto& mutable_types = const_cast<parus::ty::TypePool&>(ty_);
+            const auto parsed = parus::cimport::parse_external_type_repr(*type_arg, {}, mutable_types);
+            if (parsed == parus::ty::kInvalidType) return std::nullopt;
+            return static_cast<TypeId>(parsed);
+        };
+
         auto add_block_param_oir = [&](BlockId bb, TypeId ty) -> ValueId {
             auto& block = out.mod.blocks[bb];
             Value v{};
@@ -3830,6 +4056,10 @@ namespace parus::oir {
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
+            if (sf.is_extern &&
+                (symbol_is_core_module_fn_(sf, "mem") || func_has_impl_binding_(sf, "Impl::SpinLoop"))) {
+                continue;
+            }
             const auto wrapper_payload = parse_cimport_wrapper_payload_(sf.external_payload);
 
             Function f{};
@@ -3929,6 +4159,7 @@ namespace parus::oir {
             fb.sir = &sir_;
             fb.types = &ty_;
             fb.symtab = sym_;
+            fb.named_layout_by_type = &named_layout_by_type;
             fb.actor_types = &actor_type_set;
             fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;
@@ -3989,6 +4220,53 @@ namespace parus::oir {
                 fb.def->actor_ctx_param_index != kInvalidId &&
                 (size_t)fb.def->actor_ctx_param_index < out.mod.blocks[entry].params.size()) {
                 fb.current_actor_ctx = out.mod.blocks[entry].params[fb.def->actor_ctx_param_index];
+            }
+
+            if (func_has_impl_binding_(sf, "Impl::SizeOf")) {
+                const auto lowered_ty = parse_core_mem_intrinsic_ty_(sf, "size_of");
+                if (!lowered_ty.has_value()) {
+                    out.gate_errors.push_back({
+                        "core::mem::size_of lowering failed: invalid instantiated type in '" +
+                        std::string(sf.name) + "'"
+                    });
+                    ValueId rv = fb.emit_const_int((TypeId)sf.ret, "0");
+                    fb.ret(rv);
+                    fb.pop_scope();
+                    continue;
+                }
+                const auto [size_bytes, align_bytes] = type_size_align(type_size_align, *lowered_ty);
+                (void)align_bytes;
+                ValueId rv = fb.emit_const_int((TypeId)sf.ret, std::to_string(std::max<uint32_t>(1u, size_bytes)));
+                fb.ret(rv);
+                fb.pop_scope();
+                continue;
+            }
+
+            if (func_has_impl_binding_(sf, "Impl::AlignOf")) {
+                const auto lowered_ty = parse_core_mem_intrinsic_ty_(sf, "align_of");
+                if (!lowered_ty.has_value()) {
+                    out.gate_errors.push_back({
+                        "core::mem::align_of lowering failed: invalid instantiated type in '" +
+                        std::string(sf.name) + "'"
+                    });
+                    ValueId rv = fb.emit_const_int((TypeId)sf.ret, "0");
+                    fb.ret(rv);
+                    fb.pop_scope();
+                    continue;
+                }
+                const auto [size_bytes, align_bytes] = type_size_align(type_size_align, *lowered_ty);
+                (void)size_bytes;
+                ValueId rv = fb.emit_const_int((TypeId)sf.ret, std::to_string(std::max<uint32_t>(1u, align_bytes)));
+                fb.ret(rv);
+                fb.pop_scope();
+                continue;
+            }
+
+            if (func_has_impl_binding_(sf, "Impl::SpinLoop")) {
+                ValueId rv = fb.emit_const_null((TypeId)sf.ret);
+                fb.ret(rv);
+                fb.pop_scope();
+                continue;
             }
 
             const auto wrapper_payload = parse_cimport_wrapper_payload_(sf.external_payload);
@@ -4070,6 +4348,7 @@ namespace parus::oir {
             fb.sir = &sir_;
             fb.types = &ty_;
             fb.symtab = sym_;
+            fb.named_layout_by_type = &named_layout_by_type;
             fb.actor_types = &actor_type_set;
             fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;

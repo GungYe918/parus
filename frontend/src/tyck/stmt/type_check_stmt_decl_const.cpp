@@ -167,6 +167,64 @@
             }
         }
 
+        ImplBindingKind impl_binding = ImplBindingKind::kNone;
+        const bool has_impl_binding = stmt_impl_binding_kind_(s, impl_binding);
+        if (has_impl_binding) {
+            const std::string current_bundle = current_bundle_name_();
+            if (current_bundle != "core" ||
+                core_impl_marker_file_ids_.find(s.span.file_id) == core_impl_marker_file_ids_.end()) {
+                const std::string msg =
+                    "recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
+
+            if (s.is_extern) {
+                const std::string msg = "recognized $![Impl::*] binding must not be extern";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
+            if (s.a != ast::k_invalid_stmt) {
+                const std::string msg = "recognized $![Impl::*] binding must not define a body";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            }
+
+            const ty::TypeId usize_ty = types_.builtin(ty::Builtin::kUSize);
+            const ty::TypeId unit_ty = types_.builtin(ty::Builtin::kUnit);
+            switch (impl_binding) {
+                case ImplBindingKind::kSpinLoop:
+                    if (s.param_count != 0 || s.fn_generic_param_count != 0 || ret != unit_ty ||
+                        s.name != "spin_loop") {
+                        const std::string msg =
+                            "$![Impl::SpinLoop] requires signature 'def spin_loop() -> void;'";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                        err_(s.span, msg);
+                    }
+                    break;
+                case ImplBindingKind::kSizeOf:
+                    if (s.param_count != 0 || s.fn_generic_param_count != 1 || ret != usize_ty ||
+                        s.name != "size_of") {
+                        const std::string msg =
+                            "$![Impl::SizeOf] requires signature 'def size_of<T>() -> usize;'";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                        err_(s.span, msg);
+                    }
+                    break;
+                case ImplBindingKind::kAlignOf:
+                    if (s.param_count != 0 || s.fn_generic_param_count != 1 || ret != usize_ty ||
+                        s.name != "align_of") {
+                        const std::string msg =
+                            "$![Impl::AlignOf] requires signature 'def align_of<T>() -> usize;'";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                        err_(s.span, msg);
+                    }
+                    break;
+                case ImplBindingKind::kNone:
+                    break;
+            }
+        }
+
         // generic templates are declaration-only at this stage.
         // concrete instances are materialized and checked on-demand at call sites.
         if (sid != ast::k_invalid_stmt &&
@@ -284,6 +342,13 @@
                     case ast::StmtKind::kReturn:
                     case ast::StmtKind::kThrow:
                         return true;
+
+                    case ast::StmtKind::kExprStmt:
+                        if (st.expr == ast::k_invalid_expr ||
+                            static_cast<size_t>(st.expr) >= expr_type_cache_.size()) {
+                            return false;
+                        }
+                        return expr_type_cache_[st.expr] == types_.builtin(ty::Builtin::kNever);
 
                     case ast::StmtKind::kBlock: {
                         // v0 정책: block의 마지막 stmt가 항상 return이면 block이 항상 return

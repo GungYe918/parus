@@ -166,6 +166,9 @@ namespace parus::sir::detail {
                 f.name = s.name;
             }
         }
+        if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+            f.external_payload = sym.symbol(f.sym).external_payload;
+        }
 
         // qualifiers / mode
         f.is_export = s.is_export;
