@@ -1407,7 +1407,7 @@ namespace parus::cimport {
                     }
 
                     const bool pointee_const = clang_isConstQualifiedType(elem) != 0;
-                    out = pointee_const ? ("ptr " + elem_repr) : ("ptr mut " + elem_repr);
+                    out = pointee_const ? ("*const " + elem_repr) : ("*mut " + elem_repr);
                     return true;
                 }
                 case CXType_Elaborated:

@@ -705,10 +705,9 @@ namespace parus::ty {
                 }
 
                 case Kind::kPtr: {
-                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "ptr mut <invalid>" : "ptr <invalid>"); return; }
+                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "*mut <invalid>" : "*const <invalid>"); return; }
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
-                    out += "ptr ";
-                    if (t.ptr_is_mut) out += "mut ";
+                    out += t.ptr_is_mut ? "*mut " : "*const ";
                     if (needs_parens_for_prefix_(ek)) out += "(";
                     render_into_export_(out, t.elem);
                     if (needs_parens_for_prefix_(ek)) out += ")";
@@ -838,10 +837,9 @@ namespace parus::ty {
                 }
 
                 case Kind::kPtr: {
-                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "ptr mut <invalid>" : "ptr <invalid>"); return; }
+                    if (t.elem == kInvalidType) { out += (t.ptr_is_mut ? "*mut <invalid>" : "*const <invalid>"); return; }
                     const Kind ek = (t.elem < types_.size()) ? types_[t.elem].kind : Kind::kError;
-                    out += "ptr ";
-                    if (t.ptr_is_mut) out += "mut ";
+                    out += t.ptr_is_mut ? "*mut " : "*const ";
                     if (needs_parens_for_prefix_(ek)) out += "(";
                     render_into_(out, t.elem, RenderCtx::kTop);
                     if (needs_parens_for_prefix_(ek)) out += ")";

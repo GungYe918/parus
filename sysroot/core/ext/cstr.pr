@@ -2,17 +2,17 @@ $![Impl::Core];
 
 // Borrowed C string view backed by a raw NUL-terminated pointer.
 export class CStr {
-    ptr_: ptr c_char;
+    ptr_: *const c_char;
     len_: usize;
 
     // Builds a CStr from raw pointer and cached length metadata.
-    init(p: ptr c_char, n: usize) {
+    init(p: *const c_char, n: usize) {
         self.ptr_ = p;
         self.len_ = n;
     }
 
     // Returns the underlying raw C pointer.
-    def as_ptr(self) -> ptr c_char {
+    def as_ptr(self) -> *const c_char {
         return self.ptr_;
     }
 
@@ -35,12 +35,12 @@ export class CStr {
     }
 
     // Returns pointer to bytes excluding final NUL by contract.
-    def to_bytes(self) -> ptr c_char {
+    def to_bytes(self) -> *const c_char {
         return self.ptr_;
     }
 
     // Returns pointer to bytes including final NUL by contract.
-    def to_bytes_with_nul(self) -> ptr c_char {
+    def to_bytes_with_nul(self) -> *const c_char {
         return self.ptr_;
     }
 
@@ -50,18 +50,18 @@ export class CStr {
     }
 
     // Creates a borrowed CStr from a raw C pointer.
-    static def from_ptr(p: ptr c_char) -> CStr {
+    static def from_ptr(p: *const c_char) -> CStr {
         let zero: usize = 0usize;
         return CStr(p, zero);
     }
 
     // Creates a borrowed CStr from explicit raw parts.
-    static def from_raw_parts(p: ptr c_char, n: usize) -> CStr {
+    static def from_raw_parts(p: *const c_char, n: usize) -> CStr {
         return CStr(p, n);
     }
 
     // Validates bytes that must already include a trailing NUL.
-    static def from_bytes_with_nul(bytes: ptr c_char, n: usize) -> CStr? {
+    static def from_bytes_with_nul(bytes: *const c_char, n: usize) -> CStr? {
         if (n == 0) {
             return null;
         }
@@ -69,7 +69,7 @@ export class CStr {
     }
 
     // Scans bytes up to the first NUL and returns a borrowed CStr on success.
-    static def from_bytes_until_nul(bytes: ptr c_char, n: usize) -> CStr? {
+    static def from_bytes_until_nul(bytes: *const c_char, n: usize) -> CStr? {
         if (n == 0) {
             return null;
         }
@@ -77,23 +77,23 @@ export class CStr {
     }
 
     // Creates CStr without validating interior/trailing NUL constraints.
-    static def from_bytes_with_nul_unchecked(bytes: ptr c_char, n: usize) -> CStr {
+    static def from_bytes_with_nul_unchecked(bytes: *const c_char, n: usize) -> CStr {
         return CStr(bytes, n);
     }
 };
 
 // Internal helper to centralize CStr construction.
-def make(p: ptr c_char, n: usize) -> CStr {
+def make(p: *const c_char, n: usize) -> CStr {
     return CStr(p, n);
 }
 
 // Creates a borrowed CStr from a raw C pointer.
-export def from_ptr(p: ptr c_char) -> CStr {
+export def from_ptr(p: *const c_char) -> CStr {
     return CStr::from_ptr(p);
 }
 
 // Creates a borrowed CStr from explicit raw parts.
-export def from_raw_parts(p: ptr c_char, n: usize) -> CStr {
+export def from_raw_parts(p: *const c_char, n: usize) -> CStr {
     return CStr::from_raw_parts(p, n);
 }
 
@@ -108,32 +108,32 @@ export def len(s: CStr) -> usize {
 }
 
 // Validates bytes that must already include a trailing NUL.
-export def from_bytes_with_nul(bytes: ptr c_char, len: usize) -> CStr? {
+export def from_bytes_with_nul(bytes: *const c_char, len: usize) -> CStr? {
     return CStr::from_bytes_with_nul(bytes, len);
 }
 
 // Scans bytes up to the first NUL and returns a borrowed CStr on success.
-export def from_bytes_until_nul(bytes: ptr c_char, len: usize) -> CStr? {
+export def from_bytes_until_nul(bytes: *const c_char, len: usize) -> CStr? {
     return CStr::from_bytes_until_nul(bytes, len);
 }
 
 // Creates CStr without validating interior/trailing NUL constraints.
-export def from_bytes_with_nul_unchecked(bytes: ptr c_char, len: usize) -> CStr {
+export def from_bytes_with_nul_unchecked(bytes: *const c_char, len: usize) -> CStr {
     return CStr::from_bytes_with_nul_unchecked(bytes, len);
 }
 
 // Returns the raw C pointer for FFI calls.
-export def as_ptr(s: CStr) -> ptr c_char {
+export def as_ptr(s: CStr) -> *const c_char {
     return s.as_ptr();
 }
 
 // Returns pointer to the byte sequence excluding the final NUL contract.
-export def to_bytes(s: CStr) -> ptr c_char {
+export def to_bytes(s: CStr) -> *const c_char {
     return s.to_bytes();
 }
 
 // Returns pointer to the byte sequence including the final NUL contract.
-export def to_bytes_with_nul(s: CStr) -> ptr c_char {
+export def to_bytes_with_nul(s: CStr) -> *const c_char {
     return s.to_bytes_with_nul();
 }
 

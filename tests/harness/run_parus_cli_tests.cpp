@@ -911,7 +911,7 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
 
     const std::string core_index_src =
         "{\n"
-        "  \"version\": 5,\n"
+        "  \"version\": 7,\n"
         "  \"bundle\": \"core\",\n"
         "  \"exports\": [\n"
         "    {\n"
@@ -1140,7 +1140,7 @@ bool test_core_ext_scaffold_and_auto_injection() {
 
     const auto va_ok_main = temp_root / "main_va_ok.pr";
     const std::string va_ok_src =
-        "extern \"C\" def vprintf(fmt: ptr core::ext::c_char, ap: core::ext::vaList) -> core::ext::c_int;\n"
+        "extern \"C\" def vprintf(fmt: *const core::ext::c_char, ap: core::ext::vaList) -> core::ext::c_int;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return 0i32;\n"
@@ -2947,7 +2947,7 @@ bool test_c_header_import_stdio_format_bridge_single_arg() {
         std::cerr << "stdio::printf(text) should be rejected at C ABI boundary\n" << out_text_fail;
         return false;
     }
-    if (!contains(out_text_fail, "text value is not C ABI-safe; use ptr core::ext::c_char")) {
+    if (!contains(out_text_fail, "text value is not C ABI-safe; use *const core::ext::c_char")) {
         std::cerr << "stdio::printf(text) rejection must provide explicit C boundary guidance\n" << out_text_fail;
         return false;
     }
@@ -2977,11 +2977,11 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
     const auto main_fail = temp_root / "main_fail.pr";
     const auto llvm_out = temp_root / "main_ok.ll";
     const std::string ok_src =
-        "extern \"C\" def take_ptr(p: ptr i32) -> i32;\n"
-        "extern \"C\" def variad(first: ptr i8, ...) -> i32;\n"
+        "extern \"C\" def take_ptr(p: *const i32) -> i32;\n"
+        "extern \"C\" def variad(first: *const i8, ...) -> i32;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  let p: ptr i32 = null;\n"
+        "  let p: *const i32 = null;\n"
         "  take_ptr(null);\n"
         "  take_ptr(p);\n"
         "  let z: i32 = variad(null);\n"
@@ -2991,7 +2991,7 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
         "  return z;\n"
         "}\n";
     const std::string fail_src =
-        "extern \"C\" def variad(first: ptr i8, ...) -> i32;\n"
+        "extern \"C\" def variad(first: *const i8, ...) -> i32;\n"
         "\n"
         "def main() -> i32 {\n"
         "  manual[abi] {\n"
@@ -3014,7 +3014,7 @@ bool test_extern_c_variadic_manual_abi_and_null_boundary() {
     std::filesystem::remove_all(temp_root, ec);
 
     if (rc_ok != 0) {
-        std::cerr << "extern C variadic declaration with manual[abi] and null->ptr boundary should compile\n" << out_ok;
+        std::cerr << "extern C variadic declaration with manual[abi] and null->*const boundary should compile\n" << out_ok;
         return false;
     }
     if (contains(out_ok, "ManualAbiRequired")) {

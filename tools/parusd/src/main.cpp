@@ -2565,8 +2565,8 @@ namespace {
         }
 
         const auto version = as_i64_(obj_get_(root, "version"));
-        if (!version.has_value() || (*version != 4 && *version != 5 && *version != 6)) {
-            return fail("unsupported export-index version (expected v4, v5, or v6): " + index_path.string());
+        if (!version.has_value() || *version != 7) {
+            return fail("unsupported export-index version (expected v7): " + index_path.string());
         }
 
         const auto* exports_node = obj_get_(root, "exports");
@@ -3413,7 +3413,7 @@ namespace {
                                         payload_kind = "char";
                                         break;
                                     case parus::cimport::ImportedConstKind::kString:
-                                        ty = "ptr i8";
+                                        ty = "*const i8";
                                         payload_kind = "string";
                                         break;
                                     case parus::cimport::ImportedConstKind::kNone:

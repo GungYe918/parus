@@ -91,10 +91,10 @@
                     types_.to_string(ret));
                 if (is_text) {
                     diag_(diag::Code::kTypeErrorGeneric, s.span,
-                          "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                          "text is not C ABI-safe; use *const core::ext::c_char and explicit boundary conversion");
                 }
                 std::string msg = "C ABI return type is not FFI-safe";
-                if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                if (is_text) msg += " (text is not C ABI-safe; use *const core::ext::c_char)";
                 err_(s.span, msg);
             }
 
@@ -113,10 +113,10 @@
                         types_.to_string(p.type));
                     if (is_text) {
                         diag_(diag::Code::kTypeErrorGeneric, p.span,
-                              "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                              "text is not C ABI-safe; use *const core::ext::c_char and explicit boundary conversion");
                     }
                     std::string msg = "C ABI parameter type is not FFI-safe: " + std::string(p.name);
-                    if (is_text) msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                    if (is_text) msg += " (text is not C ABI-safe; use *const core::ext::c_char)";
                     err_(p.span, msg);
                 }
             }

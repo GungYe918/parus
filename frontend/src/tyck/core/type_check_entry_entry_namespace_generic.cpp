@@ -813,7 +813,7 @@ namespace parus::tyck {
             }
 
             case ty::Kind::kPtr:
-                // ptr T / ptr mut T: pointee도 FFI-safe여야 한다.
+                // *const T / *mut T: pointee도 FFI-safe여야 한다.
                 return is_c_abi_safe_type_impl_(tt.elem, /*allow_void=*/true, visiting);
 
             case ty::Kind::kBorrow:
@@ -878,11 +878,11 @@ namespace parus::tyck {
             diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span, std::string("global '") + std::string(s.name) + "'", types_.to_string(s.type));
             if (is_text) {
                 diag_(diag::Code::kTypeErrorGeneric, s.span,
-                      "text is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                      "text is not C ABI-safe; use *const core::ext::c_char and explicit boundary conversion");
             }
             std::string msg = "C ABI global type is not FFI-safe: " + types_.to_string(s.type);
             if (is_text) {
-                msg += " (text is not C ABI-safe; use ptr core::ext::c_char)";
+                msg += " (text is not C ABI-safe; use *const core::ext::c_char)";
             }
             err_(s.span, msg);
         }

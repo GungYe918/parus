@@ -102,17 +102,17 @@
             return out != ty::kInvalidType;
         }
 
-        constexpr std::string_view kPtrMut = "ptr mut ";
-        constexpr std::string_view kPtr = "ptr ";
+        constexpr std::string_view kPtrMut = "*mut ";
+        constexpr std::string_view kPtrConst = "*const ";
         if (repr.starts_with(kPtrMut)) {
             ty::TypeId elem = ty::kInvalidType;
             if (!parse_cimport_type_repr_(repr.substr(kPtrMut.size()), elem)) return false;
             out = types_.make_ptr(elem, /*is_mut=*/true);
             return out != ty::kInvalidType;
         }
-        if (repr.starts_with(kPtr)) {
+        if (repr.starts_with(kPtrConst)) {
             ty::TypeId elem = ty::kInvalidType;
-            if (!parse_cimport_type_repr_(repr.substr(kPtr.size()), elem)) return false;
+            if (!parse_cimport_type_repr_(repr.substr(kPtrConst.size()), elem)) return false;
             out = types_.make_ptr(elem, /*is_mut=*/false);
             return out != ty::kInvalidType;
         }
@@ -847,7 +847,7 @@
             }
 
             diag_(diag::Code::kTypeErrorGeneric, e.span,
-                  std::string("operator '*' requires &T, &mut T, ptr T, or ptr mut T (got ") +
+                  std::string("operator '*' requires &T, &mut T, *const T, or *mut T (got ") +
                       types_.to_string(operand_t) + ")");
             err_(e.span, "operator '*' requires borrow or raw pointer operand");
             return types_.error();
@@ -1856,7 +1856,7 @@
             if (ot.kind == ty::Kind::kPtr) {
                 if (!ot.ptr_is_mut) {
                     diag_(diag::Code::kTypeErrorGeneric, lhs.span,
-                          "writing through '*' requires ptr mut T for raw pointers");
+                          "writing through '*' requires *mut T for raw pointers");
                     err_(lhs.span, "cannot write through immutable raw pointer");
                     return false;
                 }
@@ -1875,7 +1875,7 @@
             }
 
             diag_(diag::Code::kTypeErrorGeneric, lhs.span,
-                  "assignment through '*' requires &mut T or ptr mut T");
+                  "assignment through '*' requires &mut T or *mut T");
             err_(lhs.span, "assignment through '*' requires mutable borrow or mutable raw pointer");
             return false;
         };

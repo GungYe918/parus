@@ -1655,7 +1655,7 @@ namespace parus::tyck {
                             types_.get(src_canon).builtin == ty::Builtin::kText;
                         if (src_is_text && is_c_char_ptr_type(expected)) {
                             diag_(diag::Code::kTypeErrorGeneric, ast_.expr(arg_eid).span,
-                                  "text value is not C ABI-safe; use ptr core::ext::c_char and explicit boundary conversion");
+                                  "text value is not C ABI-safe; use *const core::ext::c_char and explicit boundary conversion");
                         }
                         diag_(diag::Code::kTypeArgTypeMismatch, ast_.expr(arg_eid).span,
                               std::to_string(i), types_.to_string(expected),

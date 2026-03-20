@@ -24,7 +24,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 ### 2.1 `text`
 
-1. 값 자체는 2워드 헤더(`ptr u8`, `usize`)로 취급한다.
+1. 값 자체는 2워드 헤더(`*const u8`, `usize`)로 취급한다.
 2. 헤더는 register/stack에서 이동한다.
 3. 실제 바이트 backing은 static/stack/heap 어디든 가능하지만 `text`는 소유권을 갖지 않는다.
 

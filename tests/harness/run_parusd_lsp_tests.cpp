@@ -221,7 +221,7 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
 
     const std::string core_index_text =
         "{\n"
-        "  \"version\": 5,\n"
+        "  \"version\": 7,\n"
         "  \"bundle\": \"core\",\n"
         "  \"exports\": [\n"
         "    {\n"

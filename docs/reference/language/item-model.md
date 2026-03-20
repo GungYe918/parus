@@ -115,7 +115,7 @@ acts A for Vec2 {
   }
 }
 
-extern "C" def puts(s: ptr u8) -> i32;
+extern "C" def puts(s: *const u8) -> i32;
 let g_count: i32 = 0;
 
 def main() -> i32 {
@@ -131,7 +131,7 @@ if (true) { } // error: top-level statement 금지
 
 foo(); // error: top-level expression statement 금지
 
-extern "C" def puts(s: ptr u8) -> i32 // error: simple item ';' 누락
+extern "C" def puts(s: *const u8) -> i32 // error: simple item ';' 누락
 ```
 
 ---

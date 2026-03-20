@@ -61,7 +61,7 @@ FFI 경계는 선언 키워드로 고정한다.
 ### 4.1 외부 심볼 가져오기
 
 ```parus
-extern "C" def puts(s: ptr u8) -> i32;
+extern "C" def puts(s: *const u8) -> i32;
 extern "C" static mut errno: i32;
 ```
 
@@ -103,18 +103,18 @@ struct layout(c) align(16) Vec2 {
 
 ## 6. 포인터 타입 표기 (고정)
 
-Rust식 `*const/*mut` 대신 Parus 고유 표기를 사용한다.
+Raw pointer 표기는 `*const/*mut`로 고정한다.
 
-1. `ptr T`
+1. `*const T`
    - 읽기 전용 pointee
-2. `ptr mut T`
+2. `*mut T`
    - 쓰기 가능 pointee
 
 예:
 
 ```parus
-extern "C" def read(buf: ptr u8, len: usize) -> isize;
-extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
+extern "C" def read(buf: *const u8, len: usize) -> isize;
+extern "C" def write(buf: *mut u8, len: usize) -> isize;
 ```
 
 ---
@@ -125,10 +125,10 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 
 1. 정수: `i8/i16/i32/i64`, `u8/u16/u32/u64`, `isize/usize`
 2. 부동소수: `f32/f64`
-3. 포인터: `ptr T`, `ptr mut T` (T가 FFI-safe일 때)
+3. 포인터: `*const T`, `*mut T` (T가 FFI-safe일 때)
 4. `layout(c)`를 만족하는 `struct`
-5. 문자열 뷰 경계 타입: `layout(c) struct Utf8Span { data: ptr u8; len: usize; }`
-6. 문자열 버퍼 경계 타입: `layout(c) struct Utf8Buf { data: ptr mut u8; len: usize; cap: usize; }`
+5. 문자열 뷰 경계 타입: `layout(c) struct Utf8Span { data: *const u8; len: usize; }`
+6. 문자열 버퍼 경계 타입: `layout(c) struct Utf8Buf { data: *mut u8; len: usize; cap: usize; }`
 
 ### 7.2 금지 타입
 
@@ -136,7 +136,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 2. optional, actor, class 직접 값 전달
 3. 구현 의존 내부 타입
 4. 표준 라이브러리 `String` 직접 값 전달 (`Utf8Span`/`Utf8Buf`로 변환해야 함)
-5. `text` 직접 C ABI 전달 (`ptr core::ext::c_char` + 명시 변환 경계 사용)
+5. `text` 직접 C ABI 전달 (`*const core::ext::c_char` + 명시 변환 경계 사용)
 
 ### 7.3 오버로딩/심볼 규칙
 
@@ -149,7 +149,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 1. C ABI 경계 타입은 `core::ext::c_*` 및 `core::ext::vaList`를 표준 표면으로 사용한다.
 2. `core::ext::c_*`는 대응 C ABI 원시 타입과 동치(transparent alias)로 취급한다.
 3. `vaList`는 opaque 타입이며 C ABI 시그니처 경계에서만 허용한다.
-4. plain string literal(`"..."`)은 C `char*` 기대 슬롯에서만 암묵 허용한다(주로 `ptr core::ext::c_char` 계열).
+4. plain string literal(`"..."`)은 C `char*` 기대 슬롯에서만 암묵 허용한다(주로 `*const core::ext::c_char` 계열).
 5. `text` 변수/고수준 Parus 타입은 C ABI 경계에서 암묵 변환하지 않는다.
 6. `c"..."`, `cr"..."`는 compile-time literal-only `core::ext::CStr` 생성 경로로 허용한다.
 7. `text -> c_str` 자동 브리지는 v0 범위에서 제외한다.
@@ -157,7 +157,7 @@ extern "C" def write(buf: ptr mut u8, len: usize) -> isize;
 9. `manual[abi]`는 variadic 함수 자체가 아니라 실제 variadic tail 인자를 넘기는 call site에만 필요하다. zero-tail 호출과 ordinary fixed-arg C 호출은 `manual[abi]`를 요구하지 않는다.
 10. variadic tail은 ABI-safe scalar/raw pointer/`core::ext::CStr`/plain string literal만 허용한다.
 11. variadic tail에서는 `null` literal, borrow, escape, optional, aggregate, direct enum을 허용하지 않는다.
-12. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> ptr T` 자동 변환은 계속 금지한다.
+12. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> *const/*mut T` 자동 변환은 계속 금지한다.
 
 `core::ext` 매핑 표(요약):
 
@@ -289,7 +289,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 1. ABI 문서 체계 최초 고정
 2. FFI 선언을 `extern "C"` / `export "C"`로 통일
 3. `struct` 레이아웃 표기를 `layout(c)`/`align(n)`로 고정
-4. 포인터 표기를 `ptr` / `ptr mut`로 고정
+4. 포인터 표기를 `*const` / `*mut`로 고정
 
 ### v0.0.1 addendum (string/storage)
 

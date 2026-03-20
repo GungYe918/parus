@@ -173,7 +173,7 @@ export def add(a: i32, b: i32) -> i32 {
 4-b. format string literal(`F"""..."""`)은 C ABI 인자에서 금지한다.
 4-c. `bare $"..."` 형식은 문법에서 제거되었으므로 C ABI 경계에서도 허용되지 않는다.
 4-d. C `char*`(및 `const char*`) 기대 슬롯에서는 plain string literal(`"..."`)을 자동 허용한다. 이 경로는 `core::ext::c_char` 계열 포인터 슬롯을 기준으로 적용한다.
-4-e. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> ptr T` 자동 변환은 허용하지 않는다.
+4-e. `null` literal은 typed pointer slot의 call-arg/return/assignment 경계에서만 허용한다. `T? -> *const/*mut T` 자동 변환은 허용하지 않는다.
 5. C union import는 2차 규칙을 따른다.
 5-a. union field dot 접근은 `manual[...]` 내부에서만 허용한다.
 5-b. read는 `manual[get]` 또는 `manual[set]`가 필요하다.
@@ -211,4 +211,4 @@ export def add(a: i32, b: i32) -> i32 {
 11-a. non-core 번들에서는 core auto injection이 활성화된 경우 `core::ext` 경로를 import 없이 사용할 수 있다.
 11-b. `core::ext::vaList`는 opaque 타입이며 C ABI 함수 시그니처 파라미터 위치에서만 허용한다.
 11-c. `-fno-core`(또는 `PARUS_NO_CORE=1`)에서 c-import를 사용하면 하드 에러다.
-11-d. `text`는 C ABI 타입으로 허용하지 않으며, 문자열 경계는 `ptr core::ext::c_char`와 명시 변환으로 처리한다.
+11-d. `text`는 C ABI 타입으로 허용하지 않으며, 문자열 경계는 `*const core::ext::c_char`와 명시 변환으로 처리한다.

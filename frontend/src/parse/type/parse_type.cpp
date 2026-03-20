@@ -63,7 +63,7 @@ namespace parus {
         //      PrefixType
         //
         //  PrefixType :=
-        //      ( '&' ['mut'] | '~' )* SuffixType
+        //      ( '&' ['mut'] | '~' | '*' ('const' | 'mut') )* SuffixType
         //
         //  SuffixType :=
         //      PrimaryType ( '?' | '[]' )*
@@ -214,31 +214,6 @@ namespace parus {
                 n.array_has_size = false;
                 n.array_size = 0;
                 n.resolved_type = types_.make_array(elem.id);
-
-                ParsedType out{};
-                out.node = ast_.add_type_node(n);
-                out.id = n.resolved_type;
-                out.span = n.span;
-                return out;
-            }
-
-            // ---- ptr T / ptr mut T ----
-            if (cursor_.at(K::kIdent) && cursor_.peek().lexeme == "ptr") {
-                const Token ptr_tok = cursor_.bump(); // 'ptr'
-                bool is_mut = false;
-                if (cursor_.at(K::kKwMut)) {
-                    is_mut = true;
-                    cursor_.bump();
-                }
-                auto elem = parse_type();
-                if (elem.id == ty::kInvalidType) elem.id = types_.error();
-
-                ast::TypeNode n{};
-                n.kind = ast::TypeNodeKind::kPtr;
-                n.span = span_join(ptr_tok.span, elem.span.hi ? elem.span : ptr_tok.span);
-                n.elem = elem.node;
-                n.is_mut = is_mut;
-                n.resolved_type = types_.make_ptr(elem.id, is_mut);
 
                 ParsedType out{};
                 out.node = ast_.add_type_node(n);
@@ -454,11 +429,11 @@ namespace parus {
             return base;
         };
 
-        // ---- prefix chain: (& ['mut'] | ~)* ----
+        // ---- prefix chain: (& ['mut'] | ~ | *('const'|'mut'))* ----
         // NOTE: suffix binds tighter than prefix.
         // so: ~int? == ~(int?) by default.
         struct PrefixOp {
-            enum class Kind : uint8_t { kBorrow, kEscape } kind;
+            enum class Kind : uint8_t { kBorrow, kEscape, kPtr } kind;
             bool is_mut = false; // only for borrow
             Token tok{};
         };
@@ -504,6 +479,26 @@ namespace parus {
                 continue;
             }
 
+            if (cursor_.at(K::kStar)) {
+                PrefixOp op{};
+                op.kind = PrefixOp::Kind::kPtr;
+                op.tok = cursor_.bump(); // '*'
+
+                if (cursor_.at(K::kKwConst)) {
+                    cursor_.bump();
+                    op.is_mut = false;
+                } else if (cursor_.at(K::kKwMut)) {
+                    cursor_.bump();
+                    op.is_mut = true;
+                } else {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "const or mut");
+                    return make_error_type_(span_join(op.tok.span, cursor_.peek().span));
+                }
+
+                ops.push_back(op);
+                continue;
+            }
+
             break;
         }
 
@@ -525,13 +520,24 @@ namespace parus {
                 out.node = ast_.add_type_node(n);
                 out.id = n.resolved_type;
                 out.span = sp;
-            } else {
+            } else if (op.kind == PrefixOp::Kind::kEscape) {
                 const Span sp = span_join(op.tok.span, out.span);
                 ast::TypeNode n{};
                 n.kind = ast::TypeNodeKind::kEscape;
                 n.span = sp;
                 n.elem = out.node;
                 n.resolved_type = types_.make_escape(out.id);
+                out.node = ast_.add_type_node(n);
+                out.id = n.resolved_type;
+                out.span = sp;
+            } else {
+                const Span sp = span_join(op.tok.span, out.span);
+                ast::TypeNode n{};
+                n.kind = ast::TypeNodeKind::kPtr;
+                n.span = sp;
+                n.elem = out.node;
+                n.is_mut = op.is_mut;
+                n.resolved_type = types_.make_ptr(out.id, op.is_mut);
                 out.node = ast_.add_type_node(n);
                 out.id = n.resolved_type;
                 out.span = sp;

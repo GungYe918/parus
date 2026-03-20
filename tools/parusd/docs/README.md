@@ -23,7 +23,7 @@ parusd --stdio
 ## bundle/module 컨텍스트 동기화
 
 1. `parusd`는 `config.lei` + `plan master`를 평가해 module-first graph를 읽는다.
-2. bundle export index(`target/parus/index/*.exports.json`, v4)를 on-demand prepass로 생성/갱신한다.
+2. bundle export index(`target/parus/index/*.exports.json`, v7)를 on-demand prepass로 생성/갱신한다.
 3. `workspace/didChangeWatchedFiles`로 `.lei` 변경을 받으면 같은 프로젝트 루트의 열린 `.pr` 문서를 자동 재진단한다.
 
 ## 코드 근거

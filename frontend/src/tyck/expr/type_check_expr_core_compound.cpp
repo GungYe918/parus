@@ -159,7 +159,7 @@
                     const ty::TypeId data_ty = check_expr_(ent.expr);
                     if (!is_byte_compatible_ptr(data_ty)) {
                         diag_(diag::Code::kTypeAssignMismatch, ent.span,
-                              "ptr u8-compatible", type_for_user_diag_(data_ty, ent.expr));
+                              "byte-compatible raw pointer", type_for_user_diag_(data_ty, ent.expr));
                         err_(ent.span, "text.data requires a byte-compatible raw pointer");
                     }
                     continue;

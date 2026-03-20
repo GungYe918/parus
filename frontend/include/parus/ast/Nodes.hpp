@@ -302,14 +302,14 @@ namespace parus::ast {
         uint32_t generic_arg_begin = 0; // slice in AstArena::type_node_children_
         uint32_t generic_arg_count = 0;
 
-        // common child for optional/array/borrow/escape/ptr
+        // common child for optional/array/borrow/escape/raw-pointer
         TypeNodeId elem = k_invalid_type_node;
 
         // array
         bool array_has_size = false;
         uint32_t array_size = 0;
 
-        // borrow/ptr
+        // borrow/raw-pointer
         bool is_mut = false;
 
         // fn type

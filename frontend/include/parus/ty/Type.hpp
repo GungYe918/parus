@@ -18,7 +18,7 @@ namespace parus::ty {
 
         kBool,
         kChar,
-        kText,   // builtin string slice: {ptr u8, usize}
+        kText,   // builtin string slice: {*const u8, usize}
 
         // signed integers
         kI8,  kI16,  kI32,  kI64, kI128,
@@ -65,7 +65,7 @@ namespace parus::ty {
 
         kBorrow,    // &T / &mut T
         kEscape,    // ~T
-        kPtr,       // ptr T / ptr mut T
+        kPtr,       // *const T / *mut T
 
         kFn,        // def(T1, T2, ...) -> R
     };

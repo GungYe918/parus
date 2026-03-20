@@ -63,12 +63,12 @@ C ABI 경계 문자열 전달은 다음 2개 타입으로 고정한다.
 
 ```parus
 struct layout(c) Utf8Span {
-  data: ptr u8;
+  data: *const u8;
   len: usize;
 }
 
 struct layout(c) Utf8Buf {
-  data: ptr mut u8;
+  data: *mut u8;
   len: usize;
   cap: usize;
 }
@@ -88,7 +88,7 @@ struct layout(c) Utf8Buf {
 `String` 내부 레이아웃은 3워드로 고정한다.
 
 ```text
-data: ptr mut u8
+data: *mut u8
 len : usize
 cap : usize
 ```
@@ -118,7 +118,7 @@ cap : usize
 
 ```parus
 struct String {
-  data: ptr mut u8;
+  data: *mut u8;
   len: usize;
   cap: usize;
 }

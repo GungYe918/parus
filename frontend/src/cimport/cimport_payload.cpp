@@ -49,7 +49,7 @@ namespace parus::cimport {
                 "f32", "f64", "f128",
                 "text",
                 "null",
-                "ptr",
+                "const",
                 "mut",
                 "def",
             };

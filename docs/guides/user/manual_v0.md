@@ -75,7 +75,7 @@ ABI 경계 호출 허용:
 
 ## 5.1 허용
 
-1. FFI 함수가 받는 `ptr`/`ptr mut` 버퍼를 직접 순회
+1. FFI 함수가 받는 `*const`/`*mut` 버퍼를 직접 순회
 2. ABI 호출 전후 포인터 기반 복사/검증/길이 처리
 3. 저수준 입출력 루틴 내부의 제한적 raw 메모리 접근
 
@@ -104,7 +104,7 @@ ABI 경계 호출 허용:
 1. `&`, `&mut`는 기존 비탈출/배타 규칙 그대로 검사한다.
 2. `&&`는 기존 escape 규칙 그대로 검사한다.
 3. `manual` 내부에서도 borrow를 ABI 경계로 넘길 수 없다.
-4. `T? -> ptr T`, `&T -> ptr T`, `~T -> void*` 같은 암시 변환은 `manual`로 열리지 않는다.
+4. `T? -> *const/*mut T`, `&T -> *const/*mut T`, `~T -> void*` 같은 암시 변환은 `manual`로 열리지 않는다.
 5. 즉 `manual`은 “포인터 표현력 확장”, “수명/권한 규칙 해제”가 아니다.
 
 ---
@@ -112,15 +112,15 @@ ABI 경계 호출 허용:
 ## 8. FFI 중심 예시
 
 ```parus
-extern "C" def c_write(fd: i32, buf: ptr u8, len: usize) -> isize;
+extern "C" def c_write(fd: i32, buf: *const u8, len: usize) -> isize;
 
-def write_chunk(fd: i32, buf: ptr u8, len: usize) -> isize {
+def write_chunk(fd: i32, buf: *const u8, len: usize) -> isize {
     return c_write(fd: fd, buf: buf, len: len);
 }
 ```
 
 ```parus
-extern "C" def c_printf(fmt: ptr i8, ...) -> i32;
+extern "C" def c_printf(fmt: *const i8, ...) -> i32;
 
 def log_num(v: i32) -> i32 {
     manual[abi] {

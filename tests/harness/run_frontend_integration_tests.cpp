@@ -1248,12 +1248,12 @@ namespace {
             def main() -> i32 {
                 let s: text = "abc";
                 let n: usize = s.len;
-                let p: ptr u8 = s.data;
+                let p: *const u8 = s.data;
                 let arr: i32[4] = [1, 2, 3, 4];
                 let k: usize = arr.len;
                 let xs: i32[] = arr;
                 let m: usize = xs.len;
-                let q: ptr i32 = xs.data;
+                let q: *const i32 = xs.data;
                 set mut x = 1i32;
                 set mut y = 0i32;
                 {
@@ -1292,7 +1292,7 @@ namespace {
     static bool test_raw_ptr_deref_manual_gates() {
         const std::string read_src = R"(
             def main() -> i32 {
-                let p: ptr i32 = null;
+                let p: *const i32 = null;
                 let x: i32 = *p;
                 return x;
             }
@@ -1304,7 +1304,7 @@ namespace {
 
         const std::string write_src = R"(
             def main() -> i32 {
-                let p: ptr mut i32 = null;
+                let p: *mut i32 = null;
                 *p = 7i32;
                 return 0i32;
             }
@@ -1315,17 +1315,17 @@ namespace {
         auto ty_write = run_tyck(p_write);
 
         bool ok = true;
-        ok &= require_(p_read.bag.has_error(), "raw ptr read without manual must emit diagnostics");
-        ok &= require_(!ty_read.errors.empty(), "raw ptr read without manual must fail typecheck");
-        ok &= require_(p_write.bag.has_error(), "raw ptr write without manual must emit diagnostics");
-        ok &= require_(!ty_write.errors.empty(), "raw ptr write without manual must fail typecheck");
+        ok &= require_(p_read.bag.has_error(), "raw *const read without manual must emit diagnostics");
+        ok &= require_(!ty_read.errors.empty(), "raw *const read without manual must fail typecheck");
+        ok &= require_(p_write.bag.has_error(), "raw *const write without manual must emit diagnostics");
+        ok &= require_(!ty_write.errors.empty(), "raw *const write without manual must fail typecheck");
         return ok;
     }
 
     static bool test_text_view_constructor_requires_manual_abi() {
         const std::string src = R"(
             def main() -> i32 {
-                let p: ptr u8 = null;
+                let p: *const u8 = null;
                 let t: text = text{ data: p, len: 0usize };
                 return 0i32;
             }
@@ -1339,6 +1339,41 @@ namespace {
         ok &= require_(p.bag.has_code(parus::diag::Code::kManualAbiRequired),
             "text view constructor outside manual[abi] must emit ManualAbiRequired");
         ok &= require_(!ty.errors.empty(), "text view constructor outside manual[abi] must fail typecheck");
+        return ok;
+    }
+
+    static bool test_legacy_ptr_type_syntax_rejected() {
+        const std::string legacy_const_src = R"(
+            def main() -> i32 {
+                let p: ptr i32 = null;
+                return 0i32;
+            }
+        )";
+        auto legacy_const = parse_program(legacy_const_src);
+        auto legacy_const_ty = run_tyck(legacy_const);
+
+        const std::string legacy_mut_src = R"(
+            def main() -> i32 {
+                let p: ptr mut i32 = null;
+                return 0i32;
+            }
+        )";
+        auto legacy_mut = parse_program(legacy_mut_src);
+        auto legacy_mut_ty = run_tyck(legacy_mut);
+
+        const std::string bare_star_src = R"(
+            def main() -> i32 {
+                let p: *i32 = null;
+                return 0i32;
+            }
+        )";
+        auto bare = parse_program(bare_star_src);
+        auto bare_ty = run_tyck(bare);
+
+        bool ok = true;
+        ok &= require_(legacy_const.bag.has_error(), "legacy ptr type syntax must fail parse/type");
+        ok &= require_(legacy_mut.bag.has_error(), "legacy ptr mut type syntax must fail parse/type");
+        ok &= require_(bare.bag.has_error(), "bare *T type syntax must fail parse/type");
         return ok;
     }
 
@@ -2170,6 +2205,7 @@ int main() {
         {"text_view_surface_and_borrow_deref_ok", test_text_view_surface_and_borrow_deref_ok},
         {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
         {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
+        {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},

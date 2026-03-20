@@ -19,7 +19,7 @@
 `*expr`가 expression-level deref로 열린다.
 
 1. `&T`, `&mut T`에 대해서는 ordinary deref
-2. raw `ptr`에 대해서는 기존 `manual[get]` / `manual[set]` 정책 아래 deref
+2. raw `*const/*mut`에 대해서는 기존 `manual[get]` / `manual[set]` 정책 아래 deref
 3. `text` acts의 `self: &text`는 `*self`로 읽을 수 있다
 
 ### 2. Builtin view field
@@ -27,9 +27,9 @@
 다음 transparent field가 열린다.
 
 1. `text.len -> usize`
-2. `text.data -> ptr u8`
+2. `text.data -> *const u8`
 3. `T[].len -> usize`
-4. `T[].data -> ptr T`
+4. `T[].data -> *const T`
 5. `T[N].len -> usize`
 
 이 표면은 함수 호출이 아니라 view metadata projection이다.
@@ -72,7 +72,7 @@
 
 이번 변경은 `CStr`의 기존 ABI를 바꾸지 않는다.
 
-1. `CStr -> ptr c_char` C ABI coercion은 그대로 유지
+1. `CStr -> *const c_char` C ABI coercion은 그대로 유지
 2. future `to_text()`는 `text{ data: core::ext::as_ptr(c), len: core::ext::len(c) }` 형태를 기준으로 잡는다
 3. `len_with_nul()`이 아니라 `len()`을 사용해야 한다
 

@@ -1132,7 +1132,7 @@ namespace parusc::p0 {
             }
 
             ofs << "{\n";
-            ofs << "  \"version\": 6,\n";
+            ofs << "  \"version\": 7,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"exports\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
@@ -1314,8 +1314,8 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || (version != 5 && version != 6)) {
-                out_err = "unsupported export-index version in: " + path;
+            if (!parse_json_uint_field_(text, "version", version) || version != 7) {
+                out_err = "unsupported export-index version (expected v7) in: " + path;
                 return false;
             }
             if (!parse_json_string_field_(text, "bundle", bundle_name) || bundle_name.empty()) {
@@ -2457,7 +2457,7 @@ namespace parusc::p0 {
                             ce.inst_payload = parus::cimport::make_c_import_const_payload("char", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kString:
-                            ce.type_repr = "ptr i8";
+                            ce.type_repr = "*const i8";
                             ce.inst_payload = parus::cimport::make_c_import_const_payload("string", mc.value_text);
                             break;
                         case parus::cimport::ImportedConstKind::kNone:
