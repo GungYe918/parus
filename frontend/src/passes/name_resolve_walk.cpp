@@ -1152,6 +1152,48 @@
         if (!is_valid_stmt_id_(r, sid)) return;
         const auto& s = ast.stmt(sid);
 
+        auto reify_external_placeholder_as_local = [&](std::string_view qname,
+                                                       sema::SymbolKind kind,
+                                                       parus::ty::TypeId declared_type,
+                                                       Span decl_span,
+                                                       bool is_export) -> bool {
+            auto existing = sym.lookup(qname);
+            if (!existing.has_value()) return false;
+
+            auto& se = sym.symbol_mut(*existing);
+            if (!se.is_external || se.kind != kind) return false;
+
+            if (!opt.current_bundle_name.empty() &&
+                !se.decl_bundle_name.empty() &&
+                se.decl_bundle_name != opt.current_bundle_name) {
+                return false;
+            }
+
+            if (!opt.current_module_head.empty() &&
+                !se.decl_module_head.empty() &&
+                !same_external_module_head_(opt.current_module_head, se.decl_module_head, se.decl_bundle_name)) {
+                return false;
+            }
+
+            if (!opt.current_source_dir_norm.empty() &&
+                !se.decl_source_dir_norm.empty() &&
+                se.decl_source_dir_norm != opt.current_source_dir_norm) {
+                return false;
+            }
+
+            se.declared_type = declared_type;
+            se.decl_span = decl_span;
+            se.decl_file_id = decl_span.file_id;
+            se.decl_bundle_name = opt.current_bundle_name;
+            se.decl_module_head = opt.current_module_head;
+            se.decl_source_dir_norm = opt.current_source_dir_norm;
+            se.link_name.clear();
+            se.external_payload.clear();
+            se.is_export = is_export;
+            se.is_external = false;
+            return true;
+        };
+
         if (s.kind == ast::StmtKind::kBlock) {
             const auto& kids = ast.stmt_children();
             const uint64_t begin = s.stmt_begin;
@@ -1187,6 +1229,14 @@
 
         if (s.kind == ast::StmtKind::kFnDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
+            if (reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kFn,
+                    s.type,
+                    s.span,
+                    s.is_export)) {
+                return;
+            }
             if (!sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kFn, qname, s.type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {

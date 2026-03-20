@@ -443,6 +443,51 @@ bool test_core_impl_bundle_alias_resolves_exported_helper() {
     return true;
 }
 
+bool test_core_impl_same_file_helper_stays_local_in_lsp() {
+    std::error_code ec{};
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    const auto ascii_pr = repo_root / "sysroot/core/char/ascii.pr";
+    if (!std::filesystem::exists(ascii_pr, ec)) {
+        std::cerr << "core impl same-file helper fixture is missing\n";
+        return false;
+    }
+
+    const std::string uri = to_file_uri(ascii_pr);
+    const std::string ascii_text = read_text(ascii_pr);
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":51,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(ascii_text) + "\"}}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":52,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\""
+            + json_escape(uri) + "\"},\"position\":{\"line\":89,\"character\":13}}}",
+        R"({"jsonrpc":"2.0","id":53,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string out = run_lsp_session(payloads, rc);
+    if (rc != 0) {
+        std::cerr << "core impl same-file helper LSP session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (contains(out, "\"code\":\"SymbolNotExportedFileScope\"") ||
+        contains(out, "char_value_") ||
+        contains(out, "ascii_is_digit_") ||
+        contains(out, "ascii_is_upper_") ||
+        contains(out, "ascii_is_lower_") ||
+        contains(out, "ascii_to_lower_") ||
+        contains(out, "ascii_to_upper_")) {
+        std::cerr << "same-file core helper functions should stay local-visible inside export acts\n" << out << "\n";
+        return false;
+    }
+    if (!contains(out, "\"id\":52") || !contains(out, "\"uri\":\"" + uri + "\"")) {
+        std::cerr << "definition on char_value_ should jump to same file helper declaration\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
 bool test_definition_cimport_symbol() {
     std::error_code ec{};
     const auto root = std::filesystem::temp_directory_path(ec) / "parusd-definition-cimport";
@@ -792,14 +837,15 @@ int main() {
     const bool ok5 = test_completion_keywords_parus_and_lei();
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_core_impl_bundle_alias_resolves_exported_helper();
-    const bool ok8 = test_definition_cimport_symbol();
-    const bool ok9 = test_definition_cimport_promoted_macro_symbol();
-    const bool ok10 = test_definition_cimport_global_symbol();
-    const bool ok11 = test_parus_module_first_bundle_context();
-    const bool ok12 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
-    const bool ok13 = test_parus_incremental_newline_falls_back_cleanly();
+    const bool ok8 = test_core_impl_same_file_helper_stays_local_in_lsp();
+    const bool ok9 = test_definition_cimport_symbol();
+    const bool ok10 = test_definition_cimport_promoted_macro_symbol();
+    const bool ok11 = test_definition_cimport_global_symbol();
+    const bool ok12 = test_parus_module_first_bundle_context();
+    const bool ok13 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
+    const bool ok14 = test_parus_incremental_newline_falls_back_cleanly();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 || !ok13) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 || !ok13 || !ok14) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }
