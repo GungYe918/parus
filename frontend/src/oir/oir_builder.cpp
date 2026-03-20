@@ -1106,15 +1106,21 @@ namespace parus::oir {
                     return parent == "ext" || parent == "core";
                 };
 
-                if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
-                    if (const FieldLayoutDecl* layout = find_field_layout_(src_ty)) {
+                auto emit_core_ext_cstr_ptr_ = [&](ValueId src_value, TypeId want_ptr_ty) -> ValueId {
+                    const TypeId src_value_ty =
+                        ((size_t)src_value < out->values.size()) ? out->values[src_value].ty : kInvalidId;
+                    if (const FieldLayoutDecl* layout = find_field_layout_(src_value_ty)) {
                         for (const auto& m : layout->members) {
                             if (m.name == "ptr_" && m.type != kInvalidId) {
-                                return emit_field(m.type, src, "ptr_");
+                                return emit_field(m.type, src_value, "ptr_");
                             }
                         }
                     }
-                    return emit_field(dst_ty, src, "ptr_");
+                    return emit_field(want_ptr_ty, src_value, "ptr_");
+                };
+
+                if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
+                    return emit_core_ext_cstr_ptr_(src, dst_ty);
                 }
 
                 const auto& dt = types->get(dst_ty);
@@ -2115,24 +2121,24 @@ namespace parus::oir {
                     if (direct_target->abi == FunctionAbi::C &&
                         direct_target->is_c_variadic &&
                         inout_args.size() > n) {
+                        auto emit_core_ext_cstr_ptr_ = [&](ValueId src_value) -> ValueId {
+                            const TypeId src_value_ty =
+                                ((size_t)src_value < out->values.size()) ? out->values[src_value].ty : kInvalidId;
+                            if (const FieldLayoutDecl* layout = find_field_layout_(src_value_ty)) {
+                                for (const auto& m : layout->members) {
+                                    if (m.name == "ptr_" && m.type != kInvalidId) {
+                                        return emit_field(m.type, src_value, "ptr_");
+                                    }
+                                }
+                            }
+                            return emit_field(ptr_type_(), src_value, "ptr_");
+                        };
                         for (size_t ai = n; ai < inout_args.size(); ++ai) {
                             const ValueId v = inout_args[ai];
                             if ((size_t)v >= out->values.size()) continue;
                             const TypeId vty = out->values[v].ty;
                             if (!is_core_ext_cstr_type(vty)) continue;
-                            bool converted = false;
-                            if (const FieldLayoutDecl* layout = find_field_layout_(vty)) {
-                                for (const auto& m : layout->members) {
-                                    if (m.name == "ptr_" && m.type != kInvalidId) {
-                                        inout_args[ai] = emit_field(m.type, v, "ptr_");
-                                        converted = true;
-                                        break;
-                                    }
-                                }
-                            }
-                            if (!converted) {
-                                inout_args[ai] = emit_field(ptr_type_(), v, "ptr_");
-                            }
+                            inout_args[ai] = emit_core_ext_cstr_ptr_(v);
                         }
                     }
                 };

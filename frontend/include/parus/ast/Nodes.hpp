@@ -235,9 +235,15 @@ namespace parus::ast {
     };
 
     struct FieldMember {
+        enum class Visibility : uint8_t {
+            kPublic = 0,
+            kPrivate,
+        };
+
         TypeId type = k_invalid_type;
         TypeNodeId type_node = k_invalid_type_node;
         std::string_view name{};
+        Visibility visibility = Visibility::kPublic;
         Span span{};
     };
 
@@ -578,6 +584,7 @@ namespace parus::ast {
         bool fn_is_operator = false; // true when declared as `operator(...)`
         syntax::TokenKind fn_operator_token = syntax::TokenKind::kError;
         bool fn_operator_is_postfix = false; // used for ++pre/++post disambiguation
+        FieldMember::Visibility member_visibility = FieldMember::Visibility::kPublic;
 
         // ---- switch ----
         uint32_t case_begin = 0;

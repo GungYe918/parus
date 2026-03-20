@@ -154,6 +154,7 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "ClassStaticMutNotAllowed";
             case Code::kClassStaticVarRequiresInitializer: return "ClassStaticVarRequiresInitializer";
             case Code::kClassInheritanceNotAllowed: return "ClassInheritanceNotAllowed";
+            case Code::kClassPrivateMemberAccessDenied: return "ClassPrivateMemberAccessDenied";
             case Code::kActorRequiresSingleDraft: return "ActorRequiresSingleDraft";
             case Code::kActorMemberNotAllowed: return "ActorMemberNotAllowed";
             case Code::kActorDeinitNotAllowed: return "ActorDeinitNotAllowed";
@@ -510,6 +511,7 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "class static mut members are not supported in v0";
             case Code::kClassStaticVarRequiresInitializer: return "class static variable requires an initializer";
             case Code::kClassInheritanceNotAllowed: return "class-to-class inheritance is not allowed; class can only implement proto constraints";
+            case Code::kClassPrivateMemberAccessDenied: return "private class member is only accessible inside its declaring class";
             case Code::kActorRequiresSingleDraft: return "actor must declare exactly one draft block";
             case Code::kActorMemberNotAllowed: return "actor body only allows draft/init/def sub|pub declarations";
             case Code::kActorDeinitNotAllowed: return "actor does not support deinit() in v0";
@@ -872,6 +874,7 @@ namespace parus::diag {
             case Code::kClassStaticMutNotAllowed: return "class static mut 멤버는 v0에서 지원하지 않습니다";
             case Code::kClassStaticVarRequiresInitializer: return "class static 변수는 초기화식이 반드시 필요합니다";
             case Code::kClassInheritanceNotAllowed: return "class 간 상속은 허용되지 않습니다. class는 proto 제약만 구현할 수 있습니다";
+            case Code::kClassPrivateMemberAccessDenied: return "private class 멤버는 선언한 class 내부에서만 접근할 수 있습니다";
             case Code::kActorRequiresSingleDraft: return "actor는 draft 블록을 정확히 1개 선언해야 합니다";
             case Code::kActorMemberNotAllowed: return "actor 본문에는 draft/init/def sub|pub 선언만 허용됩니다";
             case Code::kActorDeinitNotAllowed: return "actor는 v0에서 deinit()을 지원하지 않습니다";

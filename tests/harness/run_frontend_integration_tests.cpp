@@ -1377,6 +1377,122 @@ namespace {
         return ok;
     }
 
+    static bool test_class_private_visibility_enforced() {
+        const std::string ok_src = R"(
+            class SecretBox {
+              private:
+                value: i32;
+                def secret(self) -> i32 {
+                  return self.value;
+                }
+
+              public:
+                init(v: i32) {
+                  self.value = v;
+                }
+
+                def get(self) -> i32 {
+                  return self.secret();
+                }
+
+                static def read_value(b: SecretBox) -> i32 {
+                  return b.value;
+                }
+            }
+
+            def main() -> i32 {
+              let b: SecretBox = SecretBox(21i32);
+              return b.get();
+            }
+        )";
+
+        auto ok_prog = parse_program(ok_src);
+        auto ok_pres = run_passes(ok_prog);
+        auto ok_ty = run_tyck(ok_prog);
+        auto ok_cap = run_cap(ok_prog, ok_pres, ok_ty);
+        auto ok_sir = run_sir(ok_prog, ok_pres, ok_ty);
+
+        const std::string bad_field_src = R"(
+            class SecretBox {
+              private:
+                value: i32;
+
+              public:
+                init(v: i32) {
+                  self.value = v;
+                }
+            }
+
+            def main() -> i32 {
+              let b: SecretBox = SecretBox(1i32);
+              return b.value;
+            }
+        )";
+        auto bad_field = parse_program(bad_field_src);
+        (void)run_passes(bad_field);
+        auto bad_field_ty = run_tyck(bad_field);
+
+        const std::string bad_method_src = R"(
+            class SecretBox {
+              private:
+                def secret(self) -> i32 {
+                  return 7i32;
+                }
+
+              public:
+                init() = default;
+            }
+
+            def main() -> i32 {
+              let b: SecretBox = SecretBox();
+              return b.secret();
+            }
+        )";
+        auto bad_method = parse_program(bad_method_src);
+        (void)run_passes(bad_method);
+        auto bad_method_ty = run_tyck(bad_method);
+
+        const std::string bad_acts_src = R"(
+            class SecretBox {
+              private:
+                value: i32;
+
+              public:
+                init(v: i32) {
+                  self.value = v;
+                }
+            }
+
+            acts for SecretBox {
+              def leak(self) -> i32 {
+                return self.value;
+              }
+            }
+        )";
+        auto bad_acts = parse_program(bad_acts_src);
+        (void)run_passes(bad_acts);
+        auto bad_acts_ty = run_tyck(bad_acts);
+
+        bool ok = true;
+        ok &= require_(!ok_prog.bag.has_error(), "class private members must remain accessible inside declaring class");
+        ok &= require_(ok_ty.errors.empty(), "class private members inside declaring class must not fail typecheck");
+        ok &= require_(ok_cap.ok, "class private members inside declaring class must pass capability check");
+        ok &= require_(ok_sir.cap.ok, "class private members inside declaring class must pass SIR capability check");
+
+        ok &= require_(bad_field.bag.has_code(parus::diag::Code::kClassPrivateMemberAccessDenied),
+            "external private field access must emit ClassPrivateMemberAccessDenied");
+        ok &= require_(!bad_field_ty.errors.empty(), "external private field access must fail typecheck");
+
+        ok &= require_(bad_method.bag.has_code(parus::diag::Code::kClassPrivateMemberAccessDenied),
+            "external private method access must emit ClassPrivateMemberAccessDenied");
+        ok &= require_(!bad_method_ty.errors.empty(), "external private method access must fail typecheck");
+
+        ok &= require_(bad_acts.bag.has_code(parus::diag::Code::kClassPrivateMemberAccessDenied),
+            "acts outside class must not access private class members");
+        ok &= require_(!bad_acts_ty.errors.empty(), "acts outside class must fail typecheck on private member access");
+        return ok;
+    }
+
     static bool test_borrow_read_in_arithmetic_ok() {
         // &i32 파라미터를 산술식에서 읽기 값으로 사용할 수 있어야 한다.
         const std::string src = R"(
@@ -2206,6 +2322,7 @@ int main() {
         {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
         {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
+        {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},

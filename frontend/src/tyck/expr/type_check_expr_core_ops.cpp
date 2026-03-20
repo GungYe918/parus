@@ -1383,6 +1383,13 @@
             for (uint32_t i = fs.field_member_begin; i < fs.field_member_begin + fs.field_member_count; ++i) {
                 const auto& m = ast_.field_members()[i];
                 if (m.name == rhs.text) {
+                    if (fs.kind == ast::StmtKind::kClassDecl &&
+                        is_private_class_field_member_(m) &&
+                        !can_access_class_member_(fsid, m.visibility)) {
+                        diag_(diag::Code::kClassPrivateMemberAccessDenied, rhs.span, rhs.text, fs.name);
+                        err_(rhs.span, "private class member is not accessible here");
+                        return types_.error();
+                    }
                     return m.type;
                 }
             }

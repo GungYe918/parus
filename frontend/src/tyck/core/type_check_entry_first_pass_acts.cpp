@@ -17,6 +17,8 @@
         class_decl_by_type_.clear();
         class_effective_method_map_.clear();
         class_member_fn_sid_set_.clear();
+        class_member_owner_by_stmt_.clear();
+        private_class_member_qname_owner_.clear();
         actor_decl_by_name_.clear();
         actor_decl_by_type_.clear();
         actor_method_map_.clear();
@@ -611,11 +613,15 @@
                         const ast::StmtId msid = kids[s.stmt_begin + i];
                         if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                         const auto& ms = ast_.stmt(msid);
+                        class_member_owner_by_stmt_[msid] = sid;
                         if (ms.kind == ast::StmtKind::kVar) {
                             if (!ms.is_static) continue;
                             std::string vqname = qname;
                             if (!vqname.empty()) vqname += "::";
                             vqname += std::string(ms.name);
+                            if (ms.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                                private_class_member_qname_owner_[vqname] = sid;
+                            }
 
                             ty::TypeId vt = ms.type;
                             if (vt == ty::kInvalidType) vt = types_.error();
@@ -691,6 +697,9 @@
                         fn_qualified_name_by_stmt_[msid] = std::move(mqname);
 
                         const std::string qfn = fn_qualified_name_by_stmt_[msid];
+                        if (mm.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                            private_class_member_qname_owner_[qfn] = sid;
+                        }
                         if (auto existing = sym_.lookup_in_current(qfn)) {
                             const auto& existing_sym = sym_.symbol(*existing);
                             if (existing_sym.kind != sema::SymbolKind::kFn) {

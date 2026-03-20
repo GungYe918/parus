@@ -2117,6 +2117,7 @@
                 const ast::StmtId msid = kids[i];
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
+                class_visibility_owner_stack_.push_back(sid);
                 if (m.kind == ast::StmtKind::kFnDecl) {
                     check_stmt_fn_decl_(msid, m);
                 } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
@@ -2162,6 +2163,7 @@
                         }
                     }
                 }
+                class_visibility_owner_stack_.pop_back();
             }
         }
         sym_.pop_scope();

@@ -398,15 +398,32 @@
         members.reserve(16);
         const uint32_t class_field_member_begin = static_cast<uint32_t>(ast_.field_members().size());
         uint32_t class_field_member_count = 0;
+        ast::FieldMember::Visibility current_visibility = ast::FieldMember::Visibility::kPublic;
         while (!cursor_.at(K::kRBrace) && !cursor_.at(K::kEof) && !is_aborted()) {
             if (cursor_.eat(K::kSemicolon)) continue;
 
             const auto k = cursor_.peek().kind;
+            if (k == K::kIdent && cursor_.peek(1).kind == K::kColon) {
+                const auto label = cursor_.peek().lexeme;
+                if (label == "public" || label == "private") {
+                    current_visibility =
+                        (label == "private")
+                            ? ast::FieldMember::Visibility::kPrivate
+                            : ast::FieldMember::Visibility::kPublic;
+                    cursor_.bump(); // public | private
+                    cursor_.bump(); // :
+                    continue;
+                }
+            }
             const bool lifecycle_start =
                 cursor_.peek().kind == K::kKwInit ||
                 cursor_.peek().kind == K::kKwDeinit;
             if (lifecycle_start) {
-                members.push_back(parse_decl_class_lifecycle_member());
+                const ast::StmtId mid = parse_decl_class_lifecycle_member();
+                if (mid != ast::k_invalid_stmt && static_cast<size_t>(mid) < ast_.stmts().size()) {
+                    ast_.stmt_mut(mid).member_visibility = current_visibility;
+                }
+                members.push_back(mid);
                 continue;
             }
 
@@ -433,6 +450,7 @@
                     ast::StmtId mid = parse_decl_fn();
                     auto& ms = ast_.stmt_mut(mid);
                     if (ms.kind == ast::StmtKind::kFnDecl) {
+                        ms.member_visibility = current_visibility;
                         ms.is_static = true;
                         if (ms.is_export) {
                             diag_report(diag::Code::kUnexpectedToken, ms.span,
@@ -501,6 +519,7 @@
                 ms.is_mut = false;
                 ms.is_static = true;
                 ms.is_const = member_is_const;
+                ms.member_visibility = current_visibility;
                 ms.name = member_name;
                 ms.type = type_id;
                 ms.type_node = type_node;
@@ -533,6 +552,7 @@
                     ms.is_extern = false;
                     ms.link_abi = ast::LinkAbi::kNone;
                 }
+                ms.member_visibility = current_visibility;
                 members.push_back(mid);
                 continue;
             }
@@ -563,6 +583,7 @@
                 fm.type = parsed_ty.id;
                 fm.type_node = parsed_ty.node;
                 fm.name = member_name;
+                fm.visibility = current_visibility;
                 fm.span = span_join(name_tok2.span, end_span);
                 ast_.add_field_member(fm);
                 ++class_field_member_count;

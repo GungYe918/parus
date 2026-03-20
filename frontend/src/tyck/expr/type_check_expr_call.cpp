@@ -656,10 +656,22 @@ namespace parus::tyck {
                                 dot_member_named = true;
 
                                 bool has_self_receiver_candidate = false;
+                                bool had_private_candidate = false;
+                                ast::StmtId class_owner_sid = ast::k_invalid_stmt;
+                                if (auto it = class_decl_by_type_.find(class_owner_t);
+                                    it != class_decl_by_type_.end()) {
+                                    class_owner_sid = it->second;
+                                }
                                 for (const auto sid : mit->second) {
                                     if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) continue;
                                     const auto& m = ast_.stmt(sid);
                                     if (m.kind != ast::StmtKind::kFnDecl) continue;
+                                    if (class_owner_sid != ast::k_invalid_stmt &&
+                                        is_private_class_stmt_member_(sid) &&
+                                        !can_access_class_member_(class_owner_sid, ast::FieldMember::Visibility::kPrivate)) {
+                                        had_private_candidate = true;
+                                        continue;
+                                    }
                                     bool has_self = false;
                                     for (uint32_t pi = 0; pi < m.param_count; ++pi) {
                                         const auto& p = ast_.params()[m.param_begin + pi];
@@ -678,6 +690,11 @@ namespace parus::tyck {
                                     dot_owner_type = class_owner_t;
                                     dot_needs_self_normalization = true;
                                     callee_name = types_.to_string(class_owner_t) + "." + std::string(rhs.text);
+                                } else if (had_private_candidate) {
+                                    diag_(diag::Code::kClassPrivateMemberAccessDenied, rhs.span, rhs.text);
+                                    err_(rhs.span, "private class member is not accessible here");
+                                    check_all_arg_exprs_only();
+                                    return types_.error();
                                 } else {
                                     diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
                                     err_(rhs.span, "dot call requires self receiver on class/proto method");

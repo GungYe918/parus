@@ -1,0 +1,18 @@
+class C {
+  private:
+    x: i32;
+
+  public:
+    init(v: i32) {
+      self.x = v;
+    }
+
+    def get(self) -> i32 {
+      return self.x;
+    }
+}
+
+def main() -> i32 {
+  let c: C = C(42i32);
+  return c.get();
+}

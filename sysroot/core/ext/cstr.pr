@@ -2,9 +2,11 @@ $![Impl::Core];
 
 // Borrowed C string view backed by a raw NUL-terminated pointer.
 export class CStr {
+private:
     ptr_: *const c_char;
     len_: usize;
 
+public:
     // Builds a CStr from raw pointer and cached length metadata.
     init(p: *const c_char, n: usize) {
         self.ptr_ = p;

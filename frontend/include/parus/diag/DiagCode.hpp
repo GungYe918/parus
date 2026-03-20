@@ -148,6 +148,7 @@ namespace parus::diag {
         kClassStaticMutNotAllowed,        // static mut member is not supported in class
         kClassStaticVarRequiresInitializer, // class static var requires initializer
         kClassInheritanceNotAllowed,      // class-to-class inheritance is not allowed (proto only)
+        kClassPrivateMemberAccessDenied,  // private class member is accessed outside the declaring class
         kActorRequiresSingleDraft,        // actor must contain exactly one draft block
         kActorMemberNotAllowed,           // actor body allows only draft/init/def sub|pub/;
         kActorDeinitNotAllowed,           // actor does not support deinit

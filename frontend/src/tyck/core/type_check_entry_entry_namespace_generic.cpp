@@ -33,6 +33,7 @@ namespace parus::tyck {
         pending_int_sym_origin_.clear();
         pending_int_expr_.clear();
         fn_sid_stack_.clear();
+        class_visibility_owner_stack_.clear();
         sym_is_mut_.clear();
         untyped_catch_binder_symbols_.clear();
         acts_default_operator_map_.clear();
@@ -84,6 +85,8 @@ namespace parus::tyck {
         class_decl_by_name_.clear();
         class_decl_by_type_.clear();
         class_qualified_name_by_stmt_.clear();
+        class_member_owner_by_stmt_.clear();
+        private_class_member_qname_owner_.clear();
         proto_decl_by_type_.clear();
         acts_qualified_name_by_stmt_.clear();
         class_member_fn_sid_set_.clear();
@@ -2477,6 +2480,7 @@ namespace parus::tyck {
                 const ast::StmtId msid = kids[i];
                 if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
                 const auto& m = ast_.stmt(msid);
+                class_member_owner_by_stmt_[msid] = inst_sid;
                 if (m.kind == ast::StmtKind::kFnDecl) {
                     if (m.fn_generic_param_count > 0) {
                         generic_fn_template_sid_set_.insert(msid);
@@ -2487,6 +2491,9 @@ namespace parus::tyck {
                     if (!mqname.empty()) mqname += "::";
                     mqname += std::string(m.name);
                     fn_qualified_name_by_stmt_[msid] = mqname;
+                    if (m.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                        private_class_member_qname_owner_[mqname] = inst_sid;
+                    }
                     fn_decl_by_name_[mqname].push_back(msid);
                     if (!m.is_static) {
                         class_effective_method_map_[inst_type][std::string(m.name)].push_back(msid);
@@ -2501,6 +2508,9 @@ namespace parus::tyck {
                     std::string vqname = inst_qname;
                     if (!vqname.empty()) vqname += "::";
                     vqname += std::string(m.name);
+                    if (m.member_visibility == ast::FieldMember::Visibility::kPrivate) {
+                        private_class_member_qname_owner_[vqname] = inst_sid;
+                    }
                     const ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
                     if (auto existing = sym_.lookup_in_current(vqname)) {
                         (void)sym_.update_declared_type(*existing, vt);
@@ -3091,6 +3101,26 @@ namespace parus::tyck {
         return out;
     }
 
+    bool TypeChecker::can_access_class_member_(
+        ast::StmtId owner_class_sid,
+        ast::FieldMember::Visibility visibility
+    ) const {
+        if (visibility != ast::FieldMember::Visibility::kPrivate) return true;
+        return !class_visibility_owner_stack_.empty() &&
+               class_visibility_owner_stack_.back() == owner_class_sid;
+    }
+
+    bool TypeChecker::is_private_class_stmt_member_(ast::StmtId member_sid) const {
+        if (member_sid == ast::k_invalid_stmt || static_cast<size_t>(member_sid) >= ast_.stmts().size()) {
+            return false;
+        }
+        return ast_.stmt(member_sid).member_visibility == ast::FieldMember::Visibility::kPrivate;
+    }
+
+    bool TypeChecker::is_private_class_field_member_(const ast::FieldMember& member) const {
+        return member.visibility == ast::FieldMember::Visibility::kPrivate;
+    }
+
     std::optional<uint32_t> TypeChecker::lookup_symbol_(std::string_view name) const {
         if (name.empty()) return std::nullopt;
 
@@ -3099,7 +3129,18 @@ namespace parus::tyck {
             key = *rewritten;
         }
 
-        if (auto sid = sym_.lookup(key)) {
+        auto lookup_visible = [&](std::string_view qname) -> std::optional<uint32_t> {
+            auto sid = sym_.lookup(qname);
+            if (!sid.has_value()) return std::nullopt;
+            if (auto it = private_class_member_qname_owner_.find(std::string(qname));
+                it != private_class_member_qname_owner_.end() &&
+                !can_access_class_member_(it->second, ast::FieldMember::Visibility::kPrivate)) {
+                return std::nullopt;
+            }
+            return sid;
+        };
+
+        if (auto sid = lookup_visible(key)) {
             return sid;
         }
 
@@ -3113,7 +3154,7 @@ namespace parus::tyck {
             }
             qname += "::";
             qname += key;
-            if (auto sid = sym_.lookup(qname)) {
+            if (auto sid = lookup_visible(qname)) {
                 return sid;
             }
         }

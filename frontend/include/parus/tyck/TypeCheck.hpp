@@ -275,6 +275,9 @@ namespace parus::tyck {
         bool type_needs_drop_(ty::TypeId t) const;
         bool is_move_only_type_(ty::TypeId t) const;
         bool is_trivial_copy_clone_type_(ty::TypeId t) const;
+        bool can_access_class_member_(ast::StmtId owner_class_sid, ast::FieldMember::Visibility visibility) const;
+        bool is_private_class_stmt_member_(ast::StmtId member_sid) const;
+        bool is_private_class_field_member_(const ast::FieldMember& member) const;
 
         bool in_loop_() const { return !break_target_stack_.empty(); }
         bool current_break_target_accepts_value_() const {
@@ -335,6 +338,7 @@ namespace parus::tyck {
         };
         FnCtx fn_ctx_{};
         std::vector<ast::StmtId> fn_sid_stack_;
+        std::vector<ast::StmtId> class_visibility_owner_stack_;
         bool in_try_expr_context_ = false;
 
         // 심볼 테이블
@@ -516,6 +520,8 @@ namespace parus::tyck {
         std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> class_effective_method_map_;
         std::unordered_set<ast::StmtId> class_member_fn_sid_set_;
+        std::unordered_map<ast::StmtId, ast::StmtId> class_member_owner_by_stmt_;
+        std::unordered_map<std::string, ast::StmtId> private_class_member_qname_owner_;
         std::unordered_map<std::string, ast::StmtId> actor_decl_by_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> actor_decl_by_type_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ast::StmtId>>> actor_method_map_;
