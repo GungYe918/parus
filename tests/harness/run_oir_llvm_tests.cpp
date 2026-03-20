@@ -48,6 +48,16 @@ namespace {
         return false;
     }
 
+    static bool messages_contain_(
+        const std::vector<parus::backend::CompileMessage>& messages,
+        std::string_view needle
+    ) {
+        for (const auto& m : messages) {
+            if (m.text.find(needle) != std::string::npos) return true;
+        }
+        return false;
+    }
+
     static bool contains_unsafe_null_aggregate_load_(const std::string& ir) {
         size_t pos = 0;
         while (pos < ir.size()) {
@@ -1241,6 +1251,125 @@ namespace {
         return emit_object_for_test_case_(lowered.llvm_ir, "nullable_lift_coalesce_patterns");
     }
 
+    static bool test_tag_only_enum_scalar_lowering_() {
+        const std::string src = R"(
+            enum Ordering {
+                case Less,
+                case Equal,
+                case Greater,
+            };
+
+            def choose(x: i32) -> Ordering {
+                if (x < 0i32) { return Ordering::Less(); }
+                if (x > 0i32) { return Ordering::Greater(); }
+                return Ordering::Equal();
+            }
+
+            def main() -> i32 {
+                let ord: Ordering = choose(1i32);
+                switch (ord) {
+                case Ordering::Greater: { return 42i32; }
+                default: {}
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "tag-only enum source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(lowered.ok, "tag-only enum lowering must succeed");
+        ok &= require_(lowered.llvm_ir.find("[32 x i8]") == std::string::npos,
+                       "tag-only enum lowering must not fall back to generic 32-byte blob ABI");
+        ok &= require_(lowered.llvm_ir.find("[4 x i8]") == std::string::npos,
+                       "tag-only enum lowering should use scalar tag ABI instead of byte blob aggregate");
+        ok &= require_(lowered.llvm_ir.find("store i32 ") != std::string::npos,
+                       "tag-only enum lowering must materialize scalar enum tags");
+        return ok;
+    }
+
+    static bool test_missing_array_element_layout_fails_closed_() {
+        const std::string src = R"(
+            struct Pair {
+                lhs: i32;
+                rhs: i32;
+            };
+
+            def main() -> i32 {
+                let xs: Pair[2] = [
+                    Pair { lhs: 1i32, rhs: 2i32 },
+                    Pair { lhs: 3i32, rhs: 4i32 },
+                ];
+                return xs[1i32].rhs;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "array element layout source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        p->oir.mod.fields.clear();
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(!lowered.ok, "missing aggregate layout in array indexing must fail closed");
+        ok &= require_(messages_contain_(lowered.messages, "requires concrete layout"),
+                       "missing aggregate layout must report a concrete-layout lowering error");
+        return ok;
+    }
+
+    static bool test_missing_tag_only_enum_layout_fails_closed_() {
+        const std::string src = R"(
+            enum E {
+                case A,
+                case B,
+            };
+
+            def choose(flag: bool) -> E {
+                if (flag) { return E::A(); }
+                return E::B();
+            }
+
+            def main() -> i32 {
+                let e: E = choose(true);
+                switch (e) {
+                case E::A: { return 42i32; }
+                default: {}
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_oir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(p.has_value(), "tag-only enum fail-closed source must pass frontend->OIR pipeline");
+        if (!ok) return false;
+
+        p->oir.mod.fields.clear();
+        const auto lowered = parus::backend::aot::lower_oir_to_llvm_ir_text(
+            p->oir.mod,
+            p->prog.types,
+            parus::backend::aot::LLVMIRLoweringOptions{.llvm_lane_major = 20}
+        );
+
+        ok &= require_(!lowered.ok, "missing enum layout must fail closed during LLVM lowering");
+        ok &= require_(messages_contain_(lowered.messages, "requires concrete layout"),
+                       "missing enum layout must report a concrete-layout lowering error");
+        return ok;
+    }
+
     /// @brief 오버로딩/연산자 오버로딩 소스를 다수 순회하며 LLVM-IR + 오브젝트 생성을 함께 검증한다.
     static bool test_overload_object_emission_matrix_() {
         const std::vector<std::string> sources = {
@@ -2223,6 +2352,9 @@ int main() {
         {"unary_not_and_bitnot_llvm_patterns", test_unary_not_and_bitnot_llvm_patterns_},
         {"field_literal_lowering", test_field_literal_lowering_},
         {"nullable_lift_and_coalesce_lowering", test_nullable_lift_and_coalesce_lowering_},
+        {"tag_only_enum_scalar_lowering", test_tag_only_enum_scalar_lowering_},
+        {"missing_array_element_layout_fails_closed", test_missing_array_element_layout_fails_closed_},
+        {"missing_tag_only_enum_layout_fails_closed", test_missing_tag_only_enum_layout_fails_closed_},
         {"overload_object_emission_matrix", test_overload_object_emission_matrix_},
         {"generic_fn_instantiation_llvm_symbols", test_generic_fn_instantiation_llvm_symbols_},
         {"generic_class_materialization_llvm_symbols", test_generic_class_materialization_llvm_symbols_},

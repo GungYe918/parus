@@ -1793,6 +1793,50 @@ namespace {
         return out;
     }
 
+    std::string strip_module_prefix_(
+        std::string_view path,
+        std::string_view module_head
+    ) {
+        if (path.empty()) return {};
+        if (module_head.empty()) return std::string(path);
+        if (path == module_head) return {};
+
+        const std::string prefix = std::string(module_head) + "::";
+        if (path.starts_with(prefix)) {
+            return std::string(path.substr(prefix.size()));
+        }
+        return std::string(path);
+    }
+
+    std::string short_core_module_head_(
+        std::string_view decl_bundle_name,
+        std::string_view module_head
+    ) {
+        if (decl_bundle_name != "core") return {};
+        if (!module_head.starts_with("core::")) return {};
+        return std::string(module_head.substr(std::string_view("core::").size()));
+    }
+
+    bool same_external_module_head_(
+        std::string_view current_module_head,
+        std::string_view external_module_head,
+        std::string_view decl_bundle_name
+    ) {
+        if (current_module_head.empty() || external_module_head.empty()) return false;
+        if (current_module_head == external_module_head) return true;
+
+        const std::string short_head = short_core_module_head_(decl_bundle_name, external_module_head);
+        if (!short_head.empty() && current_module_head == short_head) return true;
+
+        if (decl_bundle_name == "core" &&
+            current_module_head.starts_with("core::") &&
+            !short_head.empty() &&
+            current_module_head.substr(std::string_view("core::").size()) == short_head) {
+            return true;
+        }
+        return false;
+    }
+
     uint64_t file_mtime_tick_(const std::filesystem::path& p) {
         std::error_code ec{};
         const auto t = std::filesystem::last_write_time(p, ec);
@@ -2569,12 +2613,40 @@ namespace {
                 const bool already_prefixed =
                     lookup_path == module_head ||
                     lookup_path.starts_with(prefix);
-                const bool same_module = same_bundle && module_head == current_module_head;
-                if (!same_module && !already_prefixed) {
+                if (!already_prefixed) {
                     lookup_path = prefix + lookup_path;
                 }
             }
             const std::string lookup_path_for_nav = lookup_path;
+            const std::string local = strip_module_prefix_(lookup_path_for_nav, module_head);
+            const std::string short_head = short_core_module_head_(bundle_name, module_head);
+            const bool same_module =
+                same_bundle && same_external_module_head_(current_module_head, module_head, bundle_name);
+
+            std::vector<std::string> nav_paths{};
+            nav_paths.reserve(5);
+            if (!lookup_path_for_nav.empty()) nav_paths.push_back(lookup_path_for_nav);
+            if (!module_head.empty() && !local.empty()) {
+                nav_paths.push_back(module_head + "::" + local);
+                if (same_module) {
+                    nav_paths.push_back(local);
+                }
+                if (!short_head.empty()) {
+                    nav_paths.push_back(short_head + "::" + local);
+                }
+                if (!bundle_name.empty()) {
+                    std::string qualified_module = module_head;
+                    const std::string bundle_prefix = bundle_name + "::";
+                    if (!(qualified_module == bundle_name || qualified_module.starts_with(bundle_prefix))) {
+                        qualified_module = bundle_prefix + qualified_module;
+                    }
+                    nav_paths.push_back(qualified_module + "::" + local);
+                }
+            } else if (!bundle_name.empty() && !lookup_path_for_nav.empty()) {
+                nav_paths.push_back(std::string(bundle_name) + "::" + lookup_path_for_nav);
+            }
+            std::sort(nav_paths.begin(), nav_paths.end());
+            nav_paths.erase(std::unique(nav_paths.begin(), nav_paths.end()), nav_paths.end());
 
             parus::passes::NameResolveOptions::ExternalExport ex{};
             ex.kind = *mapped_kind;
@@ -2614,22 +2686,8 @@ namespace {
                         (*out_decl_locs)[key].push_back(loc);
                     };
 
-                    add_decl(lookup_path_for_nav);
-                    if (!module_head.empty()) {
-                        const std::string prefix = module_head + "::";
-                        const bool already_prefixed =
-                            lookup_path_for_nav == module_head ||
-                            lookup_path_for_nav.starts_with(prefix);
-                        if (!already_prefixed) {
-                            add_decl(prefix + lookup_path_for_nav);
-                        }
-                        if (same_bundle && current_module_head == module_head) {
-                            std::string local = lookup_path_for_nav;
-                            if (local.starts_with(prefix)) {
-                                local.erase(0, prefix.size());
-                            }
-                            add_decl(local);
-                        }
+                    for (const auto& key : nav_paths) {
+                        add_decl(key);
                     }
                 }
             }
@@ -2719,10 +2777,14 @@ namespace {
         ctx.bundle_name = current_unit->bundle_name;
         if (auto mh = current_unit->module_head_by_source.find(normalized_current);
             mh != current_unit->module_head_by_source.end() && !mh->second.empty()) {
-            ctx.current_module_head = mh->second;
+            ctx.current_module_head =
+                normalize_core_public_module_head_(current_unit->bundle_name, mh->second);
         } else {
             ctx.current_module_head =
-                compute_module_head_(config_lei->parent_path().string(), normalized_current, current_unit->bundle_name);
+                normalize_core_public_module_head_(
+                    current_unit->bundle_name,
+                    compute_module_head_(config_lei->parent_path().string(), normalized_current, current_unit->bundle_name)
+                );
         }
         ctx.current_source_dir_norm = parent_dir_norm_(normalized_current);
 
@@ -2884,6 +2946,8 @@ namespace {
                     }
                 }
                 if (fallback.current_module_head.empty()) fallback.current_module_head = "core";
+                fallback.current_module_head =
+                    normalize_core_public_module_head_("core", fallback.current_module_head);
                 lint_ctx_for_doc = std::move(fallback);
             }
         }

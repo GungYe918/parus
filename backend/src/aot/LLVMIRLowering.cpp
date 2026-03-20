@@ -140,6 +140,116 @@ namespace parus::backend::aot {
             return "add i64 0, 0";
         }
 
+        bool is_core_ext_cstr_type_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid
+        ) {
+            if (tid == parus::ty::kInvalidType) return false;
+            const auto& tt = types.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) return false;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!types.decompose_named_user(tid, path, args)) return false;
+            if (!args.empty() || path.empty()) return false;
+            if (path.back() != "CStr") return false;
+            if (path.size() == 1) return true;
+            const std::string_view parent = path[path.size() - 2];
+            return parent == "ext" || parent == "core";
+        }
+
+        std::vector<std::string> named_user_type_key_variants_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid
+        ) {
+            std::vector<std::string> out{};
+            if (tid == parus::ty::kInvalidType) return out;
+            const auto& tt = types.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) return out;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!types.decompose_named_user(tid, path, args) || path.empty() || !args.empty()) {
+                return out;
+            }
+
+            for (size_t start = 0; start < path.size(); ++start) {
+                std::string joined;
+                for (size_t i = start; i < path.size(); ++i) {
+                    if (i > start) joined += "::";
+                    joined += std::string(path[i]);
+                }
+                if (!joined.empty()) out.push_back(std::move(joined));
+            }
+
+            std::sort(out.begin(), out.end());
+            out.erase(std::unique(out.begin(), out.end()), out.end());
+            return out;
+        }
+
+        std::optional<std::string> core_ext_builtin_alias_llvm_ty_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid
+        ) {
+            if (tid == parus::ty::kInvalidType) return std::nullopt;
+            const auto& tt = types.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) return std::nullopt;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!types.decompose_named_user(tid, path, args)) return std::nullopt;
+            if (!args.empty() || path.empty()) return std::nullopt;
+            if (path.size() > 1) {
+                const std::string_view parent = path[path.size() - 2];
+                if (parent != "ext" && parent != "core") return std::nullopt;
+            }
+
+            const std::string_view leaf = path.back();
+            if (leaf == "c_void") return std::string("void");
+            if (leaf == "c_char" || leaf == "c_schar" || leaf == "c_uchar" ||
+                leaf == "i8" || leaf == "u8") {
+                return std::string("i8");
+            }
+            if (leaf == "c_short" || leaf == "c_ushort" || leaf == "i16" || leaf == "u16") {
+                return std::string("i16");
+            }
+            if (leaf == "c_int" || leaf == "c_uint" || leaf == "i32" || leaf == "u32") {
+                return std::string("i32");
+            }
+            if (leaf == "c_long" || leaf == "c_ulong") {
+#if defined(_WIN64)
+                return std::string("i32");
+#else
+                return std::string("i64");
+#endif
+            }
+            if (leaf == "c_longlong" || leaf == "c_ulonglong" || leaf == "i64" || leaf == "u64" ||
+                leaf == "isize" || leaf == "usize" || leaf == "c_size" || leaf == "c_ssize" ||
+                leaf == "c_ptrdiff") {
+                return std::string("i64");
+            }
+            if (leaf == "i128" || leaf == "u128") return std::string("i128");
+            if (leaf == "c_float" || leaf == "f32") return std::string("float");
+            if (leaf == "c_double" || leaf == "f64") return std::string("double");
+            if (leaf == "vaList") return std::string("ptr");
+            return std::nullopt;
+        }
+
+        std::optional<uint64_t> core_ext_builtin_alias_size_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid
+        ) {
+            const auto llvm_ty = core_ext_builtin_alias_llvm_ty_(types, tid);
+            if (!llvm_ty.has_value()) return std::nullopt;
+            if (*llvm_ty == "void") return uint64_t{1};
+            if (*llvm_ty == "i8") return uint64_t{1};
+            if (*llvm_ty == "i16") return uint64_t{2};
+            if (*llvm_ty == "i32" || *llvm_ty == "float") return uint64_t{4};
+            if (*llvm_ty == "i64" || *llvm_ty == "double" || *llvm_ty == "ptr") return uint64_t{8};
+            if (*llvm_ty == "i128" || *llvm_ty == "fp128") return uint64_t{16};
+            return std::nullopt;
+        }
+
         /// @brief LLVM 타입 문자열이 aggregate(구조체/배열)인지 검사한다.
         bool is_aggregate_llvm_ty_(const std::string& ty) {
             if (ty.empty()) return false;
@@ -169,7 +279,8 @@ namespace parus::backend::aot {
             parus::ty::TypeId tid,
             uint32_t depth,
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
-            const std::unordered_set<parus::ty::TypeId>* actor_types
+            const std::unordered_set<parus::ty::TypeId>* actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
         ) {
             if (tid == parus::ty::kInvalidType) return "i64";
             if (depth > 8) return "i64";
@@ -234,13 +345,27 @@ namespace parus::backend::aot {
                     return "i64";
 
                 case K::kOptional: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts, actor_types);
+                    std::string elem = map_type_rec_(
+                        types,
+                        t.elem,
+                        depth + 1,
+                        named_layouts,
+                        actor_types,
+                        scalar_enum_types
+                    );
                     if (elem == "void") elem = "i8";
                     return "{ i1, " + elem + " }";
                 }
 
                 case K::kArray: {
-                    std::string elem = map_type_rec_(types, t.elem, depth + 1, named_layouts, actor_types);
+                    std::string elem = map_type_rec_(
+                        types,
+                        t.elem,
+                        depth + 1,
+                        named_layouts,
+                        actor_types,
+                        scalar_enum_types
+                    );
                     if (elem == "void") elem = "i8";
                     if (t.array_has_size) {
                         return "[" + std::to_string(t.array_size) + " x " + elem + "]";
@@ -256,6 +381,18 @@ namespace parus::backend::aot {
                     return "ptr";
 
                 case K::kNamedUser:
+                    if (is_core_ext_cstr_type_(types, tid)) {
+                        return "{ ptr, i64 }";
+                    }
+                    if (const auto alias_ty = core_ext_builtin_alias_llvm_ty_(types, tid); alias_ty.has_value()) {
+                        return *alias_ty;
+                    }
+                    if (scalar_enum_types != nullptr) {
+                        auto enum_it = scalar_enum_types->find(tid);
+                        if (enum_it != scalar_enum_types->end()) {
+                            return enum_it->second;
+                        }
+                    }
                     if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
                         return "ptr";
                     }
@@ -277,9 +414,107 @@ namespace parus::backend::aot {
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr,
-            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr
+            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types = nullptr
         ) {
-            return map_type_rec_(types, tid, 0, named_layouts, actor_types);
+            return map_type_rec_(types, tid, 0, named_layouts, actor_types, scalar_enum_types);
+        }
+
+        bool named_user_has_concrete_layout_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
+            const std::unordered_set<parus::ty::TypeId>* actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
+        ) {
+            if (tid == parus::ty::kInvalidType) return false;
+            if (is_core_ext_cstr_type_(types, tid)) return true;
+            if (core_ext_builtin_alias_llvm_ty_(types, tid).has_value()) return true;
+            if (scalar_enum_types != nullptr && scalar_enum_types->find(tid) != scalar_enum_types->end()) {
+                return true;
+            }
+            if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
+                return true;
+            }
+            if (named_layouts != nullptr && named_layouts->find(tid) != named_layouts->end()) {
+                return true;
+            }
+            return false;
+        }
+
+        bool type_has_concrete_storage_shape_rec_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            uint32_t depth,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
+            const std::unordered_set<parus::ty::TypeId>* actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
+        ) {
+            if (tid == parus::ty::kInvalidType) return false;
+            if (depth > 8) return false;
+
+            const auto& t = types.get(tid);
+            using K = parus::ty::Kind;
+            switch (t.kind) {
+                case K::kError:
+                case K::kBuiltin:
+                case K::kPtr:
+                case K::kBorrow:
+                case K::kEscape:
+                case K::kFn:
+                    return true;
+
+                case K::kOptional:
+                    return t.elem != parus::ty::kInvalidType &&
+                        type_has_concrete_storage_shape_rec_(
+                            types,
+                            t.elem,
+                            depth + 1,
+                            named_layouts,
+                            actor_types,
+                            scalar_enum_types
+                        );
+
+                case K::kArray:
+                    if (!t.array_has_size) return true;
+                    return t.elem != parus::ty::kInvalidType &&
+                        type_has_concrete_storage_shape_rec_(
+                            types,
+                            t.elem,
+                            depth + 1,
+                            named_layouts,
+                            actor_types,
+                            scalar_enum_types
+                        );
+
+                case K::kNamedUser:
+                    return named_user_has_concrete_layout_(
+                        types,
+                        tid,
+                        named_layouts,
+                        actor_types,
+                        scalar_enum_types
+                    );
+            }
+
+            return false;
+        }
+
+        bool type_has_concrete_storage_shape_(
+            const parus::ty::TypePool& types,
+            parus::ty::TypeId tid,
+            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
+            const std::unordered_set<parus::ty::TypeId>* actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
+        ) {
+            return type_has_concrete_storage_shape_rec_(
+                types,
+                tid,
+                0,
+                named_layouts,
+                actor_types,
+                scalar_enum_types
+            );
         }
 
         /// @brief 타입의 대략적 바이트 크기를 계산한다.
@@ -288,7 +523,8 @@ namespace parus::backend::aot {
             parus::ty::TypeId tid,
             uint32_t depth,
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
-            const std::unordered_set<parus::ty::TypeId>* actor_types
+            const std::unordered_set<parus::ty::TypeId>* actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
         ) {
             if (tid == parus::ty::kInvalidType) return 8;
             if (depth > 8) return 8;
@@ -356,9 +592,29 @@ namespace parus::backend::aot {
                     }
                     return 8;
                 case K::kOptional:
-                    return std::max<uint64_t>(2, 1 + type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts, actor_types));
+                    return std::max<uint64_t>(
+                        2,
+                        1 + type_size_bytes_rec_(
+                            types,
+                            t.elem,
+                            depth + 1,
+                            named_layouts,
+                            actor_types,
+                            scalar_enum_types
+                        )
+                    );
                 case K::kArray: {
-                    const uint64_t elem = std::max<uint64_t>(1, type_size_bytes_rec_(types, t.elem, depth + 1, named_layouts, actor_types));
+                    const uint64_t elem = std::max<uint64_t>(
+                        1,
+                        type_size_bytes_rec_(
+                            types,
+                            t.elem,
+                            depth + 1,
+                            named_layouts,
+                            actor_types,
+                            scalar_enum_types
+                        )
+                    );
                     if (t.array_has_size) return elem * std::max<uint64_t>(1, t.array_size);
                     return 16; // {ptr,len}
                 }
@@ -368,6 +624,22 @@ namespace parus::backend::aot {
                 case K::kFn:
                     return 8;
                 case K::kNamedUser: {
+                    if (is_core_ext_cstr_type_(types, tid)) {
+                        return 16;
+                    }
+                    if (const auto alias_size = core_ext_builtin_alias_size_(types, tid); alias_size.has_value()) {
+                        return *alias_size;
+                    }
+                    if (scalar_enum_types != nullptr) {
+                        auto enum_it = scalar_enum_types->find(tid);
+                        if (enum_it != scalar_enum_types->end()) {
+                            if (enum_it->second == "i8") return 1;
+                            if (enum_it->second == "i16") return 2;
+                            if (enum_it->second == "i32") return 4;
+                            if (enum_it->second == "i64") return 8;
+                            if (enum_it->second == "i128") return 16;
+                        }
+                    }
                     if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
                         return 8;
                     }
@@ -388,9 +660,10 @@ namespace parus::backend::aot {
             const parus::ty::TypePool& types,
             parus::ty::TypeId tid,
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr,
-            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr
+            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr,
+            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types = nullptr
         ) {
-            return type_size_bytes_rec_(types, tid, 0, named_layouts, actor_types);
+            return type_size_bytes_rec_(types, tid, 0, named_layouts, actor_types, scalar_enum_types);
         }
 
         /// @brief OIR 모듈에서 value 사용 문맥(값/슬롯)을 수집한다.
@@ -575,11 +848,12 @@ namespace parus::backend::aot {
             const parus::oir::Module& m,
             const parus::ty::TypePool& types,
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
-            const std::unordered_set<parus::ty::TypeId>& actor_types
+            const std::unordered_set<parus::ty::TypeId>& actor_types,
+            const std::unordered_map<parus::ty::TypeId, std::string>& scalar_enum_types
         ) {
             std::vector<std::string> out(m.values.size(), "i64");
             for (size_t i = 0; i < m.values.size(); ++i) {
-                out[i] = map_type_(types, m.values[i].ty, &named_layouts, &actor_types);
+                out[i] = map_type_(types, m.values[i].ty, &named_layouts, &actor_types, &scalar_enum_types);
                 if (out[i] == "void") {
                     // LLVM SSA value는 void 타입을 가질 수 없다.
                     out[i] = "i8";
@@ -616,7 +890,7 @@ namespace parus::backend::aot {
                 }
                 if (std::holds_alternative<parus::oir::InstCast>(inst.data)) {
                     const auto& c = std::get<parus::oir::InstCast>(inst.data);
-                    out[inst.result] = map_type_(types, c.to, &named_layouts, &actor_types);
+                    out[inst.result] = map_type_(types, c.to, &named_layouts, &actor_types, &scalar_enum_types);
                     if (is_aggregate_llvm_ty_(out[inst.result])) out[inst.result] = "ptr";
                 }
             }
@@ -705,24 +979,28 @@ namespace parus::backend::aot {
                 const std::vector<std::string>& value_types,
                 const std::vector<ValueUseInfo>& value_uses,
                 const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts,
+                const std::unordered_map<parus::ty::TypeId, std::string>& scalar_enum_types,
                 const std::unordered_set<parus::ty::TypeId>& actor_types,
                 const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets,
                 const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants,
                 const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks,
                 bool* saw_invalid_callee_call,
-                bool* need_bounds_check_stub
+                bool* need_bounds_check_stub,
+                std::vector<std::string>* lowering_errors
             ) : m_(m),
                 types_(types),
                 fn_(def),
                 value_types_(value_types),
                 value_uses_(value_uses),
                 named_layouts_(named_layouts),
+                scalar_enum_types_(scalar_enum_types),
                 actor_types_(actor_types),
                 field_offsets_(field_offsets),
                 text_constants_(text_constants),
                 drop_thunks_(drop_thunks),
                 saw_invalid_callee_call_(saw_invalid_callee_call),
-                need_bounds_check_stub_(need_bounds_check_stub) {
+                need_bounds_check_stub_(need_bounds_check_stub),
+                lowering_errors_(lowering_errors) {
                 for (auto bb : fn_.blocks) owned_blocks_.insert(bb);
                 build_incomings_();
             }
@@ -730,7 +1008,9 @@ namespace parus::backend::aot {
             /// @brief 함수 본문을 생성한다.
             std::string emit(bool& need_call_stub) {
                 std::ostringstream os;
-                const std::string ret_ty = map_type_(types_, fn_.ret_ty, &named_layouts_, &actor_types_);
+                const std::string ret_ty =
+                    map_type_(types_, fn_.ret_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                (void)require_storage_shape_(fn_.ret_ty, "function return");
                 const std::string sym = sanitize_symbol_(fn_.name);
 
                 // extern 함수는 본문 없이 선언으로만 내린다.
@@ -799,18 +1079,19 @@ namespace parus::backend::aot {
             const std::vector<std::string>& value_types_;
             const std::vector<ValueUseInfo>& value_uses_;
             const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>& named_layouts_;
+            const std::unordered_map<parus::ty::TypeId, std::string>& scalar_enum_types_;
             const std::unordered_set<parus::ty::TypeId>& actor_types_;
             const std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>>& field_offsets_;
             const std::unordered_map<parus::oir::InstId, TextConstantInfo>& text_constants_;
             const std::unordered_map<parus::ty::TypeId, std::string>* drop_thunks_ = nullptr;
             bool* saw_invalid_callee_call_ = nullptr;
             bool* need_bounds_check_stub_ = nullptr;
+            std::vector<std::string>* lowering_errors_ = nullptr;
 
             std::unordered_set<parus::oir::BlockId> owned_blocks_{};
             std::unordered_map<parus::oir::BlockId, std::vector<IncomingEdge>> incomings_{};
             std::unordered_map<parus::oir::ValueId, std::string> address_ref_by_value_{};
             std::unordered_map<uint64_t, uint64_t> field_offset_cache_{};
-            std::unordered_map<parus::ty::TypeId, uint64_t> next_field_offset_{};
             uint32_t temp_seq_ = 0;
             bool need_call_stub_ = false;
 
@@ -839,6 +1120,49 @@ namespace parus::backend::aot {
                 }
             }
 
+            void record_lowering_error_(std::string message) const {
+                if (lowering_errors_ == nullptr || message.empty()) return;
+                if (std::find(lowering_errors_->begin(), lowering_errors_->end(), message) ==
+                    lowering_errors_->end()) {
+                    lowering_errors_->push_back(std::move(message));
+                }
+            }
+
+            bool type_has_concrete_storage_shape_(parus::ty::TypeId tid) const {
+                return parus::backend::aot::type_has_concrete_storage_shape_(
+                    types_,
+                    tid,
+                    &named_layouts_,
+                    &actor_types_,
+                    &scalar_enum_types_
+                );
+            }
+
+            bool require_storage_shape_(parus::ty::TypeId tid, std::string_view context) const {
+                if (tid == parus::ty::kInvalidType) return false;
+                if (type_has_concrete_storage_shape_(tid)) return true;
+                record_lowering_error_(
+                    "OIR->LLVM lowering error: " + std::string(context) +
+                    " requires concrete layout for type '" + types_.to_string(tid) + "'"
+                );
+                return false;
+            }
+
+            void emit_default_value_result_(std::ostringstream& os, parus::oir::ValueId v) const {
+                if (v == parus::oir::kInvalidId) return;
+                const std::string rty = value_ty_(v);
+                if (rty == "ptr") {
+                    os << "  " << vref_(v) << " = bitcast ptr null to ptr\n";
+                } else if (is_int_ty_(rty)) {
+                    os << "  " << vref_(v) << " = add " << rty << " 0, 0\n";
+                } else if (is_float_ty_(rty)) {
+                    os << "  " << vref_(v) << " = fadd " << rty << " "
+                       << zero_literal_(rty) << ", " << zero_literal_(rty) << "\n";
+                } else {
+                    os << "  " << vref_(v) << " = add i64 0, 0\n";
+                }
+            }
+
             /// @brief 새 임시 SSA 이름을 생성한다.
             std::string next_tmp_() {
                 return "%tmp" + std::to_string(temp_seq_++);
@@ -858,8 +1182,9 @@ namespace parus::backend::aot {
                 }
 
                 const auto tid = value_type_id_(v);
-                std::string ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                std::string ty = map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                 if (ty == "void") ty = "i8";
+                (void)require_storage_shape_(tid, "function ABI value");
                 return ty;
             }
 
@@ -921,6 +1246,25 @@ namespace parus::backend::aot {
                 return m_.globals[gr->global].type;
             }
 
+            std::optional<std::pair<parus::ty::TypeId, std::string>> scalar_enum_tag_info_(
+                parus::ty::TypeId tid
+            ) const {
+                using K = parus::ty::Kind;
+                parus::ty::TypeId cur = tid;
+                for (uint32_t i = 0; i < 6 && cur != parus::ty::kInvalidType; ++i) {
+                    const auto& t = types_.get(cur);
+                    if ((t.kind == K::kPtr || t.kind == K::kBorrow || t.kind == K::kEscape) &&
+                        t.elem != parus::ty::kInvalidType) {
+                        cur = t.elem;
+                        continue;
+                    }
+                    break;
+                }
+                auto it = scalar_enum_types_.find(cur);
+                if (it == scalar_enum_types_.end()) return std::nullopt;
+                return std::pair<parus::ty::TypeId, std::string>{cur, it->second};
+            }
+
             struct ArrayViewInfo {
                 parus::ty::TypeId array_type = parus::ty::kInvalidType;
                 std::string data_ptr{};
@@ -961,6 +1305,7 @@ namespace parus::backend::aot {
                 out.array_type = arr_tid;
 
                 const std::string base_ptr = slot_ptr_ref_(os, base);
+                if (base_ptr == "null") return std::nullopt;
                 if (at.array_has_size) {
                     out.data_ptr = base_ptr;
                     out.has_static_len = true;
@@ -970,7 +1315,8 @@ namespace parus::backend::aot {
                 }
 
                 // unsized array view representation: { ptr, i64 }
-                const std::string view_ty = map_type_(types_, arr_tid, &named_layouts_, &actor_types_);
+                const std::string view_ty =
+                    map_type_(types_, arr_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                 if (!is_aggregate_llvm_ty_(view_ty)) return std::nullopt;
 
                 const std::string data_gep = next_tmp_();
@@ -1057,7 +1403,7 @@ namespace parus::backend::aot {
                 const auto& target = m_.funcs[target_fid];
                 DirectCalleeInfo info{};
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
-                info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_);
+                info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
                 info.abi = target.abi;
                 info.c_callconv = target.c_callconv;
                 info.is_variadic = target.is_c_variadic;
@@ -1081,7 +1427,11 @@ namespace parus::backend::aot {
 
                 const auto tid = value_type_id_(slot);
                 if (tid != parus::ty::kInvalidType) {
-                    const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                    if (!require_storage_shape_(tid, "slot pointer materialization")) {
+                        return "null";
+                    }
+                    const std::string full_ty =
+                        map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                     if (is_aggregate_llvm_ty_(full_ty)) {
                         const std::string tmp_slot = next_tmp_();
                         const std::string cur = value_ty_(slot);
@@ -1098,7 +1448,11 @@ namespace parus::backend::aot {
                 if (cur == "ptr") {
                     return vref_(slot);
                 }
-                return coerce_value_(os, slot, "ptr");
+                record_lowering_error_(
+                    "OIR->LLVM lowering error: value '" + vref_(slot) +
+                    "' is not address-backed and cannot be reinterpreted as ptr"
+                );
+                return "null";
             }
 
             /// @brief aggregate 타입의 zero-init slot을 생성하고 ptr SSA를 반환한다.
@@ -1132,7 +1486,7 @@ namespace parus::backend::aot {
             }
 
             /// @brief field 오프셋(바이트)을 type+field 조합 기준으로 결정한다.
-            uint64_t field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
+            std::optional<uint64_t> field_offset_bytes_(parus::ty::TypeId base_ty, std::string_view field) {
                 parus::ty::TypeId lookup_ty = base_ty;
                 if (lookup_ty != parus::ty::kInvalidType) {
                     const auto& t = types_.get(lookup_ty);
@@ -1142,6 +1496,11 @@ namespace parus::backend::aot {
                         t.elem != parus::ty::kInvalidType) {
                         lookup_ty = t.elem;
                     }
+                }
+
+                if (is_core_ext_cstr_type_(types_, lookup_ty)) {
+                    if (field == "ptr_") return uint64_t{0};
+                    if (field == "len_") return uint64_t{8};
                 }
 
                 auto fit = field_offsets_.find(lookup_ty);
@@ -1158,11 +1517,11 @@ namespace parus::backend::aot {
                 auto it = field_offset_cache_.find(key);
                 if (it != field_offset_cache_.end()) return it->second;
 
-                uint64_t& next = next_field_offset_[lookup_ty];
-                const uint64_t off = next;
-                next += 8; // v0: 필드 정렬을 8바이트 단위로 고정
-                field_offset_cache_[key] = off;
-                return off;
+                record_lowering_error_(
+                    "OIR->LLVM lowering error: field access '" + std::string(field) +
+                    "' requires concrete layout for base type '" + types_.to_string(lookup_ty) + "'"
+                );
+                return std::nullopt;
             }
 
             /// @brief SSA 참조(ref, cur_ty)를 want 타입으로 강제 변환한다.
@@ -1299,7 +1658,7 @@ namespace parus::backend::aot {
                             return addr;
                         }
                         const std::string pointee_ty =
-                            map_type_(types_, st.elem, &named_layouts_, &actor_types_);
+                            map_type_(types_, st.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
                         if (is_aggregate_llvm_ty_(pointee_ty)) {
                             const std::string loaded = safe_load_aggregate_from_ptr_(os, pointee_ty, addr);
                             return (pointee_ty == want)
@@ -1405,17 +1764,33 @@ namespace parus::backend::aot {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
 
+                const auto base_arr_tid = array_type_from_value_(x.base);
+                if (base_arr_tid == parus::ty::kInvalidType) {
+                    record_lowering_error_("OIR->LLVM lowering error: index base is not an array/slice value");
+                    emit_default_value_result_(os, inst.result);
+                    return;
+                }
+
                 const auto idx64 = coerce_value_(os, x.index, "i64");
                 std::string data_ptr{};
 
                 if (auto av = materialize_array_view_(os, x.base); av.has_value()) {
                     data_ptr = av->data_ptr;
                 } else {
-                    data_ptr = slot_ptr_ref_(os, x.base);
+                    record_lowering_error_("OIR->LLVM lowering error: failed to materialize array view for index base");
+                    emit_default_value_result_(os, inst.result);
+                    return;
                 }
 
                 const auto elem_ty_id = value_type_id_(inst.result);
-                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty_id, &named_layouts_, &actor_types_));
+                if (!require_storage_shape_(elem_ty_id, "array/slice element")) {
+                    emit_default_value_result_(os, inst.result);
+                    return;
+                }
+                const uint64_t elem_size = std::max<uint64_t>(
+                    1,
+                    type_size_bytes_(types_, elem_ty_id, &named_layouts_, &actor_types_, &scalar_enum_types_)
+                );
 
                 std::string byte_off = idx64;
                 if (elem_size != 1) {
@@ -1473,9 +1848,16 @@ namespace parus::backend::aot {
             ) {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
+                const auto base_arr_tid = array_type_from_value_(x.base);
+                if (base_arr_tid == parus::ty::kInvalidType) {
+                    record_lowering_error_("OIR->LLVM lowering error: array_len base is not an array/slice value");
+                    emit_default_value_result_(os, inst.result);
+                    return;
+                }
                 auto av = materialize_array_view_(os, x.base);
                 if (!av.has_value()) {
-                    os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
+                    record_lowering_error_("OIR->LLVM lowering error: failed to materialize array view for array_len");
+                    emit_default_value_result_(os, inst.result);
                     return;
                 }
                 os << "  " << vref_(inst.result) << " = add i64 " << av->len_i64 << ", 0\n";
@@ -1490,8 +1872,13 @@ namespace parus::backend::aot {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
 
+                const auto base_arr_tid = array_type_from_value_(x.base);
+                if (base_arr_tid == parus::ty::kInvalidType) {
+                    record_lowering_error_("OIR->LLVM lowering error: slice base is not an array/slice value");
+                }
                 auto base_view = materialize_array_view_(os, x.base);
                 if (!base_view.has_value()) {
+                    record_lowering_error_("OIR->LLVM lowering error: failed to materialize slice base view");
                     // unsupported base shape: materialize an empty view
                     const std::string slot = emit_zero_aggregate_slot_(os, "{ ptr, i64 }");
                     address_ref_by_value_[inst.result] = slot;
@@ -1532,7 +1919,16 @@ namespace parus::backend::aot {
                         }
                     }
                 }
-                const uint64_t elem_size = std::max<uint64_t>(1, type_size_bytes_(types_, elem_ty, &named_layouts_, &actor_types_));
+                if (!require_storage_shape_(elem_ty, "slice element")) {
+                    const std::string slot = emit_zero_aggregate_slot_(os, "{ ptr, i64 }");
+                    address_ref_by_value_[inst.result] = slot;
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                    return;
+                }
+                const uint64_t elem_size = std::max<uint64_t>(
+                    1,
+                    type_size_bytes_(types_, elem_ty, &named_layouts_, &actor_types_, &scalar_enum_types_)
+                );
 
                 std::string byte_off = lo64;
                 if (elem_size != 1) {
@@ -1547,7 +1943,8 @@ namespace parus::backend::aot {
                 os << "  " << len << " = sub i64 " << hi_exclusive << ", " << lo64 << "\n";
 
                 const auto ret_tid = value_type_id_(inst.result);
-                std::string view_ty = map_type_(types_, ret_tid, &named_layouts_, &actor_types_);
+                std::string view_ty =
+                    map_type_(types_, ret_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                 if (!is_aggregate_llvm_ty_(view_ty)) {
                     view_ty = "{ ptr, i64 }";
                 }
@@ -1595,14 +1992,85 @@ namespace parus::backend::aot {
                 using namespace parus::oir;
                 if (inst.result == kInvalidId) return;
 
-                const auto base_ptr = slot_ptr_ref_(os, x.base);
                 const auto base_ty_id = field_base_type_id_(x.base);
-                const uint64_t field_off = x.c_bitfield.is_valid
-                    ? static_cast<uint64_t>(x.c_bitfield.storage_offset_bytes)
+                if (!x.c_bitfield.is_valid && x.field == "__tag") {
+                    if (auto tag_info = scalar_enum_tag_info_(base_ty_id); tag_info.has_value()) {
+                        const std::string tag_ty = tag_info->second;
+                        const bool base_is_address_backed =
+                            address_ref_by_value_.find(x.base) != address_ref_by_value_.end() ||
+                            value_ty_(x.base) == "ptr";
+                        if (base_is_address_backed) {
+                            const auto base_ptr = slot_ptr_ref_(os, x.base);
+                            if (base_ptr == "null") {
+                                address_ref_by_value_[inst.result] = "null";
+                                emit_default_value_result_(os, inst.result);
+                                return;
+                            }
+                            address_ref_by_value_[inst.result] = base_ptr;
+                            const std::string rty = value_ty_(inst.result);
+                            if (is_value_read_(inst.result)) {
+                                os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << base_ptr << "\n";
+                                return;
+                            }
+                            if (is_value_slot_(inst.result)) {
+                                emit_default_value_result_(os, inst.result);
+                                return;
+                            }
+                            if (rty == "ptr") {
+                                os << "  " << vref_(inst.result) << " = bitcast ptr " << base_ptr << " to ptr\n";
+                                return;
+                            }
+                            emit_default_value_result_(os, inst.result);
+                            return;
+                        }
+
+                        const std::string src_tag =
+                            (value_ty_(x.base) == tag_ty) ? vref_(x.base) : coerce_value_(os, x.base, tag_ty);
+                        const std::string slot = next_tmp_();
+                        os << "  " << slot << " = alloca " << tag_ty << "\n";
+                        os << "  store " << tag_ty << " " << src_tag << ", ptr " << slot << "\n";
+                        address_ref_by_value_[inst.result] = slot;
+
+                        const std::string rty = value_ty_(inst.result);
+                        if (is_value_read_(inst.result)) {
+                            if (rty == tag_ty) {
+                                os << "  " << vref_(inst.result) << " = " << copy_expr_(rty, src_tag) << "\n";
+                            } else {
+                                os << "  " << vref_(inst.result) << " = "
+                                   << copy_expr_(rty, coerce_value_(os, x.base, rty)) << "\n";
+                            }
+                            return;
+                        }
+                        if (is_value_slot_(inst.result)) {
+                            emit_default_value_result_(os, inst.result);
+                            return;
+                        }
+                        if (rty == "ptr") {
+                            os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
+                            return;
+                        }
+                        emit_default_value_result_(os, inst.result);
+                        return;
+                    }
+                }
+
+                const auto base_ptr = slot_ptr_ref_(os, x.base);
+                if (base_ptr == "null") {
+                    address_ref_by_value_[inst.result] = "null";
+                    emit_default_value_result_(os, inst.result);
+                    return;
+                }
+                const auto field_off = x.c_bitfield.is_valid
+                    ? std::optional<uint64_t>(static_cast<uint64_t>(x.c_bitfield.storage_offset_bytes))
                     : field_offset_bytes_(base_ty_id, x.field);
+                if (!field_off.has_value()) {
+                    address_ref_by_value_[inst.result] = "null";
+                    emit_default_value_result_(os, inst.result);
+                    return;
+                }
 
                 const std::string byte_ptr = next_tmp_();
-                os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << field_off << "\n";
+                os << "  " << byte_ptr << " = getelementptr i8, ptr " << base_ptr << ", i64 " << *field_off << "\n";
 
                 const std::string typed_ptr = next_tmp_();
                 os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
@@ -1711,7 +2179,8 @@ namespace parus::backend::aot {
                 }
 
                 const auto tid = value_type_id_(inst.result);
-                const std::string text_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                const std::string text_ty =
+                    map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
 
                 const std::string slot = next_tmp_();
                 os << "  " << slot << " = alloca " << text_ty << "\n";
@@ -1821,7 +2290,8 @@ namespace parus::backend::aot {
 
                             const auto tid = value_type_id_(inst.result);
                             if (tid != parus::ty::kInvalidType) {
-                                const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                                const std::string full_ty =
+                                    map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                 if (is_aggregate_llvm_ty_(full_ty)) {
                                     const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
                                     address_ref_by_value_[inst.result] = slot;
@@ -1880,8 +2350,10 @@ namespace parus::backend::aot {
                                     const auto& lhs_tt = types_.get(lhs_tid);
                                     if (lhs_tt.kind == parus::ty::Kind::kOptional &&
                                         lhs_tt.elem != parus::ty::kInvalidType) {
-                                        const std::string opt_ty = map_type_(types_, lhs_tid, &named_layouts_, &actor_types_);
-                                        std::string elem_ty = map_type_(types_, lhs_tt.elem, &named_layouts_, &actor_types_);
+                                        const std::string opt_ty = map_type_(
+                                            types_, lhs_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                        std::string elem_ty = map_type_(
+                                            types_, lhs_tt.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                         if (elem_ty == "void") elem_ty = "i8";
 
                                         const std::string lhs_ptr = slot_ptr_ref_(os, x.lhs);
@@ -1963,8 +2435,10 @@ namespace parus::backend::aot {
                                 const auto& to_tt = types_.get(x.to);
                                 if (to_tt.kind == parus::ty::Kind::kOptional &&
                                     to_tt.elem != parus::ty::kInvalidType) {
-                                    const std::string opt_ty = map_type_(types_, x.to, &named_layouts_, &actor_types_);
-                                    std::string elem_ty = map_type_(types_, to_tt.elem, &named_layouts_, &actor_types_);
+                                    const std::string opt_ty = map_type_(
+                                        types_, x.to, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                    std::string elem_ty = map_type_(
+                                        types_, to_tt.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                     if (elem_ty == "void") elem_ty = "i8";
 
                                     const std::string slot = next_tmp_();
@@ -1977,7 +2451,8 @@ namespace parus::backend::aot {
                                         const auto& src_tt = types_.get(src_tid);
                                         if (src_tt.kind == parus::ty::Kind::kOptional) {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.src);
-                                            const std::string src_agg_ty = map_type_(types_, src_tid, &named_layouts_, &actor_types_);
+                                            const std::string src_agg_ty = map_type_(
+                                                types_, src_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                             const std::string src_loaded =
                                                 safe_load_aggregate_from_ptr_(os, src_agg_ty, src_ptr);
                                             std::string copied = src_loaded;
@@ -2057,6 +2532,25 @@ namespace parus::backend::aot {
                             std::vector<std::string> arg_vals{};
                             arg_tys.reserve(x.args.size());
                             arg_vals.reserve(x.args.size());
+                            const auto result_tid = value_type_id_(inst.result);
+                            const std::string result_ssa_ty =
+                                (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
+                            const std::string result_full_ty =
+                                (result_tid == parus::ty::kInvalidType)
+                                    ? result_ssa_ty
+                                    : map_type_(types_, result_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                            const bool result_needs_aggregate_slot =
+                                inst.result != kInvalidId &&
+                                result_ssa_ty == "ptr" &&
+                                is_aggregate_llvm_ty_(result_full_ty);
+                            auto materialize_aggregate_call_result_ =
+                                [&](const std::string& agg_ty, const std::string& agg_ref) {
+                                    const std::string tmp_slot = next_tmp_();
+                                    os << "  " << tmp_slot << " = alloca " << agg_ty << "\n";
+                                    os << "  store " << agg_ty << " " << agg_ref << ", ptr " << tmp_slot << "\n";
+                                    address_ref_by_value_[inst.result] = tmp_slot;
+                                    os << "  " << vref_(inst.result) << " = bitcast ptr " << tmp_slot << " to ptr\n";
+                                };
 
                             const auto direct = resolve_direct_callee_(x);
                             std::vector<std::string> indirect_c_param_tys{};
@@ -2127,7 +2621,8 @@ namespace parus::backend::aot {
                                 else if (rty == "ptr") {
                                     const auto tid = value_type_id_(inst.result);
                                     if (tid != parus::ty::kInvalidType) {
-                                        const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                                        const std::string full_ty =
+                                            map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                         if (is_aggregate_llvm_ty_(full_ty)) {
                                             const std::string slot = emit_zero_aggregate_slot_(os, full_ty);
                                             address_ref_by_value_[inst.result] = slot;
@@ -2194,8 +2689,20 @@ namespace parus::backend::aot {
                                     os << ")\n";
                                     emit_default_result();
                                 } else if (inst.result != kInvalidId) {
-                                    const std::string want_ty = value_ty_(inst.result);
-                                    if (want_ty == direct->ret_ty) {
+                                    const std::string want_ty =
+                                        result_needs_aggregate_slot ? result_full_ty : result_ssa_ty;
+                                    if (result_needs_aggregate_slot && direct->ret_ty == want_ty) {
+                                        const std::string call_tmp = next_tmp_();
+                                        os << "  " << call_tmp << " = call " << cc;
+                                        if (direct->is_variadic) {
+                                            os << direct_sig << " @" << direct->symbol << "(";
+                                        } else {
+                                            os << direct->ret_ty << " @" << direct->symbol << "(";
+                                        }
+                                        emit_arg_list(os);
+                                        os << ")\n";
+                                        materialize_aggregate_call_result_(want_ty, call_tmp);
+                                    } else if (want_ty == direct->ret_ty) {
                                         os << "  " << vref_(inst.result) << " = call " << cc;
                                         if (direct->is_variadic) {
                                             os << direct_sig << " @" << direct->symbol << "(";
@@ -2255,7 +2762,8 @@ namespace parus::backend::aot {
                                 if (have_indirect_c_sig) {
                                     indirect_cc = llvm_callconv_prefix_(x.call_c_callconv);
                                     std::ostringstream sig;
-                                    const std::string ret_ty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
+                                    const std::string ret_ty =
+                                        result_needs_aggregate_slot ? result_full_ty : result_ssa_ty;
                                     sig << ret_ty << " (";
                                     for (size_t i = 0; i < indirect_c_param_tys.size(); ++i) {
                                         if (i) sig << ", ";
@@ -2269,8 +2777,9 @@ namespace parus::backend::aot {
                                     indirect_sig = sig.str();
                                 }
                             }
-                            const std::string rty = (inst.result == kInvalidId) ? "void" : value_ty_(inst.result);
-                            if (rty == "void") {
+                            const std::string call_rty =
+                                result_needs_aggregate_slot ? result_full_ty : result_ssa_ty;
+                            if (call_rty == "void") {
                                 os << "  call " << indirect_cc;
                                 if (!indirect_sig.empty()) {
                                     os << indirect_sig << " " << callee_ptr << "(";
@@ -2280,14 +2789,27 @@ namespace parus::backend::aot {
                                 emit_arg_list(os);
                                 os << ")\n";
                             } else {
-                                os << "  " << vref_(inst.result) << " = call " << indirect_cc;
-                                if (!indirect_sig.empty()) {
-                                    os << indirect_sig << " " << callee_ptr << "(";
+                                if (result_needs_aggregate_slot) {
+                                    const std::string call_tmp = next_tmp_();
+                                    os << "  " << call_tmp << " = call " << indirect_cc;
+                                    if (!indirect_sig.empty()) {
+                                        os << indirect_sig << " " << callee_ptr << "(";
+                                    } else {
+                                        os << call_rty << " " << callee_ptr << "(";
+                                    }
+                                    emit_arg_list(os);
+                                    os << ")\n";
+                                    materialize_aggregate_call_result_(call_rty, call_tmp);
                                 } else {
-                                    os << rty << " " << callee_ptr << "(";
+                                    os << "  " << vref_(inst.result) << " = call " << indirect_cc;
+                                    if (!indirect_sig.empty()) {
+                                        os << indirect_sig << " " << callee_ptr << "(";
+                                    } else {
+                                        os << call_rty << " " << callee_ptr << "(";
+                                    }
+                                    emit_arg_list(os);
+                                    os << ")\n";
                                 }
-                                emit_arg_list(os);
-                                os << ")\n";
                             }
                         } else if constexpr (std::is_same_v<T, InstIndex>) {
                             emit_index_(os, inst, x);
@@ -2307,7 +2829,8 @@ namespace parus::backend::aot {
                             emit_drop_(os, x);
                         } else if constexpr (std::is_same_v<T, InstAllocaLocal>) {
                             if (inst.result == kInvalidId) return;
-                            auto slot_ty = map_type_(types_, x.slot_ty, &named_layouts_, &actor_types_);
+                            auto slot_ty =
+                                map_type_(types_, x.slot_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
                             if (slot_ty == "void") slot_ty = "i8";
                             os << "  " << vref_(inst.result) << " = alloca " << slot_ty << "\n";
                             address_ref_by_value_[inst.result] = vref_(inst.result);
@@ -2318,7 +2841,8 @@ namespace parus::backend::aot {
 
                             const auto tid = value_type_id_(inst.result);
                             if (tid != parus::ty::kInvalidType) {
-                                const std::string full_ty = map_type_(types_, tid, &named_layouts_, &actor_types_);
+                                const std::string full_ty =
+                                    map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                 if (is_aggregate_llvm_ty_(full_ty) && rty == "ptr") {
                                     const std::string val = safe_load_aggregate_from_ptr_(os, full_ty, ptr);
                                     const std::string tmp_slot = next_tmp_();
@@ -2348,7 +2872,8 @@ namespace parus::backend::aot {
                                         os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
 
                                         const auto slot_tid = value_type_id_(x.slot);
-                                        const std::string storage_ty = map_type_(types_, slot_tid, &named_layouts_, &actor_types_);
+                                        const std::string storage_ty = map_type_(
+                                            types_, slot_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                         const uint32_t storage_bits = int_bits_(storage_ty);
                                         const uint32_t shift = (fld->c_bitfield.bit_offset >= fld->c_bitfield.storage_offset_bytes * 8u)
                                             ? (fld->c_bitfield.bit_offset - fld->c_bitfield.storage_offset_bytes * 8u)
@@ -2385,11 +2910,13 @@ namespace parus::backend::aot {
 
                             const auto slot_tid = value_type_id_(x.slot);
                             if (slot_tid != parus::ty::kInvalidType) {
-                                const std::string slot_full_ty = map_type_(types_, slot_tid, &named_layouts_, &actor_types_);
+                                const std::string slot_full_ty = map_type_(
+                                    types_, slot_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                 if (is_aggregate_llvm_ty_(slot_full_ty)) {
                                     const auto value_tid = value_type_id_(x.value);
                                     if (value_tid != parus::ty::kInvalidType) {
-                                        const std::string value_full_ty = map_type_(types_, value_tid, &named_layouts_, &actor_types_);
+                                        const std::string value_full_ty = map_type_(
+                                            types_, value_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                         if (is_aggregate_llvm_ty_(value_full_ty) && value_ty_(x.value) == "ptr") {
                                             const std::string src_ptr = slot_ptr_ref_(os, x.value);
                                             const std::string loaded =
@@ -2492,18 +3019,58 @@ namespace parus::backend::aot {
         os << "source_filename = \"parus.oir\"\n\n";
 
         std::unordered_map<parus::ty::TypeId, NamedLayoutInfo> named_layouts;
+        std::unordered_map<parus::ty::TypeId, std::string> scalar_enum_types;
         std::unordered_set<parus::ty::TypeId> actor_types(oir.actor_types.begin(), oir.actor_types.end());
         std::unordered_map<parus::ty::TypeId, std::unordered_map<std::string, uint32_t>> field_offsets;
+        std::unordered_map<std::string, NamedLayoutInfo> named_layouts_by_key;
+        std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> field_offsets_by_key;
+        std::unordered_map<std::string, std::string> scalar_enum_types_by_key;
         for (const auto& f : oir.fields) {
             if (f.self_type == parus::ty::kInvalidType) continue;
             NamedLayoutInfo li{};
             li.size = std::max<uint32_t>(1u, f.size);
             li.align = std::max<uint32_t>(1u, f.align);
             named_layouts[f.self_type] = li;
+            for (const auto& key : named_user_type_key_variants_(types, f.self_type)) {
+                named_layouts_by_key[key] = li;
+            }
 
             auto& om = field_offsets[f.self_type];
             for (const auto& m : f.members) {
                 om[m.name] = m.offset;
+            }
+            for (const auto& key : named_user_type_key_variants_(types, f.self_type)) {
+                field_offsets_by_key[key] = om;
+            }
+
+            if (f.members.size() == 1 && f.members[0].name == "__tag") {
+                const auto llvm_ty =
+                    map_type_(types, f.members[0].type, &named_layouts, &actor_types, nullptr);
+                scalar_enum_types[f.self_type] = llvm_ty;
+                for (const auto& key : named_user_type_key_variants_(types, f.self_type)) {
+                    scalar_enum_types_by_key[key] = llvm_ty;
+                }
+            }
+        }
+
+        for (parus::ty::TypeId tid = 0; tid < types.count(); ++tid) {
+            const auto& tt = types.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) continue;
+            if (is_core_ext_cstr_type_(types, tid)) {
+                named_layouts[tid] = NamedLayoutInfo{16u, 8u};
+                field_offsets[tid] = {{"ptr_", 0u}, {"len_", 8u}};
+            }
+            const auto keys = named_user_type_key_variants_(types, tid);
+            for (const auto& key : keys) {
+                if (auto lit = named_layouts_by_key.find(key); lit != named_layouts_by_key.end()) {
+                    named_layouts[tid] = lit->second;
+                }
+                if (auto fit = field_offsets_by_key.find(key); fit != field_offsets_by_key.end()) {
+                    field_offsets[tid] = fit->second;
+                }
+                if (auto eit = scalar_enum_types_by_key.find(key); eit != scalar_enum_types_by_key.end()) {
+                    scalar_enum_types[tid] = eit->second;
+                }
             }
         }
 
@@ -2560,7 +3127,15 @@ namespace parus::backend::aot {
             bool global_emit_error = false;
             for (const auto& g : oir.globals) {
                 const std::string sym = sanitize_symbol_(g.name);
-                const std::string gty = map_type_(types, g.type, &named_layouts, &actor_types);
+                if (!type_has_concrete_storage_shape_(types, g.type, &named_layouts, &actor_types, &scalar_enum_types)) {
+                    global_emit_error = true;
+                    out.messages.push_back(CompileMessage{
+                        true,
+                        "OIR->LLVM lowering error: global '" + g.name +
+                        "' requires concrete layout for type '" + types.to_string(g.type) + "'"
+                    });
+                }
+                const std::string gty = map_type_(types, g.type, &named_layouts, &actor_types, &scalar_enum_types);
 
                 bool is_internal = false;
                 if (!g.is_extern && g.abi == parus::oir::FunctionAbi::Parus && !g.is_export) {
@@ -2620,7 +3195,7 @@ namespace parus::backend::aot {
             }
         }
 
-        const auto value_types = build_value_type_table_(oir, types, named_layouts, actor_types);
+        const auto value_types = build_value_type_table_(oir, types, named_layouts, actor_types, scalar_enum_types);
         const auto value_uses = build_value_use_table_(oir);
         const auto phi_contract_errors = verify_phi_incoming_contract_(oir, value_types);
         if (!phi_contract_errors.empty()) {
@@ -2797,7 +3372,8 @@ namespace parus::backend::aot {
                 if (tt.kind == parus::ty::Kind::kOptional && tt.elem != parus::ty::kInvalidType) {
                     auto dit = drop_thunk_symbols.find(tt.elem);
                     if (dit != drop_thunk_symbols.end()) {
-                        const std::string opt_ty = map_type_(types, t, &named_layouts, &actor_types);
+                        const std::string opt_ty =
+                            map_type_(types, t, &named_layouts, &actor_types, &scalar_enum_types);
                         os << "  %tag.ptr = getelementptr " << opt_ty << ", ptr %self, i32 0, i32 0\n";
                         os << "  %tag = load i1, ptr %tag.ptr\n";
                         os << "  br i1 %tag, label %drop_payload, label %done\n";
@@ -2815,7 +3391,8 @@ namespace parus::backend::aot {
                 if (tt.kind == parus::ty::Kind::kArray && tt.array_has_size && tt.elem != parus::ty::kInvalidType) {
                     auto dit = drop_thunk_symbols.find(tt.elem);
                     if (dit != drop_thunk_symbols.end()) {
-                        const std::string arr_ty = map_type_(types, t, &named_layouts, &actor_types);
+                        const std::string arr_ty =
+                            map_type_(types, t, &named_layouts, &actor_types, &scalar_enum_types);
                         os << "  %idx.slot = alloca i64\n";
                         os << "  store i64 " << tt.array_size << ", ptr %idx.slot\n";
                         os << "  br label %loop.cond\n";
@@ -2867,6 +3444,7 @@ namespace parus::backend::aot {
         bool need_call_stub = false;
         bool need_bounds_check_stub = false;
         bool saw_invalid_callee_call = false;
+        std::vector<std::string> lowering_errors{};
         bool has_raw_main_symbol = false;
         bool has_ambiguous_main_entry = false;
         std::unordered_set<std::string> defined_fn_symbols{};
@@ -2899,7 +3477,8 @@ namespace parus::backend::aot {
                     static_cast<size_t>(def.entry) < oir.blocks.size()) {
                     is_zero_arity = oir.blocks[def.entry].params.empty();
                 }
-                const std::string ret_ty = map_type_(types, def.ret_ty, &named_layouts, &actor_types);
+                const std::string ret_ty =
+                    map_type_(types, def.ret_ty, &named_layouts, &actor_types, &scalar_enum_types);
                 if (is_zero_arity && (ret_ty == "i32" || ret_ty == "void")) {
                     if (!main_entry_candidate.has_value()) {
                         main_entry_candidate = MainEntryCandidate{fn_sym, ret_ty};
@@ -2916,12 +3495,14 @@ namespace parus::backend::aot {
                 value_types,
                 value_uses,
                 named_layouts,
+                scalar_enum_types,
                 actor_types,
                 field_offsets,
                 text_constants,
                 &drop_thunk_symbols,
                 &saw_invalid_callee_call,
-                &need_bounds_check_stub
+                &need_bounds_check_stub,
+                &lowering_errors
             );
             os << fe.emit(need_call_stub) << "\n";
         }
@@ -3010,6 +3591,15 @@ namespace parus::backend::aot {
                 true,
                 "encountered invalid/null callee during LLVM lowering; emitted call stub and default result."
             });
+        }
+
+        if (!lowering_errors.empty()) {
+            out.ok = false;
+            out.llvm_ir = os.str();
+            for (const auto& msg : lowering_errors) {
+                out.messages.push_back(CompileMessage{true, msg});
+            }
+            return out;
         }
 
         out.ok = true;

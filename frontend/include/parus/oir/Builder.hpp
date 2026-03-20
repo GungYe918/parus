@@ -1,6 +1,7 @@
 // frontend/include/parus/oir/Builder.hpp
 #pragma once
 #include <parus/oir/Inst.hpp>
+#include <parus/sema/SymbolTable.hpp>
 #include <parus/sir/SIR.hpp>
 #include <parus/sir/Verify.hpp>
 #include <parus/ty/TypePool.hpp>
@@ -21,8 +22,9 @@ namespace parus::oir {
     public:
         Builder(const parus::sir::Module& sir_mod,
                 const parus::ty::TypePool& ty,
-                const std::unordered_set<parus::ty::TypeId>* tag_only_enum_type_ids = nullptr)
-            : sir_(sir_mod), ty_(ty), tag_only_enum_type_ids_(tag_only_enum_type_ids) {}
+                const std::unordered_set<parus::ty::TypeId>* tag_only_enum_type_ids = nullptr,
+                const parus::sema::SymbolTable* sym = nullptr)
+            : sir_(sir_mod), ty_(ty), tag_only_enum_type_ids_(tag_only_enum_type_ids), sym_(sym) {}
 
         BuildResult build();
 
@@ -30,6 +32,7 @@ namespace parus::oir {
         const parus::sir::Module& sir_;
         [[maybe_unused]] const parus::ty::TypePool& ty_;
         const std::unordered_set<parus::ty::TypeId>* tag_only_enum_type_ids_ = nullptr;
+        const parus::sema::SymbolTable* sym_ = nullptr;
     };
 
 } // namespace parus::oir

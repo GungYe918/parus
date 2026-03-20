@@ -14,6 +14,89 @@
         return std::nullopt;
     }
 
+    static std::string strip_module_prefix_(
+        std::string_view path,
+        std::string_view module_head
+    ) {
+        if (path.empty()) return {};
+        if (module_head.empty()) return std::string(path);
+        if (path == module_head) return {};
+
+        const std::string prefix = std::string(module_head) + "::";
+        if (path.starts_with(prefix)) {
+            return std::string(path.substr(prefix.size()));
+        }
+        return std::string(path);
+    }
+
+    static std::string short_core_module_head_(
+        std::string_view decl_bundle_name,
+        std::string_view module_head
+    ) {
+        if (decl_bundle_name != "core") return {};
+        if (!module_head.starts_with("core::")) return {};
+        return std::string(module_head.substr(std::string_view("core::").size()));
+    }
+
+    static bool same_external_module_head_(
+        std::string_view current_module_head,
+        std::string_view external_module_head,
+        std::string_view decl_bundle_name
+    ) {
+        if (current_module_head.empty() || external_module_head.empty()) return false;
+        if (current_module_head == external_module_head) return true;
+
+        const std::string short_head = short_core_module_head_(decl_bundle_name, external_module_head);
+        if (!short_head.empty() && current_module_head == short_head) return true;
+
+        if (decl_bundle_name == "core" &&
+            current_module_head.starts_with("core::") &&
+            !short_head.empty() &&
+            current_module_head.substr(std::string_view("core::").size()) == short_head) {
+            return true;
+        }
+        return false;
+    }
+
+    static std::vector<std::string> candidate_names_for_external_export_(
+        const NameResolveOptions::ExternalExport& ex,
+        std::string_view current_module_head
+    ) {
+        std::vector<std::string> names{};
+        names.reserve(6);
+        if (!ex.path.empty()) names.push_back(ex.path);
+
+        const std::string local = strip_module_prefix_(ex.path, ex.module_head);
+        if (!ex.module_head.empty() && !local.empty()) {
+            const std::string module_qualified = ex.module_head + "::" + local;
+            names.push_back(module_qualified);
+
+            if (same_external_module_head_(current_module_head, ex.module_head, ex.decl_bundle_name)) {
+                names.push_back(local);
+            }
+
+            const std::string short_head = short_core_module_head_(ex.decl_bundle_name, ex.module_head);
+            if (!short_head.empty()) {
+                names.push_back(short_head + "::" + local);
+            }
+
+            if (!ex.decl_bundle_name.empty()) {
+                std::string qualified_module = ex.module_head;
+                const std::string bundle_prefix = ex.decl_bundle_name + "::";
+                if (!(qualified_module == ex.decl_bundle_name || qualified_module.starts_with(bundle_prefix))) {
+                    qualified_module = bundle_prefix + qualified_module;
+                }
+                names.push_back(qualified_module + "::" + local);
+            }
+        } else if (!ex.decl_bundle_name.empty() && !ex.path.empty()) {
+            names.push_back(ex.decl_bundle_name + "::" + ex.path);
+        }
+
+        std::sort(names.begin(), names.end());
+        names.erase(std::unique(names.begin(), names.end()), names.end());
+        return names;
+    }
+
     static std::optional<uint32_t> lookup_external_export_fallback_(
         sema::SymbolTable& sym,
         std::string_view raw_name,
@@ -27,51 +110,11 @@
             name = *rewritten;
         }
 
-        auto candidate_names_for_external_ = [&](const NameResolveOptions::ExternalExport& ex) {
-            std::vector<std::string> names{};
-            names.reserve(5);
-            if (!ex.path.empty()) names.push_back(ex.path);
-
-            if (!ex.module_head.empty()) {
-                const std::string prefix = ex.module_head + "::";
-                if (!(ex.path == ex.module_head || ex.path.starts_with(prefix))) {
-                    names.push_back(prefix + ex.path);
-                }
-
-                if (!opt.current_module_head.empty() && opt.current_module_head == ex.module_head) {
-                    std::string local = ex.path;
-                    if (local.starts_with(prefix)) {
-                        local.erase(0, prefix.size());
-                    }
-                    if (!local.empty()) names.push_back(std::move(local));
-                }
-            }
-
-            if (!ex.decl_bundle_name.empty()) {
-                if (!ex.module_head.empty()) {
-                    std::string local = ex.path;
-                    const std::string module_prefix = ex.module_head + "::";
-                    if (local.starts_with(module_prefix)) {
-                        local.erase(0, module_prefix.size());
-                    }
-                    if (!local.empty()) {
-                        names.push_back(ex.decl_bundle_name + "::" + ex.module_head + "::" + local);
-                    }
-                } else if (!ex.path.empty()) {
-                    names.push_back(ex.decl_bundle_name + "::" + ex.path);
-                }
-            }
-
-            std::sort(names.begin(), names.end());
-            names.erase(std::unique(names.begin(), names.end()), names.end());
-            return names;
-        };
-
         auto try_match = [&](std::string_view candidate) -> std::optional<uint32_t> {
             if (candidate.empty()) return std::nullopt;
 
             for (const auto& ex : opt.external_exports) {
-                const auto names = candidate_names_for_external_(ex);
+                const auto names = candidate_names_for_external_export_(ex, opt.current_module_head);
                 for (const auto& nm : names) {
                     if (nm != candidate) continue;
 
@@ -1441,34 +1484,10 @@
         diag::Bag& bag,
         const NameResolveOptions& opt
     ) {
-        auto candidate_names_for_external_ = [&](const NameResolveOptions::ExternalExport& ex) {
-            std::vector<std::string> names{};
-            names.reserve(3);
-            if (!ex.path.empty()) names.push_back(ex.path);
-
-            if (!ex.module_head.empty()) {
-                const std::string prefix = ex.module_head + "::";
-                if (!(ex.path == ex.module_head || ex.path.starts_with(prefix))) {
-                    names.push_back(prefix + ex.path);
-                }
-                if (!opt.current_module_head.empty() && opt.current_module_head == ex.module_head) {
-                    std::string local = ex.path;
-                    if (local.starts_with(prefix)) {
-                        local.erase(0, prefix.size());
-                    }
-                    if (!local.empty()) names.push_back(std::move(local));
-                }
-            }
-
-            std::sort(names.begin(), names.end());
-            names.erase(std::unique(names.begin(), names.end()), names.end());
-            return names;
-        };
-
         for (const auto& ex : opt.external_exports) {
             if (ex.path.empty()) continue;
 
-            const auto names = candidate_names_for_external_(ex);
+            const auto names = candidate_names_for_external_export_(ex, opt.current_module_head);
             for (const auto& nm : names) {
                 if (nm.empty()) continue;
 

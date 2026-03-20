@@ -32,6 +32,118 @@ namespace parus::oir {
             std::vector<uint32_t> arg_map{};
         };
 
+        struct ParsedExternalRecordLayout {
+            bool ok = false;
+            FieldLayout layout = FieldLayout::None;
+            uint32_t size = 0;
+            uint32_t align = 0;
+            std::vector<FieldMemberLayout> members{};
+        };
+
+        bool parse_u32_sv_(std::string_view text, uint32_t& out) {
+            out = 0;
+            if (text.empty()) return false;
+            uint64_t value = 0;
+            for (const char ch : text) {
+                if (!std::isdigit(static_cast<unsigned char>(ch))) return false;
+                value = value * 10u + static_cast<uint64_t>(ch - '0');
+                if (value > 0xFFFF'FFFFull) return false;
+            }
+            out = static_cast<uint32_t>(value);
+            return true;
+        }
+
+        ParsedExternalRecordLayout parse_external_record_layout_payload_(std::string_view payload) {
+            ParsedExternalRecordLayout out{};
+            const bool is_struct = payload.starts_with("parus_c_import_struct|");
+            const bool is_union = payload.starts_with("parus_c_import_union|");
+            if (!is_struct && !is_union) return out;
+
+            std::string_view size_text{};
+            std::string_view align_text{};
+            std::string_view fields_text{};
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "size") size_text = val;
+                    else if (key == "align") align_text = val;
+                    else if (key == "fields") fields_text = val;
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+
+            if (!parse_u32_sv_(size_text, out.size) || !parse_u32_sv_(align_text, out.align)) {
+                return {};
+            }
+            out.layout = is_struct ? FieldLayout::C : FieldLayout::None;
+
+            size_t begin = 0;
+            while (begin < fields_text.size()) {
+                const size_t comma = fields_text.find(',', begin);
+                const size_t end = (comma == std::string_view::npos) ? fields_text.size() : comma;
+                const std::string_view one = fields_text.substr(begin, end - begin);
+                if (!one.empty()) {
+                    const size_t colon = one.find(':');
+                    if (colon == std::string_view::npos || colon == 0 || colon + 1 >= one.size()) {
+                        return {};
+                    }
+
+                    FieldMemberLayout member{};
+                    member.name.assign(one.substr(0, colon));
+                    std::string_view type_text = one.substr(colon + 1);
+                    std::string_view suffix{};
+                    if (const size_t at = type_text.find('@'); at != std::string_view::npos) {
+                        suffix = type_text.substr(at + 1);
+                        type_text = type_text.substr(0, at);
+                    }
+
+                    std::vector<std::string_view> parts{};
+                    if (!suffix.empty()) {
+                        size_t sb = 0;
+                        while (true) {
+                            const size_t sep = suffix.find('@', sb);
+                            if (sep == std::string_view::npos) {
+                                parts.push_back(suffix.substr(sb));
+                                break;
+                            }
+                            parts.push_back(suffix.substr(sb, sep - sb));
+                            sb = sep + 1;
+                        }
+                    }
+
+                    (void)type_text;
+                    member.type = parus::ty::kInvalidType;
+
+                    if (is_struct) {
+                        uint32_t offset_bytes = 0;
+                        uint32_t bit_width = 0;
+                        uint32_t storage_offset_bytes = 0;
+                        if (!parts.empty() && !parse_u32_sv_(parts[0], offset_bytes)) return {};
+                        if (parts.size() >= 4 && !parse_u32_sv_(parts[3], bit_width)) return {};
+                        if (parts.size() >= 6 && !parse_u32_sv_(parts[5], storage_offset_bytes)) return {};
+                        member.offset = (bit_width > 0) ? storage_offset_bytes : offset_bytes;
+                    } else {
+                        member.offset = 0;
+                    }
+
+                    out.members.push_back(std::move(member));
+                }
+
+                if (comma == std::string_view::npos) break;
+                begin = comma + 1;
+            }
+
+            out.ok = true;
+            return out;
+        }
+
         ParsedCImportWrapperPayload parse_cimport_wrapper_payload_(std::string_view payload) {
             ParsedCImportWrapperPayload out{};
             if (!payload.starts_with("parus_c_import|")) return out;
@@ -90,11 +202,14 @@ namespace parus::oir {
             Module* out = nullptr;
             const parus::sir::Module* sir = nullptr;
             const parus::ty::TypePool* types = nullptr;
+            const parus::sema::SymbolTable* symtab = nullptr;
             const std::unordered_set<TypeId>* actor_types = nullptr;
             const ActorRuntimeFuncs* actor_runtime = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
             const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
+            const std::unordered_map<std::string, FuncId>* fn_link_name_to_func = nullptr;
+            const std::unordered_map<std::string, FuncId>* fn_source_name_to_func = nullptr;
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
             const std::unordered_map<TypeId, FuncId>* class_deinit_map = nullptr;
@@ -862,6 +977,29 @@ namespace parus::oir {
                             out != nullptr &&
                             (size_t)fit->second < out->funcs.size()) {
                             return emit_func_ref(fit->second, out->funcs[fit->second].name);
+                        }
+                    }
+                    if (symtab != nullptr &&
+                        sym != parus::sir::k_invalid_symbol &&
+                        static_cast<size_t>(sym) < symtab->symbols().size()) {
+                        const auto& ss = symtab->symbol(sym);
+                        if (ss.kind == parus::sema::SymbolKind::kFn) {
+                            if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
+                                auto fit = fn_link_name_to_func->find(ss.link_name);
+                                if (fit != fn_link_name_to_func->end() &&
+                                    out != nullptr &&
+                                    (size_t)fit->second < out->funcs.size()) {
+                                    return emit_func_ref(fit->second, out->funcs[fit->second].name);
+                                }
+                            }
+                            if (fn_source_name_to_func != nullptr && !ss.name.empty()) {
+                                auto fit = fn_source_name_to_func->find(ss.name);
+                                if (fit != fn_source_name_to_func->end() &&
+                                    out != nullptr &&
+                                    (size_t)fit->second < out->funcs.size()) {
+                                    return emit_func_ref(fit->second, out->funcs[fit->second].name);
+                                }
+                            }
                         }
                     }
                     // unknown -> produce dummy (kept for error recovery)
@@ -1835,9 +1973,39 @@ namespace parus::oir {
                         direct_callee = fit->second;
                     }
                 }
+                if (direct_callee == kInvalidId &&
+                    v.callee_sym != parus::sir::k_invalid_symbol &&
+                    symtab != nullptr &&
+                    static_cast<size_t>(v.callee_sym) < symtab->symbols().size()) {
+                    const auto& ss = symtab->symbol(v.callee_sym);
+                    if (ss.kind == parus::sema::SymbolKind::kFn) {
+                        if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
+                            auto fit = fn_link_name_to_func->find(ss.link_name);
+                            if (fit != fn_link_name_to_func->end() &&
+                                out != nullptr &&
+                                (size_t)fit->second < out->funcs.size()) {
+                                direct_callee = fit->second;
+                            }
+                        }
+                        if (direct_callee == kInvalidId &&
+                            fn_source_name_to_func != nullptr &&
+                            !ss.name.empty()) {
+                            auto fit = fn_source_name_to_func->find(ss.name);
+                            if (fit != fn_source_name_to_func->end() &&
+                                out != nullptr &&
+                                (size_t)fit->second < out->funcs.size()) {
+                                direct_callee = fit->second;
+                            }
+                        }
+                    }
+                }
 
                 if (callee == kInvalidId && direct_callee == kInvalidId) {
-                    callee = lower_value(v.a);
+                    if (v.a != parus::sir::k_invalid_value) {
+                        callee = lower_value(v.a);
+                    } else if (v.callee_sym != parus::sir::k_invalid_symbol) {
+                        callee = read_local(v.callee_sym, ptr_type_());
+                    }
                 }
 
                 if (direct_callee == kInvalidId) {
@@ -2084,6 +2252,13 @@ namespace parus::oir {
                 };
 
                 const TypeId tag_ty = field_type_of("__tag");
+                const bool tag_only_enum =
+                    (layout != nullptr &&
+                     layout->members.size() == 1 &&
+                     layout->members[0].name == "__tag");
+                if (tag_only_enum) {
+                    return emit_const_int(enum_ty, std::to_string(v.enum_ctor_tag_value));
+                }
                 if (tag_ty != kInvalidId) {
                     ValueId tag_v = emit_const_int(tag_ty, std::to_string(v.enum_ctor_tag_value));
                     ValueId tag_p = emit_field(tag_ty, enum_slot, "__tag");
@@ -3292,6 +3467,27 @@ namespace parus::oir {
             }
         }
 
+        if (sym_ != nullptr) {
+            for (const auto& ss : sym_->symbols()) {
+                if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kType) continue;
+                if (ss.declared_type == parus::ty::kInvalidType || ss.external_payload.empty()) continue;
+                if (named_layout_by_type.find(ss.declared_type) != named_layout_by_type.end()) continue;
+
+                const auto parsed = parse_external_record_layout_payload_(ss.external_payload);
+                if (!parsed.ok) continue;
+
+                FieldLayoutDecl of{};
+                of.name = ss.name;
+                of.self_type = ss.declared_type;
+                of.layout = parsed.layout;
+                of.align = std::max<uint32_t>(1u, parsed.align);
+                of.size = std::max<uint32_t>(1u, parsed.size);
+                of.members = parsed.members;
+                out.mod.add_field(of);
+                named_layout_by_type[of.self_type] = {of.size, of.align};
+            }
+        }
+
         if (tag_only_enum_type_ids_ != nullptr) {
             auto append_tag_keys = [&](TypeId tid, std::unordered_set<std::string>& out) {
                 if (tid == parus::ty::kInvalidType) return;
@@ -3565,6 +3761,7 @@ namespace parus::oir {
         std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>> fn_symbol_to_funcs;
         std::unordered_map<uint32_t, FuncId> fn_decl_to_func;
         std::unordered_map<std::string, FuncId> fn_link_name_to_func;
+        std::unordered_map<std::string, FuncId> fn_source_name_to_func;
         std::unordered_set<FuncId> throwing_func_ids;
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
@@ -3602,6 +3799,7 @@ namespace parus::oir {
             sir_to_oir_func[i] = fid;
             sir_to_entry[i] = entry;
             fn_link_name_to_func[out.mod.funcs[fid].name] = fid;
+            fn_source_name_to_func[out.mod.funcs[fid].source_name] = fid;
             const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
             if (pend <= (uint64_t)sir_.params.size()) {
                 for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
@@ -3666,11 +3864,14 @@ namespace parus::oir {
             fb.out = &out.mod;
             fb.sir = &sir_;
             fb.types = &ty_;
+            fb.symtab = sym_;
             fb.actor_types = &actor_type_set;
             fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;
             fb.fn_symbol_to_func = &fn_symbol_to_func;
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
+            fb.fn_link_name_to_func = &fn_link_name_to_func;
+            fb.fn_source_name_to_func = &fn_source_name_to_func;
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;
@@ -3804,11 +4005,14 @@ namespace parus::oir {
             fb.out = &out.mod;
             fb.sir = &sir_;
             fb.types = &ty_;
+            fb.symtab = sym_;
             fb.actor_types = &actor_type_set;
             fb.actor_runtime = &actor_runtime;
             fb.escape_value_map = &escape_value_map;
             fb.fn_symbol_to_func = &fn_symbol_to_func;
             fb.fn_symbol_to_funcs = &fn_symbol_to_funcs;
+            fb.fn_link_name_to_func = &fn_link_name_to_func;
+            fb.fn_source_name_to_func = &fn_source_name_to_func;
             fb.fn_decl_to_func = &fn_decl_to_func;
             fb.global_symbol_to_global = &global_symbol_to_global;
             fb.class_deinit_map = &class_deinit_map;

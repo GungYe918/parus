@@ -35,6 +35,7 @@
 #include <parus/backend/link/Linker.hpp>
 #endif
 
+#include <cstdio>
 #include <filesystem>
 #include <cctype>
 #include <algorithm>
@@ -2942,7 +2943,7 @@ namespace parusc::p0 {
             add_matching_named_types(want_keys);
         }
 
-        parus::oir::Builder ob(sir_mod, types, &oir_tag_only_enum_type_ids);
+        parus::oir::Builder ob(sir_mod, types, &oir_tag_only_enum_type_ids, &pres.sym);
         auto oir_res = ob.build();
         if (!oir_res.gate_passed) {
             for (const auto& e : oir_res.gate_errors) {
