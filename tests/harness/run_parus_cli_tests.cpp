@@ -1235,6 +1235,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path num_int = core_root / "num/int.pr";
     const std::filesystem::path num_float = core_root / "num/float.pr";
     const std::filesystem::path char_ascii = core_root / "char/ascii.pr";
+    const std::filesystem::path text_view = core_root / "text/text.pr";
     if (!std::filesystem::exists(ext_types, ec) ||
         !std::filesystem::exists(ext_cstr, ec) ||
         !std::filesystem::exists(ext_errors, ec) ||
@@ -1242,7 +1243,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(bool_acts, ec) ||
         !std::filesystem::exists(num_int, ec) ||
         !std::filesystem::exists(num_float, ec) ||
-        !std::filesystem::exists(char_ascii, ec)) {
+        !std::filesystem::exists(char_ascii, ec) ||
+        !std::filesystem::exists(text_view, ec)) {
         std::cerr << "core seed source files are missing\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1262,6 +1264,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         " --bundle-source \"" + num_int.string() + "\"" +
         " --bundle-source \"" + num_float.string() + "\"" +
         " --bundle-source \"" + char_ascii.string() + "\"" +
+        " --bundle-source \"" + text_view.string() + "\"" +
         " --emit-export-index \"" + core_index.string() + "\"";
     auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
     if (rc_emit != 0) {
@@ -1296,7 +1299,12 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-
+    if (!contains(core_index_text, "parus_builtin_acts|owner=text|member=is_empty|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=text|member=len_bytes|self=1")) {
+        std::cerr << "core export-index must include text builtin acts payloads\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
     const auto app_main = temp_root / "main.pr";
     const std::string app_src =
         "def main() -> i32 {\n"
@@ -1311,6 +1319,10 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let raw_nan: bool = raw.is_nan();\n"
         "  let c: char = 'f';\n"
         "  let hex: bool = c.is_ascii_hexdigit();\n"
+        "  let s: text = \"abc\";\n"
+        "  let empty: text = \"\";\n"
+        "  let s_len: usize = s.len_bytes();\n"
+        "  let s_empty: bool = empty.is_empty();\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1327,7 +1339,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  case core::cmp::Ordering::Less: { partial_ok = true; }\n"
         "  default: {}\n"
         "  }\n"
-        "  if (bool_ok and ord_ok and partial_ok and hex and not raw_nan) {\n"
+        "  if (bool_ok and ord_ok and partial_ok and hex and not raw_nan and s_len == 3usize and s_empty) {\n"
         "    return 42i32;\n"
         "  }\n"
         "  return 0i32;\n"
@@ -1390,6 +1402,20 @@ bool test_core_seed_runtime_smoke() {
         return false;
     }
 
+    const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
+    const std::filesystem::path core_root = repo_root / "sysroot/core";
+    const std::array<std::filesystem::path, 9> core_seed_sources = {
+        core_root / "ext/types.pr",
+        core_root / "ext/cstr.pr",
+        core_root / "ext/errors.pr",
+        core_root / "cmp/ordering.pr",
+        core_root / "bool/bool.pr",
+        core_root / "num/int.pr",
+        core_root / "num/float.pr",
+        core_root / "char/ascii.pr",
+        core_root / "text/text.pr",
+    };
+
     const auto main_pr = temp_root / "main.pr";
     const auto exe = temp_root / "main";
     const std::string main_src =
@@ -1398,7 +1424,7 @@ bool test_core_seed_runtime_smoke() {
         "  let neg: i32 = -3i32;\n"
         "  let mag: i32 = neg.abs();\n"
         "  let pos: i32 = 7i32;\n"
-        "  let s: i32 = pos.signum();\n"
+        "  let sgn: i32 = pos.signum();\n"
         "  let q: i32 = (-7i32).div_euclid(3i32);\n"
         "  let r: i32 = (-7i32).rem_euclid(3i32);\n"
         "  let zero: usize = 0usize;\n"
@@ -1415,6 +1441,10 @@ bool test_core_seed_runtime_smoke() {
         "  let hex: bool = 'f'.is_ascii_hexdigit();\n"
         "  let ws: bool = '\\n'.is_ascii_whitespace();\n"
         "  let eqic: bool = 'a'.eq_ignore_ascii_case('A');\n"
+        "  let s: text = \"abc\";\n"
+        "  let empty: text = \"\";\n"
+        "  let s_len: usize = s.len_bytes();\n"
+        "  let s_empty: bool = empty.is_empty();\n"
         "  let lhs: i32 = 3i32;\n"
         "  let rhs: i32 = 2i32;\n"
         "  let ord: core::cmp::Ordering = lhs.cmp(rhs);\n"
@@ -1426,7 +1456,7 @@ bool test_core_seed_runtime_smoke() {
         "  }\n"
         "  if (bo_ok\n"
         "      and mag == 3i32\n"
-        "      and s == 1i32\n"
+        "      and sgn == 1i32\n"
         "      and q == -3i32\n"
         "      and r == 2i32\n"
         "      and z\n"
@@ -1438,7 +1468,9 @@ bool test_core_seed_runtime_smoke() {
         "      and upper\n"
         "      and hex\n"
         "      and ws\n"
-        "      and eqic) {\n"
+        "      and eqic\n"
+        "      and s_len == 3usize\n"
+        "      and s_empty) {\n"
         "    out = out + 10i32;\n"
         "  }\n"
         "  switch (ord) {\n"
@@ -1460,13 +1492,46 @@ bool test_core_seed_runtime_smoke() {
         return false;
     }
     const auto& [sysroot, target] = *sysroot_and_target;
-    const std::string installed_core_index =
-        read_text(std::filesystem::path(sysroot) / ".cache/exports/core.exports.json");
+    const std::filesystem::path installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    const std::filesystem::path installed_core_lib_path =
+        std::filesystem::path(sysroot) / "targets" / target / "lib" / "libcore_ext.a";
+    if (!std::filesystem::exists(installed_core_index_path, ec) ||
+        !std::filesystem::exists(installed_core_lib_path, ec)) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    std::error_code time_ec{};
+    const auto installed_index_time = std::filesystem::last_write_time(installed_core_index_path, time_ec);
+    if (time_ec) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    const auto installed_lib_time = std::filesystem::last_write_time(installed_core_lib_path, time_ec);
+    if (time_ec) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    for (const auto& src : core_seed_sources) {
+        const auto src_time = std::filesystem::last_write_time(src, time_ec);
+        if (time_ec) {
+            std::filesystem::remove_all(temp_root, ec);
+            return true;
+        }
+        if (src_time > installed_index_time || src_time > installed_lib_time) {
+            std::filesystem::remove_all(temp_root, ec);
+            return true;
+        }
+    }
+
+    const std::string installed_core_index = read_text(installed_core_index_path);
     if (!contains(installed_core_index, "parus_builtin_acts|owner=bool|member=cmp|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=i32|member=div_euclid|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=u32|member=is_power_of_two|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1") ||
-        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=eq_ignore_ascii_case|self=1")) {
+        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=eq_ignore_ascii_case|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -1490,6 +1555,68 @@ bool test_core_seed_runtime_smoke() {
     }
     if (!contains(out_run, "EXIT:42")) {
         std::cerr << "core seed runtime exit mismatch (expected 42)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_text_view_cstr_preflight_syntax_only() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-text-cstr-preflight";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+    const std::filesystem::path installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    const std::filesystem::path installed_core_lib_path =
+        std::filesystem::path(sysroot) / "targets" / target / "lib" / "libcore_ext.a";
+    if (!std::filesystem::exists(installed_core_index_path, ec) ||
+        !std::filesystem::exists(installed_core_lib_path, ec)) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    const std::string installed_core_index = read_text(installed_core_index_path);
+    if (!contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=text|member=is_empty|self=1")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  manual[abi] {\n"
+        "    let c: core::ext::CStr = core::ext::from_ptr(\"Hello\");\n"
+        "    let t: text = text{ data: core::ext::as_ptr(c), len: core::ext::len(c) };\n"
+        "    let n: usize = t.len_bytes();\n"
+        "    if (n != 5usize) { return 0i32; }\n"
+        "  }\n"
+        "  return 42i32;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write text/CStr preflight sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc, out] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + main_pr.string() +
+        "\" -fsyntax-only");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc != 0) {
+        std::cerr << "text view CStr preflight should typecheck with installed core\n" << out;
         return false;
     }
     return true;
@@ -5219,6 +5346,7 @@ int main() {
     const bool ok78 = test_iteration_loop_break_value_context_syntax_only();
     const bool ok79 = test_core_seed_export_index_and_auto_injection();
     const bool ok80 = test_core_seed_runtime_smoke();
+    const bool ok81 = test_text_view_cstr_preflight_syntax_only();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -5226,7 +5354,7 @@ int main() {
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 ||
-        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80) {
+        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81) {
         return 1;
     }
 

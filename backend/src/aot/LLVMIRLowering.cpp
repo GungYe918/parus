@@ -1503,6 +1503,19 @@ namespace parus::backend::aot {
                     if (field == "len_") return uint64_t{8};
                 }
 
+                if (lookup_ty != parus::ty::kInvalidType) {
+                    const auto& tt = types_.get(lookup_ty);
+                    if (tt.kind == parus::ty::Kind::kBuiltin &&
+                        tt.builtin == parus::ty::Builtin::kText) {
+                        if (field == "data") return uint64_t{0};
+                        if (field == "len") return uint64_t{8};
+                    }
+                    if (tt.kind == parus::ty::Kind::kArray && !tt.array_has_size) {
+                        if (field == "data") return uint64_t{0};
+                        if (field == "len") return uint64_t{8};
+                    }
+                }
+
                 auto fit = field_offsets_.find(lookup_ty);
                 if (fit != field_offsets_.end()) {
                     auto oit = fit->second.find(std::string(field));

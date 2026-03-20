@@ -104,6 +104,7 @@ namespace parus::syntax {
             case TokenKind::kKwNot:
             case TokenKind::kPlus:
             case TokenKind::kMinus:
+            case TokenKind::kStar:
             case TokenKind::kPlusPlus:
             case TokenKind::kAmp:
             case TokenKind::kTilde:

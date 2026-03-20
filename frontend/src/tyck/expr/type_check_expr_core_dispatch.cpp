@@ -1379,6 +1379,10 @@ namespace parus::tyck {
             return root_place_symbol_(e.a);
         }
 
+        if (e.kind == ast::ExprKind::kUnary && e.op == K::kStar) {
+            return root_place_symbol_(e.a);
+        }
+
         return std::nullopt;
     }
 

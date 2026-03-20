@@ -1,0 +1,9 @@
+export plan text_module = module & {
+  sources = [
+    "text/text.pr",
+  ];
+  imports = [];
+  cimport = {
+    isystem: [],
+  };
+};

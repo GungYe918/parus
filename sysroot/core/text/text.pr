@@ -1,0 +1,12 @@
+$![Impl::Core];
+
+// Default text view acts for the builtin non-owning UTF-8 text type.
+export acts for text {
+    def is_empty(self) -> bool {
+        return (*self).len == 0usize;
+    }
+
+    def len_bytes(self) -> usize {
+        return (*self).len;
+    }
+};

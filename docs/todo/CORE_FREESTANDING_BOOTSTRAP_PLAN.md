@@ -2,7 +2,8 @@
 
 문서 상태: `active`
 
-primitive별 실제 구현 우선순위와 후속 phase는 `docs/todo/CORE_PRIMITIVE_ROADMAP.md`를 따른다.
+primitive별 실제 구현 우선순위와 후속 phase는 `docs/todo/CORE_PRIMITIVE_ROADMAP.md`를 따른다.  
+`core::text`의 현재 구현 경계와 언어 코어 기반 surface는 `docs/todo/CORE_TEXT_PLAN.md`를 따른다.
 
 ## 목표
 
@@ -258,6 +259,12 @@ primitive acts 대상: `text`
 
 `text`는 builtin 비소유 UTF-8 view이므로, 초기 `core::text`는 아주 작게 잡는다.
 
+현재 최소 surface는 다음 언어 코어 확장 위에서 구현된다.
+
+1. prefix deref `*`
+2. builtin view fields `.len`, `.data`
+3. `text{ data, len }` zero-copy view constructor
+
 1차 메서드:
 
 1. `is_empty(self) -> bool`
@@ -275,6 +282,8 @@ primitive acts 대상: `text`
 2. splitting iterator
 3. UTF-8 decoding iterator
 4. owned conversion
+
+즉 초기 `core::text`는 freestanding view API만 담당하고, 이후 std의 `String`과 책임이 겹치지 않게 유지한다.
 
 ### E. `core::mem`
 

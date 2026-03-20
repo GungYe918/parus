@@ -1682,6 +1682,37 @@ namespace parus::oir {
             }
 
             case parus::sir::ValueKind::kFieldInit: {
+                if (types != nullptr && v.type != kInvalidId) {
+                    const auto& tv = types->get(v.type);
+                    if (tv.kind == parus::ty::Kind::kBuiltin &&
+                        tv.builtin == parus::ty::Builtin::kText) {
+                        ValueId text_slot = emit_alloca(v.type);
+                        const uint64_t arg_end = (uint64_t)v.arg_begin + (uint64_t)v.arg_count;
+                        if (arg_end <= (uint64_t)sir->args.size()) {
+                            for (uint32_t i = 0; i < v.arg_count; ++i) {
+                                const auto& a = sir->args[v.arg_begin + i];
+                                if (a.value == parus::sir::k_invalid_value) continue;
+
+                                ValueId rhs = lower_value(a.value);
+                                TypeId member_ty = kInvalidId;
+                                if (a.label == "data") {
+                                    if (rhs != kInvalidId && (size_t)rhs < out->values.size()) {
+                                        member_ty = out->values[rhs].ty;
+                                    }
+                                } else if (a.label == "len") {
+                                    member_ty = (TypeId)types->builtin(parus::ty::Builtin::kUSize);
+                                }
+                                if (member_ty == kInvalidId) continue;
+                                rhs = coerce_value_for_target(member_ty, rhs);
+                                ValueId place = emit_field(member_ty, text_slot, std::string(a.label));
+                                emit_store(place, rhs);
+                                consume_owned_sir_value_(a.value, member_ty);
+                            }
+                        }
+                        return text_slot;
+                    }
+                }
+
                 // v0: struct 리터럴은 임시 슬롯에 멤버를 순서대로 store하여 물질화한다.
                 // 반환값은 aggregate slot 포인터 표현을 따른다.
                 ValueId obj_slot = emit_alloca(v.type);
@@ -1785,6 +1816,9 @@ namespace parus::oir {
             case parus::sir::ValueKind::kUnary: {
                 ValueId src = lower_value(v.a);
                 auto tk = static_cast<parus::syntax::TokenKind>(v.op);
+                if (tk == parus::syntax::TokenKind::kStar) {
+                    return emit_load(v.type, src);
+                }
                 if (tk == parus::syntax::TokenKind::kKwTry) {
                     // try expr: capture throwing-call state as nullable.
                     // - if exception flag is set -> null optional
@@ -2318,6 +2352,17 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kField: {
                 ValueId base = lower_value(v.a);
+                if (types != nullptr &&
+                    v.a != parus::sir::k_invalid_value &&
+                    (size_t)v.a < sir->values.size()) {
+                    const auto& base_sv = sir->values[v.a];
+                    const auto& bt = types->get(base_sv.type);
+                    if (bt.kind == parus::ty::Kind::kArray &&
+                        bt.array_has_size &&
+                        v.text == "len") {
+                        return emit_const_int(v.type, std::to_string(bt.array_size));
+                    }
+                }
                 return emit_field(v.type, base, std::string(v.text), {
                     .is_valid = v.external_c_bitfield.is_valid,
                     .storage_offset_bytes = v.external_c_bitfield.storage_offset_bytes,
@@ -2363,10 +2408,22 @@ namespace parus::oir {
 
                 // local 외 place(index/field 등)은 generic store로 남긴다.
                 // (백엔드에서 place 해석을 확장할 수 있도록 형태를 유지)
-                ValueId place_v = lower_value(v.a);
+                ValueId place_v = kInvalidId;
+                TypeId place_target_ty = kInvalidId;
+                if (place.kind == parus::sir::ValueKind::kUnary &&
+                    place.op == static_cast<uint32_t>(parus::syntax::TokenKind::kStar) &&
+                    place.a != parus::sir::k_invalid_value) {
+                    place_v = lower_value(place.a);
+                    place_target_ty = (TypeId)place.type;
+                } else {
+                    place_v = lower_value(v.a);
+                }
                 if (place_v != kInvalidId && (size_t)place_v < out->values.size()) {
+                    if (place_target_ty == kInvalidId) {
+                        place_target_ty = out->values[place_v].ty;
+                    }
                     if (is_null_coalesce_assign && types != nullptr) {
-                        const TypeId target_ty = out->values[place_v].ty;
+                        const TypeId target_ty = place_target_ty;
                         if (target_ty != kInvalidId) {
                             const auto& tt = types->get(target_ty);
                             if (tt.kind == parus::ty::Kind::kOptional && tt.elem != kInvalidId) {
@@ -2378,15 +2435,16 @@ namespace parus::oir {
                             }
                         }
                     }
-                    rhs = coerce_value_for_target(out->values[place_v].ty, rhs);
+                    if (place_target_ty != kInvalidId) {
+                        rhs = coerce_value_for_target(place_target_ty, rhs);
+                    }
                 }
                 emit_store(place_v, rhs);
                 if (place.kind == parus::sir::ValueKind::kField ||
-                    place.kind == parus::sir::ValueKind::kIndex) {
-                    const TypeId target_ty =
-                        (place_v != kInvalidId && (size_t)place_v < out->values.size())
-                            ? out->values[place_v].ty
-                            : kInvalidId;
+                    place.kind == parus::sir::ValueKind::kIndex ||
+                    (place.kind == parus::sir::ValueKind::kUnary &&
+                     place.op == static_cast<uint32_t>(parus::syntax::TokenKind::kStar))) {
+                    const TypeId target_ty = place_target_ty;
                     consume_owned_sir_value_(v.b, target_ty);
                 }
                 return rhs;

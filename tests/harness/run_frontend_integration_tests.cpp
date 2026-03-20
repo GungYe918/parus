@@ -1243,6 +1243,105 @@ namespace {
         return ok;
     }
 
+    static bool test_text_view_surface_and_borrow_deref_ok() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let s: text = "abc";
+                let n: usize = s.len;
+                let p: ptr u8 = s.data;
+                let arr: i32[4] = [1, 2, 3, 4];
+                let k: usize = arr.len;
+                let xs: i32[] = arr;
+                let m: usize = xs.len;
+                let q: ptr i32 = xs.data;
+                set mut x = 1i32;
+                set mut y = 0i32;
+                {
+                    set r = &x;
+                    y = *r;
+                }
+                {
+                    set w = &mut x;
+                    *w = y + 1i32;
+                }
+                manual[abi] {
+                    let t: text = text{ data: p, len: n };
+                    let l: usize = t.len;
+                }
+                if (n == 3usize and k == 4usize and m == 4usize) {
+                    return x;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "text view surface source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "text view surface source must not emit tyck errors");
+        ok &= require_(cap.ok, "text view surface source must pass capability check");
+        ok &= require_(sir.cap.ok, "text view surface source must pass SIR capability check");
+        return ok;
+    }
+
+    static bool test_raw_ptr_deref_manual_gates() {
+        const std::string read_src = R"(
+            def main() -> i32 {
+                let p: ptr i32 = null;
+                let x: i32 = *p;
+                return x;
+            }
+        )";
+
+        auto p_read = parse_program(read_src);
+        (void)run_passes(p_read);
+        auto ty_read = run_tyck(p_read);
+
+        const std::string write_src = R"(
+            def main() -> i32 {
+                let p: ptr mut i32 = null;
+                *p = 7i32;
+                return 0i32;
+            }
+        )";
+
+        auto p_write = parse_program(write_src);
+        (void)run_passes(p_write);
+        auto ty_write = run_tyck(p_write);
+
+        bool ok = true;
+        ok &= require_(p_read.bag.has_error(), "raw ptr read without manual must emit diagnostics");
+        ok &= require_(!ty_read.errors.empty(), "raw ptr read without manual must fail typecheck");
+        ok &= require_(p_write.bag.has_error(), "raw ptr write without manual must emit diagnostics");
+        ok &= require_(!ty_write.errors.empty(), "raw ptr write without manual must fail typecheck");
+        return ok;
+    }
+
+    static bool test_text_view_constructor_requires_manual_abi() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let p: ptr u8 = null;
+                let t: text = text{ data: p, len: 0usize };
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kManualAbiRequired),
+            "text view constructor outside manual[abi] must emit ManualAbiRequired");
+        ok &= require_(!ty.errors.empty(), "text view constructor outside manual[abi] must fail typecheck");
+        return ok;
+    }
+
     static bool test_borrow_read_in_arithmetic_ok() {
         // &i32 파라미터를 산술식에서 읽기 값으로 사용할 수 있어야 한다.
         const std::string src = R"(
@@ -2068,6 +2167,9 @@ int main() {
         {"cap_escape_on_slice_borrow_rejected", test_cap_escape_on_slice_borrow_rejected},
         {"slice_const_oob_diagnostics", test_slice_const_oob_diagnostics},
         {"text_slicing_remains_unsupported", test_text_slicing_remains_unsupported},
+        {"text_view_surface_and_borrow_deref_ok", test_text_view_surface_and_borrow_deref_ok},
+        {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
+        {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},

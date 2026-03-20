@@ -817,6 +817,42 @@
             return types_.make_escape(at);
         }
 
+        if (e.op == K::kStar) {
+            ty::TypeId operand_t = check_expr_(e.a);
+            if (is_error_(operand_t)) return types_.error();
+
+            const auto& ot = types_.get(operand_t);
+            if (ot.kind == ty::Kind::kBorrow) {
+                if (ot.elem == ty::kInvalidType) {
+                    err_(e.span, "borrow dereference target type is invalid");
+                    return types_.error();
+                }
+                return ot.elem;
+            }
+
+            if (ot.kind == ty::Kind::kPtr) {
+                if (ot.elem == ty::kInvalidType) {
+                    err_(e.span, "raw pointer dereference target type is invalid");
+                    return types_.error();
+                }
+                if (!suppress_ownership_read_ &&
+                    !has_manual_permission_(ast::kManualPermGet) &&
+                    !has_manual_permission_(ast::kManualPermSet)) {
+                    diag_(diag::Code::kTypeErrorGeneric, e.span,
+                          "raw pointer dereference requires manual[get] or manual[set]");
+                    err_(e.span, "raw pointer dereference requires manual[get] or manual[set]");
+                    return types_.error();
+                }
+                return ot.elem;
+            }
+
+            diag_(diag::Code::kTypeErrorGeneric, e.span,
+                  std::string("operator '*' requires &T, &mut T, ptr T, or ptr mut T (got ") +
+                      types_.to_string(operand_t) + ")");
+            err_(e.span, "operator '*' requires borrow or raw pointer operand");
+            return types_.error();
+        }
+
         // e.op, e.a
         ty::TypeId at = check_expr_(e.a);
         at = read_decay_borrow_(types_, at);
@@ -1220,6 +1256,32 @@
                 diag_(diag::Code::kEnumDotFieldAccessForbidden, rhs.span);
                 err_(rhs.span, "enum payload field access is only allowed via switch pattern binding");
                 return types_.error();
+            }
+
+            const auto builtin_view_member_type = [&](ty::TypeId owner_t, std::string_view member)
+                -> ty::TypeId {
+                if (owner_t == ty::kInvalidType || is_error_(owner_t)) return ty::kInvalidType;
+                const auto& bt = types_.get(owner_t);
+                if (bt.kind == ty::Kind::kBuiltin && bt.builtin == ty::Builtin::kText) {
+                    if (member == "len") return types_.builtin(ty::Builtin::kUSize);
+                    if (member == "data") {
+                        return types_.make_ptr(types_.builtin(ty::Builtin::kU8), /*is_mut=*/false);
+                    }
+                    return ty::kInvalidType;
+                }
+                if (bt.kind == ty::Kind::kArray) {
+                    if (member == "len") return types_.builtin(ty::Builtin::kUSize);
+                    if (!bt.array_has_size && member == "data" && bt.elem != ty::kInvalidType) {
+                        return types_.make_ptr(bt.elem, /*is_mut=*/false);
+                    }
+                    return ty::kInvalidType;
+                }
+                return ty::kInvalidType;
+            };
+
+            if (const ty::TypeId builtin_member_ty = builtin_view_member_type(base_t, rhs.text);
+                builtin_member_ty != ty::kInvalidType) {
+                return builtin_member_ty;
             }
 
             ty::TypeId imported_union_field_ty = ty::kInvalidType;
@@ -1730,6 +1792,94 @@
             return types_.error();
         }
 
+        auto is_builtin_view_field_lhs = [&](ast::ExprId lhs_eid) -> bool {
+            if (lhs_eid == ast::k_invalid_expr || static_cast<size_t>(lhs_eid) >= ast_.exprs().size()) {
+                return false;
+            }
+            const auto& lhs = ast_.expr(lhs_eid);
+            if (lhs.kind != ast::ExprKind::kBinary || lhs.op != K::kDot ||
+                lhs.a == ast::k_invalid_expr || lhs.b == ast::k_invalid_expr ||
+                static_cast<size_t>(lhs.b) >= ast_.exprs().size()) {
+                return false;
+            }
+
+            const auto& rhs = ast_.expr(lhs.b);
+            if (rhs.kind != ast::ExprKind::kIdent) return false;
+
+            ty::TypeId base_t = check_expr_place_no_read_(lhs.a);
+            base_t = read_decay_borrow_(types_, base_t);
+            if (base_t == ty::kInvalidType || is_error_(base_t)) return false;
+
+            const auto& bt = types_.get(base_t);
+            if (bt.kind == ty::Kind::kBuiltin && bt.builtin == ty::Builtin::kText) {
+                return rhs.text == "len" || rhs.text == "data";
+            }
+            if (bt.kind == ty::Kind::kArray) {
+                if (rhs.text == "len") return true;
+                if (rhs.text == "data" && !bt.array_has_size) return true;
+            }
+            return false;
+        };
+
+        auto classify_deref_write_target = [&](ast::ExprId lhs_eid, ty::TypeId& out_target, bool& out_skip_symbol_mut_check)
+            -> bool {
+            out_skip_symbol_mut_check = false;
+            if (lhs_eid == ast::k_invalid_expr || static_cast<size_t>(lhs_eid) >= ast_.exprs().size()) {
+                return true;
+            }
+
+            const auto& lhs = ast_.expr(lhs_eid);
+            if (lhs.kind != ast::ExprKind::kUnary || lhs.op != K::kStar || lhs.a == ast::k_invalid_expr) {
+                return true;
+            }
+
+            out_skip_symbol_mut_check = true;
+            ty::TypeId operand_t = check_expr_(lhs.a);
+            if (is_error_(operand_t)) return false;
+
+            const auto& ot = types_.get(operand_t);
+            if (ot.kind == ty::Kind::kBorrow) {
+                if (!ot.borrow_is_mut) {
+                    diag_(diag::Code::kTypeErrorGeneric, lhs.span,
+                          "writing through '*' requires &mut T when the operand is a borrow");
+                    err_(lhs.span, "cannot write through shared borrow");
+                    return false;
+                }
+                if (ot.elem == ty::kInvalidType) {
+                    err_(lhs.span, "mutable borrow dereference target type is invalid");
+                    return false;
+                }
+                out_target = ot.elem;
+                return true;
+            }
+
+            if (ot.kind == ty::Kind::kPtr) {
+                if (!ot.ptr_is_mut) {
+                    diag_(diag::Code::kTypeErrorGeneric, lhs.span,
+                          "writing through '*' requires ptr mut T for raw pointers");
+                    err_(lhs.span, "cannot write through immutable raw pointer");
+                    return false;
+                }
+                if (!has_manual_permission_(ast::kManualPermSet)) {
+                    diag_(diag::Code::kTypeErrorGeneric, lhs.span,
+                          "raw pointer write requires manual[set]");
+                    err_(lhs.span, "raw pointer write requires manual[set]");
+                    return false;
+                }
+                if (ot.elem == ty::kInvalidType) {
+                    err_(lhs.span, "mutable raw pointer dereference target type is invalid");
+                    return false;
+                }
+                out_target = ot.elem;
+                return true;
+            }
+
+            diag_(diag::Code::kTypeErrorGeneric, lhs.span,
+                  "assignment through '*' requires &mut T or ptr mut T");
+            err_(lhs.span, "assignment through '*' requires mutable borrow or mutable raw pointer");
+            return false;
+        };
+
         // ------------------------------------------------------------
         // Null-Coalescing Assign: ??=
         //
@@ -1743,15 +1893,31 @@
         // ------------------------------------------------------------
         if (e.op == K::kQuestionQuestionAssign) {
             // e.a = lhs, e.b = rhs
-            if (!is_place_expr_(e.a)) {
+            const bool lhs_is_deref =
+                (e.a != ast::k_invalid_expr &&
+                 static_cast<size_t>(e.a) < ast_.exprs().size() &&
+                 ast_.expr(e.a).kind == ast::ExprKind::kUnary &&
+                 ast_.expr(e.a).op == K::kStar);
+            if (!is_place_expr_(e.a) && !lhs_is_deref) {
                 diag_(diag::Code::kAssignLhsMustBePlace, e.span);
                 err_(e.span, "assignment lhs must be a place expression (ident/index)");
+                (void)check_expr_(e.b);
+                return types_.error();
+            }
+            if (is_builtin_view_field_lhs(e.a)) {
+                diag_(diag::Code::kAssignLhsMustBePlace, e.span);
+                err_(e.span, "builtin view fields are read-only");
                 (void)check_expr_(e.b);
                 return types_.error();
             }
 
             ty::TypeId lt = check_expr_(e.a);
             ty::TypeId lhs_target = lt;
+            bool skip_symbol_mut_check = false;
+            if (!classify_deref_write_target(e.a, lhs_target, skip_symbol_mut_check)) {
+                (void)check_expr_(e.b);
+                return types_.error();
+            }
             {
                 ty::TypeId elem = ty::kInvalidType;
                 bool is_mut_borrow = false;
@@ -1765,7 +1931,7 @@
                 ty::TypeId elem = ty::kInvalidType;
                 bool is_mut_borrow = false;
                 const bool write_through_borrow = borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow;
-                if (!write_through_borrow) {
+                if (!write_through_borrow && !skip_symbol_mut_check) {
                     if (auto sid = root_place_symbol_(e.a)) {
                         if (!is_mutable_symbol_(*sid)) {
                             diag_(diag::Code::kWriteToImmutable, e.span, "assignment");
@@ -1814,13 +1980,29 @@
         // 기존 '=' / 기타 대입류 (현 로직 유지)
         // ------------------------------------------------------------
         // e.a = lhs, e.b = rhs
-        if (!is_place_expr_(e.a)) {
+        const bool lhs_is_deref =
+            (e.a != ast::k_invalid_expr &&
+             static_cast<size_t>(e.a) < ast_.exprs().size() &&
+             ast_.expr(e.a).kind == ast::ExprKind::kUnary &&
+             ast_.expr(e.a).op == K::kStar);
+        if (!is_place_expr_(e.a) && !lhs_is_deref) {
             diag_(diag::Code::kAssignLhsMustBePlace, e.span);
             err_(e.span, "assignment lhs must be a place expression (ident/index)");
+        }
+        if (is_builtin_view_field_lhs(e.a)) {
+            diag_(diag::Code::kAssignLhsMustBePlace, e.span);
+            err_(e.span, "builtin view fields are read-only");
+            (void)check_expr_(e.b);
+            return types_.error();
         }
 
         ty::TypeId lt = (e.op == K::kAssign) ? check_expr_place_no_read_(e.a) : check_expr_(e.a);
         ty::TypeId lhs_target = lt;
+        bool skip_symbol_mut_check = false;
+        if (!classify_deref_write_target(e.a, lhs_target, skip_symbol_mut_check)) {
+            (void)check_expr_(e.b);
+            return types_.error();
+        }
         {
             ty::TypeId elem = ty::kInvalidType;
             bool is_mut_borrow = false;
@@ -1838,11 +2020,11 @@
             }
         }
 
-        if (is_place_expr_(e.a)) {
+        if (is_place_expr_(e.a) || lhs_is_deref) {
             ty::TypeId elem = ty::kInvalidType;
             bool is_mut_borrow = false;
             const bool write_through_borrow = borrow_info_(types_, lt, elem, is_mut_borrow) && is_mut_borrow;
-            if (!write_through_borrow) {
+            if (!write_through_borrow && !skip_symbol_mut_check) {
                 if (auto sid = root_place_symbol_(e.a)) {
                     if (!is_mutable_symbol_(*sid)) {
                         diag_(diag::Code::kWriteToImmutable, e.span, "assignment");

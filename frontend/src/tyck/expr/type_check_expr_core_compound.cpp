@@ -110,6 +110,89 @@
             }
         }
 
+        if (e.text == "text") {
+            if (!has_manual_permission_(ast::kManualPermAbi)) {
+                diag_(diag::Code::kManualAbiRequired, e.span);
+                err_(e.span, "text view construction requires manual[abi]");
+                return types_.error();
+            }
+
+            const ty::TypeId text_ty = types_.builtin(ty::Builtin::kText);
+            const ty::TypeId usize_ty = types_.builtin(ty::Builtin::kUSize);
+            const auto& inits = ast_.field_init_entries();
+
+            auto is_byte_compatible_ptr = [&](ty::TypeId t) -> bool {
+                if (t == ty::kInvalidType || is_error_(t)) return false;
+                const auto& tt = types_.get(t);
+                if (tt.kind != ty::Kind::kPtr || tt.elem == ty::kInvalidType) return false;
+                const auto& et = types_.get(tt.elem);
+                if (et.kind != ty::Kind::kBuiltin) return false;
+                switch (et.builtin) {
+                    case ty::Builtin::kU8:
+                    case ty::Builtin::kI8:
+                    case ty::Builtin::kCChar:
+                    case ty::Builtin::kCSChar:
+                    case ty::Builtin::kCUChar:
+                        return true;
+                    default:
+                        return false;
+                }
+            };
+
+            bool saw_data = false;
+            bool saw_len = false;
+            std::unordered_set<std::string_view> seen_members;
+            seen_members.reserve(e.field_init_count);
+
+            for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                const auto& ent = inits[e.field_init_begin + i];
+                const bool inserted = seen_members.insert(ent.name).second;
+                if (!inserted) {
+                    diag_(diag::Code::kFieldInitDuplicateMember, ent.span, ent.name);
+                    err_(ent.span, "duplicate member in text view initializer: " + std::string(ent.name));
+                    if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+                    continue;
+                }
+
+                if (ent.name == "data") {
+                    saw_data = true;
+                    const ty::TypeId data_ty = check_expr_(ent.expr);
+                    if (!is_byte_compatible_ptr(data_ty)) {
+                        diag_(diag::Code::kTypeAssignMismatch, ent.span,
+                              "ptr u8-compatible", type_for_user_diag_(data_ty, ent.expr));
+                        err_(ent.span, "text.data requires a byte-compatible raw pointer");
+                    }
+                    continue;
+                }
+
+                if (ent.name == "len") {
+                    saw_len = true;
+                    const CoercionPlan plan = classify_assign_with_coercion_(
+                        AssignSite::FieldInit, usize_ty, ent.expr, ent.span);
+                    if (!plan.ok) {
+                        diag_(diag::Code::kTypeAssignMismatch, ent.span,
+                              types_.to_string(usize_ty), type_for_user_diag_(plan.src_after, ent.expr));
+                        err_(ent.span, "text.len requires a usize-compatible expression");
+                    }
+                    continue;
+                }
+
+                diag_(diag::Code::kFieldInitUnknownMember, ent.span, "text", ent.name);
+                err_(ent.span, "unknown member in text view initializer: " + std::string(ent.name));
+                if (ent.expr != ast::k_invalid_expr) (void)check_expr_(ent.expr);
+            }
+
+            if (!saw_data) {
+                diag_(diag::Code::kFieldInitMissingMember, e.span, "text", "data");
+                err_(e.span, "missing member in text view initializer: data");
+            }
+            if (!saw_len) {
+                diag_(diag::Code::kFieldInitMissingMember, e.span, "text", "len");
+                err_(e.span, "missing member in text view initializer: len");
+            }
+            return text_ty;
+        }
+
         if (field_ty == ty::kInvalidType) {
             diag_(diag::Code::kFieldInitTypeExpected, e.span, literal_head);
             err_(e.span, "field initializer head must resolve to a struct type");
