@@ -308,8 +308,9 @@ primitive acts 대상: `text`
 
 현재 구현 정책:
 
-1. `size_of<T>()`는 fake body를 두지 않는다
+1. `size_of<T>()`는 compiler-owned 경로에서는 fake body를 두지 않는다
 2. `$![Impl::SizeOf] export def size_of<T>() -> usize;`로 선언한다
+3. 같은 key에 body가 있으면 library-owned ordinary function으로 취급한다
 3. compiler가 ABI/layout contract를 책임진다
 
 2차 free fn:
@@ -339,9 +340,10 @@ primitive acts 대상: `text`
 
 현재 구현 정책:
 
-1. `spin_loop()`는 fake body를 두지 않는다
+1. `spin_loop()`는 compiler-owned 경로에서는 fake body를 두지 않는다
 2. `$![Impl::SpinLoop] export def spin_loop() -> void;`로 선언한다
-3. `unreachable()`는 의미가 아직 trap/unchecked로 고정되지 않았으므로 별도 라운드까지 fake body를 유지한다
+3. 같은 key에 body가 있으면 library-owned ordinary function으로 취급한다
+4. `unreachable()`는 의미가 아직 trap/unchecked로 고정되지 않았으므로 별도 라운드까지 fake body를 유지한다
 
 ### G. `core::ops`
 
@@ -478,7 +480,7 @@ Parus에는 `T[]`가 있지만, Rust `core::slice` 수준의 알고리즘 표면
 
 위 1차 세트가 끝나면 다음은 이 순서가 맞다.
 
-1. `size_of/align_of`는 현재 `Impl::SizeOf`, `Impl::AlignOf`로 선언하고, 장기적으로는 `inst` query surface 성숙 이후 이관 가능성을 검토한다
+1. `size_of/align_of`는 현재 `Impl::SizeOf`, `Impl::AlignOf`로 선언하고, bodyless면 compiler-owned / body 있으면 library-owned로 나눈다. 장기적으로는 `inst` query surface 성숙 이후 이관 가능성을 검토한다
 2. optional helper free fn
 3. text prefix/suffix API
 4. checked/wrapping/saturating arithmetic

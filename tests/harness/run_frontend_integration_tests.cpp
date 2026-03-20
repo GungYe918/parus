@@ -1391,15 +1391,25 @@ namespace {
             }
         )";
 
+        const std::string impl_unknown_with_body_src = R"(
+            $![Impl::Spawn]
+            export def spawn() -> i32 {
+                return 0i32;
+            }
+        )";
+
         auto attached = parse_program(attached_src);
         auto ordinary = parse_program(ordinary_bodyless_src);
         auto impl_with_body = parse_program(impl_with_body_src);
+        auto impl_unknown_with_body = parse_program(impl_unknown_with_body_src);
 
         bool ok = true;
         ok &= require_(!attached.bag.has_error(), "attached Impl::* declarations must parse without syntax errors");
         ok &= require_(ordinary.bag.has_error(), "ordinary bodyless def must remain a syntax error");
         ok &= require_(!impl_with_body.bag.has_error(),
-                       "attached Impl::* declaration with body should remain syntactically valid and fail in tyck");
+                       "recognized attached Impl::* declaration with body must remain syntactically valid");
+        ok &= require_(!impl_unknown_with_body.bag.has_error(),
+                       "unknown attached Impl::* declaration with body must remain syntactically valid");
         return ok;
     }
 

@@ -20,6 +20,13 @@ namespace parus::tyck {
     using detail::parse_int_literal_;
 
     namespace {
+        std::string_view parse_impl_binding_mode_(std::string_view payload) {
+            if (!payload.starts_with("parus_impl_binding|key=")) return {};
+            const size_t mode_pos = payload.find("|mode=");
+            if (mode_pos == std::string_view::npos) return "compiler";
+            return payload.substr(mode_pos + std::string_view("|mode=").size());
+        }
+
         struct CImportCallMeta {
             bool is_c_import = false;
             bool is_c_decl = false;
@@ -1900,7 +1907,10 @@ namespace parus::tyck {
             };
 
             const auto& direct_sym = sym_.symbol(direct_ident_symbol);
-            const ImplBindingKind impl_binding = parse_impl_binding_payload_(direct_sym.external_payload);
+            const ImplBindingKind impl_binding =
+                (parse_impl_binding_mode_(direct_sym.external_payload) == "compiler")
+                    ? parse_impl_binding_payload_(direct_sym.external_payload)
+                    : ImplBindingKind::kNone;
 
             if (impl_binding == ImplBindingKind::kSpinLoop) {
                 if (form != CallForm::kPositionalOnly || !outside_positional.empty() || !outside_labeled.empty()) {

@@ -141,9 +141,15 @@
         auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
             if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
             const ast::Stmt& s = ast_.stmt(sid);
+            std::string stmt_impl_key{};
             ImplBindingKind stmt_impl_binding = ImplBindingKind::kNone;
+            const bool has_any_impl_binding = stmt_impl_binding_key_(s, stmt_impl_key);
             if (stmt_impl_binding_kind_(s, stmt_impl_binding) && s.kind != ast::StmtKind::kFnDecl) {
                 const std::string msg = "recognized $![Impl::*] binding is only allowed on function declarations";
+                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                err_(s.span, msg);
+            } else if (has_any_impl_binding && s.kind != ast::StmtKind::kFnDecl) {
+                const std::string msg = "attached $![Impl::*] binding is only allowed on function declarations";
                 diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                 err_(s.span, msg);
             }
@@ -261,7 +267,14 @@
                 const ty::TypeId sig = build_fn_sig(s);
                 ImplBindingKind impl_binding = ImplBindingKind::kNone;
                 (void)stmt_impl_binding_kind_(s, impl_binding);
-                const std::string impl_payload = make_impl_binding_payload_(impl_binding);
+                std::string impl_key{};
+                const bool has_impl_binding = stmt_impl_binding_key_(s, impl_key);
+                const bool compiler_owned_impl =
+                    has_impl_binding &&
+                    impl_binding != ImplBindingKind::kNone &&
+                    s.a == ast::k_invalid_stmt;
+                const std::string impl_payload =
+                    has_impl_binding ? make_impl_binding_payload_(impl_key, compiler_owned_impl) : std::string{};
 
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
@@ -1693,15 +1706,21 @@
 
     TypeChecker::ImplBindingKind TypeChecker::parse_impl_binding_payload_(std::string_view payload) const {
         if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
-        const std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+        std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+        std::string_view mode{};
+        if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
+            mode = key.substr(mode_pos + std::string_view("|mode=").size());
+            key = key.substr(0, mode_pos);
+        }
+        if (!mode.empty() && mode != "compiler") return ImplBindingKind::kNone;
         if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
         if (key == "Impl::SizeOf") return ImplBindingKind::kSizeOf;
         if (key == "Impl::AlignOf") return ImplBindingKind::kAlignOf;
         return ImplBindingKind::kNone;
     }
 
-    bool TypeChecker::stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const {
-        out_kind = ImplBindingKind::kNone;
+    bool TypeChecker::stmt_impl_binding_key_(const ast::Stmt& s, std::string& out_key) const {
+        out_key.clear();
         if (s.directive_target_path_count != 0) return false;
         if (s.directive_key_path_count != 2) return false;
 
@@ -1710,8 +1729,17 @@
         const uint64_t end = begin + s.directive_key_path_count;
         if (begin > segs.size() || end > segs.size()) return false;
         if (segs[s.directive_key_path_begin] != "Impl") return false;
+        if (segs[s.directive_key_path_begin + 1] == "Core") return false;
+        out_key = "Impl::";
+        out_key += segs[s.directive_key_path_begin + 1];
+        return true;
+    }
 
-        const std::string_view leaf = segs[s.directive_key_path_begin + 1];
+    bool TypeChecker::stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const {
+        out_kind = ImplBindingKind::kNone;
+        std::string key{};
+        if (!stmt_impl_binding_key_(s, key)) return false;
+        const std::string_view leaf = std::string_view(key).substr(std::string_view("Impl::").size());
         if (leaf == "SpinLoop") out_kind = ImplBindingKind::kSpinLoop;
         else if (leaf == "SizeOf") out_kind = ImplBindingKind::kSizeOf;
         else if (leaf == "AlignOf") out_kind = ImplBindingKind::kAlignOf;
@@ -1721,12 +1749,19 @@
 
     std::string TypeChecker::make_impl_binding_payload_(ImplBindingKind kind) const {
         switch (kind) {
-            case ImplBindingKind::kSpinLoop: return "parus_impl_binding|key=Impl::SpinLoop";
-            case ImplBindingKind::kSizeOf: return "parus_impl_binding|key=Impl::SizeOf";
-            case ImplBindingKind::kAlignOf: return "parus_impl_binding|key=Impl::AlignOf";
+            case ImplBindingKind::kSpinLoop: return make_impl_binding_payload_("Impl::SpinLoop", /*compiler_owned=*/true);
+            case ImplBindingKind::kSizeOf: return make_impl_binding_payload_("Impl::SizeOf", /*compiler_owned=*/true);
+            case ImplBindingKind::kAlignOf: return make_impl_binding_payload_("Impl::AlignOf", /*compiler_owned=*/true);
             case ImplBindingKind::kNone: break;
         }
         return {};
+    }
+
+    std::string TypeChecker::make_impl_binding_payload_(std::string_view key, bool compiler_owned) const {
+        std::string payload = "parus_impl_binding|key=";
+        payload += key;
+        payload += compiler_owned ? "|mode=compiler" : "|mode=library";
+        return payload;
     }
 
     void TypeChecker::collect_core_impl_marker_file_ids_(ast::StmtId program_stmt) {

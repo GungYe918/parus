@@ -375,7 +375,7 @@ namespace parus {
         Span end = target_ok ? target_span : key_span;
         const bool is_tag_form = key_ok && !has_target;
         const bool is_core_marker = is_tag_form && is_core_impl_marker_path_(key_begin, key_count);
-        const bool is_recognized_impl = is_tag_form && is_recognized_impl_binding_path_(key_begin, key_count);
+        const bool is_impl_binding = is_tag_form && is_impl_binding_path_(key_begin, key_count);
 
         if (cursor_.at(K::kSemicolon)) {
             end = cursor_.bump().span;
@@ -402,7 +402,7 @@ namespace parus {
                     seen_core_impl_marker_ = true;
                     core_impl_file_mode_ = true;
                 }
-            } else if (!is_recognized_impl) {
+            } else if (!is_impl_binding) {
                 diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, s.span);
             }
 
@@ -418,7 +418,7 @@ namespace parus {
 
         if (is_core_marker) {
             diag_report(diag::Code::kDirectiveCoreMarkerMustBeHeader, span_join(start.span, end));
-        } else if (!is_recognized_impl) {
+        } else if (!is_impl_binding) {
             diag_report_warn(diag::Code::kDirectiveIntrinsicPolicyPending, span_join(start.span, end));
         }
 

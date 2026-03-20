@@ -736,9 +736,13 @@ namespace parusc::p0 {
                     if (begin <= segs.size() && end <= segs.size() &&
                         segs[s.directive_key_path_begin] == "Impl") {
                         const std::string_view leaf = segs[s.directive_key_path_begin + 1];
-                        if (leaf == "SpinLoop" || leaf == "SizeOf" || leaf == "AlignOf") {
+                        if (leaf != "Core") {
                             inst_payload = "parus_impl_binding|key=Impl::";
                             inst_payload += leaf;
+                            const bool compiler_owned =
+                                (s.a == parus::ast::k_invalid_stmt) &&
+                                (leaf == "SpinLoop" || leaf == "SizeOf" || leaf == "AlignOf");
+                            inst_payload += compiler_owned ? "|mode=compiler" : "|mode=library";
                         }
                     }
                 }

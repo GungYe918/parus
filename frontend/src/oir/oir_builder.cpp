@@ -3967,19 +3967,35 @@ namespace parus::oir {
                    module_match;
         };
 
-        auto parse_impl_binding_payload_ = [](std::string_view payload) -> std::string_view {
-            if (!payload.starts_with("parus_impl_binding|key=")) return {};
-            return payload.substr(std::string_view("parus_impl_binding|key=").size());
+        struct ParsedImplBindingPayload {
+            std::string_view key{};
+            bool compiler_owned = false;
+        };
+
+        auto parse_impl_binding_payload_ = [](std::string_view payload) -> ParsedImplBindingPayload {
+            ParsedImplBindingPayload out{};
+            if (!payload.starts_with("parus_impl_binding|key=")) return out;
+            std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view mode = "compiler";
+            if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
+                mode = key.substr(mode_pos + std::string_view("|mode=").size());
+                key = key.substr(0, mode_pos);
+            }
+            out.key = key;
+            out.compiler_owned = (mode == "compiler");
+            return out;
         };
 
         auto func_has_impl_binding_ = [&](const parus::sir::Func& sf, std::string_view key) -> bool {
-            if (parse_impl_binding_payload_(sf.external_payload) == key) return true;
+            const auto direct = parse_impl_binding_payload_(sf.external_payload);
+            if (direct.compiler_owned && direct.key == key) return true;
             if (sym_ == nullptr ||
                 sf.sym == parus::sir::k_invalid_symbol ||
                 static_cast<size_t>(sf.sym) >= sym_->symbols().size()) {
                 return false;
             }
-            return parse_impl_binding_payload_(sym_->symbol(sf.sym).external_payload) == key;
+            const auto via_sym = parse_impl_binding_payload_(sym_->symbol(sf.sym).external_payload);
+            return via_sym.compiler_owned && via_sym.key == key;
         };
 
         auto parse_core_mem_intrinsic_ty_ = [&](const parus::sir::Func& sf, std::string_view leaf) -> std::optional<TypeId> {

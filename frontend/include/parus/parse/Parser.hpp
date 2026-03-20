@@ -263,6 +263,7 @@ namespace parus {
         bool parse_macro_call_payload_tokens(uint32_t& out_begin, uint32_t& out_count, Span& out_span);
         bool parse_compiler_directive_path(uint32_t& out_path_begin, uint32_t& out_path_count, Span& out_span);
         bool is_core_impl_marker_path_(uint32_t path_begin, uint32_t path_count) const;
+        bool is_impl_binding_path_(uint32_t path_begin, uint32_t path_count) const;
         bool is_recognized_impl_binding_path_(uint32_t path_begin, uint32_t path_count) const;
         bool pending_attached_impl_binding_recognized_() const;
 

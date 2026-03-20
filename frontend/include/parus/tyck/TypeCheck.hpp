@@ -628,8 +628,10 @@ namespace parus::tyck {
         void collect_core_impl_marker_file_ids_(ast::StmtId program_stmt);
         bool is_core_impl_marker_stmt_(const ast::Stmt& s) const;
         ImplBindingKind parse_impl_binding_payload_(std::string_view payload) const;
+        bool stmt_impl_binding_key_(const ast::Stmt& s, std::string& out_key) const;
         bool stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const;
         std::string make_impl_binding_payload_(ImplBindingKind kind) const;
+        std::string make_impl_binding_payload_(std::string_view key, bool compiler_owned) const;
         bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,

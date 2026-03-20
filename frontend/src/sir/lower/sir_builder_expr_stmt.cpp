@@ -15,7 +15,13 @@ namespace parus::sir::detail {
 
         ImplBindingKind parse_impl_binding_payload_(std::string_view payload) {
             if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
-            const std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view mode = "compiler";
+            if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
+                mode = key.substr(mode_pos + std::string_view("|mode=").size());
+                key = key.substr(0, mode_pos);
+            }
+            if (mode != "compiler") return ImplBindingKind::kNone;
             if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
             if (key == "Impl::SizeOf") return ImplBindingKind::kSizeOf;
             if (key == "Impl::AlignOf") return ImplBindingKind::kAlignOf;

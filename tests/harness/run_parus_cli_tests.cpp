@@ -907,6 +907,8 @@ bool test_impl_binding_surface_policy() {
     }
 
     const auto non_core = temp_root / "non_core.pr";
+    const auto non_core_with_body = temp_root / "non_core_with_body.pr";
+    const auto non_core_unknown_with_body = temp_root / "non_core_unknown_with_body.pr";
     const auto core_no_marker = temp_root / "core_no_marker.pr";
     const auto core_ok = temp_root / "core_ok.pr";
     const auto core_with_body = temp_root / "core_with_body.pr";
@@ -935,6 +937,18 @@ bool test_impl_binding_surface_policy() {
         "export def spin_loop() -> void {\n"
         "}\n";
 
+    const std::string non_core_with_body_src =
+        "$![Impl::SizeOf]\n"
+        "export def size_of<T>() -> usize {\n"
+        "  return 0usize;\n"
+        "}\n";
+
+    const std::string non_core_unknown_with_body_src =
+        "$![Impl::Spawn]\n"
+        "export def spawn() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+
     const std::string core_bad_sig_src =
         "$![Impl::Core];\n"
         "\n"
@@ -951,6 +965,8 @@ bool test_impl_binding_surface_policy() {
         "export def nope() -> void;\n";
 
     if (!write_text(non_core, impl_decls) ||
+        !write_text(non_core_with_body, non_core_with_body_src) ||
+        !write_text(non_core_unknown_with_body, non_core_unknown_with_body_src) ||
         !write_text(core_no_marker, impl_decls) ||
         !write_text(core_ok, core_ok_src) ||
         !write_text(core_with_body, core_with_body_src) ||
@@ -975,15 +991,29 @@ bool test_impl_binding_surface_policy() {
 
     auto [rc_non_core, out_non_core] = run_tool(non_core, "app");
     if (rc_non_core == 0 ||
-        !contains(out_non_core, "requires bundle 'core' and file marker '$![Impl::Core];'")) {
-        std::cerr << "non-core Impl::* surface should fail\n" << out_non_core;
+        !contains(out_non_core, "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'")) {
+        std::cerr << "non-core bodyless recognized Impl::* surface should fail\n" << out_non_core;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_non_core_with_body, out_non_core_with_body] = run_tool(non_core_with_body, "app");
+    if (rc_non_core_with_body != 0) {
+        std::cerr << "non-core recognized Impl::* with body should pass as library-owned surface\n" << out_non_core_with_body;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_non_core_unknown_with_body, out_non_core_unknown_with_body] = run_tool(non_core_unknown_with_body, "app");
+    if (rc_non_core_unknown_with_body != 0) {
+        std::cerr << "non-core unknown Impl::* with body should pass as metadata-only surface\n" << out_non_core_unknown_with_body;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
     auto [rc_core_no_marker, out_core_no_marker] = run_tool(core_no_marker, "core");
     if (rc_core_no_marker == 0 ||
-        !contains(out_core_no_marker, "requires bundle 'core' and file marker '$![Impl::Core];'")) {
+        !contains(out_core_no_marker, "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'")) {
         std::cerr << "core Impl::* surface without marker should fail\n" << out_core_no_marker;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -997,16 +1027,15 @@ bool test_impl_binding_surface_policy() {
     }
 
     auto [rc_core_with_body, out_core_with_body] = run_tool(core_with_body, "core");
-    if (rc_core_with_body == 0 ||
-        !contains(out_core_with_body, "recognized $![Impl::*] binding must not define a body")) {
-        std::cerr << "recognized Impl::* with body should fail\n" << out_core_with_body;
+    if (rc_core_with_body != 0) {
+        std::cerr << "recognized Impl::* with body should pass as library-owned surface\n" << out_core_with_body;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
     auto [rc_core_bad_sig, out_core_bad_sig] = run_tool(core_bad_sig, "core");
     if (rc_core_bad_sig == 0 ||
-        !contains(out_core_bad_sig, "$![Impl::SizeOf] requires signature 'def size_of<T>() -> usize;'")) {
+        !contains(out_core_bad_sig, "$![Impl::SizeOf] requires signature 'def size_of<T>() -> usize'")) {
         std::cerr << "recognized Impl::* with wrong signature should fail\n" << out_core_bad_sig;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1024,6 +1053,69 @@ bool test_impl_binding_surface_policy() {
     std::filesystem::remove_all(temp_root, ec);
     if (rc_ordinary_bodyless == 0) {
         std::cerr << "ordinary bodyless def must remain a syntax error\n" << out_ordinary_bodyless;
+        return false;
+    }
+    return true;
+}
+
+bool test_impl_binding_library_owned_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-impl-binding-library-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "app";
+    const std::string src =
+        "static mut touched: i32 = 0i32;\n"
+        "\n"
+        "$![Impl::SpinLoop]\n"
+        "export def spin_loop() -> void {\n"
+        "  touched = 1i32;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  spin_loop();\n"
+        "  return touched;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write Impl::* runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for Impl::* runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "library-owned Impl::* runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "library-owned Impl::* runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:1")) {
+        std::cerr << "library-owned Impl::* must run ordinary body, not compiler intrinsic\n" << out_run;
         return false;
     }
     return true;
@@ -1479,9 +1571,9 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"replace\"") ||
         !contains(core_index_text, "\"path\":\"unreachable\"") ||
         !contains(core_index_text, "\"path\":\"spin_loop\"") ||
-        !contains(core_index_text, "parus_impl_binding|key=Impl::SizeOf") ||
-        !contains(core_index_text, "parus_impl_binding|key=Impl::AlignOf") ||
-        !contains(core_index_text, "parus_impl_binding|key=Impl::SpinLoop")) {
+        !contains(core_index_text, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
+        !contains(core_index_text, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
+        !contains(core_index_text, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {
         std::cerr << "core export-index must include mem/hint helper symbols and impl bindings\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1758,9 +1850,9 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"replace\"") ||
         !contains(installed_core_index, "\"path\":\"unreachable\"") ||
         !contains(installed_core_index, "\"path\":\"spin_loop\"") ||
-        !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf") ||
-        !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf") ||
-        !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop")) {
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -5591,74 +5683,75 @@ int main() {
     const bool ok13 = test_same_bundle_multi_module_runtime_call();
     const bool ok14 = test_builtin_acts_policy_core_gate();
     const bool ok15 = test_impl_binding_surface_policy();
-    const bool ok16 = test_auto_core_export_index_loaded_for_non_core_bundle();
-    const bool ok17 = test_bundle_alias_proto_impl_path_resolves();
-    const bool ok18 = test_bundle_relative_import_resolves();
-    const bool ok19 = test_bundle_parent_relative_import_resolves();
-    const bool ok20 = test_bundle_grandparent_relative_import_resolves();
-    const bool ok21 = test_core_marker_bare_use_special_form();
-    const bool ok22 = test_import_keyword_path_rejected();
-    const bool ok23 = test_c_header_import_local_non_variadic();
-    const bool ok24 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
-    const bool ok25 = test_c_header_import_stdio_variadic_requires_manual_abi();
-    const bool ok26 = test_c_header_import_stdio_variadic_zero_tail_no_manual_abi();
-    const bool ok27 = test_c_header_import_stdio_format_bridge_single_arg();
-    const bool ok28 = test_extern_c_variadic_manual_abi_and_null_boundary();
-    const bool ok29 = test_c_header_import_cstr_runtime_prints_consistent_output();
-    const bool ok30 = test_c_header_import_include_dir_option();
-    const bool ok31 = test_lei_module_bundle_cimport_isystem_option();
-    const bool ok32 = test_c_header_import_union_manual_get_gate();
-    const bool ok33 = test_c_header_import_union_manual_set_gate();
-    const bool ok34 = test_c_header_import_struct_borrow_escape_rules();
-    const bool ok35 = test_c_header_import_enum_constant_usage();
-    const bool ok36 = test_c_header_import_global_and_tls_usage();
-    const bool ok37 = test_c_header_import_const_global_write_rejected();
-    const bool ok38 = test_c_header_import_define_undefine_options();
-    const bool ok39 = test_c_header_import_imacros_option();
-    const bool ok40 = test_c_header_import_forced_include_option();
-    const bool ok41 = test_c_header_import_anonymous_typedef_struct_usage();
-    const bool ok42 = test_c_header_import_transparent_typedef_uint32_assign();
-    const bool ok43 = test_c_header_import_nominal_typedef_record_stays_nominal();
-    const bool ok44 = test_c_header_import_function_pointer_alias_call();
-    const bool ok45 = test_c_header_import_function_like_macro_not_imported();
-    const bool ok46 = test_c_header_import_function_like_macro_direct_alias_call();
-    const bool ok47 = test_c_header_import_function_like_macro_shim_link_success();
-    const bool ok48 = test_c_header_import_function_like_macro_skip_warning();
-    const bool ok49 = test_c_header_import_function_like_macro_ir_only_supported();
-    const bool ok50 = test_c_header_import_function_like_macro_chain_promoted();
-    const bool ok51 = test_c_header_import_object_macro_const_expr_resolved();
-    const bool ok52 = test_c_header_import_function_like_macro_chain_cycle_warns();
-    const bool ok53 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
-    const bool ok54 = test_c_header_import_bitfield_read_write_no_shim();
-    const bool ok55 = test_c_header_import_bitfield_exotic_layout_hard_error();
-    const bool ok56 = test_c_header_import_flatten_collision_hard_error();
-    const bool ok57 = test_c_header_import_macos_opengl_isystem();
-    const bool ok58 = test_c_header_import_macos_moltenvk_isystem();
-    const bool ok59 = test_actor_rejected_in_no_std_profile();
-    const bool ok60 = test_actor_allowed_in_freestanding_profile();
-    const bool ok61 = test_hosted_actor_link_uses_clang_driver();
-    const bool ok62 = test_hosted_actor_parus_lld_mode_succeeds();
-    const bool ok63 = test_core_ext_scaffold_and_auto_injection();
-    const bool ok64 = test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit();
-    const bool ok65 = test_c_header_import_variadic_function_pointer_global_and_field_calls();
-    const bool ok66 = test_c_header_import_variadic_function_pointer_zero_tail_calls_without_manual_abi();
-    const bool ok67 = test_c_header_import_dropped_global_decl_preserves_supported_imports();
-    const bool ok68 = test_c_header_import_dropped_owner_record_preserves_supported_imports();
-    const bool ok69 = test_iteration_array_loop_runtime();
-    const bool ok70 = test_iteration_slice_loop_runtime();
-    const bool ok71 = test_iteration_range_loop_runtime();
-    const bool ok72 = test_iteration_unsupported_iterable_hard_error();
-    const bool ok73 = test_iteration_pure_infer_range_runtime_and_regressions();
-    const bool ok74 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
-    const bool ok75 = test_unsuffixed_array_literal_slice_runtime_and_llvm();
-    const bool ok76 = test_unsuffixed_named_array_to_slice_runtime();
-    const bool ok77 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
-    const bool ok78 = test_unsuffixed_array_literal_float_context_rejected();
-    const bool ok79 = test_iteration_loop_break_value_context_syntax_only();
-    const bool ok80 = test_core_seed_export_index_and_auto_injection();
-    const bool ok81 = test_core_seed_runtime_smoke();
-    const bool ok82 = test_text_view_cstr_preflight_syntax_only();
-    const bool ok83 = test_cstr_private_fields_hidden_but_helpers_work();
+    const bool ok16 = test_impl_binding_library_owned_runtime();
+    const bool ok17 = test_auto_core_export_index_loaded_for_non_core_bundle();
+    const bool ok18 = test_bundle_alias_proto_impl_path_resolves();
+    const bool ok19 = test_bundle_relative_import_resolves();
+    const bool ok20 = test_bundle_parent_relative_import_resolves();
+    const bool ok21 = test_bundle_grandparent_relative_import_resolves();
+    const bool ok22 = test_core_marker_bare_use_special_form();
+    const bool ok23 = test_import_keyword_path_rejected();
+    const bool ok24 = test_c_header_import_local_non_variadic();
+    const bool ok25 = test_c_header_import_stdio_variadic_fixed_arg_count_checked();
+    const bool ok26 = test_c_header_import_stdio_variadic_requires_manual_abi();
+    const bool ok27 = test_c_header_import_stdio_variadic_zero_tail_no_manual_abi();
+    const bool ok28 = test_c_header_import_stdio_format_bridge_single_arg();
+    const bool ok29 = test_extern_c_variadic_manual_abi_and_null_boundary();
+    const bool ok30 = test_c_header_import_cstr_runtime_prints_consistent_output();
+    const bool ok31 = test_c_header_import_include_dir_option();
+    const bool ok32 = test_lei_module_bundle_cimport_isystem_option();
+    const bool ok33 = test_c_header_import_union_manual_get_gate();
+    const bool ok34 = test_c_header_import_union_manual_set_gate();
+    const bool ok35 = test_c_header_import_struct_borrow_escape_rules();
+    const bool ok36 = test_c_header_import_enum_constant_usage();
+    const bool ok37 = test_c_header_import_global_and_tls_usage();
+    const bool ok38 = test_c_header_import_const_global_write_rejected();
+    const bool ok39 = test_c_header_import_define_undefine_options();
+    const bool ok40 = test_c_header_import_imacros_option();
+    const bool ok41 = test_c_header_import_forced_include_option();
+    const bool ok42 = test_c_header_import_anonymous_typedef_struct_usage();
+    const bool ok43 = test_c_header_import_transparent_typedef_uint32_assign();
+    const bool ok44 = test_c_header_import_nominal_typedef_record_stays_nominal();
+    const bool ok45 = test_c_header_import_function_pointer_alias_call();
+    const bool ok46 = test_c_header_import_function_like_macro_not_imported();
+    const bool ok47 = test_c_header_import_function_like_macro_direct_alias_call();
+    const bool ok48 = test_c_header_import_function_like_macro_shim_link_success();
+    const bool ok49 = test_c_header_import_function_like_macro_skip_warning();
+    const bool ok50 = test_c_header_import_function_like_macro_ir_only_supported();
+    const bool ok51 = test_c_header_import_function_like_macro_chain_promoted();
+    const bool ok52 = test_c_header_import_object_macro_const_expr_resolved();
+    const bool ok53 = test_c_header_import_function_like_macro_chain_cycle_warns();
+    const bool ok54 = test_c_header_import_function_like_macro_nested_paren_cast_forwarding();
+    const bool ok55 = test_c_header_import_bitfield_read_write_no_shim();
+    const bool ok56 = test_c_header_import_bitfield_exotic_layout_hard_error();
+    const bool ok57 = test_c_header_import_flatten_collision_hard_error();
+    const bool ok58 = test_c_header_import_macos_opengl_isystem();
+    const bool ok59 = test_c_header_import_macos_moltenvk_isystem();
+    const bool ok60 = test_actor_rejected_in_no_std_profile();
+    const bool ok61 = test_actor_allowed_in_freestanding_profile();
+    const bool ok62 = test_hosted_actor_link_uses_clang_driver();
+    const bool ok63 = test_hosted_actor_parus_lld_mode_succeeds();
+    const bool ok64 = test_core_ext_scaffold_and_auto_injection();
+    const bool ok65 = test_c_header_import_variadic_function_pointer_alias_requires_manual_abi_cache_hit();
+    const bool ok66 = test_c_header_import_variadic_function_pointer_global_and_field_calls();
+    const bool ok67 = test_c_header_import_variadic_function_pointer_zero_tail_calls_without_manual_abi();
+    const bool ok68 = test_c_header_import_dropped_global_decl_preserves_supported_imports();
+    const bool ok69 = test_c_header_import_dropped_owner_record_preserves_supported_imports();
+    const bool ok70 = test_iteration_array_loop_runtime();
+    const bool ok71 = test_iteration_slice_loop_runtime();
+    const bool ok72 = test_iteration_range_loop_runtime();
+    const bool ok73 = test_iteration_unsupported_iterable_hard_error();
+    const bool ok74 = test_iteration_pure_infer_range_runtime_and_regressions();
+    const bool ok75 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
+    const bool ok76 = test_unsuffixed_array_literal_slice_runtime_and_llvm();
+    const bool ok77 = test_unsuffixed_named_array_to_slice_runtime();
+    const bool ok78 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
+    const bool ok79 = test_unsuffixed_array_literal_float_context_rejected();
+    const bool ok80 = test_iteration_loop_break_value_context_syntax_only();
+    const bool ok81 = test_core_seed_export_index_and_auto_injection();
+    const bool ok82 = test_core_seed_runtime_smoke();
+    const bool ok83 = test_text_view_cstr_preflight_syntax_only();
+    const bool ok84 = test_cstr_private_fields_hidden_but_helpers_work();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -5667,7 +5760,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83) {
+        !ok83 || !ok84) {
         return 1;
     }
 

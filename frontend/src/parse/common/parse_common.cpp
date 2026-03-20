@@ -321,15 +321,21 @@ namespace parus {
     }
 
     bool Parser::is_recognized_impl_binding_path_(uint32_t path_begin, uint32_t path_count) const {
+        if (!is_impl_binding_path_(path_begin, path_count)) return false;
+        const auto& segs = ast_.path_segs();
+        return segs[path_begin + 1] == "SpinLoop" ||
+               segs[path_begin + 1] == "SizeOf" ||
+               segs[path_begin + 1] == "AlignOf";
+    }
+
+    bool Parser::is_impl_binding_path_(uint32_t path_begin, uint32_t path_count) const {
         if (path_count != 2) return false;
         const auto& segs = ast_.path_segs();
         const uint64_t begin = path_begin;
         const uint64_t end = begin + path_count;
         if (begin > segs.size() || end > segs.size()) return false;
         if (segs[path_begin] != "Impl") return false;
-        return segs[path_begin + 1] == "SpinLoop" ||
-               segs[path_begin + 1] == "SizeOf" ||
-               segs[path_begin + 1] == "AlignOf";
+        return segs[path_begin + 1] != "Core";
     }
 
     bool Parser::pending_attached_impl_binding_recognized_() const {
