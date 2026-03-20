@@ -17,4 +17,12 @@ export acts for bool {
         if (rhs) { return cmp::ordering_less(); }
         return cmp::ordering_equal();
     }
+
+    def is_true(self) -> bool {
+        return bool_value_(self);
+    }
+
+    def is_false(self) -> bool {
+        return not bool_value_(self);
+    }
 };

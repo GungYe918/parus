@@ -41,6 +41,13 @@ public:
         return self.ptr_;
     }
 
+    // Returns a non-owning text view over the cached payload bytes.
+    def to_text(self) -> text {
+        manual[abi] {
+            return text{ data: self.as_ptr(), len: self.len() };
+        }
+    }
+
     // Returns pointer to bytes including final NUL by contract.
     def to_bytes_with_nul(self) -> *const c_char {
         return self.ptr_;
@@ -132,6 +139,11 @@ export def as_ptr(s: CStr) -> *const c_char {
 // Returns pointer to the byte sequence excluding the final NUL contract.
 export def to_bytes(s: CStr) -> *const c_char {
     return s.to_bytes();
+}
+
+// Returns a non-owning text view over the cached payload bytes.
+export def to_text(s: CStr) -> text {
+    return s.to_text();
 }
 
 // Returns pointer to the byte sequence including the final NUL contract.

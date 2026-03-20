@@ -32,6 +32,49 @@ def ascii_is_control_(c: char) -> bool {
     return c < ' ';
 }
 
+def ascii_digit_value_(c: char) -> u32? {
+    switch (ascii_to_lower_(c)) {
+    case '0': { return 0u32; }
+    case '1': { return 1u32; }
+    case '2': { return 2u32; }
+    case '3': { return 3u32; }
+    case '4': { return 4u32; }
+    case '5': { return 5u32; }
+    case '6': { return 6u32; }
+    case '7': { return 7u32; }
+    case '8': { return 8u32; }
+    case '9': { return 9u32; }
+    case 'a': { return 10u32; }
+    case 'b': { return 11u32; }
+    case 'c': { return 12u32; }
+    case 'd': { return 13u32; }
+    case 'e': { return 14u32; }
+    case 'f': { return 15u32; }
+    case 'g': { return 16u32; }
+    case 'h': { return 17u32; }
+    case 'i': { return 18u32; }
+    case 'j': { return 19u32; }
+    case 'k': { return 20u32; }
+    case 'l': { return 21u32; }
+    case 'm': { return 22u32; }
+    case 'n': { return 23u32; }
+    case 'o': { return 24u32; }
+    case 'p': { return 25u32; }
+    case 'q': { return 26u32; }
+    case 'r': { return 27u32; }
+    case 's': { return 28u32; }
+    case 't': { return 29u32; }
+    case 'u': { return 30u32; }
+    case 'v': { return 31u32; }
+    case 'w': { return 32u32; }
+    case 'x': { return 33u32; }
+    case 'y': { return 34u32; }
+    case 'z': { return 35u32; }
+    default: {}
+    }
+    return null;
+}
+
 def ascii_to_lower_(c: char) -> char {
     switch (c) {
     case 'A': { return 'a'; }
@@ -146,6 +189,21 @@ export acts for char {
 
     def eq_ignore_ascii_case(self, rhs: char) -> bool {
         return ascii_to_lower_(char_value_(self)) == ascii_to_lower_(rhs);
+    }
+
+    def to_digit(self, radix: u32) -> u32? {
+        if (radix < 2u32 or radix > 36u32) {
+            return null;
+        }
+        let digit_opt: u32? = ascii_digit_value_(char_value_(self));
+        if (digit_opt == null) {
+            return null;
+        }
+        let digit: u32 = digit_opt ?? 0u32;
+        if (digit >= radix) {
+            return null;
+        }
+        return digit;
     }
 
     def to_ascii_lower(self) -> char {

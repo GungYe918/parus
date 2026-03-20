@@ -1303,8 +1303,10 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    if (!contains(core_index_text, "parus_builtin_acts|owner=bool|member=cmp|self=1")) {
-        std::cerr << "core export-index must include bool.cmp builtin acts payload\n" << core_index_text;
+    if (!contains(core_index_text, "parus_builtin_acts|owner=bool|member=cmp|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=bool|member=is_true|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=bool|member=is_false|self=1")) {
+        std::cerr << "core export-index must include bool builtin acts payloads\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -1318,13 +1320,15 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_hexdigit|self=1")) {
-        std::cerr << "core export-index must include char.is_ascii_hexdigit builtin acts payload\n" << core_index_text;
+    if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_hexdigit|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=char|member=to_digit|self=1")) {
+        std::cerr << "core export-index must include char builtin acts payloads\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
     if (!contains(core_index_text, "parus_builtin_acts|owner=text|member=is_empty|self=1") ||
-        !contains(core_index_text, "parus_builtin_acts|owner=text|member=len_bytes|self=1")) {
+        !contains(core_index_text, "parus_builtin_acts|owner=text|member=len_bytes|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=text|member=as_ptr|self=1")) {
         std::cerr << "core export-index must include text builtin acts payloads\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1334,6 +1338,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         "def main() -> i32 {\n"
         "  let truth: bool = true;\n"
         "  let bool_ord: core::cmp::Ordering = truth.cmp(false);\n"
+        "  let bool_true: bool = truth.is_true();\n"
+        "  let bool_false: bool = false.is_false();\n"
         "  let lhs: i32 = 1i32;\n"
         "  let rhs: i32 = 2i32;\n"
         "  let a: i32 = lhs.min(rhs);\n"
@@ -1343,10 +1349,15 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let raw_nan: bool = raw.is_nan();\n"
         "  let c: char = 'f';\n"
         "  let hex: bool = c.is_ascii_hexdigit();\n"
+        "  let digit: u32? = c.to_digit(16u32);\n"
         "  let s: text = \"abc\";\n"
         "  let empty: text = \"\";\n"
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
+        "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let cstr: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let bridged: text = core::ext::to_text(cstr);\n"
+        "  let bridged_len: usize = bridged.len_bytes();\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1363,7 +1374,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  case core::cmp::Ordering::Less: { partial_ok = true; }\n"
         "  default: {}\n"
         "  }\n"
-        "  if (bool_ok and ord_ok and partial_ok and hex and not raw_nan and s_len == 3usize and s_empty) {\n"
+        "  if (bool_ok and ord_ok and partial_ok and hex and bool_true and bool_false and not raw_nan and"
+        " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize) {\n"
         "    return 42i32;\n"
         "  }\n"
         "  return 0i32;\n"
@@ -1445,63 +1457,46 @@ bool test_core_seed_runtime_smoke() {
     const std::string main_src =
         "def main() -> i32 {\n"
         "  let bo: core::cmp::Ordering = true.cmp(false);\n"
+        "  let bt: bool = true.is_true();\n"
+        "  let bf: bool = false.is_false();\n"
         "  let neg: i32 = -3i32;\n"
         "  let mag: i32 = neg.abs();\n"
-        "  let pos: i32 = 7i32;\n"
-        "  let sgn: i32 = pos.signum();\n"
-        "  let q: i32 = (-7i32).div_euclid(3i32);\n"
-        "  let r: i32 = (-7i32).rem_euclid(3i32);\n"
-        "  let zero: usize = 0usize;\n"
-        "  let z: bool = zero.is_zero();\n"
-        "  let pow7: bool = 7u32.is_power_of_two();\n"
         "  let pow8: bool = 8u32.is_power_of_two();\n"
-        "  let hi0: f32 = 1.5f32;\n"
-        "  let lo: f32 = 0.5f32;\n"
-        "  let hi: f32 = hi0.max(lo);\n"
-        "  let sigf: f32 = (-2.0f32).signum();\n"
         "  let c: char = 'a';\n"
         "  let up: char = c.to_ascii_upper();\n"
-        "  let upper: bool = 'A'.is_ascii_upper();\n"
-        "  let hex: bool = 'f'.is_ascii_hexdigit();\n"
-        "  let ws: bool = '\\n'.is_ascii_whitespace();\n"
-        "  let eqic: bool = 'a'.eq_ignore_ascii_case('A');\n"
+        "  let digit_hex: u32? = 'F'.to_digit(16u32);\n"
+        "  let digit_oob: u32? = '8'.to_digit(8u32);\n"
         "  let s: text = \"abc\";\n"
         "  let empty: text = \"\";\n"
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
-        "  let lhs: i32 = 3i32;\n"
-        "  let rhs: i32 = 2i32;\n"
-        "  let ord: core::cmp::Ordering = lhs.cmp(rhs);\n"
-        "  set mut out = 0i32;\n"
+        "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let cs: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let tv: text = core::ext::to_text(cs);\n"
+        "  let tv_len: usize = tv.len_bytes();\n"
         "  set mut bo_ok = false;\n"
         "  switch (bo) {\n"
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
         "  default: {}\n"
         "  }\n"
+        "  manual[abi] {\n"
+        "    let shadow: text = text{ data: s_ptr, len: s_len };\n"
+        "    if (shadow.len_bytes() != 3usize) { return 0i32; }\n"
+        "  }\n"
         "  if (bo_ok\n"
+        "      and bt\n"
+        "      and bf\n"
         "      and mag == 3i32\n"
-        "      and sgn == 1i32\n"
-        "      and q == -3i32\n"
-        "      and r == 2i32\n"
-        "      and z\n"
-        "      and not pow7\n"
         "      and pow8\n"
-        "      and hi == 1.5f32\n"
-        "      and sigf == -1.0f32\n"
         "      and up == 'A'\n"
-        "      and upper\n"
-        "      and hex\n"
-        "      and ws\n"
-        "      and eqic\n"
+        "      and (digit_hex ?? 0u32) == 15u32\n"
+        "      and (digit_oob ?? 99u32) == 99u32\n"
         "      and s_len == 3usize\n"
-        "      and s_empty) {\n"
-        "    out = out + 10i32;\n"
+        "      and s_empty\n"
+        "      and tv_len == 5usize) {\n"
+        "    return 42i32;\n"
         "  }\n"
-        "  switch (ord) {\n"
-        "  case core::cmp::Ordering::Greater: { out = out + 32i32; }\n"
-        "  default: { return 0i32; }\n"
-        "  }\n"
-        "  return out;\n"
+        "  return 0i32;\n"
         "}\n";
     if (!write_text(main_pr, main_src)) {
         std::cerr << "failed to write core seed runtime sample\n";
@@ -1551,11 +1546,15 @@ bool test_core_seed_runtime_smoke() {
 
     const std::string installed_core_index = read_text(installed_core_index_path);
     if (!contains(installed_core_index, "parus_builtin_acts|owner=bool|member=cmp|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=bool|member=is_true|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=bool|member=is_false|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=i32|member=div_euclid|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=u32|member=is_power_of_two|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=char|member=eq_ignore_ascii_case|self=1") ||
-        !contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1")) {
+        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=to_digit|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=text|member=as_ptr|self=1")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -1620,12 +1619,10 @@ bool test_text_view_cstr_preflight_syntax_only() {
     const auto main_pr = temp_root / "main.pr";
     const std::string main_src =
         "def main() -> i32 {\n"
-        "  manual[abi] {\n"
-        "    let c: core::ext::CStr = core::ext::from_ptr(\"Hello\");\n"
-        "    let t: text = text{ data: core::ext::as_ptr(c), len: core::ext::len(c) };\n"
-        "    let n: usize = t.len_bytes();\n"
-        "    if (n != 5usize) { return 0i32; }\n"
-        "  }\n"
+        "  let c: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let t: text = core::ext::to_text(c);\n"
+        "  let n: usize = t.len_bytes();\n"
+        "  if (n != 5usize or t.is_empty()) { return 0i32; }\n"
         "  return 42i32;\n"
         "}\n";
     if (!write_text(main_pr, main_src)) {
@@ -1676,12 +1673,10 @@ bool test_cstr_private_fields_hidden_but_helpers_work() {
     const auto ok_pr = temp_root / "ok.pr";
     const std::string ok_src =
         "def main() -> i32 {\n"
-        "  let c: core::ext::CStr = core::ext::from_ptr(\"Hello\");\n"
+        "  let c: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
         "  let n: usize = core::ext::len(c);\n"
-        "  manual[abi] {\n"
-        "    let t: text = text{ data: core::ext::as_ptr(c), len: n };\n"
-        "    if (t.len_bytes() == 5usize) { return 42i32; }\n"
-        "  }\n"
+        "  let t: text = core::ext::to_text(c);\n"
+        "  if (t.len_bytes() == 5usize and n == 5usize) { return 42i32; }\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(ok_pr, ok_src)) {

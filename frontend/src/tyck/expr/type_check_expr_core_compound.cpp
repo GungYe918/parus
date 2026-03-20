@@ -125,18 +125,34 @@
                 if (t == ty::kInvalidType || is_error_(t)) return false;
                 const auto& tt = types_.get(t);
                 if (tt.kind != ty::Kind::kPtr || tt.elem == ty::kInvalidType) return false;
-                const auto& et = types_.get(tt.elem);
-                if (et.kind != ty::Kind::kBuiltin) return false;
-                switch (et.builtin) {
-                    case ty::Builtin::kU8:
-                    case ty::Builtin::kI8:
-                    case ty::Builtin::kCChar:
-                    case ty::Builtin::kCSChar:
-                    case ty::Builtin::kCUChar:
-                        return true;
-                    default:
-                        return false;
+                ty::TypeId elem = canonicalize_transparent_external_typedef_(tt.elem);
+                if (elem == ty::kInvalidType || elem >= types_.count()) return false;
+                const auto& et = types_.get(elem);
+                if (et.kind == ty::Kind::kBuiltin) {
+                    switch (et.builtin) {
+                        case ty::Builtin::kU8:
+                        case ty::Builtin::kI8:
+                        case ty::Builtin::kCChar:
+                        case ty::Builtin::kCSChar:
+                        case ty::Builtin::kCUChar:
+                            return true;
+                        default:
+                            return false;
+                    }
                 }
+                if (et.kind == ty::Kind::kNamedUser) {
+                    std::vector<std::string_view> path{};
+                    std::vector<ty::TypeId> args{};
+                    if (!types_.decompose_named_user(elem, path, args)) return false;
+                    if (!args.empty() || path.empty()) return false;
+                    const std::string_view leaf = path.back();
+                    if (!(leaf == "c_char" || leaf == "c_schar" || leaf == "c_uchar")) {
+                        return false;
+                    }
+                    if (path.size() == 1) return true;
+                    return path[path.size() - 2] == "ext";
+                }
+                return false;
             };
 
             bool saw_data = false;

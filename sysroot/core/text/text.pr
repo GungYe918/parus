@@ -9,4 +9,8 @@ export acts for text {
     def len_bytes(self) -> usize {
         return (*self).len;
     }
+
+    def as_ptr(self) -> *const u8 {
+        return (*self).data;
+    }
 };

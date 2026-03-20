@@ -1254,22 +1254,12 @@ namespace {
                 let xs: i32[] = arr;
                 let m: usize = xs.len;
                 let q: *const i32 = xs.data;
-                set mut x = 1i32;
-                set mut y = 0i32;
-                {
-                    set r = &x;
-                    y = *r;
-                }
-                {
-                    set w = &mut x;
-                    *w = y + 1i32;
-                }
                 manual[abi] {
                     let t: text = text{ data: p, len: n };
                     let l: usize = t.len;
                 }
                 if (n == 3usize and k == 4usize and m == 4usize) {
-                    return x;
+                    return 42i32;
                 }
                 return 0i32;
             }

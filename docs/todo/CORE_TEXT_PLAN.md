@@ -11,6 +11,7 @@
 3. 현재 열린 기반 표면은 `*` deref, builtin view field(`.len`, `.data`), `text{ data, len }` constructor다.
 4. `text`는 계속 freestanding non-owning UTF-8 view다.
 5. `String`은 이후 std에서 도입하는 소유 타입으로 남기며, 이번 설계와 권한이 겹치지 않는다.
+6. `text` 길이는 sentinel scan이 아니라 metadata다.
 
 ## 이번 라운드에서 실제로 열린 표면
 
@@ -51,11 +52,13 @@
 
 1. `text.is_empty(self) -> bool`
 2. `text.len_bytes(self) -> usize`
+3. `text.as_ptr(self) -> *const u8`
 
 구현은 다음 형태다.
 
 1. `(*self).len == 0usize`
 2. `(*self).len`
+3. `(*self).data`
 
 즉 길이 metadata는 언어 표면에서 직접 읽고, library acts는 그 위를 얇게 감싼다.
 
@@ -73,8 +76,20 @@
 이번 변경은 `CStr`의 기존 ABI를 바꾸지 않는다.
 
 1. `CStr -> *const c_char` C ABI coercion은 그대로 유지
-2. future `to_text()`는 `text{ data: core::ext::as_ptr(c), len: core::ext::len(c) }` 형태를 기준으로 잡는다
-3. `len_with_nul()`이 아니라 `len()`을 사용해야 한다
+2. `CStr`는 이제 `to_text()` / `core::ext::to_text(c)` 브리지를 제공한다
+3. `to_text()`는 `text{ data: core::ext::as_ptr(c), len: core::ext::len(c) }` 형태를 기준으로 잡는다
+4. `len_with_nul()`이 아니라 `len()`을 사용해야 한다
+
+## 비채택한 방향
+
+이번 라운드에서는 `text` 길이를 raw pointer scan으로 다시 계산하는 표면은 도입하지 않는다.
+
+이유:
+
+1. 현재 `text`는 `{ptr,len}` view이며, pointer-scan은 이 의미와 충돌한다
+2. `text{ data, len }`로 만든 일반 view는 NUL-terminated 보장을 갖지 않는다
+3. O(1) metadata access를 O(n) sentinel scan으로 바꾸는 것은 후퇴다
+4. sentinel scan은 `text`가 아니라 `CStr` 계층의 책임으로 남긴다
 
 ## 이번 라운드에서 여전히 하지 않는 것
 
