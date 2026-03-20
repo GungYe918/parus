@@ -911,7 +911,7 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
 
     const std::string core_index_src =
         "{\n"
-        "  \"version\": 7,\n"
+        "  \"version\": 1,\n"
         "  \"bundle\": \"core\",\n"
         "  \"exports\": [\n"
         "    {\n"
@@ -958,6 +958,30 @@ bool test_auto_core_export_index_loaded_for_non_core_bundle() {
     auto [rc_compile, out_compile] = run_capture(compile_cmd);
     if (rc_compile != 0) {
         std::cerr << "non-core bundle compile should auto-load core export-index\n" << out_compile;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string stale_core_index_src =
+        "{\n"
+        "  \"version\": 7,\n"
+        "  \"bundle\": \"core\",\n"
+        "  \"exports\": []\n"
+        "}\n";
+    if (!write_text(core_index, stale_core_index_src)) {
+        std::cerr << "failed to rewrite stale auto core export-index fixture\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_stale, out_stale] = run_capture(compile_cmd);
+    if (rc_stale == 0 || !contains(out_stale, "unsupported export-index version (expected v1)")) {
+        std::cerr << "stale v7 core export-index must be rejected\n" << out_stale;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    if (!write_text(core_index, core_index_src)) {
+        std::cerr << "failed to restore v1 auto core export-index fixture\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }

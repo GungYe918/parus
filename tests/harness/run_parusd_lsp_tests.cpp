@@ -221,7 +221,7 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
 
     const std::string core_index_text =
         "{\n"
-        "  \"version\": 7,\n"
+        "  \"version\": 1,\n"
         "  \"bundle\": \"core\",\n"
         "  \"exports\": [\n"
         "    {\n"
@@ -291,7 +291,6 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
     int rc_disabled = 0;
     const std::string out_disabled = run_lsp_session(payloads, rc_disabled, "PARUS_NO_CORE=1");
     std::error_code ec{};
-    std::filesystem::remove_all(root, ec);
     if (rc != 0) {
         std::cerr << "core export-index LSP session failed, rc=" << rc << "\n" << out << "\n";
         return false;
@@ -306,6 +305,30 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
     }
     if (contains(out_disabled, "\"uri\":\"" + uri + "\",\"version\":1,\"diagnostics\":[]")) {
         std::cerr << "PARUS_NO_CORE=1 should disable implicit core export-index injection\n" << out_disabled << "\n";
+        std::filesystem::remove_all(root, ec);
+        return false;
+    }
+
+    const std::string old_index_text =
+        "{\n"
+        "  \"version\": 7,\n"
+        "  \"bundle\": \"core\",\n"
+        "  \"exports\": []\n"
+        "}\n";
+    if (!write_text(core_index, old_index_text)) {
+        std::cerr << "failed to rewrite stale core export-index fixture\n";
+        std::filesystem::remove_all(root, ec);
+        return false;
+    }
+    int rc_stale = 0;
+    const std::string out_stale = run_lsp_session(payloads, rc_stale, env_prefix);
+    std::filesystem::remove_all(root, ec);
+    if (rc_stale != 0) {
+        std::cerr << "stale core export-index LSP session failed unexpectedly, rc=" << rc_stale << "\n" << out_stale << "\n";
+        return false;
+    }
+    if (!contains(out_stale, "unsupported export-index version (expected v1)")) {
+        std::cerr << "stale v7 core export-index must be rejected by LSP prepass\n" << out_stale << "\n";
         return false;
     }
     return true;

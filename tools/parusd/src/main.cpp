@@ -2565,8 +2565,8 @@ namespace {
         }
 
         const auto version = as_i64_(obj_get_(root, "version"));
-        if (!version.has_value() || *version != 7) {
-            return fail("unsupported export-index version (expected v7): " + index_path.string());
+        if (!version.has_value() || *version != 1) {
+            return fail("unsupported export-index version (expected v1): " + index_path.string());
         }
 
         const auto* exports_node = obj_get_(root, "exports");

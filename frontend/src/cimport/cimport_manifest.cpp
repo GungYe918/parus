@@ -18,8 +18,8 @@ namespace parus::cimport {
     namespace {
 
         constexpr std::string_view kManifestMagic = "parus-cimport-manifest";
-        constexpr uint32_t kManifestVersion = 3;
-        constexpr std::string_view kTranslatorVersion = "parus-cimport-v3";
+        constexpr uint32_t kManifestVersion = 1;
+        constexpr std::string_view kTranslatorVersion = "parus-cimport-v1";
 
         void fnv1a64_append_(uint64_t& h, std::string_view s) {
             for (const unsigned char ch : s) {

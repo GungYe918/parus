@@ -12,7 +12,7 @@ VSCode extension workspace for Parus/LEI language support.
 - Go to Definition (`textDocument/definition`) via `parusd`:
   - local symbol
   - bundle cross-file symbol
-  - import/external export-index(v7) symbol
+  - import/external export-index(v1) symbol
 - TextMate grammar fallback for Parus/LEI (`syntaxes/*.tmLanguage.json`) when semantic token data is delayed/missing.
 - LEI local snippet provider (`import/from`, `proto`, `plan`, `def`, `for`, `if/else`, `assert`, `export plan`).
 - Supported file extensions: `.pr`, `.parus`, `.lei`
