@@ -1,0 +1,120 @@
+$![Impl::Core];
+
+import cmp as cmp;
+
+def char_value_(c: &char) -> char {
+    return c + '\0';
+}
+
+def ascii_is_upper_(c: char) -> bool {
+    return c >= 'A' and c <= 'Z';
+}
+
+def ascii_is_lower_(c: char) -> bool {
+    return c >= 'a' and c <= 'z';
+}
+
+def ascii_is_digit_(c: char) -> bool {
+    return c >= '0' and c <= '9';
+}
+
+def ascii_to_lower_(c: char) -> char {
+    switch (c) {
+    case 'A': { return 'a'; }
+    case 'B': { return 'b'; }
+    case 'C': { return 'c'; }
+    case 'D': { return 'd'; }
+    case 'E': { return 'e'; }
+    case 'F': { return 'f'; }
+    case 'G': { return 'g'; }
+    case 'H': { return 'h'; }
+    case 'I': { return 'i'; }
+    case 'J': { return 'j'; }
+    case 'K': { return 'k'; }
+    case 'L': { return 'l'; }
+    case 'M': { return 'm'; }
+    case 'N': { return 'n'; }
+    case 'O': { return 'o'; }
+    case 'P': { return 'p'; }
+    case 'Q': { return 'q'; }
+    case 'R': { return 'r'; }
+    case 'S': { return 's'; }
+    case 'T': { return 't'; }
+    case 'U': { return 'u'; }
+    case 'V': { return 'v'; }
+    case 'W': { return 'w'; }
+    case 'X': { return 'x'; }
+    case 'Y': { return 'y'; }
+    case 'Z': { return 'z'; }
+    default: { return c; }
+    }
+    return c;
+}
+
+def ascii_to_upper_(c: char) -> char {
+    switch (c) {
+    case 'a': { return 'A'; }
+    case 'b': { return 'B'; }
+    case 'c': { return 'C'; }
+    case 'd': { return 'D'; }
+    case 'e': { return 'E'; }
+    case 'f': { return 'F'; }
+    case 'g': { return 'G'; }
+    case 'h': { return 'H'; }
+    case 'i': { return 'I'; }
+    case 'j': { return 'J'; }
+    case 'k': { return 'K'; }
+    case 'l': { return 'L'; }
+    case 'm': { return 'M'; }
+    case 'n': { return 'N'; }
+    case 'o': { return 'O'; }
+    case 'p': { return 'P'; }
+    case 'q': { return 'Q'; }
+    case 'r': { return 'R'; }
+    case 's': { return 'S'; }
+    case 't': { return 'T'; }
+    case 'u': { return 'U'; }
+    case 'v': { return 'V'; }
+    case 'w': { return 'W'; }
+    case 'x': { return 'X'; }
+    case 'y': { return 'Y'; }
+    case 'z': { return 'Z'; }
+    default: { return c; }
+    }
+    return c;
+}
+
+// Default ASCII-focused acts for the builtin char type.
+export acts for char {
+    def cmp(self, rhs: char) -> cmp::Ordering {
+        if (char_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (char_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def is_ascii(self) -> bool {
+        return char_value_(self) <= '~';
+    }
+
+    def is_ascii_digit(self) -> bool {
+        return ascii_is_digit_(char_value_(self));
+    }
+
+    def is_ascii_alpha(self) -> bool {
+        return ascii_is_upper_(char_value_(self)) or ascii_is_lower_(char_value_(self));
+    }
+
+    def is_ascii_alnum(self) -> bool {
+        return ascii_is_upper_(char_value_(self))
+            or ascii_is_lower_(char_value_(self))
+            or ascii_is_digit_(char_value_(self));
+    }
+
+    def to_ascii_lower(self) -> char {
+        return ascii_to_lower_(char_value_(self));
+    }
+
+    def to_ascii_upper(self) -> char {
+        return ascii_to_upper_(char_value_(self));
+    }
+};

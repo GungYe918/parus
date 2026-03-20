@@ -5,6 +5,7 @@
 #include <parus/sir/Verify.hpp>
 #include <parus/ty/TypePool.hpp>
 
+#include <unordered_set>
 #include <vector>
 
 
@@ -19,14 +20,16 @@ namespace parus::oir {
     class Builder {
     public:
         Builder(const parus::sir::Module& sir_mod,
-                const parus::ty::TypePool& ty)
-            : sir_(sir_mod), ty_(ty) {}
+                const parus::ty::TypePool& ty,
+                const std::unordered_set<parus::ty::TypeId>* tag_only_enum_type_ids = nullptr)
+            : sir_(sir_mod), ty_(ty), tag_only_enum_type_ids_(tag_only_enum_type_ids) {}
 
         BuildResult build();
 
     private:
         const parus::sir::Module& sir_;
         [[maybe_unused]] const parus::ty::TypePool& ty_;
+        const std::unordered_set<parus::ty::TypeId>* tag_only_enum_type_ids_ = nullptr;
     };
 
 } // namespace parus::oir

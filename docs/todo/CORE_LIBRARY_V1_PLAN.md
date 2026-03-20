@@ -2,6 +2,8 @@
 
 문서 상태: `active`
 
+후속 일반-purpose freestanding `core` 설계는 `docs/todo/CORE_FREESTANDING_BOOTSTRAP_PLAN.md`를 따른다.
+
 ## 목표
 
 1. `core::cabi`를 제거하고 `core::ext`를 C interop 표면으로 고정한다.

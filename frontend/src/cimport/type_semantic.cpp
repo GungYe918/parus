@@ -85,6 +85,34 @@ namespace parus::cimport {
                         out.kind = TypeSemanticKind::kNamed;
                         return parse_len_string_(out.name);
                     }
+                    case 'o': {
+                        out = TypeSemanticNode{};
+                        out.kind = TypeSemanticKind::kOptional;
+                        if (!eat('[')) return false;
+                        out.children.resize(1);
+                        if (!parse_node(out.children[0])) return false;
+                        return eat(']');
+                    }
+                    case 'r': {
+                        out = TypeSemanticNode{};
+                        out.kind = TypeSemanticKind::kBorrow;
+                        if (eof()) return false;
+                        const char mut = text[pos++];
+                        if (mut != '0' && mut != '1') return false;
+                        out.ptr_is_mut = (mut == '1');
+                        if (!eat('[')) return false;
+                        out.children.resize(1);
+                        if (!parse_node(out.children[0])) return false;
+                        return eat(']');
+                    }
+                    case 'e': {
+                        out = TypeSemanticNode{};
+                        out.kind = TypeSemanticKind::kEscape;
+                        if (!eat('[')) return false;
+                        out.children.resize(1);
+                        if (!parse_node(out.children[0])) return false;
+                        return eat(']');
+                    }
                     case 'p': {
                         out = TypeSemanticNode{};
                         out.kind = TypeSemanticKind::kPtr;
@@ -151,6 +179,25 @@ namespace parus::cimport {
                     out += std::to_string(node.name.size());
                     out.push_back('_');
                     out += node.name;
+                    return;
+                case TypeSemanticKind::kOptional:
+                    out.push_back('o');
+                    out.push_back('[');
+                    if (!node.children.empty()) serialize_into_(out, node.children[0]);
+                    out.push_back(']');
+                    return;
+                case TypeSemanticKind::kBorrow:
+                    out.push_back('r');
+                    out.push_back(node.ptr_is_mut ? '1' : '0');
+                    out.push_back('[');
+                    if (!node.children.empty()) serialize_into_(out, node.children[0]);
+                    out.push_back(']');
+                    return;
+                case TypeSemanticKind::kEscape:
+                    out.push_back('e');
+                    out.push_back('[');
+                    if (!node.children.empty()) serialize_into_(out, node.children[0]);
+                    out.push_back(']');
                     return;
                 case TypeSemanticKind::kPtr:
                     out.push_back('p');
@@ -225,6 +272,15 @@ namespace parus::cimport {
                 case TypeSemanticKind::kBuiltin:
                 case TypeSemanticKind::kNamed:
                     return intern_named_(node.name, types);
+                case TypeSemanticKind::kOptional:
+                    if (node.children.size() != 1u) return ty::kInvalidType;
+                    return types.make_optional(build_node_(node.children[0], types));
+                case TypeSemanticKind::kBorrow:
+                    if (node.children.size() != 1u) return ty::kInvalidType;
+                    return types.make_borrow(build_node_(node.children[0], types), node.ptr_is_mut);
+                case TypeSemanticKind::kEscape:
+                    if (node.children.size() != 1u) return ty::kInvalidType;
+                    return types.make_escape(build_node_(node.children[0], types));
                 case TypeSemanticKind::kPtr:
                     if (node.children.size() != 1u) return ty::kInvalidType;
                     return types.make_ptr(build_node_(node.children[0], types), node.ptr_is_mut);
@@ -302,6 +358,19 @@ namespace parus::cimport {
                 out.kind = TypeSemanticKind::kNamed;
                 out.name = std::string(types.to_string(type));
                 return true;
+            case ty::Kind::kOptional:
+                out.kind = TypeSemanticKind::kOptional;
+                out.children.resize(1);
+                return build_type_semantic_from_type(tt.elem, types, out.children[0]);
+            case ty::Kind::kBorrow:
+                out.kind = TypeSemanticKind::kBorrow;
+                out.ptr_is_mut = tt.borrow_is_mut;
+                out.children.resize(1);
+                return build_type_semantic_from_type(tt.elem, types, out.children[0]);
+            case ty::Kind::kEscape:
+                out.kind = TypeSemanticKind::kEscape;
+                out.children.resize(1);
+                return build_type_semantic_from_type(tt.elem, types, out.children[0]);
             case ty::Kind::kPtr:
                 out.kind = TypeSemanticKind::kPtr;
                 out.ptr_is_mut = tt.ptr_is_mut;

@@ -1,0 +1,19 @@
+// Three-way comparison result for freestanding core operations.
+export enum Ordering {
+    case Less,
+    case Equal,
+    case Greater,
+};
+
+// Internal-style helpers for cross-module construction of Ordering values.
+export def ordering_less() -> Ordering {
+    return Ordering::Less();
+}
+
+export def ordering_equal() -> Ordering {
+    return Ordering::Equal();
+}
+
+export def ordering_greater() -> Ordering {
+    return Ordering::Greater();
+}

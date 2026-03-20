@@ -1282,6 +1282,37 @@ namespace parus::backend::aot {
                 const std::string& want
             ) {
                 const std::string cur = value_ty_(src);
+                const auto tid = value_type_id_(src);
+                if (tid != parus::ty::kInvalidType &&
+                    tid < types_.count()) {
+                    const auto& st = types_.get(tid);
+                    if ((st.kind == parus::ty::Kind::kBorrow ||
+                         st.kind == parus::ty::Kind::kEscape) &&
+                        st.elem != parus::ty::kInvalidType &&
+                        cur == "ptr") {
+                        const std::string addr = [&]() -> std::string {
+                            auto it = address_ref_by_value_.find(src);
+                            if (it != address_ref_by_value_.end()) return it->second;
+                            return vref_(src);
+                        }();
+                        if (want == "ptr") {
+                            return addr;
+                        }
+                        const std::string pointee_ty =
+                            map_type_(types_, st.elem, &named_layouts_, &actor_types_);
+                        if (is_aggregate_llvm_ty_(pointee_ty)) {
+                            const std::string loaded = safe_load_aggregate_from_ptr_(os, pointee_ty, addr);
+                            return (pointee_ty == want)
+                                ? loaded
+                                : coerce_ref_(os, loaded, pointee_ty, want);
+                        }
+                        const std::string loaded = next_tmp_();
+                        os << "  " << loaded << " = load " << pointee_ty << ", ptr " << addr << "\n";
+                        return (pointee_ty == want)
+                            ? loaded
+                            : coerce_ref_(os, loaded, pointee_ty, want);
+                    }
+                }
                 if (want == "{ ptr, i64 }" && cur == "ptr") {
                     if (auto info = const_text_info_of_value_(src); info.has_value()) {
                         const std::string data_ptr = next_tmp_();
@@ -1297,6 +1328,10 @@ namespace parus::backend::aot {
                            << ", i64 " << info->len << ", 1\n";
                         return with_len;
                     }
+                }
+                if (want == "ptr" && cur != "ptr" && !is_aggregate_llvm_ty_(cur)) {
+                    auto it = address_ref_by_value_.find(src);
+                    if (it != address_ref_by_value_.end()) return it->second;
                 }
                 const std::string ref = vref_(src);
                 return coerce_ref_(os, ref, cur, want);

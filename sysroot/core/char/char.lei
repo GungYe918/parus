@@ -1,0 +1,9 @@
+export plan char_module = module & {
+  sources = [
+    "char/ascii.pr",
+  ];
+  imports = ["cmp"];
+  cimport = {
+    isystem: [],
+  };
+};

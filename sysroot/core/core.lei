@@ -1,9 +1,12 @@
+import char from "./char/char.lei";
+import cmp from "./cmp/cmp.lei";
 import ext from "./ext/ext.lei";
+import num from "./num/num.lei";
 
 export plan core_bundle = bundle & {
   name = "core";
   kind = "lib";
-  modules = [ext::ext_module];
+  modules = [ext::ext_module, cmp::cmp_module, num::num_module, char::char_module];
   deps = [];
   cimport = {
     isystem: [],

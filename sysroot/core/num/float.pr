@@ -1,0 +1,71 @@
+$![Impl::Core];
+
+import cmp as cmp;
+
+// Default floating-point acts for freestanding core operations.
+
+def f32_value_(x: &f32) -> f32 {
+    return x + 0.0f32;
+}
+
+def f64_value_(x: &f64) -> f64 {
+    return x + 0.0f64;
+}
+
+export acts for f32 {
+    def cmp(self, rhs: f32) -> cmp::Ordering {
+        if (f32_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (f32_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: f32) -> f32 {
+        if (f32_value_(self) < rhs) { return f32_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: f32) -> f32 {
+        if (f32_value_(self) > rhs) { return f32_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: f32, hi: f32) -> f32 {
+        if (f32_value_(self) < lo) { return lo; }
+        if (f32_value_(self) > hi) { return hi; }
+        return f32_value_(self);
+    }
+
+    def abs(self) -> f32 {
+        if (f32_value_(self) < 0.0f32) { return 0.0f32 - self; }
+        return f32_value_(self);
+    }
+};
+
+export acts for f64 {
+    def cmp(self, rhs: f64) -> cmp::Ordering {
+        if (f64_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (f64_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: f64) -> f64 {
+        if (f64_value_(self) < rhs) { return f64_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: f64) -> f64 {
+        if (f64_value_(self) > rhs) { return f64_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: f64, hi: f64) -> f64 {
+        if (f64_value_(self) < lo) { return lo; }
+        if (f64_value_(self) > hi) { return hi; }
+        return f64_value_(self);
+    }
+
+    def abs(self) -> f64 {
+        if (f64_value_(self) < 0.0f64) { return 0.0f64 - self; }
+        return f64_value_(self);
+    }
+};

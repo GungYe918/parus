@@ -29,7 +29,7 @@
 
         auto candidate_names_for_external_ = [&](const NameResolveOptions::ExternalExport& ex) {
             std::vector<std::string> names{};
-            names.reserve(3);
+            names.reserve(5);
             if (!ex.path.empty()) names.push_back(ex.path);
 
             if (!ex.module_head.empty()) {
@@ -44,6 +44,21 @@
                         local.erase(0, prefix.size());
                     }
                     if (!local.empty()) names.push_back(std::move(local));
+                }
+            }
+
+            if (!ex.decl_bundle_name.empty()) {
+                if (!ex.module_head.empty()) {
+                    std::string local = ex.path;
+                    const std::string module_prefix = ex.module_head + "::";
+                    if (local.starts_with(module_prefix)) {
+                        local.erase(0, module_prefix.size());
+                    }
+                    if (!local.empty()) {
+                        names.push_back(ex.decl_bundle_name + "::" + ex.module_head + "::" + local);
+                    }
+                } else if (!ex.path.empty()) {
+                    names.push_back(ex.decl_bundle_name + "::" + ex.path);
                 }
             }
 

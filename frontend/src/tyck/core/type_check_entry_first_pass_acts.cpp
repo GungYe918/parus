@@ -1563,6 +1563,92 @@
         }
     }
 
+    bool TypeChecker::parse_external_enum_decl_payload_(
+        std::string_view payload,
+        EnumAbiMeta& out_meta
+    ) const {
+        out_meta = {};
+        if (!payload.starts_with("parus_decl_kind=enum")) return false;
+
+        auto parse_i64_ = [](std::string_view text, int64_t& out) -> bool {
+            if (text.empty()) return false;
+            bool neg = false;
+            size_t pos = 0;
+            if (text[0] == '-') {
+                neg = true;
+                pos = 1;
+                if (pos >= text.size()) return false;
+            }
+            int64_t value = 0;
+            for (; pos < text.size(); ++pos) {
+                const char ch = text[pos];
+                if (ch < '0' || ch > '9') return false;
+                value = value * 10 + static_cast<int64_t>(ch - '0');
+            }
+            out = neg ? -value : value;
+            return true;
+        };
+
+        out_meta.layout = ast::FieldLayout::kNone;
+        out_meta.is_layout_c = false;
+
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view key = part.substr(0, eq);
+                const std::string_view val = part.substr(eq + 1);
+                if (key == "layout") {
+                    if (val == "c") {
+                        out_meta.layout = ast::FieldLayout::kC;
+                        out_meta.is_layout_c = true;
+                    } else {
+                        out_meta.layout = ast::FieldLayout::kNone;
+                        out_meta.is_layout_c = false;
+                    }
+                } else if (key == "variant") {
+                    const size_t comma = val.rfind(',');
+                    if (comma == std::string_view::npos || comma == 0 || comma + 1 >= val.size()) {
+                        return false;
+                    }
+                    int64_t tag = 0;
+                    if (!parse_i64_(val.substr(comma + 1), tag)) return false;
+
+                    EnumVariantMeta vm{};
+                    vm.name = std::string(val.substr(0, comma));
+                    vm.index = static_cast<uint32_t>(out_meta.variants.size());
+                    vm.tag = tag;
+                    vm.has_discriminant = true;
+                    out_meta.variant_index_by_name[vm.name] = vm.index;
+                    out_meta.variants.push_back(std::move(vm));
+                }
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+
+        return !out_meta.variants.empty();
+    }
+
+    void TypeChecker::collect_external_enum_metadata_() {
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external) continue;
+            if (sym.kind != sema::SymbolKind::kType) continue;
+            if (sym.external_payload.empty()) continue;
+            if (sym.declared_type == ty::kInvalidType) continue;
+            if (enum_abi_meta_by_type_.find(sym.declared_type) != enum_abi_meta_by_type_.end()) continue;
+
+            EnumAbiMeta meta{};
+            if (!parse_external_enum_decl_payload_(sym.external_payload, meta)) continue;
+            meta.sid = ast::k_invalid_stmt;
+            enum_abi_meta_by_type_[sym.declared_type] = std::move(meta);
+        }
+    }
+
     bool TypeChecker::is_core_impl_marker_stmt_(const ast::Stmt& s) const {
         if (s.kind != ast::StmtKind::kCompilerIntrinsicDirective) return false;
         if (s.directive_target_path_count != 0) return false; // tag form only: $![Impl::Core];

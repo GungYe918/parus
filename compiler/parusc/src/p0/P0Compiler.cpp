@@ -208,6 +208,11 @@ namespace parusc::p0 {
             return out;
         }
 
+        std::string build_enum_decl_payload_(
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s
+        );
+
         bool json_unescape_text_(std::string_view in, std::string& out) {
             auto hex_value_ = [](char c) -> int {
                 if (c >= '0' && c <= '9') return c - '0';
@@ -540,6 +545,96 @@ namespace parusc::p0 {
         ) {
             if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
             const auto& s = ast.stmt(sid);
+            parus::ty::TypePool export_types = types;
+
+            auto rewrite_builtin_acts_self_type_ = [&](auto&& self,
+                                                       parus::ty::TypeId cur,
+                                                       parus::ty::TypeId owner_type) -> parus::ty::TypeId {
+                using Kind = parus::ty::Kind;
+                if (cur == parus::ty::kInvalidType || cur >= export_types.count()) return cur;
+
+                const auto& tt = export_types.get(cur);
+                switch (tt.kind) {
+                    case Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<parus::ty::TypeId> args{};
+                        if (!export_types.decompose_named_user(cur, path, args)) return cur;
+                        if (path.size() == 1 && path[0] == "Self" && args.empty()) {
+                            return owner_type;
+                        }
+                        bool changed = false;
+                        for (auto& arg : args) {
+                            const auto next = self(self, arg, owner_type);
+                            if (next != arg) {
+                                arg = next;
+                                changed = true;
+                            }
+                        }
+                        if (!changed) return cur;
+                        return export_types.intern_named_path_with_args(
+                            path.data(),
+                            static_cast<uint32_t>(path.size()),
+                            args.empty() ? nullptr : args.data(),
+                            static_cast<uint32_t>(args.size())
+                        );
+                    }
+                    case Kind::kOptional: {
+                        const auto elem = self(self, tt.elem, owner_type);
+                        return elem == tt.elem ? cur : export_types.make_optional(elem);
+                    }
+                    case Kind::kArray: {
+                        const auto elem = self(self, tt.elem, owner_type);
+                        return elem == tt.elem ? cur : export_types.make_array(elem, tt.array_has_size, tt.array_size);
+                    }
+                    case Kind::kBorrow: {
+                        const auto elem = self(self, tt.elem, owner_type);
+                        return elem == tt.elem ? cur : export_types.make_borrow(elem, tt.borrow_is_mut);
+                    }
+                    case Kind::kEscape: {
+                        const auto elem = self(self, tt.elem, owner_type);
+                        return elem == tt.elem ? cur : export_types.make_escape(elem);
+                    }
+                    case Kind::kPtr: {
+                        const auto elem = self(self, tt.elem, owner_type);
+                        return elem == tt.elem ? cur : export_types.make_ptr(elem, tt.ptr_is_mut);
+                    }
+                    case Kind::kFn: {
+                        std::vector<parus::ty::TypeId> params{};
+                        std::vector<std::string_view> labels{};
+                        std::vector<uint8_t> defaults{};
+                        params.reserve(tt.param_count);
+                        labels.reserve(tt.param_count);
+                        defaults.reserve(tt.param_count);
+                        bool changed = false;
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            const auto p = export_types.fn_param_at(cur, i);
+                            const auto np = self(self, p, owner_type);
+                            if (np != p) changed = true;
+                            params.push_back(np);
+                            labels.push_back(export_types.fn_param_label_at(cur, i));
+                            defaults.push_back(export_types.fn_param_has_default_at(cur, i) ? 1u : 0u);
+                        }
+                        const auto nr = self(self, tt.ret, owner_type);
+                        if (nr != tt.ret) changed = true;
+                        if (!changed) return cur;
+                        return export_types.make_fn(
+                            nr,
+                            params.empty() ? nullptr : params.data(),
+                            static_cast<uint32_t>(params.size()),
+                            tt.positional_param_count,
+                            labels.empty() ? nullptr : labels.data(),
+                            defaults.empty() ? nullptr : defaults.data(),
+                            tt.fn_is_c_abi,
+                            tt.fn_is_c_variadic,
+                            tt.fn_callconv
+                        );
+                    }
+                    case Kind::kError:
+                    case Kind::kBuiltin:
+                    default:
+                        return cur;
+                }
+            };
 
             if (s.kind == parus::ast::StmtKind::kBlock) {
                 const auto& kids = ast.stmt_children();
@@ -608,8 +703,8 @@ namespace parusc::p0 {
                 e.module_head = module_head;
                 e.decl_dir = decl_dir;
                 if (tid != parus::ty::kInvalidType) {
-                    e.type_repr = types.to_export_string(tid);
-                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(tid, types);
+                    e.type_repr = export_types.to_export_string(tid);
+                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(tid, export_types);
                 }
                 e.inst_payload = std::move(inst_payload);
                 e.decl_file = decl_file;
@@ -657,7 +752,7 @@ namespace parusc::p0 {
                 !s.name.empty()) {
                 std::string payload{};
                 if (s.kind == parus::ast::StmtKind::kProtoDecl) payload = "parus_decl_kind=proto";
-                if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = "parus_decl_kind=enum";
+                if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = build_enum_decl_payload_(ast, s);
                 if (s.kind == parus::ast::StmtKind::kClassDecl) payload = "parus_decl_kind=class";
                 if (s.kind == parus::ast::StmtKind::kActorDecl) payload = "parus_decl_kind=actor";
                 push_export(parus::sema::SymbolKind::kType,
@@ -719,9 +814,17 @@ namespace parusc::p0 {
                             sig_repr,
                             ms.link_abi == parus::ast::LinkAbi::kC
                         );
+                        parus::ty::TypeId export_member_type = ms.type;
+                        if (s.acts_is_for && owner_is_builtin && export_member_type != parus::ty::kInvalidType) {
+                            export_member_type = rewrite_builtin_acts_self_type_(
+                                rewrite_builtin_acts_self_type_,
+                                export_member_type,
+                                s.acts_target_type
+                            );
+                        }
                         push_export(parus::sema::SymbolKind::kFn,
                                     member_qname,
-                                    ms.type,
+                                    export_member_type,
                                     s.is_export,
                                     ms.span,
                                     link_name,
@@ -770,6 +873,86 @@ namespace parusc::p0 {
                 out.push_back(std::move(e));
                 return;
             }
+        }
+
+        std::string qualify_type_semantic_for_bundle_(
+            std::string_view type_semantic,
+            std::string_view bundle_name,
+            std::string_view current_module_head,
+            const std::unordered_set<std::string>& dep_module_heads,
+            const std::unordered_set<std::string>& current_module_local_types
+        ) {
+            if (type_semantic.empty() || bundle_name.empty()) return std::string(type_semantic);
+
+            parus::cimport::TypeSemanticNode node{};
+            if (!parus::cimport::parse_type_semantic(type_semantic, node)) {
+                return std::string(type_semantic);
+            }
+
+            auto rewrite = [&](auto&& self, parus::cimport::TypeSemanticNode& cur) -> void {
+                if (cur.kind == parus::cimport::TypeSemanticKind::kNamed) {
+                    const std::string_view name = cur.name;
+                    if (!name.empty()) {
+                        const size_t split = name.find("::");
+                        if (split == std::string_view::npos) {
+                            if (!current_module_head.empty() &&
+                                current_module_local_types.find(cur.name) != current_module_local_types.end()) {
+                                cur.name = std::string(bundle_name) + "::" +
+                                           std::string(current_module_head) + "::" +
+                                           cur.name;
+                            }
+                        } else {
+                            const std::string head(name.substr(0, split));
+                            if (dep_module_heads.find(head) != dep_module_heads.end()) {
+                                cur.name = std::string(bundle_name) + "::" + cur.name;
+                            }
+                        }
+                    }
+                }
+                for (auto& child : cur.children) self(self, child);
+            };
+
+            rewrite(rewrite, node);
+            return parus::cimport::serialize_type_semantic(node);
+        }
+
+        std::string build_enum_decl_payload_(
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s
+        ) {
+            std::string payload = "parus_decl_kind=enum";
+            if (s.kind != parus::ast::StmtKind::kEnumDecl) return payload;
+
+            const uint64_t begin = s.enum_variant_begin;
+            const uint64_t end = begin + s.enum_variant_count;
+            if (begin > ast.enum_variant_decls().size() || end > ast.enum_variant_decls().size()) {
+                return payload;
+            }
+
+            for (uint32_t i = 0; i < s.enum_variant_count; ++i) {
+                const auto& v = ast.enum_variant_decls()[s.enum_variant_begin + i];
+                if (v.payload_count != 0) return payload;
+            }
+
+            payload += "|layout=";
+            payload += (s.field_layout == parus::ast::FieldLayout::kC) ? "c" : "n";
+
+            int64_t next_tag = 0;
+            for (uint32_t i = 0; i < s.enum_variant_count; ++i) {
+                const auto& v = ast.enum_variant_decls()[s.enum_variant_begin + i];
+                const int64_t tag = v.has_discriminant ? v.discriminant : next_tag;
+                next_tag = tag + 1;
+                payload += "|variant=";
+                payload += std::string(v.name);
+                payload += ",";
+                payload += std::to_string(tag);
+            }
+            return payload;
+        }
+
+        bool is_tag_only_enum_decl_payload_(std::string_view payload) {
+            if (!payload.starts_with("parus_decl_kind=enum")) return false;
+            return payload.find("|variant=") != std::string_view::npos;
         }
 
         bool collect_file_namespace_(const parus::ast::AstArena& ast, parus::ast::StmtId root, std::vector<std::string>& ns) {
@@ -853,6 +1036,45 @@ namespace parusc::p0 {
                                       decl_dir,
                                       ns,
                                       out);
+            }
+
+            std::unordered_set<std::string> bundle_module_heads{};
+            std::unordered_map<std::string, std::unordered_set<std::string>> bundle_local_types_by_module{};
+            bundle_module_heads.reserve(out.size());
+            bundle_local_types_by_module.reserve(out.size());
+            for (const auto& e : out) {
+                if (!e.module_head.empty()) bundle_module_heads.insert(e.module_head);
+                if (e.kind == parus::sema::SymbolKind::kType &&
+                    !e.module_head.empty() &&
+                    !e.path.empty() &&
+                    e.path.find("::") == std::string::npos) {
+                    bundle_local_types_by_module[e.module_head].insert(e.path);
+                }
+            }
+
+            for (auto& e : out) {
+                if (e.type_semantic.empty() || bundle_name.empty() || e.module_head.empty()) continue;
+                const auto it = bundle_local_types_by_module.find(e.module_head);
+                const std::unordered_set<std::string> empty_names{};
+                const auto& local_names = (it != bundle_local_types_by_module.end()) ? it->second : empty_names;
+                e.type_semantic = qualify_type_semantic_for_bundle_(
+                    e.type_semantic,
+                    bundle_name,
+                    e.module_head,
+                    bundle_module_heads,
+                    local_names
+                );
+
+                parus::ty::TypePool export_type_pool{};
+                const auto qualified_type = parus::cimport::parse_external_type_repr(
+                    std::string_view{},
+                    e.type_semantic,
+                    std::string_view{},
+                    export_type_pool
+                );
+                if (qualified_type != parus::ty::kInvalidType) {
+                    e.type_repr = export_type_pool.to_export_string(qualified_type);
+                }
             }
 
             std::sort(out.begin(), out.end(), [](const ExportSurfaceEntry& a, const ExportSurfaceEntry& b) {
@@ -2509,8 +2731,37 @@ namespace parusc::p0 {
                 bag.add(std::move(d));
                 continue;
             }
+
+            std::unordered_set<std::string> dep_module_heads{};
+            std::unordered_map<std::string, std::unordered_set<std::string>> dep_local_types_by_module{};
+            dep_module_heads.reserve(dep_entries.size());
+            dep_local_types_by_module.reserve(dep_entries.size());
+            for (const auto& e : dep_entries) {
+                if (!e.module_head.empty()) dep_module_heads.insert(e.module_head);
+                if (e.kind == parus::sema::SymbolKind::kType &&
+                    !e.module_head.empty() &&
+                    !e.path.empty() &&
+                    e.path.find("::") == std::string::npos) {
+                    dep_local_types_by_module[e.module_head].insert(e.path);
+                }
+            }
+
             for (auto& e : dep_entries) {
                 if (e.decl_bundle.empty()) e.decl_bundle = dep_bundle;
+                if (!e.type_semantic.empty() &&
+                    !dep_bundle.empty() &&
+                    !e.module_head.empty()) {
+                    const auto it = dep_local_types_by_module.find(e.module_head);
+                    const std::unordered_set<std::string> empty_names{};
+                    const auto& local_names = (it != dep_local_types_by_module.end()) ? it->second : empty_names;
+                    e.type_semantic = qualify_type_semantic_for_bundle_(
+                        e.type_semantic,
+                        dep_bundle,
+                        e.module_head,
+                        dep_module_heads,
+                        local_names
+                    );
+                }
                 add_external(e, /*same_bundle=*/false);
             }
         }
@@ -2618,7 +2869,80 @@ namespace parusc::p0 {
             parusc::dump::dump_sir_module(sir_mod, types);
         }
 
-        parus::oir::Builder ob(sir_mod, types);
+        std::unordered_set<parus::ty::TypeId> oir_tag_only_enum_type_ids = tyck_res.tag_only_enum_type_ids;
+        auto type_name_keys = [&](parus::ty::TypeId tid) {
+            std::unordered_set<std::string> keys{};
+            if (tid == parus::ty::kInvalidType) return keys;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!types.decompose_named_user(tid, path, args) || path.empty()) {
+                keys.insert(types.to_string(tid));
+                return keys;
+            }
+
+            std::string full{};
+            for (size_t i = 0; i < path.size(); ++i) {
+                if (i != 0) full += "::";
+                full += std::string(path[i]);
+            }
+            keys.insert(full);
+
+            if (path.size() >= 2) {
+                std::string dropped_first{};
+                for (size_t i = 1; i < path.size(); ++i) {
+                    if (i != 1) dropped_first += "::";
+                    dropped_first += std::string(path[i]);
+                }
+                keys.insert(std::move(dropped_first));
+            }
+            return keys;
+        };
+
+        auto add_matching_named_types = [&](const std::unordered_set<std::string>& want_keys) {
+            for (uint32_t i = 0; i < types.count(); ++i) {
+                const auto cur = static_cast<parus::ty::TypeId>(i);
+                const auto cur_keys = type_name_keys(cur);
+                for (const auto& key : cur_keys) {
+                    if (want_keys.find(key) != want_keys.end()) {
+                        oir_tag_only_enum_type_ids.insert(cur);
+                        break;
+                    }
+                }
+            }
+        };
+
+        for (const auto& ext : pass_opt.name_resolve.external_exports) {
+            if (!is_tag_only_enum_decl_payload_(ext.inst_payload)) continue;
+            std::unordered_set<std::string> want_keys{};
+            if (ext.kind == parus::sema::SymbolKind::kType && ext.declared_type != parus::ty::kInvalidType) {
+                const auto type_keys = type_name_keys(ext.declared_type);
+                want_keys.insert(type_keys.begin(), type_keys.end());
+            }
+
+            if (!ext.path.empty()) {
+                want_keys.insert(ext.path);
+                if (!ext.module_head.empty()) {
+                    const std::string module_prefix = ext.module_head + "::";
+                    if (!ext.path.starts_with(module_prefix)) {
+                        want_keys.insert(module_prefix + ext.path);
+                    }
+                    if (!ext.decl_bundle_name.empty()) {
+                        std::string local = ext.path;
+                        if (local.starts_with(module_prefix)) {
+                            local.erase(0, module_prefix.size());
+                        }
+                        want_keys.insert(ext.decl_bundle_name + "::" + ext.module_head + "::" + local);
+                    }
+                } else if (!ext.decl_bundle_name.empty()) {
+                    want_keys.insert(ext.decl_bundle_name + "::" + ext.path);
+                }
+            }
+
+            add_matching_named_types(want_keys);
+        }
+
+        parus::oir::Builder ob(sir_mod, types, &oir_tag_only_enum_type_ids);
         auto oir_res = ob.build();
         if (!oir_res.gate_passed) {
             for (const auto& e : oir_res.gate_errors) {

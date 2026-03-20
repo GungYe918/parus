@@ -86,6 +86,7 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_enum_sids; // concrete generic enum instantiations
         std::vector<ast::StmtId> generic_acts_template_sids; // generic acts templates (owner-generic)
         std::vector<ty::TypeId> actor_type_ids; // known actor nominal types
+        std::unordered_set<ty::TypeId> tag_only_enum_type_ids; // enum types known to lower as tag-only layout
         std::unordered_map<uint32_t, ConstInitData> const_symbol_values; // SymbolId -> const initializer value
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_values; // expr id -> imported external const literal payload
         std::vector<TyError> errors;
@@ -820,6 +821,11 @@ namespace parus::tyck {
 
         std::unordered_map<ty::TypeId, FieldAbiMeta> field_abi_meta_by_type_;
         std::unordered_map<ty::TypeId, EnumAbiMeta> enum_abi_meta_by_type_;
+        bool parse_external_enum_decl_payload_(
+            std::string_view payload,
+            EnumAbiMeta& out_meta
+        ) const;
+        void collect_external_enum_metadata_();
         std::unordered_set<ast::StmtId> generic_fn_template_sid_set_;
         std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
         std::unordered_set<ast::StmtId> generic_fn_checked_instances_;

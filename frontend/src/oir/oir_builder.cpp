@@ -980,6 +980,23 @@ namespace parus::oir {
                 }
 
                 const auto& dt = types->get(dst_ty);
+                if ((dt.kind == parus::ty::Kind::kBorrow ||
+                     dt.kind == parus::ty::Kind::kEscape) &&
+                    dt.elem != kInvalidId) {
+                    if (value_is_address_like_(src)) {
+                        return src;
+                    }
+                    ValueId slot = emit_alloca(dt.elem);
+                    ValueId store_v = src;
+                    if (out != nullptr &&
+                        (size_t)store_v < out->values.size() &&
+                        out->values[store_v].ty != dt.elem) {
+                        store_v = coerce_value_for_target(dt.elem, store_v);
+                    }
+                    emit_store(slot, store_v);
+                    return slot;
+                }
+
                 if (dt.kind == parus::ty::Kind::kArray && !dt.array_has_size &&
                     src_ty != kInvalidId) {
                     const auto& st = types->get(src_ty);
@@ -1581,6 +1598,42 @@ namespace parus::oir {
                 // OIR에서는 비물질화 원칙을 유지하고 원본 값으로 전달한다.
                 {
                     const ValueId lowered = lower_value(v.a);
+                    if (v.kind == parus::sir::ValueKind::kBorrow) {
+                        TypeId pointee_ty = v.type;
+                        if (types != nullptr && pointee_ty != kInvalidId) {
+                            const auto& bt = types->get(pointee_ty);
+                            if (bt.kind == parus::ty::Kind::kBorrow && bt.elem != kInvalidId) {
+                                pointee_ty = bt.elem;
+                            }
+                        }
+
+                        const auto operand_kind =
+                            ((size_t)v.a < sir->values.size())
+                                ? sir->values[v.a].kind
+                                : parus::sir::ValueKind::kError;
+
+                        if (value_is_address_like_(lowered)) {
+                            return lowered;
+                        }
+
+                        if (v.origin_sym != parus::sir::k_invalid_symbol &&
+                            operand_kind == parus::sir::ValueKind::kLocal &&
+                            pointee_ty != kInvalidId) {
+                            return ensure_slot(v.origin_sym, pointee_ty);
+                        }
+
+                        if (pointee_ty != kInvalidId) {
+                            ValueId slot = emit_alloca(pointee_ty);
+                            ValueId store_v = lowered;
+                            if (out != nullptr &&
+                                (size_t)store_v < out->values.size() &&
+                                out->values[store_v].ty != pointee_ty) {
+                                store_v = coerce_value_for_target(pointee_ty, store_v);
+                            }
+                            emit_store(slot, store_v);
+                            return slot;
+                        }
+                    }
                     if (v.kind == parus::sir::ValueKind::kEscape && escape_value_map != nullptr) {
                         (*escape_value_map)[vid] = lowered;
                     }
@@ -3236,6 +3289,83 @@ namespace parus::oir {
             (void)idx;
             if (of.self_type != parus::ty::kInvalidType) {
                 named_layout_by_type[of.self_type] = {std::max<uint32_t>(1u, of.size), std::max<uint32_t>(1u, of.align)};
+            }
+        }
+
+        if (tag_only_enum_type_ids_ != nullptr) {
+            auto append_tag_keys = [&](TypeId tid, std::unordered_set<std::string>& out) {
+                if (tid == parus::ty::kInvalidType) return;
+
+                std::vector<std::string_view> path{};
+                std::vector<TypeId> args{};
+                if (!ty_.decompose_named_user(tid, path, args) || path.empty()) {
+                    out.insert(ty_.to_string(tid));
+                    return;
+                }
+
+                std::string full{};
+                for (size_t i = 0; i < path.size(); ++i) {
+                    if (i != 0) full += "::";
+                    full += std::string(path[i]);
+                }
+                out.insert(full);
+
+                if (path.size() >= 2) {
+                    std::string dropped_first{};
+                    for (size_t i = 1; i < path.size(); ++i) {
+                        if (i != 1) dropped_first += "::";
+                        dropped_first += std::string(path[i]);
+                    }
+                    out.insert(std::move(dropped_first));
+                }
+            };
+
+            std::unordered_set<std::string> tag_only_enum_names{};
+            tag_only_enum_names.reserve(tag_only_enum_type_ids_->size() * 2u);
+            for (const auto enum_ty : *tag_only_enum_type_ids_) {
+                append_tag_keys(enum_ty, tag_only_enum_names);
+            }
+
+            auto add_tag_only_layout = [&](TypeId enum_ty) {
+                if (enum_ty == parus::ty::kInvalidType) return;
+                if (named_layout_by_type.find(enum_ty) != named_layout_by_type.end()) return;
+
+                FieldLayoutDecl of{};
+                of.name = ty_.to_string(enum_ty);
+                of.self_type = enum_ty;
+                of.layout = FieldLayout::None;
+                of.align = 4;
+                of.size = 4;
+
+                FieldMemberLayout tag{};
+                tag.name = "__tag";
+                tag.type = (TypeId)ty_.builtin(parus::ty::Builtin::kI32);
+                tag.offset = 0;
+                of.members.push_back(std::move(tag));
+
+                out.mod.add_field(of);
+                named_layout_by_type[enum_ty] = {4u, 4u};
+            };
+
+            for (const auto enum_ty : *tag_only_enum_type_ids_) {
+                add_tag_only_layout(enum_ty);
+            }
+
+            for (uint32_t i = 0; i < ty_.count(); ++i) {
+                const auto cur = static_cast<TypeId>(i);
+                const auto& tt = ty_.get(cur);
+                if (tt.kind != parus::ty::Kind::kNamedUser) continue;
+                std::unordered_set<std::string> cur_keys{};
+                append_tag_keys(cur, cur_keys);
+                bool matches = false;
+                for (const auto& key : cur_keys) {
+                    if (tag_only_enum_names.find(key) != tag_only_enum_names.end()) {
+                        matches = true;
+                        break;
+                    }
+                }
+                if (!matches) continue;
+                add_tag_only_layout(cur);
             }
         }
 

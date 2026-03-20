@@ -1,0 +1,468 @@
+$![Impl::Core];
+
+import cmp as cmp;
+
+// Default integer acts for signed and unsigned builtin primitives.
+
+def i8_value_(x: &i8) -> i8 { return x + 0i8; }
+def i16_value_(x: &i16) -> i16 { return x + 0i16; }
+def i32_value_(x: &i32) -> i32 { return x + 0i32; }
+def i64_value_(x: &i64) -> i64 { return x + 0i64; }
+def i128_value_(x: &i128) -> i128 { return x + 0i128; }
+def isize_value_(x: &isize) -> isize { return x + 0isize; }
+def u8_value_(x: &u8) -> u8 { return x + 0u8; }
+def u16_value_(x: &u16) -> u16 { return x + 0u16; }
+def u32_value_(x: &u32) -> u32 { return x + 0u32; }
+def u64_value_(x: &u64) -> u64 { return x + 0u64; }
+def u128_value_(x: &u128) -> u128 { return x + 0u128; }
+def usize_value_(x: &usize) -> usize { return x + 0usize; }
+
+export acts for i8 {
+    def cmp(self, rhs: i8) -> cmp::Ordering {
+        if (i8_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (i8_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: i8) -> i8 {
+        if (i8_value_(self) < rhs) { return i8_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: i8) -> i8 {
+        if (i8_value_(self) > rhs) { return i8_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: i8, hi: i8) -> i8 {
+        if (i8_value_(self) < lo) { return lo; }
+        if (i8_value_(self) > hi) { return hi; }
+        return i8_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return i8_value_(self) == 0i8;
+    }
+
+    def abs(self) -> i8 {
+        if (i8_value_(self) < 0i8) { return 0i8 - i8_value_(self); }
+        return i8_value_(self);
+    }
+
+    def signum(self) -> i8 {
+        if (i8_value_(self) < 0i8) { return -1i8; }
+        if (i8_value_(self) > 0i8) { return 1i8; }
+        return 0i8;
+    }
+
+    def is_positive(self) -> bool {
+        return i8_value_(self) > 0i8;
+    }
+
+    def is_negative(self) -> bool {
+        return i8_value_(self) < 0i8;
+    }
+};
+
+export acts for i16 {
+    def cmp(self, rhs: i16) -> cmp::Ordering {
+        if (i16_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (i16_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: i16) -> i16 {
+        if (i16_value_(self) < rhs) { return i16_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: i16) -> i16 {
+        if (i16_value_(self) > rhs) { return i16_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: i16, hi: i16) -> i16 {
+        if (i16_value_(self) < lo) { return lo; }
+        if (i16_value_(self) > hi) { return hi; }
+        return i16_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return i16_value_(self) == 0i16;
+    }
+
+    def abs(self) -> i16 {
+        if (i16_value_(self) < 0i16) { return 0i16 - i16_value_(self); }
+        return i16_value_(self);
+    }
+
+    def signum(self) -> i16 {
+        if (i16_value_(self) < 0i16) { return -1i16; }
+        if (i16_value_(self) > 0i16) { return 1i16; }
+        return 0i16;
+    }
+
+    def is_positive(self) -> bool {
+        return i16_value_(self) > 0i16;
+    }
+
+    def is_negative(self) -> bool {
+        return i16_value_(self) < 0i16;
+    }
+};
+
+export acts for i32 {
+    def cmp(self, rhs: i32) -> cmp::Ordering {
+        if (i32_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (i32_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: i32) -> i32 {
+        if (i32_value_(self) < rhs) { return i32_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: i32) -> i32 {
+        if (i32_value_(self) > rhs) { return i32_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: i32, hi: i32) -> i32 {
+        if (i32_value_(self) < lo) { return lo; }
+        if (i32_value_(self) > hi) { return hi; }
+        return i32_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return i32_value_(self) == 0i32;
+    }
+
+    def abs(self) -> i32 {
+        if (i32_value_(self) < 0i32) { return 0i32 - i32_value_(self); }
+        return i32_value_(self);
+    }
+
+    def signum(self) -> i32 {
+        if (i32_value_(self) < 0i32) { return -1i32; }
+        if (i32_value_(self) > 0i32) { return 1i32; }
+        return 0i32;
+    }
+
+    def is_positive(self) -> bool {
+        return i32_value_(self) > 0i32;
+    }
+
+    def is_negative(self) -> bool {
+        return i32_value_(self) < 0i32;
+    }
+};
+
+export acts for i64 {
+    def cmp(self, rhs: i64) -> cmp::Ordering {
+        if (i64_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (i64_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: i64) -> i64 {
+        if (i64_value_(self) < rhs) { return i64_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: i64) -> i64 {
+        if (i64_value_(self) > rhs) { return i64_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: i64, hi: i64) -> i64 {
+        if (i64_value_(self) < lo) { return lo; }
+        if (i64_value_(self) > hi) { return hi; }
+        return i64_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return i64_value_(self) == 0i64;
+    }
+
+    def abs(self) -> i64 {
+        if (i64_value_(self) < 0i64) { return 0i64 - i64_value_(self); }
+        return i64_value_(self);
+    }
+
+    def signum(self) -> i64 {
+        if (i64_value_(self) < 0i64) { return -1i64; }
+        if (i64_value_(self) > 0i64) { return 1i64; }
+        return 0i64;
+    }
+
+    def is_positive(self) -> bool {
+        return i64_value_(self) > 0i64;
+    }
+
+    def is_negative(self) -> bool {
+        return i64_value_(self) < 0i64;
+    }
+};
+
+export acts for i128 {
+    def cmp(self, rhs: i128) -> cmp::Ordering {
+        if (i128_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (i128_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: i128) -> i128 {
+        if (i128_value_(self) < rhs) { return i128_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: i128) -> i128 {
+        if (i128_value_(self) > rhs) { return i128_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: i128, hi: i128) -> i128 {
+        if (i128_value_(self) < lo) { return lo; }
+        if (i128_value_(self) > hi) { return hi; }
+        return i128_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return i128_value_(self) == 0i128;
+    }
+
+    def abs(self) -> i128 {
+        if (i128_value_(self) < 0i128) { return 0i128 - i128_value_(self); }
+        return i128_value_(self);
+    }
+
+    def signum(self) -> i128 {
+        if (i128_value_(self) < 0i128) { return -1i128; }
+        if (i128_value_(self) > 0i128) { return 1i128; }
+        return 0i128;
+    }
+
+    def is_positive(self) -> bool {
+        return i128_value_(self) > 0i128;
+    }
+
+    def is_negative(self) -> bool {
+        return i128_value_(self) < 0i128;
+    }
+};
+
+export acts for isize {
+    def cmp(self, rhs: isize) -> cmp::Ordering {
+        if (isize_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (isize_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: isize) -> isize {
+        if (isize_value_(self) < rhs) { return isize_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: isize) -> isize {
+        if (isize_value_(self) > rhs) { return isize_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: isize, hi: isize) -> isize {
+        if (isize_value_(self) < lo) { return lo; }
+        if (isize_value_(self) > hi) { return hi; }
+        return isize_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return isize_value_(self) == 0isize;
+    }
+
+    def abs(self) -> isize {
+        if (isize_value_(self) < 0isize) { return 0isize - isize_value_(self); }
+        return isize_value_(self);
+    }
+
+    def signum(self) -> isize {
+        if (isize_value_(self) < 0isize) { return -1isize; }
+        if (isize_value_(self) > 0isize) { return 1isize; }
+        return 0isize;
+    }
+
+    def is_positive(self) -> bool {
+        return isize_value_(self) > 0isize;
+    }
+
+    def is_negative(self) -> bool {
+        return isize_value_(self) < 0isize;
+    }
+};
+
+export acts for u8 {
+    def cmp(self, rhs: u8) -> cmp::Ordering {
+        if (u8_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (u8_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: u8) -> u8 {
+        if (u8_value_(self) < rhs) { return u8_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: u8) -> u8 {
+        if (u8_value_(self) > rhs) { return u8_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: u8, hi: u8) -> u8 {
+        if (u8_value_(self) < lo) { return lo; }
+        if (u8_value_(self) > hi) { return hi; }
+        return u8_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return u8_value_(self) == 0u8;
+    }
+};
+
+export acts for u16 {
+    def cmp(self, rhs: u16) -> cmp::Ordering {
+        if (u16_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (u16_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: u16) -> u16 {
+        if (u16_value_(self) < rhs) { return u16_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: u16) -> u16 {
+        if (u16_value_(self) > rhs) { return u16_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: u16, hi: u16) -> u16 {
+        if (u16_value_(self) < lo) { return lo; }
+        if (u16_value_(self) > hi) { return hi; }
+        return u16_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return u16_value_(self) == 0u16;
+    }
+};
+
+export acts for u32 {
+    def cmp(self, rhs: u32) -> cmp::Ordering {
+        if (u32_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (u32_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: u32) -> u32 {
+        if (u32_value_(self) < rhs) { return u32_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: u32) -> u32 {
+        if (u32_value_(self) > rhs) { return u32_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: u32, hi: u32) -> u32 {
+        if (u32_value_(self) < lo) { return lo; }
+        if (u32_value_(self) > hi) { return hi; }
+        return u32_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return u32_value_(self) == 0u32;
+    }
+};
+
+export acts for u64 {
+    def cmp(self, rhs: u64) -> cmp::Ordering {
+        if (u64_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (u64_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: u64) -> u64 {
+        if (u64_value_(self) < rhs) { return u64_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: u64) -> u64 {
+        if (u64_value_(self) > rhs) { return u64_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: u64, hi: u64) -> u64 {
+        if (u64_value_(self) < lo) { return lo; }
+        if (u64_value_(self) > hi) { return hi; }
+        return u64_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return u64_value_(self) == 0u64;
+    }
+};
+
+export acts for u128 {
+    def cmp(self, rhs: u128) -> cmp::Ordering {
+        if (u128_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (u128_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: u128) -> u128 {
+        if (u128_value_(self) < rhs) { return u128_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: u128) -> u128 {
+        if (u128_value_(self) > rhs) { return u128_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: u128, hi: u128) -> u128 {
+        if (u128_value_(self) < lo) { return lo; }
+        if (u128_value_(self) > hi) { return hi; }
+        return u128_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return u128_value_(self) == 0u128;
+    }
+};
+
+export acts for usize {
+    def cmp(self, rhs: usize) -> cmp::Ordering {
+        if (usize_value_(self) < rhs) { return cmp::ordering_less(); }
+        if (usize_value_(self) > rhs) { return cmp::ordering_greater(); }
+        return cmp::ordering_equal();
+    }
+
+    def min(self, rhs: usize) -> usize {
+        if (usize_value_(self) < rhs) { return usize_value_(self); }
+        return rhs;
+    }
+
+    def max(self, rhs: usize) -> usize {
+        if (usize_value_(self) > rhs) { return usize_value_(self); }
+        return rhs;
+    }
+
+    def clamp(self, lo: usize, hi: usize) -> usize {
+        if (usize_value_(self) < lo) { return lo; }
+        if (usize_value_(self) > hi) { return hi; }
+        return usize_value_(self);
+    }
+
+    def is_zero(self) -> bool {
+        return usize_value_(self) == 0usize;
+    }
+};

@@ -175,6 +175,7 @@ namespace parus::tyck {
         init_file_namespace_(program_stmt);
         collect_known_namespace_paths_(program_stmt);
         collect_external_builtin_acts_methods_();
+        collect_external_enum_metadata_();
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
@@ -659,6 +660,20 @@ namespace parus::tyck {
             std::unique(result_.actor_type_ids.begin(), result_.actor_type_ids.end()),
             result_.actor_type_ids.end()
         );
+        result_.tag_only_enum_type_ids.clear();
+        for (const auto& kv : enum_abi_meta_by_type_) {
+            if (kv.first == ty::kInvalidType) continue;
+            bool tag_only = true;
+            for (const auto& variant : kv.second.variants) {
+                if (!variant.fields.empty()) {
+                    tag_only = false;
+                    break;
+                }
+            }
+            if (tag_only) {
+                result_.tag_only_enum_type_ids.insert(kv.first);
+            }
+        }
         return result_;
     }
 

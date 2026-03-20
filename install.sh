@@ -258,6 +258,22 @@ if [[ "${#CORE_SOURCES[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+CORE_MODULE_IMPORTS_TEXT=""
+for module_head in "${CORE_MODULES[@]}"; do
+  [[ -z "${module_head}" ]] && continue
+  already_seen=0
+  while IFS= read -r seen_head; do
+    [[ -z "${seen_head}" ]] && continue
+    if [[ "${seen_head}" == "${module_head}" ]]; then
+      already_seen=1
+      break
+    fi
+  done <<< "${CORE_MODULE_IMPORTS_TEXT}"
+  if [[ "${already_seen}" -eq 0 ]]; then
+    CORE_MODULE_IMPORTS_TEXT+="${module_head}"$'\n'
+  fi
+done
+
 CORE_INDEX_PATH="${SYSROOT_DIR}/.cache/exports/core.exports.json"
 CORE_INDEX_CMD=(
   "${PARUSC_BIN}" "${CORE_SOURCES[0]}"
@@ -267,6 +283,12 @@ CORE_INDEX_CMD=(
   --module-head "${CORE_MODULES[0]}"
   --emit-export-index "${CORE_INDEX_PATH}"
 )
+if [[ -n "${CORE_MODULE_IMPORTS_TEXT}" ]]; then
+  while IFS= read -r module_import; do
+    [[ -z "${module_import}" ]] && continue
+    CORE_INDEX_CMD+=(--module-import "${module_import}")
+  done <<< "${CORE_MODULE_IMPORTS_TEXT}"
+fi
 for src in "${CORE_SOURCES[@]}"; do
   CORE_INDEX_CMD+=(--bundle-source "${src}")
 done
@@ -285,6 +307,12 @@ for i in "${!CORE_SOURCES[@]}"; do
     --bundle-root "${CORE_SRC_ROOT}"
     --module-head "${module_head}"
   )
+  if [[ -n "${CORE_MODULE_IMPORTS_TEXT}" ]]; then
+    while IFS= read -r module_import; do
+      [[ -z "${module_import}" ]] && continue
+      CORE_COMPILE_CMD+=(--module-import "${module_import}")
+    done <<< "${CORE_MODULE_IMPORTS_TEXT}"
+  fi
   for all_src in "${CORE_SOURCES[@]}"; do
     CORE_COMPILE_CMD+=(--bundle-source "${all_src}")
   done

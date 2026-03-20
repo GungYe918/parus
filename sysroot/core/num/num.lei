@@ -1,0 +1,10 @@
+export plan num_module = module & {
+  sources = [
+    "num/int.pr",
+    "num/float.pr",
+  ];
+  imports = ["cmp"];
+  cimport = {
+    isystem: [],
+  };
+};

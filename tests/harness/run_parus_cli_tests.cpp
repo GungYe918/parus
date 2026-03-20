@@ -1214,6 +1214,206 @@ bool test_core_ext_scaffold_and_auto_injection() {
     return true;
 }
 
+bool test_core_seed_export_index_and_auto_injection() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-core-seed";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root / "sysroot/.cache/exports", ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
+    const std::filesystem::path core_root = repo_root / "sysroot/core";
+    const std::filesystem::path ext_types = core_root / "ext/types.pr";
+    const std::filesystem::path ext_cstr = core_root / "ext/cstr.pr";
+    const std::filesystem::path ext_errors = core_root / "ext/errors.pr";
+    const std::filesystem::path cmp_ordering = core_root / "cmp/ordering.pr";
+    const std::filesystem::path num_int = core_root / "num/int.pr";
+    const std::filesystem::path num_float = core_root / "num/float.pr";
+    const std::filesystem::path char_ascii = core_root / "char/ascii.pr";
+    if (!std::filesystem::exists(ext_types, ec) ||
+        !std::filesystem::exists(ext_cstr, ec) ||
+        !std::filesystem::exists(ext_errors, ec) ||
+        !std::filesystem::exists(cmp_ordering, ec) ||
+        !std::filesystem::exists(num_int, ec) ||
+        !std::filesystem::exists(num_float, ec) ||
+        !std::filesystem::exists(char_ascii, ec)) {
+        std::cerr << "core seed source files are missing\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto core_index = temp_root / "sysroot/.cache/exports/core.exports.json";
+    const std::string emit_core_index_cmd =
+        "\"" + bin + "\" tool parusc -- \"" + ext_types.string() + "\"" +
+        " --bundle-name core" +
+        " --bundle-root \"" + core_root.string() + "\"" +
+        " --module-head ext" +
+        " --bundle-source \"" + ext_types.string() + "\"" +
+        " --bundle-source \"" + ext_cstr.string() + "\"" +
+        " --bundle-source \"" + ext_errors.string() + "\"" +
+        " --bundle-source \"" + cmp_ordering.string() + "\"" +
+        " --bundle-source \"" + num_int.string() + "\"" +
+        " --bundle-source \"" + num_float.string() + "\"" +
+        " --bundle-source \"" + char_ascii.string() + "\"" +
+        " --emit-export-index \"" + core_index.string() + "\"";
+    auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
+    if (rc_emit != 0) {
+        std::cerr << "failed to emit core export-index from core seed\n" << out_emit;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string core_index_text = read_text(core_index);
+    if (!contains(core_index_text, "\"path\":\"Ordering\"")) {
+        std::cerr << "core export-index must include core::cmp::Ordering\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    if (!contains(core_index_text, "parus_builtin_acts|owner=i32|member=min|self=1")) {
+        std::cerr << "core export-index must include i32.min builtin acts payload\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    if (!contains(core_index_text, "parus_builtin_acts|owner=f32|member=abs|self=1")) {
+        std::cerr << "core export-index must include f32.abs builtin acts payload\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_alpha|self=1")) {
+        std::cerr << "core export-index must include char.is_ascii_alpha builtin acts payload\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto app_main = temp_root / "main.pr";
+    const std::string app_src =
+        "def main() -> i32 {\n"
+        "  let lhs: i32 = 1i32;\n"
+        "  let rhs: i32 = 2i32;\n"
+        "  let a: i32 = lhs.min(rhs);\n"
+        "  let raw: f32 = -2.0f32;\n"
+        "  let b: f32 = raw.abs();\n"
+        "  let c: char = 'a';\n"
+        "  let up: char = c.to_ascii_upper();\n"
+        "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
+        "  switch (ord) {\n"
+        "  case core::cmp::Ordering::Greater: {\n"
+        "    if (b == 2.0f32 and up == 'A') {\n"
+        "      return 42i32;\n"
+        "    }\n"
+        "  }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(app_main, app_src)) {
+        std::cerr << "failed to write core seed app source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string compile_with_core_cmd =
+        "PARUS_NO_CORE=0 \"" + bin + "\" tool parusc -- \"" + app_main.string() + "\"" +
+        " --sysroot \"" + (temp_root / "sysroot").string() + "\"" +
+        " --emit-object -o \"" + (temp_root / "main.o").string() + "\"";
+    auto [rc_with_core, out_with_core] = run_capture(compile_with_core_cmd);
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_with_core != 0) {
+        std::cerr << "non-core bundle must resolve core seed acts via auto-injected core index\n" << out_with_core;
+        return false;
+    }
+    return true;
+}
+
+bool test_core_seed_runtime_smoke() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-core-seed-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "def main() -> i32 {\n"
+        "  let neg: i32 = -3i32;\n"
+        "  let mag: i32 = neg.abs();\n"
+        "  let pos: i32 = 7i32;\n"
+        "  let s: i32 = pos.signum();\n"
+        "  let zero: usize = 0usize;\n"
+        "  let z: bool = zero.is_zero();\n"
+        "  let hi0: f32 = 1.5f32;\n"
+        "  let lo: f32 = 0.5f32;\n"
+        "  let hi: f32 = hi0.max(lo);\n"
+        "  let c: char = 'a';\n"
+        "  let up: char = c.to_ascii_upper();\n"
+        "  let lhs: i32 = 3i32;\n"
+        "  let rhs: i32 = 2i32;\n"
+        "  let ord: core::cmp::Ordering = lhs.cmp(rhs);\n"
+        "  set mut out = 0i32;\n"
+        "  if (mag == 3i32 and s == 1i32 and z and hi == 1.5f32 and up == 'A') {\n"
+        "    out = out + 10i32;\n"
+        "  }\n"
+        "  switch (ord) {\n"
+        "  case core::cmp::Ordering::Greater: { out = out + 32i32; }\n"
+        "  default: { return 0i32; }\n"
+        "  }\n"
+        "  return out;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write core seed runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for core seed runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+    const std::string installed_core_index =
+        read_text(std::filesystem::path(sysroot) / ".cache/exports/core.exports.json");
+    if (!contains(installed_core_index, "parus_builtin_acts|owner=i32|member=abs|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=max|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=to_ascii_upper|self=1")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "core seed runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "core seed runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:42")) {
+        std::cerr << "core seed runtime exit mismatch (expected 42)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
 bool test_bundle_alias_proto_impl_path_resolves() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -4936,6 +5136,8 @@ int main() {
     const bool ok76 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
     const bool ok77 = test_unsuffixed_array_literal_float_context_rejected();
     const bool ok78 = test_iteration_loop_break_value_context_syntax_only();
+    const bool ok79 = test_core_seed_export_index_and_auto_injection();
+    const bool ok80 = test_core_seed_runtime_smoke();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -4943,7 +5145,7 @@ int main() {
         !ok36 || !ok37 || !ok38 || !ok39 || !ok40 || !ok41 || !ok42 || !ok43 || !ok44 || !ok45 || !ok46 || !ok47 ||
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 ||
-        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78) {
+        !ok71 || !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80) {
         return 1;
     }
 

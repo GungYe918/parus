@@ -1803,14 +1803,6 @@ namespace parus::tyck {
                 const uint32_t expected_outside_positional = total_cnt - 1u; // receiver consumed implicitly
                 if (outside_positional.size() != expected_outside_positional) continue;
 
-                const CoercionPlan recv_plan = classify_assign_with_coercion_(
-                    AssignSite::CallArg,
-                    types_.fn_param_at(fn_t, 0),
-                    receiver_eid,
-                    ast_.expr(receiver_eid).span
-                );
-                if (!recv_plan.ok) continue;
-
                 bool all_ok = true;
                 for (size_t i = 0; i < outside_positional.size(); ++i) {
                     const ty::TypeId expected = types_.fn_param_at(fn_t, static_cast<uint32_t>(i + 1));

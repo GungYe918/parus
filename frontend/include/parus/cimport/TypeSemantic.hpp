@@ -13,6 +13,9 @@ namespace parus::cimport {
     enum class TypeSemanticKind : uint8_t {
         kBuiltin = 0,
         kNamed,
+        kOptional,
+        kBorrow,
+        kEscape,
         kPtr,
         kArray,
         kFn,
