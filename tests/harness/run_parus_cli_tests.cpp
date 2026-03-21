@@ -1374,14 +1374,13 @@ bool test_core_ext_scaffold_and_auto_injection() {
 
     const auto app_main = temp_root / "main.pr";
     const std::string app_src =
+        "import ext as ext;\n"
+        "\n"
+        "def keep(x: ext::c_int, sz: ext::c_size, ssz: ext::c_ssize, diff: ext::c_ptrdiff) -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let x: core::ext::c_int = 7;\n"
-        "  let sz: core::ext::c_size = 10;\n"
-        "  let ssz: core::ext::c_ssize = 2;\n"
-        "  let diff: core::ext::c_ptrdiff = 3;\n"
-        "  if (sz == 10 and ssz == 2 and diff == 3) {\n"
-        "    return x;\n"
-        "  }\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(app_main, app_src)) {
@@ -1403,8 +1402,10 @@ bool test_core_ext_scaffold_and_auto_injection() {
 
     const auto hidden_fn_main = temp_root / "main_hidden_fn.pr";
     const std::string hidden_fn_src =
+        "import ext as ext;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  set x = core::ext::make(\"x\", 1usize);\n"
+        "  set x = ext::make(\"x\", 1usize);\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(hidden_fn_main, hidden_fn_src)) {
@@ -1457,7 +1458,9 @@ bool test_core_ext_scaffold_and_auto_injection() {
 
     const auto va_ok_main = temp_root / "main_va_ok.pr";
     const std::string va_ok_src =
-        "extern \"C\" def vprintf(fmt: *const core::ext::c_char, ap: core::ext::vaList) -> core::ext::c_int;\n"
+        "import ext as ext;\n"
+        "\n"
+        "extern \"C\" def vprintf(fmt: *const ext::c_char, ap: ext::vaList) -> ext::c_int;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return 0i32;\n"
@@ -1480,8 +1483,10 @@ bool test_core_ext_scaffold_and_auto_injection() {
 
     const auto va_fail_main = temp_root / "main_va_fail.pr";
     const std::string va_fail_src =
+        "import ext as ext;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let x: core::ext::vaList;\n"
+        "  let x: ext::vaList;\n"
         "  return 0i32;\n"
         "}\n";
     if (!write_text(va_fail_main, va_fail_src)) {
@@ -1550,7 +1555,8 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path bool_acts = core_root / "bool/bool.pr";
     const std::filesystem::path num_int = core_root / "num/int.pr";
     const std::filesystem::path num_float = core_root / "num/float.pr";
-    const std::filesystem::path num_proto = core_root / "num/proto.pr";
+    const std::filesystem::path constraints_proto = core_root / "constraints/proto.pr";
+    const std::filesystem::path constraints_inst = core_root / "constraints/inst.pr";
     const std::filesystem::path char_ascii = core_root / "char/ascii.pr";
     const std::filesystem::path text_view = core_root / "text/text.pr";
     const std::filesystem::path mem_mod = core_root / "mem/mem.pr";
@@ -1563,7 +1569,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(bool_acts, ec) ||
         !std::filesystem::exists(num_int, ec) ||
         !std::filesystem::exists(num_float, ec) ||
-        !std::filesystem::exists(num_proto, ec) ||
+        !std::filesystem::exists(constraints_proto, ec) ||
+        !std::filesystem::exists(constraints_inst, ec) ||
         !std::filesystem::exists(char_ascii, ec) ||
         !std::filesystem::exists(text_view, ec) ||
         !std::filesystem::exists(mem_mod, ec) ||
@@ -1588,12 +1595,13 @@ bool test_core_seed_export_index_and_auto_injection() {
                 {bool_acts, "bool", {"cmp"}},
                 {num_int, "num", {"cmp"}},
                 {num_float, "num", {"cmp"}},
-                {num_proto, "num", {}},
+                {constraints_proto, "constraints", {}},
+                {constraints_inst, "constraints", {}},
                 {char_ascii, "char", {"cmp"}},
                 {text_view, "text", {}},
                 {mem_mod, "mem", {}},
                 {hint_mod, "hint", {}},
-                {range_mod, "range", {}},
+                {range_mod, "range", {"constraints"}},
             },
             core_index,
             out_emit)) {
@@ -1655,20 +1663,32 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
         !contains(core_index_text, "\"path\":\"range\"") ||
         !contains(core_index_text, "\"path\":\"range_inclusive\"") ||
-        !contains(core_index_text, "\"path\":\"SignedInt\"") ||
-        !contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
-        !contains(core_index_text, "\"path\":\"Integral\"") ||
-        !contains(core_index_text, "\"path\":\"FloatLike\"") ||
-        !contains(core_index_text, "\"path\":\"RangeBound\"")) {
+        !contains(core_index_text, "\"path\":\"Comparable\"") ||
+        !contains(core_index_text, "\"path\":\"BinaryInteger\"") ||
+        !contains(core_index_text, "\"path\":\"SignedInteger\"") ||
+        !contains(core_index_text, "\"path\":\"UnsignedInteger\"") ||
+        !contains(core_index_text, "\"path\":\"BinaryFloatingPoint\"") ||
+        contains(core_index_text, "\"path\":\"SignedInt\"") ||
+        contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
+        contains(core_index_text, "\"path\":\"Integral\"") ||
+        contains(core_index_text, "\"path\":\"FloatLike\"") ||
+        contains(core_index_text, "\"path\":\"RangeBound\"")) {
         std::cerr << "core export-index must include range types, constructors, and builtin proto declarations\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
     const auto app_main = temp_root / "main.pr";
     const std::string app_src =
+        "import cmp as cmp;\n"
+        "import constraints as constraints;\n"
+        "import ext as ext;\n"
+        "import hint as hint;\n"
+        "import mem as mem;\n"
+        "import range as range;\n"
+        "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
-        "  core::hint::unreachable();\n"
+        "  hint::unreachable();\n"
         "}\n"
         "def main() -> i32 {\n"
         "  let truth: bool = true;\n"
@@ -1680,7 +1700,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let a: i32 = lhs.min(rhs);\n"
         "  let raw: f32 = 1.0f32;\n"
         "  let b: core::cmp::Ordering? = raw.partial_cmp(2.0f32);\n"
-        "  let b0: core::cmp::Ordering = b ?? core::cmp::ordering_equal();\n"
+        "  let b0: core::cmp::Ordering = b ?? cmp::ordering_equal();\n"
         "  let raw_nan: bool = raw.is_nan();\n"
         "  let c: char = 'f';\n"
         "  let hex: bool = c.is_ascii_hexdigit();\n"
@@ -1690,34 +1710,34 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
-        "  let sz_i32: usize = core::mem::size_of<i32>();\n"
-        "  let sz_text: usize = core::mem::size_of<text>();\n"
-        "  let al_i32: usize = core::mem::align_of<i32>();\n"
-        "  let al_text: usize = core::mem::align_of<text>();\n"
+        "  let sz_i32: usize = mem::size_of<i32>();\n"
+        "  let sz_text: usize = mem::size_of<text>();\n"
+        "  let al_i32: usize = mem::align_of<i32>();\n"
+        "  let al_text: usize = mem::align_of<text>();\n"
         "  set mut swap_a = 1i32;\n"
         "  set mut swap_b = 2i32;\n"
-        "  core::mem::swap<i32>(&mut swap_a, &mut swap_b);\n"
+        "  mem::swap<i32>(&mut swap_a, &mut swap_b);\n"
         "  set mut repl = \"abc\";\n"
-        "  let repl_old: text = core::mem::replace<text>(&mut repl, \"x\");\n"
-        "  core::hint::spin_loop();\n"
-        "  let cstr: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
-        "  let bridged: text = core::ext::to_text(cstr);\n"
+        "  let repl_old: text = mem::replace<text>(&mut repl, \"x\");\n"
+        "  hint::spin_loop();\n"
+        "  let cstr: core::ext::CStr = ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let bridged: text = ext::to_text(cstr);\n"
         "  let bridged_len: usize = bridged.len_bytes();\n"
-        "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
-        "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
-        "  let rc: core::range::Range<char> = core::range::range('a', 'z');\n"
-        "  let rci: core::range::RangeInclusive<char> = core::range::range_inclusive('k', 'k');\n"
+        "  let rx: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  let ri: core::range::RangeInclusive<u32> = range::range_inclusive(1u32, 4u32);\n"
+        "  let rc: core::range::Range<char> = range::range('a', 'z');\n"
+        "  let rci: core::range::RangeInclusive<char> = range::range_inclusive('k', 'k');\n"
         "  let rx_empty: bool = rx.is_empty();\n"
         "  let rx_has_mid: bool = rx.contains(2i32);\n"
         "  let rx_has_hi: bool = rx.contains(4i32);\n"
-        "  let rx_contains_range: bool = rx.contains_range(core::range::range(2i32, 3i32));\n"
-        "  let rx_intersects_tail: bool = rx.intersects(core::range::range(4i32, 8i32));\n"
+        "  let rx_contains_range: bool = rx.contains_range(range::range(2i32, 3i32));\n"
+        "  let rx_intersects_tail: bool = rx.intersects(range::range(4i32, 8i32));\n"
         "  let ri_has_hi: bool = ri.contains(4u32);\n"
-        "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
+        "  let ri_empty: bool = range::range_inclusive(5i32, 4i32).is_empty();\n"
         "  let rc_has_mid: bool = rc.contains('m');\n"
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
-        "  let rci_intersects: bool = rci.intersects(core::range::range_inclusive('k', 'm'));\n"
+        "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1802,7 +1822,7 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 13> core_seed_sources = {
+    const std::array<std::filesystem::path, 14> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
@@ -1810,7 +1830,8 @@ bool test_core_seed_runtime_smoke() {
         core_root / "bool/bool.pr",
         core_root / "num/int.pr",
         core_root / "num/float.pr",
-        core_root / "num/proto.pr",
+        core_root / "constraints/proto.pr",
+        core_root / "constraints/inst.pr",
         core_root / "char/ascii.pr",
         core_root / "text/text.pr",
         core_root / "mem/mem.pr",
@@ -1821,9 +1842,16 @@ bool test_core_seed_runtime_smoke() {
     const auto main_pr = temp_root / "main.pr";
     const auto exe = temp_root / "main";
     const std::string main_src =
+        "import cmp as cmp;\n"
+        "import constraints as constraints;\n"
+        "import ext as ext;\n"
+        "import hint as hint;\n"
+        "import mem as mem;\n"
+        "import range as range;\n"
+        "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
-        "  core::hint::unreachable();\n"
+        "  hint::unreachable();\n"
         "}\n"
         "def main() -> i32 {\n"
         "  let bo: core::cmp::Ordering = true.cmp(false);\n"
@@ -1841,35 +1869,35 @@ bool test_core_seed_runtime_smoke() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
-        "  let sz_i32: usize = core::mem::size_of<i32>();\n"
-        "  let sz_text: usize = core::mem::size_of<text>();\n"
-        "  let sz_arr: usize = core::mem::size_of<i32[4]>();\n"
-        "  let al_i32: usize = core::mem::align_of<i32>();\n"
-        "  let al_text: usize = core::mem::align_of<text>();\n"
+        "  let sz_i32: usize = mem::size_of<i32>();\n"
+        "  let sz_text: usize = mem::size_of<text>();\n"
+        "  let sz_arr: usize = mem::size_of<i32[4]>();\n"
+        "  let al_i32: usize = mem::align_of<i32>();\n"
+        "  let al_text: usize = mem::align_of<text>();\n"
         "  set mut swap_a = 1i32;\n"
         "  set mut swap_b = 2i32;\n"
-        "  core::mem::swap<i32>(&mut swap_a, &mut swap_b);\n"
+        "  mem::swap<i32>(&mut swap_a, &mut swap_b);\n"
         "  set mut repl = \"abc\";\n"
-        "  let repl_old: text = core::mem::replace<text>(&mut repl, \"x\");\n"
-        "  core::hint::spin_loop();\n"
-        "  let cs: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
-        "  let tv: text = core::ext::to_text(cs);\n"
+        "  let repl_old: text = mem::replace<text>(&mut repl, \"x\");\n"
+        "  hint::spin_loop();\n"
+        "  let cs: core::ext::CStr = ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let tv: text = ext::to_text(cs);\n"
         "  let tv_len: usize = tv.len_bytes();\n"
-        "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
-        "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
-        "  let rc: core::range::Range<char> = core::range::range('a', 'z');\n"
-        "  let rci: core::range::RangeInclusive<char> = core::range::range_inclusive('k', 'k');\n"
+        "  let rx: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  let ri: core::range::RangeInclusive<u32> = range::range_inclusive(1u32, 4u32);\n"
+        "  let rc: core::range::Range<char> = range::range('a', 'z');\n"
+        "  let rci: core::range::RangeInclusive<char> = range::range_inclusive('k', 'k');\n"
         "  let rx_empty: bool = rx.is_empty();\n"
         "  let rx_has_mid: bool = rx.contains(2i32);\n"
         "  let rx_has_hi: bool = rx.contains(4i32);\n"
-        "  let rx_contains_range: bool = rx.contains_range(core::range::range(2i32, 3i32));\n"
-        "  let rx_intersects_tail: bool = rx.intersects(core::range::range(4i32, 8i32));\n"
+        "  let rx_contains_range: bool = rx.contains_range(range::range(2i32, 3i32));\n"
+        "  let rx_intersects_tail: bool = rx.intersects(range::range(4i32, 8i32));\n"
         "  let ri_has_hi: bool = ri.contains(4u32);\n"
-        "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
+        "  let ri_empty: bool = range::range_inclusive(5i32, 4i32).is_empty();\n"
         "  let rc_has_mid: bool = rc.contains('m');\n"
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
-        "  let rci_intersects: bool = rci.intersects(core::range::range_inclusive('k', 'm'));\n"
+        "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
         "  set mut bo_ok = false;\n"
         "  switch (bo) {\n"
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
@@ -1982,7 +2010,7 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"RangeInclusive\"") ||
         !contains(installed_core_index, "\"path\":\"range\"") ||
         !contains(installed_core_index, "\"path\":\"range_inclusive\"") ||
-        !contains(installed_core_index, "\"path\":\"SignedInt\"") ||
+        !contains(installed_core_index, "\"path\":\"SignedInteger\"") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {
@@ -2041,11 +2069,16 @@ bool test_text_view_cstr_preflight_syntax_only() {
         return true;
     }
     const std::string installed_core_index = read_text(installed_core_index_path);
-    if (!contains(installed_core_index, "\"path\":\"SignedInt\"") ||
-        !contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
-        !contains(installed_core_index, "\"path\":\"Integral\"") ||
-        !contains(installed_core_index, "\"path\":\"FloatLike\"") ||
-        !contains(installed_core_index, "\"path\":\"RangeBound\"")) {
+    if (!contains(installed_core_index, "\"path\":\"Comparable\"") ||
+        !contains(installed_core_index, "\"path\":\"BinaryInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"SignedInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"UnsignedInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"BinaryFloatingPoint\"") ||
+        contains(installed_core_index, "\"path\":\"SignedInt\"") ||
+        contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
+        contains(installed_core_index, "\"path\":\"Integral\"") ||
+        contains(installed_core_index, "\"path\":\"FloatLike\"") ||
+        contains(installed_core_index, "\"path\":\"RangeBound\"")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -2057,9 +2090,11 @@ bool test_text_view_cstr_preflight_syntax_only() {
 
     const auto main_pr = temp_root / "main.pr";
     const std::string main_src =
+        "import ext as ext;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let c: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
-        "  let t: text = core::ext::to_text(c);\n"
+        "  let c: core::ext::CStr = ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let t: text = ext::to_text(c);\n"
         "  let n: usize = t.len_bytes();\n"
         "  if (n != 5usize or t.is_empty()) { return 0i32; }\n"
         "  return 42i32;\n"
@@ -2111,10 +2146,12 @@ bool test_cstr_private_fields_hidden_but_helpers_work() {
 
     const auto ok_pr = temp_root / "ok.pr";
     const std::string ok_src =
+        "import ext as ext;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let c: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
-        "  let n: usize = core::ext::len(c);\n"
-        "  let t: text = core::ext::to_text(c);\n"
+        "  let c: core::ext::CStr = ext::from_raw_parts(c\"Hello\", 6usize);\n"
+        "  let n: usize = ext::len(c);\n"
+        "  let t: text = ext::to_text(c);\n"
         "  if (t.len_bytes() == 5usize and n == 5usize) { return 42i32; }\n"
         "  return 0i32;\n"
         "}\n";
@@ -2135,8 +2172,10 @@ bool test_cstr_private_fields_hidden_but_helpers_work() {
 
     const auto bad_pr = temp_root / "bad.pr";
     const std::string bad_src =
+        "import ext as ext;\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let c: core::ext::CStr = core::ext::from_ptr(\"Hello\");\n"
+        "  let c: core::ext::CStr = ext::from_ptr(\"Hello\");\n"
         "  set p = c.ptr_;\n"
         "  let n: usize = c.len_;\n"
         "  if (p == null and n == 0usize) { return 0i32; }\n"
@@ -2192,11 +2231,16 @@ bool test_external_generic_constraints_v2_work() {
         return true;
     }
     const std::string installed_core_index = read_text(installed_core_index_path);
-    if (!contains(installed_core_index, "\"path\":\"SignedInt\"") ||
-        !contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
-        !contains(installed_core_index, "\"path\":\"Integral\"") ||
-        !contains(installed_core_index, "\"path\":\"FloatLike\"") ||
-        !contains(installed_core_index, "\"path\":\"RangeBound\"")) {
+    if (!contains(installed_core_index, "\"path\":\"Comparable\"") ||
+        !contains(installed_core_index, "\"path\":\"BinaryInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"SignedInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"UnsignedInteger\"") ||
+        !contains(installed_core_index, "\"path\":\"BinaryFloatingPoint\"") ||
+        contains(installed_core_index, "\"path\":\"SignedInt\"") ||
+        contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
+        contains(installed_core_index, "\"path\":\"Integral\"") ||
+        contains(installed_core_index, "\"path\":\"FloatLike\"") ||
+        contains(installed_core_index, "\"path\":\"RangeBound\"")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -2204,6 +2248,7 @@ bool test_external_generic_constraints_v2_work() {
     const auto lib_pr = temp_root / "lib.pr";
     const std::string lib_src =
         "nest api;\n"
+        "import constraints as constraints;\n"
         "struct OnlyI32<T> with [T == i32] {\n"
         "  value: T;\n"
         "};\n"
@@ -2213,10 +2258,10 @@ bool test_external_generic_constraints_v2_work() {
         "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
         "  return 1i32;\n"
         "}\n"
-        "export def signed_only<T>(x: T) with [T: num::SignedInt] -> i32 {\n"
+        "export def signed_only<T>(x: T) with [T: constraints::SignedInteger] -> i32 {\n"
         "  return 2i32;\n"
         "}\n"
-        "export acts for Box<T> with [T: num::RangeBound] {\n"
+        "export acts for Box<T> with [T: constraints::Comparable] {\n"
         "  def same(self) -> bool {\n"
         "    return self.value >= self.value;\n"
         "  }\n"
@@ -2242,7 +2287,7 @@ bool test_external_generic_constraints_v2_work() {
 
     const std::string lib_index_text = read_text(lib_index);
     if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
-        !contains(lib_index_text, "gconstraint=proto,T,num::SignedInt") ||
+        !contains(lib_index_text, "gconstraint=proto,T,constraints::SignedInteger") ||
         !contains(lib_index_text, "\"path\":\"api::OnlyI32\"") ||
         !contains(lib_index_text, "parus_field_decl|layout=n|align=0|gparam=T|gconstraint=type_eq,T,i32|field=value:T")) {
         std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;
@@ -2252,6 +2297,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto ok_pr = temp_root / "ok.pr";
     const std::string ok_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def main() -> i32 {\n"
         "  let a: i32 = api::only_i32(1i32);\n"
         "  let b: i32 = api::signed_only(-1i32);\n"
@@ -2272,8 +2320,56 @@ bool test_external_generic_constraints_v2_work() {
         return false;
     }
 
+    const auto bad_import_pr = temp_root / "bad_import.pr";
+    const std::string bad_import_src =
+        "def ordered<T>(x: T) with [T: constraints::Comparable] -> bool {\n"
+        "  return x >= x;\n"
+        "}\n";
+    if (!write_text(bad_import_pr, bad_import_src)) {
+        std::cerr << "failed to write missing-import generic constraint sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_import, out_bad_import] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_import_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() + "\"");
+    if (rc_bad_import == 0 ||
+        (!contains(out_bad_import, "GenericConstraintProtoNotFound") &&
+         !contains(out_bad_import, "unknown proto in generic constraint"))) {
+        std::cerr << "qualified cross-module proto path must require an explicit import\n" << out_bad_import;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto ok_import_pr = temp_root / "ok_import.pr";
+    const std::string ok_import_src =
+        "import constraints as constraints;\n"
+        "def ordered<T>(x: T) with [T: constraints::Comparable] -> bool {\n"
+        "  return x >= x;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  if (ordered<char>('a')) { return 0i32; }\n"
+        "  return 1i32;\n"
+        "}\n";
+    if (!write_text(ok_import_pr, ok_import_src)) {
+        std::cerr << "failed to write explicit-import generic constraint sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_ok_import, out_ok_import] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_import_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() + "\"");
+    if (rc_ok_import != 0) {
+        std::cerr << "explicit-import generic constraint sample should typecheck\n" << out_ok_import;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
     const auto ok_struct_pr = temp_root / "ok_struct.pr";
     const std::string ok_struct_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def f(x: api::OnlyI32<i32>) -> i32 {\n"
         "  return 0i32;\n"
         "}\n";
@@ -2294,6 +2390,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto bad_eq_pr = temp_root / "bad_eq.pr";
     const std::string bad_eq_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def main() -> i32 {\n"
         "  return api::only_i32(1u32);\n"
         "}\n";
@@ -2314,6 +2413,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto bad_struct_pr = temp_root / "bad_struct.pr";
     const std::string bad_struct_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def f(x: api::OnlyI32<u32>) -> i32 {\n"
         "  return 0i32;\n"
         "}\n";
@@ -2335,6 +2437,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto bad_proto_pr = temp_root / "bad_proto.pr";
     const std::string bad_proto_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def main() -> i32 {\n"
         "  return api::signed_only(1u32);\n"
         "}\n";
@@ -2355,6 +2460,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto ok_acts_pr = temp_root / "ok_acts.pr";
     const std::string ok_acts_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def main(x: api::Box<i32>) -> bool {\n"
         "  return x.same();\n"
         "}\n";
@@ -2375,6 +2483,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const auto bad_acts_pr = temp_root / "bad_acts.pr";
     const std::string bad_acts_src =
+        "import api as api;\n"
+        "import constraints as constraints;\n"
+        "\n"
         "def main(x: api::Box<bool>) -> bool {\n"
         "  return x.same();\n"
         "}\n";
@@ -3897,9 +4008,10 @@ bool test_c_header_import_cstr_runtime_prints_consistent_output() {
         "#endif\n";
     const std::string main_src =
         "import \"stdio.h\" as c;\n"
+        "import ext as ext;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set x = core::ext::from_ptr(\"Hello, World!!\");\n"
+        "  set x = ext::from_ptr(\"Hello, World!!\");\n"
         "  manual[abi] {\n"
         "    c::printf(x);\n"
         "    c::printf(\"\\n\");\n"

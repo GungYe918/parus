@@ -3079,29 +3079,28 @@ namespace {
         std::unordered_set<uint32_t> core_impl_marker_file_ids{};
         collect_core_impl_marker_file_ids_(ast, root, core_impl_marker_file_ids);
 #if PARUSD_ENABLE_LEI
-        if (!lint_ctx_for_doc.has_value() && !core_impl_marker_file_ids.empty()) {
+        if (!core_impl_marker_file_ids.empty()) {
             constexpr std::string_view kCoreRootNeedle = "/sysroot/core/";
             const size_t pos = normalized_current.find(kCoreRootNeedle);
+            ParusBundleLintContext ctx = lint_ctx_for_doc.value_or(ParusBundleLintContext{});
+            ctx.bundle_name = "core";
+            ctx.current_source_dir_norm = parent_dir_norm_(normalized_current);
+            ctx.allowed_import_heads.insert("core");
             if (pos != std::string::npos) {
-                ParusBundleLintContext fallback{};
-                fallback.bundle_name = "core";
-                fallback.current_source_dir_norm = parent_dir_norm_(normalized_current);
-                fallback.allowed_import_heads.insert("core");
-
                 std::string rel = normalized_current.substr(pos + kCoreRootNeedle.size());
                 if (!rel.empty()) {
                     const size_t slash = rel.find('/');
                     if (slash != std::string::npos && slash > 0) {
-                        fallback.current_module_head = rel.substr(0, slash);
+                        ctx.current_module_head = rel.substr(0, slash);
                     } else if (slash == std::string::npos) {
-                        fallback.current_module_head = rel;
+                        ctx.current_module_head = rel;
                     }
                 }
-                if (fallback.current_module_head.empty()) fallback.current_module_head = "core";
-                fallback.current_module_head =
-                    normalize_core_public_module_head_("core", fallback.current_module_head);
-                lint_ctx_for_doc = std::move(fallback);
             }
+            if (ctx.current_module_head.empty()) ctx.current_module_head = "core";
+            ctx.current_module_head =
+                normalize_core_public_module_head_("core", ctx.current_module_head);
+            lint_ctx_for_doc = std::move(ctx);
         }
 #endif
         std::vector<CHeaderImportSpec> c_header_imports{};

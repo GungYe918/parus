@@ -1,6 +1,5 @@
 export plan num_module = module & {
   sources = [
-    "num/proto.pr",
     "num/int.pr",
     "num/float.pr",
   ];

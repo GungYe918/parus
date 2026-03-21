@@ -121,24 +121,25 @@ def same<T, U>(x: T, y: U) with [T == U] -> bool {
 
 ## 19.8 builtin proto family
 
-primitive family classifier는 ordinary `proto` declaration으로 노출되지만, 만족 여부 일부는 compiler가 builtin type에 대해 특별취급한다.
+primitive family classifier는 `core::constraints/proto.pr`의 builtin `use Foo;` 선언으로 노출되지만, 만족 여부 일부는 compiler가 builtin type에 대해 특별취급한다.
 
 현재 builtin proto:
 
-1. `Integral`
-2. `RangeBound`
-3. `SignedInt : Integral, RangeBound`
-4. `UnsignedInt : Integral, RangeBound`
-5. `FloatLike`
+1. `Comparable`
+2. `BinaryInteger`
+3. `SignedInteger`
+4. `UnsignedInteger`
+5. `BinaryFloatingPoint`
 
 규칙:
 
-1. signed integer primitive는 `SignedInt`, `Integral`, `RangeBound`를 만족한다.
-2. unsigned integer primitive는 `UnsignedInt`, `Integral`, `RangeBound`를 만족한다.
-3. `char`는 `RangeBound`를 만족한다.
-4. `f32`, `f64`는 `FloatLike`를 만족한다.
+1. signed integer primitive는 `SignedInteger`, `BinaryInteger`, `Comparable`를 만족한다.
+2. unsigned integer primitive는 `UnsignedInteger`, `BinaryInteger`, `Comparable`를 만족한다.
+3. `char`는 `Comparable`를 만족한다.
+4. `f32`, `f64`는 `BinaryFloatingPoint`를 만족한다.
 5. user-defined type이 이 builtin proto를 직접 `:`로 구현하는 것은 금지한다.
 6. 이 proto들은 primitive family filter 용도로만 우선 사용한다.
+7. 장기적으로 builtin/external type proto conformance나 structural satisfaction from `acts`가 생기면 library-only surface로 내릴 후보들이다.
 
 ## 19.9 의존 순환 금지
 

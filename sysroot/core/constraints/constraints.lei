@@ -1,0 +1,10 @@
+export plan constraints_module = module & {
+  sources = [
+    "constraints/proto.pr",
+    "constraints/inst.pr",
+  ];
+  imports = [];
+  cimport = {
+    isystem: [],
+  };
+};

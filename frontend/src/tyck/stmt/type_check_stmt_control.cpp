@@ -203,11 +203,10 @@ namespace parus::tyck {
                     return;
                 }
                 if ((s.use_kind == ast::UseKind::kImport ||
+                     s.use_kind == ast::UseKind::kImportCHeader ||
                      s.use_kind == ast::UseKind::kPathAlias ||
                      s.use_kind == ast::UseKind::kNestAlias) &&
                     s.use_path_count > 0) {
-                    const std::string raw_path = path_join_(s.use_path_begin, s.use_path_count);
-                    const std::string path = resolve_import_path_for_alias_(raw_path);
                     std::string alias(s.use_rhs_ident);
                     if (alias.empty()) {
                         const auto& segs = ast_.path_segs();
@@ -222,6 +221,11 @@ namespace parus::tyck {
                             }
                         }
                     }
+                    const std::string raw_path = path_join_(s.use_path_begin, s.use_path_count);
+                    const std::string path =
+                        (s.use_kind == ast::UseKind::kImportCHeader)
+                        ? alias
+                        : resolve_import_path_for_alias_(raw_path);
                     if (!path.empty() && !alias.empty()) {
                         if (s.use_kind == ast::UseKind::kNestAlias) {
                             if (!is_known_namespace_path_(path)) {
@@ -842,13 +846,14 @@ namespace parus::tyck {
 
         auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
             std::string key = "Recoverable";
+            const bool key_rewritten = rewrite_imported_path_(key).has_value();
             if (auto rewritten = rewrite_imported_path_(key)) {
                 key = *rewritten;
             }
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
-            if (auto sid = lookup_symbol_(key)) {
+            if (auto sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                 const auto& ss = sym_.symbol(*sid);
                 if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
                     return pit->second;
@@ -921,13 +926,14 @@ namespace parus::tyck {
 
         auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
             std::string key = "Recoverable";
+            const bool key_rewritten = rewrite_imported_path_(key).has_value();
             if (auto rewritten = rewrite_imported_path_(key)) {
                 key = *rewritten;
             }
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
-            if (auto sid = lookup_symbol_(key)) {
+            if (auto sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                 const auto& ss = sym_.symbol(*sid);
                 if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
                     return pit->second;

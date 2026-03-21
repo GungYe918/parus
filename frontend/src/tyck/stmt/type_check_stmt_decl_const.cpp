@@ -1601,11 +1601,12 @@
             }
 
             std::string lookup = raw_path;
+            const bool lookup_rewritten = rewrite_imported_path_(lookup).has_value();
             if (auto rewritten = rewrite_imported_path_(lookup)) {
                 lookup = *rewritten;
             }
 
-            auto sym_sid = lookup_symbol_(lookup);
+            auto sym_sid = lookup_rewritten ? sym_.lookup(lookup) : lookup_symbol_(lookup);
             if (!sym_sid.has_value()) {
                 const std::string msg = std::string("proto require target not found: ") + raw_path;
                 emit_req_failure(req_item.span, msg);
@@ -2241,11 +2242,14 @@
         auto is_non_proto_base = [&](std::string_view raw) -> bool {
             if (raw.empty()) return false;
             std::string key(raw);
+            const bool key_rewritten = rewrite_imported_path_(key).has_value();
             if (auto rewritten = rewrite_imported_path_(key)) {
                 key = *rewritten;
+            } else if (qualified_path_requires_import_(key)) {
+                return false;
             }
             if (proto_decl_by_name_.find(key) != proto_decl_by_name_.end()) return false;
-            if (auto sid2 = lookup_symbol_(key)) {
+            if (auto sid2 = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                 const auto& ss = sym_.symbol(*sid2);
                 if (ss.kind == sema::SymbolKind::kType &&
                     proto_decl_by_name_.find(ss.name) == proto_decl_by_name_.end()) {

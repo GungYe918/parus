@@ -30,10 +30,6 @@
             std::vector<std::string> collect_ns = namespace_stack;
             collect_known_namespace_paths_stmt_(ast, r, root, collect_ns, known_namespace_paths);
         }
-        for (const auto& ex : opt.external_exports) {
-            add_namespace_prefixes_of_symbol_path_(ex.path, known_namespace_paths);
-        }
-
         register_external_exports_(sym, bag, opt);
         std::vector<std::string> predeclare_ns = namespace_stack;
         predeclare_namespace_decls_(ast, r, root, sym, bag, opt, predeclare_ns);

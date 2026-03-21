@@ -8,9 +8,6 @@
 
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
-        proto_decl_by_name_.clear();
-        proto_decl_by_type_.clear();
-        proto_qualified_name_by_stmt_.clear();
         class_qualified_name_by_stmt_.clear();
         acts_qualified_name_by_stmt_.clear();
         class_decl_by_name_.clear();
@@ -130,6 +127,22 @@
             }
             return false;
         };
+        auto core_builtin_use_proto = [&](std::string_view name) -> bool {
+            return name == "Comparable" ||
+                   name == "BinaryInteger" ||
+                   name == "SignedInteger" ||
+                   name == "UnsignedInteger" ||
+                   name == "BinaryFloatingPoint";
+        };
+        auto module_head_for_file = [&](uint32_t file_id) -> std::string {
+            if (file_id == 0) return {};
+            for (const auto& sym : sym_.symbols()) {
+                if (sym.is_external) continue;
+                if (sym.decl_file_id != file_id) continue;
+                if (!sym.decl_module_head.empty()) return sym.decl_module_head;
+            }
+            return {};
+        };
 
         std::unordered_map<std::string, ast::StmtId> c_abi_symbol_owner;
         const auto make_c_abi_decl_payload = [](const ast::Stmt& s) {
@@ -215,41 +228,103 @@
                     err_(s.span, msg);
                     return;
                 }
-                const std::string module_head = current_module_head_();
-                const bool module_ok =
-                    qname.starts_with("ext::") ||
-                    module_head == "ext" ||
-                    module_head.ends_with("::ext");
-                if (!module_ok) {
-                    const std::string msg = "core builtin use is allowed only in module 'ext' (got: " + qname + ")";
-                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                    err_(s.span, msg);
-                    return;
-                }
-
                 bool is_transparent = false;
                 ty::TypeId builtin_ty = ty::kInvalidType;
-                if (!core_builtin_use_type(s.use_name, is_transparent, builtin_ty) ||
-                    builtin_ty == ty::kInvalidType) {
+                const bool is_type_target =
+                    core_builtin_use_type(s.use_name, is_transparent, builtin_ty) &&
+                    builtin_ty != ty::kInvalidType;
+                const bool is_proto_target = core_builtin_use_proto(s.use_name);
+                if (!is_type_target && !is_proto_target) {
                     const std::string msg = "unknown core builtin use target: " + std::string(s.use_name);
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
                     return;
                 }
-                (void)is_transparent;
+
+                const std::string module_head = module_head_for_file(s.span.file_id);
+                if (!module_head.empty()) {
+                    const bool is_ext_module =
+                        module_head == "ext" ||
+                        module_head.ends_with("::ext");
+                    const bool is_constraints_module =
+                        module_head == "constraints" ||
+                        module_head.ends_with("::constraints");
+                    if ((is_type_target && !is_ext_module) ||
+                        (is_proto_target && !is_constraints_module)) {
+                        const std::string msg =
+                            "core builtin use is allowed only in module 'ext' or 'constraints' (got: " + qname + ")";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                        err_(s.span, msg);
+                        return;
+                    }
+                }
+
+                if (is_type_target) {
+                    (void)is_transparent;
+
+                    if (auto existing = sym_.lookup_in_current(qname)) {
+                        const auto& existing_sym = sym_.symbol(*existing);
+                        if (existing_sym.kind != sema::SymbolKind::kType) {
+                            err_(s.span, "duplicate symbol (type): " + qname);
+                            diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        } else {
+                            (void)sym_.update_declared_type(*existing, builtin_ty);
+                        }
+                    } else {
+                        auto ins = sym_.insert(sema::SymbolKind::kType, qname, builtin_ty, s.span);
+                        if (!ins.ok && ins.is_duplicate) {
+                            err_(s.span, "duplicate symbol (type): " + qname);
+                            diag_(diag::Code::kDuplicateDecl, s.span, qname);
+                        }
+                    }
+                    return;
+                }
+
+                if (!core_builtin_use_proto(s.use_name)) {
+                    const std::string msg = "unknown core builtin proto target: " + std::string(s.use_name);
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    return;
+                }
+
+                ty::TypeId proto_ty = types_.intern_ident(qname);
+                std::optional<ast::StmtId> proto_sid{};
+                if (auto it = proto_decl_by_name_.find(qname); it != proto_decl_by_name_.end()) {
+                    proto_sid = it->second;
+                } else {
+                    ast::Stmt stub{};
+                    stub.kind = ast::StmtKind::kProtoDecl;
+                    stub.span = s.span;
+                    stub.name = s.use_name;
+                    stub.type = proto_ty;
+                    stub.is_export = s.is_export;
+                    const auto stub_sid = ast_.add_stmt(stub);
+                    proto_decl_by_name_[qname] = stub_sid;
+                    proto_qualified_name_by_stmt_[stub_sid] = "core::constraints::" + std::string(s.use_name);
+                    proto_decl_by_type_[proto_ty] = stub_sid;
+                    proto_sid = stub_sid;
+                }
+
+                if (proto_sid.has_value()) {
+                    auto& proto_stmt = ast_.stmt_mut(*proto_sid);
+                    if (proto_stmt.type == ty::kInvalidType) {
+                        proto_stmt.type = proto_ty;
+                    }
+                    proto_decl_by_type_[proto_stmt.type] = *proto_sid;
+                }
 
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
                     if (existing_sym.kind != sema::SymbolKind::kType) {
-                        err_(s.span, "duplicate symbol (type): " + qname);
+                        err_(s.span, "duplicate symbol (proto): " + qname);
                         diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     } else {
-                        (void)sym_.update_declared_type(*existing, builtin_ty);
+                        (void)sym_.update_declared_type(*existing, proto_ty);
                     }
                 } else {
-                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, builtin_ty, s.span);
+                    auto ins = sym_.insert(sema::SymbolKind::kType, qname, proto_ty, s.span);
                     if (!ins.ok && ins.is_duplicate) {
-                        err_(s.span, "duplicate symbol (type): " + qname);
+                        err_(s.span, "duplicate symbol (proto): " + qname);
                         diag_(diag::Code::kDuplicateDecl, s.span, qname);
                     }
                 }
@@ -1073,6 +1148,8 @@
             }
         }
 
+        ensure_builtin_family_proto_aliases_();
+
         auto make_member_sig_key = [&](ast::StmtId fn_sid) -> std::string {
             if (fn_sid == ast::k_invalid_stmt || (size_t)fn_sid >= ast_.stmts().size()) return {};
             const auto& def = ast_.stmt(fn_sid);
@@ -1677,11 +1754,11 @@
 
     void TypeChecker::ensure_builtin_family_proto_aliases_() {
         constexpr std::string_view kBuiltinProtoLeaves[] = {
-            "SignedInt",
-            "UnsignedInt",
-            "Integral",
-            "FloatLike",
-            "RangeBound",
+            "Comparable",
+            "BinaryInteger",
+            "SignedInteger",
+            "UnsignedInteger",
+            "BinaryFloatingPoint",
         };
 
         for (const auto leaf : kBuiltinProtoLeaves) {
@@ -1700,8 +1777,8 @@
             };
 
             try_key(leaf);
-            try_key(std::string("num::") + std::string(leaf));
-            try_key(std::string("core::num::") + std::string(leaf));
+            try_key(std::string("constraints::") + std::string(leaf));
+            try_key(std::string("core::constraints::") + std::string(leaf));
             if (!sid.has_value()) {
                 for (const auto& [name, existing_sid] : proto_decl_by_name_) {
                     const size_t pos = name.rfind("::");
@@ -1715,20 +1792,13 @@
                 }
             }
 
-            if (!sid.has_value()) {
-                ast::Stmt stub{};
-                stub.kind = ast::StmtKind::kProtoDecl;
-                stub.name = leaf;
-                const auto stub_sid = ast_.add_stmt(stub);
-                proto_qualified_name_by_stmt_[stub_sid] = "core::num::" + std::string(leaf);
-                sid = stub_sid;
-            }
+            if (!sid.has_value()) continue;
 
             bind_alias(std::string(leaf), *sid);
-            bind_alias(std::string("num::") + std::string(leaf), *sid);
-            bind_alias(std::string("core::num::") + std::string(leaf), *sid);
+            bind_alias(std::string("constraints::") + std::string(leaf), *sid);
+            bind_alias(std::string("core::constraints::") + std::string(leaf), *sid);
             if (proto_qualified_name_by_stmt_.find(*sid) == proto_qualified_name_by_stmt_.end()) {
-                proto_qualified_name_by_stmt_[*sid] = "core::num::" + std::string(leaf);
+                proto_qualified_name_by_stmt_[*sid] = "core::constraints::" + std::string(leaf);
             }
         }
     }
@@ -1976,14 +2046,18 @@
 
     std::optional<ast::StmtId> TypeChecker::resolve_proto_sid_for_constraint_(std::string_view raw) const {
         if (raw.empty()) return std::nullopt;
+        const bool qualified_raw = raw.find("::") != std::string_view::npos;
         auto try_resolve = [&](std::string key) -> std::optional<ast::StmtId> {
+            const bool key_rewritten = rewrite_imported_path_(key).has_value();
             if (auto rewritten = rewrite_imported_path_(key)) {
                 key = *rewritten;
+            } else if (qualified_path_requires_import_(key)) {
+                return std::nullopt;
             }
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
-            if (auto sym_sid = lookup_symbol_(key)) {
+            if (auto sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                 const auto& ss = sym_.symbol(*sym_sid);
                 if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
                     return pit->second;
@@ -1995,14 +2069,19 @@
         if (auto resolved = try_resolve(std::string(raw))) {
             return resolved;
         }
-        if (!raw.starts_with("core::") && raw.find("::") != std::string_view::npos) {
+        if (!qualified_raw) {
+            if (auto it = proto_decl_by_name_.find(std::string(raw)); it != proto_decl_by_name_.end()) {
+                return it->second;
+            }
+        }
+        if (!raw.starts_with("core::") && qualified_raw && !qualified_path_requires_import_(raw)) {
             if (auto resolved = try_resolve("core::" + std::string(raw))) {
                 return resolved;
             }
         }
 
         const size_t sep = raw.rfind("::");
-        if (sep != std::string_view::npos && sep + 2 < raw.size()) {
+        if (!qualified_raw && sep != std::string_view::npos && sep + 2 < raw.size()) {
             const std::string_view leaf = raw.substr(sep + 2);
             std::optional<ast::StmtId> unique{};
             for (const auto& [name, sid] : proto_decl_by_name_) {
@@ -2042,11 +2121,11 @@
         };
 
         const std::string_view leaf = tail(name);
-        return leaf == "SignedInt" ||
-               leaf == "UnsignedInt" ||
-               leaf == "Integral" ||
-               leaf == "FloatLike" ||
-               leaf == "RangeBound";
+        return leaf == "Comparable" ||
+               leaf == "BinaryInteger" ||
+               leaf == "SignedInteger" ||
+               leaf == "UnsignedInteger" ||
+               leaf == "BinaryFloatingPoint";
     }
 
     bool TypeChecker::builtin_family_proto_satisfied_by_primitive_name_(
@@ -2094,11 +2173,11 @@
             return b == ty::Builtin::kChar;
         };
 
-        if (leaf == "SignedInt") return is_signed(tt.builtin);
-        if (leaf == "UnsignedInt") return is_unsigned(tt.builtin);
-        if (leaf == "Integral") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
-        if (leaf == "RangeBound") return is_signed(tt.builtin) || is_unsigned(tt.builtin) || is_char(tt.builtin);
-        if (leaf == "FloatLike") return is_float_builtin_(tt.builtin);
+        if (leaf == "SignedInteger") return is_signed(tt.builtin);
+        if (leaf == "UnsignedInteger") return is_unsigned(tt.builtin);
+        if (leaf == "BinaryInteger") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
+        if (leaf == "Comparable") return is_signed(tt.builtin) || is_unsigned(tt.builtin) || is_char(tt.builtin);
+        if (leaf == "BinaryFloatingPoint") return is_float_builtin_(tt.builtin);
         return false;
     }
 
@@ -2116,8 +2195,8 @@
 
     bool TypeChecker::type_satisfies_proto_constraint_(ty::TypeId concrete_t, ast::StmtId proto_sid, Span use_span) {
         if (proto_sid == ast::k_invalid_stmt) return false;
-        if (builtin_family_proto_satisfied_by_primitive_(concrete_t, proto_sid)) {
-            return true;
+        if (is_builtin_family_proto_(proto_sid)) {
+            return builtin_family_proto_satisfied_by_primitive_(concrete_t, proto_sid);
         }
         if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
                                               /*emit_unsatisfied_diag=*/false,
@@ -2229,17 +2308,20 @@
 
         if (cc.kind == ast::FnConstraintKind::kProto) {
             const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+            const bool proto_is_leaf = proto_path.find("::") == std::string::npos;
             auto proto_sid = resolve_proto_sid_for_constraint_(proto_path);
             if (!proto_sid.has_value()) {
-                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, proto_path)) {
+                if (proto_is_leaf &&
+                    builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, proto_path)) {
                     return true;
                 }
                 const size_t pos = proto_path.rfind("::");
                 const std::string_view leaf =
                     (pos == std::string::npos) ? std::string_view(proto_path)
                                                : std::string_view(proto_path).substr(pos + 2);
-                if (leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
-                    leaf == "FloatLike" || leaf == "RangeBound") {
+                if (proto_is_leaf &&
+                    (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
+                     leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint")) {
                     out.kind = GenericConstraintFailure::Kind::kProtoUnsatisfied;
                     out.lhs_type_param = std::string(cc.type_param);
                     out.rhs_proto = proto_path;
@@ -2314,13 +2396,15 @@
 
             if (c.kind == ast::FnConstraintKind::kProto) {
                 const std::string proto_path = path_join_(c.proto_path_begin, c.proto_path_count);
+                const bool proto_is_leaf = proto_path.find("::") == std::string::npos;
                 if (!resolve_proto_sid_for_constraint_(proto_path).has_value()) {
                     const size_t pos = proto_path.rfind("::");
                     const std::string_view leaf =
                         (pos == std::string::npos) ? std::string_view(proto_path)
                                                    : std::string_view(proto_path).substr(pos + 2);
-                    if (!(leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
-                          leaf == "FloatLike" || leaf == "RangeBound")) {
+                    if (!(proto_is_leaf &&
+                          (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
+                           leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint"))) {
                         diag_(diag::Code::kGenericConstraintProtoNotFound, c.span, proto_path);
                         err_(c.span, "unknown proto in generic constraint");
                         ok = false;

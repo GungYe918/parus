@@ -1,19 +1,3 @@
-
-        for (size_t depth = namespace_stack.size(); depth > 0; --depth) {
-            std::string q;
-            for (size_t i = 0; i < depth; ++i) {
-                if (i) q += "::";
-                q += namespace_stack[i];
-            }
-            q += "::";
-            q += name;
-            if (auto sid = sym.lookup(q)) {
-                return sid;
-            }
-        }
-        return std::nullopt;
-    }
-
     static std::string strip_module_prefix_(
         std::string_view path,
         std::string_view module_head
@@ -101,6 +85,7 @@
         sema::SymbolTable& sym,
         std::string_view raw_name,
         const std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths,
         const NameResolveOptions& opt
     ) {
         if (raw_name.empty() || opt.external_exports.empty()) return std::nullopt;
@@ -108,6 +93,8 @@
         std::string name(raw_name);
         if (auto rewritten = rewrite_imported_path_(name, import_aliases)) {
             name = *rewritten;
+        } else if (qualified_path_requires_import_(raw_name, opt.current_module_head, known_namespace_paths)) {
+            return std::nullopt;
         }
 
         auto try_match = [&](std::string_view candidate) -> std::optional<uint32_t> {
@@ -227,7 +214,8 @@
                             const size_t lt = owner.find('<');
                             if (lt != std::string::npos) owner.resize(lt);
 
-                            auto owner_sid = lookup_symbol_(sym, owner, namespace_stack, import_aliases);
+                            auto owner_sid = lookup_symbol_(sym, owner, namespace_stack, import_aliases,
+                                                            known_namespace_paths, opt.current_module_head);
                             if (owner_sid.has_value()) {
                                 const auto& owner_sym = sym.symbol(*owner_sid);
                                 if (owner_sym.kind == sema::SymbolKind::kType) {
@@ -250,9 +238,10 @@
                         }
                     }
 
-                    auto sid = lookup_symbol_(sym, e.text, namespace_stack, import_aliases);
+                    auto sid = lookup_symbol_(sym, e.text, namespace_stack, import_aliases,
+                                              known_namespace_paths, opt.current_module_head);
                     if (!sid) {
-                        sid = lookup_external_export_fallback_(sym, e.text, import_aliases, opt);
+                        sid = lookup_external_export_fallback_(sym, e.text, import_aliases, known_namespace_paths, opt);
                     }
                     if (!sid) {
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
@@ -735,7 +724,8 @@
                     auto resolve_proto_sid = [&](std::string_view raw) -> std::optional<ast::StmtId> {
                         if (raw.empty()) return std::nullopt;
 
-                        if (auto proto_sym = lookup_symbol_(sym, raw, namespace_stack, import_aliases)) {
+                        if (auto proto_sym = lookup_symbol_(sym, raw, namespace_stack, import_aliases,
+                                                            known_namespace_paths, opt.current_module_head)) {
                             if (auto psid = find_proto_decl_by_symbol(*proto_sym)) {
                                 return psid;
                             }
@@ -959,27 +949,34 @@
             }
 
             case ast::StmtKind::kUse:
-                if (s.use_kind == ast::UseKind::kImport && file_scope && s.use_path_count > 0) {
-                    const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
-                    const std::string path = resolve_import_path_for_alias_(raw_path, opt);
-                    if (!path.empty()) {
-                        validate_import_dep_(bag, opt, s.span, path);
-                        std::string alias = std::string(s.use_rhs_ident);
-                        if (alias.empty()) {
-                            const auto& segs = ast.path_segs();
-                            if (s.use_path_begin + s.use_path_count <= segs.size()) {
-                                const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
-                                if (!last.empty() && last.front() == '.') {
-                                    size_t off = 0;
-                                    while (off < last.size() && last[off] == '.') ++off;
-                                    alias = std::string(last.substr(off));
-                                } else {
-                                    alias = std::string(last);
-                                }
+                if ((s.use_kind == ast::UseKind::kImport ||
+                     s.use_kind == ast::UseKind::kImportCHeader) &&
+                    file_scope &&
+                    s.use_path_count > 0) {
+                    std::string alias = std::string(s.use_rhs_ident);
+                    if (alias.empty()) {
+                        const auto& segs = ast.path_segs();
+                        if (s.use_path_begin + s.use_path_count <= segs.size()) {
+                            const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
+                            if (!last.empty() && last.front() == '.') {
+                                size_t off = 0;
+                                while (off < last.size() && last[off] == '.') ++off;
+                                alias = std::string(last.substr(off));
+                            } else {
+                                alias = std::string(last);
                             }
                         }
-                        if (!alias.empty()) {
-                            import_aliases[alias] = path;
+                    }
+                    if (!alias.empty()) {
+                        if (s.use_kind == ast::UseKind::kImportCHeader) {
+                            import_aliases[alias] = alias;
+                        } else {
+                            const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                            const std::string path = resolve_import_path_for_alias_(raw_path, opt);
+                            if (!path.empty()) {
+                                validate_import_dep_(bag, opt, s.span, path);
+                                import_aliases[alias] = path;
+                            }
                         }
                     }
                 } else if (s.use_kind == ast::UseKind::kNestAlias &&
@@ -1112,14 +1109,10 @@
             }
 
             if (s.kind == ast::StmtKind::kUse &&
-                s.use_kind == ast::UseKind::kImport &&
+                (s.use_kind == ast::UseKind::kImport ||
+                 s.use_kind == ast::UseKind::kImportCHeader) &&
                 s.use_path_count > 0)
             {
-                const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
-                const std::string path = resolve_import_path_for_alias_(raw_path, opt);
-                if (path.empty()) continue;
-                validate_import_dep_(bag, opt, s.span, path);
-
                 std::string alias = std::string(s.use_rhs_ident);
                 if (alias.empty()) {
                     if (s.use_path_begin + s.use_path_count <= segs.size()) {
@@ -1133,7 +1126,15 @@
                         }
                     }
                 }
-                if (!alias.empty()) {
+                if (alias.empty()) continue;
+
+                if (s.use_kind == ast::UseKind::kImportCHeader) {
+                    import_aliases[alias] = alias;
+                } else {
+                    const std::string raw_path = path_join_(ast, s.use_path_begin, s.use_path_count);
+                    const std::string path = resolve_import_path_for_alias_(raw_path, opt);
+                    if (path.empty()) continue;
+                    validate_import_dep_(bag, opt, s.span, path);
                     import_aliases[alias] = path;
                 }
             }

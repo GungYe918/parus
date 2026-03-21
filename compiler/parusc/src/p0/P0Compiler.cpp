@@ -477,9 +477,10 @@ namespace parusc::p0 {
             }), entries.end());
         }
 
-        bool core_builtin_use_type_repr_(std::string_view name,
-                                         std::string& out_type_repr,
-                                         std::string& out_payload) {
+        bool core_builtin_use_export_(std::string_view module_head,
+                                      std::string_view name,
+                                      std::string& out_type_repr,
+                                      std::string& out_payload) {
             static const std::unordered_set<std::string> kAllowed = {
                 "c_void", "c_char", "c_schar", "c_uchar",
                 "c_short", "c_ushort", "c_int", "c_uint",
@@ -488,11 +489,31 @@ namespace parusc::p0 {
                 "c_size", "c_ssize", "c_ptrdiff",
                 "vaList"
             };
-            if (kAllowed.find(std::string(name)) == kAllowed.end()) return false;
-            out_type_repr = "core::ext::";
-            out_type_repr += std::string(name);
-            out_payload = "parus_core_builtin_use|name=" + std::string(name);
-            return true;
+            static const std::unordered_set<std::string> kConstraintAllowed = {
+                "Comparable",
+                "BinaryInteger",
+                "SignedInteger",
+                "UnsignedInteger",
+                "BinaryFloatingPoint",
+            };
+
+            if (module_head == "ext" || module_head == "core::ext") {
+                if (kAllowed.find(std::string(name)) == kAllowed.end()) return false;
+                out_type_repr = "core::ext::";
+                out_type_repr += std::string(name);
+                out_payload = "parus_core_builtin_use|name=" + std::string(name);
+                return true;
+            }
+
+            if (module_head == "constraints" || module_head == "core::constraints") {
+                if (kConstraintAllowed.find(std::string(name)) == kConstraintAllowed.end()) return false;
+                out_type_repr = "core::constraints::";
+                out_type_repr += std::string(name);
+                out_payload = "parus_decl_kind=proto|parus_core_builtin_use|kind=proto|name=" + std::string(name);
+                return true;
+            }
+
+            return false;
         }
 
         std::string parent_dir_norm_(std::string_view path) {
@@ -1035,7 +1056,7 @@ namespace parusc::p0 {
                 !s.use_name.empty()) {
                 std::string type_repr{};
                 std::string payload{};
-                if (!core_builtin_use_type_repr_(s.use_name, type_repr, payload)) return;
+                if (!core_builtin_use_export_(module_head, s.use_name, type_repr, payload)) return;
                 ExportSurfaceEntry e{};
                 e.kind = parus::sema::SymbolKind::kType;
                 e.kind_text = symbol_kind_to_text_(e.kind);
@@ -1049,7 +1070,7 @@ namespace parusc::p0 {
                 e.decl_line = lc.line;
                 e.decl_col = lc.col;
                 e.decl_bundle = bundle_name;
-                e.is_export = s.is_export;
+                e.is_export = true;
                 out.push_back(std::move(e));
                 return;
             }
@@ -3313,6 +3334,24 @@ namespace parusc::p0 {
                 const bool same_bundle = opt.bundle.enabled && dep_bundle == opt.bundle.bundle_name;
                 if (same_bundle && e.decl_file == current_norm) continue;
                 add_external(e, same_bundle);
+            }
+        }
+
+        for (const auto& ex : pass_opt.name_resolve.external_exports) {
+            if (ex.module_head.empty()) continue;
+
+            const auto top = normalize_import_head_top_(ex.module_head);
+            if (!top.empty()) {
+                pass_opt.name_resolve.allowed_import_heads.insert(top);
+            }
+
+            if (ex.decl_bundle_name == "core" && ex.module_head.starts_with("core::")) {
+                const std::string short_head =
+                    std::string(ex.module_head.substr(std::string_view("core::").size()));
+                const auto short_top = normalize_import_head_top_(short_head);
+                if (!short_top.empty()) {
+                    pass_opt.name_resolve.allowed_import_heads.insert(short_top);
+                }
             }
         }
 

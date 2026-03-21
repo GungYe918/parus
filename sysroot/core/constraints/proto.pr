@@ -1,0 +1,16 @@
+$![Impl::Core];
+
+// builtin proto: values with a total ordering suitable for range containment.
+use Comparable;
+
+// builtin proto: primitive binary integer family.
+use BinaryInteger;
+
+// builtin proto: primitive signed binary integer family.
+use SignedInteger;
+
+// builtin proto: primitive unsigned binary integer family.
+use UnsignedInteger;
+
+// builtin proto: primitive binary floating-point family.
+use BinaryFloatingPoint;

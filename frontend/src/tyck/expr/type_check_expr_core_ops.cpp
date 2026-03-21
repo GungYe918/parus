@@ -993,10 +993,11 @@
             const ast::Expr& recv = ast_.expr(recv_eid);
             if (recv.kind == ast::ExprKind::kIdent) {
                 std::string recv_lookup = std::string(recv.text);
+                const bool recv_rewritten = rewrite_imported_path_(recv_lookup).has_value();
                 if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
                     recv_lookup = *rewritten;
                 }
-                if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                if (auto recv_sid = recv_rewritten ? sym_.lookup(recv_lookup) : lookup_symbol_(recv_lookup)) {
                     const auto& recv_sym = sym_.symbol(*recv_sid);
                     if (recv_sym.kind == sema::SymbolKind::kType) {
                         diag_(diag::Code::kDotReceiverMustBeValue, recv.span, recv.text);

@@ -34,6 +34,22 @@ umbrella 방향성은 `docs/todo/CORE_FREESTANDING_BOOTSTRAP_PLAN.md`가 맡고,
 | `core::range` | `Range<T>`, `RangeInclusive<T>`, integer constructor, `is_empty`, `contains` | `len`, step/stride, iterator bridge, syntax sugar |
 | `core::iter` | 없음 | iterator proto/type/adapter 전체 |
 
+## Constraint Surface
+
+`core::constraints`는 현재 builtin family proto surface를 맡는다.
+
+1. `Comparable`
+2. `BinaryInteger`
+3. `SignedInteger`
+4. `UnsignedInteger`
+5. `BinaryFloatingPoint`
+
+이 다섯 proto는 지금은 compiler-owned satisfaction table을 사용한다.  
+다만 아래 두 조건 중 하나가 들어오면 library-only 후보로 다시 검토한다.
+
+1. builtin/external type에 대한 proto conformance 선언 표면
+2. `acts`/operator availability에서 structural proto satisfaction을 유도하는 규칙
+
 ## Float Comparison Policy
 
 `f32/f64`는 정수와 같은 total order를 기본 비교로 두지 않는다.

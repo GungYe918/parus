@@ -7,7 +7,7 @@
 ## 목표
 
 1. `core::cabi`를 제거하고 `core::ext`를 C interop 표면으로 고정한다.
-2. `use c_void;`류 core builtin use를 실제 builtin 타입 등록 경로로 사용한다.
+2. `use c_void;`, `use Comparable;`류 core builtin use를 실제 builtin 타입/constraint 등록 경로로 사용한다.
 3. `vaList`를 opaque C ABI 경계 타입으로 고정한다.
 
 ## v1 범위
@@ -67,6 +67,7 @@
 ## 안전 규칙
 
 1. core `.pr` 파일은 `$![Impl::Core];`를 첫 item으로 둔다.
-2. `use c_*;`는 core bundle의 `ext` 모듈에서만 허용한다.
-3. `vaList`는 C ABI 시그니처 경계에서만 허용한다.
-4. `core::ext`의 public builtin/function 주석은 영어로 작성한다.
+2. builtin `use Foo;`는 core bundle의 `ext`/`constraints` 모듈에서만 허용한다.
+3. `ext`의 `use Foo;`는 builtin 타입 선언, `constraints`의 `use Foo;`는 builtin proto 선언으로 해석한다.
+4. `vaList`는 C ABI 시그니처 경계에서만 허용한다.
+5. `core::ext`와 `core::constraints`의 public builtin/function 주석은 영어로 작성한다.

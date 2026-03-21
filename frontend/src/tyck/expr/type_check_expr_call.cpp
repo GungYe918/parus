@@ -492,10 +492,11 @@ namespace parus::tyck {
             const ast::Expr& recv_expr = ast_.expr(recv_eid);
             if (recv_expr.kind == ast::ExprKind::kIdent) {
                 std::string recv_lookup = std::string(recv_expr.text);
+                const bool recv_rewritten = rewrite_imported_path_(recv_lookup).has_value();
                 if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
                     recv_lookup = *rewritten;
                 }
-                if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                if (auto recv_sid = recv_rewritten ? sym_.lookup(recv_lookup) : lookup_symbol_(recv_lookup)) {
                     const auto& recv_sym = sym_.symbol(*recv_sid);
                     if (recv_sym.kind == sema::SymbolKind::kType) {
                         diag_(diag::Code::kDotReceiverMustBeValue, recv_expr.span, recv_expr.text);
@@ -907,10 +908,11 @@ namespace parus::tyck {
                         const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
                         if (recv_expr.kind == ast::ExprKind::kIdent) {
                             std::string recv_lookup = std::string(recv_expr.text);
+                            const bool recv_rewritten = rewrite_imported_path_(recv_lookup).has_value();
                             if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
                                 recv_lookup = *rewritten;
                             }
-                            if (auto recv_sid = lookup_symbol_(recv_lookup)) {
+                            if (auto recv_sid = recv_rewritten ? sym_.lookup(recv_lookup) : lookup_symbol_(recv_lookup)) {
                                 bound_selection = lookup_symbol_acts_selection_(*recv_sid);
                             }
                         }
@@ -1022,6 +1024,7 @@ namespace parus::tyck {
 
                     auto resolve_plain_enum_owner = [&](const std::string& raw_name) -> ast::StmtId {
                         std::string key = raw_name;
+                        const bool key_rewritten = rewrite_imported_path_(key).has_value();
                         if (auto rewritten = rewrite_imported_path_(key)) {
                             key = *rewritten;
                         }
@@ -1084,7 +1087,7 @@ namespace parus::tyck {
                         }
 
                         // 3) symbol table fallback
-                        if (auto sym_sid = lookup_symbol_(key)) {
+                        if (auto sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                             const auto& ss = sym_.symbol(*sym_sid);
                             if (ss.kind == sema::SymbolKind::kType &&
                                 ss.declared_type != ty::kInvalidType) {
@@ -1270,11 +1273,12 @@ namespace parus::tyck {
                     callee_name = std::string(callee_expr.text);
 
                     std::string owner_lookup = explicit_acts.owner_path;
+                    const bool owner_rewritten = rewrite_imported_path_(owner_lookup).has_value();
                     if (auto rewritten = rewrite_imported_path_(owner_lookup)) {
                         owner_lookup = *rewritten;
                     }
 
-                    const auto owner_sid = lookup_symbol_(owner_lookup);
+                    const auto owner_sid = owner_rewritten ? sym_.lookup(owner_lookup) : lookup_symbol_(owner_lookup);
                     if (!owner_sid.has_value()) {
                         std::ostringstream oss;
                         oss << "unknown acts owner type path '" << explicit_acts.owner_path << "'";
@@ -1377,12 +1381,13 @@ namespace parus::tyck {
             if (!is_explicit_acts_path_call) {
                 if (callee_expr.kind == ast::ExprKind::kIdent) {
                     std::string lookup_name = std::string(callee_expr.text);
+                    const bool lookup_rewritten = rewrite_imported_path_(lookup_name).has_value();
                     if (auto rewritten = rewrite_imported_path_(lookup_name)) {
                         lookup_name = *rewritten;
                     }
 
                     callee_name = lookup_name;
-                    if (auto sid = lookup_symbol_(lookup_name)) {
+                    if (auto sid = lookup_rewritten ? sym_.lookup(lookup_name) : lookup_symbol_(lookup_name)) {
                         direct_ident_symbol = *sid;
                         const auto& sym = sym_.symbol(*sid);
                         if (sym.kind == sema::SymbolKind::kType) {
@@ -2078,17 +2083,20 @@ namespace parus::tyck {
                     }
 
                     if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
+                        const bool proto_is_leaf = cc.rhs.find("::") == std::string::npos;
                         auto proto_sid = resolve_proto_sid_for_constraint_(cc.rhs);
                         if (!proto_sid.has_value()) {
-                            if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                            if (proto_is_leaf &&
+                                builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
                                 continue;
                             }
                             const size_t pos = cc.rhs.rfind("::");
                             const std::string_view leaf =
                                 (pos == std::string::npos) ? std::string_view(cc.rhs)
                                                            : std::string_view(cc.rhs).substr(pos + 2);
-                            if (leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
-                                leaf == "FloatLike" || leaf == "RangeBound") {
+                            if (proto_is_leaf &&
+                                (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
+                                 leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint")) {
                                 ext_has_unsatisfied = true;
                                 ext_unsat_lhs = cc.lhs;
                                 ext_unsat_rhs = cc.rhs;
@@ -2650,17 +2658,20 @@ namespace parus::tyck {
                         }
 
                         if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
+                            const bool proto_is_leaf = cc.rhs.find("::") == std::string::npos;
                             auto proto_sid = resolve_proto_sid_for_constraint_(cc.rhs);
                             if (!proto_sid.has_value()) {
-                                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                                if (proto_is_leaf &&
+                                    builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
                                     continue;
                                 }
                                 const size_t pos = cc.rhs.rfind("::");
                                 const std::string_view leaf =
                                     (pos == std::string::npos) ? std::string_view(cc.rhs)
                                                                : std::string_view(cc.rhs).substr(pos + 2);
-                                if (leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
-                                    leaf == "FloatLike" || leaf == "RangeBound") {
+                                if (proto_is_leaf &&
+                                    (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
+                                     leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint")) {
                                     ext_has_unsatisfied = true;
                                     ext_unsat_lhs = cc.lhs;
                                     ext_unsat_rhs = cc.rhs;

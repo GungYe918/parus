@@ -1425,55 +1425,55 @@ namespace {
                 end: T;
             };
 
-            def range_impl_<T>(start: T, end: T) with [T: RangeBound] -> Range<T> {
+            def range_impl_<T>(start: T, end: T) with [T: Comparable] -> Range<T> {
                 return Range<T>{ start: start, end: end };
             }
 
-            def range_inclusive_impl_<T>(start: T, end: T) with [T: RangeBound] -> RangeInclusive<T> {
+            def range_inclusive_impl_<T>(start: T, end: T) with [T: Comparable] -> RangeInclusive<T> {
                 return RangeInclusive<T>{ start: start, end: end };
             }
 
-            def range<T>(start: T, end: T) with [T: RangeBound] -> Range<T> {
+            def range<T>(start: T, end: T) with [T: Comparable] -> Range<T> {
                 return range_impl_<T>(start, end);
             }
 
-            def range_inclusive<T>(start: T, end: T) with [T: RangeBound] -> RangeInclusive<T> {
+            def range_inclusive<T>(start: T, end: T) with [T: Comparable] -> RangeInclusive<T> {
                 return range_inclusive_impl_<T>(start, end);
             }
 
-            def range_is_empty_<T>(start: T, end: T) with [T: RangeBound] -> bool { return start >= end; }
-            def range_contains_<T>(start: T, end: T, value: T) with [T: RangeBound] -> bool {
+            def range_is_empty_<T>(start: T, end: T) with [T: Comparable] -> bool { return start >= end; }
+            def range_contains_<T>(start: T, end: T, value: T) with [T: Comparable] -> bool {
                 return value >= start and value < end;
             }
-            def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+            def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: Comparable] -> bool {
                 return range_is_empty_<T>(other_start, other_end) or
                     (other_start >= start and other_end <= end);
             }
-            def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+            def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: Comparable] -> bool {
                 return not range_is_empty_<T>(start, end)
                     and not range_is_empty_<T>(other_start, other_end)
                     and start < other_end
                     and other_start < end;
             }
-            def range_inclusive_is_empty_<T>(start: T, end: T) with [T: RangeBound] -> bool { return start > end; }
-            def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: RangeBound] -> bool {
+            def range_inclusive_is_empty_<T>(start: T, end: T) with [T: Comparable] -> bool { return start > end; }
+            def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: Comparable] -> bool {
                 return value >= start and value <= end;
             }
-            def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+            def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: Comparable] -> bool {
                 return range_inclusive_is_empty_<T>(other_start, other_end) or
                     (other_start >= start and other_end <= end);
             }
-            def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+            def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: Comparable] -> bool {
                 return not range_inclusive_is_empty_<T>(start, end)
                     and not range_inclusive_is_empty_<T>(other_start, other_end)
                     and start <= other_end
                     and other_start <= end;
             }
-            def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: RangeBound] -> bool {
+            def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: Comparable] -> bool {
                 return not range_inclusive_is_empty_<T>(start, end) and start == end;
             }
 
-            acts for Range<T> with [T: RangeBound] {
+            acts for Range<T> with [T: Comparable] {
                 def is_empty(self) -> bool {
                     return range_is_empty_<T>(self.start, self.end);
                 }
@@ -1491,7 +1491,7 @@ namespace {
                 }
             };
 
-            acts for RangeInclusive<T> with [T: RangeBound] {
+            acts for RangeInclusive<T> with [T: Comparable] {
                 def is_empty(self) -> bool {
                     return range_inclusive_is_empty_<T>(self.start, self.end);
                 }
@@ -1562,7 +1562,7 @@ namespace {
               }
             };
 
-            acts for Box<T> with [T: RangeBound] {
+            acts for Box<T> with [T: Comparable] {
               def same(self) -> bool {
                 return self.value >= self.value;
               }
@@ -1582,7 +1582,7 @@ namespace {
               }
             };
 
-            acts for Box<T> with [T: RangeBound] {
+            acts for Box<T> with [T: Comparable] {
               def same(self) -> bool {
                 return self.value >= self.value;
               }

@@ -1,3 +1,5 @@
+$![Impl::Core];
+
 // Three-way comparison result for freestanding core operations.
 export enum Ordering {
     case Less,

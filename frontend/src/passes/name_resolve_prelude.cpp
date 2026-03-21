@@ -441,19 +441,88 @@ namespace parus::passes {
         return out;
     }
 
+    static bool qualified_path_requires_import_(
+        std::string_view raw_name,
+        std::string_view current_module_head,
+        const std::unordered_set<std::string>& known_namespace_paths
+    ) {
+        const size_t pos = raw_name.find("::");
+        if (pos == std::string_view::npos || pos == 0) return false;
+
+        const std::string_view head = raw_name.substr(0, pos);
+        if (known_namespace_paths.find(std::string(head)) != known_namespace_paths.end()) {
+            return false;
+        }
+        if (!current_module_head.empty()) {
+            if (head == current_module_head) return false;
+            if (current_module_head.starts_with("core::") &&
+                head == std::string_view(current_module_head).substr(std::string_view("core::").size())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     static std::optional<uint32_t> lookup_symbol_(
         sema::SymbolTable& sym,
         std::string_view raw_name,
         const std::vector<std::string>& namespace_stack,
-        const std::unordered_map<std::string, std::string>& import_aliases
+        const std::unordered_map<std::string, std::string>& import_aliases,
+        const std::unordered_set<std::string>& known_namespace_paths,
+        std::string_view current_module_head
     ) {
         if (raw_name.empty()) return std::nullopt;
+
+        auto head_resolves_without_import = [&](std::string_view head) -> bool {
+            if (head.empty()) return false;
+            if (sym.lookup(head).has_value()) return true;
+            const std::string prefix = std::string(head) + "::";
+            for (const auto& candidate : sym.symbols()) {
+                if (!candidate.is_external && candidate.name.starts_with(prefix)) return true;
+            }
+            for (size_t depth = namespace_stack.size(); depth > 0; --depth) {
+                std::string q;
+                for (size_t i = 0; i < depth; ++i) {
+                    if (i) q += "::";
+                    q += namespace_stack[i];
+                }
+                q += "::";
+                q += head;
+                if (sym.lookup(q).has_value()) return true;
+                const std::string nested_prefix = q + "::";
+                for (const auto& candidate : sym.symbols()) {
+                    if (!candidate.is_external && candidate.name.starts_with(nested_prefix)) return true;
+                }
+            }
+            return false;
+        };
 
         std::string name(raw_name);
         if (auto rewritten = rewrite_imported_path_(name, import_aliases)) {
             name = *rewritten;
+        } else if (qualified_path_requires_import_(raw_name, current_module_head, known_namespace_paths)) {
+            const size_t pos = raw_name.find("::");
+            if (pos == std::string_view::npos ||
+                !head_resolves_without_import(raw_name.substr(0, pos))) {
+                return std::nullopt;
+            }
         }
 
         if (auto sid = sym.lookup(name)) {
             return sid;
         }
+
+        for (size_t depth = namespace_stack.size(); depth > 0; --depth) {
+            std::string q;
+            for (size_t i = 0; i < depth; ++i) {
+                if (i) q += "::";
+                q += namespace_stack[i];
+            }
+            q += "::";
+            q += name;
+            if (auto sid = sym.lookup(q)) {
+                return sid;
+            }
+        }
+        return std::nullopt;
+    }

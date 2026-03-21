@@ -255,16 +255,21 @@ bool test_parus_core_export_index_auto_loaded_for_non_core_bundle() {
         "      \"type_repr\": \"core::ext::c_int\",\n"
         "      \"inst_payload\": \"parus_core_builtin_use|name=c_int\",\n"
         "      \"decl_span\": {\"file\": \"sysroot/core/ext/types.pr\", \"line\": 1, \"col\": 1},\n"
-        "      \"is_export\": false\n"
+        "      \"is_export\": true\n"
         "    }\n"
         "  ]\n"
         "}\n";
     const std::string main_text =
+        "import core::ext as ext;\n"
+        "\n"
+        "def keep(x: ext::c_int) -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n"
+        "\n"
         "def main() -> i32 {\n"
-        "  let y: core::ext::c_int = 10;\n"
         "  let x: i32 = 10i32;\n"
         "  x.size();\n"
-        "  return y;\n"
+        "  return 0i32;\n"
         "}\n";
     if (!write_text(core_index, core_index_text) || !write_text(main_pr, main_text)) {
         std::cerr << "failed to write core export-index fixture\n";
@@ -538,6 +543,41 @@ bool test_core_impl_same_file_helper_stays_local_in_lsp() {
     }
     if (!contains(out, "\"id\":52") || !contains(out, "\"uri\":\"" + uri + "\"")) {
         std::cerr << "definition on char_value_ should jump to same file helper declaration\n" << out << "\n";
+        return false;
+    }
+    return true;
+}
+
+bool test_core_impl_marker_does_not_require_core_bundle_in_lsp() {
+    std::error_code ec{};
+    const auto repo_root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    const auto sysroot = repo_root / "sysroot";
+    const auto range_pr = repo_root / "sysroot/core/range/range.pr";
+    if (!std::filesystem::exists(range_pr, ec)) {
+        std::cerr << "core impl marker fixture is missing\n";
+        return false;
+    }
+
+    const std::string uri = to_file_uri(range_pr);
+    const std::string range_text = read_text(range_pr);
+    std::vector<std::string> payloads{
+        R"({"jsonrpc":"2.0","id":61,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})",
+        R"({"jsonrpc":"2.0","method":"initialized","params":{}})",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"" + json_escape(uri)
+            + "\",\"languageId\":\"parus\",\"version\":1,\"text\":\"" + json_escape(range_text) + "\"}}}",
+        R"({"jsonrpc":"2.0","id":62,"method":"shutdown","params":{}})",
+        R"({"jsonrpc":"2.0","method":"exit","params":{}})",
+    };
+
+    int rc = 0;
+    const std::string env_prefix = "PARUS_SYSROOT=\"" + sysroot.string() + "\"";
+    const std::string out = run_lsp_session(payloads, rc, env_prefix);
+    if (rc != 0) {
+        std::cerr << "core impl marker LSP session failed, rc=" << rc << "\n" << out << "\n";
+        return false;
+    }
+    if (contains(out, "$![Impl::Core]; is allowed only when bundle-name is 'core'")) {
+        std::cerr << "LSP must not emit bundle-name mismatch for $![Impl::Core];\n" << out << "\n";
         return false;
     }
     return true;
@@ -893,14 +933,15 @@ int main() {
     const bool ok6 = test_definition_local_symbol();
     const bool ok7 = test_core_impl_bundle_alias_resolves_exported_helper();
     const bool ok8 = test_core_impl_same_file_helper_stays_local_in_lsp();
-    const bool ok9 = test_definition_cimport_symbol();
-    const bool ok10 = test_definition_cimport_promoted_macro_symbol();
-    const bool ok11 = test_definition_cimport_global_symbol();
-    const bool ok12 = test_parus_module_first_bundle_context();
-    const bool ok13 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
-    const bool ok14 = test_parus_incremental_newline_falls_back_cleanly();
+    const bool ok9 = test_core_impl_marker_does_not_require_core_bundle_in_lsp();
+    const bool ok10 = test_definition_cimport_symbol();
+    const bool ok11 = test_definition_cimport_promoted_macro_symbol();
+    const bool ok12 = test_definition_cimport_global_symbol();
+    const bool ok13 = test_parus_module_first_bundle_context();
+    const bool ok14 = test_parus_core_export_index_auto_loaded_for_non_core_bundle();
+    const bool ok15 = test_parus_incremental_newline_falls_back_cleanly();
 
-    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 || !ok13 || !ok14) return 1;
+    if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 || !ok12 || !ok13 || !ok14 || !ok15) return 1;
     std::cout << "parusd lsp tests passed\n";
     return 0;
 }

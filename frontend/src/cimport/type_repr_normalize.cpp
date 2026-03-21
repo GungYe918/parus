@@ -12,8 +12,12 @@
 namespace parus::cimport {
 
     std::optional<ty::Builtin> parse_core_builtin_use_payload(std::string_view payload) {
-        if (!payload.starts_with("parus_core_builtin_use|")) return std::nullopt;
+        constexpr std::string_view kMarker = "parus_core_builtin_use|";
+        const size_t marker_pos = payload.find(kMarker);
+        if (marker_pos == std::string_view::npos) return std::nullopt;
+        payload = payload.substr(marker_pos);
         std::string_view name{};
+        std::string_view kind{};
 
         size_t pos = 0;
         while (pos < payload.size()) {
@@ -24,6 +28,9 @@ namespace parus::cimport {
             if (eq != std::string_view::npos && eq + 1 < part.size()) {
                 const std::string_view key = part.substr(0, eq);
                 const std::string_view val = part.substr(eq + 1);
+                if (key == "kind") {
+                    kind = val;
+                }
                 if (key == "name") {
                     name = val;
                 }
@@ -33,6 +40,7 @@ namespace parus::cimport {
         }
 
         if (name.empty()) return std::nullopt;
+        if (!kind.empty() && kind != "type") return std::nullopt;
         ty::Builtin builtin{};
         if (!ty::TypePool::c_builtin_from_name(name, builtin)) return std::nullopt;
         return builtin;

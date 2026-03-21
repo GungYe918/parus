@@ -252,6 +252,7 @@ namespace parus::tyck {
         // 파일 기본 nest 지시어를 먼저 반영한다.
         init_file_namespace_(program_stmt);
         collect_known_namespace_paths_(program_stmt);
+        collect_file_import_aliases_(program_stmt);
         collect_external_proto_stubs_();
         ensure_builtin_family_proto_aliases_();
         collect_external_builtin_acts_methods_();
@@ -339,11 +340,12 @@ namespace parus::tyck {
                 if (raw_path.empty()) return ast::k_invalid_stmt;
 
                 std::string lookup = raw_path;
+                const bool lookup_rewritten = rewrite_imported_path_(lookup).has_value();
                 if (auto rewritten = rewrite_imported_path_(lookup)) {
                     lookup = *rewritten;
                 }
 
-                auto sym_sid = lookup_symbol_(lookup);
+                auto sym_sid = lookup_rewritten ? sym_.lookup(lookup) : lookup_symbol_(lookup);
                 if (!sym_sid.has_value()) return ast::k_invalid_stmt;
                 const auto& sym_obj = sym_.symbol(*sym_sid);
 
@@ -395,15 +397,18 @@ namespace parus::tyck {
             auto resolve_proto_sid_no_diag = [&](const ast::PathRef& pr) -> std::optional<ast::StmtId> {
                 std::string key = path_join_(pr.path_begin, pr.path_count);
                 if (key.empty()) return std::nullopt;
+                const bool key_rewritten = rewrite_imported_path_(key).has_value();
                 if (auto rewritten = rewrite_imported_path_(key)) {
                     key = *rewritten;
+                } else if (qualified_path_requires_import_(key)) {
+                    return std::nullopt;
                 }
 
                 if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                     return it->second;
                 }
 
-                if (auto sid = lookup_symbol_(key)) {
+                if (auto sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
                     const auto& ss = sym_.symbol(*sid);
                     auto pit = proto_decl_by_name_.find(ss.name);
                     if (pit != proto_decl_by_name_.end()) {
@@ -1794,17 +1799,23 @@ namespace parus::tyck {
 
         std::string direct_name = types_.to_string(proto_type);
         if (!direct_name.empty()) {
+            const bool direct_rewritten = rewrite_imported_path_(direct_name).has_value();
             if (auto rewritten = rewrite_imported_path_(direct_name)) {
                 direct_name = *rewritten;
+            } else if (qualified_path_requires_import_(direct_name)) {
+                direct_name.clear();
             }
-            if (auto it = proto_decl_by_name_.find(direct_name); it != proto_decl_by_name_.end()) {
-                return it->second;
-            }
-            if (auto sym_sid = lookup_symbol_(direct_name)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) {
-                    return pit->second;
+            if (!direct_name.empty()) {
+                if (auto it = proto_decl_by_name_.find(direct_name); it != proto_decl_by_name_.end()) {
+                    return it->second;
+                }
+                const auto sym_sid = direct_rewritten ? sym_.lookup(direct_name) : lookup_symbol_(direct_name);
+                if (sym_sid.has_value()) {
+                    const auto& ss = sym_.symbol(*sym_sid);
+                    auto pit = proto_decl_by_name_.find(ss.name);
+                    if (pit != proto_decl_by_name_.end()) {
+                        return pit->second;
+                    }
                 }
             }
         }
@@ -1817,18 +1828,24 @@ namespace parus::tyck {
         }
 
         std::string base_key = base;
+        const bool base_rewritten = rewrite_imported_path_(base_key).has_value();
         if (auto rewritten = rewrite_imported_path_(base_key)) {
             base_key = *rewritten;
+        } else if (qualified_path_requires_import_(base_key)) {
+            base_key.clear();
         }
 
         ast::StmtId templ_sid = ast::k_invalid_stmt;
-        if (auto it = proto_decl_by_name_.find(base_key); it != proto_decl_by_name_.end()) {
-            templ_sid = it->second;
-        } else if (auto sym_sid = lookup_symbol_(base_key)) {
-            const auto& ss = sym_.symbol(*sym_sid);
-            auto pit = proto_decl_by_name_.find(ss.name);
-            if (pit != proto_decl_by_name_.end()) {
-                templ_sid = pit->second;
+        if (!base_key.empty()) {
+            if (auto it = proto_decl_by_name_.find(base_key); it != proto_decl_by_name_.end()) {
+                templ_sid = it->second;
+            } else if (const auto sym_sid = base_rewritten ? sym_.lookup(base_key) : lookup_symbol_(base_key);
+                       sym_sid.has_value()) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                auto pit = proto_decl_by_name_.find(ss.name);
+                if (pit != proto_decl_by_name_.end()) {
+                    templ_sid = pit->second;
+                }
             }
         }
 
@@ -1916,13 +1933,17 @@ namespace parus::tyck {
 
         std::string key = path_join_(pr.path_begin, pr.path_count);
         if (key.empty()) return std::nullopt;
+        const bool key_rewritten = rewrite_imported_path_(key).has_value();
         if (auto rewritten = rewrite_imported_path_(key)) {
             key = *rewritten;
+        } else if (qualified_path_requires_import_(key)) {
+            return std::nullopt;
         }
         if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
             return it->second;
         }
-        if (auto sym_sid = lookup_symbol_(key)) {
+        const auto sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key);
+        if (sym_sid.has_value()) {
             const auto& ss = sym_.symbol(*sym_sid);
             auto pit = proto_decl_by_name_.find(ss.name);
             if (pit != proto_decl_by_name_.end()) {
@@ -1931,7 +1952,7 @@ namespace parus::tyck {
             const bool external_proto_symbol =
                 ss.is_external &&
                 ss.kind == sema::SymbolKind::kType &&
-                (ss.external_payload == "parus_decl_kind=proto");
+                ss.external_payload.starts_with("parus_decl_kind=proto");
             if (external_proto_symbol) {
                 ast::Stmt stub{};
                 stub.kind = ast::StmtKind::kProtoDecl;
@@ -2108,11 +2129,12 @@ namespace parus::tyck {
         }
 
         std::string base_key = base;
+        const bool base_rewritten = rewrite_imported_path_(base_key).has_value();
         if (auto rewritten = rewrite_imported_path_(base_key)) {
             base_key = *rewritten;
         }
 
-        auto sym_sid = lookup_symbol_(base_key);
+        auto sym_sid = base_rewritten ? sym_.lookup(base_key) : lookup_symbol_(base_key);
         if (!sym_sid.has_value()) return std::nullopt;
         const auto& ss = sym_.symbol(*sym_sid);
         if (ss.kind != sema::SymbolKind::kField || ss.declared_type == ty::kInvalidType) {
@@ -2974,6 +2996,66 @@ namespace parus::tyck {
         }
     }
 
+    void TypeChecker::collect_file_import_aliases_(ast::StmtId program_stmt) {
+        import_alias_to_path_.clear();
+        import_alias_scope_stack_.clear();
+        push_alias_scope_();
+
+        if (program_stmt == ast::k_invalid_stmt || static_cast<size_t>(program_stmt) >= ast_.stmts().size()) {
+            return;
+        }
+        const auto& prog = ast_.stmt(program_stmt);
+        if (prog.kind != ast::StmtKind::kBlock) return;
+
+        const auto& kids = ast_.stmt_children();
+        const auto& segs = ast_.path_segs();
+        const uint64_t begin = prog.stmt_begin;
+        const uint64_t end = begin + prog.stmt_count;
+        if (begin > kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = prog.stmt_begin; i < prog.stmt_begin + prog.stmt_count; ++i) {
+            const ast::StmtId sid = kids[i];
+            if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
+            const auto& s = ast_.stmt(sid);
+            if (s.kind != ast::StmtKind::kUse || s.use_path_count == 0) continue;
+
+            if (s.use_kind != ast::UseKind::kImport &&
+                s.use_kind != ast::UseKind::kImportCHeader &&
+                s.use_kind != ast::UseKind::kPathAlias &&
+                s.use_kind != ast::UseKind::kNestAlias) {
+                continue;
+            }
+
+            std::string alias(s.use_rhs_ident);
+            if (alias.empty()) {
+                if (s.use_path_begin + s.use_path_count <= segs.size()) {
+                    const std::string_view last = segs[s.use_path_begin + s.use_path_count - 1];
+                    if (!last.empty() && last.front() == '.') {
+                        size_t off = 0;
+                        while (off < last.size() && last[off] == '.') ++off;
+                        alias = std::string(last.substr(off));
+                    } else {
+                        alias = std::string(last);
+                    }
+                }
+            }
+
+            if (alias.empty()) continue;
+
+            const std::string raw_path = path_join_(s.use_path_begin, s.use_path_count);
+            const std::string path =
+                (s.use_kind == ast::UseKind::kImportCHeader)
+                ? alias
+                : resolve_import_path_for_alias_(raw_path);
+
+            if (path.empty()) continue;
+            if (s.use_kind == ast::UseKind::kNestAlias && !is_known_namespace_path_(path)) {
+                continue;
+            }
+            (void)define_alias_(alias, path, s.span, /*warn_use_nest_preferred=*/false);
+        }
+    }
+
     std::optional<std::string> TypeChecker::rewrite_imported_path_(std::string_view path) const {
         if (path.empty()) return std::nullopt;
 
@@ -3003,6 +3085,47 @@ namespace parus::tyck {
         return out;
     }
 
+    bool TypeChecker::qualified_path_requires_import_(std::string_view raw_path) const {
+        if (raw_path.empty()) return false;
+        const size_t pos = raw_path.find("::");
+        if (pos == std::string_view::npos || pos == 0) return false;
+
+        const std::string_view head = raw_path.substr(0, pos);
+        if (is_known_namespace_path_(head)) return false;
+
+        const std::string cur_head = current_module_head_();
+        if (!cur_head.empty()) {
+            if (head == cur_head) return false;
+            if (cur_head.starts_with("core::") &&
+                head == std::string_view(cur_head).substr(std::string_view("core::").size())) {
+                return false;
+            }
+        }
+
+        if (sym_.lookup(head).has_value()) return false;
+        {
+            const std::string prefix = std::string(head) + "::";
+            for (const auto& candidate : sym_.symbols()) {
+                if (!candidate.is_external && candidate.name.starts_with(prefix)) return false;
+            }
+        }
+        for (size_t depth = namespace_stack_.size(); depth > 0; --depth) {
+            std::string qname;
+            for (size_t i = 0; i < depth; ++i) {
+                if (i) qname += "::";
+                qname += namespace_stack_[i];
+            }
+            qname += "::";
+            qname += head;
+            if (sym_.lookup(qname).has_value()) return false;
+            const std::string nested_prefix = qname + "::";
+            for (const auto& candidate : sym_.symbols()) {
+                if (!candidate.is_external && candidate.name.starts_with(nested_prefix)) return false;
+            }
+        }
+        return true;
+    }
+
     bool TypeChecker::can_access_class_member_(
         ast::StmtId owner_class_sid,
         ast::FieldMember::Visibility visibility
@@ -3029,6 +3152,8 @@ namespace parus::tyck {
         std::string key(name);
         if (auto rewritten = rewrite_imported_path_(key)) {
             key = *rewritten;
+        } else if (qualified_path_requires_import_(name)) {
+            return std::nullopt;
         }
 
         auto lookup_visible = [&](std::string_view qname) -> std::optional<uint32_t> {

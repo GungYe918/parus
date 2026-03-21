@@ -1,8 +1,0 @@
-$![Impl::Core];
-
-export proto Integral {};
-export proto RangeBound {};
-
-export proto SignedInt: Integral, RangeBound {};
-export proto UnsignedInt: Integral, RangeBound {};
-export proto FloatLike {};
