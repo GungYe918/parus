@@ -1,5 +1,6 @@
 // frontend/src/tyck/type_check_entry.cpp
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/diag/DiagCode.hpp>
@@ -19,6 +20,80 @@ namespace parus::tyck {
     using detail::ParsedIntLiteral;
     using detail::parse_float_literal_;
     using detail::parse_int_literal_;
+
+    namespace {
+
+        struct ExternalGenericConstraintMeta {
+            enum class Kind : uint8_t {
+                kProto = 0,
+                kTypeEq,
+            };
+            Kind kind = Kind::kProto;
+            std::string lhs{};
+            std::string rhs{};
+        };
+
+        struct ExternalGenericDeclMeta {
+            std::vector<std::string> params{};
+            std::vector<ExternalGenericConstraintMeta> constraints{};
+        };
+
+        std::string payload_unescape_value_(std::string_view raw) {
+            auto hex_value = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    const int hi = hex_value(raw[i + 1]);
+                    const int lo = hex_value(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(static_cast<char>(raw[i]));
+            }
+            return out;
+        }
+
+        ExternalGenericDeclMeta parse_external_generic_decl_meta_(std::string_view payload) {
+            ExternalGenericDeclMeta out{};
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part.starts_with("gparam=")) {
+                    out.params.push_back(payload_unescape_value_(part.substr(std::string_view("gparam=").size())));
+                } else if (part.starts_with("gconstraint=")) {
+                    const std::string_view body = part.substr(std::string_view("gconstraint=").size());
+                    const size_t comma1 = body.find(',');
+                    const size_t comma2 =
+                        (comma1 == std::string_view::npos) ? std::string_view::npos : body.find(',', comma1 + 1);
+                    if (comma1 != std::string_view::npos && comma2 != std::string_view::npos) {
+                        ExternalGenericConstraintMeta cc{};
+                        const std::string_view kind = body.substr(0, comma1);
+                        cc.kind = (kind == "type_eq")
+                            ? ExternalGenericConstraintMeta::Kind::kTypeEq
+                            : ExternalGenericConstraintMeta::Kind::kProto;
+                        cc.lhs = payload_unescape_value_(body.substr(comma1 + 1, comma2 - comma1 - 1));
+                        cc.rhs = payload_unescape_value_(body.substr(comma2 + 1));
+                        out.constraints.push_back(std::move(cc));
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return out;
+        }
+    }
 
     TyckResult TypeChecker::check_program(ast::StmtId program_stmt) {
         // -----------------------------
@@ -1924,117 +1999,6 @@ namespace parus::tyck {
             subst.emplace(generic_names[i], concrete_args[i]);
         }
 
-        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
-
-        auto fn_sig_same = [&](const ast::Stmt& a, const ast::Stmt& b) -> bool {
-            if (a.kind != ast::StmtKind::kFnDecl || b.kind != ast::StmtKind::kFnDecl) return false;
-            if (a.name != b.name) return false;
-            if (a.param_count != b.param_count) return false;
-            if (a.positional_param_count != b.positional_param_count) return false;
-            if (a.fn_ret != b.fn_ret) return false;
-            for (uint32_t i = 0; i < a.param_count; ++i) {
-                const auto& ap = ast_.params()[a.param_begin + i];
-                const auto& bp = ast_.params()[b.param_begin + i];
-                if (ap.type != bp.type || ap.is_self != bp.is_self || ap.self_kind != bp.self_kind) return false;
-            }
-            return true;
-        };
-
-        auto proto_effective_required_empty = [&](ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
-            std::vector<ast::StmtId> reqs;
-            std::vector<ast::StmtId> provs;
-            std::unordered_set<ast::StmtId> visiting;
-            auto collect = [&](auto&& self, ast::StmtId cur_sid) -> void {
-                if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return;
-                if (!visiting.insert(cur_sid).second) return;
-                const auto& cur = ast_.stmt(cur_sid);
-                if (cur.kind != ast::StmtKind::kProtoDecl) return;
-                const auto& refs = ast_.path_refs();
-                const uint64_t ib = cur.decl_path_ref_begin;
-                const uint64_t ie = ib + cur.decl_path_ref_count;
-                if (ib <= refs.size() && ie <= refs.size()) {
-                    for (uint32_t i = cur.decl_path_ref_begin; i < cur.decl_path_ref_begin + cur.decl_path_ref_count; ++i) {
-                        if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                            self(self, *base_sid);
-                        }
-                    }
-                }
-                const auto& kids = ast_.stmt_children();
-                const uint64_t mb = cur.stmt_begin;
-                const uint64_t me = mb + cur.stmt_count;
-                if (mb <= kids.size() && me <= kids.size()) {
-                    for (uint32_t i = cur.stmt_begin; i < cur.stmt_begin + cur.stmt_count; ++i) {
-                        const auto msid = kids[i];
-                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                        const auto& m = ast_.stmt(msid);
-                        if (m.kind != ast::StmtKind::kFnDecl) continue;
-                        if (m.proto_fn_role == ast::ProtoFnRole::kRequire) reqs.push_back(msid);
-                        if (m.proto_fn_role == ast::ProtoFnRole::kProvide && m.a != ast::k_invalid_stmt) provs.push_back(msid);
-                    }
-                }
-            };
-            collect(collect, proto_sid);
-
-            for (const auto req_sid : reqs) {
-                if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
-                const auto& req = ast_.stmt(req_sid);
-                bool satisfied = false;
-                for (const auto prov_sid : provs) {
-                    if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
-                    if (fn_sig_same(req, ast_.stmt(prov_sid))) {
-                        satisfied = true;
-                        break;
-                    }
-                }
-                if (!satisfied) return false;
-            }
-            return true;
-        };
-
-        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt) return false;
-            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
-                                                  /*emit_unsatisfied_diag=*/false,
-                                                  /*emit_shape_diag=*/false)) {
-                return false;
-            }
-            if (proto_effective_required_empty(proto_sid)) return true;
-
-            ast::StmtId owner_sid = ast::k_invalid_stmt;
-            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
-                owner_sid = cit->second;
-            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
-                owner_sid = fit->second.sid;
-            }
-            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
-            const auto& owner = ast_.stmt(owner_sid);
-            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
-
-            const auto& refs = ast_.path_refs();
-            const uint64_t begin = owner.decl_path_ref_begin;
-            const uint64_t end = begin + owner.decl_path_ref_count;
-            if (begin > refs.size() || end > refs.size()) return false;
-            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
-                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                    if (*psid == proto_sid) return true;
-                }
-            }
-            return false;
-        };
-
         for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
             const uint32_t idx = templ.decl_constraint_begin + ci;
             if (idx >= ast_.fn_constraint_decls().size()) break;
@@ -2157,6 +2121,69 @@ namespace parus::tyck {
 
         auto fit = field_abi_meta_by_type_.find(ss.declared_type);
         if (fit == field_abi_meta_by_type_.end()) {
+            if (ss.is_external && !ss.external_payload.empty()) {
+                const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
+                if (!meta.params.empty() || !meta.constraints.empty()) {
+                    if (args.size() != meta.params.size()) {
+                        diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                              base_key,
+                              std::to_string(meta.params.size()),
+                              std::to_string(args.size()));
+                        err_(use_span, "external generic struct arity mismatch");
+                        return std::nullopt;
+                    }
+
+                    std::unordered_map<std::string, ty::TypeId> subst{};
+                    subst.reserve(meta.params.size());
+                    for (size_t i = 0; i < meta.params.size(); ++i) {
+                        subst.emplace(meta.params[i], args[i]);
+                    }
+
+                    for (const auto& cc : meta.constraints) {
+                        auto lhs_it = subst.find(cc.lhs);
+                        if (lhs_it == subst.end()) {
+                            diag_(diag::Code::kGenericUnknownTypeParamInConstraint, use_span, cc.lhs);
+                            err_(use_span, "external generic struct constraint references unknown generic parameter");
+                            return std::nullopt;
+                        }
+
+                        if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
+                            auto proto_sid = resolve_proto_sid_for_constraint_(cc.rhs);
+                            if (!proto_sid.has_value()) {
+                                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                                    continue;
+                                }
+                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                                err_(use_span, "external generic struct constraint references unknown proto");
+                                return std::nullopt;
+                            }
+                            if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, use_span)) {
+                                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, use_span,
+                                      cc.lhs, cc.rhs, types_.to_string(lhs_it->second));
+                                err_(use_span, "external generic struct proto constraint unsatisfied");
+                                return std::nullopt;
+                            }
+                            continue;
+                        }
+
+                        ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                        if (rhs_t == ty::kInvalidType) {
+                            err_(use_span, "failed to decode external generic struct equality constraint");
+                            return std::nullopt;
+                        }
+                        rhs_t = substitute_generic_type_(rhs_t, subst);
+                        const ty::TypeId lhs_t = canonicalize_transparent_external_typedef_(lhs_it->second);
+                        rhs_t = canonicalize_transparent_external_typedef_(rhs_t);
+                        if (lhs_t != rhs_t) {
+                            diag_(diag::Code::kGenericConstraintTypeMismatch, use_span,
+                                  cc.lhs, cc.rhs,
+                                  types_.to_string(lhs_t), types_.to_string(rhs_t));
+                            err_(use_span, "external generic struct equality constraint unsatisfied");
+                            return std::nullopt;
+                        }
+                    }
+                }
+            }
             return std::nullopt;
         }
         const ast::StmtId templ_sid = fit->second.sid;
@@ -2390,116 +2417,6 @@ namespace parus::tyck {
         if (templ.type != ty::kInvalidType) {
             add_subst_alias(types_.to_string(templ.type), inst_type);
         }
-
-        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
-
-        auto fn_sig_same = [&](const ast::Stmt& a, const ast::Stmt& b) -> bool {
-            if (a.kind != ast::StmtKind::kFnDecl || b.kind != ast::StmtKind::kFnDecl) return false;
-            if (a.name != b.name) return false;
-            if (a.param_count != b.param_count) return false;
-            if (a.positional_param_count != b.positional_param_count) return false;
-            if (a.fn_ret != b.fn_ret) return false;
-            for (uint32_t i = 0; i < a.param_count; ++i) {
-                const auto& ap = ast_.params()[a.param_begin + i];
-                const auto& bp = ast_.params()[b.param_begin + i];
-                if (ap.type != bp.type || ap.is_self != bp.is_self || ap.self_kind != bp.self_kind) return false;
-            }
-            return true;
-        };
-
-        auto proto_effective_required_empty = [&](ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
-            std::vector<ast::StmtId> reqs;
-            std::vector<ast::StmtId> provs;
-            std::unordered_set<ast::StmtId> visiting;
-            auto collect = [&](auto&& self, ast::StmtId cur_sid) -> void {
-                if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return;
-                if (!visiting.insert(cur_sid).second) return;
-                const auto& cur = ast_.stmt(cur_sid);
-                if (cur.kind != ast::StmtKind::kProtoDecl) return;
-                const auto& refs = ast_.path_refs();
-                const uint64_t ib = cur.decl_path_ref_begin;
-                const uint64_t ie = ib + cur.decl_path_ref_count;
-                if (ib <= refs.size() && ie <= refs.size()) {
-                    for (uint32_t i = cur.decl_path_ref_begin; i < cur.decl_path_ref_begin + cur.decl_path_ref_count; ++i) {
-                        if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                            self(self, *base_sid);
-                        }
-                    }
-                }
-                const auto& kids = ast_.stmt_children();
-                const uint64_t mb = cur.stmt_begin;
-                const uint64_t me = mb + cur.stmt_count;
-                if (mb <= kids.size() && me <= kids.size()) {
-                    for (uint32_t i = cur.stmt_begin; i < cur.stmt_begin + cur.stmt_count; ++i) {
-                        const auto msid = kids[i];
-                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                        const auto& m = ast_.stmt(msid);
-                        if (m.kind != ast::StmtKind::kFnDecl) continue;
-                        if (m.proto_fn_role == ast::ProtoFnRole::kRequire) reqs.push_back(msid);
-                        if (m.proto_fn_role == ast::ProtoFnRole::kProvide && m.a != ast::k_invalid_stmt) provs.push_back(msid);
-                    }
-                }
-            };
-            collect(collect, proto_sid);
-            for (const auto req_sid : reqs) {
-                if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
-                const auto& req = ast_.stmt(req_sid);
-                bool satisfied = false;
-                for (const auto prov_sid : provs) {
-                    if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
-                    if (fn_sig_same(req, ast_.stmt(prov_sid))) {
-                        satisfied = true;
-                        break;
-                    }
-                }
-                if (!satisfied) return false;
-            }
-            return true;
-        };
-
-        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt) return false;
-            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
-                                                  /*emit_unsatisfied_diag=*/false,
-                                                  /*emit_shape_diag=*/false)) {
-                return false;
-            }
-            if (proto_effective_required_empty(proto_sid)) return true;
-
-            ast::StmtId owner_sid = ast::k_invalid_stmt;
-            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
-                owner_sid = cit->second;
-            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
-                owner_sid = fit->second.sid;
-            }
-            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
-            const auto& owner = ast_.stmt(owner_sid);
-            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
-
-            const auto& refs = ast_.path_refs();
-            const uint64_t begin = owner.decl_path_ref_begin;
-            const uint64_t end = begin + owner.decl_path_ref_count;
-            if (begin > refs.size() || end > refs.size()) return false;
-            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
-                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                    if (*psid == proto_sid) return true;
-                }
-            }
-            return false;
-        };
 
         for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
             const uint32_t idx = templ.decl_constraint_begin + ci;
@@ -2812,116 +2729,6 @@ namespace parus::tyck {
         for (size_t i = 0; i < generic_names.size(); ++i) {
             subst.emplace(generic_names[i], concrete_args[i]);
         }
-
-        auto resolve_proto_sid_for_constraint = [&](std::string_view raw) -> std::optional<ast::StmtId> {
-            if (raw.empty()) return std::nullopt;
-            std::string key(raw);
-            if (auto rewritten = rewrite_imported_path_(key)) key = *rewritten;
-            auto it = proto_decl_by_name_.find(key);
-            if (it != proto_decl_by_name_.end()) return it->second;
-            if (auto sym_sid = lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                auto pit = proto_decl_by_name_.find(ss.name);
-                if (pit != proto_decl_by_name_.end()) return pit->second;
-            }
-            return std::nullopt;
-        };
-
-        auto fn_sig_same = [&](const ast::Stmt& a, const ast::Stmt& b) -> bool {
-            if (a.kind != ast::StmtKind::kFnDecl || b.kind != ast::StmtKind::kFnDecl) return false;
-            if (a.name != b.name) return false;
-            if (a.param_count != b.param_count) return false;
-            if (a.positional_param_count != b.positional_param_count) return false;
-            if (a.fn_ret != b.fn_ret) return false;
-            for (uint32_t i = 0; i < a.param_count; ++i) {
-                const auto& ap = ast_.params()[a.param_begin + i];
-                const auto& bp = ast_.params()[b.param_begin + i];
-                if (ap.type != bp.type || ap.is_self != bp.is_self || ap.self_kind != bp.self_kind) return false;
-            }
-            return true;
-        };
-
-        auto proto_effective_required_empty = [&](ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return false;
-            std::vector<ast::StmtId> reqs;
-            std::vector<ast::StmtId> provs;
-            std::unordered_set<ast::StmtId> visiting;
-            auto collect = [&](auto&& self, ast::StmtId cur_sid) -> void {
-                if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return;
-                if (!visiting.insert(cur_sid).second) return;
-                const auto& cur = ast_.stmt(cur_sid);
-                if (cur.kind != ast::StmtKind::kProtoDecl) return;
-                const auto& refs = ast_.path_refs();
-                const uint64_t ib = cur.decl_path_ref_begin;
-                const uint64_t ie = ib + cur.decl_path_ref_count;
-                if (ib <= refs.size() && ie <= refs.size()) {
-                    for (uint32_t i = cur.decl_path_ref_begin; i < cur.decl_path_ref_begin + cur.decl_path_ref_count; ++i) {
-                        if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                            self(self, *base_sid);
-                        }
-                    }
-                }
-                const auto& kids = ast_.stmt_children();
-                const uint64_t mb = cur.stmt_begin;
-                const uint64_t me = mb + cur.stmt_count;
-                if (mb <= kids.size() && me <= kids.size()) {
-                    for (uint32_t i = cur.stmt_begin; i < cur.stmt_begin + cur.stmt_count; ++i) {
-                        const auto msid = kids[i];
-                        if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                        const auto& m = ast_.stmt(msid);
-                        if (m.kind != ast::StmtKind::kFnDecl) continue;
-                        if (m.proto_fn_role == ast::ProtoFnRole::kRequire) reqs.push_back(msid);
-                        if (m.proto_fn_role == ast::ProtoFnRole::kProvide && m.a != ast::k_invalid_stmt) provs.push_back(msid);
-                    }
-                }
-            };
-            collect(collect, proto_sid);
-            for (const auto req_sid : reqs) {
-                if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
-                const auto& req = ast_.stmt(req_sid);
-                bool satisfied = false;
-                for (const auto prov_sid : provs) {
-                    if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
-                    if (fn_sig_same(req, ast_.stmt(prov_sid))) {
-                        satisfied = true;
-                        break;
-                    }
-                }
-                if (!satisfied) return false;
-            }
-            return true;
-        };
-
-        auto type_satisfies_proto_constraint = [&](ty::TypeId concrete_t, ast::StmtId proto_sid) -> bool {
-            if (proto_sid == ast::k_invalid_stmt) return false;
-            if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
-                                                  /*emit_unsatisfied_diag=*/false,
-                                                  /*emit_shape_diag=*/false)) {
-                return false;
-            }
-            if (proto_effective_required_empty(proto_sid)) return true;
-
-            ast::StmtId owner_sid = ast::k_invalid_stmt;
-            if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
-                owner_sid = cit->second;
-            } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
-                owner_sid = fit->second.sid;
-            }
-            if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) return false;
-            const auto& owner = ast_.stmt(owner_sid);
-            if (owner.kind != ast::StmtKind::kClassDecl && owner.kind != ast::StmtKind::kFieldDecl) return false;
-
-            const auto& refs = ast_.path_refs();
-            const uint64_t begin = owner.decl_path_ref_begin;
-            const uint64_t end = begin + owner.decl_path_ref_count;
-            if (begin > refs.size() || end > refs.size()) return false;
-            for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
-                if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
-                    if (*psid == proto_sid) return true;
-                }
-            }
-            return false;
-        };
 
         for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
             const uint32_t idx = templ.decl_constraint_begin + ci;

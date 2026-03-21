@@ -2423,6 +2423,27 @@ namespace {
         return ok;
     }
 
+    static bool test_generic_struct_constraint_checked_in_signature_types() {
+        const std::string src = R"(
+            struct OnlyI32<T> with [T == i32] {
+                value: T;
+            };
+
+            def f(x: OnlyI32<u32>) -> i32 {
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        (void)run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kGenericConstraintTypeMismatch) == 1,
+            "generic struct equality mismatch in signature types must emit GenericConstraintTypeMismatch exactly once");
+        return ok;
+    }
+
     static bool test_file_cases_directory() {
 #ifndef PARUS_FRONTEND_CASE_DIR
         std::cerr << "  - PARUS_FRONTEND_CASE_DIR is not defined\n";
@@ -2547,6 +2568,7 @@ int main() {
         {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
         {"generic_type_eq_constraints_work", test_generic_type_eq_constraints_work},
         {"generic_type_eq_constraint_mismatch_reports", test_generic_type_eq_constraint_mismatch_reports},
+        {"generic_struct_constraint_checked_in_signature_types", test_generic_struct_constraint_checked_in_signature_types},
         {"file_cases_directory", test_file_cases_directory},
     };
 

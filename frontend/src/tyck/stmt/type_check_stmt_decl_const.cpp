@@ -44,8 +44,12 @@
             diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
             err_(s.span, msg);
         }
+        (void)ensure_generic_field_instance_from_type_(ret, s.span);
+        (void)ensure_generic_enum_instance_from_type_(ret, s.span);
         for (uint32_t i = 0; i < s.param_count; ++i) {
             const auto& p = ast_.params()[s.param_begin + i];
+            (void)ensure_generic_field_instance_from_type_(p.type, p.span);
+            (void)ensure_generic_enum_instance_from_type_(p.type, p.span);
             if (!is_va_list_type_(p.type)) continue;
             if (s.link_abi != ast::LinkAbi::kC) {
                 const std::string msg =

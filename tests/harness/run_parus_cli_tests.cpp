@@ -2181,6 +2181,9 @@ bool test_external_generic_constraints_v2_work() {
     const auto lib_pr = temp_root / "lib.pr";
     const std::string lib_src =
         "nest api;\n"
+        "struct OnlyI32<T> with [T == i32] {\n"
+        "  value: T;\n"
+        "};\n"
         "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
         "  return 1i32;\n"
         "}\n"
@@ -2208,7 +2211,9 @@ bool test_external_generic_constraints_v2_work() {
 
     const std::string lib_index_text = read_text(lib_index);
     if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
-        !contains(lib_index_text, "gconstraint=proto,T,num::SignedInt")) {
+        !contains(lib_index_text, "gconstraint=proto,T,num::SignedInt") ||
+        !contains(lib_index_text, "\"path\":\"api::OnlyI32\"") ||
+        !contains(lib_index_text, "parus_field_decl|layout=n|align=0|gparam=T|gconstraint=type_eq,T,i32|field=value:T")) {
         std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -2236,6 +2241,26 @@ bool test_external_generic_constraints_v2_work() {
         return false;
     }
 
+    const auto ok_struct_pr = temp_root / "ok_struct.pr";
+    const std::string ok_struct_src =
+        "def f(x: api::OnlyI32<i32>) -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(ok_struct_pr, ok_struct_src)) {
+        std::cerr << "failed to write external generic struct success sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_ok_struct, out_ok_struct] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_struct_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_ok_struct != 0) {
+        std::cerr << "external generic struct success sample should typecheck\n" << out_ok_struct;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
     const auto bad_eq_pr = temp_root / "bad_eq.pr";
     const std::string bad_eq_src =
         "def main() -> i32 {\n"
@@ -2252,6 +2277,27 @@ bool test_external_generic_constraints_v2_work() {
         "\" --load-export-index \"" + lib_index.string() + "\"");
     if (rc_bad_eq == 0 || !contains(out_bad_eq, "GenericConstraintTypeMismatch")) {
         std::cerr << "external generic equality mismatch must report GenericConstraintTypeMismatch\n" << out_bad_eq;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_struct_pr = temp_root / "bad_struct.pr";
+    const std::string bad_struct_src =
+        "def f(x: api::OnlyI32<u32>) -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(bad_struct_pr, bad_struct_src)) {
+        std::cerr << "failed to write external generic struct negative sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_struct, out_bad_struct] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_struct_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_bad_struct == 0 || !contains(out_bad_struct, "GenericConstraintTypeMismatch")) {
+        std::cerr << "external generic struct equality mismatch must report GenericConstraintTypeMismatch\n"
+                  << out_bad_struct;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }

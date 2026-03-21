@@ -215,7 +215,7 @@ namespace parusc::p0 {
         std::string build_field_decl_payload_(
             const parus::ast::AstArena& ast,
             const parus::ast::Stmt& s,
-            const parus::SourceManager& sm
+            const parus::ty::TypePool& types
         );
 
         bool json_unescape_text_(std::string_view in, std::string& out) {
@@ -879,7 +879,7 @@ namespace parusc::p0 {
             }
 
             if (s.kind == parus::ast::StmtKind::kFieldDecl && !s.name.empty()) {
-                std::string payload = build_field_decl_payload_(ast, s, sm);
+                std::string payload = build_field_decl_payload_(ast, s, types);
                 push_export(parus::sema::SymbolKind::kField,
                             qualify_name_(ns, s.name),
                             s.type,
@@ -1374,7 +1374,7 @@ namespace parusc::p0 {
         std::string build_field_decl_payload_(
             const parus::ast::AstArena& ast,
             const parus::ast::Stmt& s,
-            const parus::SourceManager& sm
+            const parus::ty::TypePool& types
         ) {
             std::string payload = "parus_field_decl";
             if (s.kind != parus::ast::StmtKind::kFieldDecl) return payload;
@@ -1383,13 +1383,7 @@ namespace parusc::p0 {
             payload += (s.field_layout == parus::ast::FieldLayout::kC) ? "c" : "n";
             payload += "|align=";
             payload += std::to_string(s.field_align);
-
-            for (uint32_t i = 0; i < s.decl_generic_param_count; ++i) {
-                const uint32_t idx = s.decl_generic_param_begin + i;
-                if (idx >= ast.generic_param_decls().size()) break;
-                payload += "|gparam=";
-                payload += std::string(ast.generic_param_decls()[idx].name);
-            }
+            append_generic_decl_payload_(payload, ast, s, types);
 
             const uint64_t begin = s.field_member_begin;
             const uint64_t end = begin + s.field_member_count;
@@ -1402,13 +1396,16 @@ namespace parusc::p0 {
                 payload += "|field=";
                 payload += std::string(m.name);
                 payload += ":";
-                if (m.type_node != parus::ast::k_invalid_type_node &&
-                    static_cast<size_t>(m.type_node) < ast.type_nodes().size()) {
-                    const auto& tn = ast.type_nodes()[m.type_node];
-                    const auto src = sm.content(tn.span.file_id);
-                    if (tn.span.lo <= tn.span.hi && tn.span.hi <= src.size()) {
-                        payload += std::string(src.substr(tn.span.lo, tn.span.hi - tn.span.lo));
+                if (m.type != parus::ty::kInvalidType) {
+                    payload += payload_escape_value_(types.to_export_string(m.type));
+                    const auto semantic =
+                        parus::cimport::serialize_type_semantic_from_type(m.type, types);
+                    if (!semantic.empty()) {
+                        payload += "@";
+                        payload += payload_escape_value_(semantic);
                     }
+                } else {
+                    payload += payload_escape_value_("<invalid>");
                 }
             }
 
