@@ -130,13 +130,13 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 6. `core::text`
 7. `core::mem`
 8. `core::hint`
+9. `core::range`
 
 선택적 2차 모듈:
 
-1. `core::range`
-2. `core::convert`
-3. `core::marker`
-4. `core::panic`
+1. `core::convert`
+2. `core::marker`
+3. `core::panic`
 
 의도적으로 보류:
 
@@ -145,7 +145,7 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 3. `core::slice`
 4. `core::result`
 
-`core::iter`는 보류 대상이지만, 계층상으로는 장기적으로 `std`가 아니라 `core`에 둔다. 구체적인 도입 순서는 roadmap 문서를 따른다.
+`core::iter`는 아직 보류 대상이지만, 계층상으로는 장기적으로 `std`가 아니라 `core`에 둔다. `core::range`는 먼저 library-only value layer로 도입했고, loop builtin range와는 별개로 유지한다. 구체적인 도입 순서는 roadmap 문서를 따른다.
 
 ## 1차 함수셋
 

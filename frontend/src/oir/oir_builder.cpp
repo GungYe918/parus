@@ -41,6 +41,19 @@ namespace parus::oir {
             std::vector<FieldMemberLayout> members{};
         };
 
+        struct ParsedExternalParusFieldMember {
+            std::string name{};
+            parus::ty::TypeId type = parus::ty::kInvalidType;
+        };
+
+        struct ParsedExternalParusFieldDecl {
+            bool ok = false;
+            FieldLayout layout = FieldLayout::None;
+            uint32_t explicit_align = 0;
+            std::vector<std::string> generic_params{};
+            std::vector<ParsedExternalParusFieldMember> members{};
+        };
+
         bool parse_u32_sv_(std::string_view text, uint32_t& out) {
             out = 0;
             if (text.empty()) return false;
@@ -143,6 +156,156 @@ namespace parus::oir {
 
             out.ok = true;
             return out;
+        }
+
+        ParsedExternalParusFieldDecl parse_external_parus_field_decl_payload_(
+            std::string_view payload,
+            const parus::ty::TypePool& types_in
+        ) {
+            ParsedExternalParusFieldDecl out{};
+            if (!payload.starts_with("parus_field_decl|")) return out;
+            auto& types = const_cast<parus::ty::TypePool&>(types_in);
+
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                const size_t eq = part.find('=');
+                if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                    const std::string_view key = part.substr(0, eq);
+                    const std::string_view val = part.substr(eq + 1);
+                    if (key == "layout") {
+                        out.layout = (val == "c") ? FieldLayout::C : FieldLayout::None;
+                    } else if (key == "align") {
+                        if (!parse_u32_sv_(val, out.explicit_align)) return {};
+                    } else if (key == "gparam") {
+                        out.generic_params.emplace_back(val);
+                    } else if (key == "field") {
+                        const size_t colon = val.find(':');
+                        if (colon == std::string_view::npos || colon == 0 || colon + 1 >= val.size()) {
+                            return {};
+                        }
+
+                        ParsedExternalParusFieldMember member{};
+                        member.name.assign(val.substr(0, colon));
+
+                        std::string_view type_text = val.substr(colon + 1);
+                        std::string_view type_semantic{};
+                        if (const size_t at = type_text.find('@'); at != std::string_view::npos) {
+                            type_semantic = type_text.substr(at + 1);
+                            type_text = type_text.substr(0, at);
+                        }
+
+                        member.type = parus::cimport::parse_external_type_repr(
+                            type_text,
+                            type_semantic,
+                            {},
+                            types
+                        );
+                        if (member.type == parus::ty::kInvalidType) return {};
+                        out.members.push_back(std::move(member));
+                    }
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+
+            out.ok = true;
+            return out;
+        }
+
+        parus::ty::TypeId substitute_external_generic_params_(
+            const parus::ty::TypePool& types_in,
+            parus::ty::TypeId src,
+            const std::unordered_map<std::string, parus::ty::TypeId>& subst
+        ) {
+            auto& types = const_cast<parus::ty::TypePool&>(types_in);
+            if (src == parus::ty::kInvalidType) return src;
+            const auto& tt = types.get(src);
+            switch (tt.kind) {
+                case parus::ty::Kind::kNamedUser: {
+                    std::vector<std::string_view> path{};
+                    std::vector<parus::ty::TypeId> args{};
+                    if (!types.decompose_named_user(src, path, args) || path.empty()) {
+                        return src;
+                    }
+
+                    if (args.empty() && path.size() == 1) {
+                        const auto it = subst.find(std::string(path.front()));
+                        if (it != subst.end()) return it->second;
+                    }
+
+                    bool changed = false;
+                    for (auto& arg : args) {
+                        const auto next = substitute_external_generic_params_(types, arg, subst);
+                        if (next != arg) {
+                            arg = next;
+                            changed = true;
+                        }
+                    }
+                    if (!changed) return src;
+                    return types.intern_named_path_with_args(
+                        path.data(),
+                        static_cast<uint32_t>(path.size()),
+                        args.empty() ? nullptr : args.data(),
+                        static_cast<uint32_t>(args.size())
+                    );
+                }
+                case parus::ty::Kind::kOptional: {
+                    const auto elem = substitute_external_generic_params_(types, tt.elem, subst);
+                    return elem == tt.elem ? src : types.make_optional(elem);
+                }
+                case parus::ty::Kind::kArray: {
+                    const auto elem = substitute_external_generic_params_(types, tt.elem, subst);
+                    return elem == tt.elem ? src : types.make_array(elem, tt.array_has_size, tt.array_size);
+                }
+                case parus::ty::Kind::kBorrow: {
+                    const auto elem = substitute_external_generic_params_(types, tt.elem, subst);
+                    return elem == tt.elem ? src : types.make_borrow(elem, tt.borrow_is_mut);
+                }
+                case parus::ty::Kind::kEscape: {
+                    const auto elem = substitute_external_generic_params_(types, tt.elem, subst);
+                    return elem == tt.elem ? src : types.make_escape(elem);
+                }
+                case parus::ty::Kind::kPtr: {
+                    const auto elem = substitute_external_generic_params_(types, tt.elem, subst);
+                    return elem == tt.elem ? src : types.make_ptr(elem, tt.ptr_is_mut);
+                }
+                case parus::ty::Kind::kFn: {
+                    std::vector<parus::ty::TypeId> params{};
+                    std::vector<std::string_view> labels{};
+                    std::vector<uint8_t> defaults{};
+                    params.reserve(tt.param_count);
+                    labels.reserve(tt.param_count);
+                    defaults.reserve(tt.param_count);
+                    bool changed = false;
+                    for (uint32_t i = 0; i < tt.param_count; ++i) {
+                        const auto p = types.fn_param_at(src, i);
+                        const auto np = substitute_external_generic_params_(types, p, subst);
+                        if (np != p) changed = true;
+                        params.push_back(np);
+                        labels.push_back(types.fn_param_label_at(src, i));
+                        defaults.push_back(types.fn_param_has_default_at(src, i) ? 1u : 0u);
+                    }
+                    const auto nr = substitute_external_generic_params_(types, tt.ret, subst);
+                    if (nr != tt.ret) changed = true;
+                    if (!changed) return src;
+                    return types.make_fn(
+                        nr,
+                        params.empty() ? nullptr : params.data(),
+                        static_cast<uint32_t>(params.size()),
+                        tt.positional_param_count,
+                        labels.empty() ? nullptr : labels.data(),
+                        defaults.empty() ? nullptr : defaults.data(),
+                        tt.fn_is_c_abi,
+                        tt.fn_is_c_variadic,
+                        tt.fn_callconv
+                    );
+                }
+                default:
+                    return src;
+            }
         }
 
         ParsedCImportWrapperPayload parse_cimport_wrapper_payload_(std::string_view payload) {
@@ -3715,6 +3878,168 @@ namespace parus::oir {
             }
         }
 
+        auto ensure_external_parus_field_layout = [&](auto&& self, parus::ty::TypeId tid) -> bool {
+            if (sym_ == nullptr || tid == parus::ty::kInvalidType) return false;
+            if (named_layout_by_type.find(tid) != named_layout_by_type.end()) return true;
+            if (actor_type_set.find(tid) != actor_type_set.end()) return false;
+
+            const auto& tt = ty_.get(tid);
+            if (tt.kind != parus::ty::Kind::kNamedUser) return false;
+
+            std::vector<std::string_view> path{};
+            std::vector<parus::ty::TypeId> args{};
+            if (!ty_.decompose_named_user(tid, path, args) || path.empty()) return false;
+
+            std::string base_name{};
+            for (size_t i = 0; i < path.size(); ++i) {
+                if (i != 0) base_name += "::";
+                base_name += std::string(path[i]);
+            }
+
+            auto sym_sid = sym_->lookup(base_name);
+            if (!sym_sid.has_value()) return false;
+            const auto& ss = sym_->symbol(*sym_sid);
+            if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kField || ss.external_payload.empty()) {
+                return false;
+            }
+
+            const auto parsed = parse_external_parus_field_decl_payload_(ss.external_payload, ty_);
+            if (!parsed.ok) return false;
+            if (args.size() != parsed.generic_params.size()) {
+                return false;
+            }
+
+            std::unordered_map<std::string, parus::ty::TypeId> subst{};
+            subst.reserve(parsed.generic_params.size());
+            for (size_t i = 0; i < parsed.generic_params.size(); ++i) {
+                subst.emplace(parsed.generic_params[i], args[i]);
+            }
+
+            auto resolve_size_align = [&](auto&& resolve, parus::ty::TypeId cur) -> std::pair<uint32_t, uint32_t> {
+                using TK = parus::ty::Kind;
+                using TB = parus::ty::Builtin;
+
+                if (cur == parus::ty::kInvalidType) return {8u, 8u};
+                const auto& ct = ty_.get(cur);
+                switch (ct.kind) {
+                    case TK::kError:
+                        return {8u, 8u};
+                    case TK::kBuiltin:
+                        switch (ct.builtin) {
+                            case TB::kBool:
+                            case TB::kI8:
+                            case TB::kU8:
+                            case TB::kCChar:
+                            case TB::kCSChar:
+                            case TB::kCUChar:
+                                return {1u, 1u};
+                            case TB::kI16:
+                            case TB::kU16:
+                            case TB::kCShort:
+                            case TB::kCUShort:
+                                return {2u, 2u};
+                            case TB::kI32:
+                            case TB::kU32:
+                            case TB::kF32:
+                            case TB::kChar:
+                            case TB::kCInt:
+                            case TB::kCUInt:
+                            case TB::kCFloat:
+                                return {4u, 4u};
+                            case TB::kText:
+                                return {16u, 8u};
+                            case TB::kI128:
+                            case TB::kU128:
+                            case TB::kF128:
+                                return {16u, 16u};
+                            case TB::kUnit:
+                            case TB::kCVoid:
+                                return {1u, 1u};
+                            case TB::kCLong:
+                            case TB::kCULong:
+                                return {static_cast<uint32_t>(sizeof(long)), static_cast<uint32_t>(alignof(long))};
+                            case TB::kCLongLong:
+                            case TB::kCULongLong:
+                            case TB::kCDouble:
+                                return {8u, 8u};
+                            case TB::kCSize:
+                            case TB::kCSSize:
+                            case TB::kCPtrDiff:
+                            case TB::kVaList:
+                                return {8u, 8u};
+                            default:
+                                return {8u, 8u};
+                        }
+                    case TK::kPtr:
+                    case TK::kBorrow:
+                    case TK::kEscape:
+                    case TK::kFn:
+                        return {8u, 8u};
+                    case TK::kOptional: {
+                        const auto [elem_size, elem_align] = resolve(resolve, ct.elem);
+                        const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                        const uint32_t body = align_to_(1u, a) + std::max<uint32_t>(1u, elem_size);
+                        return {body, a};
+                    }
+                    case TK::kArray: {
+                        const auto [elem_size, elem_align] = resolve(resolve, ct.elem);
+                        const uint32_t e = std::max<uint32_t>(1u, elem_size);
+                        const uint32_t a = std::max<uint32_t>(1u, elem_align);
+                        if (!ct.array_has_size) return {16u, 8u};
+                        return {e * std::max<uint32_t>(1u, ct.array_size), a};
+                    }
+                    case TK::kNamedUser: {
+                        if (actor_type_set.find(cur) != actor_type_set.end()) return {8u, 8u};
+                        (void)self(self, cur);
+                        auto it = named_layout_by_type.find(cur);
+                        if (it != named_layout_by_type.end()) return it->second;
+                        return {8u, 8u};
+                    }
+                }
+                return {8u, 8u};
+            };
+
+            FieldLayoutDecl of{};
+            of.name = ty_.to_string(tid);
+            of.self_type = tid;
+            of.layout = parsed.layout;
+            of.align = parsed.explicit_align;
+
+            uint32_t offset = 0;
+            uint32_t struct_align = std::max<uint32_t>(1u, of.align);
+            for (const auto& member : parsed.members) {
+                const parus::ty::TypeId concrete_member_ty =
+                    substitute_external_generic_params_(ty_, member.type, subst);
+                const auto [member_size_raw, member_align_raw] = resolve_size_align(resolve_size_align, concrete_member_ty);
+                const uint32_t member_size = std::max<uint32_t>(1u, member_size_raw);
+                const uint32_t member_align = std::max<uint32_t>(1u, member_align_raw);
+
+                if (of.layout == FieldLayout::C) {
+                    offset = align_to_(offset, member_align);
+                }
+
+                FieldMemberLayout om{};
+                om.name = member.name;
+                om.type = concrete_member_ty;
+                om.offset = offset;
+                of.members.push_back(std::move(om));
+
+                offset += member_size;
+                struct_align = std::max(struct_align, member_align);
+            }
+
+            if (of.layout == FieldLayout::C) {
+                of.size = std::max<uint32_t>(1u, align_to_(offset, struct_align));
+            } else {
+                of.size = std::max<uint32_t>(1u, offset);
+            }
+            if (of.align == 0) of.align = struct_align;
+
+            out.mod.add_field(of);
+            named_layout_by_type[tid] = {of.size, std::max<uint32_t>(1u, of.align)};
+            return true;
+        };
+
         if (sym_ != nullptr) {
             for (const auto& ss : sym_->symbols()) {
                 if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kType) continue;
@@ -3733,6 +4058,12 @@ namespace parus::oir {
                 of.members = parsed.members;
                 out.mod.add_field(of);
                 named_layout_by_type[of.self_type] = {of.size, of.align};
+            }
+        }
+
+        if (sym_ != nullptr) {
+            for (parus::ty::TypeId tid = 0; tid < ty_.count(); ++tid) {
+                (void)ensure_external_parus_field_layout(ensure_external_parus_field_layout, tid);
             }
         }
 

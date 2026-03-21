@@ -561,6 +561,7 @@ namespace parus::tyck {
             ty::TypeId owner_type = ty::kInvalidType;
             bool receiver_is_self = false;
         };
+        std::unordered_map<std::string, std::vector<uint32_t>> external_fn_overload_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_default_method_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
@@ -614,6 +615,7 @@ namespace parus::tyck {
         static bool is_char_builtin_(ty::Builtin b);
         static bool is_text_builtin_(ty::Builtin b);
         static bool is_bool_builtin_(ty::Builtin b);
+        void collect_external_fn_overloads_();
         bool is_self_named_type_(ty::TypeId t) const;
         bool is_builtin_owner_type_(ty::TypeId t, ty::Builtin* out_builtin = nullptr) const;
         std::optional<ty::TypeId> parse_builtin_owner_type_from_text_(std::string_view s) const;
@@ -638,6 +640,7 @@ namespace parus::tyck {
             std::string& out_base,
             std::vector<ty::TypeId>& out_args
         ) const;
+        bool type_contains_unresolved_generic_param_(ty::TypeId t) const;
         void push_acts_selection_scope_();
         void pop_acts_selection_scope_();
         const ActiveActsSelection* lookup_active_acts_selection_(ty::TypeId owner_type) const;

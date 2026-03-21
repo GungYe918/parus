@@ -1488,6 +1488,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path text_view = core_root / "text/text.pr";
     const std::filesystem::path mem_mod = core_root / "mem/mem.pr";
     const std::filesystem::path hint_mod = core_root / "hint/hint.pr";
+    const std::filesystem::path range_mod = core_root / "range/range.pr";
     if (!std::filesystem::exists(ext_types, ec) ||
         !std::filesystem::exists(ext_cstr, ec) ||
         !std::filesystem::exists(ext_errors, ec) ||
@@ -1498,7 +1499,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(char_ascii, ec) ||
         !std::filesystem::exists(text_view, ec) ||
         !std::filesystem::exists(mem_mod, ec) ||
-        !std::filesystem::exists(hint_mod, ec)) {
+        !std::filesystem::exists(hint_mod, ec) ||
+        !std::filesystem::exists(range_mod, ec)) {
         std::cerr << "core seed source files are missing\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1521,6 +1523,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         " --bundle-source \"" + text_view.string() + "\"" +
         " --bundle-source \"" + mem_mod.string() + "\"" +
         " --bundle-source \"" + hint_mod.string() + "\"" +
+        " --bundle-source \"" + range_mod.string() + "\"" +
         " --emit-export-index \"" + core_index.string() + "\"";
     auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
     if (rc_emit != 0) {
@@ -1578,6 +1581,14 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
+    if (!contains(core_index_text, "\"path\":\"Range\"") ||
+        !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
+        !contains(core_index_text, "\"path\":\"range\"") ||
+        !contains(core_index_text, "\"path\":\"range_inclusive\"")) {
+        std::cerr << "core export-index must include range types and constructors\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
     const auto app_main = temp_root / "main.pr";
     const std::string app_src =
         "def cold(flag: bool) -> i32 {\n"
@@ -1617,6 +1628,13 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let cstr: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
         "  let bridged: text = core::ext::to_text(cstr);\n"
         "  let bridged_len: usize = bridged.len_bytes();\n"
+        "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
+        "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
+        "  let rx_empty: bool = rx.is_empty();\n"
+        "  let rx_has_mid: bool = rx.contains(2i32);\n"
+        "  let rx_has_hi: bool = rx.contains(4i32);\n"
+        "  let ri_has_hi: bool = ri.contains(4u32);\n"
+        "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1635,6 +1653,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  }\n"
         "  if (bool_ok and ord_ok and partial_ok and hex and bool_true and bool_false and not raw_nan and"
         " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
+        " not rx_empty and rx_has_mid and not rx_has_hi and ri_has_hi and ri_empty and"
         " sz_i32 == 4usize and sz_text == 16usize and al_i32 == 4usize and al_text == 8usize and"
         " swap_a == 2i32 and swap_b == 1i32 and repl_old.len_bytes() == 3usize and repl.len_bytes() == 1usize and"
         " cold(true) == 7i32) {\n"
@@ -1702,7 +1721,7 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 11> core_seed_sources = {
+    const std::array<std::filesystem::path, 12> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
@@ -1714,6 +1733,7 @@ bool test_core_seed_runtime_smoke() {
         core_root / "text/text.pr",
         core_root / "mem/mem.pr",
         core_root / "hint/hint.pr",
+        core_root / "range/range.pr",
     };
 
     const auto main_pr = temp_root / "main.pr";
@@ -1753,6 +1773,13 @@ bool test_core_seed_runtime_smoke() {
         "  let cs: core::ext::CStr = core::ext::from_raw_parts(c\"Hello\", 6usize);\n"
         "  let tv: text = core::ext::to_text(cs);\n"
         "  let tv_len: usize = tv.len_bytes();\n"
+        "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
+        "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
+        "  let rx_empty: bool = rx.is_empty();\n"
+        "  let rx_has_mid: bool = rx.contains(2i32);\n"
+        "  let rx_has_hi: bool = rx.contains(4i32);\n"
+        "  let ri_has_hi: bool = ri.contains(4u32);\n"
+        "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
         "  set mut bo_ok = false;\n"
         "  switch (bo) {\n"
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
@@ -1773,6 +1800,11 @@ bool test_core_seed_runtime_smoke() {
         "      and s_len == 3usize\n"
         "      and s_empty\n"
         "      and tv_len == 5usize\n"
+        "      and not rx_empty\n"
+        "      and rx_has_mid\n"
+        "      and not rx_has_hi\n"
+        "      and ri_has_hi\n"
+        "      and ri_empty\n"
         "      and sz_i32 == 4usize\n"
         "      and sz_text == 16usize\n"
         "      and sz_arr == 16usize\n"
@@ -1850,6 +1882,10 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"replace\"") ||
         !contains(installed_core_index, "\"path\":\"unreachable\"") ||
         !contains(installed_core_index, "\"path\":\"spin_loop\"") ||
+        !contains(installed_core_index, "\"path\":\"Range\"") ||
+        !contains(installed_core_index, "\"path\":\"RangeInclusive\"") ||
+        !contains(installed_core_index, "\"path\":\"range\"") ||
+        !contains(installed_core_index, "\"path\":\"range_inclusive\"") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {

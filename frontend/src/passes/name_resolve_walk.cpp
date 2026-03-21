@@ -1534,6 +1534,18 @@
         diag::Bag& bag,
         const NameResolveOptions& opt
     ) {
+        auto is_c_abi_external_payload = [](std::string_view payload) -> bool {
+            return payload.starts_with("parus_c_import|") ||
+                   payload.starts_with("parus_c_abi_decl|");
+        };
+
+        auto hidden_external_overload_name = [&](std::string_view visible_name) -> std::string {
+            std::string hidden(visible_name);
+            hidden += "@@extovl$";
+            hidden += std::to_string(sym.symbols().size());
+            return hidden;
+        };
+
         for (const auto& ex : opt.external_exports) {
             if (ex.path.empty()) continue;
 
@@ -1545,6 +1557,33 @@
                     const auto& old = sym.symbol(*existing);
                     if (old.kind != ex.kind) {
                         report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, nm);
+                    } else if (ex.kind == sema::SymbolKind::kFn &&
+                               old.is_external &&
+                               !is_c_abi_external_payload(old.external_payload) &&
+                               !is_c_abi_external_payload(ex.inst_payload)) {
+                        const std::string hidden_name = hidden_external_overload_name(nm);
+                        auto ins = declare_(
+                            ex.kind,
+                            hidden_name,
+                            ex.declared_type,
+                            ex.decl_span,
+                            sym,
+                            bag,
+                            opt
+                        );
+                        if (!ins.ok || ins.is_duplicate) {
+                            continue;
+                        }
+
+                        auto& se = sym.symbol_mut(ins.symbol_id);
+                        se.decl_file_id = ex.decl_span.file_id;
+                        se.decl_bundle_name = ex.decl_bundle_name;
+                        se.decl_module_head = ex.module_head;
+                        se.decl_source_dir_norm = ex.decl_source_dir_norm;
+                        se.link_name = ex.link_name;
+                        se.external_payload = ex.inst_payload;
+                        se.is_export = ex.is_export;
+                        se.is_external = true;
                     } else {
                         auto& cur = sym.symbol_mut(*existing);
                         if (ex.kind == sema::SymbolKind::kFn && !ex.link_name.empty() && cur.link_name.empty()) {

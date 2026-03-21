@@ -1622,6 +1622,25 @@ namespace parus::tyck {
             return tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kInferInteger;
         };
 
+        auto resolve_c_abi_fn_type = [&](ty::TypeId fn_t) -> ty::TypeId {
+            ty::TypeId cur = fn_t;
+            for (uint32_t depth = 0; depth < 8 && cur != ty::kInvalidType; ++depth) {
+                cur = read_decay_borrow_local(cur);
+                cur = canonicalize_transparent_external_typedef_(cur);
+                if (cur == ty::kInvalidType || cur >= types_.count()) return ty::kInvalidType;
+                const auto& tt = types_.get(cur);
+                if (tt.kind == ty::Kind::kFn) return cur;
+                if (tt.kind == ty::Kind::kPtr ||
+                    tt.kind == ty::Kind::kBorrow ||
+                    tt.kind == ty::Kind::kEscape) {
+                    cur = tt.elem;
+                    continue;
+                }
+                return ty::kInvalidType;
+            }
+            return ty::kInvalidType;
+        };
+
         auto classify_c_abi_fn_type = [&](ty::TypeId fn_t,
                                           bool& out_is_c_abi,
                                           bool& out_is_variadic,
@@ -1629,11 +1648,11 @@ namespace parus::tyck {
             out_is_c_abi = false;
             out_is_variadic = false;
             out_callconv = ty::CCallConv::kDefault;
-            if (fn_t == ty::kInvalidType || fn_t >= types_.count()) return;
-            if (types_.get(fn_t).kind != ty::Kind::kFn) return;
-            out_is_c_abi = types_.fn_is_c_abi(fn_t);
-            out_is_variadic = types_.fn_is_c_variadic(fn_t);
-            out_callconv = types_.fn_callconv(fn_t);
+            const ty::TypeId resolved = resolve_c_abi_fn_type(fn_t);
+            if (resolved == ty::kInvalidType) return;
+            out_is_c_abi = types_.fn_is_c_abi(resolved);
+            out_is_variadic = types_.fn_is_c_variadic(resolved);
+            out_callconv = types_.fn_callconv(resolved);
         };
 
         auto check_c_abi_call_with_positions =
@@ -1894,6 +1913,86 @@ namespace parus::tyck {
         }
 
         // ------------------------------------------------------------
+        // 2.55) external free-function overload candidates (from export-index metadata)
+        // ------------------------------------------------------------
+        if (!is_ctor_call &&
+            overload_decl_ids.empty() &&
+            explicit_call_type_args.empty() &&
+            direct_ident_symbol != sema::SymbolTable::kNoScope &&
+            direct_ident_symbol < sym_.symbols().size()) {
+            const auto& direct_sym = sym_.symbol(direct_ident_symbol);
+            const bool compiler_owned_impl =
+                (parse_impl_binding_mode_(direct_sym.external_payload) == "compiler");
+            if (direct_sym.is_external &&
+                direct_sym.kind == sema::SymbolKind::kFn &&
+                !compiler_owned_impl) {
+                auto it = external_fn_overload_map_.find(callee_name);
+                if (it != external_fn_overload_map_.end() && !it->second.empty()) {
+                    if (form != CallForm::kPositionalOnly) {
+                        diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                        err_(e.span, "external function call currently supports positional arguments only");
+                        check_all_arg_exprs_only();
+                        return fallback_ret;
+                    }
+
+                    uint32_t selected_external_sym = sema::SymbolTable::kNoScope;
+                    ty::TypeId selected_external_fn_type = ty::kInvalidType;
+
+                    for (const auto sid : it->second) {
+                        if (sid == sema::SymbolTable::kNoScope || sid >= sym_.symbols().size()) continue;
+                        const auto& fn_sym = sym_.symbol(sid);
+                        const ty::TypeId fn_t = fn_sym.declared_type;
+                        if (fn_t == ty::kInvalidType || fn_t >= types_.count()) continue;
+                        const auto& fn_tt = types_.get(fn_t);
+                        if (fn_tt.kind != ty::Kind::kFn) continue;
+                        if (!explicit_call_type_args.empty()) continue;
+                        if (outside_positional.size() != fn_tt.param_count) continue;
+
+                        bool all_ok = true;
+                        for (size_t i = 0; i < outside_positional.size(); ++i) {
+                            const ty::TypeId expected = types_.fn_param_at(fn_t, static_cast<uint32_t>(i));
+                            if (is_c_char_ptr_type(expected) &&
+                                is_plain_string_literal_expr(outside_positional[i]->expr)) {
+                                const ty::TypeId lit_ty = check_expr_(outside_positional[i]->expr);
+                                if (is_error_(lit_ty)) {
+                                    all_ok = false;
+                                }
+                                if (!all_ok) break;
+                                continue;
+                            }
+                            const CoercionPlan plan = classify_assign_with_coercion_(
+                                AssignSite::CallArg,
+                                expected,
+                                outside_positional[i]->expr,
+                                outside_positional[i]->span
+                            );
+                            if (!plan.ok) {
+                                all_ok = false;
+                                break;
+                            }
+                        }
+                        if (!all_ok) continue;
+
+                        selected_external_sym = sid;
+                        selected_external_fn_type = fn_t;
+                        break;
+                    }
+
+                    if (selected_external_sym == sema::SymbolTable::kNoScope ||
+                        selected_external_fn_type == ty::kInvalidType) {
+                        diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
+                        err_(e.span, "no matching external function overload");
+                        check_all_arg_exprs_only();
+                        return fallback_ret;
+                    }
+
+                    cache_external_callee_(selected_external_sym);
+                    return types_.get(selected_external_fn_type).ret;
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
         // 2.6) core impl-bound helpers and external core::mem generics
         // ------------------------------------------------------------
         if (!is_ctor_call &&
@@ -2005,6 +2104,7 @@ namespace parus::tyck {
         // 2.75) indirect C ABI call via function value / fnptr alias
         // ------------------------------------------------------------
         if (overload_decl_ids.empty()) {
+            const ty::TypeId c_abi_fn_t = resolve_c_abi_fn_type(callee_t);
             bool callee_is_c_abi = false;
             bool callee_is_c_variadic = false;
             ty::CCallConv callee_c_callconv = ty::CCallConv::kDefault;
@@ -2021,7 +2121,7 @@ namespace parus::tyck {
                 for (const auto* a : outside_positional) {
                     if (a != nullptr) arg_exprs.push_back(a->expr);
                 }
-                return check_c_abi_call_with_positions(callee_t, cimport_callee_symbol, arg_exprs, e.span);
+                return check_c_abi_call_with_positions(c_abi_fn_t, cimport_callee_symbol, arg_exprs, e.span);
             }
         }
 

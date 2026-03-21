@@ -1,0 +1,209 @@
+// Library-only range value layer for freestanding core.
+
+struct Range<T> {
+    start: T;
+    end: T;
+};
+
+struct RangeInclusive<T> {
+    start: T;
+    end: T;
+};
+
+export def range(start: i8, end: i8) -> Range<i8> { return Range<i8>{ start: start, end: end }; }
+export def range(start: i16, end: i16) -> Range<i16> { return Range<i16>{ start: start, end: end }; }
+export def range(start: i32, end: i32) -> Range<i32> { return Range<i32>{ start: start, end: end }; }
+export def range(start: i64, end: i64) -> Range<i64> { return Range<i64>{ start: start, end: end }; }
+export def range(start: i128, end: i128) -> Range<i128> { return Range<i128>{ start: start, end: end }; }
+export def range(start: isize, end: isize) -> Range<isize> { return Range<isize>{ start: start, end: end }; }
+export def range(start: u8, end: u8) -> Range<u8> { return Range<u8>{ start: start, end: end }; }
+export def range(start: u16, end: u16) -> Range<u16> { return Range<u16>{ start: start, end: end }; }
+export def range(start: u32, end: u32) -> Range<u32> { return Range<u32>{ start: start, end: end }; }
+export def range(start: u64, end: u64) -> Range<u64> { return Range<u64>{ start: start, end: end }; }
+export def range(start: u128, end: u128) -> Range<u128> { return Range<u128>{ start: start, end: end }; }
+export def range(start: usize, end: usize) -> Range<usize> { return Range<usize>{ start: start, end: end }; }
+
+export def range_inclusive(start: i8, end: i8) -> RangeInclusive<i8> { return RangeInclusive<i8>{ start: start, end: end }; }
+export def range_inclusive(start: i16, end: i16) -> RangeInclusive<i16> { return RangeInclusive<i16>{ start: start, end: end }; }
+export def range_inclusive(start: i32, end: i32) -> RangeInclusive<i32> { return RangeInclusive<i32>{ start: start, end: end }; }
+export def range_inclusive(start: i64, end: i64) -> RangeInclusive<i64> { return RangeInclusive<i64>{ start: start, end: end }; }
+export def range_inclusive(start: i128, end: i128) -> RangeInclusive<i128> { return RangeInclusive<i128>{ start: start, end: end }; }
+export def range_inclusive(start: isize, end: isize) -> RangeInclusive<isize> { return RangeInclusive<isize>{ start: start, end: end }; }
+export def range_inclusive(start: u8, end: u8) -> RangeInclusive<u8> { return RangeInclusive<u8>{ start: start, end: end }; }
+export def range_inclusive(start: u16, end: u16) -> RangeInclusive<u16> { return RangeInclusive<u16>{ start: start, end: end }; }
+export def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> { return RangeInclusive<u32>{ start: start, end: end }; }
+export def range_inclusive(start: u64, end: u64) -> RangeInclusive<u64> { return RangeInclusive<u64>{ start: start, end: end }; }
+export def range_inclusive(start: u128, end: u128) -> RangeInclusive<u128> { return RangeInclusive<u128>{ start: start, end: end }; }
+export def range_inclusive(start: usize, end: usize) -> RangeInclusive<usize> { return RangeInclusive<usize>{ start: start, end: end }; }
+
+def range_is_empty_(start: i8, end: i8) -> bool { return start >= end; }
+def range_is_empty_(start: i16, end: i16) -> bool { return start >= end; }
+def range_is_empty_(start: i32, end: i32) -> bool { return start >= end; }
+def range_is_empty_(start: i64, end: i64) -> bool { return start >= end; }
+def range_is_empty_(start: i128, end: i128) -> bool { return start >= end; }
+def range_is_empty_(start: isize, end: isize) -> bool { return start >= end; }
+def range_is_empty_(start: u8, end: u8) -> bool { return start >= end; }
+def range_is_empty_(start: u16, end: u16) -> bool { return start >= end; }
+def range_is_empty_(start: u32, end: u32) -> bool { return start >= end; }
+def range_is_empty_(start: u64, end: u64) -> bool { return start >= end; }
+def range_is_empty_(start: u128, end: u128) -> bool { return start >= end; }
+def range_is_empty_(start: usize, end: usize) -> bool { return start >= end; }
+
+def range_contains_(start: i8, end: i8, value: i8) -> bool { return value >= start and value < end; }
+def range_contains_(start: i16, end: i16, value: i16) -> bool { return value >= start and value < end; }
+def range_contains_(start: i32, end: i32, value: i32) -> bool { return value >= start and value < end; }
+def range_contains_(start: i64, end: i64, value: i64) -> bool { return value >= start and value < end; }
+def range_contains_(start: i128, end: i128, value: i128) -> bool { return value >= start and value < end; }
+def range_contains_(start: isize, end: isize, value: isize) -> bool { return value >= start and value < end; }
+def range_contains_(start: u8, end: u8, value: u8) -> bool { return value >= start and value < end; }
+def range_contains_(start: u16, end: u16, value: u16) -> bool { return value >= start and value < end; }
+def range_contains_(start: u32, end: u32, value: u32) -> bool { return value >= start and value < end; }
+def range_contains_(start: u64, end: u64, value: u64) -> bool { return value >= start and value < end; }
+def range_contains_(start: u128, end: u128, value: u128) -> bool { return value >= start and value < end; }
+def range_contains_(start: usize, end: usize, value: usize) -> bool { return value >= start and value < end; }
+
+def range_inclusive_is_empty_(start: i8, end: i8) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: i16, end: i16) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: i32, end: i32) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: i64, end: i64) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: i128, end: i128) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: isize, end: isize) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: u8, end: u8) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: u16, end: u16) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: u32, end: u32) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: u64, end: u64) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: u128, end: u128) -> bool { return start > end; }
+def range_inclusive_is_empty_(start: usize, end: usize) -> bool { return start > end; }
+
+def range_inclusive_contains_(start: i8, end: i8, value: i8) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: i16, end: i16, value: i16) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: i32, end: i32, value: i32) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: i64, end: i64, value: i64) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: i128, end: i128, value: i128) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: isize, end: isize, value: isize) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: u8, end: u8, value: u8) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: u16, end: u16, value: u16) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: u32, end: u32, value: u32) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: u64, end: u64, value: u64) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: u128, end: u128, value: u128) -> bool { return value >= start and value <= end; }
+def range_inclusive_contains_(start: usize, end: usize, value: usize) -> bool { return value >= start and value <= end; }
+
+export acts for Range<i8> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: i8) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<i16> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: i16) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<i32> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: i32) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<i64> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: i64) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<i128> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: i128) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<isize> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: isize) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<u8> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: u8) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<u16> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: u16) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<u32> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: u32) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<u64> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: u64) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<u128> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: u128) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for Range<usize> {
+    def is_empty(self) -> bool { return range_is_empty_(self.start, self.end); }
+    def contains(self, value: usize) -> bool { return range_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<i8> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: i8) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<i16> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: i16) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<i32> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: i32) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<i64> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: i64) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<i128> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: i128) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<isize> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: isize) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<u8> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: u8) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<u16> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: u16) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<u32> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: u32) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<u64> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: u64) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<u128> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: u128) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};
+
+export acts for RangeInclusive<usize> {
+    def is_empty(self) -> bool { return range_inclusive_is_empty_(self.start, self.end); }
+    def contains(self, value: usize) -> bool { return range_inclusive_contains_(self.start, self.end, value); }
+};

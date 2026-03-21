@@ -1413,6 +1413,115 @@ namespace {
         return ok;
     }
 
+    static bool test_core_range_surface_ok() {
+        const std::string src = R"(
+            struct Range<T> {
+                start: T;
+                end: T;
+            };
+
+            struct RangeInclusive<T> {
+                start: T;
+                end: T;
+            };
+
+            def range(start: i32, end: i32) -> Range<i32> {
+                return Range<i32>{ start: start, end: end };
+            }
+
+            def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> {
+                return RangeInclusive<u32>{ start: start, end: end };
+            }
+
+            def range_is_empty_(start: i32, end: i32) -> bool { return start >= end; }
+            def range_contains_(start: i32, end: i32, value: i32) -> bool {
+                return value >= start and value < end;
+            }
+            def range_inclusive_is_empty_(start: u32, end: u32) -> bool { return start > end; }
+            def range_inclusive_contains_(start: u32, end: u32, value: u32) -> bool {
+                return value >= start and value <= end;
+            }
+
+            acts for Range<T> {
+                def is_empty(self) -> bool {
+                    return range_is_empty_(self.start, self.end);
+                }
+
+                def contains(self, value: T) -> bool {
+                    return range_contains_(self.start, self.end, value);
+                }
+            };
+
+            acts for RangeInclusive<T> {
+                def is_empty(self) -> bool {
+                    return range_inclusive_is_empty_(self.start, self.end);
+                }
+
+                def contains(self, value: T) -> bool {
+                    return range_inclusive_contains_(self.start, self.end, value);
+                }
+            };
+
+            def main() -> i32 {
+                let a: Range<i32> = range(1i32, 4i32);
+                let b: RangeInclusive<u32> = range_inclusive(1u32, 4u32);
+                let c: Range<i32> = Range<i32>{ start: 4i32, end: 4i32 };
+                let x: bool = a.contains(2i32);
+                let y: bool = a.contains(4i32);
+                let z: bool = b.contains(4u32);
+                let e: bool = c.is_empty();
+                if (x and not y and z and e and a.start == 1i32 and b.end == 4u32) {
+                    return 42i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "core range surface source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "core range surface source must not emit tyck errors");
+        ok &= require_(cap.ok, "core range surface source must pass capability check");
+        ok &= require_(sir.cap.ok, "core range surface source must pass SIR capability check");
+        return ok;
+    }
+
+    static bool test_core_range_loop_bridge_stays_unsupported() {
+        const std::string src = R"(
+            struct Range<T> {
+                start: T;
+                end: T;
+            };
+
+            def range(start: i32, end: i32) -> Range<i32> {
+                return Range<i32>{ start: start, end: end };
+            }
+
+            def main() -> i32? {
+                return loop (x in range(1i32, 4i32)) {
+                    if (x == 3i32) {
+                        break x;
+                    }
+                };
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kLoopIterableUnsupported),
+            "loop over core::range value must remain unsupported in v1");
+        ok &= require_(!ty.errors.empty(), "loop over core::range value must fail typecheck");
+        return ok;
+    }
+
     static bool test_class_private_visibility_enforced() {
         const std::string ok_src = R"(
             class SecretBox {
@@ -2359,6 +2468,8 @@ int main() {
         {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
         {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},
+        {"core_range_surface_ok", test_core_range_surface_ok},
+        {"core_range_loop_bridge_stays_unsupported", test_core_range_loop_bridge_stays_unsupported},
         {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},

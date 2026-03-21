@@ -39,6 +39,7 @@ namespace parus::tyck {
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
         external_acts_default_method_map_.clear();
+        external_fn_overload_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();
         acts_default_decl_by_owner_.clear();
         core_impl_marker_file_ids_.clear();
@@ -178,6 +179,7 @@ namespace parus::tyck {
         init_file_namespace_(program_stmt);
         collect_known_namespace_paths_(program_stmt);
         collect_external_builtin_acts_methods_();
+        collect_external_fn_overloads_();
         collect_external_enum_metadata_();
 
         // ---------------------------------------------------------
@@ -930,6 +932,49 @@ namespace parus::tyck {
             out_base.append(path[i].data(), path[i].size());
         }
         return !out_args.empty();
+    }
+
+    bool TypeChecker::type_contains_unresolved_generic_param_(ty::TypeId t) const {
+        if (t == ty::kInvalidType) return false;
+        const auto& tt = types_.get(t);
+        switch (tt.kind) {
+            case ty::Kind::kNamedUser: {
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (!types_.decompose_named_user(t, path, args) || path.empty()) {
+                    return false;
+                }
+
+                for (const auto arg : args) {
+                    if (type_contains_unresolved_generic_param_(arg)) return true;
+                }
+
+                if (!args.empty() || path.size() != 1) return false;
+
+                ty::Builtin builtin{};
+                if (ty::TypePool::builtin_from_name(path.front(), builtin) ||
+                    ty::TypePool::c_builtin_from_name(path.front(), builtin)) {
+                    return false;
+                }
+
+                return !lookup_symbol_(path.front()).has_value();
+            }
+            case ty::Kind::kOptional:
+            case ty::Kind::kArray:
+            case ty::Kind::kBorrow:
+            case ty::Kind::kEscape:
+            case ty::Kind::kPtr:
+                return type_contains_unresolved_generic_param_(tt.elem);
+            case ty::Kind::kFn: {
+                if (type_contains_unresolved_generic_param_(tt.ret)) return true;
+                for (uint32_t i = 0; i < tt.param_count; ++i) {
+                    if (type_contains_unresolved_generic_param_(types_.fn_param_at(t, i))) return true;
+                }
+                return false;
+            }
+            default:
+                return false;
+        }
     }
 
     std::vector<std::string> TypeChecker::collect_decl_generic_param_names_(const ast::Stmt& decl) const {

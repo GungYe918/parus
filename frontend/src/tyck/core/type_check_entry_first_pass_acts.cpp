@@ -894,18 +894,7 @@
                 const std::string qname = qualify_decl_name_(s.name);
                 acts_qualified_name_by_stmt_[sid] = qname;
                 if (s.acts_is_for) {
-                    bool generic_owner = false;
-                    if (s.acts_target_type_node != ast::k_invalid_type_node &&
-                        (size_t)s.acts_target_type_node < ast_.type_nodes().size()) {
-                        const auto& owner_tn = ast_.type_node(s.acts_target_type_node);
-                        generic_owner =
-                            (owner_tn.kind == ast::TypeNodeKind::kNamedPath && owner_tn.generic_arg_count > 0);
-                    }
-                    if (!generic_owner) {
-                        std::string owner_base;
-                        std::vector<ty::TypeId> owner_args;
-                        generic_owner = decompose_named_user_type_(s.acts_target_type, owner_base, owner_args);
-                    }
+                    const bool generic_owner = type_contains_unresolved_generic_param_(s.acts_target_type);
                     if (generic_owner) {
                         generic_acts_template_sid_set_.insert(sid);
                     }
@@ -1587,21 +1576,76 @@
             const auto& sym = sym_.symbol(sid);
             if (!sym.is_external) continue;
             if (sym.kind != sema::SymbolKind::kFn) continue;
-            if (sym.external_payload.empty()) continue;
             if (sym.declared_type == ty::kInvalidType) continue;
 
             ty::TypeId owner_t = ty::kInvalidType;
             std::string member_name{};
             bool receiver_is_self = false;
-            if (!parse_external_builtin_acts_payload_(sym.external_payload, owner_t, member_name, receiver_is_self)) {
+            if (parse_external_builtin_acts_payload_(sym.external_payload, owner_t, member_name, receiver_is_self)) {
+                ExternalActsMethodDecl md{};
+                md.fn_symbol = sid;
+                md.owner_type = owner_t;
+                md.receiver_is_self = receiver_is_self;
+                external_acts_default_method_map_[owner_t][member_name].push_back(md);
                 continue;
             }
+
+            const std::string_view full_name = sym.name;
+            const size_t split = full_name.rfind("::");
+            if (split == std::string_view::npos) continue;
+
+            const std::string_view owner_set = full_name.substr(0, split);
+            std::string_view acts_set = owner_set;
+            if (const size_t owner_split = owner_set.rfind("::");
+                owner_split != std::string_view::npos) {
+                acts_set = owner_set.substr(owner_split + 2);
+            }
+            if (!acts_set.starts_with("__acts_for$")) continue;
+
+            if (sym.declared_type >= types_.count()) continue;
+            const auto& fn_t = types_.get(sym.declared_type);
+            if (fn_t.kind != ty::Kind::kFn || fn_t.param_count == 0) continue;
+
+            owner_t = types_.fn_param_at(sym.declared_type, 0);
+            if (owner_t == ty::kInvalidType || owner_t >= types_.count()) continue;
+            const auto& owner_tt = types_.get(owner_t);
+            if (owner_tt.kind == ty::Kind::kBorrow) {
+                owner_t = owner_tt.elem;
+            }
+            if (owner_t == ty::kInvalidType) continue;
+
+            member_name.assign(full_name.substr(split + 2));
+            receiver_is_self = true;
 
             ExternalActsMethodDecl md{};
             md.fn_symbol = sid;
             md.owner_type = owner_t;
             md.receiver_is_self = receiver_is_self;
             external_acts_default_method_map_[owner_t][member_name].push_back(md);
+        }
+    }
+
+    void TypeChecker::collect_external_fn_overloads_() {
+        external_fn_overload_map_.clear();
+
+        auto visible_name = [](std::string_view name) -> std::string {
+            constexpr std::string_view marker = "@@extovl$";
+            const size_t pos = name.find(marker);
+            if (pos == std::string_view::npos) return std::string(name);
+            return std::string(name.substr(0, pos));
+        };
+        auto is_c_abi_external_payload = [](std::string_view payload) -> bool {
+            return payload.starts_with("parus_c_import|") ||
+                   payload.starts_with("parus_c_abi_decl|");
+        };
+
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external) continue;
+            if (sym.kind != sema::SymbolKind::kFn) continue;
+            if (sym.declared_type == ty::kInvalidType) continue;
+            if (is_c_abi_external_payload(sym.external_payload)) continue;
+            external_fn_overload_map_[visible_name(sym.name)].push_back(sid);
         }
     }
 
