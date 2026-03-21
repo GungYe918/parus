@@ -35,12 +35,10 @@
 #include <parus/backend/link/Linker.hpp>
 #endif
 
-#include <cstdio>
 #include <filesystem>
 #include <cctype>
 #include <algorithm>
 #include <cstdlib>
-#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -339,6 +337,116 @@ namespace parusc::p0 {
             return out;
         }
 
+        std::string path_join_(
+            const parus::ast::AstArena& ast,
+            uint32_t begin,
+            uint32_t count
+        ) {
+            const auto& segs = ast.path_segs();
+            const uint64_t end = static_cast<uint64_t>(begin) + count;
+            if (begin > segs.size() || end > segs.size()) return {};
+
+            std::string out{};
+            for (uint32_t i = 0; i < count; ++i) {
+                if (i) out += "::";
+                out += std::string(segs[begin + i]);
+            }
+            return out;
+        }
+
+        std::string payload_escape_value_(std::string_view raw) {
+            static constexpr char kHex[] = "0123456789ABCDEF";
+            std::string out{};
+            out.reserve(raw.size());
+            for (const unsigned char ch : raw) {
+                const bool safe =
+                    (ch >= 'a' && ch <= 'z') ||
+                    (ch >= 'A' && ch <= 'Z') ||
+                    (ch >= '0' && ch <= '9') ||
+                    ch == '_' || ch == '-' || ch == '.' || ch == ':' || ch == '<' || ch == '>';
+                if (safe) {
+                    out.push_back(static_cast<char>(ch));
+                } else {
+                    out.push_back('%');
+                    out.push_back(kHex[(ch >> 4) & 0xF]);
+                    out.push_back(kHex[ch & 0xF]);
+                }
+            }
+            return out;
+        }
+
+        void append_generic_decl_payload_(
+            std::string& payload,
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s,
+            const parus::ty::TypePool& types
+        ) {
+            const uint32_t gp_begin =
+                (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_generic_param_begin : s.decl_generic_param_begin;
+            const uint32_t gp_count =
+                (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_generic_param_count : s.decl_generic_param_count;
+            const uint32_t cc_begin =
+                (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_constraint_begin : s.decl_constraint_begin;
+            const uint32_t cc_count =
+                (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_constraint_count : s.decl_constraint_count;
+
+            if (gp_count == 0 && cc_count == 0) return;
+
+            if (payload.empty()) {
+                payload = "parus_generic_decl";
+            }
+            const auto& gps = ast.generic_param_decls();
+            const auto& ccs = ast.fn_constraint_decls();
+
+            for (uint32_t i = 0; i < gp_count; ++i) {
+                const uint32_t idx = gp_begin + i;
+                if (idx >= gps.size()) break;
+                payload += "|gparam=";
+                payload += payload_escape_value_(gps[idx].name);
+            }
+
+            for (uint32_t i = 0; i < cc_count; ++i) {
+                const uint32_t idx = cc_begin + i;
+                if (idx >= ccs.size()) break;
+                const auto& cc = ccs[idx];
+                payload += "|gconstraint=";
+                if (cc.kind == parus::ast::FnConstraintKind::kProto) {
+                    payload += "proto,";
+                    payload += payload_escape_value_(cc.type_param);
+                    payload += ",";
+                    payload += payload_escape_value_(path_join_(ast, cc.proto_path_begin, cc.proto_path_count));
+                } else {
+                    payload += "type_eq,";
+                    payload += payload_escape_value_(cc.type_param);
+                    payload += ",";
+                    payload += payload_escape_value_(
+                        (cc.rhs_type != parus::ty::kInvalidType)
+                            ? types.to_export_string(cc.rhs_type)
+                            : std::string("<invalid>")
+                    );
+                }
+            }
+        }
+
+        void dedupe_export_surface_(std::vector<ExportSurfaceEntry>& entries) {
+            std::sort(entries.begin(), entries.end(), [](const ExportSurfaceEntry& a, const ExportSurfaceEntry& b) {
+                return std::tie(a.kind_text, a.path, a.link_name, a.module_head, a.decl_dir,
+                                a.type_repr, a.type_semantic, a.inst_payload,
+                                a.decl_file, a.decl_line, a.decl_col, a.decl_bundle, a.is_export)
+                     < std::tie(b.kind_text, b.path, b.link_name, b.module_head, b.decl_dir,
+                                b.type_repr, b.type_semantic, b.inst_payload,
+                                b.decl_file, b.decl_line, b.decl_col, b.decl_bundle, b.is_export);
+            });
+            entries.erase(std::unique(entries.begin(), entries.end(), [](const ExportSurfaceEntry& a, const ExportSurfaceEntry& b) {
+                return std::tie(a.kind_text, a.path, a.link_name, a.module_head, a.decl_dir,
+                                a.type_repr, a.type_semantic, a.inst_payload,
+                                a.decl_file, a.decl_line, a.decl_col, a.decl_bundle, a.is_export)
+                    == std::tie(b.kind_text, b.path, b.link_name, b.module_head, b.decl_dir,
+                                b.type_repr, b.type_semantic, b.inst_payload,
+                                b.decl_file, b.decl_line, b.decl_col, b.decl_bundle, b.is_export);
+            }), entries.end());
+        }
+
         bool core_builtin_use_type_repr_(std::string_view name,
                                          std::string& out_type_repr,
                                          std::string& out_payload) {
@@ -548,7 +656,8 @@ namespace parusc::p0 {
             const std::string& module_head,
             const std::string& decl_dir,
             std::vector<std::string>& ns,
-            std::vector<ExportSurfaceEntry>& out
+            std::vector<ExportSurfaceEntry>& out,
+            std::optional<uint32_t> only_file_id = std::nullopt
         ) {
             if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
             const auto& s = ast.stmt(sid);
@@ -658,7 +767,8 @@ namespace parusc::p0 {
                                               module_head,
                                               decl_dir,
                                               ns,
-                                              out);
+                                              out,
+                                              only_file_id);
                     }
                 }
                 return;
@@ -685,7 +795,8 @@ namespace parusc::p0 {
                                           module_head,
                                           decl_dir,
                                           ns,
-                                          out);
+                                          out,
+                                          only_file_id);
                     while (pushed > 0) {
                         ns.pop_back();
                         --pushed;
@@ -702,6 +813,7 @@ namespace parusc::p0 {
                                    std::string link_name = {},
                                    std::string inst_payload = {}) {
                 if (qname.empty()) return;
+                if (only_file_id.has_value() && span.file_id != *only_file_id) return;
                 ExportSurfaceEntry e{};
                 e.kind = kind;
                 e.kind_text = symbol_kind_to_text_(kind);
@@ -752,6 +864,7 @@ namespace parusc::p0 {
                         }
                     }
                 }
+                append_generic_decl_payload_(inst_payload, ast, s, types);
                 push_export(parus::sema::SymbolKind::kFn, qname, s.type, s.is_export, s.span, link_name, std::move(inst_payload));
                 return;
             }
@@ -766,13 +879,14 @@ namespace parusc::p0 {
             }
 
             if (s.kind == parus::ast::StmtKind::kFieldDecl && !s.name.empty()) {
+                std::string payload = build_field_decl_payload_(ast, s, sm);
                 push_export(parus::sema::SymbolKind::kField,
                             qualify_name_(ns, s.name),
                             s.type,
                             s.is_export,
                             s.span,
                             /*link_name=*/{},
-                            build_field_decl_payload_(ast, s, sm));
+                            std::move(payload));
                 return;
             }
 
@@ -786,6 +900,7 @@ namespace parusc::p0 {
                 if (s.kind == parus::ast::StmtKind::kEnumDecl) payload = build_enum_decl_payload_(ast, s);
                 if (s.kind == parus::ast::StmtKind::kClassDecl) payload = "parus_decl_kind=class";
                 if (s.kind == parus::ast::StmtKind::kActorDecl) payload = "parus_decl_kind=actor";
+                append_generic_decl_payload_(payload, ast, s, types);
                 push_export(parus::sema::SymbolKind::kType,
                             qualify_name_(ns, s.name),
                             s.type,
@@ -798,7 +913,9 @@ namespace parusc::p0 {
 
             if (s.kind == parus::ast::StmtKind::kActsDecl && !s.name.empty()) {
                 const std::string acts_qname = qualify_name_(ns, s.name);
-                push_export(parus::sema::SymbolKind::kAct, acts_qname, s.acts_target_type, s.is_export, s.span);
+                std::string acts_payload{};
+                append_generic_decl_payload_(acts_payload, ast, s, types);
+                push_export(parus::sema::SymbolKind::kAct, acts_qname, s.acts_target_type, s.is_export, s.span, {}, std::move(acts_payload));
 
                 const bool owner_is_builtin =
                     (s.acts_target_type != parus::ty::kInvalidType) &&
@@ -832,6 +949,7 @@ namespace parusc::p0 {
                                       "|member=" + std::string(ms.name) +
                                       "|self=" + (receiver_is_self ? "1" : "0");
                         }
+                        append_generic_decl_payload_(payload, ast, ms, types);
 
                         std::string member_qname = acts_qname;
                         member_qname += "::";
@@ -1109,6 +1227,116 @@ namespace parusc::p0 {
             return walk(walk, tid);
         }
 
+        void qualify_export_surface_entries_for_bundle_(
+            std::vector<ExportSurfaceEntry>& entries,
+            std::string_view bundle_name
+        ) {
+            if (entries.empty() || bundle_name.empty()) return;
+
+            auto relative_module_head = [&](std::string_view module_head) -> std::string {
+                const std::string prefix = std::string(bundle_name) + "::";
+                if (module_head.starts_with(prefix)) {
+                    return std::string(module_head.substr(prefix.size()));
+                }
+                return std::string(module_head);
+            };
+
+            std::unordered_set<std::string> bundle_module_heads{};
+            std::unordered_map<std::string, std::unordered_set<std::string>> bundle_local_types_by_module{};
+            bundle_module_heads.reserve(entries.size());
+            bundle_local_types_by_module.reserve(entries.size());
+            for (const auto& e : entries) {
+                if (!e.module_head.empty()) {
+                    bundle_module_heads.insert(relative_module_head(e.module_head));
+                }
+                if ((e.kind == parus::sema::SymbolKind::kType ||
+                     e.kind == parus::sema::SymbolKind::kField) &&
+                    !e.module_head.empty() &&
+                    !e.path.empty() &&
+                    e.path.find("::") == std::string::npos) {
+                    bundle_local_types_by_module[relative_module_head(e.module_head)].insert(e.path);
+                }
+            }
+
+            for (auto& e : entries) {
+                if ((e.type_repr.empty() && e.type_semantic.empty()) || e.module_head.empty()) {
+                    continue;
+                }
+                const std::string current_module_head = relative_module_head(e.module_head);
+                const auto it = bundle_local_types_by_module.find(current_module_head);
+                const std::unordered_set<std::string> empty_names{};
+                const auto& local_names = (it != bundle_local_types_by_module.end()) ? it->second : empty_names;
+                const auto has_bundle_qual = [&](std::string_view type_repr) -> bool {
+                    const std::string needle = std::string(bundle_name) + "::";
+                    return type_repr.find(needle) != std::string_view::npos;
+                };
+
+                parus::ty::TypePool sem_pool{};
+                parus::ty::TypeId sem_type = parus::ty::kInvalidType;
+                std::string sem_qualified_semantic = e.type_semantic;
+                std::string sem_qualified_repr{};
+                if (!e.type_semantic.empty()) {
+                    sem_qualified_semantic = qualify_type_semantic_for_bundle_(
+                        e.type_semantic,
+                        bundle_name,
+                        current_module_head,
+                        bundle_module_heads,
+                        local_names
+                    );
+                    sem_type = parus::cimport::parse_external_type_repr(
+                        std::string_view{},
+                        sem_qualified_semantic,
+                        e.inst_payload,
+                        sem_pool
+                    );
+                    if (sem_type != parus::ty::kInvalidType) {
+                        sem_qualified_repr = sem_pool.to_export_string(sem_type);
+                    }
+                }
+
+                parus::ty::TypePool repr_pool{};
+                parus::ty::TypeId repr_type = parus::ty::kInvalidType;
+                std::string repr_qualified_repr{};
+                if (!e.type_repr.empty()) {
+                    const auto parsed_type = parus::cimport::parse_external_type_repr(
+                        e.type_repr,
+                        std::string_view{},
+                        e.inst_payload,
+                        repr_pool
+                    );
+                    if (parsed_type != parus::ty::kInvalidType) {
+                        repr_type = qualify_type_for_bundle_(
+                            parsed_type,
+                            repr_pool,
+                            bundle_name,
+                            current_module_head,
+                            bundle_module_heads,
+                            local_names
+                        );
+                        if (repr_type != parus::ty::kInvalidType) {
+                            repr_qualified_repr = repr_pool.to_export_string(repr_type);
+                        }
+                    }
+                }
+
+                if (repr_type != parus::ty::kInvalidType &&
+                    (has_bundle_qual(repr_qualified_repr) || sem_type == parus::ty::kInvalidType)) {
+                    e.type_repr = std::move(repr_qualified_repr);
+                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(repr_type, repr_pool);
+                    continue;
+                }
+                if (sem_type != parus::ty::kInvalidType) {
+                    e.type_repr = std::move(sem_qualified_repr);
+                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(sem_type, sem_pool);
+                    continue;
+                }
+                if (repr_type != parus::ty::kInvalidType) {
+                    e.type_repr = std::move(repr_qualified_repr);
+                    e.type_semantic = parus::cimport::serialize_type_semantic_from_type(repr_type, repr_pool);
+                }
+            }
+        }
+
         std::string build_enum_decl_payload_(
             const parus::ast::AstArena& ast,
             const parus::ast::Stmt& s
@@ -1346,6 +1574,36 @@ namespace parusc::p0 {
                 return a.decl_file < b.decl_file;
             });
             return true;
+        }
+
+        void collect_typed_current_export_surface_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId root,
+            const parus::ty::TypePool& types,
+            const parus::SourceManager& sm,
+            uint32_t current_file_id,
+            std::string_view decl_file,
+            std::string_view bundle_name,
+            std::string_view module_head,
+            std::string_view decl_dir,
+            std::vector<ExportSurfaceEntry>& out
+        ) {
+            out.clear();
+            std::vector<std::string> ns{};
+            (void)collect_file_namespace_(ast, root, ns);
+            collect_exports_stmt_(ast,
+                                  root,
+                                  types,
+                                  sm,
+                                  std::string(decl_file),
+                                  std::string(bundle_name),
+                                  std::string(module_head),
+                                  std::string(decl_dir),
+                                  ns,
+                                  out,
+                                  current_file_id);
+            qualify_export_surface_entries_for_bundle_(out, bundle_name);
+            dedupe_export_surface_(out);
         }
 
         void validate_same_folder_export_collisions_(
@@ -2891,18 +3149,6 @@ namespace parusc::p0 {
             }
         }
 
-        if (!opt.bundle.emit_export_index_path.empty()) {
-            std::string write_err{};
-            if (!write_export_index_(opt.bundle.emit_export_index_path, opt.bundle.bundle_name, bundle_surface, write_err)) {
-                parus::diag::Diagnostic d(parus::diag::Severity::kError, parus::diag::Code::kExportIndexSchema, root_span);
-                d.add_arg(write_err);
-                bag.add(std::move(d));
-                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-                return (diag_rc != 0) ? 1 : 0;
-            }
-            return 0;
-        }
-
         auto pass_opt = opt.pass_opt;
         pass_opt.name_resolve.current_file_id = file_id;
         pass_opt.name_resolve.current_bundle_name = opt.bundle.bundle_name;
@@ -2927,37 +3173,73 @@ namespace parusc::p0 {
 
         std::set<std::tuple<std::string, std::string, std::string>> external_seen{};
         auto add_external = [&](const ExportSurfaceEntry& e, bool same_bundle) {
-            std::string lookup_path = e.path;
+            std::vector<std::string> lookup_paths{};
+            lookup_paths.reserve(3);
+
+            std::string full_path = e.path;
+            std::string local_path = e.path;
             if (!e.module_head.empty()) {
                 const std::string prefix = e.module_head + "::";
                 const bool already_prefixed =
-                    lookup_path == e.module_head ||
-                    lookup_path.starts_with(prefix);
-                const bool same_module = same_bundle && e.module_head == pass_opt.name_resolve.current_module_head;
-                if (!same_module && !already_prefixed) {
-                    lookup_path = prefix + lookup_path;
+                    full_path == e.module_head ||
+                    full_path.starts_with(prefix);
+                if (!already_prefixed) {
+                    full_path = prefix + full_path;
                 }
+
+                if (full_path.starts_with(prefix)) {
+                    local_path = std::string(full_path.substr(prefix.size()));
+                }
+
+                const bool same_module = same_bundle &&
+                    (e.module_head == pass_opt.name_resolve.current_module_head ||
+                     (e.decl_bundle == "core" &&
+                      e.module_head.starts_with("core::") &&
+                      pass_opt.name_resolve.current_module_head ==
+                          std::string(e.module_head.substr(std::string_view("core::").size()))));
+
+                if (same_module && !local_path.empty()) {
+                    lookup_paths.push_back(local_path);
+                }
+                lookup_paths.push_back(full_path);
+
+                if (e.decl_bundle == "core" &&
+                    e.module_head.starts_with("core::") &&
+                    !local_path.empty()) {
+                    const std::string short_head =
+                        std::string(e.module_head.substr(std::string_view("core::").size()));
+                    if (!short_head.empty()) {
+                        lookup_paths.push_back(short_head + "::" + local_path);
+                    }
+                }
+            } else if (!full_path.empty()) {
+                lookup_paths.push_back(full_path);
             }
 
-            const std::string overload_key =
-                (e.kind == parus::sema::SymbolKind::kFn) ? e.type_repr : std::string{};
-            const auto key = std::make_tuple(e.kind_text, lookup_path, overload_key);
-            if (!external_seen.insert(key).second) return;
+            std::sort(lookup_paths.begin(), lookup_paths.end());
+            lookup_paths.erase(std::unique(lookup_paths.begin(), lookup_paths.end()), lookup_paths.end());
 
-            parus::passes::NameResolveOptions::ExternalExport x{};
-            x.kind = e.kind;
-            x.path = std::move(lookup_path);
-            x.link_name = e.link_name;
-            x.declared_type = parse_type_repr_into_(e.type_repr, e.type_semantic, e.inst_payload, types);
-            x.declared_type_repr = e.type_repr;
-            x.declared_type_semantic = e.type_semantic;
-            x.decl_span = root_span;
-            x.decl_bundle_name = e.decl_bundle;
-            x.module_head = e.module_head;
-            x.decl_source_dir_norm = e.decl_dir;
-            x.is_export = e.is_export;
-            x.inst_payload = e.inst_payload;
-            pass_opt.name_resolve.external_exports.push_back(std::move(x));
+            for (const auto& lookup_path : lookup_paths) {
+                const std::string overload_key =
+                    (e.kind == parus::sema::SymbolKind::kFn) ? e.type_repr : std::string{};
+                const auto key = std::make_tuple(e.kind_text, lookup_path, overload_key);
+                if (!external_seen.insert(key).second) continue;
+
+                parus::passes::NameResolveOptions::ExternalExport x{};
+                x.kind = e.kind;
+                x.path = lookup_path;
+                x.link_name = e.link_name;
+                x.declared_type = parse_type_repr_into_(e.type_repr, e.type_semantic, e.inst_payload, types);
+                x.declared_type_repr = e.type_repr;
+                x.declared_type_semantic = e.type_semantic;
+                x.decl_span = root_span;
+                x.decl_bundle_name = e.decl_bundle;
+                x.module_head = e.module_head;
+                x.decl_source_dir_norm = e.decl_dir;
+                x.is_export = e.is_export;
+                x.inst_payload = e.inst_payload;
+                pass_opt.name_resolve.external_exports.push_back(std::move(x));
+            }
         };
 
         if (opt.bundle.enabled) {
@@ -2997,70 +3279,12 @@ namespace parusc::p0 {
                 continue;
             }
 
-            std::unordered_set<std::string> dep_module_heads{};
-            std::unordered_map<std::string, std::unordered_set<std::string>> dep_local_types_by_module{};
-            dep_module_heads.reserve(dep_entries.size());
-            dep_local_types_by_module.reserve(dep_entries.size());
-            for (const auto& e : dep_entries) {
-                if (!e.module_head.empty()) dep_module_heads.insert(e.module_head);
-                if ((e.kind == parus::sema::SymbolKind::kType ||
-                     e.kind == parus::sema::SymbolKind::kField) &&
-                    !e.module_head.empty() &&
-                    !e.path.empty() &&
-                    e.path.find("::") == std::string::npos) {
-                    dep_local_types_by_module[e.module_head].insert(e.path);
-                }
-            }
-
+            qualify_export_surface_entries_for_bundle_(dep_entries, dep_bundle);
             for (auto& e : dep_entries) {
                 if (e.decl_bundle.empty()) e.decl_bundle = dep_bundle;
-                if ((!e.type_repr.empty() || !e.type_semantic.empty()) &&
-                    !dep_bundle.empty() &&
-                    !e.module_head.empty()) {
-                    const auto it = dep_local_types_by_module.find(e.module_head);
-                    const std::unordered_set<std::string> empty_names{};
-                    const auto& local_names = (it != dep_local_types_by_module.end()) ? it->second : empty_names;
-                    parus::ty::TypePool dep_type_pool{};
-                    parus::ty::TypeId qualified_type = parus::ty::kInvalidType;
-                    if (!e.type_repr.empty()) {
-                        const auto parsed_type = parus::cimport::parse_external_type_repr(
-                            e.type_repr,
-                            std::string_view{},
-                            e.inst_payload,
-                            dep_type_pool
-                        );
-                        if (parsed_type != parus::ty::kInvalidType) {
-                            qualified_type = qualify_type_for_bundle_(
-                                parsed_type,
-                                dep_type_pool,
-                                dep_bundle,
-                                e.module_head,
-                                dep_module_heads,
-                                local_names
-                            );
-                        }
-                    }
-                    if (qualified_type == parus::ty::kInvalidType && !e.type_semantic.empty()) {
-                        e.type_semantic = qualify_type_semantic_for_bundle_(
-                            e.type_semantic,
-                            dep_bundle,
-                            e.module_head,
-                            dep_module_heads,
-                            local_names
-                        );
-                        qualified_type = parus::cimport::parse_external_type_repr(
-                            std::string_view{},
-                            e.type_semantic,
-                            e.inst_payload,
-                            dep_type_pool
-                        );
-                    }
-                    if (qualified_type != parus::ty::kInvalidType) {
-                        e.type_repr = dep_type_pool.to_export_string(qualified_type);
-                        e.type_semantic = parus::cimport::serialize_type_semantic_from_type(qualified_type, dep_type_pool);
-                    }
-                }
-                add_external(e, /*same_bundle=*/false);
+                const bool same_bundle = opt.bundle.enabled && dep_bundle == opt.bundle.bundle_name;
+                if (same_bundle && e.decl_file == current_norm) continue;
+                add_external(e, same_bundle);
             }
         }
 
@@ -3082,6 +3306,9 @@ namespace parusc::p0 {
                 !inv.bundle_sources.empty() ||
                 !pass_opt.name_resolve.external_exports.empty()) {
                 tc.set_seed_symbol_table(&pres.sym);
+            }
+            if (!opt.bundle.bundle_name.empty()) {
+                tc.set_current_bundle_name(opt.bundle.bundle_name);
             }
             if (!core_impl_marker_file_ids.empty()) {
                 tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));
@@ -3111,6 +3338,69 @@ namespace parusc::p0 {
         if (bag.has_error() || !ast_cap_res.ok) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0 || !ast_cap_res.ok) ? 1 : 0;
+        }
+
+        if (!opt.bundle.emit_export_index_path.empty()) {
+            std::vector<ExportSurfaceEntry> typed_exports{};
+            collect_typed_current_export_surface_(
+                ast,
+                root,
+                types,
+                sm,
+                file_id,
+                current_norm,
+                opt.bundle.bundle_name,
+                pass_opt.name_resolve.current_module_head,
+                current_dir,
+                typed_exports
+            );
+
+            std::vector<ExportSurfaceEntry> merged_exports = typed_exports;
+            for (const auto& idx_path : inv.load_export_index_paths) {
+                std::string dep_bundle{};
+                std::vector<ExportSurfaceEntry> dep_entries{};
+                std::string load_err{};
+                if (!load_export_index_(idx_path, dep_bundle, dep_entries, load_err)) {
+                    parus::diag::Diagnostic d(
+                        parus::diag::Severity::kError,
+                        parus::diag::Code::kExportIndexSchema,
+                        root_span
+                    );
+                    d.add_arg(load_err);
+                    bag.add(std::move(d));
+                    const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                    return (diag_rc != 0) ? 1 : 0;
+                }
+                if (dep_bundle != opt.bundle.bundle_name) {
+                    continue;
+                }
+                merged_exports.insert(merged_exports.end(), dep_entries.begin(), dep_entries.end());
+            }
+
+            qualify_export_surface_entries_for_bundle_(merged_exports, opt.bundle.bundle_name);
+            dedupe_export_surface_(merged_exports);
+            validate_same_folder_export_collisions_(merged_exports, bag, root_span);
+            if (bag.has_error()) {
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
+
+            std::string write_err{};
+            if (!write_export_index_(opt.bundle.emit_export_index_path,
+                                     opt.bundle.bundle_name,
+                                     merged_exports,
+                                     write_err)) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kExportIndexSchema,
+                    root_span
+                );
+                d.add_arg(write_err);
+                bag.add(std::move(d));
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
+            return 0;
         }
 
         if (opt.syntax_only) {

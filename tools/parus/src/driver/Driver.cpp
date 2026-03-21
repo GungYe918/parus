@@ -772,6 +772,47 @@ int run_check(const cli::Options& opt,
         info.deps.erase(std::unique(info.deps.begin(), info.deps.end()), info.deps.end());
     }
 
+    {
+        std::unordered_map<std::string, uint8_t> visit{};
+        std::vector<std::string> sorted{};
+        sorted.reserve(bundle_order.size());
+        bool cycle_or_missing = false;
+
+        auto dfs = [&](auto&& self, const std::string& name) -> void {
+            if (cycle_or_missing) return;
+            const auto st = visit.find(name);
+            if (st != visit.end()) {
+                if (st->second == 2) return;
+                if (st->second == 1) {
+                    emit_fail(settings.diag_color, "Bundle dependency cycle detected at '" + name + "'");
+                    cycle_or_missing = true;
+                }
+                return;
+            }
+
+            auto bit = bundles.find(name);
+            if (bit == bundles.end()) {
+                emit_fail(settings.diag_color, "Unknown bundle dependency referenced: " + name);
+                cycle_or_missing = true;
+                return;
+            }
+
+            visit[name] = 1;
+            for (const auto& dep : bit->second.deps) {
+                self(self, dep);
+                if (cycle_or_missing) return;
+            }
+            visit[name] = 2;
+            sorted.push_back(name);
+        };
+
+        for (const auto& name : bundle_order) {
+            dfs(dfs, name);
+            if (cycle_or_missing) return 1;
+        }
+        bundle_order = std::move(sorted);
+    }
+
     const auto index_dir = parus_tools::paths::index_dir(entry_base).lexically_normal();
     ec.clear();
     std::filesystem::create_directories(index_dir, ec);
@@ -787,63 +828,145 @@ int run_check(const cli::Options& opt,
         const auto idx_path = (index_dir / (bname + ".exports.json")).string();
         bundle_index_paths[bname] = idx_path;
 
-        std::vector<std::string> extra{};
-        extra.push_back("--bundle-name");
-        extra.push_back(bname);
-        extra.push_back("--bundle-root");
-        extra.push_back(bundle_root);
-        auto first_head = bit->second.module_head_by_source.find(bit->second.sources.front());
-        if (first_head != bit->second.module_head_by_source.end()) {
-            extra.push_back("--module-head");
-            extra.push_back(first_head->second);
-        }
-        auto first_imports = bit->second.module_imports_by_source.find(bit->second.sources.front());
-        if (first_imports != bit->second.module_imports_by_source.end()) {
-            for (const auto& mh : first_imports->second) {
-                extra.push_back("--module-import");
-                extra.push_back(mh);
+        std::vector<std::string> fragment_paths{};
+        fragment_paths.reserve(bit->second.sources.size());
+
+        for (size_t si = 0; si < bit->second.sources.size(); ++si) {
+            const auto& src = bit->second.sources[si];
+            const auto frag_path = (index_dir / (bname + ".frag." + std::to_string(si) + ".exports.json")).string();
+            fragment_paths.push_back(frag_path);
+
+            std::vector<std::string> extra{};
+            extra.push_back("--bundle-name");
+            extra.push_back(bname);
+            extra.push_back("--bundle-root");
+            extra.push_back(bundle_root);
+            if (auto mhit = bit->second.module_head_by_source.find(src);
+                mhit != bit->second.module_head_by_source.end()) {
+                extra.push_back("--module-head");
+                extra.push_back(mhit->second);
             }
-        }
-        auto first_cimport =
-            bit->second.module_cimport_isystem_by_source.find(bit->second.sources.front());
-        if (first_cimport != bit->second.module_cimport_isystem_by_source.end()) {
-            for (const auto& d : first_cimport->second) {
+            if (auto miit = bit->second.module_imports_by_source.find(src);
+                miit != bit->second.module_imports_by_source.end()) {
+                for (const auto& mh : miit->second) {
+                    extra.push_back("--module-import");
+                    extra.push_back(mh);
+                }
+            }
+            if (auto ciit = bit->second.module_cimport_isystem_by_source.find(src);
+                ciit != bit->second.module_cimport_isystem_by_source.end()) {
+                for (const auto& d : ciit->second) {
+                    if (d.empty()) continue;
+                    std::filesystem::path p(d);
+                    if (p.is_relative()) p = entry_base / p;
+                    extra.push_back("-isystem");
+                    extra.push_back(p.lexically_normal().string());
+                }
+            }
+            for (const auto& d : bit->second.bundle_cimport_isystem) {
                 if (d.empty()) continue;
                 std::filesystem::path p(d);
                 if (p.is_relative()) p = entry_base / p;
                 extra.push_back("-isystem");
                 extra.push_back(p.lexically_normal().string());
             }
+            extra.push_back("--emit-export-index");
+            extra.push_back(frag_path);
+            for (const auto& all_src : bit->second.sources) {
+                extra.push_back("--bundle-source");
+                extra.push_back(all_src);
+            }
+            for (const auto& dep : bit->second.deps) {
+                extra.push_back("--bundle-dep");
+                extra.push_back(dep);
+                std::string dep_idx = (index_dir / (dep + ".exports.json")).string();
+                if (auto it = bundle_index_paths.find(dep); it != bundle_index_paths.end()) {
+                    dep_idx = it->second;
+                }
+                extra.push_back("--load-export-index");
+                extra.push_back(dep_idx);
+            }
+
+            emit_progress(progress, settings.diag_color, 52, "Prepass export fragment for bundle " + bname);
+            const int rc = run_check_one_pr(parusc,
+                                            src,
+                                            diag_format,
+                                            lang,
+                                            context,
+                                            macro_budget_flags,
+                                            extra);
+            if (rc != 0) {
+                emit_fail(settings.diag_color, "Bundle fragment prepass failed for " + bname + " (exit=" + std::to_string(rc) + ")");
+                return rc;
+            }
+        }
+
+        std::vector<std::string> merge_extra{};
+        merge_extra.push_back("--bundle-name");
+        merge_extra.push_back(bname);
+        merge_extra.push_back("--bundle-root");
+        merge_extra.push_back(bundle_root);
+        if (auto mhit = bit->second.module_head_by_source.find(bit->second.sources.front());
+            mhit != bit->second.module_head_by_source.end()) {
+            merge_extra.push_back("--module-head");
+            merge_extra.push_back(mhit->second);
+        }
+        if (auto miit = bit->second.module_imports_by_source.find(bit->second.sources.front());
+            miit != bit->second.module_imports_by_source.end()) {
+            for (const auto& mh : miit->second) {
+                merge_extra.push_back("--module-import");
+                merge_extra.push_back(mh);
+            }
+        }
+        if (auto ciit = bit->second.module_cimport_isystem_by_source.find(bit->second.sources.front());
+            ciit != bit->second.module_cimport_isystem_by_source.end()) {
+            for (const auto& d : ciit->second) {
+                if (d.empty()) continue;
+                std::filesystem::path p(d);
+                if (p.is_relative()) p = entry_base / p;
+                merge_extra.push_back("-isystem");
+                merge_extra.push_back(p.lexically_normal().string());
+            }
         }
         for (const auto& d : bit->second.bundle_cimport_isystem) {
             if (d.empty()) continue;
             std::filesystem::path p(d);
             if (p.is_relative()) p = entry_base / p;
-            extra.push_back("-isystem");
-            extra.push_back(p.lexically_normal().string());
+            merge_extra.push_back("-isystem");
+            merge_extra.push_back(p.lexically_normal().string());
         }
-        extra.push_back("--emit-export-index");
-        extra.push_back(idx_path);
-        for (const auto& src : bit->second.sources) {
-            extra.push_back("--bundle-source");
-            extra.push_back(src);
+        merge_extra.push_back("--emit-export-index");
+        merge_extra.push_back(idx_path);
+        for (const auto& all_src : bit->second.sources) {
+            merge_extra.push_back("--bundle-source");
+            merge_extra.push_back(all_src);
+        }
+        for (const auto& frag : fragment_paths) {
+            merge_extra.push_back("--load-export-index");
+            merge_extra.push_back(frag);
         }
         for (const auto& dep : bit->second.deps) {
-            extra.push_back("--bundle-dep");
-            extra.push_back(dep);
+            merge_extra.push_back("--bundle-dep");
+            merge_extra.push_back(dep);
+            std::string dep_idx = (index_dir / (dep + ".exports.json")).string();
+            if (auto it = bundle_index_paths.find(dep); it != bundle_index_paths.end()) {
+                dep_idx = it->second;
+            }
+            merge_extra.push_back("--load-export-index");
+            merge_extra.push_back(dep_idx);
         }
 
-        emit_progress(progress, settings.diag_color, 52, "Prepass export index for bundle " + bname);
-        const int rc = run_check_one_pr(parusc,
-                                        bit->second.sources.front(),
-                                        diag_format,
-                                        lang,
-                                        context,
-                                        macro_budget_flags,
-                                        extra);
-        if (rc != 0) {
-            emit_fail(settings.diag_color, "Bundle prepass failed for " + bname + " (exit=" + std::to_string(rc) + ")");
-            return rc;
+        emit_progress(progress, settings.diag_color, 53, "Merge export index for bundle " + bname);
+        const int merge_rc = run_check_one_pr(parusc,
+                                              bit->second.sources.front(),
+                                              diag_format,
+                                              lang,
+                                              context,
+                                              macro_budget_flags,
+                                              merge_extra);
+        if (merge_rc != 0) {
+            emit_fail(settings.diag_color, "Bundle export-index merge failed for " + bname + " (exit=" + std::to_string(merge_rc) + ")");
+            return merge_rc;
         }
     }
 

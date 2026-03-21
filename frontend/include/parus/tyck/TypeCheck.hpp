@@ -109,6 +109,9 @@ namespace parus::tyck {
 
         void bind_diag(diag::Bag& bag) { diag_bag_ = &bag; }
         void set_seed_symbol_table(const sema::SymbolTable* seed) { seed_sym_ = seed; }
+        void set_current_bundle_name(std::string bundle_name) {
+            explicit_current_bundle_name_ = std::move(bundle_name);
+        }
         void set_core_impl_marker_file_ids(std::unordered_set<uint32_t> file_ids) {
             explicit_core_impl_marker_file_ids_ = std::move(file_ids);
         }
@@ -255,6 +258,7 @@ namespace parus::tyck {
         void diag_(diag::Code code, Span sp, std::string_view a0);
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
         void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2);
+        void diag_(diag::Code code, Span sp, std::string_view a0, std::string_view a1, std::string_view a2, std::string_view a3);
         void warn_(diag::Code code, Span sp, std::string_view a0 = {});
         void warn_(diag::Code code, Span sp, std::string_view a0, std::string_view a1);
 
@@ -344,6 +348,7 @@ namespace parus::tyck {
         // 심볼 테이블
         sema::SymbolTable sym_;
         const sema::SymbolTable* seed_sym_ = nullptr;
+        std::string explicit_current_bundle_name_{};
 
         // 결과 저장소
         TyckResult result_{};
@@ -604,6 +609,23 @@ namespace parus::tyck {
             kAlignOf,
         };
 
+        struct GenericConstraintFailure {
+            enum class Kind : uint8_t {
+                kNone = 0,
+                kUnknownTypeParam,
+                kProtoNotFound,
+                kProtoUnsatisfied,
+                kTypeMismatch,
+            };
+
+            Kind kind = Kind::kNone;
+            std::string lhs_type_param{};
+            std::string rhs_proto{};
+            std::string rhs_type_repr{};
+            std::string concrete_lhs{};
+            std::string concrete_rhs{};
+        };
+
         std::vector<std::unordered_map<ty::TypeId, ActiveActsSelection>> acts_selection_scope_stack_;
         std::unordered_map<uint32_t, ActiveActsSelection> acts_selection_by_symbol_;
 
@@ -626,6 +648,8 @@ namespace parus::tyck {
             bool& out_receiver_is_self
         ) const;
         void collect_external_builtin_acts_methods_();
+        void collect_external_proto_stubs_();
+        void ensure_builtin_family_proto_aliases_();
         std::string current_bundle_name_() const;
         void collect_core_impl_marker_file_ids_(ast::StmtId program_stmt);
         bool is_core_impl_marker_stmt_(const ast::Stmt& s) const;
@@ -634,6 +658,27 @@ namespace parus::tyck {
         bool stmt_impl_binding_kind_(const ast::Stmt& s, ImplBindingKind& out_kind) const;
         std::string make_impl_binding_payload_(ImplBindingKind kind) const;
         std::string make_impl_binding_payload_(std::string_view key, bool compiler_owned) const;
+        bool validate_constraint_clause_decl_(
+            uint32_t begin,
+            uint32_t count,
+            const std::unordered_set<std::string>& generic_params,
+            Span owner_span
+        );
+        void collect_unresolved_generic_param_names_in_type_(
+            ty::TypeId t,
+            std::unordered_set<std::string>& out
+        ) const;
+        std::optional<ast::StmtId> resolve_proto_sid_for_constraint_(std::string_view raw) const;
+        bool is_builtin_family_proto_(ast::StmtId proto_sid) const;
+        bool builtin_family_proto_satisfied_by_primitive_name_(ty::TypeId concrete_t, std::string_view proto_name) const;
+        bool builtin_family_proto_satisfied_by_primitive_(ty::TypeId concrete_t, ast::StmtId proto_sid) const;
+        bool type_satisfies_proto_constraint_(ty::TypeId concrete_t, ast::StmtId proto_sid, Span use_span);
+        bool evaluate_generic_constraint_(
+            const ast::FnConstraintDecl& cc,
+            const std::unordered_map<std::string, ty::TypeId>& bindings,
+            Span use_span,
+            GenericConstraintFailure& out
+        );
         bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,

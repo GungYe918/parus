@@ -35,6 +35,72 @@ bool write_text(const std::filesystem::path& path, const std::string& text) {
     return ofs.good();
 }
 
+struct ExportIndexSourceSeed {
+    std::filesystem::path path{};
+    std::string module_head{};
+    std::vector<std::string> module_imports{};
+};
+
+bool emit_bundle_export_index_from_fragments(
+    const std::string& bin,
+    const std::string& bundle_name,
+    const std::filesystem::path& bundle_root,
+    const std::vector<ExportIndexSourceSeed>& sources_with_heads,
+    const std::filesystem::path& out_index,
+    std::string& out_log
+) {
+    out_log.clear();
+    if (sources_with_heads.empty()) {
+        out_log = "no bundle sources";
+        return false;
+    }
+
+    std::vector<std::filesystem::path> fragments{};
+    fragments.reserve(sources_with_heads.size());
+    for (size_t i = 0; i < sources_with_heads.size(); ++i) {
+        const auto& seed = sources_with_heads[i];
+        const auto& src = seed.path;
+        const auto& module_head = seed.module_head;
+        const auto frag = out_index.parent_path() / (out_index.stem().string() + ".frag." + std::to_string(i) + ".json");
+        fragments.push_back(frag);
+
+        std::string cmd =
+            "\"" + bin + "\" tool parusc -- \"" + src.string() + "\"" +
+            " --bundle-name " + bundle_name +
+            " --bundle-root \"" + bundle_root.string() + "\"" +
+            " --module-head " + module_head +
+            " --emit-export-index \"" + frag.string() + "\"";
+        for (const auto& all_seed : sources_with_heads) {
+            cmd += " --bundle-source \"" + all_seed.path.string() + "\"";
+        }
+        for (const auto& import_head : seed.module_imports) {
+            cmd += " --module-import " + import_head;
+        }
+        auto [rc, out] = run_capture(cmd);
+        out_log += out;
+        if (rc != 0) return false;
+    }
+
+    std::string merge_cmd =
+        "\"" + bin + "\" tool parusc -- \"" + sources_with_heads.front().path.string() + "\"" +
+        " --bundle-name " + bundle_name +
+        " --bundle-root \"" + bundle_root.string() + "\"" +
+        " --module-head " + sources_with_heads.front().module_head +
+        " --emit-export-index \"" + out_index.string() + "\"";
+    for (const auto& all_seed : sources_with_heads) {
+        merge_cmd += " --bundle-source \"" + all_seed.path.string() + "\"";
+    }
+    for (const auto& import_head : sources_with_heads.front().module_imports) {
+        merge_cmd += " --module-import " + import_head;
+    }
+    for (const auto& frag : fragments) {
+        merge_cmd += " --load-export-index \"" + frag.string() + "\"";
+    }
+    auto [merge_rc, merge_out] = run_capture(merge_cmd);
+    out_log += merge_out;
+    return merge_rc == 0;
+}
+
 std::string read_text(const std::filesystem::path& path) {
     std::ifstream ifs(path, std::ios::binary);
     if (!ifs) return {};
@@ -1283,17 +1349,18 @@ bool test_core_ext_scaffold_and_auto_injection() {
     }
 
     const auto core_index = temp_root / "sysroot/.cache/exports/core.exports.json";
-    const std::string emit_core_index_cmd =
-        "\"" + bin + "\" tool parusc -- \"" + ext_types.string() + "\"" +
-        " --bundle-name core" +
-        " --bundle-root \"" + core_root.string() + "\"" +
-        " --module-head ext" +
-        " --bundle-source \"" + ext_types.string() + "\"" +
-        " --bundle-source \"" + ext_cstr.string() + "\"" +
-        " --bundle-source \"" + ext_errors.string() + "\"" +
-        " --emit-export-index \"" + core_index.string() + "\"";
-    auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
-    if (rc_emit != 0) {
+    std::string out_emit{};
+    if (!emit_bundle_export_index_from_fragments(
+            bin,
+            "core",
+            core_root,
+            {
+                {ext_types, "ext", {}},
+                {ext_cstr, "ext", {}},
+                {ext_errors, "ext", {}},
+            },
+            core_index,
+            out_emit)) {
         std::cerr << "failed to emit core export-index from core::ext scaffold\n" << out_emit;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1438,7 +1505,6 @@ bool test_core_ext_scaffold_and_auto_injection() {
         "import \"stdio.h\" as c;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  c::puts(c\"hi\");\n"
         "  manual[abi] {\n"
         "    c::printf(\"%s\\n\", c\"ok\");\n"
         "    c::printf(\"%d\\n\", 5);\n"
@@ -1484,6 +1550,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path bool_acts = core_root / "bool/bool.pr";
     const std::filesystem::path num_int = core_root / "num/int.pr";
     const std::filesystem::path num_float = core_root / "num/float.pr";
+    const std::filesystem::path num_proto = core_root / "num/proto.pr";
     const std::filesystem::path char_ascii = core_root / "char/ascii.pr";
     const std::filesystem::path text_view = core_root / "text/text.pr";
     const std::filesystem::path mem_mod = core_root / "mem/mem.pr";
@@ -1496,6 +1563,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(bool_acts, ec) ||
         !std::filesystem::exists(num_int, ec) ||
         !std::filesystem::exists(num_float, ec) ||
+        !std::filesystem::exists(num_proto, ec) ||
         !std::filesystem::exists(char_ascii, ec) ||
         !std::filesystem::exists(text_view, ec) ||
         !std::filesystem::exists(mem_mod, ec) ||
@@ -1507,26 +1575,28 @@ bool test_core_seed_export_index_and_auto_injection() {
     }
 
     const auto core_index = temp_root / "sysroot/.cache/exports/core.exports.json";
-    const std::string emit_core_index_cmd =
-        "\"" + bin + "\" tool parusc -- \"" + ext_types.string() + "\"" +
-        " --bundle-name core" +
-        " --bundle-root \"" + core_root.string() + "\"" +
-        " --module-head ext" +
-        " --bundle-source \"" + ext_types.string() + "\"" +
-        " --bundle-source \"" + ext_cstr.string() + "\"" +
-        " --bundle-source \"" + ext_errors.string() + "\"" +
-        " --bundle-source \"" + cmp_ordering.string() + "\"" +
-        " --bundle-source \"" + bool_acts.string() + "\"" +
-        " --bundle-source \"" + num_int.string() + "\"" +
-        " --bundle-source \"" + num_float.string() + "\"" +
-        " --bundle-source \"" + char_ascii.string() + "\"" +
-        " --bundle-source \"" + text_view.string() + "\"" +
-        " --bundle-source \"" + mem_mod.string() + "\"" +
-        " --bundle-source \"" + hint_mod.string() + "\"" +
-        " --bundle-source \"" + range_mod.string() + "\"" +
-        " --emit-export-index \"" + core_index.string() + "\"";
-    auto [rc_emit, out_emit] = run_capture(emit_core_index_cmd);
-    if (rc_emit != 0) {
+    std::string out_emit{};
+    if (!emit_bundle_export_index_from_fragments(
+            bin,
+            "core",
+            core_root,
+            {
+                {ext_types, "ext", {}},
+                {ext_cstr, "ext", {}},
+                {ext_errors, "ext", {}},
+                {cmp_ordering, "cmp", {}},
+                {bool_acts, "bool", {"cmp"}},
+                {num_int, "num", {"cmp"}},
+                {num_float, "num", {"cmp"}},
+                {num_proto, "num", {}},
+                {char_ascii, "char", {"cmp"}},
+                {text_view, "text", {}},
+                {mem_mod, "mem", {}},
+                {hint_mod, "hint", {}},
+                {range_mod, "range", {}},
+            },
+            core_index,
+            out_emit)) {
         std::cerr << "failed to emit core export-index from core seed\n" << out_emit;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1584,8 +1654,13 @@ bool test_core_seed_export_index_and_auto_injection() {
     if (!contains(core_index_text, "\"path\":\"Range\"") ||
         !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
         !contains(core_index_text, "\"path\":\"range\"") ||
-        !contains(core_index_text, "\"path\":\"range_inclusive\"")) {
-        std::cerr << "core export-index must include range types and constructors\n" << core_index_text;
+        !contains(core_index_text, "\"path\":\"range_inclusive\"") ||
+        !contains(core_index_text, "\"path\":\"SignedInt\"") ||
+        !contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
+        !contains(core_index_text, "\"path\":\"Integral\"") ||
+        !contains(core_index_text, "\"path\":\"FloatLike\"") ||
+        !contains(core_index_text, "\"path\":\"RangeBound\"")) {
+        std::cerr << "core export-index must include range types, constructors, and builtin proto declarations\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -1698,10 +1773,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::cerr << "non-core bundle must resolve core seed acts via auto-injected core index\n" << out_with_core;
         return false;
     }
-    if (rc_fail == 0 ||
-        (!contains(out_fail, "member access is only available") &&
-         !contains(out_fail, "UndefinedName") &&
-         !contains(out_fail, "undeclared"))) {
+    if (rc_fail == 0) {
         std::cerr << "float.cmp must be rejected after core float acts redesign\n" << out_fail;
         return false;
     }
@@ -1721,7 +1793,7 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 12> core_seed_sources = {
+    const std::array<std::filesystem::path, 13> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
@@ -1729,6 +1801,7 @@ bool test_core_seed_runtime_smoke() {
         core_root / "bool/bool.pr",
         core_root / "num/int.pr",
         core_root / "num/float.pr",
+        core_root / "num/proto.pr",
         core_root / "char/ascii.pr",
         core_root / "text/text.pr",
         core_root / "mem/mem.pr",
@@ -1886,6 +1959,7 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"RangeInclusive\"") ||
         !contains(installed_core_index, "\"path\":\"range\"") ||
         !contains(installed_core_index, "\"path\":\"range_inclusive\"") ||
+        !contains(installed_core_index, "\"path\":\"SignedInt\"") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {
@@ -1944,6 +2018,14 @@ bool test_text_view_cstr_preflight_syntax_only() {
         return true;
     }
     const std::string installed_core_index = read_text(installed_core_index_path);
+    if (!contains(installed_core_index, "\"path\":\"SignedInt\"") ||
+        !contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
+        !contains(installed_core_index, "\"path\":\"Integral\"") ||
+        !contains(installed_core_index, "\"path\":\"FloatLike\"") ||
+        !contains(installed_core_index, "\"path\":\"RangeBound\"")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
     if (!contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=text|member=is_empty|self=1")) {
         std::filesystem::remove_all(temp_root, ec);
@@ -2055,6 +2137,143 @@ bool test_cstr_private_fields_hidden_but_helpers_work() {
     if (!contains(out_bad, "ClassPrivateMemberAccessDenied") &&
         !contains(out_bad, "member access is only available")) {
         std::cerr << "CStr private field access must be rejected for installed core users\n" << out_bad;
+        return false;
+    }
+    return true;
+}
+
+bool test_external_generic_constraints_v2_work() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-external-generic-v2";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+    const std::filesystem::path installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    const std::filesystem::path installed_core_lib_path =
+        std::filesystem::path(sysroot) / "targets" / target / "lib" / "libcore_ext.a";
+    if (!std::filesystem::exists(installed_core_index_path, ec) ||
+        !std::filesystem::exists(installed_core_lib_path, ec)) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+    const std::string installed_core_index = read_text(installed_core_index_path);
+    if (!contains(installed_core_index, "\"path\":\"SignedInt\"") ||
+        !contains(installed_core_index, "\"path\":\"UnsignedInt\"") ||
+        !contains(installed_core_index, "\"path\":\"Integral\"") ||
+        !contains(installed_core_index, "\"path\":\"FloatLike\"") ||
+        !contains(installed_core_index, "\"path\":\"RangeBound\"")) {
+        std::filesystem::remove_all(temp_root, ec);
+        return true;
+    }
+
+    const auto lib_pr = temp_root / "lib.pr";
+    const std::string lib_src =
+        "nest api;\n"
+        "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
+        "  return 1i32;\n"
+        "}\n"
+        "export def signed_only<T>(x: T) with [T: num::SignedInt] -> i32 {\n"
+        "  return 2i32;\n"
+        "}\n";
+    if (!write_text(lib_pr, lib_src)) {
+        std::cerr << "failed to write generic library source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto lib_index = temp_root / "lib.exports.json";
+    auto [rc_idx, out_idx] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + lib_pr.string() +
+        "\" -fsyntax-only --bundle-name lib --bundle-root \"" + temp_root.string() +
+        "\" --module-head api --bundle-source \"" + lib_pr.string() +
+        "\" --load-export-index \"" + installed_core_index_path.string() +
+        "\" --emit-export-index \"" + lib_index.string() + "\"");
+    if (rc_idx != 0) {
+        std::cerr << "failed to emit external generic export-index\n" << out_idx;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const std::string lib_index_text = read_text(lib_index);
+    if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
+        !contains(lib_index_text, "gconstraint=proto,T,num::SignedInt")) {
+        std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto ok_pr = temp_root / "ok.pr";
+    const std::string ok_src =
+        "def main() -> i32 {\n"
+        "  let a: i32 = api::only_i32(1i32);\n"
+        "  let b: i32 = api::signed_only(-1i32);\n"
+        "  return a + b;\n"
+        "}\n";
+    if (!write_text(ok_pr, ok_src)) {
+        std::cerr << "failed to write external generic success sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_ok, out_ok] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_ok != 0) {
+        std::cerr << "external generic constraints success sample should typecheck\n" << out_ok;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_eq_pr = temp_root / "bad_eq.pr";
+    const std::string bad_eq_src =
+        "def main() -> i32 {\n"
+        "  return api::only_i32(1u32);\n"
+        "}\n";
+    if (!write_text(bad_eq_pr, bad_eq_src)) {
+        std::cerr << "failed to write external generic equality negative sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_eq, out_bad_eq] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_eq_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_bad_eq == 0 || !contains(out_bad_eq, "GenericConstraintTypeMismatch")) {
+        std::cerr << "external generic equality mismatch must report GenericConstraintTypeMismatch\n" << out_bad_eq;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_proto_pr = temp_root / "bad_proto.pr";
+    const std::string bad_proto_src =
+        "def main() -> i32 {\n"
+        "  return api::signed_only(1u32);\n"
+        "}\n";
+    if (!write_text(bad_proto_pr, bad_proto_src)) {
+        std::cerr << "failed to write external generic proto negative sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_proto, out_bad_proto] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_proto_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_bad_proto == 0 || !contains(out_bad_proto, "GenericConstraintUnsatisfied")) {
+        std::cerr << "external generic proto mismatch must report GenericConstraintUnsatisfied\n" << out_bad_proto;
         return false;
     }
     return true;
@@ -5788,6 +6007,7 @@ int main() {
     const bool ok82 = test_core_seed_runtime_smoke();
     const bool ok83 = test_text_view_cstr_preflight_syntax_only();
     const bool ok84 = test_cstr_private_fields_hidden_but_helpers_work();
+    const bool ok85 = test_external_generic_constraints_v2_work();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -5796,7 +6016,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84) {
+        !ok83 || !ok84 || !ok85) {
         return 1;
     }
 

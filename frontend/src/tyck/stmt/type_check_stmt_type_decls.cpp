@@ -134,6 +134,13 @@
     /// @brief field 선언의 멤버 타입 제약(POD 값 타입만 허용)을 검사한다.
     void TypeChecker::check_stmt_field_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
+        {
+            std::unordered_set<std::string> generic_params;
+            for (const auto& name : collect_decl_generic_param_names_(s)) {
+                generic_params.insert(name);
+            }
+            (void)validate_constraint_clause_decl_(s.decl_constraint_begin, s.decl_constraint_count, generic_params, s.span);
+        }
         const bool is_generic_template =
             (s.decl_generic_param_count > 0) &&
             (generic_field_template_sid_set_.find(sid) != generic_field_template_sid_set_.end());
@@ -300,6 +307,12 @@
                     err_(pr.span, "unknown proto target: " + proto_path);
                     continue;
                 }
+                if (is_builtin_family_proto_(*proto_sid)) {
+                    diag_(diag::Code::kTypeErrorGeneric, pr.span,
+                          "builtin proto '" + proto_path + "' is reserved for primitive family constraints");
+                    err_(pr.span, "builtin proto is reserved for primitive family constraints");
+                    continue;
+                }
                 if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, pr.span,
                                                       /*emit_unsatisfied_diag=*/true,
                                                       /*emit_shape_diag=*/true)) {
@@ -347,6 +360,13 @@
 
     void TypeChecker::check_stmt_enum_decl_(ast::StmtId sid) {
         const ast::Stmt& s = ast_.stmt(sid);
+        {
+            std::unordered_set<std::string> generic_params;
+            for (const auto& name : collect_decl_generic_param_names_(s)) {
+                generic_params.insert(name);
+            }
+            (void)validate_constraint_clause_decl_(s.decl_constraint_begin, s.decl_constraint_count, generic_params, s.span);
+        }
         const bool is_generic_template =
             (s.decl_generic_param_count > 0) &&
             (generic_enum_template_sid_set_.find(sid) != generic_enum_template_sid_set_.end());
@@ -544,6 +564,13 @@
                     }
                     continue;
                 }
+                if (is_builtin_family_proto_(*proto_sid)) {
+                    const std::string p = path_ref_display_(refs[i]);
+                    diag_(diag::Code::kTypeErrorGeneric, refs[i].span,
+                          "builtin proto '" + p + "' is reserved for primitive family constraints");
+                    err_(refs[i].span, "builtin proto is reserved for primitive family constraints");
+                    continue;
+                }
                 if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, refs[i].span,
                                                       /*emit_unsatisfied_diag=*/true,
                                                       /*emit_shape_diag=*/true)) {
@@ -591,6 +618,13 @@
 
     /// @brief acts 선언 내부의 함수 멤버를 타입 체크한다.
     void TypeChecker::check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s) {
+        {
+            std::unordered_set<std::string> generic_params;
+            for (const auto& name : collect_decl_generic_param_names_(s)) {
+                generic_params.insert(name);
+            }
+            (void)validate_constraint_clause_decl_(s.decl_constraint_begin, s.decl_constraint_count, generic_params, s.span);
+        }
         if (sid != ast::k_invalid_stmt &&
             generic_acts_template_sid_set_.find(sid) != generic_acts_template_sid_set_.end()) {
             return;

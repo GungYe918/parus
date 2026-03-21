@@ -1,14 +1,129 @@
 // frontend/src/sir/sir_builder_common.cpp
 #include "sir_builder_internal.hpp"
+#include "../../tyck/common/type_check_literals.hpp"
 #include <parus/syntax/TokenKind.hpp>
 
 
 namespace parus::sir::detail {
 
+    namespace {
+        ty::TypePool* g_active_sir_types_ = nullptr;
+    }
+
+    void set_active_type_pool_for_sir_build_(ty::TypePool* types) {
+        g_active_sir_types_ = types;
+    }
+
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
         if ((size_t)eid >= tyck.expr_types.size()) return k_invalid_type;
         return tyck.expr_types[eid];
+    }
+
+    TypeId best_effort_type_of_ast_expr(
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        parus::ast::ExprId eid
+    ) {
+        const TypeId typed = type_of_ast_expr(tyck, eid);
+        if (typed != k_invalid_type) return typed;
+        if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
+
+        const auto& e = ast.expr(eid);
+        if (e.target_type != k_invalid_type) return e.target_type;
+
+        switch (e.kind) {
+            case parus::ast::ExprKind::kIntLit: {
+                if (g_active_sir_types_ == nullptr) break;
+                const auto lit = parus::tyck::detail::parse_int_literal_(e.text);
+                if (lit.ok && lit.has_suffix) return g_active_sir_types_->builtin(lit.suffix);
+                break;
+            }
+            case parus::ast::ExprKind::kFloatLit: {
+                if (g_active_sir_types_ == nullptr) break;
+                const auto lit = parus::tyck::detail::parse_float_literal_(e.text);
+                if (lit.ok) return g_active_sir_types_->builtin(lit.builtin);
+                break;
+            }
+            case parus::ast::ExprKind::kBoolLit:
+                return g_active_sir_types_ != nullptr
+                           ? g_active_sir_types_->builtin(parus::ty::Builtin::kBool)
+                           : k_invalid_type;
+            case parus::ast::ExprKind::kCharLit:
+                return g_active_sir_types_ != nullptr
+                           ? g_active_sir_types_->builtin(parus::ty::Builtin::kChar)
+                           : k_invalid_type;
+            case parus::ast::ExprKind::kNullLit:
+                return g_active_sir_types_ != nullptr
+                           ? g_active_sir_types_->builtin(parus::ty::Builtin::kNull)
+                           : k_invalid_type;
+            case parus::ast::ExprKind::kStringLit: {
+                const bool is_c_literal =
+                    e.text.starts_with("c\"") || e.text.starts_with("cr\"");
+                if (!is_c_literal) {
+                    return g_active_sir_types_ != nullptr
+                               ? g_active_sir_types_->builtin(parus::ty::Builtin::kText)
+                               : k_invalid_type;
+                }
+                auto lookup_cstr = [&](std::string_view qname) -> TypeId {
+                    if (auto sid = sym.lookup(std::string(qname))) {
+                        const auto& ss = sym.symbol(*sid);
+                        if (ss.kind == sema::SymbolKind::kType &&
+                            ss.declared_type != k_invalid_type) {
+                            return ss.declared_type;
+                        }
+                    }
+                    return k_invalid_type;
+                };
+                TypeId t = lookup_cstr("core::ext::CStr");
+                if (t == k_invalid_type) t = lookup_cstr("core::CStr");
+                if (t == k_invalid_type) t = lookup_cstr("ext::CStr");
+                if (t == k_invalid_type) t = lookup_cstr("CStr");
+                if (t != k_invalid_type) return t;
+                break;
+            }
+            case parus::ast::ExprKind::kArrayLit: {
+                if (g_active_sir_types_ == nullptr || e.arg_count == 0) break;
+                const auto& args = ast.args();
+                const uint32_t begin = e.arg_begin;
+                const uint32_t end = e.arg_begin + e.arg_count;
+                if (begin >= args.size() || end > args.size()) break;
+                TypeId elem = k_invalid_type;
+                for (uint32_t i = begin; i < end; ++i) {
+                    const auto child_eid = args[i].expr;
+                    const TypeId child_t =
+                        best_effort_type_of_ast_expr(ast, sym, nres, tyck, child_eid);
+                    if (child_t == k_invalid_type) {
+                        elem = k_invalid_type;
+                        break;
+                    }
+                    if (elem == k_invalid_type) {
+                        elem = child_t;
+                        continue;
+                    }
+                    if (elem != child_t) {
+                        elem = k_invalid_type;
+                        break;
+                    }
+                }
+                if (elem != k_invalid_type) {
+                    return g_active_sir_types_->make_array(elem, /*has_size=*/true, e.arg_count);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+
+        const SymbolId sym_id = resolve_symbol_from_expr(nres, tyck, eid);
+        if (sym_id != k_invalid_symbol && (size_t)sym_id < sym.symbols().size()) {
+            const TypeId declared = sym.symbol(sym_id).declared_type;
+            if (declared != k_invalid_type) return declared;
+        }
+
+        return k_invalid_type;
     }
 
     // -----------------------------
@@ -115,6 +230,8 @@ namespace parus::sir::detail {
     // Resolve the most concrete type we can observe from identifier use-sites
     // that bind to the same symbol.
     TypeId resolve_decl_type_from_symbol_uses(
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
         SymbolId sym_id
@@ -129,7 +246,8 @@ namespace parus::sir::detail {
             if ((size_t)rid >= nres.resolved.size()) continue;
             if ((SymbolId)nres.resolved[rid].sym != sym_id) continue;
 
-            const TypeId t = type_of_ast_expr(tyck, (parus::ast::ExprId)eid);
+            const TypeId t =
+                best_effort_type_of_ast_expr(ast, sym, nres, tyck, (parus::ast::ExprId)eid);
             if (t != k_invalid_type) return t;
         }
 
@@ -408,7 +526,7 @@ namespace parus::sir::detail {
         if (forced_type != k_invalid_type) {
             bv.type = forced_type;
         } else if (tail_eid != parus::ast::k_invalid_expr) {
-            bv.type = type_of_ast_expr(tyck, tail_eid);
+            bv.type = best_effort_type_of_ast_expr(ast, sym, nres, tyck, tail_eid);
         } else {
             bv.type = k_invalid_type;
         }

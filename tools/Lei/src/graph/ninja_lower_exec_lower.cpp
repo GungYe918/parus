@@ -105,6 +105,69 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
         const std::string index_path = (index_dir / (sanitize(b.name) + ".exports.json")).string();
         ctx.bundle_index_path_by_name[b.name] = index_path;
         add_artifact(ctx, index_path, ArtifactKind::kGeneratedFile);
+        std::vector<std::string> fragment_paths{};
+        std::vector<std::string> fragment_actions{};
+        fragment_paths.reserve(resolved_sources.size());
+        fragment_actions.reserve(resolved_sources.size());
+        for (size_t si = 0; si < resolved_sources.size(); ++si) {
+            const auto& src = resolved_sources[si];
+            const std::string frag_path = (index_dir / (sanitize(b.name) + ".frag." + std::to_string(si) + ".exports.json")).string();
+            fragment_paths.push_back(frag_path);
+            add_artifact(ctx, frag_path, ArtifactKind::kGeneratedFile);
+
+            std::vector<std::string> frag_cmd = {
+                parusc_cmd,
+                src,
+                "-fsyntax-only",
+                "--bundle-name",
+                b.name,
+                "--bundle-root",
+                bundle_root,
+                "--module-head",
+                source_module_head[src],
+                "--emit-export-index",
+                frag_path,
+            };
+            if (auto it = source_module_imports.find(src); it != source_module_imports.end()) {
+                for (const auto& im : it->second) {
+                    frag_cmd.push_back("--module-import");
+                    frag_cmd.push_back(im);
+                }
+            }
+            if (auto it = source_module_cimport_isystem.find(src);
+                it != source_module_cimport_isystem.end()) {
+                for (const auto& d : it->second) {
+                    if (d.empty()) continue;
+                    frag_cmd.push_back("-isystem");
+                    frag_cmd.push_back(d);
+                }
+            }
+            for (const auto& d : b.cimport_isystem) {
+                if (d.empty()) continue;
+                frag_cmd.push_back("-isystem");
+                frag_cmd.push_back(d);
+            }
+            for (const auto& all_src : resolved_sources) {
+                frag_cmd.push_back("--bundle-source");
+                frag_cmd.push_back(all_src);
+            }
+            for (const auto& dep : b.deps) {
+                frag_cmd.push_back("--bundle-dep");
+                frag_cmd.push_back(dep);
+                const std::string dep_index = (index_dir / (sanitize(dep) + ".exports.json")).string();
+                frag_cmd.push_back("--load-export-index");
+                frag_cmd.push_back(dep_index);
+            }
+            const std::string frag_action = add_action(ctx,
+                                                       BuildActionKind::kCodegen,
+                                                       "bundle-prepass-frag:" + b.name + ":" + src,
+                                                       ".",
+                                                       std::move(frag_cmd),
+                                                       {src},
+                                                       {frag_path},
+                                                       false);
+            fragment_actions.push_back(frag_action);
+        }
 
         std::vector<std::string> prepass_cmd = {
             parusc_cmd,
@@ -142,9 +205,16 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
             prepass_cmd.push_back("--bundle-source");
             prepass_cmd.push_back(src);
         }
+        for (const auto& frag : fragment_paths) {
+            prepass_cmd.push_back("--load-export-index");
+            prepass_cmd.push_back(frag);
+        }
         for (const auto& dep : b.deps) {
             prepass_cmd.push_back("--bundle-dep");
             prepass_cmd.push_back(dep);
+            const std::string dep_index = (index_dir / (sanitize(dep) + ".exports.json")).string();
+            prepass_cmd.push_back("--load-export-index");
+            prepass_cmd.push_back(dep_index);
         }
         const std::string prepass_action = add_action(ctx,
                                                       BuildActionKind::kCodegen,
@@ -154,7 +224,11 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
                                                       resolved_sources,
                                                       {index_path},
                                                       false);
+        for (const auto& frag_action : fragment_actions) {
+            add_edge(ctx, frag_action, prepass_action, EdgeKind::kHard);
+        }
         ctx.bundle_prepass_action_by_name[b.name] = prepass_action;
+        ctx.bundle_prepass_fragment_actions_by_name[b.name] = fragment_actions;
         ctx.bundle_compile_actions_by_name[b.name] = {};
 
         for (const auto& src : resolved_sources) {
@@ -377,6 +451,15 @@ std::optional<ExecGraph> lower_exec_graph(const BuildGraph& graph,
 
             auto dep_prepass = ctx.bundle_prepass_action_by_name.find(dep);
             if (dep_prepass != ctx.bundle_prepass_action_by_name.end()) {
+                if (self_prepass != ctx.bundle_prepass_action_by_name.end()) {
+                    add_edge(ctx, dep_prepass->second, self_prepass->second, EdgeKind::kHard);
+                }
+                auto itf = ctx.bundle_prepass_fragment_actions_by_name.find(b.name);
+                if (itf != ctx.bundle_prepass_fragment_actions_by_name.end()) {
+                    for (const auto& frag_action : itf->second) {
+                        add_edge(ctx, dep_prepass->second, frag_action, EdgeKind::kHard);
+                    }
+                }
                 auto itc = ctx.bundle_compile_actions_by_name.find(b.name);
                 if (itc != ctx.bundle_compile_actions_by_name.end()) {
                     for (const auto& ca : itc->second) {

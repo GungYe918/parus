@@ -342,6 +342,7 @@ namespace parus::diag {
         kGenericAmbiguousOverload, // generic overload selection is ambiguous
         kGenericConstraintProtoNotFound, // proto path in generic constraint not found
         kGenericConstraintUnsatisfied, // concrete type does not satisfy generic proto constraint
+        kGenericConstraintTypeMismatch, // generic type equality constraint is not satisfied
         kGenericUnknownTypeParamInConstraint, // declaration constraint references unknown generic parameter
         kGenericDeclConstraintUnsatisfied, // declaration-level generic constraint is unsatisfied
         kGenericTypePathArityMismatch, // generic-applied type path arity mismatch

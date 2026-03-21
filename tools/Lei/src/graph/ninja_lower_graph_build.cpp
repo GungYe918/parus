@@ -384,6 +384,7 @@ struct LowerCtx {
     std::unordered_map<std::string, std::string> bundle_stamp_or_bin_by_name{};
     std::unordered_map<std::string, std::string> bundle_prepass_action_by_name{};
     std::unordered_map<std::string, std::string> bundle_index_path_by_name{};
+    std::unordered_map<std::string, std::vector<std::string>> bundle_prepass_fragment_actions_by_name{};
     std::unordered_map<std::string, std::vector<std::string>> bundle_compile_actions_by_name{};
 
     std::unordered_map<std::string, std::string> task_action_by_name{};

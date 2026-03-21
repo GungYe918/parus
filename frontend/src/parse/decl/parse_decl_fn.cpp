@@ -464,28 +464,44 @@ namespace parus {
                 break;
             }
 
-            if (!cursor_.eat(K::kColon)) {
-                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ":");
-                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
-                if (cursor_.eat(K::kComma)) continue;
-                break;
-            }
-
-            const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
-            if (pc == 0) {
-                diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "proto path");
-                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
-                if (cursor_.eat(K::kComma)) continue;
-                break;
-            }
-
             ast::FnConstraintDecl c{};
             c.type_param = type_param;
-            c.proto_path_begin = pb;
-            c.proto_path_count = pc;
-            c.span = span_join(tparam.span, cursor_.prev().span);
-            ast_.add_fn_constraint_decl(c);
-            ++out_count;
+            if (cursor_.eat(K::kColon)) {
+                const auto [pb, pc] = parse_path_segments(/*allow_leading_coloncolon=*/true);
+                if (pc == 0) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "proto path");
+                    recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                c.kind = ast::FnConstraintKind::kProto;
+                c.proto_path_begin = pb;
+                c.proto_path_count = pc;
+                c.span = span_join(tparam.span, cursor_.prev().span);
+                ast_.add_fn_constraint_decl(c);
+                ++out_count;
+            } else if (cursor_.eat(K::kEqEq)) {
+                const auto rhs = parse_type();
+                if (rhs.node == ast::k_invalid_type_node) {
+                    diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "constraint type");
+                    recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                    if (cursor_.eat(K::kComma)) continue;
+                    break;
+                }
+
+                c.kind = ast::FnConstraintKind::kTypeEq;
+                c.rhs_type_node = rhs.node;
+                c.rhs_type = rhs.id;
+                c.span = span_join(tparam.span, rhs.span);
+                ast_.add_fn_constraint_decl(c);
+                ++out_count;
+            } else {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ": or ==");
+                recover_to_delim(K::kComma, K::kRBracket, K::kArrow);
+                if (cursor_.eat(K::kComma)) continue;
+                break;
+            }
 
             if (cursor_.eat(K::kComma)) {
                 if (cursor_.at(K::kRBracket)) break;

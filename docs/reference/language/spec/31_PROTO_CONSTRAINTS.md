@@ -83,7 +83,7 @@ def main() -> i32 {
 2. 같은 모듈 타 파일 선언은 `export`된 심볼만 허용한다.
 3. 모듈 밖 선언은 `import/alias`로 반입된 경로 + `export`된 심볼만 허용한다.
 
-## 19.7 제네릭 결합 규칙 (v1)
+## 19.7 제네릭 결합 규칙 (v2)
 
 1. `proto` 선언은 제네릭 파라미터를 가질 수 있다.
 2. `class`는 `class A : Proto<i32>` 형태로 concrete proto를 구현할 수 있다.
@@ -91,6 +91,12 @@ def main() -> i32 {
 4. `acts` 제네릭은 owner 타입 표기만 허용한다.
 5. 허용: `acts for Vec<T> with [T: Proto] { ... }`
 6. 금지: `acts for Vec<T> <T> { ... }`
+7. `with [...]` constraint atom은 다음 두 가지를 지원한다.
+   - `T: SomeProto`
+   - `T == TypeExpr`
+8. `T == U`는 `TypeExpr`의 한 형태로 허용한다.
+9. `with [...]` 안의 comma는 AND 의미만 가진다.
+10. 새 constraint 절 문법이나 bool expression 기반 constraint language는 도입하지 않는다.
 
 예시:
 
@@ -103,15 +109,43 @@ class IntHolder: Holder<i32> {
   init() = default;
   def get(self) -> i32 { return 1i32; }
 };
+
+def only_i32<T>(x: T) with [T == i32] -> i32 {
+  return 1i32;
+}
+
+def same<T, U>(x: T, y: U) with [T == U] -> bool {
+  return true;
+}
 ```
 
-## 19.8 의존 순환 금지
+## 19.8 builtin proto family
+
+primitive family classifier는 ordinary `proto` declaration으로 노출되지만, 만족 여부 일부는 compiler가 builtin type에 대해 특별취급한다.
+
+현재 builtin proto:
+
+1. `Integral`
+2. `RangeBound`
+3. `SignedInt : Integral, RangeBound`
+4. `UnsignedInt : Integral, RangeBound`
+5. `FloatLike`
+
+규칙:
+
+1. signed integer primitive는 `SignedInt`, `Integral`, `RangeBound`를 만족한다.
+2. unsigned integer primitive는 `UnsignedInt`, `Integral`, `RangeBound`를 만족한다.
+3. `f32`, `f64`는 `FloatLike`를 만족한다.
+4. user-defined type이 이 builtin proto를 직접 `:`로 구현하는 것은 금지한다.
+5. 이 proto들은 primitive family filter 용도로만 우선 사용한다.
+
+## 19.9 의존 순환 금지
 
 1. `type -> proto`, `proto -> proto`, `proto -> type/acts`, `acts -> owner type` 에지를 합친 그래프에서 순환은 금지한다.
 2. 직접/간접 순환(`type <-> proto`, `proto <-> proto`, `proto -> acts -> type -> proto`)은 모두 hard error다.
 3. 진단은 `ProtoDependencyCycle`을 사용한다.
 
-## 19.9 진단 코드
+## 19.10 진단 코드
 
 1. `ProtoOperatorNotAllowed`
 2. `ProtoMemberBodyNotAllowed`
@@ -130,8 +164,9 @@ class IntHolder: Holder<i32> {
 15. `ProtoArrowMemberAmbiguous`
 16. `ProtoArrowQualifierRequired`
 17. `ProtoDependencyCycle`
+18. `GenericConstraintTypeMismatch`
 
-## 19.10 예외 채널 마커 proto (v0)
+## 19.11 예외 채널 마커 proto (v0)
 
 예외 채널 분류는 아래 마커 proto를 사용한다.
 

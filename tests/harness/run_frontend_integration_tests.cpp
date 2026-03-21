@@ -2375,6 +2375,54 @@ namespace {
         return ok;
     }
 
+    static bool test_generic_type_eq_constraints_work() {
+        const std::string src = R"(
+            def only_i32<T>(x: T) with [T == i32] -> i32 {
+                return 1i32;
+            }
+
+            def same<T, U>(x: T, y: U) with [T == U] -> bool {
+                return true;
+            }
+
+            def main() -> i32 {
+                let a: i32 = only_i32(1i32);
+                let b: bool = same(1i32, 2i32);
+                return a;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "generic type equality success case must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "generic type equality success case must not emit tyck errors");
+        return ok;
+    }
+
+    static bool test_generic_type_eq_constraint_mismatch_reports() {
+        const std::string src = R"(
+            def only_i32<T>(x: T) with [T == i32] -> i32 {
+                return 1i32;
+            }
+
+            def main() -> i32 {
+                return only_i32(1u32);
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        (void)run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(count_diag_code_(p.bag, parus::diag::Code::kGenericConstraintTypeMismatch) == 1,
+            "generic type equality mismatch must emit GenericConstraintTypeMismatch exactly once");
+        return ok;
+    }
+
     static bool test_file_cases_directory() {
 #ifndef PARUS_FRONTEND_CASE_DIR
         std::cerr << "  - PARUS_FRONTEND_CASE_DIR is not defined\n";
@@ -2497,6 +2545,8 @@ int main() {
         {"try_expr_operand_must_be_throwing_call_single_core", test_try_expr_operand_must_be_throwing_call_single_core},
         {"generic_proto_target_arity_reports_once", test_generic_proto_target_arity_reports_once},
         {"generic_proto_target_not_found_reports_once", test_generic_proto_target_not_found_reports_once},
+        {"generic_type_eq_constraints_work", test_generic_type_eq_constraints_work},
+        {"generic_type_eq_constraint_mismatch_reports", test_generic_type_eq_constraint_mismatch_reports},
         {"file_cases_directory", test_file_cases_directory},
     };
 

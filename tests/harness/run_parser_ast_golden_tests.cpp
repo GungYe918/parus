@@ -27,6 +27,7 @@ struct DumpState {
     std::vector<uint8_t> active_stmts{};
     std::vector<uint8_t> active_exprs{};
     std::vector<uint8_t> active_types{};
+    const parus::ty::TypePool* types = nullptr;
 };
 
 static bool require_(bool cond, const char* msg) {
@@ -830,8 +831,17 @@ static void dump_stmt_(
                         const auto& c = cons[s.fn_constraint_begin + i];
                         std::string line = "constraint[" + std::to_string(i) + "] ";
                         line += escape_string_(c.type_param);
-                        line += " : ";
-                        line += escape_string_(join_path_(ast, c.proto_path_begin, c.proto_path_count));
+                        if (c.kind == parus::ast::FnConstraintKind::kTypeEq) {
+                            line += " == ";
+                            if (c.rhs_type != parus::ty::kInvalidType && state.types != nullptr) {
+                                line += escape_string_(state.types->to_string(c.rhs_type));
+                            } else {
+                                line += "<invalid>";
+                            }
+                        } else {
+                            line += " : ";
+                            line += escape_string_(join_path_(ast, c.proto_path_begin, c.proto_path_count));
+                        }
                         append_line_(out, depth + 2, line);
                     }
                 }
@@ -938,6 +948,7 @@ static std::string dump_program_ast_(const ParseOnlyProgram& p) {
     append_line_(out, 0, "root:");
 
     DumpState state{};
+    state.types = &p.types;
     dump_stmt_(p.ast, p.root, 1, out, state);
     return out;
 }

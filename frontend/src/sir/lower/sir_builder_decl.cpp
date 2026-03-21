@@ -497,17 +497,17 @@ namespace parus::sir::detail {
             g.name = s.name;
         }
 
-        g.declared_type = resolve_decl_type_from_symbol_uses(nres, tyck, g.sym);
-        if (g.declared_type == k_invalid_type) {
-            g.declared_type = s.type;
-        }
-        if (g.declared_type == k_invalid_type && s.init != ast::k_invalid_expr) {
-            g.declared_type = type_of_ast_expr(tyck, s.init);
-        }
+        g.declared_type = s.type;
         if (g.declared_type == k_invalid_type &&
             g.sym != k_invalid_symbol &&
             (size_t)g.sym < sym.symbols().size()) {
             g.declared_type = sym.symbol(g.sym).declared_type;
+        }
+        if (g.declared_type == k_invalid_type) {
+            g.declared_type = resolve_decl_type_from_symbol_uses(ast, sym, nres, tyck, g.sym);
+        }
+        if (g.declared_type == k_invalid_type && s.init != ast::k_invalid_expr) {
+            g.declared_type = best_effort_type_of_ast_expr(ast, sym, nres, tyck, s.init);
         }
 
         if (s.init != ast::k_invalid_expr) {
@@ -547,9 +547,12 @@ namespace parus::sir {
         const BuildOptions& opt
     ) {
         (void)sym;
-        (void)types;
 
         Module m{};
+        set_active_type_pool_for_sir_build_(const_cast<ty::TypePool*>(&types));
+        struct ActiveTypesReset {
+            ~ActiveTypesReset() { set_active_type_pool_for_sir_build_(nullptr); }
+        } active_types_reset{};
         m.bundle_enabled = opt.bundle_enabled;
         m.bundle_name = opt.bundle_name;
         m.current_source_norm = opt.current_source_norm;

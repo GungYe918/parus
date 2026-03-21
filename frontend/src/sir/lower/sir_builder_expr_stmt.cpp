@@ -15,11 +15,22 @@ namespace parus::sir::detail {
 
         ImplBindingKind parse_impl_binding_payload_(std::string_view payload) {
             if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
-            std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view rest = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view key = rest;
             std::string_view mode = "compiler";
-            if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
-                mode = key.substr(mode_pos + std::string_view("|mode=").size());
-                key = key.substr(0, mode_pos);
+            if (const size_t split = rest.find('|'); split != std::string_view::npos) {
+                key = rest.substr(0, split);
+                rest = rest.substr(split + 1);
+                while (!rest.empty()) {
+                    const size_t next = rest.find('|');
+                    const std::string_view part =
+                        (next == std::string_view::npos) ? rest : rest.substr(0, next);
+                    if (part.starts_with("mode=")) {
+                        mode = part.substr(std::string_view("mode=").size());
+                    }
+                    if (next == std::string_view::npos) break;
+                    rest = rest.substr(next + 1);
+                }
             }
             if (mode != "compiler") return ImplBindingKind::kNone;
             if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
@@ -62,7 +73,7 @@ namespace parus::sir::detail {
 
         Value v{};
         v.span = e.span;
-        v.type = type_of_ast_expr(tyck, eid);
+        v.type = best_effort_type_of_ast_expr(ast, sym, nres, tyck, eid);
         const ast::StmtId overload_sid =
             ((size_t)eid < tyck.expr_overload_target.size())
                 ? tyck.expr_overload_target[eid]
@@ -183,7 +194,7 @@ namespace parus::sir::detail {
                     v.kind = ValueKind::kCast;
                     v.op = (uint32_t)parus::ast::CastKind::kAsForce;
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
-                    v.cast_to = type_of_ast_expr(tyck, eid);
+                    v.cast_to = best_effort_type_of_ast_expr(ast, sym, nres, tyck, eid);
                     break;
                 }
 
@@ -403,6 +414,65 @@ namespace parus::sir::detail {
                         }
                         if ((size_t)eid < tyck.expr_enum_ctor_tag_value.size()) {
                             v.enum_ctor_tag_value = tyck.expr_enum_ctor_tag_value[eid];
+                        }
+                    }
+                }
+                if (!v.call_is_enum_ctor &&
+                    e.a != parus::ast::k_invalid_expr &&
+                    e.arg_count == 0) {
+                    const auto& callee_expr = ast.expr(e.a);
+                    if (callee_expr.kind == parus::ast::ExprKind::kIdent) {
+                        const std::string callee_text(callee_expr.text);
+                        const size_t split = callee_text.rfind("::");
+                        if (split != std::string::npos && split > 0 && split + 2 < callee_text.size()) {
+                            const std::string owner_text = callee_text.substr(0, split);
+                            const std::string variant_text = callee_text.substr(split + 2);
+
+                            parus::ast::StmtId enum_sid = parus::ast::k_invalid_stmt;
+                            bool ambiguous = false;
+                            for (parus::ast::StmtId sid = 0;
+                                 sid < static_cast<parus::ast::StmtId>(ast.stmts().size());
+                                 ++sid) {
+                                const auto& cand = ast.stmt(sid);
+                                if (cand.kind != parus::ast::StmtKind::kEnumDecl) continue;
+                                if (cand.name != owner_text) continue;
+                                if (enum_sid != parus::ast::k_invalid_stmt && enum_sid != sid) {
+                                    ambiguous = true;
+                                    break;
+                                }
+                                enum_sid = sid;
+                            }
+
+                            if (!ambiguous &&
+                                enum_sid != parus::ast::k_invalid_stmt &&
+                                static_cast<size_t>(enum_sid) < ast.stmts().size()) {
+                                const auto& enum_decl = ast.stmt(enum_sid);
+                                if (enum_decl.type != parus::ty::kInvalidType &&
+                                    enum_decl.decl_generic_param_count == 0) {
+                                    int64_t next_tag = 0;
+                                    const auto& variants = ast.enum_variant_decls();
+                                    const uint64_t begin = enum_decl.enum_variant_begin;
+                                    const uint64_t end = begin + enum_decl.enum_variant_count;
+                                    if (end <= variants.size()) {
+                                        for (uint32_t i = 0; i < enum_decl.enum_variant_count; ++i) {
+                                            const auto& variant = variants[begin + i];
+                                            const int64_t tag = variant.has_discriminant
+                                                ? variant.discriminant
+                                                : next_tag;
+                                            next_tag = tag + 1;
+                                            if (variant.name != variant_text) continue;
+                                            if (variant.payload_count != 0) break;
+                                            v.kind = ValueKind::kEnumCtor;
+                                            v.call_is_enum_ctor = true;
+                                            v.ctor_owner_type = enum_decl.type;
+                                            v.enum_ctor_variant_index = i;
+                                            v.enum_ctor_tag_value = tag;
+                                            v.type = enum_decl.type;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -795,21 +865,24 @@ namespace parus::sir::detail {
                 out.sym = resolve_symbol_from_stmt(nres, sid);
 
                 const bool has_sym = (out.sym != k_invalid_symbol && (size_t)out.sym < sym.symbols().size());
-                const TypeId use_derived_type = resolve_decl_type_from_symbol_uses(nres, tyck, out.sym);
+                const TypeId use_derived_type = resolve_decl_type_from_symbol_uses(ast, sym, nres, tyck, out.sym);
 
                 // declared_type policy:
                 // - let: prefer declared symbol type, fallback annotation
-                // - set: prefer use-derived tyck type, then init tyck type, then symbol type
+                // - set: inference can leave the symbol table on a transient literal type
+                //   until a later use forces a concrete declaration type. Prefer the
+                //   use-derived recovery before falling back to the raw symbol/AST type.
                 if (!s.is_set) {
                     out.declared_type = has_sym ? sym.symbol(out.sym).declared_type : k_invalid_type;
                     if (out.declared_type == k_invalid_type) out.declared_type = s.type;
                 } else {
                     out.declared_type = use_derived_type;
                     if (out.declared_type == k_invalid_type) {
-                        out.declared_type = type_of_ast_expr(tyck, s.init);
+                        out.declared_type = has_sym ? sym.symbol(out.sym).declared_type : k_invalid_type;
                     }
-                    if (out.declared_type == k_invalid_type && has_sym) {
-                        out.declared_type = sym.symbol(out.sym).declared_type;
+                    if (out.declared_type == k_invalid_type) out.declared_type = s.type;
+                    if (out.declared_type == k_invalid_type) {
+                        out.declared_type = best_effort_type_of_ast_expr(ast, sym, nres, tyck, s.init);
                     }
                 }
                 break;

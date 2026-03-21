@@ -266,10 +266,18 @@ namespace parus::ast {
         Span span{};
     };
 
+    enum class FnConstraintKind : uint8_t {
+        kProto = 0,
+        kTypeEq,
+    };
+
     struct FnConstraintDecl {
+        FnConstraintKind kind = FnConstraintKind::kProto;
         std::string_view type_param{};
         uint32_t proto_path_begin = 0;
         uint32_t proto_path_count = 0;
+        TypeNodeId rhs_type_node = k_invalid_type_node;
+        TypeId rhs_type = k_invalid_type;
         Span span{};
     };
 

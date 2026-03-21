@@ -180,7 +180,11 @@ namespace parus::oir {
                     } else if (key == "align") {
                         if (!parse_u32_sv_(val, out.explicit_align)) return {};
                     } else if (key == "gparam") {
-                        out.generic_params.emplace_back(val);
+                        const std::string param(val);
+                        if (std::find(out.generic_params.begin(), out.generic_params.end(), param) ==
+                            out.generic_params.end()) {
+                            out.generic_params.push_back(param);
+                        }
                     } else if (key == "field") {
                         const size_t colon = val.find(':');
                         if (colon == std::string_view::npos || colon == 0 || colon + 1 >= val.size()) {
@@ -2324,7 +2328,11 @@ namespace parus::oir {
                             const auto& f = out->funcs[fid];
                             if (f.entry == kInvalidId || (size_t)f.entry >= out->blocks.size()) continue;
                             const auto& entry = out->blocks[f.entry];
-                            if (entry.params.size() != args.size()) continue;
+                            size_t expected_param_count = args.size();
+                            if (ctor_call && f.is_actor_init) {
+                                expected_param_count += 2u;
+                            }
+                            if (entry.params.size() != expected_param_count) continue;
 
                             uint32_t exact = 0;
                             bool ok = true;
@@ -2868,8 +2876,47 @@ namespace parus::oir {
                     return emit_const_null(v.type);
                 }
 
-                const auto loop_kind = v.loop_source_kind;
-                const TypeId binder_ty = v.loop_binder_type;
+                auto loop_kind = v.loop_source_kind;
+                TypeId binder_ty = v.loop_binder_type;
+                auto derive_loop_source_from_sir_type = [&](parus::sir::ValueId source)
+                    -> std::pair<parus::LoopSourceKind, TypeId> {
+                    using parus::LoopSourceKind;
+                    if (source == parus::sir::k_invalid_value || sir == nullptr || types == nullptr) {
+                        return {LoopSourceKind::kNone, kInvalidId};
+                    }
+                    if ((size_t)source >= sir->values.size()) {
+                        return {LoopSourceKind::kNone, kInvalidId};
+                    }
+                    TypeId tid = sir->values[source].type;
+                    for (uint32_t depth = 0; depth < 6 && tid != kInvalidId; ++depth) {
+                        const auto& tt = types->get(tid);
+                        if (tt.kind == parus::ty::Kind::kArray) {
+                            return {
+                                tt.array_has_size ? LoopSourceKind::kSizedArray
+                                                  : LoopSourceKind::kSliceView,
+                                tt.elem
+                            };
+                        }
+                        if ((tt.kind == parus::ty::Kind::kBorrow ||
+                             tt.kind == parus::ty::Kind::kEscape ||
+                             tt.kind == parus::ty::Kind::kPtr) &&
+                            tt.elem != kInvalidId) {
+                            tid = tt.elem;
+                            continue;
+                        }
+                        break;
+                    }
+                    return {LoopSourceKind::kNone, kInvalidId};
+                };
+                if ((loop_kind == parus::LoopSourceKind::kNone ||
+                     loop_kind == parus::LoopSourceKind::kIteratorFutureUnsupported) &&
+                    v.a != parus::sir::k_invalid_value) {
+                    const auto [derived_kind, derived_binder] = derive_loop_source_from_sir_type(v.a);
+                    if (derived_kind != parus::LoopSourceKind::kNone) {
+                        loop_kind = derived_kind;
+                        if (binder_ty == kInvalidId) binder_ty = derived_binder;
+                    }
+                }
                 if (loop_kind == parus::LoopSourceKind::kNone ||
                     loop_kind == parus::LoopSourceKind::kIteratorFutureUnsupported) {
                     report_lowering_error("loop lowering failed: unsupported header loop source reached OIR");
@@ -3896,12 +3943,34 @@ namespace parus::oir {
                 base_name += std::string(path[i]);
             }
 
-            auto sym_sid = sym_->lookup(base_name);
-            if (!sym_sid.has_value()) return false;
-            const auto& ss = sym_->symbol(*sym_sid);
-            if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kField || ss.external_payload.empty()) {
-                return false;
+            auto lookup_external_layout_symbol_ = [&](std::string_view qname)
+                -> const parus::sema::Symbol* {
+                for (const auto& ss : sym_->symbols()) {
+                    if (ss.name != qname) continue;
+                    if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kField ||
+                        ss.external_payload.empty()) {
+                        continue;
+                    }
+                    return &ss;
+                }
+                return nullptr;
+            };
+
+            const parus::sema::Symbol* layout_sym = lookup_external_layout_symbol_(base_name);
+            if (layout_sym == nullptr) {
+                const size_t split = base_name.find("::");
+                if (split != std::string::npos && split + 2 < base_name.size()) {
+                    layout_sym = lookup_external_layout_symbol_(base_name.substr(split + 2));
+                }
             }
+            if (layout_sym == nullptr) {
+                const size_t split = base_name.rfind("::");
+                if (split != std::string::npos && split + 2 < base_name.size()) {
+                    layout_sym = lookup_external_layout_symbol_(base_name.substr(split + 2));
+                }
+            }
+            if (layout_sym == nullptr) return false;
+            const auto& ss = *layout_sym;
 
             const auto parsed = parse_external_parus_field_decl_payload_(ss.external_payload, ty_);
             if (!parsed.ok) return false;
@@ -4306,11 +4375,22 @@ namespace parus::oir {
         auto parse_impl_binding_payload_ = [](std::string_view payload) -> ParsedImplBindingPayload {
             ParsedImplBindingPayload out{};
             if (!payload.starts_with("parus_impl_binding|key=")) return out;
-            std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view rest = payload.substr(std::string_view("parus_impl_binding|key=").size());
+            std::string_view key = rest;
             std::string_view mode = "compiler";
-            if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
-                mode = key.substr(mode_pos + std::string_view("|mode=").size());
-                key = key.substr(0, mode_pos);
+            if (const size_t split = rest.find('|'); split != std::string_view::npos) {
+                key = rest.substr(0, split);
+                rest = rest.substr(split + 1);
+                while (!rest.empty()) {
+                    const size_t next = rest.find('|');
+                    const std::string_view part =
+                        (next == std::string_view::npos) ? rest : rest.substr(0, next);
+                    if (part.starts_with("mode=")) {
+                        mode = part.substr(std::string_view("mode=").size());
+                    }
+                    if (next == std::string_view::npos) break;
+                    rest = rest.substr(next + 1);
+                }
             }
             out.key = key;
             out.compiler_owned = (mode == "compiler");

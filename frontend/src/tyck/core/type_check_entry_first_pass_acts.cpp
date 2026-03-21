@@ -273,6 +273,16 @@
                     has_impl_binding &&
                     impl_binding != ImplBindingKind::kNone &&
                     s.a == ast::k_invalid_stmt;
+                if (compiler_owned_impl) {
+                    const std::string current_bundle = current_bundle_name_();
+                    if (current_bundle != "core" ||
+                        core_impl_marker_file_ids_.find(s.span.file_id) == core_impl_marker_file_ids_.end()) {
+                        const std::string msg =
+                            "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'";
+                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                        err_(s.span, msg);
+                    }
+                }
                 const std::string impl_payload =
                     has_impl_binding ? make_impl_binding_payload_(impl_key, compiler_owned_impl) : std::string{};
 
@@ -1625,6 +1635,88 @@
         }
     }
 
+    void TypeChecker::collect_external_proto_stubs_() {
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external) continue;
+            if (sym.kind != sema::SymbolKind::kType) continue;
+            if (!sym.external_payload.starts_with("parus_decl_kind=proto")) continue;
+            if (sym.name.empty()) continue;
+            if (proto_decl_by_name_.find(sym.name) != proto_decl_by_name_.end()) continue;
+
+            ast::Stmt stub{};
+            stub.kind = ast::StmtKind::kProtoDecl;
+            stub.span = sym.decl_span;
+            stub.name = sym.name;
+            stub.type = sym.declared_type;
+            stub.is_export = sym.is_export;
+            const auto stub_sid = ast_.add_stmt(stub);
+            proto_decl_by_name_[sym.name] = stub_sid;
+            proto_qualified_name_by_stmt_[stub_sid] = sym.name;
+            if (sym.declared_type != ty::kInvalidType) {
+                proto_decl_by_type_[sym.declared_type] = stub_sid;
+            }
+        }
+    }
+
+    void TypeChecker::ensure_builtin_family_proto_aliases_() {
+        constexpr std::string_view kBuiltinProtoLeaves[] = {
+            "SignedInt",
+            "UnsignedInt",
+            "Integral",
+            "FloatLike",
+            "RangeBound",
+        };
+
+        for (const auto leaf : kBuiltinProtoLeaves) {
+            std::optional<ast::StmtId> sid{};
+
+            auto bind_alias = [&](std::string key, ast::StmtId target_sid) {
+                if (key.empty()) return;
+                proto_decl_by_name_[std::move(key)] = target_sid;
+            };
+
+            auto try_key = [&](std::string_view key) {
+                if (key.empty() || sid.has_value()) return;
+                if (auto it = proto_decl_by_name_.find(std::string(key)); it != proto_decl_by_name_.end()) {
+                    sid = it->second;
+                }
+            };
+
+            try_key(leaf);
+            try_key(std::string("num::") + std::string(leaf));
+            try_key(std::string("core::num::") + std::string(leaf));
+            if (!sid.has_value()) {
+                for (const auto& [name, existing_sid] : proto_decl_by_name_) {
+                    const size_t pos = name.rfind("::");
+                    const std::string_view tail =
+                        (pos == std::string::npos) ? std::string_view(name)
+                                                   : std::string_view(name).substr(pos + 2);
+                    if (tail == leaf) {
+                        sid = existing_sid;
+                        break;
+                    }
+                }
+            }
+
+            if (!sid.has_value()) {
+                ast::Stmt stub{};
+                stub.kind = ast::StmtKind::kProtoDecl;
+                stub.name = leaf;
+                const auto stub_sid = ast_.add_stmt(stub);
+                proto_qualified_name_by_stmt_[stub_sid] = "core::num::" + std::string(leaf);
+                sid = stub_sid;
+            }
+
+            bind_alias(std::string(leaf), *sid);
+            bind_alias(std::string("num::") + std::string(leaf), *sid);
+            bind_alias(std::string("core::num::") + std::string(leaf), *sid);
+            if (proto_qualified_name_by_stmt_.find(*sid) == proto_qualified_name_by_stmt_.end()) {
+                proto_qualified_name_by_stmt_[*sid] = "core::num::" + std::string(leaf);
+            }
+        }
+    }
+
     void TypeChecker::collect_external_fn_overloads_() {
         external_fn_overload_map_.clear();
 
@@ -1750,11 +1842,22 @@
 
     TypeChecker::ImplBindingKind TypeChecker::parse_impl_binding_payload_(std::string_view payload) const {
         if (!payload.starts_with("parus_impl_binding|key=")) return ImplBindingKind::kNone;
-        std::string_view key = payload.substr(std::string_view("parus_impl_binding|key=").size());
+        std::string_view rest = payload.substr(std::string_view("parus_impl_binding|key=").size());
+        std::string_view key = rest;
         std::string_view mode{};
-        if (const size_t mode_pos = key.find("|mode="); mode_pos != std::string_view::npos) {
-            mode = key.substr(mode_pos + std::string_view("|mode=").size());
-            key = key.substr(0, mode_pos);
+        if (const size_t split = rest.find('|'); split != std::string_view::npos) {
+            key = rest.substr(0, split);
+            rest = rest.substr(split + 1);
+            while (!rest.empty()) {
+                const size_t next = rest.find('|');
+                const std::string_view part =
+                    (next == std::string_view::npos) ? rest : rest.substr(0, next);
+                if (part.starts_with("mode=")) {
+                    mode = part.substr(std::string_view("mode=").size());
+                }
+                if (next == std::string_view::npos) break;
+                rest = rest.substr(next + 1);
+            }
         }
         if (!mode.empty() && mode != "compiler") return ImplBindingKind::kNone;
         if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
@@ -1808,6 +1911,421 @@
         return payload;
     }
 
+    void TypeChecker::collect_unresolved_generic_param_names_in_type_(
+        ty::TypeId t,
+        std::unordered_set<std::string>& out
+    ) const {
+        if (t == ty::kInvalidType) return;
+        const auto& tt = types_.get(t);
+        switch (tt.kind) {
+            case ty::Kind::kNamedUser: {
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (!types_.decompose_named_user(t, path, args) || path.empty()) return;
+
+                for (const auto arg : args) {
+                    collect_unresolved_generic_param_names_in_type_(arg, out);
+                }
+
+                if (!args.empty() || path.size() != 1) return;
+
+                ty::Builtin builtin{};
+                if (ty::TypePool::builtin_from_name(path.front(), builtin) ||
+                    ty::TypePool::c_builtin_from_name(path.front(), builtin)) {
+                    return;
+                }
+                if (!lookup_symbol_(path.front()).has_value()) {
+                    out.emplace(path.front());
+                }
+                return;
+            }
+            case ty::Kind::kOptional:
+            case ty::Kind::kArray:
+            case ty::Kind::kBorrow:
+            case ty::Kind::kEscape:
+            case ty::Kind::kPtr:
+                collect_unresolved_generic_param_names_in_type_(tt.elem, out);
+                return;
+            case ty::Kind::kFn: {
+                collect_unresolved_generic_param_names_in_type_(tt.ret, out);
+                for (uint32_t i = 0; i < tt.param_count; ++i) {
+                    collect_unresolved_generic_param_names_in_type_(types_.fn_param_at(t, i), out);
+                }
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
+    std::optional<ast::StmtId> TypeChecker::resolve_proto_sid_for_constraint_(std::string_view raw) const {
+        if (raw.empty()) return std::nullopt;
+        auto try_resolve = [&](std::string key) -> std::optional<ast::StmtId> {
+            if (auto rewritten = rewrite_imported_path_(key)) {
+                key = *rewritten;
+            }
+            if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
+                return it->second;
+            }
+            if (auto sym_sid = lookup_symbol_(key)) {
+                const auto& ss = sym_.symbol(*sym_sid);
+                if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
+                    return pit->second;
+                }
+            }
+            return std::nullopt;
+        };
+
+        if (auto resolved = try_resolve(std::string(raw))) {
+            return resolved;
+        }
+        if (!raw.starts_with("core::") && raw.find("::") != std::string_view::npos) {
+            if (auto resolved = try_resolve("core::" + std::string(raw))) {
+                return resolved;
+            }
+        }
+
+        const size_t sep = raw.rfind("::");
+        if (sep != std::string_view::npos && sep + 2 < raw.size()) {
+            const std::string_view leaf = raw.substr(sep + 2);
+            std::optional<ast::StmtId> unique{};
+            for (const auto& [name, sid] : proto_decl_by_name_) {
+                const size_t name_sep = name.rfind("::");
+                const std::string_view candidate_leaf =
+                    (name_sep == std::string::npos) ? std::string_view(name)
+                                                    : std::string_view(name).substr(name_sep + 2);
+                if (candidate_leaf != leaf) continue;
+                if (unique.has_value() && *unique != sid) {
+                    unique.reset();
+                    break;
+                }
+                unique = sid;
+            }
+            if (unique.has_value()) {
+                return unique;
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool TypeChecker::is_builtin_family_proto_(ast::StmtId proto_sid) const {
+        if (proto_sid == ast::k_invalid_stmt || static_cast<size_t>(proto_sid) >= ast_.stmts().size()) {
+            return false;
+        }
+
+        std::string name = ast_.stmt(proto_sid).name.empty()
+            ? std::string{}
+            : std::string(ast_.stmt(proto_sid).name);
+        if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
+            name = it->second;
+        }
+
+        const auto tail = [&](std::string_view qname) -> std::string_view {
+            const size_t pos = qname.rfind("::");
+            return (pos == std::string_view::npos) ? qname : qname.substr(pos + 2);
+        };
+
+        const std::string_view leaf = tail(name);
+        return leaf == "SignedInt" ||
+               leaf == "UnsignedInt" ||
+               leaf == "Integral" ||
+               leaf == "FloatLike" ||
+               leaf == "RangeBound";
+    }
+
+    bool TypeChecker::builtin_family_proto_satisfied_by_primitive_name_(
+        ty::TypeId concrete_t,
+        std::string_view proto_name
+    ) const {
+        concrete_t = canonicalize_transparent_external_typedef_(concrete_t);
+        if (concrete_t == ty::kInvalidType || concrete_t >= types_.count()) return false;
+        const auto& tt = types_.get(concrete_t);
+        if (tt.kind != ty::Kind::kBuiltin) return false;
+
+        const size_t pos = proto_name.rfind("::");
+        const std::string_view leaf =
+            (pos == std::string_view::npos) ? proto_name : proto_name.substr(pos + 2);
+
+        auto is_signed = [&](ty::Builtin b) {
+            using B = ty::Builtin;
+            switch (b) {
+                case B::kI8:
+                case B::kI16:
+                case B::kI32:
+                case B::kI64:
+                case B::kI128:
+                case B::kISize:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+        auto is_unsigned = [&](ty::Builtin b) {
+            using B = ty::Builtin;
+            switch (b) {
+                case B::kU8:
+                case B::kU16:
+                case B::kU32:
+                case B::kU64:
+                case B::kU128:
+                case B::kUSize:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        if (leaf == "SignedInt") return is_signed(tt.builtin);
+        if (leaf == "UnsignedInt") return is_unsigned(tt.builtin);
+        if (leaf == "Integral") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
+        if (leaf == "RangeBound") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
+        if (leaf == "FloatLike") return is_float_builtin_(tt.builtin);
+        return false;
+    }
+
+    bool TypeChecker::builtin_family_proto_satisfied_by_primitive_(ty::TypeId concrete_t, ast::StmtId proto_sid) const {
+        if (!is_builtin_family_proto_(proto_sid)) return false;
+
+        std::string name = ast_.stmt(proto_sid).name.empty()
+            ? std::string{}
+            : std::string(ast_.stmt(proto_sid).name);
+        if (auto it = proto_qualified_name_by_stmt_.find(proto_sid); it != proto_qualified_name_by_stmt_.end()) {
+            name = it->second;
+        }
+        return builtin_family_proto_satisfied_by_primitive_name_(concrete_t, name);
+    }
+
+    bool TypeChecker::type_satisfies_proto_constraint_(ty::TypeId concrete_t, ast::StmtId proto_sid, Span use_span) {
+        if (proto_sid == ast::k_invalid_stmt) return false;
+        if (builtin_family_proto_satisfied_by_primitive_(concrete_t, proto_sid)) {
+            return true;
+        }
+        if (!evaluate_proto_require_at_apply_(proto_sid, concrete_t, use_span,
+                                              /*emit_unsatisfied_diag=*/false,
+                                              /*emit_shape_diag=*/false)) {
+            return false;
+        }
+
+        std::vector<ast::StmtId> reqs;
+        std::vector<ast::StmtId> provs;
+        std::unordered_set<ast::StmtId> visiting;
+        auto fn_sig_same = [&](const ast::Stmt& a, const ast::Stmt& b) -> bool {
+            if (a.kind != ast::StmtKind::kFnDecl || b.kind != ast::StmtKind::kFnDecl) return false;
+            if (a.name != b.name) return false;
+            if (a.param_count != b.param_count) return false;
+            if (a.positional_param_count != b.positional_param_count) return false;
+            if (a.fn_ret != b.fn_ret) return false;
+            for (uint32_t i = 0; i < a.param_count; ++i) {
+                const auto& ap = ast_.params()[a.param_begin + i];
+                const auto& bp = ast_.params()[b.param_begin + i];
+                if (ap.type != bp.type || ap.is_self != bp.is_self || ap.self_kind != bp.self_kind) return false;
+            }
+            return true;
+        };
+        auto collect = [&](auto&& self, ast::StmtId cur_sid) -> void {
+            if (cur_sid == ast::k_invalid_stmt || static_cast<size_t>(cur_sid) >= ast_.stmts().size()) return;
+            if (!visiting.insert(cur_sid).second) return;
+            const auto& cur = ast_.stmt(cur_sid);
+            if (cur.kind != ast::StmtKind::kProtoDecl) return;
+            const auto& refs = ast_.path_refs();
+            const uint64_t ib = cur.decl_path_ref_begin;
+            const uint64_t ie = ib + cur.decl_path_ref_count;
+            if (ib <= refs.size() && ie <= refs.size()) {
+                for (uint32_t i = cur.decl_path_ref_begin; i < cur.decl_path_ref_begin + cur.decl_path_ref_count; ++i) {
+                    if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], use_span)) {
+                        self(self, *base_sid);
+                    }
+                }
+            }
+            const auto& kids = ast_.stmt_children();
+            const uint64_t mb = cur.stmt_begin;
+            const uint64_t me = mb + cur.stmt_count;
+            if (mb <= kids.size() && me <= kids.size()) {
+                for (uint32_t i = cur.stmt_begin; i < cur.stmt_begin + cur.stmt_count; ++i) {
+                    const auto msid = kids[i];
+                    if (msid == ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast_.stmts().size()) continue;
+                    const auto& m = ast_.stmt(msid);
+                    if (m.kind != ast::StmtKind::kFnDecl) continue;
+                    if (m.proto_fn_role == ast::ProtoFnRole::kRequire) reqs.push_back(msid);
+                    if (m.proto_fn_role == ast::ProtoFnRole::kProvide && m.a != ast::k_invalid_stmt) provs.push_back(msid);
+                }
+            }
+        };
+        collect(collect, proto_sid);
+
+        bool effective_required_empty = true;
+        for (const auto req_sid : reqs) {
+            if (req_sid == ast::k_invalid_stmt || static_cast<size_t>(req_sid) >= ast_.stmts().size()) continue;
+            const auto& req = ast_.stmt(req_sid);
+            bool satisfied = false;
+            for (const auto prov_sid : provs) {
+                if (prov_sid == ast::k_invalid_stmt || static_cast<size_t>(prov_sid) >= ast_.stmts().size()) continue;
+                if (fn_sig_same(req, ast_.stmt(prov_sid))) {
+                    satisfied = true;
+                    break;
+                }
+            }
+            if (!satisfied) {
+                effective_required_empty = false;
+                break;
+            }
+        }
+        if (effective_required_empty) return true;
+
+        ast::StmtId owner_sid = ast::k_invalid_stmt;
+        if (auto cit = class_decl_by_type_.find(concrete_t); cit != class_decl_by_type_.end()) {
+            owner_sid = cit->second;
+        } else if (auto fit = field_abi_meta_by_type_.find(concrete_t); fit != field_abi_meta_by_type_.end()) {
+            owner_sid = fit->second.sid;
+        } else if (auto eit = enum_abi_meta_by_type_.find(concrete_t); eit != enum_abi_meta_by_type_.end()) {
+            owner_sid = eit->second.sid;
+        }
+        if (owner_sid == ast::k_invalid_stmt || static_cast<size_t>(owner_sid) >= ast_.stmts().size()) return false;
+        const auto& owner = ast_.stmt(owner_sid);
+        const auto& refs = ast_.path_refs();
+        const uint64_t begin = owner.decl_path_ref_begin;
+        const uint64_t end = begin + owner.decl_path_ref_count;
+        if (begin > refs.size() || end > refs.size()) return false;
+        for (uint32_t i = owner.decl_path_ref_begin; i < owner.decl_path_ref_begin + owner.decl_path_ref_count; ++i) {
+            const std::string path = path_ref_display_(refs[i]);
+            auto psid = resolve_proto_sid_for_constraint_(path);
+            if (psid.has_value() && *psid == proto_sid) return true;
+        }
+        return false;
+    }
+
+    bool TypeChecker::evaluate_generic_constraint_(
+        const ast::FnConstraintDecl& cc,
+        const std::unordered_map<std::string, ty::TypeId>& bindings,
+        Span use_span,
+        GenericConstraintFailure& out
+    ) {
+        out = GenericConstraintFailure{};
+        const auto lhs_it = bindings.find(std::string(cc.type_param));
+        if (lhs_it == bindings.end()) {
+            out.kind = GenericConstraintFailure::Kind::kUnknownTypeParam;
+            out.lhs_type_param = std::string(cc.type_param);
+            return false;
+        }
+
+        if (cc.kind == ast::FnConstraintKind::kProto) {
+            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
+            auto proto_sid = resolve_proto_sid_for_constraint_(proto_path);
+            if (!proto_sid.has_value()) {
+                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, proto_path)) {
+                    return true;
+                }
+                const size_t pos = proto_path.rfind("::");
+                const std::string_view leaf =
+                    (pos == std::string::npos) ? std::string_view(proto_path)
+                                               : std::string_view(proto_path).substr(pos + 2);
+                if (leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
+                    leaf == "FloatLike" || leaf == "RangeBound") {
+                    out.kind = GenericConstraintFailure::Kind::kProtoUnsatisfied;
+                    out.lhs_type_param = std::string(cc.type_param);
+                    out.rhs_proto = proto_path;
+                    out.concrete_lhs = types_.to_string(lhs_it->second);
+                    return false;
+                }
+                out.kind = GenericConstraintFailure::Kind::kProtoNotFound;
+                out.rhs_proto = proto_path;
+                return false;
+            }
+            if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, use_span)) {
+                out.kind = GenericConstraintFailure::Kind::kProtoUnsatisfied;
+                out.lhs_type_param = std::string(cc.type_param);
+                out.rhs_proto = proto_path;
+                out.concrete_lhs = types_.to_string(lhs_it->second);
+                return false;
+            }
+            return true;
+        }
+
+        if (cc.kind == ast::FnConstraintKind::kTypeEq) {
+            ty::TypeId rhs = cc.rhs_type;
+            if (rhs == ty::kInvalidType) {
+                out.kind = GenericConstraintFailure::Kind::kUnknownTypeParam;
+                out.lhs_type_param = std::string(cc.type_param);
+                out.rhs_type_repr = "<invalid>";
+                return false;
+            }
+            rhs = substitute_generic_type_(rhs, bindings);
+            std::unordered_set<std::string> unresolved{};
+            collect_unresolved_generic_param_names_in_type_(rhs, unresolved);
+            if (!unresolved.empty()) {
+                out.kind = GenericConstraintFailure::Kind::kUnknownTypeParam;
+                out.lhs_type_param = *unresolved.begin();
+                return false;
+            }
+
+            const ty::TypeId lhs = canonicalize_transparent_external_typedef_(lhs_it->second);
+            rhs = canonicalize_transparent_external_typedef_(rhs);
+            if (lhs != rhs) {
+                out.kind = GenericConstraintFailure::Kind::kTypeMismatch;
+                out.lhs_type_param = std::string(cc.type_param);
+                out.rhs_type_repr =
+                    (cc.rhs_type != ty::kInvalidType) ? types_.to_string(cc.rhs_type) : std::string("<invalid>");
+                out.concrete_lhs = types_.to_string(lhs_it->second);
+                out.concrete_rhs = types_.to_string(rhs);
+                return false;
+            }
+            return true;
+        }
+
+        return true;
+    }
+
+    bool TypeChecker::validate_constraint_clause_decl_(
+        uint32_t begin,
+        uint32_t count,
+        const std::unordered_set<std::string>& generic_params,
+        Span owner_span
+    ) {
+        bool ok = true;
+        for (uint32_t ci = 0; ci < count; ++ci) {
+            const uint32_t idx = begin + ci;
+            if (idx >= ast_.fn_constraint_decls().size()) break;
+            const auto& c = ast_.fn_constraint_decls()[idx];
+
+            if (generic_params.find(std::string(c.type_param)) == generic_params.end()) {
+                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, c.span, c.type_param);
+                err_(c.span, "constraint references unknown generic type parameter");
+                ok = false;
+            }
+
+            if (c.kind == ast::FnConstraintKind::kProto) {
+                const std::string proto_path = path_join_(c.proto_path_begin, c.proto_path_count);
+                if (!resolve_proto_sid_for_constraint_(proto_path).has_value()) {
+                    const size_t pos = proto_path.rfind("::");
+                    const std::string_view leaf =
+                        (pos == std::string::npos) ? std::string_view(proto_path)
+                                                   : std::string_view(proto_path).substr(pos + 2);
+                    if (!(leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
+                          leaf == "FloatLike" || leaf == "RangeBound")) {
+                        diag_(diag::Code::kGenericConstraintProtoNotFound, c.span, proto_path);
+                        err_(c.span, "unknown proto in generic constraint");
+                        ok = false;
+                    }
+                }
+                continue;
+            }
+
+            if (c.kind == ast::FnConstraintKind::kTypeEq) {
+                std::unordered_set<std::string> unresolved{};
+                collect_unresolved_generic_param_names_in_type_(c.rhs_type, unresolved);
+                for (const auto& name : unresolved) {
+                    if (generic_params.find(name) != generic_params.end()) continue;
+                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, c.span, name);
+                    err_(c.span, "constraint references unknown generic type parameter");
+                    ok = false;
+                }
+                continue;
+            }
+        }
+        (void)owner_span;
+        return ok;
+    }
+
     void TypeChecker::collect_core_impl_marker_file_ids_(ast::StmtId program_stmt) {
         core_impl_marker_file_ids_ = explicit_core_impl_marker_file_ids_;
         if (program_stmt == ast::k_invalid_stmt || static_cast<size_t>(program_stmt) >= ast_.stmts().size()) {
@@ -1830,12 +2348,10 @@
     }
 
     std::string TypeChecker::current_bundle_name_() const {
+        if (!explicit_current_bundle_name_.empty()) return explicit_current_bundle_name_;
         const auto& syms = sym_.symbols();
         for (const auto& s : syms) {
             if (s.is_external) continue;
-            if (!s.decl_bundle_name.empty()) return s.decl_bundle_name;
-        }
-        for (const auto& s : syms) {
             if (!s.decl_bundle_name.empty()) return s.decl_bundle_name;
         }
         return {};

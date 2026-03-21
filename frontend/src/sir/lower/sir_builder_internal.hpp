@@ -8,6 +8,15 @@ namespace parus::sir::detail {
     /// @brief Tyck 결과에서 AST expression의 최종 타입을 조회한다.
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid);
 
+    /// @brief Tyck cache가 비어 있어도 AST target_type / resolved symbol type로 보강 조회한다.
+    TypeId best_effort_type_of_ast_expr(
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        parus::ast::ExprId eid
+    );
+
     /// @brief AST expression 노드에서 name-resolve 심볼을 찾는다.
     SymbolId resolve_symbol_from_expr(
         const passes::NameResolveResult& nres,
@@ -41,10 +50,14 @@ namespace parus::sir::detail {
 
     /// @brief 동일 심볼의 사용 위치를 기준으로 선언 타입을 보강 추론한다.
     TypeId resolve_decl_type_from_symbol_uses(
+        const parus::ast::AstArena& ast,
+        const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
         const tyck::TyckResult& tyck,
         SymbolId sym_id
     );
+
+    void set_active_type_pool_for_sir_build_(ty::TypePool* types);
 
     /// @brief AST expression이 place(local/index/...)인지 분류한다.
     PlaceClass classify_place_from_ast(const parus::ast::AstArena& ast, parus::ast::ExprId eid);

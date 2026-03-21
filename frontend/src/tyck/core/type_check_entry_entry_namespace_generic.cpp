@@ -113,6 +113,10 @@ namespace parus::tyck {
             sym_ = sema::SymbolTable{};
         }
 
+        if (string_type_ == ty::kInvalidType) {
+            string_type_ = types_.builtin(ty::Builtin::kText);
+        }
+
         // expr type cache: AST exprs 크기에 맞춰 리셋
         expr_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_overload_target_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
@@ -155,11 +159,6 @@ namespace parus::tyck {
         result_.expr_external_const_values = expr_external_const_value_cache_;
         result_.param_resolved_symbol = param_resolved_symbol_cache_;
 
-        // string literal은 builtin text 타입으로 고정한다.
-        if (string_type_ == ty::kInvalidType) {
-            string_type_ = types_.builtin(ty::Builtin::kText);
-        }
-
         // ------------------------------------------
         // Sanity: program은 Block이어야 한다 (정책)
         // ------------------------------------------
@@ -168,7 +167,7 @@ namespace parus::tyck {
             return result_;
         }
 
-        const ast::Stmt& root = ast_.stmt(program_stmt);
+        const ast::Stmt root = ast_.stmt(program_stmt);
         if (root.kind != ast::StmtKind::kBlock) {
             if (diag_bag_) diag_(diag::Code::kTopLevelMustBeBlock, root.span);
             result_.ok = false;
@@ -178,6 +177,8 @@ namespace parus::tyck {
         // 파일 기본 nest 지시어를 먼저 반영한다.
         init_file_namespace_(program_stmt);
         collect_known_namespace_paths_(program_stmt);
+        collect_external_proto_stubs_();
+        ensure_builtin_family_proto_aliases_();
         collect_external_builtin_acts_methods_();
         collect_external_fn_overloads_();
         collect_external_enum_metadata_();
@@ -720,6 +721,22 @@ namespace parus::tyck {
         diag_bag_->add(std::move(d));
     }
 
+    void TypeChecker::diag_(diag::Code code,
+                            Span sp,
+                            std::string_view a0,
+                            std::string_view a1,
+                            std::string_view a2,
+                            std::string_view a3) {
+        if (!diag_bag_) return;
+        result_.ok = false;
+        diag::Diagnostic d(diag::Severity::kError, code, sp);
+        d.add_arg(a0);
+        d.add_arg(a1);
+        d.add_arg(a2);
+        d.add_arg(a3);
+        diag_bag_->add(std::move(d));
+    }
+
     void TypeChecker::warn_(diag::Code code, Span sp, std::string_view a0) {
         if (!diag_bag_) return;
         diag::Diagnostic d(diag::Severity::kWarning, code, sp);
@@ -756,6 +773,19 @@ namespace parus::tyck {
         if (t == ty::kInvalidType) return false;
         t = canonicalize_transparent_external_typedef_(t);
         if (t == ty::kInvalidType) return false;
+        if (t < types_.count()) {
+            const auto& tt = types_.get(t);
+            if (tt.kind == ty::Kind::kNamedUser) {
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (types_.decompose_named_user(t, path, args) &&
+                    args.empty() &&
+                    !path.empty() &&
+                    path.back() == "vaList") {
+                    return true;
+                }
+            }
+        }
         const auto& tt = types_.get(t);
         return tt.kind == ty::Kind::kBuiltin && tt.builtin == ty::Builtin::kVaList;
     }
@@ -2009,27 +2039,32 @@ namespace parus::tyck {
             const uint32_t idx = templ.decl_constraint_begin + ci;
             if (idx >= ast_.fn_constraint_decls().size()) break;
             const auto& cc = ast_.fn_constraint_decls()[idx];
-
-            auto bit = subst.find(std::string(cc.type_param));
-            if (bit == subst.end()) {
-                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
-                err_(cc.span, "struct declaration constraint references unknown generic parameter");
-                return std::nullopt;
+            GenericConstraintFailure failure{};
+            if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
+            switch (failure.kind) {
+                case GenericConstraintFailure::Kind::kUnknownTypeParam:
+                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
+                    err_(cc.span, "struct declaration constraint references unknown generic parameter");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoNotFound:
+                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
+                    err_(cc.span, "struct declaration constraint references unknown proto");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
+                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
+                    err_(cc.span, "struct declaration generic constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kTypeMismatch:
+                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
+                          failure.lhs_type_param, failure.rhs_type_repr,
+                          failure.concrete_lhs, failure.concrete_rhs);
+                    err_(cc.span, "struct declaration generic equality constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kNone:
+                    break;
             }
-
-            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
-            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
-            if (!proto_sid.has_value()) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
-                err_(cc.span, "struct declaration constraint references unknown proto");
-                return std::nullopt;
-            }
-            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
-                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                      cc.type_param, proto_path, types_.to_string(bit->second));
-                err_(cc.span, "struct declaration generic constraint unsatisfied");
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
 
         std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
@@ -2470,27 +2505,32 @@ namespace parus::tyck {
             const uint32_t idx = templ.decl_constraint_begin + ci;
             if (idx >= ast_.fn_constraint_decls().size()) break;
             const auto& cc = ast_.fn_constraint_decls()[idx];
-
-            auto bit = subst.find(std::string(cc.type_param));
-            if (bit == subst.end()) {
-                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
-                err_(cc.span, "declaration constraint references unknown generic parameter");
-                return std::nullopt;
+            GenericConstraintFailure failure{};
+            if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
+            switch (failure.kind) {
+                case GenericConstraintFailure::Kind::kUnknownTypeParam:
+                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
+                    err_(cc.span, "declaration constraint references unknown generic parameter");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoNotFound:
+                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
+                    err_(cc.span, "declaration constraint references unknown proto");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
+                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
+                    err_(cc.span, "declaration generic constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kTypeMismatch:
+                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
+                          failure.lhs_type_param, failure.rhs_type_repr,
+                          failure.concrete_lhs, failure.concrete_rhs);
+                    err_(cc.span, "declaration generic equality constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kNone:
+                    break;
             }
-
-            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
-            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
-            if (!proto_sid.has_value()) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
-                err_(cc.span, "declaration constraint references unknown proto");
-                return std::nullopt;
-            }
-            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
-                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                      cc.type_param, proto_path, types_.to_string(bit->second));
-                err_(cc.span, "declaration generic constraint unsatisfied");
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
 
         std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;
@@ -2887,27 +2927,32 @@ namespace parus::tyck {
             const uint32_t idx = templ.decl_constraint_begin + ci;
             if (idx >= ast_.fn_constraint_decls().size()) break;
             const auto& cc = ast_.fn_constraint_decls()[idx];
-
-            auto bit = subst.find(std::string(cc.type_param));
-            if (bit == subst.end()) {
-                diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, cc.type_param);
-                err_(cc.span, "acts declaration constraint references unknown generic parameter");
-                return std::nullopt;
+            GenericConstraintFailure failure{};
+            if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
+            switch (failure.kind) {
+                case GenericConstraintFailure::Kind::kUnknownTypeParam:
+                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
+                    err_(cc.span, "acts declaration constraint references unknown generic parameter");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoNotFound:
+                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
+                    err_(cc.span, "acts declaration constraint references unknown proto");
+                    break;
+                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
+                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
+                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
+                    err_(cc.span, "acts declaration generic constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kTypeMismatch:
+                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
+                          failure.lhs_type_param, failure.rhs_type_repr,
+                          failure.concrete_lhs, failure.concrete_rhs);
+                    err_(cc.span, "acts declaration generic equality constraint unsatisfied");
+                    break;
+                case GenericConstraintFailure::Kind::kNone:
+                    break;
             }
-
-            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
-            auto proto_sid = resolve_proto_sid_for_constraint(proto_path);
-            if (!proto_sid.has_value()) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, proto_path);
-                err_(cc.span, "acts declaration constraint references unknown proto");
-                return std::nullopt;
-            }
-            if (!type_satisfies_proto_constraint(bit->second, *proto_sid)) {
-                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                      cc.type_param, proto_path, types_.to_string(bit->second));
-                err_(cc.span, "acts declaration generic constraint unsatisfied");
-                return std::nullopt;
-            }
+            return std::nullopt;
         }
 
         std::unordered_map<ast::ExprId, ast::ExprId> expr_clone_map;

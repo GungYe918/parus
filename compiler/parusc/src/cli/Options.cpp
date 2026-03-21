@@ -293,7 +293,9 @@ namespace parusc::cli {
                     return true;
                 }
                 if (!push_value(*v)) return true;
-                out.bundle.enabled = true;
+                if (name != "load-export-index") {
+                    out.bundle.enabled = true;
+                }
                 return true;
             }
             if (arg.starts_with(opt_eq)) {
@@ -304,7 +306,9 @@ namespace parusc::cli {
                     return true;
                 }
                 if (!push_value(v)) return true;
-                out.bundle.enabled = true;
+                if (name != "load-export-index") {
+                    out.bundle.enabled = true;
+                }
                 return true;
             }
             return false;

@@ -1,16 +1,25 @@
 $![Impl::Core];
 
+def text_len_bytes_(x: &text) -> usize {
+    let n: usize = (*x).len;
+    return n;
+}
+
+def text_as_ptr_(x: &text) -> *const u8 {
+    return (*x).data;
+}
+
 // Default text view acts for the builtin non-owning UTF-8 text type.
 export acts for text {
     def is_empty(self) -> bool {
-        return (*self).len == 0usize;
+        return text_len_bytes_(self) == 0usize;
     }
 
     def len_bytes(self) -> usize {
-        return (*self).len;
+        return text_len_bytes_(self);
     }
 
     def as_ptr(self) -> *const u8 {
-        return (*self).data;
+        return text_as_ptr_(self);
     }
 };

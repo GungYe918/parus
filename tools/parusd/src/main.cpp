@@ -2299,7 +2299,12 @@ namespace {
         return "parusc";
     }
 
-    bool index_stale_for_bundle_(const std::filesystem::path& index_path, const BundleUnitMeta& unit) {
+    bool index_stale_for_bundle_(
+        const std::filesystem::path& index_path,
+        const BundleUnitMeta& unit,
+        std::string_view parusc_path,
+        const std::vector<std::string>& load_export_index_paths
+    ) {
         namespace fs = std::filesystem;
         std::error_code ec{};
         if (!fs::exists(index_path, ec) || ec) return true;
@@ -2311,12 +2316,52 @@ namespace {
             if (ec) return true;
             if (src_time > index_time) return true;
         }
+        if (!parusc_path.empty()) {
+            const fs::path compiler_path{std::string(parusc_path)};
+            const auto compiler_time = fs::last_write_time(compiler_path, ec);
+            if (ec) return true;
+            if (compiler_time > index_time) return true;
+        }
+        for (const auto& dep_idx : load_export_index_paths) {
+            if (dep_idx.empty()) continue;
+            const fs::path dep_path(dep_idx);
+            const auto dep_time = fs::last_write_time(dep_path, ec);
+            if (ec) return true;
+            if (dep_time > index_time) return true;
+        }
+
+        std::unordered_set<std::string> expected_module_heads{};
+        for (const auto& [src, head] : unit.module_head_by_source) {
+            (void)src;
+            if (head.empty()) continue;
+            expected_module_heads.insert(head);
+            if (unit.bundle_name == "core" &&
+                head != "core" &&
+                !std::string_view(head).starts_with("core::")) {
+                expected_module_heads.insert("core::" + head);
+            }
+        }
+        if (expected_module_heads.size() > 1) {
+            std::ifstream ifs(index_path, std::ios::binary);
+            if (!ifs.is_open()) return true;
+            const std::string text{
+                std::istreambuf_iterator<char>(ifs),
+                std::istreambuf_iterator<char>()
+            };
+            for (const auto& head : expected_module_heads) {
+                if (text.find("\"module_head\":\"" + head + "\"") != std::string::npos) {
+                    continue;
+                }
+                return true;
+            }
+        }
         return false;
     }
 
     bool ensure_bundle_export_index_(
         const std::filesystem::path& config_dir,
         const BundleUnitMeta& unit,
+        const std::vector<std::string>& load_export_index_paths,
         std::filesystem::path& out_index_path
     ) {
         namespace fs = std::filesystem;
@@ -2325,11 +2370,74 @@ namespace {
         fs::create_directories(index_dir, ec);
         if (ec) return false;
         out_index_path = index_dir / (unit.bundle_name + ".exports.json");
-        if (!index_stale_for_bundle_(out_index_path, unit)) return true;
+        const std::string parusc_path = resolve_parusc_path_();
+        if (!index_stale_for_bundle_(out_index_path, unit, parusc_path, load_export_index_paths)) return true;
         if (unit.normalized_sources.empty()) return false;
 
-        std::vector<std::string> argv{
-            resolve_parusc_path_(),
+        auto append_source_context = [&](std::vector<std::string>& argv, const std::string& src) {
+            if (auto it = unit.module_head_by_source.find(src);
+                it != unit.module_head_by_source.end() && !it->second.empty()) {
+                argv.push_back("--module-head");
+                argv.push_back(it->second);
+            }
+            if (auto it = unit.module_imports_by_source.find(src);
+                it != unit.module_imports_by_source.end()) {
+                for (const auto& import_head : it->second) {
+                    if (import_head.empty()) continue;
+                    argv.push_back("--module-import");
+                    argv.push_back(normalize_import_head_(import_head));
+                }
+            }
+            std::vector<std::string> cimport_isystem = unit.bundle_cimport_isystem;
+            if (auto it = unit.module_cimport_isystem_by_source.find(src);
+                it != unit.module_cimport_isystem_by_source.end()) {
+                parus::cimport::append_unique_normalized_paths(cimport_isystem, it->second);
+            }
+            for (const auto& d : cimport_isystem) {
+                if (d.empty()) continue;
+                argv.push_back("-isystem");
+                argv.push_back(d);
+            }
+        };
+
+        std::vector<std::filesystem::path> fragment_paths{};
+        fragment_paths.reserve(unit.normalized_sources.size());
+        for (size_t i = 0; i < unit.normalized_sources.size(); ++i) {
+            const auto& src = unit.normalized_sources[i];
+            const auto frag_path =
+                index_dir / (unit.bundle_name + ".frag." + std::to_string(i) + ".exports.json");
+            fragment_paths.push_back(frag_path);
+
+            std::vector<std::string> argv{
+                parusc_path,
+                src,
+                "-fsyntax-only",
+                "--bundle-name",
+                unit.bundle_name,
+                "--bundle-root",
+                config_dir.lexically_normal().string(),
+                "--emit-export-index",
+                frag_path.string(),
+            };
+            append_source_context(argv, src);
+            for (const auto& all_src : unit.normalized_sources) {
+                argv.push_back("--bundle-source");
+                argv.push_back(all_src);
+            }
+            for (const auto& idx : load_export_index_paths) {
+                if (idx.empty()) continue;
+                argv.push_back("--load-export-index");
+                argv.push_back(idx);
+            }
+            for (const auto& dep : unit.bundle_deps) {
+                argv.push_back("--bundle-dep");
+                argv.push_back(dep);
+            }
+            if (run_argv_system_(argv) != 0) return false;
+        }
+
+        std::vector<std::string> merge_argv{
+            parusc_path,
             unit.normalized_sources.front(),
             "-fsyntax-only",
             "--bundle-name",
@@ -2339,39 +2447,25 @@ namespace {
             "--emit-export-index",
             out_index_path.string(),
         };
-        if (auto it = unit.module_head_by_source.find(unit.normalized_sources.front());
-            it != unit.module_head_by_source.end() && !it->second.empty()) {
-            argv.push_back("--module-head");
-            argv.push_back(it->second);
+        append_source_context(merge_argv, unit.normalized_sources.front());
+        for (const auto& all_src : unit.normalized_sources) {
+            merge_argv.push_back("--bundle-source");
+            merge_argv.push_back(all_src);
         }
-        if (auto it = unit.module_imports_by_source.find(unit.normalized_sources.front());
-            it != unit.module_imports_by_source.end()) {
-            for (const auto& import_head : it->second) {
-                if (import_head.empty()) continue;
-                argv.push_back("--module-import");
-                argv.push_back(normalize_import_head_(import_head));
-            }
+        for (const auto& frag : fragment_paths) {
+            merge_argv.push_back("--load-export-index");
+            merge_argv.push_back(frag.string());
         }
-        std::vector<std::string> cimport_isystem = unit.bundle_cimport_isystem;
-        if (auto it = unit.module_cimport_isystem_by_source.find(unit.normalized_sources.front());
-            it != unit.module_cimport_isystem_by_source.end()) {
-            parus::cimport::append_unique_normalized_paths(cimport_isystem, it->second);
-        }
-        for (const auto& d : cimport_isystem) {
-            if (d.empty()) continue;
-            argv.push_back("-isystem");
-            argv.push_back(d);
-        }
-        for (const auto& src : unit.normalized_sources) {
-            argv.push_back("--bundle-source");
-            argv.push_back(src);
+        for (const auto& idx : load_export_index_paths) {
+            if (idx.empty()) continue;
+            merge_argv.push_back("--load-export-index");
+            merge_argv.push_back(idx);
         }
         for (const auto& dep : unit.bundle_deps) {
-            argv.push_back("--bundle-dep");
-            argv.push_back(dep);
+            merge_argv.push_back("--bundle-dep");
+            merge_argv.push_back(dep);
         }
-        const int rc = run_argv_system_(argv);
-        return rc == 0;
+        return run_argv_system_(merge_argv) == 0;
     }
 
     bool read_text_file_(const std::filesystem::path& path, std::string& out) {
@@ -2648,22 +2742,41 @@ namespace {
             std::sort(nav_paths.begin(), nav_paths.end());
             nav_paths.erase(std::unique(nav_paths.begin(), nav_paths.end()), nav_paths.end());
 
-            parus::passes::NameResolveOptions::ExternalExport ex{};
-            ex.kind = *mapped_kind;
-            ex.path = lookup_path;
-            ex.link_name = std::string(*link_name_s);
-            ex.declared_type_repr = std::string(*type_repr_s);
-            if (type_semantic_s.has_value()) {
-                ex.declared_type_semantic = std::string(*type_semantic_s);
+            std::vector<std::string> export_paths{};
+            export_paths.reserve(3);
+            if (!same_module && !lookup_path.empty()) {
+                export_paths.push_back(lookup_path);
             }
-            ex.decl_bundle_name = bundle_name;
-            ex.module_head = std::move(module_head);
-            ex.decl_source_dir_norm = std::move(decl_source_dir);
-            ex.is_export = is_export;
-            if (inst_payload_s.has_value()) {
-                ex.inst_payload = std::string(*inst_payload_s);
+            if (same_module && !local.empty()) {
+                export_paths.push_back(local);
             }
-            out_exports.push_back(std::move(ex));
+            if (!lookup_path.empty()) {
+                export_paths.push_back(lookup_path);
+            }
+            if (!short_head.empty() && !local.empty()) {
+                export_paths.push_back(short_head + "::" + local);
+            }
+            std::sort(export_paths.begin(), export_paths.end());
+            export_paths.erase(std::unique(export_paths.begin(), export_paths.end()), export_paths.end());
+
+            for (const auto& export_path : export_paths) {
+                parus::passes::NameResolveOptions::ExternalExport ex{};
+                ex.kind = *mapped_kind;
+                ex.path = export_path;
+                ex.link_name = std::string(*link_name_s);
+                ex.declared_type_repr = std::string(*type_repr_s);
+                if (type_semantic_s.has_value()) {
+                    ex.declared_type_semantic = std::string(*type_semantic_s);
+                }
+                ex.decl_bundle_name = bundle_name;
+                ex.module_head = module_head;
+                ex.decl_source_dir_norm = decl_source_dir;
+                ex.is_export = is_export;
+                if (inst_payload_s.has_value()) {
+                    ex.inst_payload = std::string(*inst_payload_s);
+                }
+                out_exports.push_back(std::move(ex));
+            }
 
             if (out_decl_locs != nullptr && decl_span_node != nullptr &&
                 decl_span_node->kind == JsonValue::Kind::kObject) {
@@ -2810,12 +2923,50 @@ namespace {
         }
 
         const auto config_dir = config_lei->parent_path();
+        std::unordered_map<std::string, std::filesystem::path> ensured_bundle_index_paths{};
+        std::unordered_set<std::string> ensure_bundle_stack{};
+
+        auto ensure_one_bundle_index = [&](auto&& self,
+                                           std::string_view bundle_name,
+                                           std::filesystem::path& out_idx_path) -> bool {
+            const std::string key(bundle_name);
+            if (key.empty()) return false;
+            if (auto it_cached = ensured_bundle_index_paths.find(key);
+                it_cached != ensured_bundle_index_paths.end()) {
+                out_idx_path = it_cached->second;
+                return true;
+            }
+
+            auto it = units_by_name.find(key);
+            if (it == units_by_name.end()) return false;
+            if (!ensure_bundle_stack.insert(key).second) return false;
+
+            std::vector<std::string> dep_index_paths{};
+            dep_index_paths.reserve(it->second->bundle_deps.size());
+            for (const auto& dep : it->second->bundle_deps) {
+                std::filesystem::path dep_idx{};
+                if (!self(self, dep, dep_idx)) {
+                    ensure_bundle_stack.erase(key);
+                    return false;
+                }
+                dep_index_paths.push_back(dep_idx.string());
+            }
+
+            if (!ensure_bundle_export_index_(config_dir, *it->second, dep_index_paths, out_idx_path)) {
+                ensure_bundle_stack.erase(key);
+                return false;
+            }
+            ensure_bundle_stack.erase(key);
+            ensured_bundle_index_paths.emplace(key, out_idx_path);
+            return true;
+        };
+
         auto load_one_bundle = [&](std::string_view bundle_name, bool same_bundle) {
             auto it = units_by_name.find(std::string(bundle_name));
             if (it == units_by_name.end()) return;
 
             std::filesystem::path idx_path{};
-            if (!ensure_bundle_export_index_(config_dir, *it->second, idx_path)) {
+            if (!ensure_one_bundle_index(ensure_one_bundle_index, bundle_name, idx_path)) {
                 ctx.index_load_errors.push_back(
                     "failed to generate export-index for bundle '" + std::string(bundle_name) + "'");
                 return;
@@ -2835,7 +2986,8 @@ namespace {
             // stale cache/schema mismatch: one forced regeneration retry.
             std::error_code ec{};
             std::filesystem::remove(idx_path, ec);
-            if (!ensure_bundle_export_index_(config_dir, *it->second, idx_path)) {
+            ensured_bundle_index_paths.erase(std::string(bundle_name));
+            if (!ensure_one_bundle_index(ensure_one_bundle_index, bundle_name, idx_path)) {
                 std::string msg =
                     "failed to regenerate export-index for bundle '" + std::string(bundle_name) + "'";
                 if (!first_err.empty()) msg += " (first load error: " + first_err + ")";

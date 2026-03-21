@@ -2381,10 +2381,14 @@ namespace parus::cimport {
         const std::string source = "#include \"" + escaped + "\"\n";
         const std::string tu_name = importer_source_path + ".parus_cimport.c";
         (void)sysroot_path;
+        const std::filesystem::path importer_path(importer_source_path);
+        const std::string working_dir =
+            importer_path.has_parent_path() ? importer_path.parent_path().string() : std::string{};
 
         std::vector<std::string> args_storage{};
         args_storage.reserve(
             12 +
+            (working_dir.empty() ? 0u : 2u) +
             (target_triple.empty() ? 0u : 2u) +
             (apple_sdk_root.empty() ? 0u : 2u) +
             include_dirs.size() +
@@ -2397,6 +2401,10 @@ namespace parus::cimport {
         args_storage.emplace_back("c");
         args_storage.emplace_back("-std=c17");
         args_storage.emplace_back("-fsyntax-only");
+        if (!working_dir.empty()) {
+            args_storage.emplace_back("-working-directory");
+            args_storage.emplace_back(working_dir);
+        }
         if (!target_triple.empty()) {
             args_storage.emplace_back("-target");
             args_storage.emplace_back(target_triple);

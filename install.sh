@@ -275,6 +275,32 @@ for module_head in "${CORE_MODULES[@]}"; do
 done
 
 CORE_INDEX_PATH="${SYSROOT_DIR}/.cache/exports/core.exports.json"
+CORE_FRAGMENT_PATHS=()
+for i in "${!CORE_SOURCES[@]}"; do
+  src="${CORE_SOURCES[$i]}"
+  module_head="${CORE_MODULES[$i]}"
+  frag="${SYSROOT_DIR}/.cache/exports/core_${i}.frag.exports.json"
+  CORE_FRAGMENT_PATHS+=("${frag}")
+  CORE_FRAGMENT_CMD=(
+    "${PARUSC_BIN}" "${src}"
+    -fsyntax-only
+    --bundle-name core
+    --bundle-root "${CORE_SRC_ROOT}"
+    --module-head "${module_head}"
+    --emit-export-index "${frag}"
+  )
+  if [[ -n "${CORE_MODULE_IMPORTS_TEXT}" ]]; then
+    while IFS= read -r module_import; do
+      [[ -z "${module_import}" ]] && continue
+      CORE_FRAGMENT_CMD+=(--module-import "${module_import}")
+    done <<< "${CORE_MODULE_IMPORTS_TEXT}"
+  fi
+  for all_src in "${CORE_SOURCES[@]}"; do
+    CORE_FRAGMENT_CMD+=(--bundle-source "${all_src}")
+  done
+  "${CORE_FRAGMENT_CMD[@]}"
+done
+
 CORE_INDEX_CMD=(
   "${PARUSC_BIN}" "${CORE_SOURCES[0]}"
   -fsyntax-only
@@ -291,6 +317,9 @@ if [[ -n "${CORE_MODULE_IMPORTS_TEXT}" ]]; then
 fi
 for src in "${CORE_SOURCES[@]}"; do
   CORE_INDEX_CMD+=(--bundle-source "${src}")
+done
+for frag in "${CORE_FRAGMENT_PATHS[@]}"; do
+  CORE_INDEX_CMD+=(--load-export-index "${frag}")
 done
 "${CORE_INDEX_CMD[@]}"
 

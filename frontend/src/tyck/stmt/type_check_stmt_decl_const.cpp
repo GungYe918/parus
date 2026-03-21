@@ -1,8 +1,9 @@
     void TypeChecker::check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s) {
+        const ast::Stmt fn = s;
         // ----------------------------
         // 0) 시그니처 타입 확보
         // ----------------------------
-        ty::TypeId sig = s.type;
+        ty::TypeId sig = fn.type;
 
         ty::TypeId ret = ty::kInvalidType;
 
@@ -54,15 +55,15 @@
             }
         }
 
-        if (s.link_abi == ast::LinkAbi::kC) {
-            if (s.fn_is_c_variadic && !s.is_extern) {
+        if (fn.link_abi == ast::LinkAbi::kC) {
+            if (fn.fn_is_c_variadic && !fn.is_extern) {
                 const std::string msg = "C variadic declaration is allowed only on extern \"C\" declarations";
-                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                err_(s.span, msg);
+                diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                err_(fn.span, msg);
             }
-            if (s.is_throwing) {
-                diag_(diag::Code::kAbiCThrowingFnNotAllowed, s.span, s.name);
-                err_(s.span, "C ABI function must not be throwing ('?'); convert exception channel at boundary");
+            if (fn.is_throwing) {
+                diag_(diag::Code::kAbiCThrowingFnNotAllowed, fn.span, fn.name);
+                err_(fn.span, "C ABI function must not be throwing ('?'); convert exception channel at boundary");
             }
 
             auto check_enum_direct_c_abi = [&](ty::TypeId t, Span sp, std::string_view what) {
@@ -73,12 +74,12 @@
                 }
             };
 
-            if (s.has_named_group || s.positional_param_count != s.param_count) {
-                diag_(diag::Code::kAbiCNamedGroupNotAllowed, s.span, s.name);
-                err_(s.span, "C ABI function must not use named-group parameters: " + std::string(s.name));
+            if (fn.has_named_group || fn.positional_param_count != fn.param_count) {
+                diag_(diag::Code::kAbiCNamedGroupNotAllowed, fn.span, fn.name);
+                err_(fn.span, "C ABI function must not use named-group parameters: " + std::string(fn.name));
             }
 
-            check_enum_direct_c_abi(ret, s.span, std::string("return type of '") + std::string(s.name) + "'");
+            check_enum_direct_c_abi(ret, fn.span, std::string("return type of '") + std::string(fn.name) + "'");
             (void)ensure_generic_field_instance_from_type_(ret, s.span);
             if (!is_c_abi_safe_type_(ret, /*allow_void=*/true)) {
                 const ty::TypeId canon = canonicalize_transparent_external_typedef_(ret);
@@ -86,20 +87,20 @@
                     canon != ty::kInvalidType &&
                     types_.get(canon).kind == ty::Kind::kBuiltin &&
                     types_.get(canon).builtin == ty::Builtin::kText;
-                diag_(diag::Code::kAbiCTypeNotFfiSafe, s.span,
-                    std::string("return type of '") + std::string(s.name) + "'",
+                diag_(diag::Code::kAbiCTypeNotFfiSafe, fn.span,
+                    std::string("return type of '") + std::string(fn.name) + "'",
                     types_.to_string(ret));
                 if (is_text) {
-                    diag_(diag::Code::kTypeErrorGeneric, s.span,
+                    diag_(diag::Code::kTypeErrorGeneric, fn.span,
                           "text is not C ABI-safe; use *const core::ext::c_char and explicit boundary conversion");
                 }
                 std::string msg = "C ABI return type is not FFI-safe";
                 if (is_text) msg += " (text is not C ABI-safe; use *const core::ext::c_char)";
-                err_(s.span, msg);
+                err_(fn.span, msg);
             }
 
-            for (uint32_t i = 0; i < s.param_count; ++i) {
-                const auto& p = ast_.params()[s.param_begin + i];
+            for (uint32_t i = 0; i < fn.param_count; ++i) {
+                const auto& p = ast_.params()[fn.param_begin + i];
                 check_enum_direct_c_abi(p.type, p.span, std::string("parameter '") + std::string(p.name) + "'");
                 (void)ensure_generic_field_instance_from_type_(p.type, p.span);
                 if (!is_c_abi_safe_type_(p.type, /*allow_void=*/false)) {
@@ -122,100 +123,75 @@
             }
         }
 
-        if (s.has_named_group && s.positional_param_count > 0) {
-            diag_(diag::Code::kFnNamedGroupMixedWithPositional, s.span);
-            err_(s.span, "function declaration must be either positional-only or named-group-only");
+        if (fn.has_named_group && fn.positional_param_count > 0) {
+            diag_(diag::Code::kFnNamedGroupMixedWithPositional, fn.span);
+            err_(fn.span, "function declaration must be either positional-only or named-group-only");
         }
 
         // ----------------------------
-        // 0.5) generic proto constraints (declaration-time validation)
+        // 0.5) generic constraints (declaration-time validation)
         // ----------------------------
         std::unordered_set<std::string> generic_params;
-        for (uint32_t gi = 0; gi < s.fn_generic_param_count; ++gi) {
-            const uint32_t idx = s.fn_generic_param_begin + gi;
+        for (uint32_t gi = 0; gi < fn.fn_generic_param_count; ++gi) {
+            const uint32_t idx = fn.fn_generic_param_begin + gi;
             if (idx >= ast_.generic_param_decls().size()) break;
             generic_params.insert(std::string(ast_.generic_param_decls()[idx].name));
         }
-        for (uint32_t ci = 0; ci < s.fn_constraint_count; ++ci) {
-            const uint32_t idx = s.fn_constraint_begin + ci;
-            if (idx >= ast_.fn_constraint_decls().size()) break;
-            const auto& c = ast_.fn_constraint_decls()[idx];
-
-            if (generic_params.find(std::string(c.type_param)) == generic_params.end()) {
-                std::string msg = "constraint uses unknown type parameter: " + std::string(c.type_param);
-                diag_(diag::Code::kProtoConstraintUnsatisfied, c.span, msg);
-                err_(c.span, msg);
-            }
-
-            const std::string proto_path = path_join_(c.proto_path_begin, c.proto_path_count);
-            bool proto_ok = false;
-            if (!proto_path.empty()) {
-                std::string key = proto_path;
-                if (auto rewritten = rewrite_imported_path_(key)) {
-                    key = *rewritten;
-                }
-                if (proto_decl_by_name_.find(key) != proto_decl_by_name_.end()) {
-                    proto_ok = true;
-                } else if (auto sid = lookup_symbol_(key)) {
-                    const auto& ss = sym_.symbol(*sid);
-                    proto_ok = (proto_decl_by_name_.find(ss.name) != proto_decl_by_name_.end());
-                }
-            }
-            if (!proto_ok) {
-                diag_(diag::Code::kProtoImplTargetNotSupported, c.span, proto_path);
-                err_(c.span, "unknown proto in constraint: " + proto_path);
+        if (!validate_constraint_clause_decl_(fn.fn_constraint_begin, fn.fn_constraint_count, generic_params, fn.span)) {
+            if (generic_params.empty()) {
+                err_(fn.span, "generic constraint declaration validation failed");
             }
         }
 
         ImplBindingKind impl_binding = ImplBindingKind::kNone;
-        const bool has_impl_binding = stmt_impl_binding_kind_(s, impl_binding);
+        const bool has_impl_binding = stmt_impl_binding_kind_(fn, impl_binding);
         if (has_impl_binding) {
-            const bool compiler_owned_impl = (s.a == ast::k_invalid_stmt);
+            const bool compiler_owned_impl = (fn.a == ast::k_invalid_stmt);
             if (compiler_owned_impl) {
                 const std::string current_bundle = current_bundle_name_();
                 if (current_bundle != "core" ||
-                    core_impl_marker_file_ids_.find(s.span.file_id) == core_impl_marker_file_ids_.end()) {
+                    core_impl_marker_file_ids_.find(fn.span.file_id) == core_impl_marker_file_ids_.end()) {
                     const std::string msg =
                         "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'";
-                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                    err_(s.span, msg);
+                    diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                    err_(fn.span, msg);
                 }
             }
 
-            if (s.is_extern) {
+            if (fn.is_extern) {
                 const std::string msg = "recognized $![Impl::*] binding must not be extern";
-                diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                err_(s.span, msg);
+                diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                err_(fn.span, msg);
             }
 
             const ty::TypeId usize_ty = types_.builtin(ty::Builtin::kUSize);
             const ty::TypeId unit_ty = types_.builtin(ty::Builtin::kUnit);
             switch (impl_binding) {
                 case ImplBindingKind::kSpinLoop:
-                    if (s.param_count != 0 || s.fn_generic_param_count != 0 || ret != unit_ty ||
-                        s.name != "spin_loop") {
+                    if (fn.param_count != 0 || fn.fn_generic_param_count != 0 || ret != unit_ty ||
+                        fn.name != "spin_loop") {
                         const std::string msg =
                             "$![Impl::SpinLoop] requires signature 'def spin_loop() -> void'";
-                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                        err_(s.span, msg);
+                        diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                        err_(fn.span, msg);
                     }
                     break;
                 case ImplBindingKind::kSizeOf:
-                    if (s.param_count != 0 || s.fn_generic_param_count != 1 || ret != usize_ty ||
-                        s.name != "size_of") {
+                    if (fn.param_count != 0 || fn.fn_generic_param_count != 1 || ret != usize_ty ||
+                        fn.name != "size_of") {
                         const std::string msg =
                             "$![Impl::SizeOf] requires signature 'def size_of<T>() -> usize'";
-                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                        err_(s.span, msg);
+                        diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                        err_(fn.span, msg);
                     }
                     break;
                 case ImplBindingKind::kAlignOf:
-                    if (s.param_count != 0 || s.fn_generic_param_count != 1 || ret != usize_ty ||
-                        s.name != "align_of") {
+                    if (fn.param_count != 0 || fn.fn_generic_param_count != 1 || ret != usize_ty ||
+                        fn.name != "align_of") {
                         const std::string msg =
                             "$![Impl::AlignOf] requires signature 'def align_of<T>() -> usize'";
-                        diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
-                        err_(s.span, msg);
+                        diag_(diag::Code::kTypeErrorGeneric, fn.span, msg);
+                        err_(fn.span, msg);
                     }
                     break;
                 case ImplBindingKind::kNone:
@@ -226,7 +202,7 @@
         // generic templates are declaration-only at this stage.
         // concrete instances are materialized and checked on-demand at call sites.
         if (sid != ast::k_invalid_stmt &&
-            s.fn_generic_param_count > 0 &&
+            fn.fn_generic_param_count > 0 &&
             generic_fn_template_sid_set_.find(sid) != generic_fn_template_sid_set_.end()) {
             return;
         }
@@ -239,9 +215,9 @@
 
         FnCtx saved = fn_ctx_;
         fn_ctx_.in_fn = true;
-        fn_ctx_.is_pure = s.is_pure;
-        fn_ctx_.is_comptime = s.is_comptime;
-        fn_ctx_.is_throwing = s.is_throwing;
+        fn_ctx_.is_pure = fn.is_pure;
+        fn_ctx_.is_comptime = fn.is_comptime;
+        fn_ctx_.is_throwing = fn.is_throwing;
         fn_ctx_.has_exception_construct = false;
         fn_ctx_.ret = (ret == ty::kInvalidType) ? types_.error() : ret;
         fn_sid_stack_.push_back(sid);
@@ -249,8 +225,8 @@
         // ----------------------------
         // 2) 파라미터 심볼 삽입 + default expr 검사
         // ----------------------------
-        for (uint32_t i = 0; i < s.param_count; ++i) {
-            const auto& p = ast_.params()[s.param_begin + i];
+        for (uint32_t i = 0; i < fn.param_count; ++i) {
+            const auto& p = ast_.params()[fn.param_begin + i];
             ty::TypeId pt = (p.type == ty::kInvalidType) ? types_.error() : p.type;
 
             auto ins = sym_.insert(sema::SymbolKind::kVar, p.name, pt, p.span);
@@ -259,10 +235,10 @@
                 diag_(diag::Code::kTypeDuplicateParam, p.span, p.name);
             }
             if (ins.ok) {
-                if ((size_t)(s.param_begin + i) >= param_resolved_symbol_cache_.size()) {
-                    param_resolved_symbol_cache_.resize((size_t)(s.param_begin + i) + 1, sema::SymbolTable::kNoScope);
+                if ((size_t)(fn.param_begin + i) >= param_resolved_symbol_cache_.size()) {
+                    param_resolved_symbol_cache_.resize((size_t)(fn.param_begin + i) + 1, sema::SymbolTable::kNoScope);
                 }
-                param_resolved_symbol_cache_[s.param_begin + i] = ins.symbol_id;
+                param_resolved_symbol_cache_[fn.param_begin + i] = ins.symbol_id;
                 // receiver mutability follows `self mut`; regular params follow `mut name: T`.
                 const bool param_is_mut = p.is_mut ||
                     (p.is_self && p.self_kind == ast::SelfReceiverKind::kMut);
@@ -308,13 +284,13 @@
         // ----------------------------
         // 3) 본문 체크
         // ----------------------------
-        if (s.is_extern) {
-            if (s.a != ast::k_invalid_stmt) {
-                diag_(diag::Code::kTypeErrorGeneric, s.span, "extern function declaration must not have a body");
-                err_(s.span, "extern function declaration must not have a body");
+        if (fn.is_extern) {
+            if (fn.a != ast::k_invalid_stmt) {
+                diag_(diag::Code::kTypeErrorGeneric, fn.span, "extern function declaration must not have a body");
+                err_(fn.span, "extern function declaration must not have a body");
             }
-        } else if (s.a != ast::k_invalid_stmt) {
-            check_stmt_(s.a);
+        } else if (fn.a != ast::k_invalid_stmt) {
+            check_stmt_(fn.a);
         }
 
         // ----------------------------
@@ -330,7 +306,7 @@
         // 반환 타입이 void(Unit)/never면 "끝까지 도달" 허용
         const ty::TypeId fn_ret = fn_ctx_.ret;
 
-        if (!s.is_extern && !is_unit(fn_ret) && !is_never(fn_ret)) {
+        if (!fn.is_extern && !is_unit(fn_ret) && !is_never(fn_ret)) {
             // body가 항상 return 하는지 검사
             auto stmt_always_returns = [&](auto&& self, ast::StmtId sid) -> bool {
                 if (sid == ast::k_invalid_stmt) return false;
@@ -395,12 +371,12 @@
                 }
             };
 
-            const bool ok_all_paths = stmt_always_returns(stmt_always_returns, s.a);
+            const bool ok_all_paths = stmt_always_returns(stmt_always_returns, fn.a);
             if (!ok_all_paths) {
                 // 여기서 “return 누락” 진단
                 // (diag code는 새로 만드는 게 정석: kMissingReturn)
-                diag_(diag::Code::kMissingReturn, s.span, s.name);
-                err_(s.span, "missing return on some control path");
+                diag_(diag::Code::kMissingReturn, fn.span, fn.name);
+                err_(fn.span, "missing return on some control path");
             }
         }
 
@@ -1820,6 +1796,13 @@
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
         if (s.kind != ast::StmtKind::kClassDecl) return;
+        {
+            std::unordered_set<std::string> generic_params;
+            for (const auto& name : collect_decl_generic_param_names_(s)) {
+                generic_params.insert(name);
+            }
+            (void)validate_constraint_clause_decl_(s.decl_constraint_begin, s.decl_constraint_count, generic_params, s.span);
+        }
         if (generic_class_template_sid_set_.find(sid) != generic_class_template_sid_set_.end()) {
             return;
         }
@@ -2286,6 +2269,12 @@
                         diag_(diag::Code::kProtoImplTargetNotSupported, pr.span, proto_path);
                         err_(pr.span, "unknown proto target: " + proto_path);
                     }
+                    continue;
+                }
+                if (is_builtin_family_proto_(*proto_sid)) {
+                    diag_(diag::Code::kTypeErrorGeneric, pr.span,
+                          "builtin proto '" + proto_path + "' is reserved for primitive family constraints");
+                    err_(pr.span, "builtin proto is reserved for primitive family constraints");
                     continue;
                 }
                 if (!evaluate_proto_require_at_apply_(*proto_sid, self_ty, pr.span,

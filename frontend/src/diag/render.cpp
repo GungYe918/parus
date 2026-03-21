@@ -364,6 +364,7 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "GenericAmbiguousOverload";
             case Code::kGenericConstraintProtoNotFound: return "GenericConstraintProtoNotFound";
             case Code::kGenericConstraintUnsatisfied: return "GenericConstraintUnsatisfied";
+            case Code::kGenericConstraintTypeMismatch: return "GenericConstraintTypeMismatch";
             case Code::kGenericUnknownTypeParamInConstraint: return "GenericUnknownTypeParamInConstraint";
             case Code::kGenericDeclConstraintUnsatisfied: return "GenericDeclConstraintUnsatisfied";
             case Code::kGenericTypePathArityMismatch: return "GenericTypePathArityMismatch";
@@ -728,6 +729,7 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "generic overload resolution is ambiguous for call '{0}'";
             case Code::kGenericConstraintProtoNotFound: return "generic constraint references unknown proto '{0}'";
             case Code::kGenericConstraintUnsatisfied: return "generic constraint '{0}: {1}' is not satisfied by '{2}'";
+            case Code::kGenericConstraintTypeMismatch: return "generic equality constraint '{0} == {1}' is not satisfied ('{2}' != '{3}')";
             case Code::kGenericUnknownTypeParamInConstraint: return "constraint references unknown generic type parameter '{0}'";
             case Code::kGenericDeclConstraintUnsatisfied: return "declaration generic constraint '{0}: {1}' is not satisfied by '{2}'";
             case Code::kGenericTypePathArityMismatch: return "generic type path arity mismatch on '{0}': expected {1}, got {2}";
@@ -1097,6 +1099,7 @@ namespace parus::diag {
             case Code::kGenericAmbiguousOverload: return "호출 '{0}'의 제네릭 오버로드 해석이 모호합니다";
             case Code::kGenericConstraintProtoNotFound: return "제네릭 제약이 알 수 없는 proto '{0}'를 참조합니다";
             case Code::kGenericConstraintUnsatisfied: return "제네릭 제약 '{0}: {1}'을(를) '{2}' 타입이 만족하지 않습니다";
+            case Code::kGenericConstraintTypeMismatch: return "제네릭 동치 제약 '{0} == {1}'을(를) 만족하지 않습니다 ('{2}' != '{3}')";
             case Code::kGenericUnknownTypeParamInConstraint: return "제약이 알 수 없는 제네릭 타입 파라미터 '{0}'를 참조합니다";
             case Code::kGenericDeclConstraintUnsatisfied: return "선언 제네릭 제약 '{0}: {1}'을(를) '{2}' 타입이 만족하지 않습니다";
             case Code::kGenericTypePathArityMismatch: return "제네릭 타입 경로 '{0}'의 인자 개수가 맞지 않습니다: 기대 {1}개, 실제 {2}개";

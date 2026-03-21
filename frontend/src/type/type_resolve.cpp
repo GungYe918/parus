@@ -173,6 +173,11 @@ namespace parus::type {
                         p.type = resolve_node(p.type_node);
                     }
                 }
+                for (auto& c : ast.fn_constraint_decls_mut()) {
+                    if (c.rhs_type_node != ast::k_invalid_type_node) {
+                        c.rhs_type = resolve_node(c.rhs_type_node);
+                    }
+                }
             }
         };
     } // namespace

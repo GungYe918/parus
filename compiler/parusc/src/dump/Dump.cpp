@@ -653,6 +653,20 @@ namespace parusc::dump {
                 v.kind == sir::ValueKind::kFieldInit) {
                 std::cout << " arg_begin=" << v.arg_begin
                         << " arg_count=" << v.arg_count;
+                if (v.kind == sir::ValueKind::kCall) {
+                    if (v.callee_sym != sir::k_invalid_symbol) {
+                        std::cout << " callee_sym=" << v.callee_sym;
+                    }
+                    if (v.callee_decl_stmt != 0xFFFF'FFFFu) {
+                        std::cout << " callee_decl_stmt=" << v.callee_decl_stmt;
+                    }
+                    if (v.core_call_kind != sir::CoreCallKind::kNone) {
+                        std::cout << " core_call_kind=" << static_cast<uint32_t>(v.core_call_kind);
+                    }
+                    if (v.core_call_type_arg != sir::k_invalid_type) {
+                        std::cout << " core_call_type_arg=" << (uint32_t)v.core_call_type_arg;
+                    }
+                }
             }
             if (v.kind == sir::ValueKind::kLoopExpr) {
                 std::cout << " loop_body_block=" << (parus::sir::BlockId)v.b;
