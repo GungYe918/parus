@@ -538,6 +538,17 @@ namespace parus::tyck {
             return owner_t;
         };
 
+        auto owner_base_name_matches = [&](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
         auto resolve_owner_decl_sid_for_proto = [&](ty::TypeId owner_t) -> ast::StmtId {
             if (owner_t == ty::kInvalidType) return ast::k_invalid_stmt;
             if (auto it = class_decl_by_type_.find(owner_t); it != class_decl_by_type_.end()) {
@@ -922,6 +933,22 @@ namespace parus::tyck {
                                 if (mit != oit->second.end() && !mit->second.empty()) {
                                     any_external_method_named = true;
                                     selected_external_methods = mit->second;
+                                }
+                            }
+                            std::string owner_base{};
+                            std::vector<ty::TypeId> owner_args{};
+                            if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_base.empty()) {
+                                for (const auto& [template_owner_base, member_map] : external_acts_template_method_map_) {
+                                    if (!owner_base_name_matches(owner_base, template_owner_base)) continue;
+                                    auto mit = member_map.find(std::string(rhs.text));
+                                    if (mit != member_map.end() && !mit->second.empty()) {
+                                        any_external_method_named = true;
+                                        selected_external_methods.insert(
+                                            selected_external_methods.end(),
+                                            mit->second.begin(),
+                                            mit->second.end()
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -1890,6 +1917,7 @@ namespace parus::tyck {
             ty::TypeId selected_external_fn_type = ty::kInvalidType;
             bool has_selected_external = false;
             uint32_t selected_external_score = 0xFFFF'FFFFu;
+            bool selected_external_is_template = true;
             bool ext_has_arity = false;
             uint32_t ext_expected_arity = 0;
             uint32_t ext_got_arity = 0;
@@ -2108,6 +2136,7 @@ namespace parus::tyck {
 
                 bool all_ok = true;
                 uint32_t candidate_score = 0u;
+                const bool candidate_is_template = !meta.params.empty();
                 for (size_t i = 0; i < outside_positional.size(); ++i) {
                     const ty::TypeId expected = expected_params[i];
                     if (is_c_char_ptr_type(expected) &&
@@ -2134,9 +2163,13 @@ namespace parus::tyck {
                 }
                 if (!all_ok) continue;
 
-                if (!has_selected_external || candidate_score < selected_external_score) {
+                if (!has_selected_external ||
+                    candidate_score < selected_external_score ||
+                    (candidate_score == selected_external_score &&
+                     selected_external_is_template && !candidate_is_template)) {
                     has_selected_external = true;
                     selected_external_score = candidate_score;
+                    selected_external_is_template = candidate_is_template;
                     selected_external_sym = sid;
                     selected_external_fn_type = expected_ret;
                 }
@@ -2431,7 +2464,91 @@ namespace parus::tyck {
             }
 
             uint32_t selected_external_sym = sema::SymbolTable::kNoScope;
-            ty::TypeId selected_external_fn_type = ty::kInvalidType;
+            ty::TypeId selected_external_ret_type = ty::kInvalidType;
+            bool has_selected_external = false;
+            uint32_t selected_external_score = 0xFFFF'FFFFu;
+            bool selected_external_is_template = true;
+            bool ext_has_arity = false;
+            uint32_t ext_expected_arity = 0;
+            uint32_t ext_got_arity = 0;
+            bool ext_has_proto_not_found = false;
+            std::string ext_proto_not_found{};
+            bool ext_has_unsatisfied = false;
+            std::string ext_unsat_lhs{};
+            std::string ext_unsat_rhs{};
+            std::string ext_unsat_concrete{};
+            bool ext_has_type_mismatch = false;
+            std::string ext_eq_lhs{};
+            std::string ext_eq_rhs{};
+            std::string ext_eq_concrete_lhs{};
+            std::string ext_eq_concrete_rhs{};
+            bool ext_has_infer_fail = false;
+
+            auto infer_generic_bindings_external = [&](auto&& self,
+                                                       ty::TypeId pattern,
+                                                       ty::TypeId actual,
+                                                       const std::unordered_set<std::string>& generic_set,
+                                                       std::unordered_map<std::string, ty::TypeId>& out_bindings) -> bool {
+                pattern = canonicalize_transparent_external_typedef_(pattern);
+                actual = canonicalize_transparent_external_typedef_(actual);
+                if (pattern == ty::kInvalidType || actual == ty::kInvalidType) return false;
+                const auto& pt = types_.get(pattern);
+                const auto& at = types_.get(actual);
+                switch (pt.kind) {
+                    case ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> ppath{};
+                        std::vector<ty::TypeId> pargs{};
+                        if (!types_.decompose_named_user(pattern, ppath, pargs) || ppath.empty()) {
+                            return pattern == actual;
+                        }
+                        if (pargs.empty() && ppath.size() == 1) {
+                            const std::string name(ppath.front());
+                            if (generic_set.find(name) != generic_set.end()) {
+                                auto it = out_bindings.find(name);
+                                if (it == out_bindings.end()) {
+                                    out_bindings.emplace(name, actual);
+                                    return true;
+                                }
+                                return it->second == actual;
+                            }
+                        }
+                        std::vector<std::string_view> apath{};
+                        std::vector<ty::TypeId> aargs{};
+                        if (!types_.decompose_named_user(actual, apath, aargs)) return false;
+                        if (ppath.size() != apath.size() || pargs.size() != aargs.size()) return false;
+                        for (size_t i = 0; i < ppath.size(); ++i) {
+                            if (ppath[i] != apath[i]) return false;
+                        }
+                        for (size_t i = 0; i < pargs.size(); ++i) {
+                            if (!self(self, pargs[i], aargs[i], generic_set, out_bindings)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kEscape:
+                    case ty::Kind::kPtr:
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                        if (pt.kind != at.kind) return false;
+                        return self(self, pt.elem, at.elem, generic_set, out_bindings);
+                    case ty::Kind::kFn:
+                        if (at.kind != ty::Kind::kFn ||
+                            pt.param_count != at.param_count ||
+                            pt.positional_param_count != at.positional_param_count) {
+                            return false;
+                        }
+                        for (uint32_t i = 0; i < pt.param_count; ++i) {
+                            if (!self(self, types_.fn_param_at(pattern, i), types_.fn_param_at(actual, i), generic_set, out_bindings)) {
+                                return false;
+                            }
+                        }
+                        return self(self, pt.ret, at.ret, generic_set, out_bindings);
+                    default:
+                        return pattern == actual;
+                }
+            };
 
             for (const auto& cand : external_overload_methods) {
                 if (cand.fn_symbol == sema::SymbolTable::kNoScope ||
@@ -2441,15 +2558,178 @@ namespace parus::tyck {
                 const auto& fn_sym = sym_.symbol(cand.fn_symbol);
                 const ty::TypeId fn_t = fn_sym.declared_type;
                 if (fn_t == ty::kInvalidType || types_.get(fn_t).kind != ty::Kind::kFn) continue;
+                const auto meta = parse_external_generic_decl_meta_(cand.external_payload);
                 const uint32_t total_cnt = types_.get(fn_t).param_count;
                 if (total_cnt == 0) continue;
 
-                const uint32_t expected_outside_positional = total_cnt - 1u; // receiver consumed implicitly
+                std::unordered_map<std::string, ty::TypeId> bindings{};
+                std::vector<ty::TypeId> expected_params{};
+                expected_params.reserve(total_cnt > 0 ? total_cnt - 1u : 0u);
+                ty::TypeId expected_ret = types_.get(fn_t).ret;
+
+                if (cand.owner_is_generic_template) {
+                    std::string concrete_owner_base{};
+                    std::vector<ty::TypeId> concrete_owner_args{};
+                    if (!decompose_named_user_type_(dot_owner_type, concrete_owner_base, concrete_owner_args) ||
+                        !owner_base_name_matches(concrete_owner_base, cand.owner_base) ||
+                        concrete_owner_args.size() != cand.owner_generic_arity ||
+                        meta.params.size() < cand.owner_generic_arity) {
+                        continue;
+                    }
+
+                    for (size_t i = 0; i < concrete_owner_args.size(); ++i) {
+                        bindings.emplace(meta.params[i], concrete_owner_args[i]);
+                    }
+
+                    const size_t remaining_generic_count =
+                        (meta.params.size() >= cand.owner_generic_arity)
+                            ? (meta.params.size() - cand.owner_generic_arity)
+                            : 0u;
+
+                    if (remaining_generic_count > 0) {
+                        if (!explicit_call_type_args.empty()) {
+                            if (explicit_call_type_args.size() != remaining_generic_count) {
+                                ext_has_arity = true;
+                                ext_expected_arity = static_cast<uint32_t>(remaining_generic_count);
+                                ext_got_arity = static_cast<uint32_t>(explicit_call_type_args.size());
+                                continue;
+                            }
+                            for (size_t gi = 0; gi < remaining_generic_count; ++gi) {
+                                bindings.emplace(meta.params[cand.owner_generic_arity + gi], explicit_call_type_args[gi]);
+                            }
+                        } else {
+                            std::unordered_set<std::string> generic_set{};
+                            for (size_t gi = 0; gi < remaining_generic_count; ++gi) {
+                                generic_set.insert(meta.params[cand.owner_generic_arity + gi]);
+                            }
+                            bool infer_ok = true;
+                            for (size_t i = 0; i < outside_positional.size() && i + 1u < total_cnt; ++i) {
+                                ty::TypeId expected = types_.fn_param_at(fn_t, static_cast<uint32_t>(i + 1u));
+                                expected = substitute_generic_type_(expected, bindings);
+                                const ty::TypeId arg_t = check_expr_(outside_positional[i]->expr);
+                                if (!infer_generic_bindings_external(
+                                        infer_generic_bindings_external,
+                                        expected,
+                                        arg_t,
+                                        generic_set,
+                                        bindings)) {
+                                    infer_ok = false;
+                                    break;
+                                }
+                            }
+                            if (!infer_ok) {
+                                ext_has_infer_fail = true;
+                                continue;
+                            }
+                            bool complete = true;
+                            for (size_t gi = 0; gi < remaining_generic_count; ++gi) {
+                                if (bindings.find(meta.params[cand.owner_generic_arity + gi]) == bindings.end()) {
+                                    complete = false;
+                                    break;
+                                }
+                            }
+                            if (!complete) {
+                                ext_has_infer_fail = true;
+                                continue;
+                            }
+                        }
+                    } else if (!explicit_call_type_args.empty()) {
+                        ext_has_arity = true;
+                        ext_expected_arity = 0;
+                        ext_got_arity = static_cast<uint32_t>(explicit_call_type_args.size());
+                        continue;
+                    }
+
+                    bool constraint_ok = true;
+                    for (const auto& cc : meta.constraints) {
+                        auto lhs_it = bindings.find(cc.lhs);
+                        if (lhs_it == bindings.end()) {
+                            ext_has_infer_fail = true;
+                            constraint_ok = false;
+                            break;
+                        }
+
+                        if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
+                            auto proto_sid = resolve_proto_sid_for_constraint_(cc.rhs);
+                            if (!proto_sid.has_value()) {
+                                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                                    continue;
+                                }
+                                const size_t pos = cc.rhs.rfind("::");
+                                const std::string_view leaf =
+                                    (pos == std::string::npos) ? std::string_view(cc.rhs)
+                                                               : std::string_view(cc.rhs).substr(pos + 2);
+                                if (leaf == "SignedInt" || leaf == "UnsignedInt" || leaf == "Integral" ||
+                                    leaf == "FloatLike" || leaf == "RangeBound") {
+                                    ext_has_unsatisfied = true;
+                                    ext_unsat_lhs = cc.lhs;
+                                    ext_unsat_rhs = cc.rhs;
+                                    ext_unsat_concrete = types_.to_string(lhs_it->second);
+                                } else {
+                                    ext_has_proto_not_found = true;
+                                    ext_proto_not_found = cc.rhs;
+                                }
+                                constraint_ok = false;
+                                break;
+                            }
+                            if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, e.span)) {
+                                ext_has_unsatisfied = true;
+                                ext_unsat_lhs = cc.lhs;
+                                ext_unsat_rhs = cc.rhs;
+                                ext_unsat_concrete = types_.to_string(lhs_it->second);
+                                constraint_ok = false;
+                                break;
+                            }
+                            continue;
+                        }
+
+                        ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                        if (rhs_t == ty::kInvalidType) {
+                            ext_has_infer_fail = true;
+                            constraint_ok = false;
+                            break;
+                        }
+                        rhs_t = substitute_generic_type_(rhs_t, bindings);
+                        const ty::TypeId lhs_t = canonicalize_transparent_external_typedef_(lhs_it->second);
+                        rhs_t = canonicalize_transparent_external_typedef_(rhs_t);
+                        if (lhs_t != rhs_t) {
+                            ext_has_type_mismatch = true;
+                            ext_eq_lhs = cc.lhs;
+                            ext_eq_rhs = cc.rhs;
+                            ext_eq_concrete_lhs = types_.to_string(lhs_it->second);
+                            ext_eq_concrete_rhs = types_.to_string(rhs_t);
+                            constraint_ok = false;
+                            break;
+                        }
+                    }
+                    if (!constraint_ok) continue;
+
+                    for (uint32_t i = 1; i < total_cnt; ++i) {
+                        ty::TypeId expected = types_.fn_param_at(fn_t, i);
+                        expected = substitute_generic_type_(expected, bindings);
+                        expected_params.push_back(expected);
+                    }
+                    expected_ret = substitute_generic_type_(expected_ret, bindings);
+                } else {
+                    if (!explicit_call_type_args.empty()) {
+                        ext_has_arity = true;
+                        ext_expected_arity = 0;
+                        ext_got_arity = static_cast<uint32_t>(explicit_call_type_args.size());
+                        continue;
+                    }
+                    for (uint32_t i = 1; i < total_cnt; ++i) {
+                        expected_params.push_back(types_.fn_param_at(fn_t, i));
+                    }
+                }
+
+                const uint32_t expected_outside_positional = static_cast<uint32_t>(expected_params.size());
                 if (outside_positional.size() != expected_outside_positional) continue;
 
                 bool all_ok = true;
+                uint32_t candidate_score = 0u;
+                const bool candidate_is_template = cand.owner_is_generic_template || !meta.params.empty();
                 for (size_t i = 0; i < outside_positional.size(); ++i) {
-                    const ty::TypeId expected = types_.fn_param_at(fn_t, static_cast<uint32_t>(i + 1));
+                    const ty::TypeId expected = expected_params[i];
                     const CoercionPlan plan = classify_assign_with_coercion_(
                         AssignSite::CallArg,
                         expected,
@@ -2460,16 +2740,59 @@ namespace parus::tyck {
                         all_ok = false;
                         break;
                     }
+                    candidate_score += external_overload_match_score(
+                        expected, outside_positional[i]->expr, plan);
                 }
                 if (!all_ok) continue;
 
-                selected_external_sym = cand.fn_symbol;
-                selected_external_fn_type = fn_t;
-                break;
+                if (!has_selected_external ||
+                    candidate_score < selected_external_score ||
+                    (candidate_score == selected_external_score &&
+                     selected_external_is_template && !candidate_is_template)) {
+                    has_selected_external = true;
+                    selected_external_score = candidate_score;
+                    selected_external_is_template = candidate_is_template;
+                    selected_external_sym = cand.fn_symbol;
+                    selected_external_ret_type = expected_ret;
+                }
             }
 
             if (selected_external_sym == sema::SymbolTable::kNoScope ||
-                selected_external_fn_type == ty::kInvalidType) {
+                selected_external_ret_type == ty::kInvalidType) {
+                if (ext_has_arity) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span,
+                          std::to_string(ext_expected_arity),
+                          std::to_string(ext_got_arity));
+                    err_(e.span, "generic arity mismatch");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
+                if (ext_has_proto_not_found) {
+                    diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, ext_proto_not_found);
+                    err_(e.span, "generic constraint references unknown proto");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
+                if (ext_has_unsatisfied) {
+                    diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
+                          ext_unsat_lhs, ext_unsat_rhs, ext_unsat_concrete);
+                    err_(e.span, "generic constraint is not satisfied");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
+                if (ext_has_type_mismatch) {
+                    diag_(diag::Code::kGenericConstraintTypeMismatch, e.span,
+                          ext_eq_lhs, ext_eq_rhs, ext_eq_concrete_lhs, ext_eq_concrete_rhs);
+                    err_(e.span, "generic equality constraint is not satisfied");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
+                if (ext_has_infer_fail) {
+                    diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                    err_(e.span, "failed to infer generic call type arguments");
+                    check_all_arg_exprs_only();
+                    return fallback_ret;
+                }
                 diag_(diag::Code::kOverloadNoMatchingCall, e.span, callee_name, make_callsite_summary());
                 err_(e.span, "no matching external acts method overload");
                 check_all_arg_exprs_only();
@@ -2484,7 +2807,7 @@ namespace parus::tyck {
                 call_expr_id < expr_external_receiver_expr_cache_.size()) {
                 expr_external_receiver_expr_cache_[call_expr_id] = receiver_eid;
             }
-            return types_.get(selected_external_fn_type).ret;
+            return selected_external_ret_type;
         }
 
         // ------------------------------------------------------------

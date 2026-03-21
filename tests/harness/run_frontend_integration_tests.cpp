@@ -1425,52 +1425,114 @@ namespace {
                 end: T;
             };
 
-            def range(start: i32, end: i32) -> Range<i32> {
-                return Range<i32>{ start: start, end: end };
+            def range_impl_<T>(start: T, end: T) with [T: RangeBound] -> Range<T> {
+                return Range<T>{ start: start, end: end };
             }
 
-            def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> {
-                return RangeInclusive<u32>{ start: start, end: end };
+            def range_inclusive_impl_<T>(start: T, end: T) with [T: RangeBound] -> RangeInclusive<T> {
+                return RangeInclusive<T>{ start: start, end: end };
             }
 
-            def range_is_empty_(start: i32, end: i32) -> bool { return start >= end; }
-            def range_contains_(start: i32, end: i32, value: i32) -> bool {
+            def range<T>(start: T, end: T) with [T: RangeBound] -> Range<T> {
+                return range_impl_<T>(start, end);
+            }
+
+            def range_inclusive<T>(start: T, end: T) with [T: RangeBound] -> RangeInclusive<T> {
+                return range_inclusive_impl_<T>(start, end);
+            }
+
+            def range_is_empty_<T>(start: T, end: T) with [T: RangeBound] -> bool { return start >= end; }
+            def range_contains_<T>(start: T, end: T, value: T) with [T: RangeBound] -> bool {
                 return value >= start and value < end;
             }
-            def range_inclusive_is_empty_(start: u32, end: u32) -> bool { return start > end; }
-            def range_inclusive_contains_(start: u32, end: u32, value: u32) -> bool {
+            def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+                return range_is_empty_<T>(other_start, other_end) or
+                    (other_start >= start and other_end <= end);
+            }
+            def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+                return not range_is_empty_<T>(start, end)
+                    and not range_is_empty_<T>(other_start, other_end)
+                    and start < other_end
+                    and other_start < end;
+            }
+            def range_inclusive_is_empty_<T>(start: T, end: T) with [T: RangeBound] -> bool { return start > end; }
+            def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: RangeBound] -> bool {
                 return value >= start and value <= end;
             }
+            def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+                return range_inclusive_is_empty_<T>(other_start, other_end) or
+                    (other_start >= start and other_end <= end);
+            }
+            def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: RangeBound] -> bool {
+                return not range_inclusive_is_empty_<T>(start, end)
+                    and not range_inclusive_is_empty_<T>(other_start, other_end)
+                    and start <= other_end
+                    and other_start <= end;
+            }
+            def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: RangeBound] -> bool {
+                return not range_inclusive_is_empty_<T>(start, end) and start == end;
+            }
 
-            acts for Range<T> {
+            acts for Range<T> with [T: RangeBound] {
                 def is_empty(self) -> bool {
-                    return range_is_empty_(self.start, self.end);
+                    return range_is_empty_<T>(self.start, self.end);
                 }
 
                 def contains(self, value: T) -> bool {
-                    return range_contains_(self.start, self.end, value);
+                    return range_contains_<T>(self.start, self.end, value);
+                }
+
+                def contains_range(self, other: Range<T>) -> bool {
+                    return range_contains_range_<T>(self.start, self.end, other.start, other.end);
+                }
+
+                def intersects(self, other: Range<T>) -> bool {
+                    return range_intersects_<T>(self.start, self.end, other.start, other.end);
                 }
             };
 
-            acts for RangeInclusive<T> {
+            acts for RangeInclusive<T> with [T: RangeBound] {
                 def is_empty(self) -> bool {
-                    return range_inclusive_is_empty_(self.start, self.end);
+                    return range_inclusive_is_empty_<T>(self.start, self.end);
                 }
 
                 def contains(self, value: T) -> bool {
-                    return range_inclusive_contains_(self.start, self.end, value);
+                    return range_inclusive_contains_<T>(self.start, self.end, value);
+                }
+
+                def contains_range(self, other: RangeInclusive<T>) -> bool {
+                    return range_inclusive_contains_range_<T>(self.start, self.end, other.start, other.end);
+                }
+
+                def intersects(self, other: RangeInclusive<T>) -> bool {
+                    return range_inclusive_intersects_<T>(self.start, self.end, other.start, other.end);
+                }
+
+                def is_singleton(self) -> bool {
+                    return range_inclusive_is_singleton_<T>(self.start, self.end);
                 }
             };
 
             def main() -> i32 {
                 let a: Range<i32> = range(1i32, 4i32);
                 let b: RangeInclusive<u32> = range_inclusive(1u32, 4u32);
-                let c: Range<i32> = Range<i32>{ start: 4i32, end: 4i32 };
+                let c: Range<char> = range('a', 'z');
+                let d: RangeInclusive<char> = range_inclusive('k', 'k');
+                let e: Range<i32> = range(2i32, 3i32);
+                let f: Range<i32> = range(4i32, 8i32);
                 let x: bool = a.contains(2i32);
                 let y: bool = a.contains(4i32);
                 let z: bool = b.contains(4u32);
-                let e: bool = c.is_empty();
-                if (x and not y and z and e and a.start == 1i32 and b.end == 4u32) {
+                let a_contains_range: bool = a.contains_range(e);
+                let a_intersects_tail: bool = a.intersects(f);
+                let c_has_mid: bool = c.contains('m');
+                let c_has_hi: bool = c.contains('z');
+                let d_singleton: bool = d.is_singleton();
+                let d_intersects: bool = d.intersects(range_inclusive('k', 'm'));
+                let ri_empty: bool = range_inclusive(5i32, 4i32).is_empty();
+                if (x and not y and z and a_contains_range and not a_intersects_tail and
+                    c_has_mid and not c_has_hi and d_singleton and d_intersects and ri_empty and
+                    a.start == 1i32 and b.end == 4u32) {
                     return 42i32;
                 }
                 return 0i32;
@@ -1488,6 +1550,64 @@ namespace {
         ok &= require_(ty.errors.empty(), "core range surface source must not emit tyck errors");
         ok &= require_(cap.ok, "core range surface source must pass capability check");
         ok &= require_(sir.cap.ok, "core range surface source must pass SIR capability check");
+        return ok;
+    }
+
+    static bool test_generic_acts_owner_constraint_ok() {
+        const std::string ok_src = R"(
+            class Box<T> {
+              value: T;
+              init(v: T) {
+                self.value = v;
+              }
+            };
+
+            acts for Box<T> with [T: RangeBound] {
+              def same(self) -> bool {
+                return self.value >= self.value;
+              }
+            };
+
+            def main() -> bool {
+              let b: Box<i32> = Box<i32>(1i32);
+              return b.same();
+            }
+        )";
+
+        const std::string err_src = R"(
+            class Box<T> {
+              value: T;
+              init(v: T) {
+                self.value = v;
+              }
+            };
+
+            acts for Box<T> with [T: RangeBound] {
+              def same(self) -> bool {
+                return self.value >= self.value;
+              }
+            };
+
+            def main() -> bool {
+              let b: Box<bool> = Box<bool>(true);
+              return b.same();
+            }
+        )";
+
+        auto ok_prog = parse_program(ok_src);
+        auto ok_passes = run_passes(ok_prog);
+        auto ok_ty = run_tyck(ok_prog, &ok_passes.generic_prep);
+
+        auto err_prog = parse_program(err_src);
+        auto err_passes = run_passes(err_prog);
+        auto err_ty = run_tyck(err_prog, &err_passes.generic_prep);
+
+        bool ok = true;
+        ok &= require_(!ok_prog.bag.has_error(), "generic acts owner-constraint success sample must not emit diagnostics");
+        ok &= require_(ok_ty.errors.empty(), "generic acts owner-constraint success sample must typecheck");
+        ok &= require_(err_prog.bag.has_code(parus::diag::Code::kGenericDeclConstraintUnsatisfied),
+                       "generic acts owner-constraint failure must report GenericDeclConstraintUnsatisfied");
+        ok &= require_(!err_ty.errors.empty(), "generic acts owner-constraint failure must emit tyck errors");
         return ok;
     }
 
@@ -2538,6 +2658,7 @@ int main() {
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
         {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},
         {"core_range_surface_ok", test_core_range_surface_ok},
+        {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
         {"core_range_loop_bridge_stays_unsupported", test_core_range_loop_bridge_stays_unsupported},
         {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},

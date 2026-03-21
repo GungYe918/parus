@@ -875,6 +875,10 @@ namespace parus::sir::detail {
                 if (!s.is_set) {
                     out.declared_type = has_sym ? sym.symbol(out.sym).declared_type : k_invalid_type;
                     if (out.declared_type == k_invalid_type) out.declared_type = s.type;
+                    if (out.declared_type == k_invalid_type) out.declared_type = use_derived_type;
+                    if (out.declared_type == k_invalid_type) {
+                        out.declared_type = best_effort_type_of_ast_expr(ast, sym, nres, tyck, s.init);
+                    }
                 } else {
                     out.declared_type = use_derived_type;
                     if (out.declared_type == k_invalid_type) {

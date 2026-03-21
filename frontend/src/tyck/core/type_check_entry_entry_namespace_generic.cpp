@@ -2197,6 +2197,11 @@ namespace parus::tyck {
         if (templ.decl_generic_param_count == 0) {
             return templ_sid;
         }
+        for (const auto arg_t : args) {
+            if (type_contains_unresolved_generic_param_(arg_t)) {
+                return templ_sid;
+            }
+        }
         return ensure_generic_field_instance_(templ_sid, args, use_span);
     }
 

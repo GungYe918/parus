@@ -1705,11 +1705,19 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let bridged_len: usize = bridged.len_bytes();\n"
         "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
         "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
+        "  let rc: core::range::Range<char> = core::range::range('a', 'z');\n"
+        "  let rci: core::range::RangeInclusive<char> = core::range::range_inclusive('k', 'k');\n"
         "  let rx_empty: bool = rx.is_empty();\n"
         "  let rx_has_mid: bool = rx.contains(2i32);\n"
         "  let rx_has_hi: bool = rx.contains(4i32);\n"
+        "  let rx_contains_range: bool = rx.contains_range(core::range::range(2i32, 3i32));\n"
+        "  let rx_intersects_tail: bool = rx.intersects(core::range::range(4i32, 8i32));\n"
         "  let ri_has_hi: bool = ri.contains(4u32);\n"
         "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
+        "  let rc_has_mid: bool = rc.contains('m');\n"
+        "  let rc_has_hi: bool = rc.contains('z');\n"
+        "  let rci_single: bool = rci.is_singleton();\n"
+        "  let rci_intersects: bool = rci.intersects(core::range::range_inclusive('k', 'm'));\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1728,7 +1736,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  }\n"
         "  if (bool_ok and ord_ok and partial_ok and hex and bool_true and bool_false and not raw_nan and"
         " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
-        " not rx_empty and rx_has_mid and not rx_has_hi and ri_has_hi and ri_empty and"
+        " not rx_empty and rx_has_mid and not rx_has_hi and rx_contains_range and not rx_intersects_tail and"
+        " ri_has_hi and ri_empty and rc_has_mid and not rc_has_hi and rci_single and rci_intersects and"
         " sz_i32 == 4usize and sz_text == 16usize and al_i32 == 4usize and al_text == 8usize and"
         " swap_a == 2i32 and swap_b == 1i32 and repl_old.len_bytes() == 3usize and repl.len_bytes() == 1usize and"
         " cold(true) == 7i32) {\n"
@@ -1848,11 +1857,19 @@ bool test_core_seed_runtime_smoke() {
         "  let tv_len: usize = tv.len_bytes();\n"
         "  let rx: core::range::Range<i32> = core::range::range(1i32, 4i32);\n"
         "  let ri: core::range::RangeInclusive<u32> = core::range::range_inclusive(1u32, 4u32);\n"
+        "  let rc: core::range::Range<char> = core::range::range('a', 'z');\n"
+        "  let rci: core::range::RangeInclusive<char> = core::range::range_inclusive('k', 'k');\n"
         "  let rx_empty: bool = rx.is_empty();\n"
         "  let rx_has_mid: bool = rx.contains(2i32);\n"
         "  let rx_has_hi: bool = rx.contains(4i32);\n"
+        "  let rx_contains_range: bool = rx.contains_range(core::range::range(2i32, 3i32));\n"
+        "  let rx_intersects_tail: bool = rx.intersects(core::range::range(4i32, 8i32));\n"
         "  let ri_has_hi: bool = ri.contains(4u32);\n"
         "  let ri_empty: bool = core::range::range_inclusive(5i32, 4i32).is_empty();\n"
+        "  let rc_has_mid: bool = rc.contains('m');\n"
+        "  let rc_has_hi: bool = rc.contains('z');\n"
+        "  let rci_single: bool = rci.is_singleton();\n"
+        "  let rci_intersects: bool = rci.intersects(core::range::range_inclusive('k', 'm'));\n"
         "  set mut bo_ok = false;\n"
         "  switch (bo) {\n"
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
@@ -1876,8 +1893,14 @@ bool test_core_seed_runtime_smoke() {
         "      and not rx_empty\n"
         "      and rx_has_mid\n"
         "      and not rx_has_hi\n"
+        "      and rx_contains_range\n"
+        "      and not rx_intersects_tail\n"
         "      and ri_has_hi\n"
         "      and ri_empty\n"
+        "      and rc_has_mid\n"
+        "      and not rc_has_hi\n"
+        "      and rci_single\n"
+        "      and rci_intersects\n"
         "      and sz_i32 == 4usize\n"
         "      and sz_text == 16usize\n"
         "      and sz_arr == 16usize\n"
@@ -2184,12 +2207,20 @@ bool test_external_generic_constraints_v2_work() {
         "struct OnlyI32<T> with [T == i32] {\n"
         "  value: T;\n"
         "};\n"
+        "struct Box<T> {\n"
+        "  value: T;\n"
+        "};\n"
         "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
         "  return 1i32;\n"
         "}\n"
         "export def signed_only<T>(x: T) with [T: num::SignedInt] -> i32 {\n"
         "  return 2i32;\n"
-        "}\n";
+        "}\n"
+        "export acts for Box<T> with [T: num::RangeBound] {\n"
+        "  def same(self) -> bool {\n"
+        "    return self.value >= self.value;\n"
+        "  }\n"
+        "};\n";
     if (!write_text(lib_pr, lib_src)) {
         std::cerr << "failed to write generic library source\n";
         std::filesystem::remove_all(temp_root, ec);
@@ -2316,10 +2347,51 @@ bool test_external_generic_constraints_v2_work() {
         "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_proto_pr.string() +
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
         "\" --load-export-index \"" + lib_index.string() + "\"");
-    std::filesystem::remove_all(temp_root, ec);
-
     if (rc_bad_proto == 0 || !contains(out_bad_proto, "GenericConstraintUnsatisfied")) {
         std::cerr << "external generic proto mismatch must report GenericConstraintUnsatisfied\n" << out_bad_proto;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto ok_acts_pr = temp_root / "ok_acts.pr";
+    const std::string ok_acts_src =
+        "def main(x: api::Box<i32>) -> bool {\n"
+        "  return x.same();\n"
+        "}\n";
+    if (!write_text(ok_acts_pr, ok_acts_src)) {
+        std::cerr << "failed to write external generic acts success sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_ok_acts, out_ok_acts] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_acts_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_ok_acts != 0) {
+        std::cerr << "external generic acts success sample should typecheck\n" << out_ok_acts;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_acts_pr = temp_root / "bad_acts.pr";
+    const std::string bad_acts_src =
+        "def main(x: api::Box<bool>) -> bool {\n"
+        "  return x.same();\n"
+        "}\n";
+    if (!write_text(bad_acts_pr, bad_acts_src)) {
+        std::cerr << "failed to write external generic acts negative sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_acts, out_bad_acts] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_acts_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc_bad_acts == 0 || !contains(out_bad_acts, "GenericConstraintUnsatisfied")) {
+        std::cerr << "external generic acts proto mismatch must report GenericConstraintUnsatisfied\n"
+                  << out_bad_acts;
         return false;
     }
     return true;

@@ -1582,6 +1582,7 @@
 
     void TypeChecker::collect_external_builtin_acts_methods_() {
         external_acts_default_method_map_.clear();
+        external_acts_template_method_map_.clear();
         for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
             const auto& sym = sym_.symbol(sid);
             if (!sym.is_external) continue;
@@ -1631,6 +1632,21 @@
             md.fn_symbol = sid;
             md.owner_type = owner_t;
             md.receiver_is_self = receiver_is_self;
+            md.external_payload = sym.external_payload;
+
+            std::unordered_set<std::string> unresolved{};
+            collect_unresolved_generic_param_names_in_type_(owner_t, unresolved);
+            std::string owner_base{};
+            std::vector<ty::TypeId> owner_args{};
+            if (!unresolved.empty() &&
+                decompose_named_user_type_(owner_t, owner_base, owner_args) &&
+                !owner_base.empty()) {
+                md.owner_is_generic_template = true;
+                md.owner_generic_arity = static_cast<uint32_t>(owner_args.size());
+                md.owner_base = owner_base;
+                external_acts_template_method_map_[owner_base][member_name].push_back(md);
+                continue;
+            }
             external_acts_default_method_map_[owner_t][member_name].push_back(md);
         }
     }
@@ -2074,11 +2090,14 @@
                     return false;
             }
         };
+        auto is_char = [&](ty::Builtin b) {
+            return b == ty::Builtin::kChar;
+        };
 
         if (leaf == "SignedInt") return is_signed(tt.builtin);
         if (leaf == "UnsignedInt") return is_unsigned(tt.builtin);
         if (leaf == "Integral") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
-        if (leaf == "RangeBound") return is_signed(tt.builtin) || is_unsigned(tt.builtin);
+        if (leaf == "RangeBound") return is_signed(tt.builtin) || is_unsigned(tt.builtin) || is_char(tt.builtin);
         if (leaf == "FloatLike") return is_float_builtin_(tt.builtin);
         return false;
     }

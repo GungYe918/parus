@@ -381,6 +381,28 @@ namespace parusc::p0 {
             const parus::ast::Stmt& s,
             const parus::ty::TypePool& types
         ) {
+            std::vector<std::string> owner_generic_params{};
+            if (s.kind == parus::ast::StmtKind::kActsDecl &&
+                s.acts_is_for &&
+                s.acts_target_type != parus::ty::kInvalidType) {
+                std::vector<std::string_view> owner_path{};
+                std::vector<parus::ty::TypeId> owner_args{};
+                if (types.decompose_named_user(s.acts_target_type, owner_path, owner_args) && !owner_args.empty()) {
+                    owner_generic_params.reserve(owner_args.size());
+                    for (const auto arg_t : owner_args) {
+                        if (arg_t == parus::ty::kInvalidType || arg_t >= types.count()) continue;
+                        std::vector<std::string_view> arg_path{};
+                        std::vector<parus::ty::TypeId> arg_args{};
+                        if (!types.decompose_named_user(arg_t, arg_path, arg_args) ||
+                            arg_path.size() != 1 ||
+                            !arg_args.empty()) {
+                            continue;
+                        }
+                        owner_generic_params.emplace_back(arg_path.front());
+                    }
+                }
+            }
+
             const uint32_t gp_begin =
                 (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_generic_param_begin : s.decl_generic_param_begin;
             const uint32_t gp_count =
@@ -390,17 +412,25 @@ namespace parusc::p0 {
             const uint32_t cc_count =
                 (s.kind == parus::ast::StmtKind::kFnDecl) ? s.fn_constraint_count : s.decl_constraint_count;
 
-            if (gp_count == 0 && cc_count == 0) return;
+            if (gp_count == 0 && cc_count == 0 && owner_generic_params.empty()) return;
 
             if (payload.empty()) {
                 payload = "parus_generic_decl";
             }
             const auto& gps = ast.generic_param_decls();
             const auto& ccs = ast.fn_constraint_decls();
+            std::unordered_set<std::string> emitted_params{};
+
+            for (const auto& name : owner_generic_params) {
+                if (!emitted_params.insert(name).second) continue;
+                payload += "|gparam=";
+                payload += payload_escape_value_(name);
+            }
 
             for (uint32_t i = 0; i < gp_count; ++i) {
                 const uint32_t idx = gp_begin + i;
                 if (idx >= gps.size()) break;
+                if (!emitted_params.insert(std::string(gps[idx].name)).second) continue;
                 payload += "|gparam=";
                 payload += payload_escape_value_(gps[idx].name);
             }
@@ -949,6 +979,7 @@ namespace parusc::p0 {
                                       "|member=" + std::string(ms.name) +
                                       "|self=" + (receiver_is_self ? "1" : "0");
                         }
+                        append_generic_decl_payload_(payload, ast, s, types);
                         append_generic_decl_payload_(payload, ast, ms, types);
 
                         std::string member_qname = acts_qname;

@@ -1342,6 +1342,43 @@ namespace parus::oir {
                 const TypeId src_ty = out->values[src].ty;
                 if (src_ty == dst_ty) return src;
 
+                auto type_contains_unresolved_generic_param = [&](auto&& self, TypeId t) -> bool {
+                    if (t == kInvalidId || types == nullptr) return false;
+                    const auto& tt = types->get(t);
+                    switch (tt.kind) {
+                        case parus::ty::Kind::kNamedUser: {
+                            std::vector<std::string_view> path{};
+                            std::vector<TypeId> args{};
+                            if (!types->decompose_named_user(t, path, args) || path.empty()) return false;
+                            if (args.empty() && path.size() == 1) {
+                                if (symtab == nullptr) return true;
+                                if (auto sid = symtab->lookup(std::string(path.front()))) {
+                                    const auto& ss = symtab->symbol(*sid);
+                                    return ss.kind != parus::sema::SymbolKind::kType;
+                                }
+                                return true;
+                            }
+                            for (const auto arg_t : args) {
+                                if (self(self, arg_t)) return true;
+                            }
+                            return false;
+                        }
+                        case parus::ty::Kind::kBorrow:
+                        case parus::ty::Kind::kEscape:
+                        case parus::ty::Kind::kPtr:
+                        case parus::ty::Kind::kOptional:
+                        case parus::ty::Kind::kArray:
+                            return tt.elem != kInvalidId && self(self, tt.elem);
+                        case parus::ty::Kind::kFn:
+                            for (uint32_t i = 0; i < tt.param_count; ++i) {
+                                if (self(self, types->fn_param_at(t, i))) return true;
+                            }
+                            return tt.ret != kInvalidId && self(self, tt.ret);
+                        default:
+                            return false;
+                    }
+                };
+
                 auto is_c_char_like_type = [&](TypeId t) -> bool {
                     if (t == kInvalidId) return false;
                     const auto& et = types->get(t);
@@ -1423,12 +1460,17 @@ namespace parus::oir {
                     if (value_is_address_like_(src)) {
                         return src;
                     }
-                    ValueId slot = emit_alloca(dt.elem);
+                    TypeId slot_ty = dt.elem;
+                    if (src_ty != kInvalidId &&
+                        type_contains_unresolved_generic_param(type_contains_unresolved_generic_param, slot_ty)) {
+                        slot_ty = src_ty;
+                    }
+                    ValueId slot = emit_alloca(slot_ty);
                     ValueId store_v = src;
                     if (out != nullptr &&
                         (size_t)store_v < out->values.size() &&
-                        out->values[store_v].ty != dt.elem) {
-                        store_v = coerce_value_for_target(dt.elem, store_v);
+                        out->values[store_v].ty != slot_ty) {
+                        store_v = coerce_value_for_target(slot_ty, store_v);
                     }
                     emit_store(slot, store_v);
                     return slot;

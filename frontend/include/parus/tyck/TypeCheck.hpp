@@ -565,10 +565,15 @@ namespace parus::tyck {
             uint32_t fn_symbol = sema::SymbolTable::kNoScope;
             ty::TypeId owner_type = ty::kInvalidType;
             bool receiver_is_self = false;
+            bool owner_is_generic_template = false;
+            uint32_t owner_generic_arity = 0;
+            std::string owner_base{};
+            std::string external_payload{};
         };
         std::unordered_map<std::string, std::vector<uint32_t>> external_fn_overload_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_default_method_map_;
+        std::unordered_map<std::string, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_template_method_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> acts_default_decl_by_owner_;
         std::unordered_set<uint32_t> explicit_core_impl_marker_file_ids_;

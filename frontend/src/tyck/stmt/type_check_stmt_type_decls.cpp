@@ -161,6 +161,18 @@
             return;
         }
 
+        ty::TypeId self_ty = s.type;
+        if (self_ty == ty::kInvalidType && !s.name.empty()) {
+            self_ty = types_.intern_ident(s.name);
+        }
+        if (self_ty != ty::kInvalidType) {
+            FieldAbiMeta meta{};
+            meta.sid = sid;
+            meta.layout = s.field_layout;
+            meta.align = s.field_align;
+            field_abi_meta_by_type_[self_ty] = meta;
+        }
+
         if (is_generic_template) {
             return;
         }
@@ -203,18 +215,6 @@
                 diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
             }
             err_(m.span, oss.str());
-        }
-
-        ty::TypeId self_ty = s.type;
-        if (self_ty == ty::kInvalidType && !s.name.empty()) {
-            self_ty = types_.intern_ident(s.name);
-        }
-        if (self_ty != ty::kInvalidType) {
-            FieldAbiMeta meta{};
-            meta.sid = sid;
-            meta.layout = s.field_layout;
-            meta.align = s.field_align;
-            field_abi_meta_by_type_[self_ty] = meta;
         }
 
         // Implements validation for `field Name : ProtoA, ProtoB`
@@ -623,6 +623,13 @@
             for (const auto& name : collect_decl_generic_param_names_(s)) {
                 generic_params.insert(name);
             }
+            if (s.acts_is_for && s.acts_target_type != ty::kInvalidType) {
+                std::unordered_set<std::string> owner_generic_params{};
+                collect_unresolved_generic_param_names_in_type_(s.acts_target_type, owner_generic_params);
+                for (const auto& name : owner_generic_params) {
+                    generic_params.insert(name);
+                }
+            }
             (void)validate_constraint_clause_decl_(s.decl_constraint_begin, s.decl_constraint_count, generic_params, s.span);
         }
         if (sid != ast::k_invalid_stmt &&
@@ -634,7 +641,28 @@
 
         if (s.acts_is_for) {
             bool owner_ok = false;
-            const ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
+            ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
+            {
+                std::string owner_base{};
+                std::vector<ty::TypeId> owner_args{};
+                if (decompose_named_user_type_(owner_type, owner_base, owner_args) && !owner_args.empty()) {
+                    std::string owner_key = owner_base;
+                    if (auto rewritten = rewrite_imported_path_(owner_key)) {
+                        owner_key = *rewritten;
+                    }
+                    if (auto cit = class_decl_by_name_.find(owner_key); cit != class_decl_by_name_.end()) {
+                        if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, s.span)) {
+                            const auto& inst = ast_.stmt(*inst_sid);
+                            if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                                owner_type = inst.type;
+                            }
+                        }
+                    }
+                }
+            }
+            (void)ensure_generic_field_instance_from_type_(owner_type, s.span);
+            (void)ensure_generic_enum_instance_from_type_(owner_type, s.span);
+            owner_type = canonicalize_acts_owner_type_(owner_type);
             if (owner_type != ty::kInvalidType) {
                 ty::Builtin builtin_kind = ty::Builtin::kNull;
                 if (is_builtin_owner_type_(owner_type, &builtin_kind)) {
