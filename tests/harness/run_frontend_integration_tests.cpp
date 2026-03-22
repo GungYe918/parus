@@ -120,6 +120,15 @@ namespace {
         return out;
     }
 
+    static parus::oir::BuildResult run_oir(
+        ParsedProgram& p,
+        const parus::passes::PassResults& pres,
+        const SirRun& sir
+    ) {
+        parus::oir::Builder builder(sir.mod, p.types, nullptr, &pres.sym);
+        return builder.build();
+    }
+
     static bool require_(bool cond, const char* msg) {
         if (cond) return true;
         std::cerr << "  - " << msg << "\n";
@@ -1611,34 +1620,144 @@ namespace {
         return ok;
     }
 
-    static bool test_core_range_loop_bridge_stays_unsupported() {
-        const std::string src = R"(
-            struct Range<T> {
-                start: T;
-                end: T;
+    static bool test_iter_proto_default_acts_satisfaction_ok() {
+        const std::string ok_src = R"(
+            proto Iterator<Item> {
+                require next(it: &mut Self) -> Item?;
             };
 
-            def range(start: i32, end: i32) -> Range<i32> {
-                return Range<i32>{ start: start, end: end };
-            }
+            struct CounterIter: Iterator<i32> {
+                cur: i32;
+                end: i32;
+            };
 
-            def main() -> i32? {
-                return loop (x in range(1i32, 4i32)) {
-                    if (x == 3i32) {
-                        break x;
+            acts for CounterIter {
+                def next(self mut) -> i32? {
+                    if (self.cur >= self.end) {
+                        return null;
                     }
-                };
+                    let out: i32 = self.cur;
+                    self.cur = self.cur + 1i32;
+                    return out;
+                }
+            };
+
+            def main() -> i32 {
+                set mut it = CounterIter{ cur: 1i32, end: 3i32 };
+                let a: i32? = it.next();
+                let b: i32? = it.next();
+                if (a != null and b != null and (a as! i32) == 1i32 and (b as! i32) == 2i32) {
+                    return 42i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        const std::string err_src = R"(
+            proto Iterator<Item> {
+                require next(it: &mut Self) -> Item?;
+            };
+
+            struct CounterIter: Iterator<i32> {
+                cur: i32;
+                end: i32;
+            };
+
+            def main() -> i32 {
+                return 0i32;
+            }
+        )";
+
+        auto ok_prog = parse_program(ok_src);
+        auto ok_pres = run_passes(ok_prog);
+        auto ok_ty = run_tyck(ok_prog, &ok_pres.generic_prep);
+
+        auto err_prog = parse_program(err_src);
+        auto err_pres = run_passes(err_prog);
+        auto err_ty = run_tyck(err_prog, &err_pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(!ok_prog.bag.has_error(), "default acts must satisfy Iterator requirement when signatures match");
+        ok &= require_(ok_ty.errors.empty(), "Iterator default acts satisfaction success sample must typecheck");
+        ok &= require_(err_prog.bag.has_code(parus::diag::Code::kProtoImplMissingMember),
+                       "missing default acts method must report ProtoImplMissingMember");
+        ok &= require_(!err_ty.errors.empty(), "missing default acts method must fail typecheck");
+        return ok;
+    }
+
+    static bool test_core_iter_sequence_loop_bridge_ok() {
+        const std::string src = R"(
+            proto Iterator<Item> {
+                require next(it: &mut Self) -> Item?;
+            };
+
+            proto Sequence<Item, Iter> {
+                require iter(seq: &Self) -> Iter;
+            };
+
+            struct CounterIter: Iterator<i32> {
+                cur: i32;
+                end: i32;
+            };
+
+            acts for CounterIter {
+                def next(self mut) -> i32? {
+                    if (self.cur >= self.end) {
+                        return null;
+                    }
+                    let out: i32 = self.cur;
+                    self.cur = self.cur + 1i32;
+                    return out;
+                }
+            };
+
+            struct Counter: Sequence<i32, CounterIter> {
+                start: i32;
+                end: i32;
+            };
+
+            acts for Counter {
+                def iter(self) -> CounterIter {
+                    return CounterIter{ cur: self.start, end: self.end };
+                }
+            };
+
+            def main() -> i32 {
+                set mut it = Counter{ start: 1i32, end: 4i32 }.iter();
+                let a: i32? = it.next();
+                let b: i32? = it.next();
+                let c: i32? = it.next();
+                let d: i32? = it.next();
+
+                set mut sum = 0i32;
+                loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                    set sum = sum + x;
+                }
+
+                if (a != null and b != null and c != null and d == null and
+                    (a as! i32) == 1i32 and (b as! i32) == 2i32 and (c as! i32) == 3i32 and
+                    sum == 6i32) {
+                    return 42i32;
+                }
+                return 0i32;
             }
         )";
 
         auto p = parse_program(src);
-        (void)run_passes(p);
-        auto ty = run_tyck(p);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+        auto oir = run_oir(p, pres, sir);
 
         bool ok = true;
-        ok &= require_(p.bag.has_code(parus::diag::Code::kLoopIterableUnsupported),
-            "loop over core::range value must remain unsupported in v1");
-        ok &= require_(!ty.errors.empty(), "loop over core::range value must fail typecheck");
+        ok &= require_(!p.bag.has_error(), "sequence loop bridge source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "sequence loop bridge source must typecheck");
+        ok &= require_(cap.ok, "sequence loop bridge source must pass capability check");
+        ok &= require_(sir.verify_errors.empty(), "sequence loop bridge source must produce valid SIR");
+        ok &= require_(sir.cap.ok, "sequence loop bridge source must pass SIR capability analysis");
+        ok &= require_(sir.handle_verify_errors.empty(), "sequence loop bridge source must pass handle verification");
+        ok &= require_(oir.gate_passed, "sequence loop bridge source must lower to valid OIR");
         return ok;
     }
 
@@ -1997,7 +2116,7 @@ namespace {
         if (!ok) return false;
 
         sir.mod.escape_handles[0].materialize_count = 1;
-        parus::oir::Builder ob(sir.mod, p.types);
+        parus::oir::Builder ob(sir.mod, p.types, nullptr, &pres.sym);
         auto oir = ob.build();
 
         ok &= require_(!oir.gate_passed, "OIR gate must fail when escape handle verify fails");
@@ -2659,7 +2778,8 @@ int main() {
         {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},
         {"core_range_surface_ok", test_core_range_surface_ok},
         {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
-        {"core_range_loop_bridge_stays_unsupported", test_core_range_loop_bridge_stays_unsupported},
+        {"iter_proto_default_acts_satisfaction_ok", test_iter_proto_default_acts_satisfaction_ok},
+        {"core_iter_sequence_loop_bridge_ok", test_core_iter_sequence_loop_bridge_ok},
         {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},

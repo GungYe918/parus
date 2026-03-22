@@ -326,6 +326,29 @@ namespace parus::sir {
                         oss << "value #" << vid << " loop has invalid range end value id " << v.c;
                         push_error_(errs, oss.str());
                     }
+                    if (v.loop_source_kind == parus::LoopSourceKind::kSequence) {
+                        if (v.loop_iterator_type == k_invalid_type) {
+                            std::ostringstream oss;
+                            oss << "value #" << vid << " sequence loop is missing iterator type metadata";
+                            push_error_(errs, oss.str());
+                        }
+                        const bool has_iter =
+                            v.loop_iter_decl_stmt != 0xFFFF'FFFFu ||
+                            v.loop_iter_external_sym != k_invalid_symbol;
+                        const bool has_next =
+                            v.loop_next_decl_stmt != 0xFFFF'FFFFu ||
+                            v.loop_next_external_sym != k_invalid_symbol;
+                        if (!has_iter) {
+                            std::ostringstream oss;
+                            oss << "value #" << vid << " sequence loop is missing iter() target metadata";
+                            push_error_(errs, oss.str());
+                        }
+                        if (!has_next) {
+                            std::ostringstream oss;
+                            oss << "value #" << vid << " sequence loop is missing next() target metadata";
+                            push_error_(errs, oss.str());
+                        }
+                    }
                     const BlockId body = (BlockId)v.b;
                     if (!valid_block_id_(m, body)) {
                         std::ostringstream oss;

@@ -1,0 +1,177 @@
+$![Impl::Core];
+
+import constraints as constraints;
+
+export proto Iterator<Item> {
+    require next(it: &mut Self) -> Item?;
+};
+
+export proto Sequence<Item, Iter> {
+    require iter(seq: &Self) -> Iter;
+};
+
+$![Impl::StepNext]
+export def step_next<T>(value: T) with [T: constraints::Step] -> T?;
+
+struct RangeIter<T>: Iterator<T> {
+    cur: T;
+    end: T;
+};
+
+struct RangeInclusiveIter<T>: Iterator<T> {
+    cur: T;
+    end: T;
+    done: bool;
+};
+
+def range_iter_next_impl_<T>(mut it: &mut RangeIter<T>) with [T: constraints::Step] -> T? {
+    if (it.cur >= it.end) {
+        return null;
+    }
+
+    let out: T = it.cur;
+    let next_value: T? = step_next<T>(out);
+    if (next_value == null) {
+        it.cur = it.end;
+    } else {
+        it.cur = next_value as! T;
+    }
+    return out;
+}
+
+def range_inclusive_iter_next_impl_<T>(mut it: &mut RangeInclusiveIter<T>) with [T: constraints::Step] -> T? {
+    if (it.done or it.cur > it.end) {
+        return null;
+    }
+
+    let out: T = it.cur;
+    if (out == it.end) {
+        it.done = true;
+        return out;
+    }
+
+    let next_value: T? = step_next<T>(out);
+    if (next_value == null) {
+        it.done = true;
+        return out;
+    }
+
+    it.cur = next_value as! T;
+    return out;
+}
+
+export acts for RangeIter<T> with [T: constraints::Step] {
+    def next(self mut) -> T? {
+        return range_iter_next_impl_<T>(self);
+    }
+};
+
+export acts for RangeInclusiveIter<T> with [T: constraints::Step] {
+    def next(self mut) -> T? {
+        return range_inclusive_iter_next_impl_<T>(self);
+    }
+};
+
+export acts for RangeIter<i8> {
+    def next(self mut) -> i8? { return range_iter_next_impl_<i8>(self); }
+};
+
+export acts for RangeIter<i16> {
+    def next(self mut) -> i16? { return range_iter_next_impl_<i16>(self); }
+};
+
+export acts for RangeIter<i32> {
+    def next(self mut) -> i32? { return range_iter_next_impl_<i32>(self); }
+};
+
+export acts for RangeIter<i64> {
+    def next(self mut) -> i64? { return range_iter_next_impl_<i64>(self); }
+};
+
+export acts for RangeIter<i128> {
+    def next(self mut) -> i128? { return range_iter_next_impl_<i128>(self); }
+};
+
+export acts for RangeIter<isize> {
+    def next(self mut) -> isize? { return range_iter_next_impl_<isize>(self); }
+};
+
+export acts for RangeIter<u8> {
+    def next(self mut) -> u8? { return range_iter_next_impl_<u8>(self); }
+};
+
+export acts for RangeIter<u16> {
+    def next(self mut) -> u16? { return range_iter_next_impl_<u16>(self); }
+};
+
+export acts for RangeIter<u32> {
+    def next(self mut) -> u32? { return range_iter_next_impl_<u32>(self); }
+};
+
+export acts for RangeIter<u64> {
+    def next(self mut) -> u64? { return range_iter_next_impl_<u64>(self); }
+};
+
+export acts for RangeIter<u128> {
+    def next(self mut) -> u128? { return range_iter_next_impl_<u128>(self); }
+};
+
+export acts for RangeIter<usize> {
+    def next(self mut) -> usize? { return range_iter_next_impl_<usize>(self); }
+};
+
+export acts for RangeIter<char> {
+    def next(self mut) -> char? { return range_iter_next_impl_<char>(self); }
+};
+
+export acts for RangeInclusiveIter<i8> {
+    def next(self mut) -> i8? { return range_inclusive_iter_next_impl_<i8>(self); }
+};
+
+export acts for RangeInclusiveIter<i16> {
+    def next(self mut) -> i16? { return range_inclusive_iter_next_impl_<i16>(self); }
+};
+
+export acts for RangeInclusiveIter<i32> {
+    def next(self mut) -> i32? { return range_inclusive_iter_next_impl_<i32>(self); }
+};
+
+export acts for RangeInclusiveIter<i64> {
+    def next(self mut) -> i64? { return range_inclusive_iter_next_impl_<i64>(self); }
+};
+
+export acts for RangeInclusiveIter<i128> {
+    def next(self mut) -> i128? { return range_inclusive_iter_next_impl_<i128>(self); }
+};
+
+export acts for RangeInclusiveIter<isize> {
+    def next(self mut) -> isize? { return range_inclusive_iter_next_impl_<isize>(self); }
+};
+
+export acts for RangeInclusiveIter<u8> {
+    def next(self mut) -> u8? { return range_inclusive_iter_next_impl_<u8>(self); }
+};
+
+export acts for RangeInclusiveIter<u16> {
+    def next(self mut) -> u16? { return range_inclusive_iter_next_impl_<u16>(self); }
+};
+
+export acts for RangeInclusiveIter<u32> {
+    def next(self mut) -> u32? { return range_inclusive_iter_next_impl_<u32>(self); }
+};
+
+export acts for RangeInclusiveIter<u64> {
+    def next(self mut) -> u64? { return range_inclusive_iter_next_impl_<u64>(self); }
+};
+
+export acts for RangeInclusiveIter<u128> {
+    def next(self mut) -> u128? { return range_inclusive_iter_next_impl_<u128>(self); }
+};
+
+export acts for RangeInclusiveIter<usize> {
+    def next(self mut) -> usize? { return range_inclusive_iter_next_impl_<usize>(self); }
+};
+
+export acts for RangeInclusiveIter<char> {
+    def next(self mut) -> char? { return range_inclusive_iter_next_impl_<char>(self); }
+};

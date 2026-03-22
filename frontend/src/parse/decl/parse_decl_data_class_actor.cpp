@@ -788,11 +788,15 @@
 
             ast::Param hidden_self{};
             hidden_self.name = std::string_view("draft");
-            hidden_self.type = types_.make_borrow(types_.intern_ident("Self"), /*is_mut=*/true);
+            const bool actor_receiver_is_mut = (mode == ast::FnMode::kPub);
+            hidden_self.type = types_.make_borrow(types_.intern_ident("Self"), actor_receiver_is_mut);
             hidden_self.type_node = ast::k_invalid_type_node;
             hidden_self.is_mut = false;
             hidden_self.is_self = true;
-            hidden_self.self_kind = ast::SelfReceiverKind::kMut;
+            hidden_self.self_kind =
+                actor_receiver_is_mut
+                    ? ast::SelfReceiverKind::kMut
+                    : ast::SelfReceiverKind::kRead;
             hidden_self.is_named_group = false;
             hidden_self.has_default = false;
             hidden_self.default_expr = ast::k_invalid_expr;

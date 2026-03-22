@@ -319,7 +319,7 @@ namespace {
                        "generic proto use must materialize at least one concrete proto instance");
         if (!ok) return false;
 
-        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
         auto oir = ob.build();
         ok &= require_(oir.gate_passed, "OIR gate must pass for generic proto source");
         if (!ok) return false;
@@ -1105,7 +1105,7 @@ namespace {
         ok &= require_(p.sir_cap.ok, "proto override seed must pass SIR capability");
         if (!ok) return false;
 
-        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
         auto oir = ob.build();
         ok &= require_(oir.gate_passed, "OIR gate must pass for proto override source");
         if (!ok) return false;
@@ -1142,7 +1142,7 @@ namespace {
         ok &= require_(p.sir_cap.ok, "class ctor lowering seed must pass SIR capability");
         if (!ok) return false;
 
-        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
         auto oir = ob.build();
         ok &= require_(oir.gate_passed, "OIR gate must pass for class ctor call source");
         if (!ok) return false;
@@ -1304,7 +1304,7 @@ namespace {
         ok &= require_(p.sir_cap.ok, "raii scope-exit seed must pass SIR capability");
         if (!ok) return false;
 
-        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
         auto oir = ob.build();
         ok &= require_(oir.gate_passed, "OIR gate must pass for raii scope-exit source");
         if (!ok) return false;
@@ -1351,7 +1351,7 @@ namespace {
         ok &= require_(p.sir_cap.ok, "raii escape-move seed must pass SIR capability");
         if (!ok) return false;
 
-        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
         auto oir = ob.build();
         ok &= require_(oir.gate_passed, "OIR gate must pass for raii escape-move source");
         if (!ok) return false;

@@ -1561,6 +1561,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path text_view = core_root / "text/text.pr";
     const std::filesystem::path mem_mod = core_root / "mem/mem.pr";
     const std::filesystem::path hint_mod = core_root / "hint/hint.pr";
+    const std::filesystem::path iter_mod = core_root / "iter/iter.pr";
     const std::filesystem::path range_mod = core_root / "range/range.pr";
     if (!std::filesystem::exists(ext_types, ec) ||
         !std::filesystem::exists(ext_cstr, ec) ||
@@ -1575,6 +1576,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(text_view, ec) ||
         !std::filesystem::exists(mem_mod, ec) ||
         !std::filesystem::exists(hint_mod, ec) ||
+        !std::filesystem::exists(iter_mod, ec) ||
         !std::filesystem::exists(range_mod, ec)) {
         std::cerr << "core seed source files are missing\n";
         std::filesystem::remove_all(temp_root, ec);
@@ -1601,7 +1603,8 @@ bool test_core_seed_export_index_and_auto_injection() {
                 {text_view, "text", {}},
                 {mem_mod, "mem", {}},
                 {hint_mod, "hint", {}},
-                {range_mod, "range", {"constraints"}},
+                {iter_mod, "iter", {"constraints"}},
+                {range_mod, "range", {"constraints", "iter"}},
             },
             core_index,
             out_emit)) {
@@ -1663,11 +1666,22 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
         !contains(core_index_text, "\"path\":\"range\"") ||
         !contains(core_index_text, "\"path\":\"range_inclusive\"") ||
+        !contains(core_index_text, "\"path\":\"Iterator\"") ||
+        !contains(core_index_text, "\"path\":\"Sequence\"") ||
+        !contains(core_index_text, "\"path\":\"RangeIter\"") ||
+        !contains(core_index_text, "\"path\":\"RangeInclusiveIter\"") ||
+        !contains(core_index_text, "\"path\":\"step_next\"") ||
         !contains(core_index_text, "\"path\":\"Comparable\"") ||
         !contains(core_index_text, "\"path\":\"BinaryInteger\"") ||
         !contains(core_index_text, "\"path\":\"SignedInteger\"") ||
         !contains(core_index_text, "\"path\":\"UnsignedInteger\"") ||
+        !contains(core_index_text, "\"path\":\"Step\"") ||
         !contains(core_index_text, "\"path\":\"BinaryFloatingPoint\"") ||
+        !contains(core_index_text, "parus_impl_binding|key=Impl::StepNext|mode=compiler") ||
+        !contains(core_index_text, "impl_proto=core::iter::Sequence") ||
+        !contains(core_index_text, "impl_proto=core::iter::Iterator") ||
+        !contains(core_index_text, "gconstraint=proto,T,core::constraints::Step") ||
+        contains(core_index_text, "gconstraint=proto,T,constraints::Step") ||
         contains(core_index_text, "\"path\":\"SignedInt\"") ||
         contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
         contains(core_index_text, "\"path\":\"Integral\"") ||
@@ -1683,6 +1697,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "import constraints as constraints;\n"
         "import ext as ext;\n"
         "import hint as hint;\n"
+        "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
         "\n"
@@ -1738,6 +1753,22 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
         "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
+        "  set mut it = rx.iter();\n"
+        "  let it1: i32? = it.next();\n"
+        "  let it2: i32? = it.next();\n"
+        "  let it3: i32? = it.next();\n"
+        "  let it4: i32? = it.next();\n"
+        "  set mut single_char = rci.iter();\n"
+        "  let rc1: char? = single_char.next();\n"
+        "  let rc2: char? = single_char.next();\n"
+        "  set mut loop_sum = 0i32;\n"
+        "  loop (x in range::range(1i32, 4i32)) {\n"
+        "    set loop_sum = loop_sum + x;\n"
+        "  }\n"
+        "  set mut loop_inc_sum = 0i32;\n"
+        "  loop (x in range::range_inclusive(1i32, 3i32)) {\n"
+        "    set loop_inc_sum = loop_inc_sum + x;\n"
+        "  }\n"
         "  let ord: core::cmp::Ordering = a.cmp(0i32);\n"
         "  set mut bool_ok = false;\n"
         "  switch (bool_ord) {\n"
@@ -1758,6 +1789,10 @@ bool test_core_seed_export_index_and_auto_injection() {
         " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
         " not rx_empty and rx_has_mid and not rx_has_hi and rx_contains_range and not rx_intersects_tail and"
         " ri_has_hi and ri_empty and rc_has_mid and not rc_has_hi and rci_single and rci_intersects and"
+        " it1 != null and it2 != null and it3 != null and it4 == null and"
+        " (it1 as! i32) == 1i32 and (it2 as! i32) == 2i32 and (it3 as! i32) == 3i32 and"
+        " rc1 != null and (rc1 as! char) == 'k' and rc2 == null and"
+        " loop_sum == 6i32 and loop_inc_sum == 6i32 and"
         " sz_i32 == 4usize and sz_text == 16usize and al_i32 == 4usize and al_text == 8usize and"
         " swap_a == 2i32 and swap_b == 1i32 and repl_old.len_bytes() == 3usize and repl.len_bytes() == 1usize and"
         " cold(true) == 7i32) {\n"
@@ -1822,7 +1857,7 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 14> core_seed_sources = {
+    const std::array<std::filesystem::path, 15> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
@@ -1836,6 +1871,7 @@ bool test_core_seed_runtime_smoke() {
         core_root / "text/text.pr",
         core_root / "mem/mem.pr",
         core_root / "hint/hint.pr",
+        core_root / "iter/iter.pr",
         core_root / "range/range.pr",
     };
 
@@ -1846,6 +1882,7 @@ bool test_core_seed_runtime_smoke() {
         "import constraints as constraints;\n"
         "import ext as ext;\n"
         "import hint as hint;\n"
+        "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
         "\n"
@@ -1898,6 +1935,22 @@ bool test_core_seed_runtime_smoke() {
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
         "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
+        "  set mut it = rx.iter();\n"
+        "  let it1: i32? = it.next();\n"
+        "  let it2: i32? = it.next();\n"
+        "  let it3: i32? = it.next();\n"
+        "  let it4: i32? = it.next();\n"
+        "  set mut char_it = rci.iter();\n"
+        "  let rc1: char? = char_it.next();\n"
+        "  let rc2: char? = char_it.next();\n"
+        "  set mut loop_sum = 0i32;\n"
+        "  loop (x in range::range(1i32, 4i32)) {\n"
+        "    set loop_sum = loop_sum + x;\n"
+        "  }\n"
+        "  set mut loop_inc_sum = 0i32;\n"
+        "  loop (x in range::range_inclusive(1i32, 3i32)) {\n"
+        "    set loop_inc_sum = loop_inc_sum + x;\n"
+        "  }\n"
         "  set mut bo_ok = false;\n"
         "  switch (bo) {\n"
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
@@ -1929,6 +1982,18 @@ bool test_core_seed_runtime_smoke() {
         "      and not rc_has_hi\n"
         "      and rci_single\n"
         "      and rci_intersects\n"
+        "      and it1 != null\n"
+        "      and it2 != null\n"
+        "      and it3 != null\n"
+        "      and it4 == null\n"
+        "      and (it1 as! i32) == 1i32\n"
+        "      and (it2 as! i32) == 2i32\n"
+        "      and (it3 as! i32) == 3i32\n"
+        "      and rc1 != null\n"
+        "      and (rc1 as! char) == 'k'\n"
+        "      and rc2 == null\n"
+        "      and loop_sum == 6i32\n"
+        "      and loop_inc_sum == 6i32\n"
         "      and sz_i32 == 4usize\n"
         "      and sz_text == 16usize\n"
         "      and sz_arr == 16usize\n"
@@ -2010,10 +2075,16 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"RangeInclusive\"") ||
         !contains(installed_core_index, "\"path\":\"range\"") ||
         !contains(installed_core_index, "\"path\":\"range_inclusive\"") ||
+        !contains(installed_core_index, "\"path\":\"Iterator\"") ||
+        !contains(installed_core_index, "\"path\":\"Sequence\"") ||
+        !contains(installed_core_index, "\"path\":\"RangeIter\"") ||
+        !contains(installed_core_index, "\"path\":\"RangeInclusiveIter\"") ||
+        !contains(installed_core_index, "\"path\":\"step_next\"") ||
         !contains(installed_core_index, "\"path\":\"SignedInteger\"") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
-        !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler")) {
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler") ||
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::StepNext|mode=compiler")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }
@@ -2287,7 +2358,8 @@ bool test_external_generic_constraints_v2_work() {
 
     const std::string lib_index_text = read_text(lib_index);
     if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
-        !contains(lib_index_text, "gconstraint=proto,T,constraints::SignedInteger") ||
+        !contains(lib_index_text, "gconstraint=proto,T,core::constraints::SignedInteger") ||
+        contains(lib_index_text, "gconstraint=proto,T,constraints::SignedInteger") ||
         !contains(lib_index_text, "\"path\":\"api::OnlyI32\"") ||
         !contains(lib_index_text, "parus_field_decl|layout=n|align=0|gparam=T|gconstraint=type_eq,T,i32|field=value:T")) {
         std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;

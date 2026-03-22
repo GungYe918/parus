@@ -180,6 +180,8 @@
                         err_(fn.span, msg);
                     }
                     break;
+                case ImplBindingKind::kStepNext:
+                    break;
                 case ImplBindingKind::kSizeOf:
                     if (fn.param_count != 0 || fn.fn_generic_param_count != 1 || ret != usize_ty ||
                         fn.name != "size_of") {
@@ -208,6 +210,9 @@
         if (sid != ast::k_invalid_stmt &&
             fn.fn_generic_param_count > 0 &&
             generic_fn_template_sid_set_.find(sid) != generic_fn_template_sid_set_.end()) {
+            return;
+        }
+        if (has_impl_binding && fn.a == ast::k_invalid_stmt) {
             return;
         }
 
@@ -1670,6 +1675,82 @@
         return visit_proto(visit_proto, proto_sid, visiting);
     }
 
+    bool TypeChecker::proto_member_fn_sig_matches_impl_(
+        const ast::Stmt& req,
+        const ast::Stmt& impl,
+        ty::TypeId owner_type
+    ) const {
+        if (req.kind != ast::StmtKind::kFnDecl || impl.kind != ast::StmtKind::kFnDecl) return false;
+        if (req.name != impl.name) return false;
+        if (req.param_count != impl.param_count) return false;
+        if (req.positional_param_count != impl.positional_param_count) return false;
+
+        auto normalize_self = [&](ty::TypeId t) -> ty::TypeId {
+            if (t == ty::kInvalidType) return t;
+            const auto& tt = types_.get(t);
+            if (tt.kind == ty::Kind::kNamedUser && is_self_named_type_(t)) {
+                return owner_type;
+            }
+            if (tt.kind == ty::Kind::kBorrow || tt.kind == ty::Kind::kEscape) {
+                if (tt.elem == ty::kInvalidType) return t;
+                const auto& et = types_.get(tt.elem);
+                if (et.kind == ty::Kind::kNamedUser && is_self_named_type_(tt.elem)) {
+                    return (tt.kind == ty::Kind::kBorrow)
+                        ? types_.make_borrow(owner_type, tt.borrow_is_mut)
+                        : types_.make_escape(owner_type);
+                }
+            }
+            return t;
+        };
+
+        auto is_receiver_semantic_param = [&](const ast::Param& p) -> bool {
+            if (p.is_self) return true;
+            if (p.type == ty::kInvalidType) return false;
+            const auto& pt = types_.get(p.type);
+            if (pt.kind == ty::Kind::kNamedUser && is_self_named_type_(p.type)) return true;
+            if ((pt.kind == ty::Kind::kBorrow || pt.kind == ty::Kind::kEscape) &&
+                pt.elem != ty::kInvalidType) {
+                const auto& et = types_.get(pt.elem);
+                return et.kind == ty::Kind::kNamedUser && is_self_named_type_(pt.elem);
+            }
+            return false;
+        };
+
+        if (normalize_self(req.fn_ret) != normalize_self(impl.fn_ret)) return false;
+        for (uint32_t i = 0; i < req.param_count; ++i) {
+            const auto& rp = ast_.params()[req.param_begin + i];
+            const auto& ip = ast_.params()[impl.param_begin + i];
+            if (normalize_self(rp.type) != normalize_self(ip.type)) return false;
+            if (is_receiver_semantic_param(rp) != is_receiver_semantic_param(ip)) return false;
+        }
+        return true;
+    }
+
+    bool TypeChecker::proto_requirement_satisfied_by_default_acts_(
+        ast::StmtId req_sid,
+        ty::TypeId owner_type
+    ) const {
+        if (req_sid == ast::k_invalid_stmt || static_cast<size_t>(req_sid) >= ast_.stmts().size()) {
+            return false;
+        }
+        if (owner_type == ty::kInvalidType) return false;
+        owner_type = canonicalize_acts_owner_type_(owner_type);
+        auto oit = acts_default_method_map_.find(owner_type);
+        if (oit == acts_default_method_map_.end()) return false;
+        const auto& req = ast_.stmt(req_sid);
+        auto mit = oit->second.find(std::string(req.name));
+        if (mit == oit->second.end()) return false;
+        for (const auto& cand : mit->second) {
+            if (cand.fn_sid == ast::k_invalid_stmt) continue;
+            if (cand.from_named_set) continue;
+            if (static_cast<size_t>(cand.fn_sid) >= ast_.stmts().size()) continue;
+            if (proto_member_fn_sig_matches_impl_(req, ast_.stmt(cand.fn_sid), owner_type)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void TypeChecker::check_stmt_proto_decl_(ast::StmtId sid) {
         if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
         const ast::Stmt& s = ast_.stmt(sid);
@@ -1840,19 +1921,7 @@
         };
 
         auto fn_sig_matches = [&](const ast::Stmt& req, const ast::Stmt& impl) -> bool {
-            if (req.kind != ast::StmtKind::kFnDecl || impl.kind != ast::StmtKind::kFnDecl) return false;
-            if (req.name != impl.name) return false;
-            if (req.param_count != impl.param_count) return false;
-            if (req.positional_param_count != impl.positional_param_count) return false;
-            if (normalize_self(req.fn_ret) != normalize_self(impl.fn_ret)) return false;
-            for (uint32_t i = 0; i < req.param_count; ++i) {
-                const auto& rp = ast_.params()[req.param_begin + i];
-                const auto& ip = ast_.params()[impl.param_begin + i];
-                if (normalize_self(rp.type) != normalize_self(ip.type)) return false;
-                if (rp.is_self != ip.is_self) return false;
-                if (rp.self_kind != ip.self_kind) return false;
-            }
-            return true;
+            return proto_member_fn_sig_matches_impl_(req, impl, self_ty);
         };
 
         auto collect_required = [&](auto&& self,
@@ -2049,6 +2118,7 @@
         if (self_ty != ty::kInvalidType) {
             class_effective_method_map_[self_ty] = local_overload_sets;
         }
+        ensure_generic_acts_for_owner_(self_ty, s.span);
 
         struct FnOverloadBackup {
             bool had_key = false;
@@ -2293,6 +2363,7 @@
                     continue;
                 }
 
+                bool proto_impl_ok = true;
                 std::vector<ast::StmtId> required;
                 std::vector<ast::StmtId> provided;
                 std::unordered_set<ast::StmtId> visiting;
@@ -2325,9 +2396,20 @@
                             }
                         }
                     }
+                    if (!matched &&
+                        proto_requirement_satisfied_by_default_acts_(req_sid, self_ty)) {
+                        matched = true;
+                    }
                     if (!matched) {
                         diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
                         err_(req.span, "missing proto member implementation: " + std::string(req.name));
+                        proto_impl_ok = false;
+                    }
+                }
+                if (proto_impl_ok && self_ty != ty::kInvalidType) {
+                    auto& impls = explicit_impl_proto_sids_by_type_[self_ty];
+                    if (std::find(impls.begin(), impls.end(), *proto_sid) == impls.end()) {
+                        impls.push_back(*proto_sid);
                     }
                 }
             }

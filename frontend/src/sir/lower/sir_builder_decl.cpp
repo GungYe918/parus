@@ -478,7 +478,7 @@ namespace parus::sir::detail {
 
         GlobalVarDecl g{};
         g.span = s.span;
-        g.sym = (forced_sym != k_invalid_symbol) ? forced_sym : resolve_symbol_from_stmt(nres, sid);
+        g.sym = (forced_sym != k_invalid_symbol) ? forced_sym : resolve_symbol_from_stmt(nres, tyck, sid);
         g.is_set = s.is_set;
         g.is_mut = s.is_mut;
         g.is_static = s.is_static;
@@ -654,7 +654,7 @@ namespace parus::sir {
                 (void)lower_class_field_decl_(m, ast, sym, nres, sid);
 
                 std::string class_qname = std::string(s.name);
-                if (auto class_sym = resolve_symbol_from_stmt(nres, sid);
+                if (auto class_sym = resolve_symbol_from_stmt(nres, tyck, sid);
                     class_sym != k_invalid_symbol && (size_t)class_sym < sym.symbols().size()) {
                     class_qname = sym.symbol(class_sym).name;
                 }
@@ -733,7 +733,7 @@ namespace parus::sir {
                 }
                 ActsDecl a{};
                 a.span = s.span;
-                a.sym = resolve_symbol_from_stmt(nres, sid);
+                a.sym = resolve_symbol_from_stmt(nres, tyck, sid);
                 if (a.sym != k_invalid_symbol && (size_t)a.sym < sym.symbols().size()) {
                     a.name = sym.symbol(a.sym).name;
                 } else {

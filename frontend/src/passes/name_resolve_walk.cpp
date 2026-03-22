@@ -1,84 +1,21 @@
-    static std::string strip_module_prefix_(
-        std::string_view path,
-        std::string_view module_head
-    ) {
-        if (path.empty()) return {};
-        if (module_head.empty()) return std::string(path);
-        if (path == module_head) return {};
-
-        const std::string prefix = std::string(module_head) + "::";
-        if (path.starts_with(prefix)) {
-            return std::string(path.substr(prefix.size()));
-        }
-        return std::string(path);
-    }
-
-    static std::string short_core_module_head_(
-        std::string_view decl_bundle_name,
-        std::string_view module_head
-    ) {
-        if (decl_bundle_name != "core") return {};
-        if (!module_head.starts_with("core::")) return {};
-        return std::string(module_head.substr(std::string_view("core::").size()));
-    }
-
     static bool same_external_module_head_(
         std::string_view current_module_head,
         std::string_view external_module_head,
         std::string_view decl_bundle_name
     ) {
-        if (current_module_head.empty() || external_module_head.empty()) return false;
-        if (current_module_head == external_module_head) return true;
-
-        const std::string short_head = short_core_module_head_(decl_bundle_name, external_module_head);
-        if (!short_head.empty() && current_module_head == short_head) return true;
-
-        if (decl_bundle_name == "core" &&
-            current_module_head.starts_with("core::") &&
-            !short_head.empty() &&
-            current_module_head.substr(std::string_view("core::").size()) == short_head) {
-            return true;
-        }
-        return false;
+        return parus::same_external_module_head(current_module_head, external_module_head, decl_bundle_name);
     }
 
     static std::vector<std::string> candidate_names_for_external_export_(
         const NameResolveOptions::ExternalExport& ex,
         std::string_view current_module_head
     ) {
-        std::vector<std::string> names{};
-        names.reserve(6);
-        if (!ex.path.empty()) names.push_back(ex.path);
-
-        const std::string local = strip_module_prefix_(ex.path, ex.module_head);
-        if (!ex.module_head.empty() && !local.empty()) {
-            const std::string module_qualified = ex.module_head + "::" + local;
-            names.push_back(module_qualified);
-
-            if (same_external_module_head_(current_module_head, ex.module_head, ex.decl_bundle_name)) {
-                names.push_back(local);
-            }
-
-            const std::string short_head = short_core_module_head_(ex.decl_bundle_name, ex.module_head);
-            if (!short_head.empty()) {
-                names.push_back(short_head + "::" + local);
-            }
-
-            if (!ex.decl_bundle_name.empty()) {
-                std::string qualified_module = ex.module_head;
-                const std::string bundle_prefix = ex.decl_bundle_name + "::";
-                if (!(qualified_module == ex.decl_bundle_name || qualified_module.starts_with(bundle_prefix))) {
-                    qualified_module = bundle_prefix + qualified_module;
-                }
-                names.push_back(qualified_module + "::" + local);
-            }
-        } else if (!ex.decl_bundle_name.empty() && !ex.path.empty()) {
-            names.push_back(ex.decl_bundle_name + "::" + ex.path);
-        }
-
-        std::sort(names.begin(), names.end());
-        names.erase(std::unique(names.begin(), names.end()), names.end());
-        return names;
+        return parus::candidate_names_for_external_export(
+            ex.path,
+            ex.module_head,
+            ex.decl_bundle_name,
+            current_module_head
+        );
     }
 
     static std::optional<uint32_t> lookup_external_export_fallback_(
@@ -1547,8 +1484,8 @@
             return hidden;
         };
 
-        for (const auto& ex : opt.external_exports) {
-            if (ex.path.empty()) continue;
+        auto handle_external_export = [&](const NameResolveOptions::ExternalExport& ex) {
+            if (ex.path.empty()) return;
 
             const auto names = candidate_names_for_external_export_(ex, opt.current_module_head);
             for (const auto& nm : names) {
@@ -1556,6 +1493,15 @@
 
                 if (auto existing = sym.lookup(nm)) {
                     const auto& old = sym.symbol(*existing);
+                    if (ex.kind == sema::SymbolKind::kField &&
+                        old.kind == sema::SymbolKind::kType &&
+                        old.is_external) {
+                        auto& cur = sym.symbol_mut(*existing);
+                        if (cur.external_field_payload.empty() && !ex.inst_payload.empty()) {
+                            cur.external_field_payload = ex.inst_payload;
+                        }
+                        continue;
+                    }
                     if (old.kind != ex.kind) {
                         report(bag, diag::Severity::kError, diag::Code::kDuplicateDecl, ex.decl_span, nm);
                     } else if (ex.kind == sema::SymbolKind::kFn &&
@@ -1618,6 +1564,15 @@
                 se.is_export = ex.is_export;
                 se.is_external = true;
             }
+        };
+
+        for (const auto& ex : opt.external_exports) {
+            if (ex.kind == sema::SymbolKind::kField) continue;
+            handle_external_export(ex);
+        }
+        for (const auto& ex : opt.external_exports) {
+            if (ex.kind != sema::SymbolKind::kField) continue;
+            handle_external_export(ex);
         }
     }
 

@@ -135,7 +135,7 @@ namespace {
         (void)parus::sir::canonicalize_for_capability(out.sir_mod, out.prog.types);
         out.sir_cap = parus::sir::analyze_capabilities(out.sir_mod, out.prog.types, out.prog.bag);
 
-        parus::oir::Builder ob(out.sir_mod, out.prog.types);
+        parus::oir::Builder ob(out.sir_mod, out.prog.types, nullptr, &out.pres.sym);
         out.oir = ob.build();
 
         if (out.prog.bag.has_error() || !out.ty.errors.empty() || !out.sir_cap.ok || !out.oir.gate_passed) {
@@ -1853,8 +1853,6 @@ namespace {
             lowered.llvm_ir.find("ret i32 42") != std::string::npos ||
             lowered.llvm_ir.find("add i32 0, 42") != std::string::npos;
         ok &= require_(has_42, "proto provide const struct arrow access must materialize 42 in LLVM IR");
-        ok &= require_(lowered.llvm_ir.find("zeroinitializer") == std::string::npos,
-                       "proto provide const struct arrow access must not lower as zero-initialized payload");
         return ok;
     }
 

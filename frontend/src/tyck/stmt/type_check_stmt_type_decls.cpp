@@ -177,6 +177,8 @@
             return;
         }
 
+        ensure_generic_acts_for_owner_(self_ty, s.span);
+
         for (uint32_t i = begin; i < end; ++i) {
             const auto& m = ast_.field_members()[i];
             const bool optional_member = is_optional_(m.type);
@@ -319,6 +321,7 @@
                     continue;
                 }
 
+                bool proto_impl_ok = true;
                 std::vector<ast::StmtId> required;
                 std::vector<ast::StmtId> provided;
                 std::unordered_set<ast::StmtId> visiting;
@@ -351,8 +354,18 @@
                         }
                     }
                     if (satisfied_by_provide) continue;
+                    if (proto_requirement_satisfied_by_default_acts_(req_sid, self_ty)) {
+                        continue;
+                    }
                     diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
                     err_(req.span, "field does not provide proto member: " + std::string(req.name));
+                    proto_impl_ok = false;
+                }
+                if (proto_impl_ok && self_ty != ty::kInvalidType) {
+                    auto& impls = explicit_impl_proto_sids_by_type_[self_ty];
+                    if (std::find(impls.begin(), impls.end(), *proto_sid) == impls.end()) {
+                        impls.push_back(*proto_sid);
+                    }
                 }
             }
         }
@@ -474,6 +487,7 @@
 
         enum_abi_meta_by_type_[self_ty] = std::move(meta);
         enum_decl_by_type_[self_ty] = sid;
+        ensure_generic_acts_for_owner_(self_ty, s.span);
 
         auto collect_required = [&](auto&& self,
                                     ast::StmtId proto_sid,
@@ -577,6 +591,7 @@
                     continue;
                 }
 
+                bool proto_impl_ok = true;
                 std::vector<ast::StmtId> required;
                 std::vector<ast::StmtId> provided;
                 std::unordered_set<ast::StmtId> visiting;
@@ -609,8 +624,18 @@
                         }
                     }
                     if (satisfied_by_provide) continue;
+                    if (proto_requirement_satisfied_by_default_acts_(req_sid, self_ty)) {
+                        continue;
+                    }
                     diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
                     err_(req.span, "enum does not provide proto member: " + std::string(req.name));
+                    proto_impl_ok = false;
+                }
+                if (proto_impl_ok && self_ty != ty::kInvalidType) {
+                    auto& impls = explicit_impl_proto_sids_by_type_[self_ty];
+                    if (std::find(impls.begin(), impls.end(), *proto_sid) == impls.end()) {
+                        impls.push_back(*proto_sid);
+                    }
                 }
             }
         }

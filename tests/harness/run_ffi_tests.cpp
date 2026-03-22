@@ -254,7 +254,7 @@ namespace {
         (void)parus::sir::canonicalize_for_capability(out.sir_mod, out.prog.types);
         out.sir_cap = parus::sir::analyze_capabilities(out.sir_mod, out.prog.types, out.prog.bag);
 
-        parus::oir::Builder ob(out.sir_mod, out.prog.types);
+        parus::oir::Builder ob(out.sir_mod, out.prog.types, nullptr, &out.pres.sym);
         out.oir = ob.build();
 
         if (out.prog.bag.has_error() || !out.ty.errors.empty() || !out.sir_cap.ok || !out.oir.gate_passed) {

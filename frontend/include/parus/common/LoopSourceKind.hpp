@@ -10,6 +10,7 @@ namespace parus {
         kSliceView,
         kRangeExclusive,
         kRangeInclusive,
+        kSequence,
         kIteratorFutureUnsupported,
     };
 

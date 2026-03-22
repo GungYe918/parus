@@ -2,6 +2,7 @@
 
 // Shared include set for name_resolve split units.
 #include <parus/passes/NameResolve.hpp>
+#include <parus/common/ModulePath.hpp>
 #include <parus/diag/DiagCode.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/syntax/TokenKind.hpp>

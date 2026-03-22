@@ -107,6 +107,7 @@ namespace parus::sir {
         kMemSizeOf,
         kMemAlignOf,
         kHintSpinLoop,
+        kStepNext,
         kMemSwap,
         kMemReplace,
     };
@@ -160,6 +161,11 @@ namespace parus::sir {
         SymbolId sym = k_invalid_symbol;
         parus::LoopSourceKind loop_source_kind = parus::LoopSourceKind::kNone;
         TypeId loop_binder_type = k_invalid_type;
+        TypeId loop_iterator_type = k_invalid_type;
+        uint32_t loop_iter_decl_stmt = 0xFFFF'FFFFu;
+        SymbolId loop_iter_external_sym = k_invalid_symbol;
+        uint32_t loop_next_decl_stmt = 0xFFFF'FFFFu;
+        SymbolId loop_next_external_sym = k_invalid_symbol;
 
         // direct callee symbol (for kCall)
         SymbolId callee_sym = k_invalid_symbol;

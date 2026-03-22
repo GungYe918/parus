@@ -1,77 +1,86 @@
 $![Impl::Core];
 
 import constraints as constraints;
+import iter as iter;
 
-struct Range<T> {
+struct Range<T>: iter::Sequence<T, iter::RangeIter<T>> {
     start: T;
     end: T;
 };
 
-struct RangeInclusive<T> {
+struct RangeInclusive<T>: iter::Sequence<T, iter::RangeInclusiveIter<T>> {
     start: T;
     end: T;
 };
 
-def range_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
+def range_impl_<T>(start: T, end: T) with [T: constraints::Step] -> Range<T> {
     return Range<T>{ start: start, end: end };
 }
 
-def range_inclusive_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
+def range_inclusive_impl_<T>(start: T, end: T) with [T: constraints::Step] -> RangeInclusive<T> {
     return RangeInclusive<T>{ start: start, end: end };
 }
 
-export def range<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
+export def range<T>(start: T, end: T) with [T: constraints::Step] -> Range<T> {
     return range_impl_<T>(start, end);
 }
 
-export def range_inclusive<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
+export def range_inclusive<T>(start: T, end: T) with [T: constraints::Step] -> RangeInclusive<T> {
     return range_inclusive_impl_<T>(start, end);
 }
 
-def range_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
+def range_is_empty_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
     return start >= end;
 }
 
-def range_contains_<T>(start: T, end: T, value: T) with [T: constraints::Comparable] -> bool {
+def range_contains_<T>(start: T, end: T, value: T) with [T: constraints::Step] -> bool {
     return value >= start and value < end;
 }
 
-def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
+def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
     return range_is_empty_<T>(other_start, other_end) or (other_start >= start and other_end <= end);
 }
 
-def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
+def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
     return not range_is_empty_<T>(start, end)
         and not range_is_empty_<T>(other_start, other_end)
         and start < other_end
         and other_start < end;
 }
 
-def range_inclusive_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
+def range_inclusive_is_empty_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
     return start > end;
 }
 
-def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: constraints::Comparable] -> bool {
+def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: constraints::Step] -> bool {
     return value >= start and value <= end;
 }
 
-def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
+def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
     return range_inclusive_is_empty_<T>(other_start, other_end) or
         (other_start >= start and other_end <= end);
 }
 
-def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
-    return not range_inclusive_is_empty_<T>(start, end)
+def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
+    return  not range_inclusive_is_empty_<T>(start, end)
         and not range_inclusive_is_empty_<T>(other_start, other_end)
         and start <= other_end
         and other_start <= end;
 }
 
-def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
+def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
     return not range_inclusive_is_empty_<T>(start, end) and start == end;
 }
 
-export acts for Range<T> with [T: constraints::Comparable] {
+def range_iter_impl_<T>(start: T, end: T) with [T: constraints::Step] -> iter::RangeIter<T> {
+    return iter::RangeIter<T>{ cur: start, end: end };
+}
+
+def range_inclusive_iter_impl_<T>(start: T, end: T) with [T: constraints::Step] -> iter::RangeInclusiveIter<T> {
+    return iter::RangeInclusiveIter<T>{ cur: start, end: end, done: false };
+}
+
+export acts for Range<T> with [T: constraints::Step] {
     def is_empty(self) -> bool {
         return range_is_empty_<T>(self.start, self.end);
     }
@@ -87,9 +96,13 @@ export acts for Range<T> with [T: constraints::Comparable] {
     def intersects(self, other: Range<T>) -> bool {
         return range_intersects_<T>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<T> {
+        return range_iter_impl_<T>(self.start, self.end);
+    }
 };
 
-export acts for RangeInclusive<T> with [T: constraints::Comparable] {
+export acts for RangeInclusive<T> with [T: constraints::Step] {
     def is_empty(self) -> bool {
         return range_inclusive_is_empty_<T>(self.start, self.end);
     }
@@ -108,6 +121,10 @@ export acts for RangeInclusive<T> with [T: constraints::Comparable] {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<T>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<T> {
+        return range_inclusive_iter_impl_<T>(self.start, self.end);
     }
 };
 
@@ -231,6 +248,10 @@ export acts for Range<i8> {
     def intersects(self, other: Range<i8>) -> bool {
         return range_intersects_<i8>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<i8> {
+        return range_iter_impl_<i8>(self.start, self.end);
+    }
 };
 
 export acts for Range<i16> {
@@ -248,6 +269,10 @@ export acts for Range<i16> {
 
     def intersects(self, other: Range<i16>) -> bool {
         return range_intersects_<i16>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<i16> {
+        return range_iter_impl_<i16>(self.start, self.end);
     }
 };
 
@@ -267,6 +292,11 @@ export acts for Range<i32> {
     def intersects(self, other: Range<i32>) -> bool {
         return range_intersects_<i32>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<i32> {
+        return range_iter_impl_<i32>(self.start, self.end);
+    }
+
 };
 
 export acts for Range<i64> {
@@ -284,6 +314,10 @@ export acts for Range<i64> {
 
     def intersects(self, other: Range<i64>) -> bool {
         return range_intersects_<i64>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<i64> {
+        return range_iter_impl_<i64>(self.start, self.end);
     }
 };
 
@@ -303,6 +337,10 @@ export acts for Range<i128> {
     def intersects(self, other: Range<i128>) -> bool {
         return range_intersects_<i128>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<i128> {
+        return range_iter_impl_<i128>(self.start, self.end);
+    }
 };
 
 export acts for Range<isize> {
@@ -320,6 +358,10 @@ export acts for Range<isize> {
 
     def intersects(self, other: Range<isize>) -> bool {
         return range_intersects_<isize>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<isize> {
+        return range_iter_impl_<isize>(self.start, self.end);
     }
 };
 
@@ -339,6 +381,10 @@ export acts for Range<u8> {
     def intersects(self, other: Range<u8>) -> bool {
         return range_intersects_<u8>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<u8> {
+        return range_iter_impl_<u8>(self.start, self.end);
+    }
 };
 
 export acts for Range<u16> {
@@ -356,6 +402,10 @@ export acts for Range<u16> {
 
     def intersects(self, other: Range<u16>) -> bool {
         return range_intersects_<u16>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<u16> {
+        return range_iter_impl_<u16>(self.start, self.end);
     }
 };
 
@@ -375,6 +425,10 @@ export acts for Range<u32> {
     def intersects(self, other: Range<u32>) -> bool {
         return range_intersects_<u32>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<u32> {
+        return range_iter_impl_<u32>(self.start, self.end);
+    }
 };
 
 export acts for Range<u64> {
@@ -392,6 +446,10 @@ export acts for Range<u64> {
 
     def intersects(self, other: Range<u64>) -> bool {
         return range_intersects_<u64>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<u64> {
+        return range_iter_impl_<u64>(self.start, self.end);
     }
 };
 
@@ -411,6 +469,10 @@ export acts for Range<u128> {
     def intersects(self, other: Range<u128>) -> bool {
         return range_intersects_<u128>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<u128> {
+        return range_iter_impl_<u128>(self.start, self.end);
+    }
 };
 
 export acts for Range<usize> {
@@ -428,6 +490,10 @@ export acts for Range<usize> {
 
     def intersects(self, other: Range<usize>) -> bool {
         return range_intersects_<usize>(self.start, self.end, other.start, other.end);
+    }
+
+    def iter(self) -> iter::RangeIter<usize> {
+        return range_iter_impl_<usize>(self.start, self.end);
     }
 };
 
@@ -447,6 +513,11 @@ export acts for Range<char> {
     def intersects(self, other: Range<char>) -> bool {
         return range_intersects_<char>(self.start, self.end, other.start, other.end);
     }
+
+    def iter(self) -> iter::RangeIter<char> {
+        return range_iter_impl_<char>(self.start, self.end);
+    }
+
 };
 
 export acts for RangeInclusive<i8> {
@@ -468,6 +539,10 @@ export acts for RangeInclusive<i8> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<i8>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<i8> {
+        return range_inclusive_iter_impl_<i8>(self.start, self.end);
     }
 };
 
@@ -491,6 +566,10 @@ export acts for RangeInclusive<i16> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<i16>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<i16> {
+        return range_inclusive_iter_impl_<i16>(self.start, self.end);
+    }
 };
 
 export acts for RangeInclusive<i32> {
@@ -513,6 +592,11 @@ export acts for RangeInclusive<i32> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<i32>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<i32> {
+        return range_inclusive_iter_impl_<i32>(self.start, self.end);
+    }
+
 };
 
 export acts for RangeInclusive<i64> {
@@ -534,6 +618,10 @@ export acts for RangeInclusive<i64> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<i64>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<i64> {
+        return range_inclusive_iter_impl_<i64>(self.start, self.end);
     }
 };
 
@@ -557,6 +645,10 @@ export acts for RangeInclusive<i128> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<i128>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<i128> {
+        return range_inclusive_iter_impl_<i128>(self.start, self.end);
+    }
 };
 
 export acts for RangeInclusive<isize> {
@@ -578,6 +670,10 @@ export acts for RangeInclusive<isize> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<isize>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<isize> {
+        return range_inclusive_iter_impl_<isize>(self.start, self.end);
     }
 };
 
@@ -601,6 +697,10 @@ export acts for RangeInclusive<u8> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<u8>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<u8> {
+        return range_inclusive_iter_impl_<u8>(self.start, self.end);
+    }
 };
 
 export acts for RangeInclusive<u16> {
@@ -622,6 +722,10 @@ export acts for RangeInclusive<u16> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<u16>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<u16> {
+        return range_inclusive_iter_impl_<u16>(self.start, self.end);
     }
 };
 
@@ -645,6 +749,10 @@ export acts for RangeInclusive<u32> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<u32>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<u32> {
+        return range_inclusive_iter_impl_<u32>(self.start, self.end);
+    }
 };
 
 export acts for RangeInclusive<u64> {
@@ -666,6 +774,10 @@ export acts for RangeInclusive<u64> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<u64>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<u64> {
+        return range_inclusive_iter_impl_<u64>(self.start, self.end);
     }
 };
 
@@ -689,6 +801,10 @@ export acts for RangeInclusive<u128> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<u128>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<u128> {
+        return range_inclusive_iter_impl_<u128>(self.start, self.end);
+    }
 };
 
 export acts for RangeInclusive<usize> {
@@ -710,6 +826,10 @@ export acts for RangeInclusive<usize> {
 
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<usize>(self.start, self.end);
+    }
+
+    def iter(self) -> iter::RangeInclusiveIter<usize> {
+        return range_inclusive_iter_impl_<usize>(self.start, self.end);
     }
 };
 
@@ -733,4 +853,9 @@ export acts for RangeInclusive<char> {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<char>(self.start, self.end);
     }
+
+    def iter(self) -> iter::RangeInclusiveIter<char> {
+        return range_inclusive_iter_impl_<char>(self.start, self.end);
+    }
+
 };

@@ -70,6 +70,7 @@ namespace parus::tyck {
         struct ExternalGenericDeclMeta {
             std::vector<std::string> params{};
             std::vector<ExternalGenericConstraintMeta> constraints{};
+            std::vector<std::pair<std::string, std::string>> impl_protos{};
         };
 
         ExternalGenericDeclMeta parse_external_generic_decl_meta_(std::string_view payload) {
@@ -94,6 +95,16 @@ namespace parus::tyck {
                         cc.lhs = payload_unescape_value_(body.substr(comma1 + 1, comma2 - comma1 - 1));
                         cc.rhs = payload_unescape_value_(body.substr(comma2 + 1));
                         out.constraints.push_back(std::move(cc));
+                    }
+                } else if (part.starts_with("impl_proto=")) {
+                    const std::string body = payload_unescape_value_(
+                        part.substr(std::string_view("impl_proto=").size())
+                    );
+                    const size_t split = body.find('@');
+                    if (split == std::string::npos) {
+                        out.impl_protos.emplace_back(body, std::string{});
+                    } else {
+                        out.impl_protos.emplace_back(body.substr(0, split), body.substr(split + 1));
                     }
                 }
                 if (next == payload.size()) break;

@@ -2,7 +2,7 @@ export plan range_module = module & {
   sources = [
     "range/range.pr",
   ];
-  imports = ["constraints"];
+  imports = ["constraints", "iter"];
   cimport = {
     isystem: [],
   };

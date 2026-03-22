@@ -9,6 +9,7 @@ namespace parus::sir::detail {
         enum class ImplBindingKind : uint8_t {
             kNone = 0,
             kSpinLoop,
+            kStepNext,
             kSizeOf,
             kAlignOf,
         };
@@ -34,8 +35,30 @@ namespace parus::sir::detail {
             }
             if (mode != "compiler") return ImplBindingKind::kNone;
             if (key == "Impl::SpinLoop") return ImplBindingKind::kSpinLoop;
+            if (key == "Impl::StepNext") return ImplBindingKind::kStepNext;
             if (key == "Impl::SizeOf") return ImplBindingKind::kSizeOf;
             if (key == "Impl::AlignOf") return ImplBindingKind::kAlignOf;
+            return ImplBindingKind::kNone;
+        }
+
+        ImplBindingKind stmt_impl_binding_kind_(const parus::ast::AstArena& ast, const parus::ast::Stmt& s) {
+            if (s.directive_target_path_count != 0 || s.directive_key_path_count != 2) {
+                return ImplBindingKind::kNone;
+            }
+            const auto& segs = ast.path_segs();
+            const uint64_t begin = s.directive_key_path_begin;
+            const uint64_t end = begin + s.directive_key_path_count;
+            if (!(begin <= segs.size() && end <= segs.size())) {
+                return ImplBindingKind::kNone;
+            }
+            if (segs[s.directive_key_path_begin] != "Impl") {
+                return ImplBindingKind::kNone;
+            }
+            const std::string_view leaf = segs[s.directive_key_path_begin + 1];
+            if (leaf == "SpinLoop") return ImplBindingKind::kSpinLoop;
+            if (leaf == "StepNext") return ImplBindingKind::kStepNext;
+            if (leaf == "SizeOf") return ImplBindingKind::kSizeOf;
+            if (leaf == "AlignOf") return ImplBindingKind::kAlignOf;
             return ImplBindingKind::kNone;
         }
     } // namespace
@@ -166,7 +189,7 @@ namespace parus::sir::detail {
                      e.op == parus::syntax::TokenKind::kKwClone) &&
                     overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;
-                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
                     const ValueId operand =
@@ -201,7 +224,7 @@ namespace parus::sir::detail {
                 // v0: postfix++ only
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;
-                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
                     const ValueId operand =
@@ -272,7 +295,7 @@ namespace parus::sir::detail {
 
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;
-                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
                     v.callee_decl_stmt = overload_sid;
                     v.a = k_invalid_value;
                     const ValueId lhs =
@@ -366,6 +389,21 @@ namespace parus::sir::detail {
                 }
                 if ((size_t)eid < tyck.expr_loop_binder_type.size()) {
                     v.loop_binder_type = tyck.expr_loop_binder_type[eid];
+                }
+                if ((size_t)eid < tyck.expr_loop_iterator_type.size()) {
+                    v.loop_iterator_type = tyck.expr_loop_iterator_type[eid];
+                }
+                if ((size_t)eid < tyck.expr_loop_iter_decl.size()) {
+                    v.loop_iter_decl_stmt = tyck.expr_loop_iter_decl[eid];
+                }
+                if ((size_t)eid < tyck.expr_loop_iter_external_symbol.size()) {
+                    v.loop_iter_external_sym = tyck.expr_loop_iter_external_symbol[eid];
+                }
+                if ((size_t)eid < tyck.expr_loop_next_decl.size()) {
+                    v.loop_next_decl_stmt = tyck.expr_loop_next_decl[eid];
+                }
+                if ((size_t)eid < tyck.expr_loop_next_external_symbol.size()) {
+                    v.loop_next_external_sym = tyck.expr_loop_next_external_symbol[eid];
                 }
 
                 if (e.loop_has_header && e.loop_iter != parus::ast::k_invalid_expr &&
@@ -498,7 +536,7 @@ namespace parus::sir::detail {
                     external_receiver_eid = tyck.expr_external_receiver_expr[eid];
                 }
                 if (overload_sid != ast::k_invalid_stmt) {
-                    v.callee_sym = resolve_symbol_from_stmt(nres, overload_sid);
+                    v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
                     v.callee_decl_stmt = overload_sid;
 
                     // acts-for method call sugar:
@@ -527,6 +565,43 @@ namespace parus::sir::detail {
                     v.callee_sym = external_callee_sym;
                     v.callee_decl_stmt = ast::k_invalid_stmt;
                 }
+                if (v.core_call_kind == CoreCallKind::kNone &&
+                    v.callee_decl_stmt != ast::k_invalid_stmt &&
+                    static_cast<size_t>(v.callee_decl_stmt) < ast.stmts().size()) {
+                    const auto& callee_decl = ast.stmt(v.callee_decl_stmt);
+                    const ImplBindingKind impl_binding =
+                        (callee_decl.a == ast::k_invalid_stmt)
+                            ? stmt_impl_binding_kind_(ast, callee_decl)
+                            : ImplBindingKind::kNone;
+                    const auto& type_args = ast.type_args();
+                    const uint64_t begin = e.call_type_arg_begin;
+                    const uint64_t end = begin + e.call_type_arg_count;
+                    switch (impl_binding) {
+                        case ImplBindingKind::kSpinLoop:
+                            v.core_call_kind = CoreCallKind::kHintSpinLoop;
+                            break;
+                        case ImplBindingKind::kStepNext:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kStepNext;
+                            }
+                            break;
+                        case ImplBindingKind::kSizeOf:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kMemSizeOf;
+                            }
+                            break;
+                        case ImplBindingKind::kAlignOf:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kMemAlignOf;
+                            }
+                            break;
+                        case ImplBindingKind::kNone:
+                            break;
+                    }
+                }
                 if (v.callee_sym != k_invalid_symbol && v.callee_sym < sym.symbols().size()) {
                     const auto& callee_sym = sym.symbol(v.callee_sym);
                     const ImplBindingKind impl_binding = parse_impl_binding_payload_(callee_sym.external_payload);
@@ -540,6 +615,12 @@ namespace parus::sir::detail {
                     switch (impl_binding) {
                         case ImplBindingKind::kSpinLoop:
                             v.core_call_kind = CoreCallKind::kHintSpinLoop;
+                            break;
+                        case ImplBindingKind::kStepNext:
+                            if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                v.core_call_kind = CoreCallKind::kStepNext;
+                            }
                             break;
                         case ImplBindingKind::kSizeOf:
                             if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
@@ -591,6 +672,59 @@ namespace parus::sir::detail {
                 // Build parent args first, then append as one contiguous slice.
                 std::vector<Arg> pending_args;
                 pending_args.reserve(e.arg_count + (inject_implicit_receiver ? 1u : 0u));
+                auto lower_receiver_arg_ = [&](parus::ast::ExprId recv_eid,
+                                               ty::TypeId param_ty,
+                                               bool force_borrow,
+                                               bool borrow_is_mut) -> ValueId {
+                    const ValueId lowered =
+                        lower_expr(m, out_has_any_write, ast, sym, nres, tyck, recv_eid);
+                    if (recv_eid == parus::ast::k_invalid_expr || param_ty == ty::kInvalidType) {
+                        return lowered;
+                    }
+                    const auto recv_ty = best_effort_type_of_ast_expr(ast, sym, nres, tyck, recv_eid);
+                    if (recv_ty == ty::kInvalidType || recv_ty == param_ty) return lowered;
+                    if (!force_borrow) return lowered;
+
+                    // Borrowed self on an rvalue receiver is lowered as an ordinary
+                    // value here; OIR will materialize a temporary slot if the callee
+                    // actually expects &Self / &mut Self. This keeps method chains such
+                    // as `outer.get().get()` valid without weakening user-written `&`.
+                    const bool receiver_is_place =
+                        classify_place_from_ast(ast, recv_eid) != PlaceClass::kNotPlace;
+                    if (!receiver_is_place) return lowered;
+
+                    Value borrow{};
+                    borrow.kind = ValueKind::kBorrow;
+                    borrow.span = ast.expr(recv_eid).span;
+                    borrow.type = param_ty;
+                    borrow.a = lowered;
+                    borrow.borrow_is_mut = borrow_is_mut;
+                    borrow.origin_sym = resolve_root_place_symbol_from_expr(ast, nres, tyck, recv_eid);
+                    borrow.effect = EffectClass::kPure;
+                    return m.add_value(borrow);
+                };
+                auto receiver_param_info_for_local_ = [&]() -> std::tuple<ty::TypeId, bool, bool> {
+                    if (overload_sid == ast::k_invalid_stmt ||
+                        static_cast<size_t>(overload_sid) >= ast.stmts().size()) {
+                        return {ty::kInvalidType, false, false};
+                    }
+                    const auto& def = ast.stmt(overload_sid);
+                    if (receiver_param_index == 0xFFFF'FFFFu ||
+                        receiver_param_index >= def.param_count) {
+                        return {ty::kInvalidType, false, false};
+                    }
+                    const auto& param = ast.params()[def.param_begin + receiver_param_index];
+                    const bool is_actor_member =
+                        def.fn_mode == parus::ast::FnMode::kPub ||
+                        def.fn_mode == parus::ast::FnMode::kSub;
+                    const bool force_borrow =
+                        !is_actor_member &&
+                        (param.self_kind == parus::ast::SelfReceiverKind::kRead ||
+                         param.self_kind == parus::ast::SelfReceiverKind::kMut);
+                    const bool borrow_is_mut =
+                        param.self_kind == parus::ast::SelfReceiverKind::kMut;
+                    return {param.type, force_borrow, borrow_is_mut};
+                };
 
                 if (inject_implicit_receiver &&
                     receiver_param_index == 0 &&
@@ -600,7 +734,9 @@ namespace parus::sir::detail {
                     recv.has_label = false;
                     recv.is_hole = false;
                     recv.span = ast.expr(receiver_eid).span;
-                    recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
+                    const auto [recv_param_ty, recv_force_borrow, recv_is_mut] = receiver_param_info_for_local_();
+                    recv.value = lower_receiver_arg_(
+                        receiver_eid, recv_param_ty, recv_force_borrow, recv_is_mut);
                     pending_args.push_back(recv);
                 }
                 if (!inject_implicit_receiver &&
@@ -643,7 +779,9 @@ namespace parus::sir::detail {
                     recv.has_label = false;
                     recv.is_hole = false;
                     recv.span = ast.expr(receiver_eid).span;
-                    recv.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, receiver_eid);
+                    const auto [recv_param_ty, recv_force_borrow, recv_is_mut] = receiver_param_info_for_local_();
+                    recv.value = lower_receiver_arg_(
+                        receiver_eid, recv_param_ty, recv_force_borrow, recv_is_mut);
                     pending_args.push_back(recv);
                 }
 
@@ -862,7 +1000,7 @@ namespace parus::sir::detail {
                 out.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
 
                 // decl symbol from stmt
-                out.sym = resolve_symbol_from_stmt(nres, sid);
+                out.sym = resolve_symbol_from_stmt(nres, tyck, sid);
 
                 const bool has_sym = (out.sym != k_invalid_symbol && (size_t)out.sym < sym.symbols().size());
                 const TypeId use_derived_type = resolve_decl_type_from_symbol_uses(ast, sym, nres, tyck, out.sym);

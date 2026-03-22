@@ -14,3 +14,6 @@ use UnsignedInteger;
 
 // builtin proto: primitive binary floating-point family.
 use BinaryFloatingPoint;
+
+// builtin proto: discrete ordered domain with unit successor.
+use Step;

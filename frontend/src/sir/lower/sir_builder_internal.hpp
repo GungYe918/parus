@@ -39,6 +39,11 @@ namespace parus::sir::detail {
     );
 
     /// @brief AST statement 노드에서 name-resolve 심볼을 찾는다.
+    SymbolId resolve_symbol_from_stmt(
+        const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
+        parus::ast::StmtId sid
+    );
     SymbolId resolve_symbol_from_stmt(const passes::NameResolveResult& nres, parus::ast::StmtId sid);
 
     /// @brief AST 파라미터 인덱스에서 name-resolve 심볼을 찾는다.

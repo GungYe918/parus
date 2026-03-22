@@ -54,6 +54,19 @@ namespace parus::oir {
             std::vector<ParsedExternalParusFieldMember> members{};
         };
 
+        bool known_concrete_leaf_type_name_without_symbols_(
+            const parus::sir::Module& sir,
+            const parus::ty::TypePool& types,
+            std::string_view leaf
+        );
+
+        bool leaf_name_resolves_to_concrete_type_(
+            const parus::sir::Module& sir,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym,
+            std::string_view leaf
+        );
+
         bool parse_u32_sv_(std::string_view text, uint32_t& out) {
             out = 0;
             if (text.empty()) return false;
@@ -65,6 +78,31 @@ namespace parus::oir {
             }
             out = static_cast<uint32_t>(value);
             return true;
+        }
+
+        std::string payload_unescape_value_(std::string_view raw) {
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                const char c = raw[i];
+                if (c == '%' && i + 2 < raw.size()) {
+                    auto hexv = [](char ch) -> int {
+                        if (ch >= '0' && ch <= '9') return ch - '0';
+                        if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                        if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                        return -1;
+                    };
+                    const int hi = hexv(raw[i + 1]);
+                    const int lo = hexv(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(c);
+            }
+            return out;
         }
 
         ParsedExternalRecordLayout parse_external_record_layout_payload_(std::string_view payload) {
@@ -180,7 +218,7 @@ namespace parus::oir {
                     } else if (key == "align") {
                         if (!parse_u32_sv_(val, out.explicit_align)) return {};
                     } else if (key == "gparam") {
-                        const std::string param(val);
+                        const std::string param = payload_unescape_value_(val);
                         if (std::find(out.generic_params.begin(), out.generic_params.end(), param) ==
                             out.generic_params.end()) {
                             out.generic_params.push_back(param);
@@ -194,11 +232,12 @@ namespace parus::oir {
                         ParsedExternalParusFieldMember member{};
                         member.name.assign(val.substr(0, colon));
 
-                        std::string_view type_text = val.substr(colon + 1);
+                        const std::string encoded_type = payload_unescape_value_(val.substr(colon + 1));
+                        std::string_view type_text = encoded_type;
                         std::string_view type_semantic{};
-                        if (const size_t at = type_text.find('@'); at != std::string_view::npos) {
-                            type_semantic = type_text.substr(at + 1);
-                            type_text = type_text.substr(0, at);
+                        if (const size_t at = encoded_type.find('@'); at != std::string::npos) {
+                            type_semantic = std::string_view(encoded_type).substr(at + 1);
+                            type_text = std::string_view(encoded_type).substr(0, at);
                         }
 
                         member.type = parus::cimport::parse_external_type_repr(
@@ -1340,7 +1379,15 @@ namespace parus::oir {
                 if ((size_t)src >= out->values.size()) return src;
 
                 const TypeId src_ty = out->values[src].ty;
-                if (src_ty == dst_ty) return src;
+                if (src_ty == dst_ty) {
+                    const auto& dt0 = types->get(dst_ty);
+                    if ((dt0.kind != parus::ty::Kind::kBorrow &&
+                         dt0.kind != parus::ty::Kind::kEscape) &&
+                        value_is_address_like_(src)) {
+                        return emit_load(dst_ty, src);
+                    }
+                    return src;
+                }
 
                 auto type_contains_unresolved_generic_param = [&](auto&& self, TypeId t) -> bool {
                     if (t == kInvalidId || types == nullptr) return false;
@@ -1351,12 +1398,12 @@ namespace parus::oir {
                             std::vector<TypeId> args{};
                             if (!types->decompose_named_user(t, path, args) || path.empty()) return false;
                             if (args.empty() && path.size() == 1) {
-                                if (symtab == nullptr) return true;
-                                if (auto sid = symtab->lookup(std::string(path.front()))) {
-                                    const auto& ss = symtab->symbol(*sid);
-                                    return ss.kind != parus::sema::SymbolKind::kType;
-                                }
-                                return true;
+                                return !leaf_name_resolves_to_concrete_type_(
+                                    *sir,
+                                    *types,
+                                    symtab,
+                                    path.front()
+                                );
                             }
                             for (const auto arg_t : args) {
                                 if (self(self, arg_t)) return true;
@@ -1499,6 +1546,12 @@ namespace parus::oir {
                         // Optional some(T): represent as typed cast at OIR boundary.
                         return emit_cast(dst_ty, Effect::Pure, CastKind::As, dst_ty, src);
                     }
+                }
+
+                if (value_is_address_like_(src) && src_ty != kInvalidId) {
+                    const ValueId loaded = emit_load(src_ty, src);
+                    if (loaded == src) return loaded;
+                    return coerce_value_for_target(dst_ty, loaded);
                 }
 
                 return src;
@@ -1835,6 +1888,49 @@ namespace parus::oir {
             std::ostringstream hs;
             hs << std::hex << fnv1a64_(canonical);
             return "__parus_module_init__" + hs.str();
+        }
+
+        bool known_concrete_leaf_type_name_without_symbols_(
+            const parus::sir::Module& sir,
+            const parus::ty::TypePool& types,
+            std::string_view leaf
+        ) {
+            auto matches_named_leaf_ = [&](TypeId t) -> bool {
+                if (t == parus::ty::kInvalidType) return false;
+                std::vector<std::string_view> path{};
+                std::vector<TypeId> args{};
+                if (!types.decompose_named_user(t, path, args) || path.empty()) return false;
+                return path.back() == leaf;
+            };
+
+            for (const auto& fd : sir.fields) {
+                if (matches_named_leaf_(fd.self_type)) return true;
+            }
+            for (const auto& ad : sir.acts) {
+                if (matches_named_leaf_(ad.target_type)) return true;
+            }
+            for (const auto& fn : sir.funcs) {
+                if (matches_named_leaf_(fn.actor_owner_type)) return true;
+            }
+            return false;
+        }
+
+        bool leaf_name_resolves_to_concrete_type_(
+            const parus::sir::Module& sir,
+            const parus::ty::TypePool& types,
+            const parus::sema::SymbolTable* sym,
+            std::string_view leaf
+        ) {
+            if (sym != nullptr) {
+                if (auto sid = sym->lookup(std::string(leaf))) {
+                    const auto& ss = sym->symbol(*sid);
+                    if (ss.kind == parus::sema::SymbolKind::kType ||
+                        ss.kind == parus::sema::SymbolKind::kField) {
+                        return true;
+                    }
+                }
+            }
+            return known_concrete_leaf_type_name_without_symbols_(sir, types, leaf);
         }
 
         /// @brief SIR 함수 ABI를 OIR 함수 ABI로 변환한다.
@@ -2282,6 +2378,80 @@ namespace parus::oir {
                 }
 
                 if (v.core_call_kind != parus::sir::CoreCallKind::kNone) {
+                    auto emit_step_next_core_ = [&](ValueId cur, TypeId step_ty, TypeId opt_ty) -> ValueId {
+                        if (types == nullptr || step_ty == kInvalidId || opt_ty == kInvalidId) {
+                            report_lowering_error("core::iter::step_next lowering failed: invalid type metadata");
+                            return emit_const_null(opt_ty);
+                        }
+
+                        auto emit_step_limit_ = [&](TypeId ty) -> ValueId {
+                            using B = parus::ty::Builtin;
+                            const auto& tt = types->get(ty);
+                            if (tt.kind != parus::ty::Kind::kBuiltin) return emit_const_null(ty);
+                            switch (tt.builtin) {
+                                case B::kI8: return emit_const_int(ty, "127");
+                                case B::kI16: return emit_const_int(ty, "32767");
+                                case B::kI32: return emit_const_int(ty, "2147483647");
+                                case B::kI64: return emit_const_int(ty, "9223372036854775807");
+                                case B::kI128: return emit_const_int(ty, "170141183460469231731687303715884105727");
+                                case B::kU8: return emit_const_int(ty, "255");
+                                case B::kU16: return emit_const_int(ty, "65535");
+                                case B::kU32: return emit_const_int(ty, "4294967295");
+                                case B::kU64: return emit_const_int(ty, "18446744073709551615");
+                                case B::kU128: return emit_const_int(ty, "340282366920938463463374607431768211455");
+                                case B::kISize:
+                                    return emit_const_int(
+                                        ty,
+                                        (sizeof(size_t) == 8u)
+                                            ? "9223372036854775807"
+                                            : "2147483647"
+                                    );
+                                case B::kUSize:
+                                    return emit_const_int(
+                                        ty,
+                                        (sizeof(size_t) == 8u)
+                                            ? "18446744073709551615"
+                                            : "4294967295"
+                                    );
+                                case B::kChar: return emit_const_char(ty, 0x10FFFFu);
+                                default: return emit_const_null(ty);
+                            }
+                        };
+
+                        auto emit_step_one_ = [&](TypeId ty) -> ValueId {
+                            using B = parus::ty::Builtin;
+                            const auto& tt = types->get(ty);
+                            if (tt.kind != parus::ty::Kind::kBuiltin) return emit_const_int(ty, "1");
+                            if (tt.builtin == B::kChar) return emit_const_char(ty, 1u);
+                            return emit_const_int(ty, "1");
+                        };
+
+                        const ValueId limit = emit_step_limit_(step_ty);
+                        const ValueId at_end = emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, cur, limit);
+                        const BlockId fail_bb = new_block();
+                        const BlockId succ_bb = new_block();
+                        const BlockId join_bb = new_block();
+                        const ValueId join_param = add_block_param(join_bb, opt_ty);
+                        condbr(at_end, fail_bb, {}, succ_bb, {});
+
+                        def->blocks.push_back(fail_bb);
+                        cur_bb = fail_bb;
+                        br(join_bb, {emit_const_null(opt_ty)});
+
+                        def->blocks.push_back(succ_bb);
+                        cur_bb = succ_bb;
+                        {
+                            const ValueId next_v =
+                                emit_binop(step_ty, Effect::Pure, BinOp::Add, cur, emit_step_one_(step_ty));
+                            const ValueId some_v = emit_cast(opt_ty, Effect::Pure, CastKind::As, opt_ty, next_v);
+                            br(join_bb, {some_v});
+                        }
+
+                        def->blocks.push_back(join_bb);
+                        cur_bb = join_bb;
+                        return join_param;
+                    };
+
                     switch (v.core_call_kind) {
                         case parus::sir::CoreCallKind::kMemSizeOf: {
                             const auto [size_bytes, align_bytes] = type_size_align_(v.core_call_type_arg);
@@ -2295,6 +2465,17 @@ namespace parus::oir {
                         }
                         case parus::sir::CoreCallKind::kHintSpinLoop: {
                             return emit_const_null(v.type);
+                        }
+                        case parus::sir::CoreCallKind::kStepNext: {
+                            if (args.size() != 1u) {
+                                report_lowering_error("core::iter::step_next lowering failed: expected 1 argument");
+                                return emit_const_null(v.type);
+                            }
+                            const TypeId step_ty =
+                                (v.core_call_type_arg != kInvalidId)
+                                    ? v.core_call_type_arg
+                                    : (((size_t)args[0] < out->values.size()) ? out->values[args[0]].ty : kInvalidId);
+                            return emit_step_next_core_(args[0], step_ty, v.type);
                         }
                         case parus::sir::CoreCallKind::kMemReplace: {
                             if (args.size() != 2u) {
@@ -2509,10 +2690,71 @@ namespace parus::oir {
                     };
                     const auto& entry = out->blocks[direct_target->entry];
                     const size_t n = std::min(entry.params.size(), inout_args.size());
+                    auto try_preserve_local_slot_for_borrow_param_ =
+                        [&](size_t ai, TypeId param_ty) -> ValueId {
+                            if (types == nullptr ||
+                                sir == nullptr ||
+                                param_ty == kInvalidId ||
+                                ai >= arg_value_ids.size()) {
+                                return kInvalidId;
+                            }
+
+                            const auto& pt = types->get(param_ty);
+                            if ((pt.kind != parus::ty::Kind::kBorrow &&
+                                 pt.kind != parus::ty::Kind::kEscape) ||
+                                pt.elem == kInvalidId) {
+                                return kInvalidId;
+                            }
+
+                            const parus::sir::ValueId arg_vid = arg_value_ids[ai];
+                            if (arg_vid == parus::sir::k_invalid_value ||
+                                (size_t)arg_vid >= sir->values.size()) {
+                                return kInvalidId;
+                            }
+
+                            const auto& arg_sv = sir->values[arg_vid];
+                            const auto arg_already_borrow_like = [&]() -> bool {
+                                if (arg_sv.type == kInvalidId || static_cast<size_t>(arg_sv.type) >= types->count()) {
+                                    return false;
+                                }
+                                const auto& arg_tt = types->get(arg_sv.type);
+                                return (arg_tt.kind == parus::ty::Kind::kBorrow ||
+                                        arg_tt.kind == parus::ty::Kind::kEscape) &&
+                                       arg_tt.elem == pt.elem;
+                            }();
+                            switch (arg_sv.kind) {
+                                case parus::sir::ValueKind::kLocal:
+                                    if (arg_already_borrow_like) {
+                                        break;
+                                    }
+                                    if (arg_sv.sym != parus::sir::k_invalid_symbol) {
+                                        return ensure_slot(arg_sv.sym, pt.elem);
+                                    }
+                                    break;
+                                case parus::sir::ValueKind::kBorrow:
+                                case parus::sir::ValueKind::kEscape:
+                                    if (arg_already_borrow_like) {
+                                        break;
+                                    }
+                                    if (arg_sv.origin_sym != parus::sir::k_invalid_symbol) {
+                                        return ensure_slot(arg_sv.origin_sym, pt.elem);
+                                    }
+                                    break;
+                                default:
+                                    break;
+                            }
+                            return kInvalidId;
+                        };
                     for (size_t ai = 0; ai < n; ++ai) {
                         const ValueId p = entry.params[ai];
                         if ((size_t)p >= out->values.size()) continue;
-                        inout_args[ai] = coerce_value_for_target(out->values[p].ty, inout_args[ai]);
+                        const TypeId param_ty = out->values[p].ty;
+                        if (const ValueId slot = try_preserve_local_slot_for_borrow_param_(ai, param_ty);
+                            slot != kInvalidId) {
+                            inout_args[ai] = slot;
+                            continue;
+                        }
+                        inout_args[ai] = coerce_value_for_target(param_ty, inout_args[ai]);
                     }
 
                     if (direct_target->abi == FunctionAbi::C &&
@@ -2995,6 +3237,152 @@ namespace parus::oir {
                     return std::nullopt;
                 };
 
+                auto resolve_loop_direct_callee_ = [&](uint32_t decl_sid,
+                                                       parus::sir::SymbolId callee_sym) -> FuncId {
+                    if (decl_sid != 0xFFFF'FFFFu && fn_decl_to_func != nullptr) {
+                        auto dit = fn_decl_to_func->find(decl_sid);
+                        if (dit != fn_decl_to_func->end() &&
+                            (size_t)dit->second < out->funcs.size()) {
+                            return dit->second;
+                        }
+                    }
+                    if (callee_sym != parus::sir::k_invalid_symbol &&
+                        fn_symbol_to_func != nullptr) {
+                        auto fit = fn_symbol_to_func->find(callee_sym);
+                        if (fit != fn_symbol_to_func->end() &&
+                            (size_t)fit->second < out->funcs.size()) {
+                            return fit->second;
+                        }
+                    }
+                    if (callee_sym != parus::sir::k_invalid_symbol &&
+                        symtab != nullptr &&
+                        static_cast<size_t>(callee_sym) < symtab->symbols().size()) {
+                        const auto& ss = symtab->symbol(callee_sym);
+                        if (ss.kind == parus::sema::SymbolKind::kFn) {
+                            if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
+                                auto fit = fn_link_name_to_func->find(ss.link_name);
+                                if (fit != fn_link_name_to_func->end() &&
+                                    (size_t)fit->second < out->funcs.size()) {
+                                    return fit->second;
+                                }
+                            }
+                            if (fn_source_name_to_func != nullptr && !ss.name.empty()) {
+                                auto fit = fn_source_name_to_func->find(ss.name);
+                                if (fit != fn_source_name_to_func->end() &&
+                                    (size_t)fit->second < out->funcs.size()) {
+                                    return fit->second;
+                                }
+                            }
+                        }
+                    }
+                    return kInvalidId;
+                };
+
+                auto coerce_args_for_direct_loop_ = [&](FuncId direct_callee, std::vector<ValueId>& inout_args) {
+                    if (direct_callee == kInvalidId || out == nullptr || (size_t)direct_callee >= out->funcs.size()) {
+                        return;
+                    }
+                    const auto& target = out->funcs[direct_callee];
+                    if (target.entry == kInvalidId || (size_t)target.entry >= out->blocks.size()) {
+                        return;
+                    }
+                    const auto& entry = out->blocks[target.entry];
+                    const size_t n = std::min(entry.params.size(), inout_args.size());
+                    for (size_t ai = 0; ai < n; ++ai) {
+                        const ValueId p = entry.params[ai];
+                        if ((size_t)p >= out->values.size()) continue;
+                        inout_args[ai] = coerce_value_for_target(out->values[p].ty, inout_args[ai]);
+                    }
+                };
+
+                if (loop_kind == parus::LoopSourceKind::kSequence) {
+                    const ValueId iterable = lower_value(v.a);
+                    if (iterable == kInvalidId) {
+                        report_lowering_error("sequence loop lowering failed: iterable value did not lower");
+                        def->blocks.push_back(exit_bb);
+                        cur_bb = exit_bb;
+                        return emit_const_null(v.type);
+                    }
+                    if (v.loop_iterator_type == parus::sir::k_invalid_type) {
+                        report_lowering_error("sequence loop lowering failed: missing iterator type metadata");
+                        def->blocks.push_back(exit_bb);
+                        cur_bb = exit_bb;
+                        return emit_const_null(v.type);
+                    }
+
+                    const FuncId iter_callee =
+                        resolve_loop_direct_callee_(v.loop_iter_decl_stmt, v.loop_iter_external_sym);
+                    const FuncId next_callee =
+                        resolve_loop_direct_callee_(v.loop_next_decl_stmt, v.loop_next_external_sym);
+                    if (iter_callee == kInvalidId || next_callee == kInvalidId) {
+                        report_lowering_error("sequence loop lowering failed: unresolved iter/next target");
+                        def->blocks.push_back(exit_bb);
+                        cur_bb = exit_bb;
+                        return emit_const_null(v.type);
+                    }
+
+                    std::vector<ValueId> iter_args{iterable};
+                    coerce_args_for_direct_loop_(iter_callee, iter_args);
+                    const ValueId iter_value =
+                        emit_direct_call((TypeId)v.loop_iterator_type, iter_callee, std::move(iter_args));
+                    const ValueId iter_slot = emit_alloca((TypeId)v.loop_iterator_type);
+                    emit_store(iter_slot, iter_value);
+
+                    const TypeId next_opt_ty =
+                        (types != nullptr)
+                            ? (TypeId)const_cast<parus::ty::TypePool*>(types)->make_optional(binder_ty)
+                            : kInvalidId;
+                    const BlockId head_bb = new_block();
+                    const BlockId body_bb = new_block();
+                    const BlockId latch_bb = new_block();
+                    const ValueId body_next = add_block_param(body_bb, next_opt_ty);
+
+                    if (!has_term()) br(head_bb, {});
+
+                    def->blocks.push_back(head_bb);
+                    cur_bb = head_bb;
+                    {
+                        std::vector<ValueId> next_args{iter_slot};
+                        coerce_args_for_direct_loop_(next_callee, next_args);
+                        const ValueId next_opt = emit_direct_call(next_opt_ty, next_callee, std::move(next_args));
+                        const ValueId is_done =
+                            emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, next_opt, emit_const_null(next_opt_ty));
+                        condbr(is_done,
+                               exit_bb,
+                               expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{},
+                               body_bb,
+                               {next_opt});
+                    }
+
+                    def->blocks.push_back(body_bb);
+                    cur_bb = body_bb;
+                    const size_t loop_scope_base = env_stack.size();
+                    const ValueId elem =
+                        emit_cast(binder_ty, Effect::MayTrap, CastKind::AsB, binder_ty, body_next);
+                    loop_stack.push_back(LoopContext{
+                        .break_bb = exit_bb,
+                        .continue_bb = latch_bb,
+                        .expects_break_value = expects_break_value,
+                        .break_ty = (TypeId)v.type,
+                        .scope_depth_base = loop_scope_base
+                    });
+                    push_scope();
+                    bind(v.sym, Binding{false, false, elem, kInvalidId});
+                    lower_block((parus::sir::BlockId)v.b);
+                    pop_scope();
+                    loop_stack.pop_back();
+                    if (!has_term()) br(latch_bb, {});
+
+                    def->blocks.push_back(latch_bb);
+                    cur_bb = latch_bb;
+                    if (!has_term()) br(head_bb, {});
+
+                    def->blocks.push_back(exit_bb);
+                    cur_bb = exit_bb;
+                    if (expects_break_value) return break_param;
+                    return emit_const_null(v.type);
+                }
+
                 if (loop_kind == parus::LoopSourceKind::kSizedArray ||
                     loop_kind == parus::LoopSourceKind::kSliceView) {
                     const ValueId base = lower_value(v.a);
@@ -3156,7 +3544,21 @@ namespace parus::oir {
                                                                     : emit_const_null(declared);
                 init = coerce_value_for_target(declared, init);
 
+                const auto existing = env.find(s.sym);
+                const bool reassign_existing = s.is_set && existing != env.end();
+
                 const bool needs_cleanup = type_needs_drop_(declared);
+
+                if (reassign_existing) {
+                    ValueId slot = ensure_slot(s.sym, declared);
+                    emit_store(slot, init);
+                    if (s.init == parus::sir::k_invalid_value) {
+                        mark_symbol_moved(s.sym, /*moved=*/true);
+                    } else {
+                        consume_owned_sir_value_(s.init, declared);
+                    }
+                    return;
+                }
 
                 if (needs_cleanup) {
                     ValueId slot = emit_alloca(declared);
@@ -3985,15 +4387,51 @@ namespace parus::oir {
                 base_name += std::string(path[i]);
             }
 
+            auto type_base_name_ = [&](parus::ty::TypeId sid) -> std::string {
+                if (sid == parus::ty::kInvalidType) return {};
+                std::vector<std::string_view> spath{};
+                std::vector<parus::ty::TypeId> sargs{};
+                if (!ty_.decompose_named_user(sid, spath, sargs) || spath.empty()) return {};
+                std::string joined{};
+                for (size_t i = 0; i < spath.size(); ++i) {
+                    if (i != 0) joined += "::";
+                    joined += std::string(spath[i]);
+                }
+                return joined;
+            };
+
+            auto same_base_name_ = [&](std::string_view lhs, std::string_view rhs) -> bool {
+                if (lhs.empty() || rhs.empty()) return false;
+                if (lhs == rhs) return true;
+                if (lhs.starts_with("core::") && lhs.substr(std::string_view("core::").size()) == rhs) return true;
+                if (rhs.starts_with("core::") && rhs.substr(std::string_view("core::").size()) == lhs) return true;
+                const size_t lsplit = lhs.rfind("::");
+                const size_t rsplit = rhs.rfind("::");
+                const std::string_view lleaf =
+                    (lsplit == std::string_view::npos) ? lhs : lhs.substr(lsplit + 2);
+                const std::string_view rleaf =
+                    (rsplit == std::string_view::npos) ? rhs : rhs.substr(rsplit + 2);
+                return lleaf == rleaf;
+            };
+
             auto lookup_external_layout_symbol_ = [&](std::string_view qname)
                 -> const parus::sema::Symbol* {
                 for (const auto& ss : sym_->symbols()) {
-                    if (ss.name != qname) continue;
-                    if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kField ||
-                        ss.external_payload.empty()) {
+                    if (!ss.is_external) {
                         continue;
                     }
-                    return &ss;
+                    const bool has_field_payload =
+                        (ss.kind == parus::sema::SymbolKind::kField && !ss.external_payload.empty()) ||
+                        (ss.kind == parus::sema::SymbolKind::kType && !ss.external_field_payload.empty());
+                    if (!has_field_payload) {
+                        continue;
+                    }
+                    if (ss.name == qname) {
+                        return &ss;
+                    }
+                    if (same_base_name_(type_base_name_(ss.declared_type), qname)) {
+                        return &ss;
+                    }
                 }
                 return nullptr;
             };
@@ -4013,8 +4451,11 @@ namespace parus::oir {
             }
             if (layout_sym == nullptr) return false;
             const auto& ss = *layout_sym;
+            const std::string_view field_payload =
+                (!ss.external_field_payload.empty() ? std::string_view(ss.external_field_payload)
+                                                   : std::string_view(ss.external_payload));
 
-            const auto parsed = parse_external_parus_field_decl_payload_(ss.external_payload, ty_);
+            const auto parsed = parse_external_parus_field_decl_payload_(field_payload, ty_);
             if (!parsed.ok) return false;
             if (args.size() != parsed.generic_params.size()) {
                 return false;
@@ -4522,11 +4963,74 @@ namespace parus::oir {
         std::unordered_map<std::string, FuncId> fn_link_name_to_func;
         std::unordered_map<std::string, FuncId> fn_source_name_to_func;
         std::unordered_set<FuncId> throwing_func_ids;
+        const auto sir_type_contains_unresolved_generic_param = [&](auto&& self, TypeId t) -> bool {
+            if (t == ty::kInvalidType) return false;
+            const auto& tt = ty_.get(t);
+            switch (tt.kind) {
+                case parus::ty::Kind::kNamedUser: {
+                    std::vector<std::string_view> path{};
+                    std::vector<TypeId> args{};
+                    if (!ty_.decompose_named_user(t, path, args) || path.empty()) return false;
+                    if (args.empty() && path.size() == 1) {
+                        return !leaf_name_resolves_to_concrete_type_(
+                            sir_,
+                            ty_,
+                            sym_,
+                            path.front()
+                        );
+                    }
+                    for (const auto arg_t : args) {
+                        if (self(self, arg_t)) return true;
+                    }
+                    return false;
+                }
+                case parus::ty::Kind::kBorrow:
+                case parus::ty::Kind::kEscape:
+                case parus::ty::Kind::kPtr:
+                case parus::ty::Kind::kOptional:
+                case parus::ty::Kind::kArray:
+                    return tt.elem != ty::kInvalidType && self(self, tt.elem);
+                case parus::ty::Kind::kFn:
+                    for (uint32_t i = 0; i < tt.param_count; ++i) {
+                        if (self(self, ty_.fn_param_at(t, i))) return true;
+                    }
+                    return tt.ret != ty::kInvalidType && self(self, tt.ret);
+                default:
+                    return false;
+            }
+        };
 
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
+            const bool compiler_owned_impl =
+                func_has_impl_binding_(sf, "Impl::SpinLoop") ||
+                func_has_impl_binding_(sf, "Impl::StepNext") ||
+                func_has_impl_binding_(sf, "Impl::SizeOf") ||
+                func_has_impl_binding_(sf, "Impl::AlignOf");
             if (sf.is_extern &&
-                (symbol_is_core_module_fn_(sf, "mem") || func_has_impl_binding_(sf, "Impl::SpinLoop"))) {
+                (symbol_is_core_module_fn_(sf, "mem") ||
+                 func_has_impl_binding_(sf, "Impl::SpinLoop") ||
+                 func_has_impl_binding_(sf, "Impl::StepNext"))) {
+                continue;
+            }
+            if (compiler_owned_impl) {
+                continue;
+            }
+            if (sir_type_contains_unresolved_generic_param(sir_type_contains_unresolved_generic_param, sf.ret)) {
+                continue;
+            }
+            bool skip_for_unresolved_param = false;
+            for (uint32_t pi = 0; pi < sf.param_count; ++pi) {
+                const auto param_idx = sf.param_begin + pi;
+                if (param_idx >= sir_.params.size()) continue;
+                if (sir_type_contains_unresolved_generic_param(
+                        sir_type_contains_unresolved_generic_param,
+                        sir_.params[param_idx].type)) {
+                    skip_for_unresolved_param = true;
+                    break;
+                }
+            }
+            if (skip_for_unresolved_param) {
                 continue;
             }
             const auto wrapper_payload = parse_cimport_wrapper_payload_(sf.external_payload);
@@ -4691,6 +5195,14 @@ namespace parus::oir {
                 fb.current_actor_ctx = out.mod.blocks[entry].params[fb.def->actor_ctx_param_index];
             }
 
+            // Imported extern functions stay as declarations in OIR.
+            // Lowering them into synthetic null-return stubs breaks installed-core calls
+            // by shadowing the real linked implementation with a local body.
+            if (out.mod.funcs[fid].is_extern) {
+                fb.pop_scope();
+                continue;
+            }
+
             if (func_has_impl_binding_(sf, "Impl::SizeOf")) {
                 const auto lowered_ty = parse_core_mem_intrinsic_ty_(sf, "size_of");
                 if (!lowered_ty.has_value()) {
@@ -4734,6 +5246,92 @@ namespace parus::oir {
             if (func_has_impl_binding_(sf, "Impl::SpinLoop")) {
                 ValueId rv = fb.emit_const_null((TypeId)sf.ret);
                 fb.ret(rv);
+                fb.pop_scope();
+                continue;
+            }
+
+            if (func_has_impl_binding_(sf, "Impl::StepNext")) {
+                const TypeId step_ty =
+                    (sf.param_count > 0 && sf.param_begin < sir_.params.size())
+                        ? (TypeId)sir_.params[sf.param_begin].type
+                        : kInvalidId;
+                ValueId cur_v = kInvalidId;
+                if (sf.param_count > 0 && !out.mod.blocks[entry].params.empty()) {
+                    cur_v = out.mod.blocks[entry].params[0];
+                }
+                auto emit_step_limit_ = [&](TypeId ty) -> ValueId {
+                    using B = parus::ty::Builtin;
+                    const auto& tt = ty_.get(ty);
+                    switch (tt.builtin) {
+                        case B::kI8: return fb.emit_const_int(ty, "127");
+                        case B::kI16: return fb.emit_const_int(ty, "32767");
+                        case B::kI32: return fb.emit_const_int(ty, "2147483647");
+                        case B::kI64: return fb.emit_const_int(ty, "9223372036854775807");
+                        case B::kI128: return fb.emit_const_int(ty, "170141183460469231731687303715884105727");
+                        case B::kU8: return fb.emit_const_int(ty, "255");
+                        case B::kU16: return fb.emit_const_int(ty, "65535");
+                        case B::kU32: return fb.emit_const_int(ty, "4294967295");
+                        case B::kU64: return fb.emit_const_int(ty, "18446744073709551615");
+                        case B::kU128: return fb.emit_const_int(ty, "340282366920938463463374607431768211455");
+                        case B::kISize:
+                            return fb.emit_const_int(
+                                ty,
+                                (sizeof(size_t) == 8u)
+                                    ? "9223372036854775807"
+                                    : "2147483647"
+                            );
+                        case B::kUSize:
+                            return fb.emit_const_int(
+                                ty,
+                                (sizeof(size_t) == 8u)
+                                    ? "18446744073709551615"
+                                    : "4294967295"
+                            );
+                        case B::kChar: return fb.emit_const_char(ty, 0x10FFFFu);
+                        default: return fb.emit_const_null(ty);
+                    }
+                };
+                auto emit_step_one_ = [&](TypeId ty) -> ValueId {
+                    const auto& tt = ty_.get(ty);
+                    if (tt.kind == parus::ty::Kind::kBuiltin &&
+                        tt.builtin == parus::ty::Builtin::kChar) {
+                        return fb.emit_const_char(ty, 1u);
+                    }
+                    return fb.emit_const_int(ty, "1");
+                };
+
+                if (step_ty == kInvalidId || cur_v == kInvalidId) {
+                    ValueId rv = fb.emit_const_null((TypeId)sf.ret);
+                    fb.ret(rv);
+                    fb.pop_scope();
+                    continue;
+                }
+
+                const ValueId limit = emit_step_limit_(step_ty);
+                const ValueId at_end = fb.emit_binop(fb.bool_type_(), Effect::Pure, BinOp::Eq, cur_v, limit);
+                const BlockId fail_bb = fb.new_block();
+                const BlockId succ_bb = fb.new_block();
+                const BlockId join_bb = fb.new_block();
+                const ValueId join_param = fb.add_block_param(join_bb, (TypeId)sf.ret);
+                fb.condbr(at_end, fail_bb, {}, succ_bb, {});
+
+                fb.def->blocks.push_back(fail_bb);
+                fb.cur_bb = fail_bb;
+                fb.br(join_bb, {fb.emit_const_null((TypeId)sf.ret)});
+
+                fb.def->blocks.push_back(succ_bb);
+                fb.cur_bb = succ_bb;
+                {
+                    const ValueId next_v =
+                        fb.emit_binop(step_ty, Effect::Pure, BinOp::Add, cur_v, emit_step_one_(step_ty));
+                    const ValueId some_v =
+                        fb.emit_cast((TypeId)sf.ret, Effect::Pure, CastKind::As, (TypeId)sf.ret, next_v);
+                    fb.br(join_bb, {some_v});
+                }
+
+                fb.def->blocks.push_back(join_bb);
+                fb.cur_bb = join_bb;
+                fb.ret(join_param);
                 fb.pop_scope();
                 continue;
             }

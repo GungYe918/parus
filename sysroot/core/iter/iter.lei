@@ -1,0 +1,9 @@
+export plan iter_module = module & {
+  sources = [
+    "iter/iter.pr",
+  ];
+  imports = ["constraints"];
+  cimport = {
+    isystem: [],
+  };
+};

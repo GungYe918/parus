@@ -65,6 +65,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_enum_ctor_variant_index; // expr index -> enum variant index, invalid if not enum-ctor expr
         std::vector<int64_t> expr_enum_ctor_tag_value; // expr index -> enum tag value, valid on enum-ctor expr
         std::vector<uint32_t> expr_resolved_symbol; // expr index -> resolved symbol id (tyck fallback for cloned generic nodes)
+        std::vector<uint32_t> stmt_resolved_symbol; // ast.stmts() index -> resolved symbol id (tyck fallback for cloned generic decl stmts)
         std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
         std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
         std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
@@ -74,6 +75,11 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_call_c_fixed_param_count; // expr index -> fixed parameter count for C calls
         std::vector<uint8_t> expr_loop_source_kind; // expr index -> parus::LoopSourceKind
         std::vector<ty::TypeId> expr_loop_binder_type; // expr index -> loop binder type
+        std::vector<ty::TypeId> expr_loop_iterator_type; // expr index -> concrete iterator type for sequence loops
+        std::vector<ast::StmtId> expr_loop_iter_decl; // expr index -> selected iter decl, invalid when external/none
+        std::vector<uint32_t> expr_loop_iter_external_symbol; // expr index -> selected external iter callee symbol
+        std::vector<ast::StmtId> expr_loop_next_decl; // expr index -> selected next decl, invalid when external/none
+        std::vector<uint32_t> expr_loop_next_external_symbol; // expr index -> selected external next callee symbol
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield; // expr index -> imported C bitfield access metadata
         std::vector<ast::ExprId> expr_fstring_runtime_expr; // expr index -> runtime passthrough expr for non-folded f-string, invalid otherwise
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
@@ -361,6 +367,7 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_enum_ctor_variant_index_cache_;
         std::vector<int64_t> expr_enum_ctor_tag_value_cache_;
         std::vector<uint32_t> expr_resolved_symbol_cache_;
+        std::vector<uint32_t> stmt_resolved_symbol_cache_;
         std::vector<ast::StmtId> expr_proto_const_decl_cache_;
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
@@ -370,6 +377,11 @@ namespace parus::tyck {
         std::vector<uint32_t> expr_call_c_fixed_param_count_cache_;
         std::vector<uint8_t> expr_loop_source_kind_cache_;
         std::vector<ty::TypeId> expr_loop_binder_type_cache_;
+        std::vector<ty::TypeId> expr_loop_iterator_type_cache_;
+        std::vector<ast::StmtId> expr_loop_iter_decl_cache_;
+        std::vector<uint32_t> expr_loop_iter_external_symbol_cache_;
+        std::vector<ast::StmtId> expr_loop_next_decl_cache_;
+        std::vector<uint32_t> expr_loop_next_external_symbol_cache_;
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;
@@ -521,6 +533,7 @@ namespace parus::tyck {
         std::unordered_map<std::string, ast::StmtId> proto_decl_by_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> proto_decl_by_type_;
         std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
+        std::unordered_map<ty::TypeId, std::vector<ast::StmtId>> explicit_impl_proto_sids_by_type_;
         std::unordered_map<ast::StmtId, std::string> class_qualified_name_by_stmt_;
         std::unordered_map<ast::StmtId, std::string> acts_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> class_decl_by_name_;
@@ -612,6 +625,7 @@ namespace parus::tyck {
         enum class ImplBindingKind : uint8_t {
             kNone = 0,
             kSpinLoop,
+            kStepNext,
             kSizeOf,
             kAlignOf,
         };
@@ -679,6 +693,7 @@ namespace parus::tyck {
         bool is_builtin_family_proto_(ast::StmtId proto_sid) const;
         bool builtin_family_proto_satisfied_by_primitive_name_(ty::TypeId concrete_t, std::string_view proto_name) const;
         bool builtin_family_proto_satisfied_by_primitive_(ty::TypeId concrete_t, ast::StmtId proto_sid) const;
+        bool proto_decl_matches_constraint_sid_(ast::StmtId candidate_sid, ast::StmtId expected_sid) const;
         bool type_satisfies_proto_constraint_(ty::TypeId concrete_t, ast::StmtId proto_sid, Span use_span);
         bool evaluate_generic_constraint_(
             const ast::FnConstraintDecl& cc,
@@ -772,6 +787,15 @@ namespace parus::tyck {
             bool emit_unsatisfied_diag = true,
             bool emit_shape_diag = true
         );
+        bool proto_member_fn_sig_matches_impl_(
+            const ast::Stmt& req,
+            const ast::Stmt& impl,
+            ty::TypeId owner_type
+        ) const;
+        bool proto_requirement_satisfied_by_default_acts_(
+            ast::StmtId req_sid,
+            ty::TypeId owner_type
+        ) const;
         struct ConstObject;
         struct ConstValue {
             enum class Kind : uint8_t {

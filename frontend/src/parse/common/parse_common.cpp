@@ -324,6 +324,7 @@ namespace parus {
         if (!is_impl_binding_path_(path_begin, path_count)) return false;
         const auto& segs = ast_.path_segs();
         return segs[path_begin + 1] == "SpinLoop" ||
+               segs[path_begin + 1] == "StepNext" ||
                segs[path_begin + 1] == "SizeOf" ||
                segs[path_begin + 1] == "AlignOf";
     }

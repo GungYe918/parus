@@ -169,8 +169,18 @@ namespace parus::backend::aot {
 
             std::vector<std::string_view> path{};
             std::vector<parus::ty::TypeId> args{};
-            if (!types.decompose_named_user(tid, path, args) || path.empty() || !args.empty()) {
+            if (!types.decompose_named_user(tid, path, args) || path.empty()) {
                 return out;
+            }
+
+            std::string arg_suffix{};
+            if (!args.empty()) {
+                arg_suffix.push_back('<');
+                for (size_t i = 0; i < args.size(); ++i) {
+                    if (i != 0) arg_suffix += ",";
+                    arg_suffix += types.to_string(args[i]);
+                }
+                arg_suffix.push_back('>');
             }
 
             for (size_t start = 0; start < path.size(); ++start) {
@@ -179,7 +189,10 @@ namespace parus::backend::aot {
                     if (i > start) joined += "::";
                     joined += std::string(path[i]);
                 }
-                if (!joined.empty()) out.push_back(std::move(joined));
+                if (!joined.empty()) {
+                    joined += arg_suffix;
+                    out.push_back(std::move(joined));
+                }
             }
 
             std::sort(out.begin(), out.end());
@@ -2357,6 +2370,35 @@ namespace parus::backend::aot {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
                             using B = BinOp;
+                            auto is_null_literal_ = [&](parus::oir::ValueId src) -> bool {
+                                if (is_const_null_value_(src)) return true;
+                                const auto src_tid = value_type_id_(src);
+                                if (src_tid == parus::ty::kInvalidType || src_tid >= types_.count()) return false;
+                                const auto& src_tt = types_.get(src_tid);
+                                return src_tt.kind == parus::ty::Kind::kBuiltin &&
+                                       src_tt.builtin == parus::ty::Builtin::kNull;
+                            };
+                            auto emit_optional_is_some_ = [&](parus::oir::ValueId src) -> std::optional<std::string> {
+                                const auto src_tid = value_type_id_(src);
+                                if (src_tid == parus::ty::kInvalidType || src_tid >= types_.count()) {
+                                    return std::nullopt;
+                                }
+                                const auto& src_tt = types_.get(src_tid);
+                                if (src_tt.kind != parus::ty::Kind::kOptional ||
+                                    src_tt.elem == parus::ty::kInvalidType) {
+                                    return std::nullopt;
+                                }
+                                const std::string opt_ty = map_type_(
+                                    types_, src_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                if (!is_aggregate_llvm_ty_(opt_ty)) return std::nullopt;
+                                const std::string opt_ptr = slot_ptr_ref_(os, src);
+                                const std::string tag_gep = next_tmp_();
+                                os << "  " << tag_gep << " = getelementptr " << opt_ty
+                                   << ", ptr " << opt_ptr << ", i32 0, i32 0\n";
+                                const std::string tag = next_tmp_();
+                                os << "  " << tag << " = load i1, ptr " << tag_gep << "\n";
+                                return tag;
+                            };
                             if (x.op == B::NullCoalesce) {
                                 const auto lhs_tid = value_type_id_(x.lhs);
                                 if (lhs_tid != parus::ty::kInvalidType) {
@@ -2406,6 +2448,21 @@ namespace parus::backend::aot {
 
                             if (x.op == B::Lt || x.op == B::Le || x.op == B::Gt ||
                                 x.op == B::Ge || x.op == B::Eq || x.op == B::Ne) {
+                                if ((x.op == B::Eq || x.op == B::Ne) &&
+                                    (is_null_literal_(x.lhs) || is_null_literal_(x.rhs))) {
+                                    const parus::oir::ValueId opt_src =
+                                        is_null_literal_(x.lhs) ? x.rhs : x.lhs;
+                                    if (auto some_tag = emit_optional_is_some_(opt_src); some_tag.has_value()) {
+                                        if (x.op == B::Eq) {
+                                            os << "  " << vref_(inst.result) << " = xor i1 "
+                                               << *some_tag << ", true\n";
+                                        } else {
+                                            os << "  " << vref_(inst.result) << " = add i1 0, "
+                                               << *some_tag << "\n";
+                                        }
+                                        return;
+                                    }
+                                }
                                 const auto lty = value_ty_(x.lhs);
                                 const auto cty = lty;
                                 const auto lhs = coerce_value_(os, x.lhs, cty);
@@ -2443,6 +2500,7 @@ namespace parus::backend::aot {
                         } else if constexpr (std::is_same_v<T, InstCast>) {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
+                            const auto src_tid = value_type_id_(x.src);
 
                             if (x.to != parus::ty::kInvalidType) {
                                 const auto& to_tt = types_.get(x.to);
@@ -2508,6 +2566,41 @@ namespace parus::backend::aot {
                                         os << "  " << vref_(inst.result) << " = add " << rty << " 0, 0\n";
                                     }
                                     return;
+                                }
+                            }
+
+                            if (src_tid != parus::ty::kInvalidType &&
+                                src_tid < types_.count()) {
+                                const auto& src_tt = types_.get(src_tid);
+                                if (src_tt.kind == parus::ty::Kind::kOptional &&
+                                    src_tt.elem != parus::ty::kInvalidType &&
+                                    x.to != parus::ty::kInvalidType &&
+                                    x.to == src_tt.elem) {
+                                    const std::string opt_ty = map_type_(
+                                        types_, src_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                    if (is_aggregate_llvm_ty_(opt_ty)) {
+                                        const std::string opt_ptr = slot_ptr_ref_(os, x.src);
+                                        const std::string payload_gep = next_tmp_();
+                                        os << "  " << payload_gep << " = getelementptr " << opt_ty
+                                           << ", ptr " << opt_ptr << ", i32 0, i32 1\n";
+                                        const std::string elem_ty = map_type_(
+                                            types_, x.to, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                        if (is_aggregate_llvm_ty_(elem_ty)) {
+                                            const std::string payload =
+                                                safe_load_aggregate_from_ptr_(os, elem_ty, payload_gep);
+                                            os << "  " << vref_(inst.result) << " = "
+                                               << copy_expr_(rty, payload) << "\n";
+                                        } else {
+                                            const std::string payload = next_tmp_();
+                                            os << "  " << payload << " = load " << elem_ty
+                                               << ", ptr " << payload_gep << "\n";
+                                            const std::string final =
+                                                (elem_ty == rty) ? payload : coerce_ref_(os, payload, elem_ty, rty);
+                                            os << "  " << vref_(inst.result) << " = "
+                                               << copy_expr_(rty, final) << "\n";
+                                        }
+                                        return;
+                                    }
                                 }
                             }
 

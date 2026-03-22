@@ -1,5 +1,6 @@
 // frontend/src/tyck/type_check_entry.cpp
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/common/ModulePath.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -36,6 +37,7 @@ namespace parus::tyck {
         struct ExternalGenericDeclMeta {
             std::vector<std::string> params{};
             std::vector<ExternalGenericConstraintMeta> constraints{};
+            std::vector<std::pair<std::string, std::string>> impl_protos{};
         };
 
         std::string payload_unescape_value_(std::string_view raw) {
@@ -86,6 +88,16 @@ namespace parus::tyck {
                         cc.lhs = payload_unescape_value_(body.substr(comma1 + 1, comma2 - comma1 - 1));
                         cc.rhs = payload_unescape_value_(body.substr(comma2 + 1));
                         out.constraints.push_back(std::move(cc));
+                    }
+                } else if (part.starts_with("impl_proto=")) {
+                    const std::string body = payload_unescape_value_(
+                        part.substr(std::string_view("impl_proto=").size())
+                    );
+                    const size_t split = body.find('@');
+                    if (split == std::string::npos) {
+                        out.impl_protos.emplace_back(body, std::string{});
+                    } else {
+                        out.impl_protos.emplace_back(body.substr(0, split), body.substr(split + 1));
                     }
                 }
                 if (next == payload.size()) break;
@@ -200,6 +212,7 @@ namespace parus::tyck {
         expr_enum_ctor_variant_index_cache_.assign(ast_.exprs().size(), 0xFFFF'FFFFu);
         expr_enum_ctor_tag_value_cache_.assign(ast_.exprs().size(), 0);
         expr_resolved_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        stmt_resolved_symbol_cache_.assign(ast_.stmts().size(), sema::SymbolTable::kNoScope);
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
@@ -209,6 +222,11 @@ namespace parus::tyck {
         expr_call_c_fixed_param_count_cache_.assign(ast_.exprs().size(), 0u);
         expr_loop_source_kind_cache_.assign(ast_.exprs().size(), static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         expr_loop_binder_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_loop_iterator_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        expr_loop_iter_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
+        expr_loop_iter_external_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_loop_next_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
+        expr_loop_next_external_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
         expr_external_c_bitfield_cache_.assign(ast_.exprs().size(), ExternalCBitfieldAccess{});
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_external_const_value_cache_.clear();
@@ -220,6 +238,7 @@ namespace parus::tyck {
         result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.stmt_resolved_symbol = stmt_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
@@ -229,6 +248,11 @@ namespace parus::tyck {
         result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
         result_.expr_loop_source_kind = expr_loop_source_kind_cache_;
         result_.expr_loop_binder_type = expr_loop_binder_type_cache_;
+        result_.expr_loop_iterator_type = expr_loop_iterator_type_cache_;
+        result_.expr_loop_iter_decl = expr_loop_iter_decl_cache_;
+        result_.expr_loop_iter_external_symbol = expr_loop_iter_external_symbol_cache_;
+        result_.expr_loop_next_decl = expr_loop_next_decl_cache_;
+        result_.expr_loop_next_external_symbol = expr_loop_next_external_symbol_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -709,6 +733,7 @@ namespace parus::tyck {
         result_.expr_enum_ctor_variant_index = expr_enum_ctor_variant_index_cache_;
         result_.expr_enum_ctor_tag_value = expr_enum_ctor_tag_value_cache_;
         result_.expr_resolved_symbol = expr_resolved_symbol_cache_;
+        result_.stmt_resolved_symbol = stmt_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
@@ -718,6 +743,11 @@ namespace parus::tyck {
         result_.expr_call_c_fixed_param_count = expr_call_c_fixed_param_count_cache_;
         result_.expr_loop_source_kind = expr_loop_source_kind_cache_;
         result_.expr_loop_binder_type = expr_loop_binder_type_cache_;
+        result_.expr_loop_iterator_type = expr_loop_iterator_type_cache_;
+        result_.expr_loop_iter_decl = expr_loop_iter_decl_cache_;
+        result_.expr_loop_iter_external_symbol = expr_loop_iter_external_symbol_cache_;
+        result_.expr_loop_next_decl = expr_loop_next_decl_cache_;
+        result_.expr_loop_next_external_symbol = expr_loop_next_external_symbol_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -1732,6 +1762,7 @@ namespace parus::tyck {
         }
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) {
             expr_type_cache_.resize(expr_size, ty::kInvalidType);
         }
@@ -1753,8 +1784,32 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) {
             expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         }
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) {
+            stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        }
         if (expr_proto_const_decl_cache_.size() < expr_size) {
             expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        }
+        if (expr_loop_source_kind_cache_.size() < expr_size) {
+            expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        }
+        if (expr_loop_binder_type_cache_.size() < expr_size) {
+            expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_loop_iterator_type_cache_.size() < expr_size) {
+            expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (expr_loop_iter_decl_cache_.size() < expr_size) {
+            expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        }
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) {
+            expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        }
+        if (expr_loop_next_decl_cache_.size() < expr_size) {
+            expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        }
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) {
+            expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         }
         if (expr_external_c_bitfield_cache_.size() < expr_size) {
             expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
@@ -1954,17 +2009,31 @@ namespace parus::tyck {
                 ss.kind == sema::SymbolKind::kType &&
                 ss.external_payload.starts_with("parus_decl_kind=proto");
             if (external_proto_symbol) {
+                const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
                 ast::Stmt stub{};
                 stub.kind = ast::StmtKind::kProtoDecl;
                 stub.span = ss.decl_span;
                 stub.name = ss.name;
                 stub.type = ss.declared_type;
                 stub.is_export = ss.is_export;
+                for (const auto& name : meta.params) {
+                    ast::GenericParamDecl gp{};
+                    gp.name = ast_.add_owned_string(name);
+                    gp.span = ss.decl_span;
+                    if (stub.decl_generic_param_count == 0) {
+                        stub.decl_generic_param_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+                    }
+                    ast_.add_generic_param_decl(gp);
+                    ++stub.decl_generic_param_count;
+                }
                 const auto stub_sid = ast_.add_stmt(stub);
                 proto_decl_by_name_[ss.name] = stub_sid;
                 proto_qualified_name_by_stmt_[stub_sid] = ss.name;
                 if (ss.declared_type != ty::kInvalidType) {
                     proto_decl_by_type_[ss.declared_type] = stub_sid;
+                }
+                if (stub.decl_generic_param_count > 0) {
+                    generic_proto_template_sid_set_.insert(stub_sid);
                 }
                 return stub_sid;
             }
@@ -2065,10 +2134,46 @@ namespace parus::tyck {
         inst.decl_constraint_begin = 0;
         inst.decl_constraint_count = 0;
 
+        auto module_info_for_file = [&](uint32_t file_id) {
+            struct ModuleInfo {
+                std::string bundle{};
+                std::string module{};
+            };
+            ModuleInfo out{};
+            if (file_id == 0) return out;
+            for (const auto& ss : sym_.symbols()) {
+                if (ss.is_external) continue;
+                if (ss.decl_file_id != file_id) continue;
+                if (!ss.decl_bundle_name.empty() && out.bundle.empty()) {
+                    out.bundle = ss.decl_bundle_name;
+                }
+                if (!ss.decl_module_head.empty() && out.module.empty()) {
+                    out.module = ss.decl_module_head;
+                }
+                if (!out.bundle.empty() && !out.module.empty()) return out;
+            }
+            if (out.bundle.empty()) out.bundle = current_bundle_name_();
+            if (out.module.empty()) out.module = current_module_head_();
+            return out;
+        };
+        auto strip_type_prefix = [](std::string s, std::string_view prefix) {
+            if (prefix.empty()) return s;
+            const std::string full_prefix = std::string(prefix) + "::";
+            if (s.starts_with(full_prefix)) {
+                s.erase(0, full_prefix.size());
+            }
+            return s;
+        };
+
         std::string base_qname = std::string(templ.name);
         if (templ.type != ty::kInvalidType) {
             base_qname = types_.to_string(templ.type);
         }
+        const auto module_info = module_info_for_file(templ.span.file_id);
+        const std::string canonical_module_head =
+            parus::normalize_core_public_module_head(module_info.bundle, module_info.module);
+        base_qname = strip_type_prefix(base_qname, canonical_module_head);
+        base_qname = strip_type_prefix(base_qname, module_info.module);
         std::ostringstream qn;
         qn << base_qname << "<";
         for (size_t i = 0; i < concrete_args.size(); ++i) {
@@ -2076,7 +2181,16 @@ namespace parus::tyck {
             qn << types_.to_string(concrete_args[i]);
         }
         qn << ">";
-        const std::string inst_qname = qn.str();
+        const std::string short_inst_qname = qn.str();
+        std::string inst_qname = short_inst_qname;
+        const size_t generic_pos = short_inst_qname.find('<');
+        const std::string_view base_name =
+            (generic_pos == std::string::npos)
+                ? std::string_view(short_inst_qname)
+                : std::string_view(short_inst_qname).substr(0, generic_pos);
+        if (!canonical_module_head.empty() && base_name.find("::") == std::string_view::npos) {
+            inst_qname = canonical_module_head + "::" + short_inst_qname;
+        }
         const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
         inst.name = ast_.add_owned_string(inst_qname);
         inst.type = inst_type;
@@ -2084,16 +2198,30 @@ namespace parus::tyck {
         if (auto existing = sym_.lookup_in_current(inst_qname)) {
             (void)sym_.update_declared_type(*existing, inst_type);
         } else {
-            (void)sym_.insert(sema::SymbolKind::kField, inst_qname, inst_type, inst.span);
+            (void)sym_.insert(sema::SymbolKind::kField, inst_qname, inst_type, inst.span,
+                              inst.span.file_id,
+                              module_info.bundle,
+                              inst.is_export,
+                              false,
+                              module_info.module);
         }
 
-        field_abi_meta_by_type_[inst_type] = FieldAbiMeta{
+        const FieldAbiMeta meta{
             .sid = inst_sid,
             .layout = inst.field_layout,
             .align = inst.field_align,
         };
+        field_abi_meta_by_type_[inst_type] = meta;
+        if (short_inst_qname != inst_qname) {
+            field_abi_meta_by_type_[types_.intern_ident(ast_.add_owned_string(short_inst_qname))] = meta;
+            if (!module_info.module.empty()) {
+                const std::string module_inst_qname = module_info.module + "::" + short_inst_qname;
+                field_abi_meta_by_type_[types_.intern_ident(ast_.add_owned_string(module_inst_qname))] = meta;
+            }
+        }
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -2101,7 +2229,15 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2124,27 +2260,50 @@ namespace parus::tyck {
 
         std::string base;
         std::vector<ty::TypeId> args;
+        if (!decompose_named_user_type_(maybe_generic_field_type, base, args)) {
+            const std::string reparsed_src = types_.to_string(maybe_generic_field_type);
+            const ty::TypeId reparsed =
+                parus::cimport::parse_external_type_repr(reparsed_src, {}, {}, types_);
+            if (reparsed != ty::kInvalidType) {
+                maybe_generic_field_type = reparsed;
+            }
+        }
         if (!decompose_named_user_type_(maybe_generic_field_type, base, args) || args.empty()) {
             return std::nullopt;
         }
 
         std::string base_key = base;
-        const bool base_rewritten = rewrite_imported_path_(base_key).has_value();
         if (auto rewritten = rewrite_imported_path_(base_key)) {
             base_key = *rewritten;
         }
 
-        auto sym_sid = base_rewritten ? sym_.lookup(base_key) : lookup_symbol_(base_key);
+        auto sym_sid = sym_.lookup(base_key);
+        if (!sym_sid.has_value()) {
+            sym_sid = lookup_symbol_(base_key);
+        }
+        if (!sym_sid.has_value() && base_key != base) {
+            sym_sid = lookup_symbol_(base);
+        }
         if (!sym_sid.has_value()) return std::nullopt;
         const auto& ss = sym_.symbol(*sym_sid);
-        if (ss.kind != sema::SymbolKind::kField || ss.declared_type == ty::kInvalidType) {
+        const bool struct_like_external_type =
+            ss.kind == sema::SymbolKind::kType &&
+            ss.is_external &&
+            (!ss.external_field_payload.empty() ||
+             ss.external_payload.starts_with("parus_field_decl"));
+        if ((ss.kind != sema::SymbolKind::kField && !struct_like_external_type) ||
+            ss.declared_type == ty::kInvalidType) {
             return std::nullopt;
         }
 
         auto fit = field_abi_meta_by_type_.find(ss.declared_type);
         if (fit == field_abi_meta_by_type_.end()) {
-            if (ss.is_external && !ss.external_payload.empty()) {
-                const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
+            const std::string_view external_field_payload =
+                !ss.external_field_payload.empty()
+                    ? std::string_view(ss.external_field_payload)
+                    : std::string_view(ss.external_payload);
+            if (ss.is_external && external_field_payload.starts_with("parus_field_decl")) {
+                const auto meta = parse_external_generic_decl_meta_(external_field_payload);
                 if (!meta.params.empty() || !meta.constraints.empty()) {
                     if (args.size() != meta.params.size()) {
                         diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
@@ -2205,8 +2364,90 @@ namespace parus::tyck {
                         }
                     }
                 }
+
+                ast::Stmt stub{};
+                stub.kind = ast::StmtKind::kFieldDecl;
+                stub.span = ss.decl_span;
+                stub.name = ast_.add_owned_string(ss.name);
+                stub.type = ss.declared_type;
+                stub.is_export = ss.is_export;
+
+                size_t pos = 0;
+                while (pos < ss.external_payload.size()) {
+                    size_t next = ss.external_payload.find('|', pos);
+                    if (next == std::string_view::npos) next = ss.external_payload.size();
+                    const std::string_view part = std::string_view(ss.external_payload).substr(pos, next - pos);
+                    if (part.starts_with("gparam=")) {
+                        ast::GenericParamDecl gp{};
+                        gp.name = ast_.add_owned_string(
+                            payload_unescape_value_(part.substr(std::string_view("gparam=").size()))
+                        );
+                        gp.span = ss.decl_span;
+                        if (stub.decl_generic_param_count == 0) {
+                            stub.decl_generic_param_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+                        }
+                        ast_.add_generic_param_decl(gp);
+                        ++stub.decl_generic_param_count;
+                    } else if (part.starts_with("layout=")) {
+                        const auto val = part.substr(std::string_view("layout=").size());
+                        stub.field_layout = (val == "c") ? ast::FieldLayout::kC : ast::FieldLayout::kNone;
+                    } else if (part.starts_with("align=")) {
+                        try {
+                            stub.field_align = static_cast<uint32_t>(
+                                std::stoul(std::string(part.substr(std::string_view("align=").size())))
+                            );
+                        } catch (...) {
+                            stub.field_align = 0;
+                        }
+                    } else if (part.starts_with("field=")) {
+                        const std::string body = payload_unescape_value_(
+                            part.substr(std::string_view("field=").size())
+                        );
+                        const size_t colon = body.find(':');
+                        if (colon == std::string::npos) {
+                            if (next == ss.external_payload.size()) break;
+                            pos = next + 1;
+                            continue;
+                        }
+                        std::string field_name = body.substr(0, colon);
+                        std::string repr = body.substr(colon + 1);
+                        std::string semantic{};
+                        const size_t semantic_split = repr.find('@');
+                        if (semantic_split != std::string::npos) {
+                            semantic = repr.substr(semantic_split + 1);
+                            repr = repr.substr(0, semantic_split);
+                        }
+                        ast::FieldMember member{};
+                        member.name = ast_.add_owned_string(field_name);
+                        member.type = parus::cimport::parse_external_type_repr(repr, semantic, ss.external_payload, types_);
+                        if (stub.field_member_count == 0) {
+                            stub.field_member_begin = static_cast<uint32_t>(ast_.field_members().size());
+                        }
+                        ast_.add_field_member(member);
+                        ++stub.field_member_count;
+                    }
+                    if (next == ss.external_payload.size()) break;
+                    pos = next + 1;
+                }
+
+                const ast::StmtId stub_sid = ast_.add_stmt(stub);
+                field_abi_meta_by_type_[ss.declared_type] = FieldAbiMeta{
+                    .sid = stub_sid,
+                    .layout = stub.field_layout,
+                    .align = stub.field_align,
+                };
+                if (stub.decl_generic_param_count > 0) {
+                    generic_field_template_sid_set_.insert(stub_sid);
+                }
+                if (ss.declared_type != ty::kInvalidType) {
+                    field_abi_meta_by_type_[canonicalize_transparent_external_typedef_(ss.declared_type)] =
+                        field_abi_meta_by_type_[ss.declared_type];
+                }
+                fit = field_abi_meta_by_type_.find(ss.declared_type);
             }
-            return std::nullopt;
+            if (fit == field_abi_meta_by_type_.end()) {
+                return std::nullopt;
+            }
         }
         const ast::StmtId templ_sid = fit->second.sid;
         if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
@@ -2224,7 +2465,21 @@ namespace parus::tyck {
                 return templ_sid;
             }
         }
-        return ensure_generic_field_instance_(templ_sid, args, use_span);
+        const auto inst_sid = ensure_generic_field_instance_(templ_sid, args, use_span);
+        if (inst_sid.has_value() &&
+            static_cast<size_t>(*inst_sid) < ast_.stmts().size()) {
+            const auto& inst = ast_.stmt(*inst_sid);
+            if (inst.type != ty::kInvalidType) {
+                if (auto meta_it = field_abi_meta_by_type_.find(inst.type);
+                    meta_it != field_abi_meta_by_type_.end()) {
+                    field_abi_meta_by_type_[maybe_generic_field_type] = meta_it->second;
+                    const ty::TypeId canonical_t =
+                        canonicalize_transparent_external_typedef_(maybe_generic_field_type);
+                    field_abi_meta_by_type_[canonical_t] = meta_it->second;
+                }
+            }
+        }
+        return inst_sid;
     }
 
     std::optional<ast::StmtId> TypeChecker::ensure_generic_enum_instance_(
@@ -2312,6 +2567,7 @@ namespace parus::tyck {
         }
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -2319,7 +2575,15 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2551,6 +2815,7 @@ namespace parus::tyck {
         }
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -2558,7 +2823,15 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2682,6 +2955,7 @@ namespace parus::tyck {
         }
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -2689,7 +2963,15 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2751,6 +3033,32 @@ namespace parus::tyck {
             return it->second;
         }
 
+        std::string acts_qname = std::string(templ.name);
+        if (auto it = acts_qualified_name_by_stmt_.find(template_sid);
+            it != acts_qualified_name_by_stmt_.end()) {
+            acts_qname = it->second;
+        }
+
+        // Prefer an explicitly declared concrete acts block over instantiating
+        // a generic template for the same owner. This avoids duplicate lowering
+        // when a library ships both generic default acts and concrete shims.
+        if (templ.acts_has_set_name) {
+            const std::string key = acts_named_decl_key_(concrete_owner_type, acts_qname);
+            if (auto it = acts_named_decl_by_owner_and_name_.find(key);
+                it != acts_named_decl_by_owner_and_name_.end() &&
+                it->second != template_sid) {
+                generic_acts_instance_cache_[cache_key] = it->second;
+                return it->second;
+            }
+        } else {
+            if (auto it = acts_default_decl_by_owner_.find(concrete_owner_type);
+                it != acts_default_decl_by_owner_.end() &&
+                it->second != template_sid) {
+                generic_acts_instance_cache_[cache_key] = it->second;
+                return it->second;
+            }
+        }
+
         std::unordered_map<std::string, ty::TypeId> subst;
         subst.reserve(generic_names.size());
         for (size_t i = 0; i < generic_names.size(); ++i) {
@@ -2804,11 +3112,6 @@ namespace parus::tyck {
         inst.decl_generic_param_begin = 0;
         inst.decl_generic_param_count = 0;
 
-        std::string acts_qname = std::string(templ.name);
-        if (auto it = acts_qualified_name_by_stmt_.find(template_sid);
-            it != acts_qualified_name_by_stmt_.end()) {
-            acts_qname = it->second;
-        }
         acts_qualified_name_by_stmt_[inst_sid] = acts_qname;
 
         if (inst.acts_has_set_name) {
@@ -2818,6 +3121,7 @@ namespace parus::tyck {
         collect_acts_method_decl_(inst_sid, inst, /*allow_named_set=*/true);
 
         const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -2825,7 +3129,15 @@ namespace parus::tyck {
         if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
         if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -3091,6 +3403,7 @@ namespace parus::tyck {
         if (pos == std::string_view::npos || pos == 0) return false;
 
         const std::string_view head = raw_path.substr(0, pos);
+        if (raw_path.starts_with("core::")) return false;
         if (is_known_namespace_path_(head)) return false;
 
         const std::string cur_head = current_module_head_();
@@ -3103,6 +3416,10 @@ namespace parus::tyck {
         }
 
         if (sym_.lookup(head).has_value()) return false;
+        for (const auto& candidate : sym_.symbols()) {
+            if (!candidate.is_external) continue;
+            if (candidate.decl_bundle_name == head) return false;
+        }
         {
             const std::string prefix = std::string(head) + "::";
             for (const auto& candidate : sym_.symbols()) {
@@ -3169,6 +3486,49 @@ namespace parus::tyck {
 
         if (auto sid = lookup_visible(key)) {
             return sid;
+        }
+
+        auto module_head_candidate_match = [&](const sema::Symbol& ss, std::string_view query) -> bool {
+            if (query.empty() || ss.name.empty()) return false;
+            if (ss.name == query) return true;
+
+            const std::string current_bundle = current_bundle_name_();
+            const std::string current_head =
+                parus::normalize_core_public_module_head(current_bundle, current_module_head_());
+            const std::string symbol_head =
+                parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+            const auto candidates = parus::candidate_names_for_external_export(
+                ss.name,
+                symbol_head,
+                ss.decl_bundle_name,
+                current_head
+            );
+            return std::find(candidates.begin(), candidates.end(), std::string(query)) != candidates.end();
+        };
+
+        auto scan_symbols = [&](bool external_only) -> std::optional<uint32_t> {
+            const auto& syms = sym_.symbols();
+            for (uint32_t sid = 0; sid < syms.size(); ++sid) {
+                const auto& ss = syms[sid];
+                if (external_only != ss.is_external) continue;
+                if (!module_head_candidate_match(ss, key)) continue;
+                if (auto it = private_class_member_qname_owner_.find(ss.name);
+                    it != private_class_member_qname_owner_.end() &&
+                    !can_access_class_member_(it->second, ast::FieldMember::Visibility::kPrivate)) {
+                    continue;
+                }
+                return sid;
+            }
+            return std::nullopt;
+        };
+
+        if (key.find("::") != std::string::npos) {
+            if (auto sid = scan_symbols(/*external_only=*/false)) {
+                return sid;
+            }
+            if (auto sid = scan_symbols(/*external_only=*/true)) {
+                return sid;
+            }
         }
 
         // nest 경로 상대 해소:

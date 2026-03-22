@@ -314,6 +314,16 @@ namespace parus::tyck {
 
     void TypeChecker::check_stmt_var_(ast::StmtId sid) {
         const ast::Stmt s = ast_.stmt(sid);
+        auto record_stmt_symbol = [&](uint32_t sym_id) {
+            if (sym_id == sema::SymbolTable::kNoScope) return;
+            if (static_cast<size_t>(sid) >= stmt_resolved_symbol_cache_.size()) {
+                stmt_resolved_symbol_cache_.resize(
+                    static_cast<size_t>(sid) + 1,
+                    sema::SymbolTable::kNoScope
+                );
+            }
+            stmt_resolved_symbol_cache_[sid] = sym_id;
+        };
         const bool is_global_decl =
             (block_depth_ == 0) &&
             (s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC));
@@ -378,6 +388,7 @@ namespace parus::tyck {
 
             if (var_sym != sema::SymbolTable::kNoScope) {
                 sym_is_mut_[var_sym] = s.is_mut;
+                record_stmt_symbol(var_sym);
             }
 
             ast_.stmt_mut(sid).type = vt;
@@ -446,6 +457,7 @@ namespace parus::tyck {
 
             if (var_sym != sema::SymbolTable::kNoScope) {
                 sym_is_mut_[var_sym] = false;
+                record_stmt_symbol(var_sym);
                 const_symbol_decl_sid_[var_sym] = sid;
                 if (s.init != ast::k_invalid_expr) {
                     ConstValue init_value{};
@@ -521,6 +533,7 @@ namespace parus::tyck {
 
             if (var_sym != sema::SymbolTable::kNoScope) {
                 sym_is_mut_[var_sym] = s.is_mut;
+                record_stmt_symbol(var_sym);
             }
 
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
@@ -584,6 +597,7 @@ namespace parus::tyck {
         // NEW: mut tracking (set mut / set)
         if (ins.ok) {
             sym_is_mut_[ins.symbol_id] = s.is_mut;
+            record_stmt_symbol(ins.symbol_id);
         }
 
         if (ins.ok && type_contains_infer_int_(inferred)) {

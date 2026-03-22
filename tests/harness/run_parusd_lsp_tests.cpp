@@ -580,6 +580,12 @@ bool test_core_impl_marker_does_not_require_core_bundle_in_lsp() {
         std::cerr << "LSP must not emit bundle-name mismatch for $![Impl::Core];\n" << out << "\n";
         return false;
     }
+    if (contains(out, "ImportDepNotDeclared") ||
+        contains(out, "\"code\":\"UndefinedName\"") ||
+        contains(out, "invalid UTF-8 sequence starting at byte offset")) {
+        std::cerr << "LSP must stably resolve core imports for range.pr without spurious diagnostics\n" << out << "\n";
+        return false;
+    }
     return true;
 }
 

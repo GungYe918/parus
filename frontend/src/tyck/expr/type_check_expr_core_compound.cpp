@@ -95,7 +95,13 @@
         if (field_ty == ty::kInvalidType && !e.text.empty()) {
             if (auto type_sym = lookup_symbol_(e.text)) {
                 const auto& sym = sym_.symbol(*type_sym);
-                if (sym.kind == sema::SymbolKind::kField && sym.declared_type != ty::kInvalidType) {
+                const bool struct_like_external_type =
+                    sym.kind == sema::SymbolKind::kType &&
+                    sym.is_external &&
+                    (!sym.external_field_payload.empty() ||
+                     sym.external_payload.starts_with("parus_field_decl"));
+                if ((sym.kind == sema::SymbolKind::kField || struct_like_external_type) &&
+                    sym.declared_type != ty::kInvalidType) {
                     field_ty = sym.declared_type;
                 }
             }
@@ -550,6 +556,11 @@
 
         parus::LoopSourceKind loop_source_kind = parus::LoopSourceKind::kNone;
         ty::TypeId loop_binder_type = ty::kInvalidType;
+        ty::TypeId loop_iterator_type = ty::kInvalidType;
+        ast::StmtId loop_iter_decl = ast::k_invalid_stmt;
+        uint32_t loop_iter_external_symbol = sema::SymbolTable::kNoScope;
+        ast::StmtId loop_next_decl = ast::k_invalid_stmt;
+        uint32_t loop_next_external_symbol = sema::SymbolTable::kNoScope;
 
         auto cache_loop_meta = [&]() {
             if (current_expr_id_ == ast::k_invalid_expr) return;
@@ -559,6 +570,21 @@
             }
             if ((size_t)current_expr_id_ < expr_loop_binder_type_cache_.size()) {
                 expr_loop_binder_type_cache_[current_expr_id_] = loop_binder_type;
+            }
+            if ((size_t)current_expr_id_ < expr_loop_iterator_type_cache_.size()) {
+                expr_loop_iterator_type_cache_[current_expr_id_] = loop_iterator_type;
+            }
+            if ((size_t)current_expr_id_ < expr_loop_iter_decl_cache_.size()) {
+                expr_loop_iter_decl_cache_[current_expr_id_] = loop_iter_decl;
+            }
+            if ((size_t)current_expr_id_ < expr_loop_iter_external_symbol_cache_.size()) {
+                expr_loop_iter_external_symbol_cache_[current_expr_id_] = loop_iter_external_symbol;
+            }
+            if ((size_t)current_expr_id_ < expr_loop_next_decl_cache_.size()) {
+                expr_loop_next_decl_cache_[current_expr_id_] = loop_next_decl;
+            }
+            if ((size_t)current_expr_id_ < expr_loop_next_external_symbol_cache_.size()) {
+                expr_loop_next_external_symbol_cache_[current_expr_id_] = loop_next_external_symbol;
             }
         };
 
@@ -576,6 +602,266 @@
                     diag_(diag::Code::kShadowing, e.span, e.loop_var);
                 }
             }
+        };
+
+        struct LoopMethodTarget {
+            ty::TypeId fn_type = ty::kInvalidType;
+            ast::StmtId decl_sid = ast::k_invalid_stmt;
+            uint32_t external_sym = sema::SymbolTable::kNoScope;
+            bool external_is_template = false;
+            bool ok = false;
+        };
+
+        auto resolve_proto_sid_for_loop_ = [&](std::initializer_list<std::string_view> names)
+            -> std::optional<ast::StmtId> {
+            for (const auto name : names) {
+                if (auto sid = resolve_proto_sid_for_constraint_(std::string(name))) return sid;
+                if (auto it = proto_decl_by_name_.find(std::string(name)); it != proto_decl_by_name_.end()) {
+                    return it->second;
+                }
+            }
+            return std::nullopt;
+        };
+
+        auto owner_base_name_matches = [&](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
+        auto resolve_owner_type_in_map = [&](const auto& method_map, ty::TypeId t) -> ty::TypeId {
+            if (t == ty::kInvalidType) return t;
+            if (method_map.find(t) != method_map.end()) return t;
+            const auto& tt = types_.get(t);
+            if (tt.kind != ty::Kind::kNamedUser) return t;
+            if (auto sid = lookup_symbol_(types_.to_string(t))) {
+                const auto& ss = sym_.symbol(*sid);
+                if (ss.kind == sema::SymbolKind::kType &&
+                    method_map.find(ss.declared_type) != method_map.end()) {
+                    return ss.declared_type;
+                }
+            }
+            return t;
+        };
+
+        auto resolve_loop_method = [&](ty::TypeId owner_t,
+                                       std::string_view member_name,
+                                       bool require_mut_self,
+                                       Span member_span) -> LoopMethodTarget {
+            LoopMethodTarget out{};
+            owner_t = canonicalize_acts_owner_type_(owner_t);
+            if (owner_t == ty::kInvalidType || member_name.empty()) return out;
+
+            auto local_receiver_matches = [&](const ast::Stmt& fn) -> bool {
+                if (fn.kind != ast::StmtKind::kFnDecl || fn.param_count == 0) return false;
+                const auto& p0 = ast_.params()[fn.param_begin];
+                if (!p0.is_self) return false;
+                if (require_mut_self) {
+                    return p0.self_kind == ast::SelfReceiverKind::kMut;
+                }
+                return p0.self_kind == ast::SelfReceiverKind::kRead;
+            };
+
+            auto external_receiver_matches = [&](ty::TypeId fn_t) -> bool {
+                if (fn_t == ty::kInvalidType || fn_t >= types_.count()) return false;
+                const auto& ft = types_.get(fn_t);
+                if (ft.kind != ty::Kind::kFn || ft.param_count == 0) return false;
+                ty::TypeId self_t = canonicalize_transparent_external_typedef_(types_.fn_param_at(fn_t, 0));
+                if (self_t == ty::kInvalidType || self_t >= types_.count()) return false;
+                const auto& st = types_.get(self_t);
+                if (st.kind != ty::Kind::kBorrow || st.elem == ty::kInvalidType) return false;
+                const ty::TypeId elem_t = canonicalize_transparent_external_typedef_(st.elem);
+                if (elem_t != owner_t) return false;
+                return require_mut_self ? st.borrow_is_mut : !st.borrow_is_mut;
+            };
+
+            auto adopt_local = [&](ast::StmtId sid) -> bool {
+                if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) return false;
+                const auto& fn = ast_.stmt(sid);
+                if (!local_receiver_matches(fn)) return false;
+                if (out.ok) {
+                    diag_(diag::Code::kTypeErrorGeneric, member_span,
+                          "ambiguous iteration method '" + std::string(member_name) + "'");
+                    err_(member_span, "ambiguous iteration method");
+                    out.fn_type = types_.error();
+                    out.ok = true;
+                    return true;
+                }
+                out.ok = true;
+                out.decl_sid = sid;
+                out.fn_type = fn.type;
+                return true;
+            };
+
+            auto adopt_external = [&](uint32_t sym_sid, ty::TypeId fn_t, bool candidate_is_template) -> bool {
+                if (!external_receiver_matches(fn_t)) return false;
+                if (out.ok) {
+                    const bool current_is_external =
+                        out.decl_sid == ast::k_invalid_stmt &&
+                        out.external_sym != sema::SymbolTable::kNoScope;
+                    if (current_is_external) {
+                        if (out.fn_type == fn_t) {
+                            if (out.external_is_template && !candidate_is_template) {
+                                out.external_sym = sym_sid;
+                                out.external_is_template = false;
+                            }
+                            return true;
+                        }
+                        if (out.external_is_template && !candidate_is_template) {
+                            out.external_sym = sym_sid;
+                            out.fn_type = fn_t;
+                            out.external_is_template = false;
+                            return true;
+                        }
+                        if (!out.external_is_template && candidate_is_template) {
+                            return true;
+                        }
+                    }
+                    diag_(diag::Code::kTypeErrorGeneric, member_span,
+                          "ambiguous external iteration method '" + std::string(member_name) + "'");
+                    err_(member_span, "ambiguous external iteration method");
+                    out.fn_type = types_.error();
+                    out.ok = true;
+                    return true;
+                }
+                out.ok = true;
+                out.external_sym = sym_sid;
+                out.fn_type = fn_t;
+                out.external_is_template = candidate_is_template;
+                return true;
+            };
+
+            ty::TypeId class_owner_t = resolve_owner_type_in_map(class_effective_method_map_, owner_t);
+            if (class_owner_t != ty::kInvalidType &&
+                class_effective_method_map_.find(class_owner_t) == class_effective_method_map_.end()) {
+                if (auto cit = class_decl_by_type_.find(class_owner_t); cit != class_decl_by_type_.end()) {
+                    const ast::StmtId csid = cit->second;
+                    if (generic_decl_checked_instances_.find(csid) == generic_decl_checked_instances_.end() &&
+                        generic_decl_checking_instances_.find(csid) == generic_decl_checking_instances_.end()) {
+                        check_stmt_class_decl_(csid);
+                        generic_decl_checked_instances_.insert(csid);
+                    }
+                }
+            }
+            class_owner_t = resolve_owner_type_in_map(class_effective_method_map_, owner_t);
+            if (class_owner_t != ty::kInvalidType) {
+                auto oit = class_effective_method_map_.find(class_owner_t);
+                if (oit != class_effective_method_map_.end()) {
+                    auto mit = oit->second.find(std::string(member_name));
+                    if (mit != oit->second.end()) {
+                        for (const auto sid : mit->second) {
+                            (void)adopt_local(sid);
+                        }
+                    }
+                }
+            }
+
+            for (const auto& md : lookup_acts_methods_for_call_(owner_t, member_name, nullptr)) {
+                (void)adopt_local(md.fn_sid);
+            }
+
+            auto oit = external_acts_default_method_map_.find(owner_t);
+            if (oit != external_acts_default_method_map_.end()) {
+                auto mit = oit->second.find(std::string(member_name));
+                if (mit != oit->second.end()) {
+                    for (const auto& md : mit->second) {
+                        if (md.fn_symbol == sema::SymbolTable::kNoScope ||
+                            md.fn_symbol >= sym_.symbols().size()) {
+                            continue;
+                        }
+                        (void)adopt_external(md.fn_symbol,
+                                             sym_.symbol(md.fn_symbol).declared_type,
+                                             /*candidate_is_template=*/false);
+                    }
+                }
+            }
+
+            std::string owner_base{};
+            std::vector<ty::TypeId> owner_args{};
+            if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_base.empty()) {
+                for (const auto& [template_owner_base, member_map] : external_acts_template_method_map_) {
+                    if (!owner_base_name_matches(owner_base, template_owner_base)) continue;
+                    auto mit = member_map.find(std::string(member_name));
+                    if (mit == member_map.end()) continue;
+                    for (const auto& md : mit->second) {
+                        if (md.fn_symbol == sema::SymbolTable::kNoScope ||
+                            md.fn_symbol >= sym_.symbols().size()) {
+                            continue;
+                        }
+                        const auto& ss = sym_.symbol(md.fn_symbol);
+                        ty::TypeId fn_t = ss.declared_type;
+                        if (md.owner_is_generic_template) {
+                            struct ExternalGenericDeclMeta {
+                                std::vector<std::string> params{};
+                            };
+                            auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+                                auto hex_value = [](char ch) -> int {
+                                    if (ch >= '0' && ch <= '9') return ch - '0';
+                                    if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                                    if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                                    return -1;
+                                };
+                                std::string out{};
+                                out.reserve(raw.size());
+                                for (size_t i = 0; i < raw.size(); ++i) {
+                                    if (raw[i] == '%' && i + 2 < raw.size()) {
+                                        const int hi = hex_value(raw[i + 1]);
+                                        const int lo = hex_value(raw[i + 2]);
+                                        if (hi >= 0 && lo >= 0) {
+                                            out.push_back(static_cast<char>((hi << 4) | lo));
+                                            i += 2;
+                                            continue;
+                                        }
+                                    }
+                                    out.push_back(raw[i]);
+                                }
+                                return out;
+                            };
+                            auto parse_external_generic_decl_meta_ = [&](std::string_view payload) {
+                                ExternalGenericDeclMeta meta{};
+                                size_t pos = 0;
+                                while (pos < payload.size()) {
+                                    size_t next = payload.find('|', pos);
+                                    if (next == std::string_view::npos) next = payload.size();
+                                    const std::string_view part = payload.substr(pos, next - pos);
+                                    if (part.starts_with("gparam=")) {
+                                        meta.params.push_back(
+                                            payload_unescape_value_(part.substr(std::string_view("gparam=").size()))
+                                        );
+                                    }
+                                    if (next == payload.size()) break;
+                                    pos = next + 1;
+                                }
+                                return meta;
+                            };
+                            const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
+                            if (owner_args.size() != md.owner_generic_arity ||
+                                meta.params.size() < md.owner_generic_arity) {
+                                continue;
+                            }
+                            std::unordered_map<std::string, ty::TypeId> bindings{};
+                            for (size_t i = 0; i < owner_args.size(); ++i) {
+                                bindings.emplace(meta.params[i], owner_args[i]);
+                            }
+                            fn_t = substitute_generic_type_(fn_t, bindings);
+                        }
+                        (void)adopt_external(md.fn_symbol, fn_t, /*candidate_is_template=*/true);
+                    }
+                }
+            }
+
+            if (!out.ok) {
+                diag_(diag::Code::kLoopIterableUnsupported, member_span);
+                err_(member_span,
+                     "loop iterable is missing required '" + std::string(member_name) + "' method");
+                return out;
+            }
+            return out;
         };
 
         // loop scope: variable binding + body scope
@@ -678,9 +964,60 @@
                     set_loop_binder(at.elem);
                 } else {
                     loop_source_kind = parus::LoopSourceKind::kIteratorFutureUnsupported;
-                    diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
-                    err_(e.span, "loop iterable is unsupported in v0 (iterator protocol is deferred)");
-                    set_loop_binder(types_.error());
+                    const auto seq_proto_sid = resolve_proto_sid_for_loop_(
+                        {"iter::Sequence", "core::iter::Sequence", "Sequence"}
+                    );
+                    const auto iter_proto_sid = resolve_proto_sid_for_loop_(
+                        {"iter::Iterator", "core::iter::Iterator", "Iterator"}
+                    );
+                    if (!seq_proto_sid.has_value()) {
+                        diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                        err_(e.span, "loop iterable is missing iter::Sequence protocol metadata");
+                        set_loop_binder(types_.error());
+                    } else if (!type_satisfies_proto_constraint_(iter_t, *seq_proto_sid, e.span)) {
+                        diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                        err_(e.span, "loop iterable does not satisfy iter::Sequence");
+                        set_loop_binder(types_.error());
+                    } else {
+                                const auto iter_method =
+                            resolve_loop_method(iter_t, "iter", /*require_mut_self=*/false, ast_.expr(e.loop_iter).span);
+                        if (!iter_method.ok || is_error_(iter_method.fn_type)) {
+                            set_loop_binder(types_.error());
+                        } else {
+                            ty::TypeId iterator_t = canonicalize_transparent_external_typedef_(
+                                types_.get(iter_method.fn_type).ret
+                            );
+                            if (iterator_t == ty::kInvalidType || is_error_(iterator_t)) {
+                                diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                                err_(e.span, "iter::Sequence.iter() must return a concrete iterator type");
+                                set_loop_binder(types_.error());
+                            } else if (iter_proto_sid.has_value() &&
+                                       !type_satisfies_proto_constraint_(iterator_t, *iter_proto_sid, e.span)) {
+                                diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                                err_(e.span, "loop iterator does not satisfy iter::Iterator");
+                                set_loop_binder(types_.error());
+                            } else {
+                                const auto next_method =
+                                    resolve_loop_method(iterator_t, "next", /*require_mut_self=*/true, ast_.expr(e.loop_iter).span);
+                                const ty::TypeId next_ret =
+                                    next_method.ok ? canonicalize_transparent_external_typedef_(types_.get(next_method.fn_type).ret)
+                                                   : ty::kInvalidType;
+                                if (!next_method.ok || next_ret == ty::kInvalidType || !is_optional_(next_ret)) {
+                                    diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                                    err_(e.span, "iter::Iterator.next(self mut) must return Item?");
+                                    set_loop_binder(types_.error());
+                                } else {
+                                    loop_source_kind = parus::LoopSourceKind::kSequence;
+                                    loop_iterator_type = iterator_t;
+                                    loop_iter_decl = iter_method.decl_sid;
+                                    loop_iter_external_symbol = iter_method.external_sym;
+                                    loop_next_decl = next_method.decl_sid;
+                                    loop_next_external_symbol = next_method.external_sym;
+                                    set_loop_binder(optional_elem_(next_ret));
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

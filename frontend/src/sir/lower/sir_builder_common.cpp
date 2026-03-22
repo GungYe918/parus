@@ -194,16 +194,31 @@ namespace parus::sir::detail {
 
     SymbolId resolve_symbol_from_stmt(
         const passes::NameResolveResult& nres,
+        const tyck::TyckResult& tyck,
         parus::ast::StmtId sid
     ) {
         if (sid == parus::ast::k_invalid_stmt) return k_invalid_symbol;
-        if ((size_t)sid >= nres.stmt_to_resolved.size()) return k_invalid_symbol;
+        if ((size_t)sid < nres.stmt_to_resolved.size()) {
+            const auto rid = nres.stmt_to_resolved[(uint32_t)sid];
+            if (rid != passes::NameResolveResult::k_invalid_resolved &&
+                (size_t)rid < nres.resolved.size()) {
+                return (SymbolId)nres.resolved[rid].sym;
+            }
+        }
+        if ((size_t)sid < tyck.stmt_resolved_symbol.size()) {
+            const uint32_t resolved = tyck.stmt_resolved_symbol[sid];
+            if (resolved != sema::SymbolTable::kNoScope) {
+                return (SymbolId)resolved;
+            }
+        }
+        return k_invalid_symbol;
+    }
 
-        const auto rid = nres.stmt_to_resolved[(uint32_t)sid];
-        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
-        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
-
-        return (SymbolId)nres.resolved[rid].sym;
+    SymbolId resolve_symbol_from_stmt(
+        const passes::NameResolveResult& nres,
+        parus::ast::StmtId sid
+    ) {
+        return resolve_symbol_from_stmt(nres, tyck::TyckResult{}, sid);
     }
 
     SymbolId resolve_symbol_from_param_index(
