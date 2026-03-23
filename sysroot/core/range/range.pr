@@ -120,10 +120,7 @@ export acts for Range<T> with [T: constraints::Comparable] {
     }
 };
 
-export acts for Range<T> with [T: constraints::Step] {
-    type Item = T;
-    type Iter = iter::RangeIter<T>;
-
+export acts for Range<T is Item, iter::RangeIter<T> is Iter> with [T: constraints::Step] {
     def into_iter(self move) -> iter::RangeIter<T> {
         return iter::RangeIter<T>{ cur: self.start, end: self.end };
     }
@@ -151,10 +148,7 @@ export acts for RangeInclusive<T> with [T: constraints::Comparable] {
     }
 };
 
-export acts for RangeInclusive<T> with [T: constraints::Step] {
-    type Item = T;
-    type Iter = iter::RangeInclusiveIter<T>;
-
+export acts for RangeInclusive<T is Item, iter::RangeInclusiveIter<T> is Iter> with [T: constraints::Step] {
     def into_iter(self move) -> iter::RangeInclusiveIter<T> {
         return iter::RangeInclusiveIter<T>{ cur: self.start, end: self.end, done: false };
     }

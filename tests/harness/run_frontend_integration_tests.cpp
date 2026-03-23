@@ -675,15 +675,13 @@ namespace {
                 require into_iter(src: Self) -> Self::Iter;
             };
 
-            struct CounterIter: Iterator {
-                cur: i32;
-                end: i32;
+            struct CounterIter<T>: Iterator with [T == i32] {
+                cur: T;
+                end: T;
             };
 
-            acts for CounterIter {
-                type Item = i32;
-
-                def next(self mut, out: &mut i32) -> bool {
+            acts for CounterIter<T is Item> with [T == i32] {
+                def next(self mut, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -693,17 +691,14 @@ namespace {
                 }
             };
 
-            struct Counter: IterSourceMove {
-                start: i32;
-                end: i32;
+            struct Counter<T>: IterSourceMove with [T == i32] {
+                start: T;
+                end: T;
             };
 
-            acts for Counter {
-                type Item = i32;
-                type Iter = CounterIter;
-
-                def into_iter(self move) -> CounterIter {
-                    return CounterIter{ cur: self.start, end: self.end };
+            acts for Counter<T is Item, CounterIter<T> is Iter> with [T == i32] {
+                def into_iter(self move) -> CounterIter<T> {
+                    return CounterIter<T>{ cur: self.start, end: self.end };
                 }
             };
 
@@ -725,7 +720,7 @@ namespace {
                 let b: i32? = loop {
                     break 42;
                 };
-                let c: i32? = loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                let c: i32? = loop (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -814,15 +809,13 @@ namespace {
                 require into_iter(src: Self) -> Self::Iter;
             };
 
-            struct CounterIter: Iterator {
-                cur: i32;
-                end: i32;
+            struct CounterIter<T>: Iterator with [T == i32] {
+                cur: T;
+                end: T;
             };
 
-            acts for CounterIter {
-                type Item = i32;
-
-                def next(self mut, out: &mut i32) -> bool {
+            acts for CounterIter<T is Item> with [T == i32] {
+                def next(self mut, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -832,22 +825,19 @@ namespace {
                 }
             };
 
-            struct Counter: IterSourceMove {
-                start: i32;
-                end: i32;
+            struct Counter<T>: IterSourceMove with [T == i32] {
+                start: T;
+                end: T;
             };
 
-            acts for Counter {
-                type Item = i32;
-                type Iter = CounterIter;
-
-                def into_iter(self move) -> CounterIter {
-                    return CounterIter{ cur: self.start, end: self.end };
+            acts for Counter<T is Item, CounterIter<T> is Iter> with [T == i32] {
+                def into_iter(self move) -> CounterIter<T> {
+                    return CounterIter<T>{ cur: self.start, end: self.end };
                 }
             };
 
             def main() -> i32 {
-                let y: i32 = loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                let y: i32 = loop (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -889,15 +879,13 @@ namespace {
                 require into_iter(src: Self) -> Self::Iter;
             };
 
-            struct CounterIter: Iterator {
-                cur: i32;
-                end: i32;
+            struct CounterIter<T>: Iterator with [T == i32] {
+                cur: T;
+                end: T;
             };
 
-            acts for CounterIter {
-                type Item = i32;
-
-                def next(self mut, out: &mut i32) -> bool {
+            acts for CounterIter<T is Item> with [T == i32] {
+                def next(self mut, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -907,29 +895,26 @@ namespace {
                 }
             };
 
-            struct Counter: IterSourceMove {
-                start: i32;
-                end: i32;
+            struct Counter<T>: IterSourceMove with [T == i32] {
+                start: T;
+                end: T;
             };
 
-            acts for Counter {
-                type Item = i32;
-                type Iter = CounterIter;
-
-                def into_iter(self move) -> CounterIter {
-                    return CounterIter{ cur: self.start, end: self.end };
+            acts for Counter<T is Item, CounterIter<T> is Iter> with [T == i32] {
+                def into_iter(self move) -> CounterIter<T> {
+                    return CounterIter<T>{ cur: self.start, end: self.end };
                 }
             };
 
             def main() -> i32 {
-                set inferred = loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                set inferred = loop (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
                 };
                 let inferred_value: i32 = inferred ?? 0;
 
-                let a: i32? = loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                let a: i32? = loop (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -1756,15 +1741,13 @@ namespace {
                 require next(it: &mut Self, out: &mut Self::Item) -> bool;
             };
 
-            struct CounterIter: Iterator {
-                cur: i32;
-                end: i32;
+            struct CounterIter<T>: Iterator with [T == i32] {
+                cur: T;
+                end: T;
             };
 
-            acts for CounterIter {
-                type Item = i32;
-
-                def next(self mut, out: &mut i32) -> bool {
+            acts for CounterIter<T is Item> with [T == i32] {
+                def next(self mut, out: &mut T) -> bool {
                     if (self.cur >= self.end) {
                         return false;
                     }
@@ -1775,7 +1758,7 @@ namespace {
             };
 
             def main() -> i32 {
-                set mut it = CounterIter{ cur: 1i32, end: 3i32 };
+                set mut it = CounterIter<i32>{ cur: 1i32, end: 3i32 };
                 set mut a = 0i32;
                 set mut b = 0i32;
                 let ok_a: bool = it.next(&mut a);
@@ -1833,15 +1816,13 @@ namespace {
                 require into_iter(src: Self) -> Self::Iter;
             };
 
-            struct CounterIter: Iterator {
-                cur: i32;
-                end: i32;
+            struct CounterIter<T>: Iterator with [T == i32] {
+                cur: T;
+                end: T;
             };
 
-            acts for CounterIter {
-                type Item = i32;
-
-                def next(self mut, out: &mut i32) -> bool {
+            acts for CounterIter<T is Item> with [T == i32] {
+                def next(self mut, out: &mut T) -> bool {
                     if (self.cur >= self.end) {
                         return false;
                     }
@@ -1851,22 +1832,19 @@ namespace {
                 }
             };
 
-            struct Counter: IterSourceMove {
-                start: i32;
-                end: i32;
+            struct Counter<T>: IterSourceMove with [T == i32] {
+                start: T;
+                end: T;
             };
 
-            acts for Counter {
-                type Item = i32;
-                type Iter = CounterIter;
-
-                def into_iter(self move) -> CounterIter {
-                    return CounterIter{ cur: self.start, end: self.end };
+            acts for Counter<T is Item, CounterIter<T> is Iter> with [T == i32] {
+                def into_iter(self move) -> CounterIter<T> {
+                    return CounterIter<T>{ cur: self.start, end: self.end };
                 }
             };
 
             def main() -> i32 {
-                set mut it = Counter{ start: 1i32, end: 4i32 }.into_iter();
+                set mut it = Counter<i32>{ start: 1i32, end: 4i32 }.into_iter();
                 set mut a = 0i32;
                 set mut b = 0i32;
                 set mut c = 0i32;
@@ -1877,12 +1855,12 @@ namespace {
                 let ok_d: bool = it.next(&mut d);
 
                 set mut sum = 0i32;
-                loop (x in Counter{ start: 1i32, end: 4i32 }) {
+                loop (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     set sum = sum + x;
                 }
 
                 set mut sum_for = 0i32;
-                for (x in Counter{ start: 1i32, end: 4i32 }) {
+                for (x in Counter<i32>{ start: 1i32, end: 4i32 }) {
                     set sum_for = sum_for + x;
                 }
 
@@ -1910,6 +1888,63 @@ namespace {
         ok &= require_(sir.cap.ok, "sequence loop bridge source must pass SIR capability analysis");
         ok &= require_(sir.handle_verify_errors.empty(), "sequence loop bridge source must pass handle verification");
         ok &= require_(oir.gate_passed, "sequence loop bridge source must lower to valid OIR");
+        return ok;
+    }
+
+    static bool test_acts_header_witness_syntax_enforced() {
+        const std::string legacy_src = R"(
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
+            };
+
+            struct CounterIter: Iterator {
+                cur: i32;
+                end: i32;
+            };
+
+            acts for CounterIter {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
+                    return false;
+                }
+            };
+        )";
+
+        const std::string future_binder_src = R"(
+            proto IterSourceMove {
+                require type Item;
+                require type Iter;
+                require into_iter(src: Self) -> Self::Iter;
+            };
+
+            struct CounterIter<T> with [T == i32] {
+                value: T;
+            };
+
+            struct Counter<T>: IterSourceMove with [T == i32] {
+                value: T;
+            };
+
+            acts for Counter<CounterIter<T> is Iter, T is Item> with [T == i32] {
+                def into_iter(self move) -> CounterIter<T> {
+                    return CounterIter<T>{ value: self.value };
+                }
+            };
+        )";
+
+        auto legacy_prog = parse_program(legacy_src);
+        auto legacy_pres = run_passes(legacy_prog);
+        auto legacy_ty = run_tyck(legacy_prog, &legacy_pres.generic_prep);
+
+        auto future_prog = parse_program(future_binder_src);
+        (void)run_passes(future_prog);
+
+        bool ok = true;
+        ok &= require_(legacy_prog.bag.has_error(), "legacy acts body associated type syntax must be rejected");
+        ok &= require_(!legacy_ty.errors.empty(), "legacy acts body associated type syntax must produce tyck error");
+        ok &= require_(future_prog.bag.has_error(), "acts witness type must not reference future binders");
         return ok;
     }
 
@@ -2932,6 +2967,7 @@ int main() {
         {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
         {"iter_proto_default_acts_satisfaction_ok", test_iter_proto_default_acts_satisfaction_ok},
         {"core_iter_sequence_loop_bridge_ok", test_core_iter_sequence_loop_bridge_ok},
+        {"acts_header_witness_syntax_enforced", test_acts_header_witness_syntax_enforced},
         {"class_private_visibility_enforced", test_class_private_visibility_enforced},
         {"borrow_read_in_arithmetic_ok", test_borrow_read_in_arithmetic_ok},
         {"mut_borrow_write_through_assignment_ok", test_mut_borrow_write_through_assignment_ok},

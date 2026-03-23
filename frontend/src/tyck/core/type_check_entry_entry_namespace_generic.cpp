@@ -1457,6 +1457,31 @@ namespace parus::tyck {
             }
         }
 
+        if (old_s.acts_assoc_witness_count > 0) {
+            const auto& witnesses = ast_.acts_assoc_type_witness_decls();
+            const uint64_t begin = old_s.acts_assoc_witness_begin;
+            const uint64_t end = begin + old_s.acts_assoc_witness_count;
+            if (begin <= witnesses.size() && end <= witnesses.size()) {
+                std::vector<ast::ActsAssocTypeWitnessDecl> src_witnesses;
+                src_witnesses.reserve(old_s.acts_assoc_witness_count);
+                for (uint32_t i = 0; i < old_s.acts_assoc_witness_count; ++i) {
+                    src_witnesses.push_back(witnesses[old_s.acts_assoc_witness_begin + i]);
+                }
+                s.acts_assoc_witness_begin = static_cast<uint32_t>(ast_.acts_assoc_type_witness_decls().size());
+                s.acts_assoc_witness_count = old_s.acts_assoc_witness_count;
+                for (uint32_t i = 0; i < old_s.acts_assoc_witness_count; ++i) {
+                    auto w = src_witnesses[i];
+                    if (w.rhs_type != ty::kInvalidType) {
+                        w.rhs_type = substitute_generic_type_(w.rhs_type, subst);
+                    }
+                    ast_.add_acts_assoc_type_witness_decl(w);
+                }
+            } else {
+                s.acts_assoc_witness_begin = 0;
+                s.acts_assoc_witness_count = 0;
+            }
+        }
+
         if (old_s.stmt_count > 0) {
             const auto& kids = ast_.stmt_children();
             const uint64_t begin = old_s.stmt_begin;

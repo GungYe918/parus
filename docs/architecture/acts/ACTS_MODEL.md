@@ -24,6 +24,7 @@
 2. 연산자 의미는 runtime 동적 디스패치가 아니라 compile-time 해소로 결정한다.
 3. `acts` 선택은 lexical scope에서만 영향을 준다.
 4. default 동작은 항상 존재 가능하며, named acts는 선택적으로 덮어쓴다.
+5. associated type witness는 `acts` body가 아니라 `acts for ...` 헤더에 둔다.
 
 ---
 
@@ -52,6 +53,20 @@ acts FastMath for Vec2 {
   operator(+)(self, rhs: Vec2) -> Vec2 { ... }
 }
 ```
+
+`acts for` 헤더의 `<>`는 binder/witness layer다.
+
+```parus
+acts for Range<T is Item, iter::RangeIter<T> is Iter> with [T: Step] {
+  def into_iter(self move) -> iter::RangeIter<T> { ... }
+}
+```
+
+여기서:
+
+1. `T`는 generic binder다.
+2. `Item = T`, `Iter = iter::RangeIter<T>` witness를 헤더에서 준다.
+3. `with [T: Step]`는 binder `T`에 대한 제약이다.
 
 ---
 

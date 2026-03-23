@@ -283,6 +283,13 @@ namespace parus::ast {
         Span span{};
     };
 
+    struct ActsAssocTypeWitnessDecl {
+        std::string_view assoc_name{};
+        TypeNodeId rhs_type_node = k_invalid_type_node;
+        TypeId rhs_type = k_invalid_type;
+        Span span{};
+    };
+
     struct FStringPart {
         bool is_expr = false;
         std::string_view text{};
@@ -630,6 +637,8 @@ namespace parus::ast {
         bool acts_has_set_name = false;    // true: `acts Name for T`
         TypeId acts_target_type = k_invalid_type;
         TypeNodeId acts_target_type_node = k_invalid_type_node;
+        uint32_t acts_assoc_witness_begin = 0;
+        uint32_t acts_assoc_witness_count = 0;
 
         // ---- use ----
         UseKind use_kind = UseKind::kError;
@@ -731,6 +740,10 @@ namespace parus::ast {
             fn_constraint_decls_.push_back(c);
             return static_cast<uint32_t>(fn_constraint_decls_.size() - 1);
         }
+        uint32_t add_acts_assoc_type_witness_decl(const ActsAssocTypeWitnessDecl& w) {
+            acts_assoc_type_witness_decls_.push_back(w);
+            return static_cast<uint32_t>(acts_assoc_type_witness_decls_.size() - 1);
+        }
 
         uint32_t add_fstring_part(const FStringPart& p) {
             fstring_parts_.push_back(p);
@@ -819,6 +832,12 @@ namespace parus::ast {
         std::vector<GenericParamDecl>& generic_param_decls_mut() { return generic_param_decls_; }
         const std::vector<FnConstraintDecl>& fn_constraint_decls() const { return fn_constraint_decls_; }
         std::vector<FnConstraintDecl>& fn_constraint_decls_mut() { return fn_constraint_decls_; }
+        const std::vector<ActsAssocTypeWitnessDecl>& acts_assoc_type_witness_decls() const {
+            return acts_assoc_type_witness_decls_;
+        }
+        std::vector<ActsAssocTypeWitnessDecl>& acts_assoc_type_witness_decls_mut() {
+            return acts_assoc_type_witness_decls_;
+        }
 
         const std::vector<FStringPart>& fstring_parts() const { return fstring_parts_; }
         std::vector<FStringPart>& fstring_parts_mut() { return fstring_parts_; }
@@ -859,6 +878,7 @@ namespace parus::ast {
         std::vector<PathRef> path_refs_;
         std::vector<GenericParamDecl> generic_param_decls_;
         std::vector<FnConstraintDecl> fn_constraint_decls_;
+        std::vector<ActsAssocTypeWitnessDecl> acts_assoc_type_witness_decls_;
         std::vector<FStringPart> fstring_parts_;
         std::deque<std::string> owned_strings_;
         std::vector<std::string_view> path_segs_;

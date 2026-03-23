@@ -57,6 +57,8 @@ proto ProtoName [: BaseProto, ...] {
 2. `struct Name : ProtoA, ...`, `enum Name : ProtoA, ...`도 선언상 허용된다.
 3. 적용 가능한 proto는 effective required fn set과 required associated type set이 모두 충족되어야 한다.
 4. `struct/enum`도 default `acts for T`를 통해 함수 requirement와 associated type requirement를 충족할 수 있다.
+   * 함수 requirement는 default acts method가 맡는다.
+   * associated type requirement는 acts header witness(`<... is Assoc>`)가 맡는다.
 5. 시그니처 매칭은 `Self`와 `Self::Assoc`를 구현체 concrete 타입 + acts binding 기준으로 정규화해 비교한다.
 6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
 7. proto `provide` 멤버 접근/호출은 `->`만 사용한다(`v->id()`, `v->Proto.id()`, `v->CONST`).

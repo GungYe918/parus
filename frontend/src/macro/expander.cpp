@@ -857,6 +857,19 @@ namespace parus::macro {
                 if (sid >= ctx.ast.stmts().size()) return false;
                 ctx.ast.stmt_mut(sid).acts_target_type_node = acts_target_type_node;
 
+                const auto stmt_now_for_witness = ctx.ast.stmt(sid);
+                const uint64_t witness_begin = stmt_now_for_witness.acts_assoc_witness_begin;
+                const uint64_t witness_end = witness_begin + stmt_now_for_witness.acts_assoc_witness_count;
+                if (witness_begin <= ctx.ast.acts_assoc_type_witness_decls().size() &&
+                    witness_end <= ctx.ast.acts_assoc_type_witness_decls().size()) {
+                    auto& witnesses = ctx.ast.acts_assoc_type_witness_decls_mut();
+                    for (uint32_t i = 0; i < stmt_now_for_witness.acts_assoc_witness_count; ++i) {
+                        const auto wi = stmt_now_for_witness.acts_assoc_witness_begin + i;
+                        if (wi >= witnesses.size()) break;
+                        if (!expand_type_node(witnesses[wi].rhs_type_node, scope_depth, depth)) return false;
+                    }
+                }
+
                 auto var_acts_target_type_node = ctx.ast.stmt(sid).var_acts_target_type_node;
                 if (!expand_type_node(var_acts_target_type_node, scope_depth, depth)) return false;
                 if (sid >= ctx.ast.stmts().size()) return false;

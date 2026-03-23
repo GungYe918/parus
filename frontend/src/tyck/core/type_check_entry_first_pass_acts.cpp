@@ -3457,26 +3457,22 @@
         const ty::TypeId owner_type = canonicalize_acts_owner_type_(acts_decl.acts_target_type);
         if (owner_type == ty::kInvalidType) return;
 
-        const auto& kids = ast_.stmt_children();
-        const uint32_t begin = acts_decl.stmt_begin;
-        const uint32_t end = acts_decl.stmt_begin + acts_decl.stmt_count;
-        if (begin >= kids.size() || end > kids.size()) return;
+        const auto& witnesses = ast_.acts_assoc_type_witness_decls();
+        const uint64_t begin = acts_decl.acts_assoc_witness_begin;
+        const uint64_t end = begin + acts_decl.acts_assoc_witness_count;
+        if (begin > witnesses.size() || end > witnesses.size()) return;
 
-        for (uint32_t i = begin; i < end; ++i) {
-            const ast::StmtId sid = kids[i];
-            if (sid == ast::k_invalid_stmt) continue;
-            const auto& member = ast_.stmt(sid);
-            if (member.kind != ast::StmtKind::kAssocTypeDecl) continue;
-            if (member.assoc_type_role != ast::AssocTypeRole::kActsImpl) continue;
-            if (member.name.empty() || member.type == ty::kInvalidType) continue;
+        for (uint32_t i = 0; i < acts_decl.acts_assoc_witness_count; ++i) {
+            const auto& witness = witnesses[acts_decl.acts_assoc_witness_begin + i];
+            if (witness.assoc_name.empty() || witness.rhs_type == ty::kInvalidType) continue;
 
             acts_default_assoc_type_map_[owner_type]
-                [std::string(member.name)]
+                [std::string(witness.assoc_name)]
                 .push_back(ActsAssocTypeDecl{
-                    .assoc_sid = sid,
+                    .assoc_sid = ast::k_invalid_stmt,
                     .acts_decl_sid = acts_decl_sid,
                     .owner_type = owner_type,
-                    .bound_type = member.type,
+                    .bound_type = witness.rhs_type,
                     .from_named_set = acts_decl.acts_has_set_name,
                 });
         }

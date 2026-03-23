@@ -168,6 +168,11 @@ namespace parus::type {
                         s.var_acts_target_type = resolve_node(s.var_acts_target_type_node);
                     }
                 }
+                for (auto& w : ast.acts_assoc_type_witness_decls_mut()) {
+                    if (w.rhs_type_node != ast::k_invalid_type_node) {
+                        w.rhs_type = resolve_node(w.rhs_type_node);
+                    }
+                }
                 for (auto& p : ast.path_refs_mut()) {
                     if (p.type_node != ast::k_invalid_type_node) {
                         p.type = resolve_node(p.type_node);

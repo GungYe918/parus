@@ -228,6 +228,10 @@ namespace parus {
         //  acts 선언 파싱 (v0: acts A, acts for T, acts Name for T)
         ast::StmtId parse_decl_acts();
         ast::StmtId parse_decl_acts_operator(ast::TypeId owner_type, bool allow_operator);
+        ParsedType parse_decl_acts_owner_type(uint32_t& out_generic_begin,
+                                              uint32_t& out_generic_count,
+                                              uint32_t& out_witness_begin,
+                                              uint32_t& out_witness_count);
 
         // use구문 파싱
         ast::StmtId parse_decl_use();

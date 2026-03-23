@@ -748,42 +748,192 @@
         const uint32_t begin = s.stmt_begin;
         const uint32_t end = s.stmt_begin + s.stmt_count;
 
+        if (s.acts_assoc_witness_count > 0) {
+            std::unordered_set<std::string> seen_assoc_type_names{};
+            std::unordered_set<std::string> required_assoc_type_names{};
+            auto resolve_owner_decl_sid = [&]() -> ast::StmtId {
+                if (owner_type != ty::kInvalidType) {
+                    if (auto it = field_abi_meta_by_type_.find(owner_type); it != field_abi_meta_by_type_.end()) {
+                        return it->second.sid;
+                    }
+                    if (auto it = class_decl_by_type_.find(owner_type); it != class_decl_by_type_.end()) {
+                        return it->second;
+                    }
+                    if (auto it = enum_abi_meta_by_type_.find(owner_type); it != enum_abi_meta_by_type_.end()) {
+                        return it->second.sid;
+                    }
+                    if (auto it = enum_decl_by_type_.find(owner_type); it != enum_decl_by_type_.end()) {
+                        return it->second;
+                    }
+                }
+
+                if (s.acts_target_type_node == ast::k_invalid_type_node ||
+                    static_cast<size_t>(s.acts_target_type_node) >= ast_.type_nodes().size()) {
+                    return ast::k_invalid_stmt;
+                }
+
+                const auto& tn = ast_.type_node(s.acts_target_type_node);
+                if (tn.kind != ast::TypeNodeKind::kNamedPath || tn.path_count == 0) {
+                    return ast::k_invalid_stmt;
+                }
+
+                std::string owner_key = path_join_(tn.path_begin, tn.path_count);
+                const size_t owner_split = owner_key.rfind("::");
+                const std::string owner_leaf =
+                    (owner_split == std::string::npos) ? owner_key : owner_key.substr(owner_split + 2);
+                const bool rewritten_lookup = rewrite_imported_path_(owner_key).has_value();
+                if (auto rewritten = rewrite_imported_path_(owner_key)) {
+                    owner_key = *rewritten;
+                } else if (qualified_path_requires_import_(owner_key)) {
+                    return ast::k_invalid_stmt;
+                }
+
+                auto owner_sym = rewritten_lookup ? sym_.lookup(owner_key) : lookup_symbol_(owner_key);
+                if (!owner_sym.has_value()) owner_sym = lookup_symbol_(owner_key);
+                if (!owner_sym.has_value()) return ast::k_invalid_stmt;
+
+                const auto& ss = sym_.symbol(*owner_sym);
+                const ty::TypeId declared_t = canonicalize_acts_owner_type_(
+                    canonicalize_transparent_external_typedef_(ss.declared_type));
+                if (declared_t != ty::kInvalidType) {
+                    if (auto it = field_abi_meta_by_type_.find(declared_t); it != field_abi_meta_by_type_.end()) {
+                        return it->second.sid;
+                    }
+                    if (auto it = class_decl_by_type_.find(declared_t); it != class_decl_by_type_.end()) {
+                        return it->second;
+                    }
+                    if (auto it = enum_abi_meta_by_type_.find(declared_t); it != enum_abi_meta_by_type_.end()) {
+                        return it->second.sid;
+                    }
+                    if (auto it = enum_decl_by_type_.find(declared_t); it != enum_decl_by_type_.end()) {
+                        return it->second;
+                    }
+                }
+
+                for (ast::StmtId candidate_sid = 0;
+                     static_cast<size_t>(candidate_sid) < ast_.stmts().size();
+                     ++candidate_sid) {
+                    const auto& candidate = ast_.stmt(candidate_sid);
+                    if (candidate.span.file_id != s.span.file_id) continue;
+                    if (candidate.kind != ast::StmtKind::kFieldDecl &&
+                        candidate.kind != ast::StmtKind::kClassDecl &&
+                        candidate.kind != ast::StmtKind::kEnumDecl) {
+                        continue;
+                    }
+                    if (candidate.name != owner_leaf) continue;
+                    return candidate_sid;
+                }
+                return ast::k_invalid_stmt;
+            };
+            auto collect_required_assoc_names_from_proto = [&](ast::StmtId proto_sid) {
+                if (proto_sid == ast::k_invalid_stmt || static_cast<size_t>(proto_sid) >= ast_.stmts().size()) {
+                    return;
+                }
+                const auto& proto = ast_.stmt(proto_sid);
+                if (proto.kind != ast::StmtKind::kProtoDecl) return;
+                const auto& proto_kids = ast_.stmt_children();
+                const uint64_t pb = proto.stmt_begin;
+                const uint64_t pe = pb + proto.stmt_count;
+                if (!(pb <= proto_kids.size() && pe <= proto_kids.size())) return;
+                for (uint32_t i = 0; i < proto.stmt_count; ++i) {
+                    const auto msid = proto_kids[proto.stmt_begin + i];
+                    if (msid == ast::k_invalid_stmt ||
+                        static_cast<size_t>(msid) >= ast_.stmts().size()) {
+                        continue;
+                    }
+                    const auto& member = ast_.stmt(msid);
+                    if (member.kind != ast::StmtKind::kAssocTypeDecl ||
+                        member.assoc_type_role != ast::AssocTypeRole::kProtoRequire ||
+                        member.name.empty()) {
+                        continue;
+                    }
+                    required_assoc_type_names.insert(std::string(member.name));
+                }
+            };
+            if (owner_type != ty::kInvalidType) {
+                if (auto it = explicit_impl_proto_sids_by_type_.find(owner_type);
+                    it != explicit_impl_proto_sids_by_type_.end()) {
+                    for (const auto proto_sid : it->second) {
+                        collect_required_assoc_names_from_proto(proto_sid);
+                    }
+                }
+                if (required_assoc_type_names.empty()) {
+                    const ast::StmtId owner_decl_sid = resolve_owner_decl_sid();
+                    if (owner_decl_sid != ast::k_invalid_stmt &&
+                        static_cast<size_t>(owner_decl_sid) < ast_.stmts().size()) {
+                        const auto& owner_decl = ast_.stmt(owner_decl_sid);
+                        const auto& refs = ast_.path_refs();
+                        const uint64_t pb = owner_decl.decl_path_ref_begin;
+                        const uint64_t pe = pb + owner_decl.decl_path_ref_count;
+                        if (pb <= refs.size() && pe <= refs.size()) {
+                            for (uint32_t i = 0; i < owner_decl.decl_path_ref_count; ++i) {
+                                const auto& pr = refs[owner_decl.decl_path_ref_begin + i];
+                                if (auto proto_sid = resolve_proto_decl_from_path_ref_(pr, owner_decl.span)) {
+                                    collect_required_assoc_names_from_proto(*proto_sid);
+                                    continue;
+                                }
+                                if (auto proto_sid = resolve_proto_sid_for_constraint_(path_ref_display_(pr))) {
+                                    collect_required_assoc_names_from_proto(*proto_sid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            const auto& witnesses = ast_.acts_assoc_type_witness_decls();
+            const uint64_t wbegin = s.acts_assoc_witness_begin;
+            const uint64_t wend = wbegin + s.acts_assoc_witness_count;
+            if (!(wbegin <= witnesses.size() && wend <= witnesses.size())) {
+                diag_(diag::Code::kTypeErrorGeneric, s.span, "invalid acts associated witness slice");
+                err_(s.span, "invalid acts associated witness slice");
+            } else {
+                for (uint32_t i = 0; i < s.acts_assoc_witness_count; ++i) {
+                    const auto& witness = witnesses[s.acts_assoc_witness_begin + i];
+                    if (!s.acts_is_for) {
+                        diag_(diag::Code::kTypeErrorGeneric, witness.span,
+                              "acts-associated type witnesses are only allowed in acts-for declarations");
+                        err_(witness.span, "acts-associated type witnesses are only allowed in acts-for declarations");
+                        continue;
+                    }
+                    if (witness.assoc_name.empty()) {
+                        diag_(diag::Code::kTypeErrorGeneric, witness.span,
+                              "acts-associated type witness requires an associated type name");
+                        err_(witness.span, "acts-associated type witness requires an associated type name");
+                        continue;
+                    }
+                    if (witness.rhs_type == ty::kInvalidType || is_error_(witness.rhs_type)) {
+                        diag_(diag::Code::kTypeErrorGeneric, witness.span,
+                              "acts-associated type witness requires a valid type");
+                        err_(witness.span, "acts-associated type witness requires a valid type");
+                        continue;
+                    }
+                    if (!seen_assoc_type_names.insert(std::string(witness.assoc_name)).second) {
+                        diag_(diag::Code::kDuplicateDecl, witness.span, witness.assoc_name);
+                        err_(witness.span, "duplicate acts associated type witness");
+                        continue;
+                    }
+                    if (!required_assoc_type_names.empty() &&
+                        required_assoc_type_names.find(std::string(witness.assoc_name)) == required_assoc_type_names.end()) {
+                        std::ostringstream oss;
+                        oss << "unknown acts-associated type witness '" << witness.assoc_name
+                            << "' for acts owner " << types_.to_string(owner_type);
+                        diag_(diag::Code::kTypeErrorGeneric, witness.span, oss.str());
+                        err_(witness.span, "unknown acts-associated type witness");
+                    }
+                }
+            }
+        }
+
         // acts 멤버 함수의 상호 참조를 위해 먼저 시그니처를 predeclare한다.
         if (begin < kids.size() && end <= kids.size()) {
-            std::unordered_set<std::string> seen_assoc_type_names{};
             for (uint32_t i = begin; i < end; ++i) {
                 const auto sid = kids[i];
                 if (sid == ast::k_invalid_stmt) continue;
                 const auto& member = ast_.stmt(sid);
                 if (member.kind == ast::StmtKind::kAssocTypeDecl) {
-                    if (!s.acts_is_for) {
-                        diag_(diag::Code::kTypeErrorGeneric, member.span,
-                              "associated type bindings are only allowed in acts-for declarations");
-                        err_(member.span, "associated type bindings are only allowed in acts-for declarations");
-                        continue;
-                    }
-                    if (member.assoc_type_role != ast::AssocTypeRole::kActsImpl) {
-                        diag_(diag::Code::kTypeErrorGeneric, member.span,
-                              "acts associated type binding must use 'type Name = ...;'");
-                        err_(member.span, "invalid acts associated type binding");
-                        continue;
-                    }
-                    if (member.name.empty()) {
-                        diag_(diag::Code::kTypeErrorGeneric, member.span,
-                              "acts associated type binding requires a name");
-                        err_(member.span, "acts associated type binding requires a name");
-                        continue;
-                    }
-                    if (member.type == ty::kInvalidType || is_error_(member.type)) {
-                        diag_(diag::Code::kTypeErrorGeneric, member.span,
-                              "acts associated type binding requires a valid type");
-                        err_(member.span, "acts associated type binding requires a valid type");
-                        continue;
-                    }
-                    if (!seen_assoc_type_names.insert(std::string(member.name)).second) {
-                        diag_(diag::Code::kDuplicateDecl, member.span, member.name);
-                        err_(member.span, "duplicate acts associated type binding");
-                    }
+                    diag_(diag::Code::kTypeErrorGeneric, member.span,
+                          "acts-associated type witness must be written in the acts header using '<... is Assoc>'");
+                    err_(member.span, "legacy acts associated type binding syntax is removed");
                     continue;
                 }
                 if (member.kind != ast::StmtKind::kFnDecl) continue;

@@ -576,24 +576,21 @@ namespace parusc::p0 {
                 if (acts.kind != parus::ast::StmtKind::kActsDecl || !acts.acts_is_for) continue;
                 if (!acts_owner_matches(acts)) continue;
 
-                const uint64_t begin = acts.stmt_begin;
-                const uint64_t end = begin + acts.stmt_count;
-                if (!(begin <= kids.size() && end <= kids.size())) continue;
-
                 bool emitted_from_this_acts = false;
-                for (uint32_t i = acts.stmt_begin; i < acts.stmt_begin + acts.stmt_count; ++i) {
-                    const auto msid = kids[i];
-                    if (msid == parus::ast::k_invalid_stmt || static_cast<size_t>(msid) >= stmts.size()) continue;
-                    const auto& member = ast.stmt(msid);
-                    if (member.kind != parus::ast::StmtKind::kAssocTypeDecl) continue;
-                    if (member.assoc_type_role != parus::ast::AssocTypeRole::kActsImpl) continue;
-                    if (member.name.empty() || member.type == parus::ty::kInvalidType) continue;
+                const auto& witnesses = ast.acts_assoc_type_witness_decls();
+                const uint64_t wbegin = acts.acts_assoc_witness_begin;
+                const uint64_t wend = wbegin + acts.acts_assoc_witness_count;
+                if (!(wbegin <= witnesses.size() && wend <= witnesses.size())) continue;
 
-                    std::string body = std::string(member.name);
+                for (uint32_t i = 0; i < acts.acts_assoc_witness_count; ++i) {
+                    const auto& witness = witnesses[acts.acts_assoc_witness_begin + i];
+                    if (witness.assoc_name.empty() || witness.rhs_type == parus::ty::kInvalidType) continue;
+
+                    std::string body = std::string(witness.assoc_name);
                     body += ",";
-                    body += types.to_export_string(member.type);
+                    body += types.to_export_string(witness.rhs_type);
                     const auto semantic =
-                        parus::cimport::serialize_type_semantic_from_type(member.type, types);
+                        parus::cimport::serialize_type_semantic_from_type(witness.rhs_type, types);
                     if (!semantic.empty()) {
                         body += "@";
                         body += semantic;

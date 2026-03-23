@@ -185,6 +185,208 @@
         return ast_.add_stmt(s);
     }
 
+    Parser::ParsedType Parser::parse_decl_acts_owner_type(uint32_t& out_generic_begin,
+                                                          uint32_t& out_generic_count,
+                                                          uint32_t& out_witness_begin,
+                                                          uint32_t& out_witness_count) {
+        using K = syntax::TokenKind;
+
+        out_generic_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+        out_generic_count = 0;
+        out_witness_begin = static_cast<uint32_t>(ast_.acts_assoc_type_witness_decls().size());
+        out_witness_count = 0;
+
+        const auto is_contextual_is = [](const Token& t) {
+            return t.kind == K::kIdent && t.lexeme == "is";
+        };
+
+        auto extract_simple_binder_name = [&](const ParsedType& parsed) -> std::optional<std::string_view> {
+            if (parsed.node == ast::k_invalid_type_node ||
+                static_cast<size_t>(parsed.node) >= ast_.type_nodes().size()) {
+                return std::nullopt;
+            }
+            const auto& tn = ast_.type_node(parsed.node);
+            if (tn.kind != ast::TypeNodeKind::kNamedPath || tn.path_count != 1 || tn.generic_arg_count != 0) {
+                return std::nullopt;
+            }
+            const auto& segs = ast_.path_segs();
+            if (tn.path_begin >= segs.size()) return std::nullopt;
+            return segs[tn.path_begin];
+        };
+        auto is_builtin_like_name = [&](std::string_view name) -> bool {
+            ty::Builtin builtin{};
+            return ty::TypePool::builtin_from_name(name, builtin) ||
+                   ty::TypePool::c_builtin_from_name(name, builtin);
+        };
+        auto collect_unresolved_names_in_type = [&](auto&& self,
+                                                    ty::TypeId t,
+                                                    std::unordered_set<std::string>& out) -> void {
+            if (t == ty::kInvalidType || t >= types_.count()) return;
+            const auto& tt = types_.get(t);
+            switch (tt.kind) {
+                case ty::Kind::kNamedUser: {
+                    std::vector<std::string_view> path{};
+                    std::vector<ty::TypeId> args{};
+                    if (!types_.decompose_named_user(t, path, args) || path.empty()) return;
+                    for (const auto arg : args) {
+                        self(self, arg, out);
+                    }
+                    if (!args.empty() || path.size() != 1) return;
+                    ty::Builtin builtin{};
+                    if (ty::TypePool::builtin_from_name(path.front(), builtin) ||
+                        ty::TypePool::c_builtin_from_name(path.front(), builtin)) {
+                        return;
+                    }
+                    out.insert(std::string(path.front()));
+                    return;
+                }
+                case ty::Kind::kOptional:
+                case ty::Kind::kArray:
+                case ty::Kind::kBorrow:
+                case ty::Kind::kEscape:
+                case ty::Kind::kPtr:
+                    self(self, tt.elem, out);
+                    return;
+                case ty::Kind::kFn:
+                    self(self, tt.ret, out);
+                    for (uint32_t i = 0; i < tt.param_count; ++i) {
+                        self(self, types_.fn_param_at(t, i), out);
+                    }
+                    return;
+                default:
+                    return;
+            }
+        };
+
+        const bool starts_named_path = cursor_.at(K::kIdent) || cursor_.at(K::kColonColon);
+        if (!starts_named_path) {
+            return parse_type();
+        }
+
+        const Token first_tok = cursor_.peek();
+        const auto [path_begin, path_count] = parse_path_segments(cursor_.at(K::kColonColon));
+        if (path_count == 0) {
+            return parse_type();
+        }
+
+        std::vector<ParsedType> owner_args{};
+        Span last_span = cursor_.prev().span;
+
+        if (cursor_.eat(K::kLt)) {
+            std::unordered_set<std::string> seen_binders{};
+
+            while (!cursor_.at(K::kGt) && !cursor_.at(K::kEof) && !is_aborted()) {
+                const auto lhs = parse_type();
+                last_span = lhs.span.hi ? lhs.span : last_span;
+
+                bool has_assoc = false;
+                std::string_view assoc_name{};
+                Span entry_span = lhs.span;
+                if (is_contextual_is(cursor_.peek())) {
+                    const Token is_tok = cursor_.bump();
+                    has_assoc = true;
+                    const Token assoc_tok = cursor_.peek();
+                    if (assoc_tok.kind == K::kIdent) {
+                        assoc_name = assoc_tok.lexeme;
+                        entry_span = span_join(entry_span, assoc_tok.span);
+                        cursor_.bump();
+                    } else {
+                        diag_report(diag::Code::kTypeNameExpected, assoc_tok.span);
+                        entry_span = span_join(entry_span, is_tok.span);
+                    }
+                }
+
+                const auto binder_name = extract_simple_binder_name(lhs);
+                const bool introduces_binder =
+                    binder_name.has_value() &&
+                    !is_builtin_like_name(*binder_name) &&
+                    seen_binders.find(std::string(*binder_name)) == seen_binders.end();
+
+                if (binder_name.has_value() && introduces_binder) {
+                    ast::GenericParamDecl gp{};
+                    gp.name = *binder_name;
+                    gp.span = lhs.span;
+                    ast_.add_generic_param_decl(gp);
+                    ++out_generic_count;
+                    owner_args.push_back(lhs);
+                    seen_binders.insert(std::string(*binder_name));
+                } else if (!has_assoc) {
+                    if (binder_name.has_value()) {
+                        diag_report(diag::Code::kDuplicateDecl, lhs.span, *binder_name);
+                    } else {
+                        diag_report(diag::Code::kUnexpectedToken, lhs.span,
+                                    "acts owner generic entry must be a binder or a witness");
+                    }
+                }
+
+                if (has_assoc) {
+                    std::unordered_set<std::string> unresolved_names{};
+                    collect_unresolved_names_in_type(collect_unresolved_names_in_type, lhs.id, unresolved_names);
+                    for (const auto& unresolved_name : unresolved_names) {
+                        if (seen_binders.find(unresolved_name) != seen_binders.end()) continue;
+                        diag_report(diag::Code::kUnexpectedToken, lhs.span,
+                                    "acts witness type may only reference previously introduced binders");
+                        break;
+                    }
+                    ast::ActsAssocTypeWitnessDecl witness{};
+                    witness.assoc_name = assoc_name;
+                    witness.rhs_type_node = lhs.node;
+                    witness.rhs_type = lhs.id;
+                    witness.span = entry_span;
+                    ast_.add_acts_assoc_type_witness_decl(witness);
+                    ++out_witness_count;
+                }
+
+                if (cursor_.eat(K::kComma)) {
+                    if (cursor_.at(K::kGt)) break;
+                    continue;
+                }
+                break;
+            }
+
+            if (!cursor_.eat(K::kGt)) {
+                diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ">");
+                recover_to_delim(K::kGt, K::kKwWith, K::kLBrace);
+                cursor_.eat(K::kGt);
+            }
+            last_span = cursor_.prev().span;
+        }
+
+        ast::TypeNode n{};
+        n.kind = ast::TypeNodeKind::kNamedPath;
+        n.span = span_join(first_tok.span, last_span);
+        n.path_begin = path_begin;
+        n.path_count = path_count;
+        n.generic_arg_begin = static_cast<uint32_t>(ast_.type_node_children().size());
+        n.generic_arg_count = static_cast<uint32_t>(owner_args.size());
+        for (const auto& arg : owner_args) {
+            ast_.add_type_node_child(arg.node);
+        }
+
+        const auto& segs = ast_.path_segs();
+        if (owner_args.empty()) {
+            n.resolved_type = types_.intern_path(&segs[path_begin], path_count);
+        } else {
+            std::vector<ty::TypeId> arg_ids{};
+            arg_ids.reserve(owner_args.size());
+            for (const auto& arg : owner_args) {
+                arg_ids.push_back(arg.id);
+            }
+            n.resolved_type = types_.intern_named_path_with_args(
+                &segs[path_begin],
+                path_count,
+                arg_ids.data(),
+                static_cast<uint32_t>(arg_ids.size())
+            );
+        }
+
+        ParsedType out{};
+        out.node = ast_.add_type_node(n);
+        out.id = n.resolved_type;
+        out.span = n.span;
+        return out;
+    }
+
     /// @brief acts 선언(`acts A`, `acts for T`, `acts Name for T`)을 파싱한다.
     ast::StmtId Parser::parse_decl_acts() {
         using K = syntax::TokenKind;
@@ -216,6 +418,10 @@
         bool acts_has_set_name = false;
         ast::TypeId acts_target_type = ast::k_invalid_type;
         ast::TypeNodeId acts_target_type_node = ast::k_invalid_type_node;
+        uint32_t acts_generic_begin = 0;
+        uint32_t acts_generic_count = 0;
+        uint32_t acts_witness_begin = 0;
+        uint32_t acts_witness_count = 0;
 
         const auto is_for_token = [](const Token& t) -> bool {
             return t.kind == K::kKwFor || (t.kind == K::kIdent && t.lexeme == "for");
@@ -226,7 +432,12 @@
             // acts for T { ... }
             acts_is_for = true;
             cursor_.bump(); // for
-            auto ty = parse_type();
+            auto ty = parse_decl_acts_owner_type(
+                acts_generic_begin,
+                acts_generic_count,
+                acts_witness_begin,
+                acts_witness_count
+            );
             acts_target_type = ty.id;
             acts_target_type_node = ty.node;
             if (acts_target_type == ast::k_invalid_type) {
@@ -241,7 +452,12 @@
                 acts_is_for = true;
                 acts_has_set_name = true;
                 cursor_.bump(); // for
-                auto ty = parse_type();
+                auto ty = parse_decl_acts_owner_type(
+                    acts_generic_begin,
+                    acts_generic_count,
+                    acts_witness_begin,
+                    acts_witness_count
+                );
                 acts_target_type = ty.id;
                 acts_target_type_node = ty.node;
                 if (acts_target_type == ast::k_invalid_type) {
@@ -372,8 +588,10 @@
         s.acts_has_set_name = acts_has_set_name;
         s.acts_target_type = acts_target_type;
         s.acts_target_type_node = acts_target_type_node;
-        s.decl_generic_param_begin = 0;
-        s.decl_generic_param_count = 0;
+        s.acts_assoc_witness_begin = acts_witness_begin;
+        s.acts_assoc_witness_count = acts_witness_count;
+        s.decl_generic_param_begin = acts_generic_begin;
+        s.decl_generic_param_count = acts_generic_count;
         s.decl_constraint_begin = decl_constraint_begin;
         s.decl_constraint_count = decl_constraint_count;
         return ast_.add_stmt(s);
