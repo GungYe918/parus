@@ -1944,12 +1944,101 @@ namespace parus::oir {
             return out;
         }
 
+        bool is_hex_digit_(char c) {
+            return (c >= '0' && c <= '9') ||
+                   (c >= 'a' && c <= 'f') ||
+                   (c >= 'A' && c <= 'F');
+        }
+
+        uint8_t hex_digit_value_(char c) {
+            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
+            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
+            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(10 + (c - 'A'));
+            return 0;
+        }
+
+        bool is_valid_unicode_scalar_(uint32_t cp) {
+            return cp <= 0x10FFFFu && !(cp >= 0xD800u && cp <= 0xDFFFu);
+        }
+
+        std::optional<uint32_t> parse_unicode_escape_code_(std::string_view body) {
+            if (body.size() < 5 || body[0] != '\\' || body[1] != 'u' || body[2] != '{' || body.back() != '}') {
+                return std::nullopt;
+            }
+            const std::string_view hex = body.substr(3, body.size() - 4);
+            if (hex.empty()) return std::nullopt;
+
+            uint32_t cp = 0;
+            for (const char ch : hex) {
+                if (!is_hex_digit_(ch)) return std::nullopt;
+                const uint32_t digit = static_cast<uint32_t>(hex_digit_value_(ch));
+                if (cp > 0x10FFFFu / 16u) return std::nullopt;
+                cp = cp * 16u + digit;
+                if (cp > 0x10FFFFu) return std::nullopt;
+            }
+            if (!is_valid_unicode_scalar_(cp)) return std::nullopt;
+            return cp;
+        }
+
+        std::optional<uint32_t> decode_single_utf8_codepoint_(std::string_view body) {
+            if (body.empty()) return std::nullopt;
+            const auto b0 = static_cast<unsigned char>(body[0]);
+            if (b0 < 0x80u) {
+                if (body.size() != 1) return std::nullopt;
+                return static_cast<uint32_t>(b0);
+            }
+
+            auto cont = [&](size_t idx) -> std::optional<uint32_t> {
+                if (idx >= body.size()) return std::nullopt;
+                const auto bx = static_cast<unsigned char>(body[idx]);
+                if ((bx & 0xC0u) != 0x80u) return std::nullopt;
+                return static_cast<uint32_t>(bx & 0x3Fu);
+            };
+
+            if ((b0 & 0xE0u) == 0xC0u) {
+                if (body.size() != 2) return std::nullopt;
+                const auto c1 = cont(1);
+                if (!c1.has_value()) return std::nullopt;
+                const uint32_t cp = (static_cast<uint32_t>(b0 & 0x1Fu) << 6u) | *c1;
+                if (cp < 0x80u || !is_valid_unicode_scalar_(cp)) return std::nullopt;
+                return cp;
+            }
+            if ((b0 & 0xF0u) == 0xE0u) {
+                if (body.size() != 3) return std::nullopt;
+                const auto c1 = cont(1);
+                const auto c2 = cont(2);
+                if (!c1.has_value() || !c2.has_value()) return std::nullopt;
+                const uint32_t cp =
+                    (static_cast<uint32_t>(b0 & 0x0Fu) << 12u) |
+                    (*c1 << 6u) |
+                    *c2;
+                if (cp < 0x800u || !is_valid_unicode_scalar_(cp)) return std::nullopt;
+                return cp;
+            }
+            if ((b0 & 0xF8u) == 0xF0u) {
+                if (body.size() != 4) return std::nullopt;
+                const auto c1 = cont(1);
+                const auto c2 = cont(2);
+                const auto c3 = cont(3);
+                if (!c1.has_value() || !c2.has_value() || !c3.has_value()) return std::nullopt;
+                const uint32_t cp =
+                    (static_cast<uint32_t>(b0 & 0x07u) << 18u) |
+                    (*c1 << 12u) |
+                    (*c2 << 6u) |
+                    *c3;
+                if (cp < 0x10000u || !is_valid_unicode_scalar_(cp)) return std::nullopt;
+                return cp;
+            }
+            return std::nullopt;
+        }
+
         std::optional<uint32_t> parse_char_literal_code_(std::string_view text) {
             if (text.size() < 3 || text.front() != '\'' || text.back() != '\'') return std::nullopt;
             std::string_view body = text.substr(1, text.size() - 2);
             if (body.empty()) return std::nullopt;
-            if (body.size() == 1) return static_cast<uint32_t>(static_cast<unsigned char>(body[0]));
-            if (body[0] != '\\') return std::nullopt;
+            if (body[0] != '\\') {
+                return decode_single_utf8_codepoint_(body);
+            }
 
             if (body.size() == 2) {
                 switch (body[1]) {
@@ -1962,20 +2051,10 @@ namespace parus::oir {
                     default: return std::nullopt;
                 }
             }
+            if (auto cp = parse_unicode_escape_code_(body); cp.has_value()) {
+                return cp;
+            }
             return std::nullopt;
-        }
-
-        bool is_hex_digit_(char c) {
-            return (c >= '0' && c <= '9') ||
-                   (c >= 'a' && c <= 'f') ||
-                   (c >= 'A' && c <= 'F');
-        }
-
-        uint8_t hex_digit_value_(char c) {
-            if (c >= '0' && c <= '9') return static_cast<uint8_t>(c - '0');
-            if (c >= 'a' && c <= 'f') return static_cast<uint8_t>(10 + (c - 'a'));
-            if (c >= 'A' && c <= 'F') return static_cast<uint8_t>(10 + (c - 'A'));
-            return 0;
         }
 
         std::string decode_escaped_string_body_(std::string_view body) {

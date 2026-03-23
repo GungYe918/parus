@@ -487,8 +487,15 @@ namespace {
                 return 0i32;
             }
 
+            def sinku(v: char) -> i32 {
+                if (v == 'é') {
+                    return 2i32;
+                }
+                return 0i32;
+            }
+
             def main() -> i32 {
-                return sinkf(1.25f64) + sinkc('A');
+                return sinkf(1.25f64) + sinkc('A') + sinku('é');
             }
         )";
 
