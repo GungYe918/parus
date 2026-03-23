@@ -15,8 +15,6 @@
 
 ```parus
 proto ProtoName [: BaseProto, ...] {
-  require struct Path;
-  require acts IOOps;
   require type Item;
   require hash(v: Self) -> u64;
   provide def id() -> i32 { return 0i32; }
@@ -28,21 +26,21 @@ proto ProtoName [: BaseProto, ...] {
 2. `proto ... with require(...)` 꼬리 문법은 제거되었다.
 3. `proto A: B, C`에서 `:` 뒤 대상은 `proto`만 허용한다.
 4. `require` 항목에는 `proto(...)`를 허용하지 않는다.
-5. `require type Name;`는 required associated type slot을 선언한다.
-6. `require` 함수 시그니처는 `def` 없이 `require foo(...) -> T;` 형태를 사용한다.
-7. `provide def`는 본문이 필수다.
-8. `provide const`만 변수 제공으로 허용한다.
-9. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
-10. proto `require/provide` 함수에서 `self` 리시버 파라미터는 금지한다.
+5. concrete shared dependency는 `import`로 표현하고, proto member로 선언하지 않는다.
+6. `require type Name;`는 required associated type slot을 선언한다.
+7. `require` 함수 시그니처는 `def` 없이 `require foo(...) -> T;` 형태를 사용한다.
+8. `provide def`는 본문이 필수다.
+9. `provide const`만 변수 제공으로 허용한다.
+10. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
+11. proto `require/provide` 함수에서 `self` 리시버 파라미터는 금지한다.
 
 ## 19.3 require/provide 항목 의미론
 
-1. `require struct/enum/class/actor/acts Path;`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
-2. `require type Name;`는 구현체가 채워야 하는 associated type을 선언한다.
-3. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
-4. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
-5. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
-6. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
+1. `require type Name;`는 구현체가 채워야 하는 associated type을 선언한다.
+2. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
+3. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
+4. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
+5. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
 
 ## 19.4 상속/클로저 규칙
 
@@ -82,11 +80,11 @@ def main() -> i32 {
 }
 ```
 
-## 19.6 require 타깃 심볼 가시성
+## 19.6 concrete dependency와 proto slot
 
-1. 같은 파일 선언은 허용한다.
-2. 같은 모듈 타 파일 선언은 `export`된 심볼만 허용한다.
-3. 모듈 밖 선언은 `import/alias`로 반입된 경로 + `export`된 심볼만 허용한다.
+1. concrete shared dependency는 proto member가 아니라 ordinary `import`로 반입한다.
+2. implementation-chosen nominal slot은 `require type Name;`로 선언한다.
+3. `require struct/enum/class/actor/acts Path;` 문법은 제거되었다.
 
 ## 19.7 제네릭 결합 규칙 (v2)
 
@@ -151,8 +149,8 @@ primitive family classifier는 `core::constraints/proto.pr`의 builtin `use Foo;
 
 ## 19.9 의존 순환 금지
 
-1. `type -> proto`, `proto -> proto`, `proto -> type/acts`, `acts -> owner type` 에지를 합친 그래프에서 순환은 금지한다.
-2. 직접/간접 순환(`type <-> proto`, `proto <-> proto`, `proto -> acts -> type -> proto`)은 모두 hard error다.
+1. `type -> proto`, `proto -> proto`, `acts -> owner type` 에지를 합친 그래프에서 순환은 금지한다.
+2. 직접/간접 순환(`type <-> proto`, `proto <-> proto`, `proto -> proto -> type`)은 모두 hard error다.
 3. 진단은 `ProtoDependencyCycle`을 사용한다.
 
 ## 19.10 진단 코드

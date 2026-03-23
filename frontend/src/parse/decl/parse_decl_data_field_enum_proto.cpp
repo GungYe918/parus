@@ -749,34 +749,24 @@ namespace parus {
                     continue;
                 }
 
-                const auto proto_require_kind_name = [&](ast::ProtoRequireKind req_kind) -> const char* {
-                    switch (req_kind) {
-                        case ast::ProtoRequireKind::kStruct: return "struct";
-                        case ast::ProtoRequireKind::kEnum: return "enum";
-                        case ast::ProtoRequireKind::kClass: return "class";
-                        case ast::ProtoRequireKind::kActor: return "actor";
-                        case ast::ProtoRequireKind::kActs: return "acts";
-                        case ast::ProtoRequireKind::kNone: break;
-                    }
-                    return "require";
-                };
+                const Token next = cursor_.peek();
+                if (next.kind == K::kKwField || next.kind == K::kKwEnum ||
+                    next.kind == K::kKwClass || next.kind == K::kKwActor ||
+                    next.kind == K::kKwActs) {
+                    const Token kind_tok = cursor_.bump();
+                    diag_report(
+                        diag::Code::kUnexpectedToken,
+                        kind_tok.span,
+                        "proto kind-require is removed; use import for concrete dependencies or 'require type Foo;' for implementation-chosen slots"
+                    );
 
-                const auto parse_require_kind_item = [&](ast::ProtoRequireKind req_kind) -> ast::StmtId {
                     const bool saw_legacy_lparen = cursor_.at(K::kLParen);
-                    if (saw_legacy_lparen) {
-                        const Token legacy_lparen = cursor_.bump();
-                        const std::string replacement = std::string("proto require kind items now use decl-like syntax: require ") +
-                                                        proto_require_kind_name(req_kind) + " Foo;";
-                        diag_report(diag::Code::kUnexpectedToken, legacy_lparen.span, replacement);
-                    }
+                    if (saw_legacy_lparen) cursor_.bump();
 
-                    ast::PathRef pr{};
-                    bool path_ok = true;
-                    if (cursor_.at(K::kRParen) || cursor_.at(K::kSemicolon) || cursor_.at(K::kEof)) {
-                        path_ok = false;
-                        diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span, "type path");
-                    } else {
-                        path_ok = parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true);
+                    if (!cursor_.at(K::kRParen) && !cursor_.at(K::kSemicolon) &&
+                        !cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
+                        ast::PathRef ignored{};
+                        (void)parse_type_path_ref(ignored, /*allow_leading_coloncolon=*/true);
                     }
 
                     if (cursor_.at(K::kRParen)) {
@@ -784,54 +774,22 @@ namespace parus {
                         diag_report(
                             diag::Code::kUnexpectedToken,
                             legacy_rparen.span,
-                            "remove ')' from proto require kind item; use decl-like syntax"
+                            "remove ')' from removed proto kind-require syntax"
                         );
-                    } else if (saw_legacy_lparen && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kRBrace) &&
-                               !cursor_.at(K::kEof)) {
+                    } else if (saw_legacy_lparen && !cursor_.at(K::kSemicolon) &&
+                               !cursor_.at(K::kRBrace) && !cursor_.at(K::kEof)) {
                         recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
                         if (cursor_.at(K::kRParen)) {
                             const Token legacy_rparen = cursor_.bump();
                             diag_report(
                                 diag::Code::kUnexpectedToken,
                                 legacy_rparen.span,
-                                "remove ')' from proto require kind item; use decl-like syntax"
+                                "remove ')' from removed proto kind-require syntax"
                             );
                         }
                     }
 
-                    Span end_sp = req_tok.span;
-                    if (path_ok) {
-                        end_sp = pr.span;
-                    }
-                    end_sp = stmt_consume_semicolon_or_recover(end_sp);
-
-                    ast::Stmt m{};
-                    m.kind = ast::StmtKind::kRequire;
-                    m.span = span_join(req_tok.span, end_sp);
-                    m.proto_require_kind = req_kind;
-                    if (path_ok) {
-                        m.proto_req_path_begin = pr.path_begin;
-                        m.proto_req_path_count = pr.path_count;
-                    }
-                    return ast_.add_stmt(m);
-                };
-
-                const Token next = cursor_.peek();
-                if (next.kind == K::kKwField || next.kind == K::kKwEnum ||
-                    next.kind == K::kKwClass || next.kind == K::kKwActor ||
-                    next.kind == K::kKwActs) {
-                    ast::ProtoRequireKind req_kind = ast::ProtoRequireKind::kNone;
-                    switch (next.kind) {
-                        case K::kKwField: req_kind = ast::ProtoRequireKind::kStruct; break;
-                        case K::kKwEnum: req_kind = ast::ProtoRequireKind::kEnum; break;
-                        case K::kKwClass: req_kind = ast::ProtoRequireKind::kClass; break;
-                        case K::kKwActor: req_kind = ast::ProtoRequireKind::kActor; break;
-                        case K::kKwActs: req_kind = ast::ProtoRequireKind::kActs; break;
-                        default: break;
-                    }
-                    cursor_.bump(); // kind keyword
-                    const ast::StmtId msid = parse_require_kind_item(req_kind);
-                    if (msid != ast::k_invalid_stmt) members.push_back(msid);
+                    (void)stmt_consume_semicolon_or_recover(kind_tok.span);
                     continue;
                 }
 

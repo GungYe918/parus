@@ -1,18 +1,11 @@
 proto P {
-  require id(self) -> i32;
   require class MissingType;
 };
 
 class A: P {
-  id_value: i32;
   init() = default;
-
-  def id(self) -> i32 {
-    return 0i32;
-  }
 };
 
 def main() -> i32 {
-  set a = A();
-  return a.id();
+  return 0i32;
 }

@@ -1521,121 +1521,12 @@
         bool emit_unsatisfied_diag,
         bool emit_shape_diag
     ) {
-        (void)owner_type; // v1: reserved for Self-aware require evaluation.
+        (void)owner_type;
+        (void)emit_unsatisfied_diag;
+        (void)emit_shape_diag;
         if (proto_sid == ast::k_invalid_stmt || (size_t)proto_sid >= ast_.stmts().size()) return true;
         const auto& ps = ast_.stmt(proto_sid);
         if (ps.kind != ast::StmtKind::kProtoDecl) return true;
-
-        auto emit_req_failure = [&](Span sp, const std::string& msg) {
-            if (emit_shape_diag) {
-                diag_(diag::Code::kTypeErrorGeneric, sp, msg);
-                err_(sp, msg);
-            }
-            if (emit_unsatisfied_diag) {
-                diag_(diag::Code::kProtoConstraintUnsatisfied, apply_span, std::string(ps.name));
-                err_(apply_span, msg);
-            }
-        };
-
-        const std::string current_bundle = current_bundle_name_();
-        auto symbol_visible_from_use = [&](const sema::Symbol& sym_obj) -> bool {
-            if (sym_obj.is_external) return sym_obj.is_export;
-
-            if (apply_span.file_id != 0 &&
-                sym_obj.decl_file_id != 0 &&
-                sym_obj.decl_file_id != apply_span.file_id &&
-                !sym_obj.is_export) {
-                return false;
-            }
-
-            if (!current_bundle.empty() &&
-                !sym_obj.decl_bundle_name.empty() &&
-                sym_obj.decl_bundle_name != current_bundle &&
-                !sym_obj.is_export) {
-                return false;
-            }
-            return true;
-        };
-
-        auto req_kind_matches = [&](ast::ProtoRequireKind req_kind, const sema::Symbol& sym_obj) -> bool {
-            switch (req_kind) {
-                case ast::ProtoRequireKind::kStruct:
-                    return sym_obj.kind == sema::SymbolKind::kField;
-
-                case ast::ProtoRequireKind::kEnum:
-                    return sym_obj.kind == sema::SymbolKind::kType &&
-                        enum_decl_by_name_.find(sym_obj.name) != enum_decl_by_name_.end();
-
-                case ast::ProtoRequireKind::kClass:
-                    return sym_obj.kind == sema::SymbolKind::kType &&
-                        class_decl_by_name_.find(sym_obj.name) != class_decl_by_name_.end();
-
-                case ast::ProtoRequireKind::kActor:
-                    return sym_obj.kind == sema::SymbolKind::kType &&
-                        actor_decl_by_name_.find(sym_obj.name) != actor_decl_by_name_.end();
-
-                case ast::ProtoRequireKind::kActs:
-                    return sym_obj.kind == sema::SymbolKind::kAct;
-
-                case ast::ProtoRequireKind::kNone:
-                    return true;
-            }
-            return true;
-        };
-
-        auto req_kind_name = [&](ast::ProtoRequireKind req_kind) -> const char* {
-            switch (req_kind) {
-                case ast::ProtoRequireKind::kStruct: return "struct";
-                case ast::ProtoRequireKind::kEnum: return "enum";
-                case ast::ProtoRequireKind::kClass: return "class";
-                case ast::ProtoRequireKind::kActor: return "actor";
-                case ast::ProtoRequireKind::kActs: return "acts";
-                case ast::ProtoRequireKind::kNone: return "require";
-            }
-            return "require";
-        };
-
-        auto evaluate_req_item = [&](const ast::Stmt& req_item) -> bool {
-            if (req_item.proto_require_kind == ast::ProtoRequireKind::kNone) {
-                return true;
-            }
-            const std::string raw_path = path_join_(req_item.proto_req_path_begin, req_item.proto_req_path_count);
-            if (raw_path.empty()) {
-                emit_req_failure(req_item.span, "proto require target path is missing");
-                return false;
-            }
-
-            std::string lookup = raw_path;
-            const bool lookup_rewritten = rewrite_imported_path_(lookup).has_value();
-            if (auto rewritten = rewrite_imported_path_(lookup)) {
-                lookup = *rewritten;
-            }
-
-            auto sym_sid = lookup_rewritten ? sym_.lookup(lookup) : lookup_symbol_(lookup);
-            if (!sym_sid.has_value()) {
-                const std::string msg = std::string("proto require target not found: ") + raw_path;
-                emit_req_failure(req_item.span, msg);
-                return false;
-            }
-
-            const auto& sym_obj = sym_.symbol(*sym_sid);
-            if (!symbol_visible_from_use(sym_obj)) {
-                const std::string msg = std::string("proto require target is not visible from this use-site: ") + raw_path;
-                emit_req_failure(req_item.span, msg);
-                return false;
-            }
-
-            if (!req_kind_matches(req_item.proto_require_kind, sym_obj)) {
-                std::string msg = "proto require kind mismatch: expected ";
-                msg += req_kind_name(req_item.proto_require_kind);
-                msg += ", got symbol '";
-                msg += sym_obj.name;
-                msg += "'";
-                emit_req_failure(req_item.span, msg);
-                return false;
-            }
-            return true;
-        };
 
         auto visit_proto = [&](auto&& self, ast::StmtId cur_sid, std::unordered_set<ast::StmtId>& visiting) -> bool {
             if (cur_sid == ast::k_invalid_stmt || (size_t)cur_sid >= ast_.stmts().size()) return true;
@@ -1650,21 +1541,6 @@
                 for (uint32_t i = ib; i < ie; ++i) {
                     if (auto base_sid = resolve_proto_decl_from_path_ref_(refs[i], apply_span)) {
                         if (!self(self, *base_sid, visiting)) return false;
-                    }
-                }
-            }
-
-            const auto& kids = ast_.stmt_children();
-            const uint32_t mb = cur.stmt_begin;
-            const uint32_t me = cur.stmt_begin + cur.stmt_count;
-            if (mb <= kids.size() && me <= kids.size()) {
-                for (uint32_t i = mb; i < me; ++i) {
-                    const ast::StmtId msid = kids[i];
-                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                    const auto& m = ast_.stmt(msid);
-                    if (m.kind == ast::StmtKind::kRequire &&
-                        m.proto_require_kind != ast::ProtoRequireKind::kNone) {
-                        if (!evaluate_req_item(m)) return false;
                     }
                 }
             }
@@ -1796,14 +1672,9 @@
                 }
 
                 if (m.kind == ast::StmtKind::kRequire) {
-                    if (m.proto_require_kind == ast::ProtoRequireKind::kNone) {
-                        diag_(diag::Code::kUnexpectedToken, m.span,
-                              "require(expr) statement is not allowed in proto body");
-                        err_(m.span, "proto body requires typed require item");
-                    } else if (m.proto_req_path_count == 0) {
-                        diag_(diag::Code::kUnexpectedToken, m.span, "require target path");
-                        err_(m.span, "proto require target path is missing");
-                    }
+                    diag_(diag::Code::kUnexpectedToken, m.span,
+                          "proto kind-require is removed; use import or 'require type'");
+                    err_(m.span, "proto kind-require is removed");
                     continue;
                 }
 

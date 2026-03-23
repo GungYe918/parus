@@ -1819,18 +1819,16 @@ namespace {
     /// @brief proto provide const(struct) 접근(v->vx).x가 0이 아닌 실제 필드값으로 lowering되는지 검사한다.
     static bool test_proto_provide_const_struct_arrow_value_() {
         const std::string src = R"(
-            proto Equatable {
-                require struct Vec2;
-
-                provide const vx: Vec2 = Vec2 {
-                    x: 42i32, y: 42i32
-                };
-            };
-
             struct Vec2 {
                 x: i32;
                 y: i32;
             }
+
+            proto Equatable {
+                provide const vx: Vec2 = Vec2 {
+                    x: 42i32, y: 42i32
+                };
+            };
 
             struct Vec3: Equatable {
             };

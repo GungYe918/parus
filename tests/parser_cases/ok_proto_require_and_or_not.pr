@@ -1,5 +1,4 @@
 proto BoolReq {
-  require class Anchor;
   provide def f() -> i32 {
     return 1i32;
   }

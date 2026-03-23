@@ -1,5 +1,4 @@
 proto P {
-  require class Anchor;
   provide def id() -> i32 {
     return 1i32;
   }

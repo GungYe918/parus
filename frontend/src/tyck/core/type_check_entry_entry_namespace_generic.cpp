@@ -379,72 +379,6 @@ namespace parus::tyck {
                 return ast::k_invalid_stmt;
             };
 
-            std::unordered_map<std::string, ast::StmtId> acts_decl_by_name{};
-            acts_decl_by_name.reserve(acts_qualified_name_by_stmt_.size());
-            for (const auto& kv : acts_qualified_name_by_stmt_) {
-                acts_decl_by_name[kv.second] = kv.first;
-            }
-
-            auto resolve_decl_sid_from_require_target = [&](const ast::Stmt& req_item) -> ast::StmtId {
-                if (req_item.proto_require_kind == ast::ProtoRequireKind::kNone) return ast::k_invalid_stmt;
-                const std::string raw_path = path_join_(req_item.proto_req_path_begin, req_item.proto_req_path_count);
-                if (raw_path.empty()) return ast::k_invalid_stmt;
-
-                std::string lookup = raw_path;
-                const bool lookup_rewritten = rewrite_imported_path_(lookup).has_value();
-                if (auto rewritten = rewrite_imported_path_(lookup)) {
-                    lookup = *rewritten;
-                }
-
-                auto sym_sid = lookup_rewritten ? sym_.lookup(lookup) : lookup_symbol_(lookup);
-                if (!sym_sid.has_value()) return ast::k_invalid_stmt;
-                const auto& sym_obj = sym_.symbol(*sym_sid);
-
-                switch (req_item.proto_require_kind) {
-                    case ast::ProtoRequireKind::kStruct:
-                        if (sym_obj.kind == sema::SymbolKind::kField) {
-                            return resolve_decl_sid_from_type(sym_obj.declared_type);
-                        }
-                        break;
-
-                    case ast::ProtoRequireKind::kEnum:
-                        if (sym_obj.kind == sema::SymbolKind::kType) {
-                            if (auto it = enum_decl_by_name_.find(sym_obj.name); it != enum_decl_by_name_.end()) {
-                                return it->second;
-                            }
-                        }
-                        break;
-
-                    case ast::ProtoRequireKind::kClass:
-                        if (sym_obj.kind == sema::SymbolKind::kType) {
-                            if (auto it = class_decl_by_name_.find(sym_obj.name); it != class_decl_by_name_.end()) {
-                                return it->second;
-                            }
-                        }
-                        break;
-
-                    case ast::ProtoRequireKind::kActor:
-                        if (sym_obj.kind == sema::SymbolKind::kType) {
-                            if (auto it = actor_decl_by_name_.find(sym_obj.name); it != actor_decl_by_name_.end()) {
-                                return it->second;
-                            }
-                        }
-                        break;
-
-                    case ast::ProtoRequireKind::kActs:
-                        if (sym_obj.kind == sema::SymbolKind::kAct) {
-                            if (auto it = acts_decl_by_name.find(sym_obj.name); it != acts_decl_by_name.end()) {
-                                return it->second;
-                            }
-                        }
-                        break;
-
-                    case ast::ProtoRequireKind::kNone:
-                        break;
-                }
-                return ast::k_invalid_stmt;
-            };
-
             auto resolve_proto_sid_no_diag = [&](const ast::PathRef& pr) -> std::optional<ast::StmtId> {
                 std::string key = path_join_(pr.path_begin, pr.path_count);
                 if (key.empty()) return std::nullopt;
@@ -483,24 +417,6 @@ namespace parus::tyck {
                         }
                     }
 
-                    const auto& kids = ast_.stmt_children();
-                    const uint64_t mb = s.stmt_begin;
-                    const uint64_t me = mb + s.stmt_count;
-                    if (mb <= kids.size() && me <= kids.size()) {
-                        for (uint32_t i = s.stmt_begin; i < s.stmt_begin + s.stmt_count; ++i) {
-                            const ast::StmtId msid = kids[i];
-                            if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
-                            const auto& m = ast_.stmt(msid);
-                            if (m.kind != ast::StmtKind::kRequire ||
-                                m.proto_require_kind == ast::ProtoRequireKind::kNone) {
-                                continue;
-                            }
-                            const ast::StmtId target_sid = resolve_decl_sid_from_require_target(m);
-                            if (target_sid != ast::k_invalid_stmt) {
-                                add_edge(sid, target_sid);
-                            }
-                        }
-                    }
                     continue;
                 }
 
