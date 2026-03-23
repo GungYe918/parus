@@ -1826,6 +1826,108 @@ namespace {
         return ok;
     }
 
+    static bool test_core_convert_surface_ok() {
+        const std::string src = R"(
+            proto Into<T> {
+                require into(v: Self) -> T;
+            };
+
+            proto AsRef<T> {
+                require as_ref(v: &Self) -> &T;
+            };
+
+            proto AsMut<T> {
+                require as_mut(v: &mut Self) -> &mut T;
+            };
+
+            struct Wrapper : Into<i32> {
+                value: i32;
+            };
+
+            acts for Wrapper {
+                def into(self move) -> i32 {
+                    return self.value;
+                }
+            };
+
+            def into<T, U>(value: U) -> T {
+                return value.into();
+            }
+
+            def main() -> i32 {
+                let iv: i32 = into<i32, Wrapper>(Wrapper{ value: 5i32 });
+                if (iv == 5i32) {
+                    return 42i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+        auto oir = run_oir(p, pres, sir);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "core::convert sample must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "core::convert sample must typecheck");
+        ok &= require_(cap.ok, "core::convert sample must pass capability check");
+        ok &= require_(sir.verify_errors.empty(), "core::convert sample must produce valid SIR");
+        ok &= require_(sir.cap.ok, "core::convert sample must pass SIR capability analysis");
+        ok &= require_(sir.handle_verify_errors.empty(), "core::convert sample must pass handle verification");
+        ok &= require_(oir.gate_passed, "core::convert sample must lower to valid OIR");
+        return ok;
+    }
+
+    static bool test_core_convert_missing_member_rejected() {
+        const std::string bad_sig_src = R"(
+            proto Into<T> {
+                require into(v: Self) -> T;
+            };
+
+            struct Bad : Into<i32> {
+                value: i32;
+            };
+
+            acts for Bad {
+                def into(self) -> i32 {
+                    return self.value;
+                }
+            };
+        )";
+
+        const std::string bad_call_src = R"(
+            proto Into<T> {
+                require into(v: Self) -> T;
+            };
+
+            def into<T, U>(value: U) -> T {
+                return value.into();
+            }
+
+            def main() -> i32 {
+                return into<i32, bool>(true);
+            }
+        )";
+
+        auto bad_sig_prog = parse_program(bad_sig_src);
+        auto bad_sig_pres = run_passes(bad_sig_prog);
+        auto bad_sig_ty = run_tyck(bad_sig_prog, &bad_sig_pres.generic_prep);
+
+        auto bad_call_prog = parse_program(bad_call_src);
+        auto bad_call_pres = run_passes(bad_call_prog);
+        auto bad_call_ty = run_tyck(bad_call_prog, &bad_call_pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(bad_sig_prog.bag.has_code(parus::diag::Code::kProtoImplMissingMember),
+                       "mismatched Into impl must report ProtoImplMissingMember");
+        ok &= require_(!bad_sig_ty.errors.empty(), "mismatched Into impl must fail typecheck");
+        ok &= require_(!bad_call_ty.errors.empty(), "calling unconstrained convert::into on bool must fail");
+        return ok;
+    }
+
     static bool test_generic_acts_owner_constraint_ok() {
         const std::string ok_src = R"(
             class Box<T> {
@@ -3116,6 +3218,8 @@ int main() {
         {"core_range_surface_ok", test_core_range_surface_ok},
         {"core_slice_surface_ok", test_core_slice_surface_ok},
         {"core_slice_comparable_gate_rejected", test_core_slice_comparable_gate_rejected},
+        {"core_convert_surface_ok", test_core_convert_surface_ok},
+        {"core_convert_missing_member_rejected", test_core_convert_missing_member_rejected},
         {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
         {"iter_proto_default_acts_satisfaction_ok", test_iter_proto_default_acts_satisfaction_ok},
         {"core_iter_sequence_loop_bridge_ok", test_core_iter_sequence_loop_bridge_ok},

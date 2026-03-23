@@ -1553,6 +1553,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path ext_errors = core_root / "ext/errors.pr";
     const std::filesystem::path cmp_ordering = core_root / "cmp/ordering.pr";
     const std::filesystem::path bool_acts = core_root / "bool/bool.pr";
+    const std::filesystem::path convert_mod = core_root / "convert/convert.pr";
     const std::filesystem::path num_int = core_root / "num/int.pr";
     const std::filesystem::path num_float = core_root / "num/float.pr";
     const std::filesystem::path constraints_proto = core_root / "constraints/proto.pr";
@@ -1569,6 +1570,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(ext_errors, ec) ||
         !std::filesystem::exists(cmp_ordering, ec) ||
         !std::filesystem::exists(bool_acts, ec) ||
+        !std::filesystem::exists(convert_mod, ec) ||
         !std::filesystem::exists(num_int, ec) ||
         !std::filesystem::exists(num_float, ec) ||
         !std::filesystem::exists(constraints_proto, ec) ||
@@ -1597,6 +1599,7 @@ bool test_core_seed_export_index_and_auto_injection() {
                 {ext_errors, "ext", {}},
                 {cmp_ordering, "cmp", {"constraints"}},
                 {bool_acts, "bool", {"cmp"}},
+                {convert_mod, "convert", {}},
                 {num_int, "num", {"cmp"}},
                 {num_float, "num", {"cmp"}},
                 {constraints_proto, "constraints", {}},
@@ -1673,6 +1676,10 @@ bool test_core_seed_export_index_and_auto_injection() {
         return false;
     }
     if (!contains(core_index_text, "\"path\":\"Range\"") ||
+        !contains(core_index_text, "\"path\":\"Into\"") ||
+        !contains(core_index_text, "\"path\":\"AsRef\"") ||
+        !contains(core_index_text, "\"path\":\"AsMut\"") ||
+        !contains(core_index_text, "\"path\":\"into\"") ||
         !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
         !contains(core_index_text, "\"path\":\"range\"") ||
         !contains(core_index_text, "\"path\":\"range_inclusive\"") ||
@@ -1710,12 +1717,20 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::string app_src =
         "import cmp as cmp;\n"
         "import constraints as constraints;\n"
+        "import convert as convert;\n"
         "import ext as ext;\n"
         "import hint as hint;\n"
         "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
         "import slice as slice;\n"
+        "\n"
+        "struct ConvertBox : convert::Into<i32> {\n"
+        "  value: i32;\n"
+        "};\n"
+        "acts for ConvertBox {\n"
+        "  def into(self move) -> i32 { return self.value; }\n"
+        "};\n"
         "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
@@ -1748,6 +1763,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let convert_i: i32 = ConvertBox::acts(default)::into(ConvertBox{ value: 5i32 });\n"
         "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
         "  let xs: i32[] = arr;\n"
         "  let empty_xs: i32[] = arr[0i32..0i32];\n"
@@ -1853,7 +1869,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  if (bool_ok and ord_ok and partial_ok and ord_less and ord_eq and ord_gt and ord_rev_ok and"
         " even_ok and odd_ok and pow_ok == 81u32 and hex and bool_true and bool_false and not raw_nan and"
         " utf1 == 1usize and utf2 == 2usize and utf3 == 3usize and utf4 == 4usize and"
-        " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
+        " s_len == 3usize and s_empty and convert_i == 5i32 and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
         " xs_len == 4usize and xs_empty and slice_eq and slice_sub_eq and"
         " slice_dropf_eq and slice_back_eq and slice_dropb_eq and slice_full_eq and slice::is_empty(none) and"
         " slice_starts and slice_ends and cmp_min_v == 3i32 and cmp_max_v == 'z' and cmp_clamp_v == 4i32 and"
@@ -1927,12 +1943,13 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 16> core_seed_sources = {
+    const std::array<std::filesystem::path, 17> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
         core_root / "cmp/ordering.pr",
         core_root / "bool/bool.pr",
+        core_root / "convert/convert.pr",
         core_root / "num/int.pr",
         core_root / "num/float.pr",
         core_root / "constraints/proto.pr",
@@ -1951,12 +1968,20 @@ bool test_core_seed_runtime_smoke() {
     const std::string main_src =
         "import cmp as cmp;\n"
         "import constraints as constraints;\n"
+        "import convert as convert;\n"
         "import ext as ext;\n"
         "import hint as hint;\n"
         "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
         "import slice as slice;\n"
+        "\n"
+        "struct ConvertBox : convert::Into<i32> {\n"
+        "  value: i32;\n"
+        "};\n"
+        "acts for ConvertBox {\n"
+        "  def into(self move) -> i32 { return self.value; }\n"
+        "};\n"
         "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
@@ -1986,6 +2011,7 @@ bool test_core_seed_runtime_smoke() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let convert_i: i32 = ConvertBox::acts(default)::into(ConvertBox{ value: 5i32 });\n"
         "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
         "  let xs: i32[] = arr;\n"
         "  let empty_xs: i32[] = arr[0i32..0i32];\n"
@@ -2101,6 +2127,7 @@ bool test_core_seed_runtime_smoke() {
         "      and utf2 == 2usize\n"
         "      and utf3 == 3usize\n"
         "      and utf4 == 4usize\n"
+        "      and convert_i == 5i32\n"
         "      and (digit_hex ?? 0u32) == 15u32\n"
         "      and (digit_oob ?? 99u32) == 99u32\n"
         "      and s_len == 3usize\n"

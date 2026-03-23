@@ -137,12 +137,12 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 10. `core::iter`
 11. `core::constraints`
 12. `core::slice`
+13. `core::convert`
 
 선택적 2차 모듈:
 
-1. `core::convert`
-2. `core::marker`
-3. `core::panic`
+1. `core::marker`
+2. `core::panic`
 
 의도적으로 보류:
 
@@ -151,6 +151,7 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 3. `core::result`
 
 `core::iter`는 이제 V1 foundation이 구현되었고, 계층상으로도 `std`가 아니라 `core`에 둔다. `core::range`는 value layer와 iter bridge를 함께 가지며, loop builtin range와는 lowering 상에서만 별도 최적화를 유지한다. `core::slice`는 view foundation으로 도입되었지만, 아직 free function-only다. 구체적인 후속 도입 순서는 roadmap 문서를 따른다.
+`core::convert`는 contract-first vocabulary layer로 도입되며, v1에서는 `Into<T>`, `AsRef<T>`, `AsMut<T>`와 free `into` helper를 제공한다.
 
 ## 1차 함수셋
 
@@ -172,6 +173,24 @@ generic surface가 유용하더라도, 초기에 너무 많은 combinator를 넣
 
 초기에는 generic constraint보다 primitive acts와 simple free fn이 더 중요하다.
 현재는 `Ordering` helper와 generic `min/max/clamp`까지 1차 surface로 본다.
+
+### A-1. `core::convert`
+
+초기 surface:
+
+1. `proto Into<T> { require into(v: Self) -> T; }`
+2. `proto AsRef<T> { require as_ref(v: &Self) -> &T; }`
+3. `proto AsMut<T> { require as_mut(v: &mut Self) -> &mut T; }`
+4. free fn:
+   - `into<T, U>(value: U) -> T`
+
+정책:
+
+1. v1은 concrete impl이 아니라 vocabulary/contract layer다.
+2. current grammar에서는 `with [U: Into<T>]` 같은 generic proto-instantiated constraint를 아직 못 쓰므로 helper는 unconstrained wrapper로 둔다.
+3. `From<T>`/fallible conversion/numeric cast는 v1 범위 밖이다.
+4. current borrow 규칙상 ordinary function body에서 borrow를 반환할 수 없으므로 free `as_ref/as_mut` helper는 후속 라운드로 미룬다.
+5. installed/external bundle 경계에서 user-defined owner의 generic helper instantiation은 아직 완전히 고정되지 않았으므로, runtime smoke는 proto import + dot-call도 같이 본다.
 
 ### B. `core::num`
 
