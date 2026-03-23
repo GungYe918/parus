@@ -68,6 +68,7 @@ namespace parus::tyck {
         std::vector<uint32_t> stmt_resolved_symbol; // ast.stmts() index -> resolved symbol id (tyck fallback for cloned generic decl stmts)
         std::vector<ast::StmtId> expr_proto_const_decl; // expr index -> selected proto provide-const decl stmt id
         std::vector<uint32_t> expr_external_callee_symbol; // expr index -> direct external callee symbol id
+        std::vector<ty::TypeId> expr_external_callee_type; // expr index -> concrete selected external callee fn type
         std::vector<ast::ExprId> expr_external_receiver_expr; // expr index -> implicit receiver expr for external dot-call
         std::vector<uint8_t> expr_call_is_c_abi; // expr index -> call lowers with C ABI
         std::vector<uint8_t> expr_call_is_c_variadic; // expr index -> call is C variadic
@@ -78,8 +79,19 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_loop_iterator_type; // expr index -> concrete iterator type for sequence loops
         std::vector<ast::StmtId> expr_loop_iter_decl; // expr index -> selected iter decl, invalid when external/none
         std::vector<uint32_t> expr_loop_iter_external_symbol; // expr index -> selected external iter callee symbol
+        std::vector<ty::TypeId> expr_loop_iter_fn_type; // expr index -> concrete iter callee fn type
         std::vector<ast::StmtId> expr_loop_next_decl; // expr index -> selected next decl, invalid when external/none
         std::vector<uint32_t> expr_loop_next_external_symbol; // expr index -> selected external next callee symbol
+        std::vector<ty::TypeId> expr_loop_next_fn_type; // expr index -> concrete next callee fn type
+        std::vector<uint8_t> stmt_for_source_kind; // stmt index -> parus::LoopSourceKind for `for`
+        std::vector<ty::TypeId> stmt_for_binder_type; // stmt index -> `for` binder type
+        std::vector<ty::TypeId> stmt_for_iterator_type; // stmt index -> concrete iterator type for protocol-driven `for`
+        std::vector<ast::StmtId> stmt_for_iter_decl; // stmt index -> selected iter decl, invalid when external/none
+        std::vector<uint32_t> stmt_for_iter_external_symbol; // stmt index -> selected external iter callee symbol
+        std::vector<ty::TypeId> stmt_for_iter_fn_type; // stmt index -> concrete iter callee fn type
+        std::vector<ast::StmtId> stmt_for_next_decl; // stmt index -> selected next decl, invalid when external/none
+        std::vector<uint32_t> stmt_for_next_external_symbol; // stmt index -> selected external next callee symbol
+        std::vector<ty::TypeId> stmt_for_next_fn_type; // stmt index -> concrete next callee fn type
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield; // expr index -> imported C bitfield access metadata
         std::vector<ast::ExprId> expr_fstring_runtime_expr; // expr index -> runtime passthrough expr for non-folded f-string, invalid otherwise
         std::vector<uint32_t> param_resolved_symbol; // ast.params() index -> resolved symbol id
@@ -214,6 +226,7 @@ namespace parus::tyck {
         void check_stmt_block_(const ast::Stmt& s);
         void check_stmt_var_(ast::StmtId sid);
         void check_stmt_if_(const ast::Stmt& s);
+        void check_stmt_for_(ast::StmtId sid, const ast::Stmt& s);
         void check_stmt_while_(const ast::Stmt& s);
         void check_stmt_do_scope_(const ast::Stmt& s);
         void check_stmt_do_while_(const ast::Stmt& s);
@@ -251,6 +264,7 @@ namespace parus::tyck {
         ty::TypeId check_expr_if_(const ast::Expr& e, Slot slot);    // overload
         ty::TypeId check_expr_block_(const ast::Expr& e, Slot slot); // overload
         ty::TypeId check_expr_loop_(const ast::Expr& e, Slot slot);  // overload
+        ty::TypeId check_expr_loop_(const ast::Expr& e, Slot slot, BreakTargetKind break_target_kind);
 
 
         // --------------------
@@ -370,6 +384,7 @@ namespace parus::tyck {
         std::vector<uint32_t> stmt_resolved_symbol_cache_;
         std::vector<ast::StmtId> expr_proto_const_decl_cache_;
         std::vector<uint32_t> expr_external_callee_symbol_cache_;
+        std::vector<ty::TypeId> expr_external_callee_type_cache_;
         std::vector<ast::ExprId> expr_external_receiver_expr_cache_;
         std::vector<uint8_t> expr_call_is_c_abi_cache_;
         std::vector<uint8_t> expr_call_is_c_variadic_cache_;
@@ -380,13 +395,25 @@ namespace parus::tyck {
         std::vector<ty::TypeId> expr_loop_iterator_type_cache_;
         std::vector<ast::StmtId> expr_loop_iter_decl_cache_;
         std::vector<uint32_t> expr_loop_iter_external_symbol_cache_;
+        std::vector<ty::TypeId> expr_loop_iter_fn_type_cache_;
         std::vector<ast::StmtId> expr_loop_next_decl_cache_;
         std::vector<uint32_t> expr_loop_next_external_symbol_cache_;
+        std::vector<ty::TypeId> expr_loop_next_fn_type_cache_;
+        std::vector<uint8_t> stmt_for_source_kind_cache_;
+        std::vector<ty::TypeId> stmt_for_binder_type_cache_;
+        std::vector<ty::TypeId> stmt_for_iterator_type_cache_;
+        std::vector<ast::StmtId> stmt_for_iter_decl_cache_;
+        std::vector<uint32_t> stmt_for_iter_external_symbol_cache_;
+        std::vector<ty::TypeId> stmt_for_iter_fn_type_cache_;
+        std::vector<ast::StmtId> stmt_for_next_decl_cache_;
+        std::vector<uint32_t> stmt_for_next_external_symbol_cache_;
+        std::vector<ty::TypeId> stmt_for_next_fn_type_cache_;
         std::vector<ExternalCBitfieldAccess> expr_external_c_bitfield_cache_;
         std::vector<ast::ExprId> expr_fstring_runtime_expr_cache_;
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
+        ast::StmtId current_for_stmt_id_ = ast::k_invalid_stmt;
 
         // builtin text type for string literals
         ty::TypeId string_type_ = ty::kInvalidType;
@@ -585,12 +612,30 @@ namespace parus::tyck {
             std::string owner_base{};
             std::string external_payload{};
         };
+        struct ActsAssocTypeDecl {
+            ast::StmtId assoc_sid = ast::k_invalid_stmt;
+            ast::StmtId acts_decl_sid = ast::k_invalid_stmt;
+            ty::TypeId owner_type = ty::kInvalidType;
+            ty::TypeId bound_type = ty::kInvalidType;
+            bool from_named_set = false;
+        };
+        struct ExternalActsAssocTypeDecl {
+            ty::TypeId owner_type = ty::kInvalidType;
+            ty::TypeId bound_type = ty::kInvalidType;
+            bool owner_is_generic_template = false;
+            uint32_t owner_generic_arity = 0;
+            std::string owner_base{};
+            std::string external_payload{};
+        };
         std::unordered_map<std::string, std::vector<uint32_t>> external_fn_overload_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsMethodDecl>>> acts_default_method_map_;
         std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_default_method_map_;
         std::unordered_map<std::string, std::unordered_map<std::string, std::vector<ExternalActsMethodDecl>>> external_acts_template_method_map_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ActsAssocTypeDecl>>> acts_default_assoc_type_map_;
+        std::unordered_map<ty::TypeId, std::unordered_map<std::string, std::vector<ExternalActsAssocTypeDecl>>> external_acts_default_assoc_type_map_;
+        std::unordered_map<std::string, std::unordered_map<std::string, std::vector<ExternalActsAssocTypeDecl>>> external_acts_template_assoc_type_map_;
         std::unordered_map<std::string, ast::StmtId> acts_named_decl_by_owner_and_name_;
-        std::unordered_map<ty::TypeId, ast::StmtId> acts_default_decl_by_owner_;
+        std::unordered_map<ty::TypeId, std::vector<ast::StmtId>> acts_default_decls_by_owner_;
         std::unordered_set<uint32_t> explicit_core_impl_marker_file_ids_;
         std::unordered_set<uint32_t> core_impl_marker_file_ids_;
 
@@ -668,6 +713,12 @@ namespace parus::tyck {
             std::string& out_member_name,
             bool& out_receiver_is_self
         ) const;
+        bool parse_external_acts_assoc_type_payload_(
+            std::string_view payload,
+            ty::TypeId& out_owner_type,
+            std::string& out_assoc_name,
+            ty::TypeId& out_bound_type
+        ) const;
         void collect_external_builtin_acts_methods_();
         void collect_external_proto_stubs_();
         void ensure_builtin_family_proto_aliases_();
@@ -717,6 +768,7 @@ namespace parus::tyck {
         bool apply_use_acts_selection_(const ast::Stmt& use_stmt);
         void collect_acts_operator_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
         void collect_acts_method_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
+        void collect_acts_assoc_type_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set = false);
         ast::StmtId resolve_binary_operator_overload_(syntax::TokenKind op, ty::TypeId lhs, ty::TypeId rhs,
                                                       const ActiveActsSelection* forced_selection = nullptr) const;
         ast::StmtId resolve_prefix_operator_overload_(syntax::TokenKind op, ty::TypeId lhs,
@@ -725,6 +777,23 @@ namespace parus::tyck {
                                                        const ActiveActsSelection* forced_selection = nullptr) const;
         std::vector<ActsMethodDecl> lookup_acts_methods_for_call_(ty::TypeId owner_type, std::string_view name,
                                                                   const ActiveActsSelection* forced_selection = nullptr) const;
+        std::vector<ExternalActsMethodDecl> lookup_external_acts_methods_for_call_(
+            ty::TypeId concrete_owner_type,
+            std::string_view member_name
+        ) const;
+        std::optional<ty::TypeId> lookup_acts_assoc_type_binding_(ty::TypeId owner_type, std::string_view name,
+                                                                  const ActiveActsSelection* forced_selection = nullptr) const;
+        bool is_self_assoc_named_type_(ty::TypeId t, std::string* out_name = nullptr) const;
+        ty::TypeId substitute_self_and_assoc_type_(
+            ty::TypeId t,
+            ty::TypeId owner_type,
+            const std::unordered_map<std::string, ty::TypeId>* assoc_bindings = nullptr
+        ) const;
+        bool collect_assoc_type_bindings_for_owner_(
+            ty::TypeId owner_type,
+            std::unordered_map<std::string, ty::TypeId>& out,
+            const ActiveActsSelection* forced_selection = nullptr
+        ) const;
         static bool type_matches_acts_owner_(const ty::TypePool& types, ty::TypeId owner, ty::TypeId actual);
         std::vector<std::string> collect_decl_generic_param_names_(const ast::Stmt& decl) const;
         std::optional<ast::StmtId> ensure_generic_class_instance_(
@@ -794,6 +863,10 @@ namespace parus::tyck {
         ) const;
         bool proto_requirement_satisfied_by_default_acts_(
             ast::StmtId req_sid,
+            ty::TypeId owner_type
+        ) const;
+        bool proto_assoc_requirement_satisfied_by_default_acts_(
+            const ast::Stmt& req,
             ty::TypeId owner_type
         ) const;
         struct ConstObject;

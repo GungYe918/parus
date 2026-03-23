@@ -84,6 +84,7 @@ namespace parus::ast {
         // stmt/decl 혼용이 가능한 언어지만, 의미적으로는 "decl 성격"인 stmt도 존재
         kVar,         // let/set
         kIf,
+        kFor,
         kWhile,
         kDoScope,     // do { ... }
         kDoWhile,     // do { ... } while (cond);
@@ -108,6 +109,7 @@ namespace parus::ast {
         kClassDecl,
         kActorDecl,
         kActsDecl,
+        kAssocTypeDecl,
         kInstDecl, // compile-time instruction declaration
 
         // use
@@ -522,6 +524,12 @@ namespace parus::ast {
         kActs,
     };
 
+    enum class AssocTypeRole : uint8_t {
+        kNone = 0,
+        kProtoRequire,
+        kActsImpl,
+    };
+
     struct Stmt {
         StmtKind kind{};
         Span span{};
@@ -612,6 +620,7 @@ namespace parus::ast {
         uint32_t decl_path_ref_count = 0;
         ProtoFnRole proto_fn_role = ProtoFnRole::kNone;
         ProtoRequireKind proto_require_kind = ProtoRequireKind::kNone;
+        AssocTypeRole assoc_type_role = AssocTypeRole::kNone;
         uint32_t proto_req_path_begin = 0;
         uint32_t proto_req_path_count = 0;
         bool var_is_proto_provide = false;

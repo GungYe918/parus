@@ -567,7 +567,7 @@ namespace parus::diag {
             case Code::kLoopHeaderExpectedIn:       return "expected 'in' in loop header (e.g., loop (v in xs))";
             case Code::kLoopHeaderExpectedRParen:   return "expected ')' to close loop header";
             case Code::kLoopBodyExpectedBlock:      return "expected loop body block '{ ... }'";
-            case Code::kLoopIterableUnsupported:    return "loop header iterable is unsupported in v0; only T[N], T[], and range forms are currently accepted";
+            case Code::kLoopIterableUnsupported:    return "loop header iterable does not satisfy the current iteration source requirements";
             case Code::kLoopRangeBoundMustBeInteger:return "loop range bounds must use builtin integer types";
             case Code::kLoopRangeBoundTypeMismatch: return "loop range bounds must have the same concrete integer type";
             case Code::kLoopRangeNeedsTypedBound:   return "loop range needs at least one typed integer bound; two infer-integer bounds are not allowed";

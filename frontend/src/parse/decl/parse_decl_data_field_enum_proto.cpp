@@ -724,6 +724,31 @@ namespace parus {
             if (cursor_.at(K::kKwRequire)) {
                 const Token req_tok = cursor_.bump(); // require
 
+                if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "type") {
+                    cursor_.bump(); // contextual 'type'
+
+                    std::string_view assoc_name{};
+                    const Token assoc_tok = cursor_.peek();
+                    if (assoc_tok.kind == K::kIdent) {
+                        assoc_name = assoc_tok.lexeme;
+                        cursor_.bump();
+                    } else {
+                        diag_report(diag::Code::kTypeNameExpected, assoc_tok.span);
+                    }
+
+                    const Span end_sp = stmt_consume_semicolon_or_recover(
+                        assoc_tok.kind == K::kIdent ? assoc_tok.span : req_tok.span
+                    );
+
+                    ast::Stmt m{};
+                    m.kind = ast::StmtKind::kAssocTypeDecl;
+                    m.span = span_join(req_tok.span, end_sp);
+                    m.name = assoc_name;
+                    m.assoc_type_role = ast::AssocTypeRole::kProtoRequire;
+                    members.push_back(ast_.add_stmt(m));
+                    continue;
+                }
+
                 const auto parse_require_kind_item = [&](ast::ProtoRequireKind req_kind) -> ast::StmtId {
                     if (!cursor_.eat(K::kLParen)) {
                         diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
@@ -830,7 +855,7 @@ namespace parus {
             }
 
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "proto member (require/provide)");
+                        "proto member (require/provide/require type)");
             recover_to_delim(K::kSemicolon, K::kRBrace);
             cursor_.eat(K::kSemicolon);
         }

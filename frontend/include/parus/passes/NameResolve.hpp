@@ -106,6 +106,7 @@ namespace parus::passes {
 
         std::vector<ResolvedId> expr_to_resolved;  // size = ast.exprs().size()
         std::vector<ResolvedId> expr_loop_var_to_resolved;  // size = ast.exprs().size(), loop binder only
+        std::vector<ResolvedId> stmt_for_var_to_resolved;  // size = ast.stmts().size(), for binder only
         std::vector<ResolvedId> stmt_to_resolved;  // size = ast.stmts().size()
         std::vector<ResolvedId> param_to_resolved; // size = ast.params().size()
 
@@ -115,6 +116,7 @@ namespace parus::passes {
 
             expr_to_resolved.assign(expr_count, k_invalid_resolved);
             expr_loop_var_to_resolved.assign(expr_count, k_invalid_resolved);
+            stmt_for_var_to_resolved.assign(stmt_count, k_invalid_resolved);
             stmt_to_resolved.assign(stmt_count, k_invalid_resolved);
             param_to_resolved.assign(param_count, k_invalid_resolved);
         }

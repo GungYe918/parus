@@ -344,6 +344,11 @@ namespace parus::cap {
                         walk_stmt_(s.a);
                         return;
 
+                    case ast::StmtKind::kFor:
+                        walk_expr_(s.expr, ExprUse::kValue);
+                        walk_stmt_(s.a);
+                        return;
+
                     case ast::StmtKind::kReturn: {
                         if (s.expr != ast::k_invalid_expr) {
                             walk_expr_(s.expr, ExprUse::kReturnValue);
@@ -415,6 +420,7 @@ namespace parus::cap {
                     case ast::StmtKind::kInstDecl:
                     case ast::StmtKind::kCompilerDirective:
                     case ast::StmtKind::kCompilerIntrinsicDirective:
+                    case ast::StmtKind::kAssocTypeDecl:
                     case ast::StmtKind::kError:
                         return;
 

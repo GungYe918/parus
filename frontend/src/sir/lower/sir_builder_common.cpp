@@ -14,6 +14,10 @@ namespace parus::sir::detail {
         g_active_sir_types_ = types;
     }
 
+    TypeId active_builtin_type(parus::ty::Builtin b) {
+        return g_active_sir_types_ != nullptr ? g_active_sir_types_->builtin(b) : k_invalid_type;
+    }
+
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
         if ((size_t)eid >= tyck.expr_types.size()) return k_invalid_type;
@@ -158,6 +162,18 @@ namespace parus::sir::detail {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_symbol;
         if ((size_t)eid >= nres.expr_loop_var_to_resolved.size()) return k_invalid_symbol;
         const auto rid = nres.expr_loop_var_to_resolved[(uint32_t)eid];
+        if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
+        if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
+        return (SymbolId)nres.resolved[rid].sym;
+    }
+
+    SymbolId resolve_loop_symbol_from_stmt(
+        const passes::NameResolveResult& nres,
+        parus::ast::StmtId sid
+    ) {
+        if (sid == parus::ast::k_invalid_stmt) return k_invalid_symbol;
+        if ((size_t)sid >= nres.stmt_for_var_to_resolved.size()) return k_invalid_symbol;
+        const auto rid = nres.stmt_for_var_to_resolved[(uint32_t)sid];
         if (rid == passes::NameResolveResult::k_invalid_resolved) return k_invalid_symbol;
         if ((size_t)rid >= nres.resolved.size()) return k_invalid_symbol;
         return (SymbolId)nres.resolved[rid].sym;

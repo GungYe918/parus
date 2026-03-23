@@ -173,6 +173,7 @@ namespace parus {
         ast::StmtId parse_stmt_if();
 
         //  while 파싱
+        ast::StmtId parse_stmt_for();
         ast::StmtId parse_stmt_while();
         //  do / do-while 파싱
         ast::StmtId parse_stmt_do();

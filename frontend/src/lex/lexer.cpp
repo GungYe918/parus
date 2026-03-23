@@ -428,6 +428,7 @@ namespace parus {
         if (t.lexeme == "if")       { t.kind = syntax::TokenKind::kKwIf;       return t; }
         if (t.lexeme == "elif")     { t.kind = syntax::TokenKind::kKwElif;     return t; }
         if (t.lexeme == "else")     { t.kind = syntax::TokenKind::kKwElse;     return t; }
+        if (t.lexeme == "for")      { t.kind = syntax::TokenKind::kKwFor;      return t; }
         if (t.lexeme == "while")    { t.kind = syntax::TokenKind::kKwWhile;    return t; }
         if (t.lexeme == "do")       { t.kind = syntax::TokenKind::kKwDo;       return t; }
         if (t.lexeme == "loop")     { t.kind = syntax::TokenKind::kKwLoop;     return t; }

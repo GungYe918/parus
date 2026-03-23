@@ -1080,6 +1080,8 @@ namespace parus::tyck {
 
         dst = canonicalize_transparent_external_typedef_(dst);
         src = canonicalize_transparent_external_typedef_(src);
+        dst = canonicalize_acts_owner_type_(dst);
+        src = canonicalize_acts_owner_type_(src);
         if (dst == src) return true;
 
         // null -> T? 허용
@@ -1087,6 +1089,60 @@ namespace parus::tyck {
 
         const auto& dt = types_.get(dst);
         const auto& st = types_.get(src);
+
+        if (dt.kind == ty::Kind::kNamedUser && st.kind == ty::Kind::kNamedUser) {
+            std::vector<std::string_view> dst_path{};
+            std::vector<ty::TypeId> dst_args{};
+            std::vector<std::string_view> src_path{};
+            std::vector<ty::TypeId> src_args{};
+            if (types_.decompose_named_user(dst, dst_path, dst_args) &&
+                types_.decompose_named_user(src, src_path, src_args) &&
+                !dst_path.empty() &&
+                !src_path.empty() &&
+                dst_args.size() == src_args.size()) {
+                auto same_base_name = [](std::string_view lhs, std::string_view rhs) -> bool {
+                    if (lhs == rhs) return true;
+                    if (lhs.starts_with("core::") &&
+                        lhs.substr(std::string_view("core::").size()) == rhs) {
+                        return true;
+                    }
+                    if (rhs.starts_with("core::") &&
+                        rhs.substr(std::string_view("core::").size()) == lhs) {
+                        return true;
+                    }
+                    const size_t lsplit = lhs.rfind("::");
+                    const size_t rsplit = rhs.rfind("::");
+                    const std::string_view lleaf =
+                        (lsplit == std::string_view::npos) ? lhs : lhs.substr(lsplit + 2);
+                    const std::string_view rleaf =
+                        (rsplit == std::string_view::npos) ? rhs : rhs.substr(rsplit + 2);
+                    return lleaf == rleaf;
+                };
+
+                std::string dst_base{};
+                std::string src_base{};
+                for (size_t i = 0; i < dst_path.size(); ++i) {
+                    if (i) dst_base += "::";
+                    dst_base.append(dst_path[i].data(), dst_path[i].size());
+                }
+                for (size_t i = 0; i < src_path.size(); ++i) {
+                    if (i) src_base += "::";
+                    src_base.append(src_path[i].data(), src_path[i].size());
+                }
+
+                if (same_base_name(dst_base, src_base)) {
+                    bool args_ok = true;
+                    for (size_t i = 0; i < dst_args.size(); ++i) {
+                        if (!can_assign_(dst_args[i], src_args[i]) ||
+                            !can_assign_(src_args[i], dst_args[i])) {
+                            args_ok = false;
+                            break;
+                        }
+                    }
+                    if (args_ok) return true;
+                }
+            }
+        }
 
         // read-only coercion: &mut T -> &T
         if (dt.kind == ty::Kind::kBorrow && st.kind == ty::Kind::kBorrow) {

@@ -512,6 +512,108 @@ namespace parusc::p0 {
             }
         }
 
+        void append_type_assoc_binding_payload_(
+            std::string& payload,
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s,
+            const parus::ty::TypePool& types
+        ) {
+            if (s.type == parus::ty::kInvalidType) return;
+            const std::string owner_repr = types.to_export_string(s.type);
+            if (owner_repr.empty()) return;
+
+            const auto& stmts = ast.stmts();
+            const auto& kids = ast.stmt_children();
+            std::unordered_set<std::string> emitted{};
+            std::unordered_set<uint32_t> emitted_constraint_stmts{};
+
+            const auto append_constraint_payload_only_ = [&](
+                const parus::ast::Stmt& decl
+            ) {
+                const uint32_t cc_begin =
+                    (decl.kind == parus::ast::StmtKind::kFnDecl) ? decl.fn_constraint_begin : decl.decl_constraint_begin;
+                const uint32_t cc_count =
+                    (decl.kind == parus::ast::StmtKind::kFnDecl) ? decl.fn_constraint_count : decl.decl_constraint_count;
+                if (cc_count == 0) return;
+                const auto& ccs = ast.fn_constraint_decls();
+                for (uint32_t i = 0; i < cc_count; ++i) {
+                    const uint32_t idx = cc_begin + i;
+                    if (idx >= ccs.size()) break;
+                    const auto& cc = ccs[idx];
+                    payload += "|gconstraint=";
+                    if (cc.kind == parus::ast::FnConstraintKind::kProto) {
+                        payload += "proto,";
+                        payload += payload_escape_value_(cc.type_param);
+                        payload += ",";
+                        payload += payload_escape_value_(path_join_(ast, cc.proto_path_begin, cc.proto_path_count));
+                    } else {
+                        payload += "type_eq,";
+                        payload += payload_escape_value_(cc.type_param);
+                        payload += ",";
+                        payload += payload_escape_value_(
+                            (cc.rhs_type != parus::ty::kInvalidType)
+                                ? types.to_export_string(cc.rhs_type)
+                                : std::string("<invalid>")
+                        );
+                    }
+                }
+            };
+
+            const auto acts_owner_matches = [&](const parus::ast::Stmt& acts) -> bool {
+                if (acts.acts_target_type == parus::ty::kInvalidType) return false;
+                if (types.to_export_string(acts.acts_target_type) == owner_repr) return true;
+
+                std::vector<std::string_view> owner_path{};
+                std::vector<parus::ty::TypeId> owner_args{};
+                if (!types.decompose_named_user(acts.acts_target_type, owner_path, owner_args) ||
+                    owner_path.empty()) {
+                    return false;
+                }
+                return owner_path.back() == s.name;
+            };
+
+            for (const auto& acts : stmts) {
+                if (acts.kind != parus::ast::StmtKind::kActsDecl || !acts.acts_is_for) continue;
+                if (!acts_owner_matches(acts)) continue;
+
+                const uint64_t begin = acts.stmt_begin;
+                const uint64_t end = begin + acts.stmt_count;
+                if (!(begin <= kids.size() && end <= kids.size())) continue;
+
+                bool emitted_from_this_acts = false;
+                for (uint32_t i = acts.stmt_begin; i < acts.stmt_begin + acts.stmt_count; ++i) {
+                    const auto msid = kids[i];
+                    if (msid == parus::ast::k_invalid_stmt || static_cast<size_t>(msid) >= stmts.size()) continue;
+                    const auto& member = ast.stmt(msid);
+                    if (member.kind != parus::ast::StmtKind::kAssocTypeDecl) continue;
+                    if (member.assoc_type_role != parus::ast::AssocTypeRole::kActsImpl) continue;
+                    if (member.name.empty() || member.type == parus::ty::kInvalidType) continue;
+
+                    std::string body = std::string(member.name);
+                    body += ",";
+                    body += types.to_export_string(member.type);
+                    const auto semantic =
+                        parus::cimport::serialize_type_semantic_from_type(member.type, types);
+                    if (!semantic.empty()) {
+                        body += "@";
+                        body += semantic;
+                    }
+                    if (!emitted.insert(body).second) continue;
+
+                    if (payload.empty()) {
+                        payload = "parus_type_decl";
+                    }
+                    if (!emitted_from_this_acts &&
+                        emitted_constraint_stmts.insert(&acts - stmts.data()).second) {
+                        append_constraint_payload_only_(acts);
+                    }
+                    payload += "|assoc_type=";
+                    payload += body;
+                    emitted_from_this_acts = true;
+                }
+            }
+        }
+
         void dedupe_export_surface_(std::vector<ExportSurfaceEntry>& entries) {
             std::sort(entries.begin(), entries.end(), [](const ExportSurfaceEntry& a, const ExportSurfaceEntry& b) {
                 return std::tie(a.kind_text, a.path, a.link_name, a.module_head, a.decl_dir,
@@ -872,7 +974,7 @@ namespace parusc::p0 {
             if (s.kind == parus::ast::StmtKind::kFnDecl && !s.name.empty()) {
                 const std::string qname = qualify_name_(ns, s.name);
                 const std::string sig_repr =
-                    (s.type != parus::ty::kInvalidType) ? types.to_string(s.type) : std::string("def(?)");
+                    (s.type != parus::ty::kInvalidType) ? types.to_export_string(s.type) : std::string("def(?)");
                 const std::string link_name = build_function_link_name_(
                     bundle_name,
                     qname,
@@ -938,6 +1040,7 @@ namespace parusc::p0 {
                 append_generic_decl_payload_(payload, ast, s, types);
                 if (s.kind != parus::ast::StmtKind::kProtoDecl) {
                     append_type_impl_proto_payload_(payload, ast, s, types);
+                    append_type_assoc_binding_payload_(payload, ast, s, types);
                 }
                 push_export(parus::sema::SymbolKind::kType,
                             qualify_name_(ns, s.name),
@@ -951,9 +1054,20 @@ namespace parusc::p0 {
 
             if (s.kind == parus::ast::StmtKind::kActsDecl && !s.name.empty()) {
                 const std::string acts_qname = qualify_name_(ns, s.name);
-                std::string acts_payload{};
-                append_generic_decl_payload_(acts_payload, ast, s, types);
-                push_export(parus::sema::SymbolKind::kAct, acts_qname, s.acts_target_type, s.is_export, s.span, {}, std::move(acts_payload));
+                const bool export_acts_decl_symbol = !(s.acts_is_for && !s.acts_has_set_name);
+                if (export_acts_decl_symbol) {
+                    std::string acts_payload{};
+                    append_generic_decl_payload_(acts_payload, ast, s, types);
+                    push_export(
+                        parus::sema::SymbolKind::kAct,
+                        acts_qname,
+                        s.acts_target_type,
+                        s.is_export,
+                        s.span,
+                        {},
+                        std::move(acts_payload)
+                    );
+                }
 
                 const bool owner_is_builtin =
                     (s.acts_target_type != parus::ty::kInvalidType) &&
@@ -990,18 +1104,6 @@ namespace parusc::p0 {
                         append_generic_decl_payload_(payload, ast, s, types);
                         append_generic_decl_payload_(payload, ast, ms, types);
 
-                        std::string member_qname = acts_qname;
-                        member_qname += "::";
-                        member_qname += std::string(ms.name);
-                        const std::string sig_repr =
-                            (ms.type != parus::ty::kInvalidType) ? types.to_string(ms.type) : std::string("def(?)");
-                        const std::string link_name = build_function_link_name_(
-                            bundle_name,
-                            member_qname,
-                            ms.fn_mode,
-                            sig_repr,
-                            ms.link_abi == parus::ast::LinkAbi::kC
-                        );
                         parus::ty::TypeId export_member_type = ms.type;
                         if (s.acts_is_for && export_member_type != parus::ty::kInvalidType) {
                             export_member_type = rewrite_builtin_acts_self_type_(
@@ -1010,6 +1112,20 @@ namespace parusc::p0 {
                                 s.acts_target_type
                             );
                         }
+                        std::string member_qname = acts_qname;
+                        member_qname += "::";
+                        member_qname += std::string(ms.name);
+                        const std::string sig_repr =
+                            (export_member_type != parus::ty::kInvalidType)
+                                ? export_types.to_export_string(export_member_type)
+                                : std::string("def(?)");
+                        const std::string link_name = build_function_link_name_(
+                            bundle_name,
+                            member_qname,
+                            ms.fn_mode,
+                            sig_repr,
+                            ms.link_abi == parus::ast::LinkAbi::kC
+                        );
                         push_export(parus::sema::SymbolKind::kFn,
                                     member_qname,
                                     export_member_type,
@@ -1895,6 +2011,38 @@ namespace parusc::p0 {
                         body_out = repr;
                     }
                     rewritten = "impl_proto=" + payload_escape_value_(body_out);
+                } else if (part.starts_with("assoc_type=")) {
+                    const std::string body = payload_unescape_value_(
+                        part.substr(std::string_view("assoc_type=").size())
+                    );
+                    const size_t comma = body.find(',');
+                    if (comma != std::string::npos) {
+                        const std::string name = body.substr(0, comma);
+                        const std::string encoded_type = body.substr(comma + 1);
+                        if (!name.empty() && !encoded_type.empty()) {
+                            const size_t split = encoded_type.find('@');
+                            const std::string repr =
+                                (split == std::string::npos) ? encoded_type : encoded_type.substr(0, split);
+                            const std::string semantic =
+                                (split == std::string::npos) ? std::string{} : encoded_type.substr(split + 1);
+                            const auto [qrepr, qsemantic] = qualify_payload_type_meta_for_bundle_(
+                                repr,
+                                semantic,
+                                bundle_name,
+                                current_module_head,
+                                dep_module_heads,
+                                current_module_local_symbols
+                            );
+                            std::string body_out = name;
+                            body_out += ",";
+                            body_out += qrepr.empty() ? repr : qrepr;
+                            if (!qsemantic.empty()) {
+                                body_out += "@";
+                                body_out += qsemantic;
+                            }
+                            rewritten = "assoc_type=" + payload_escape_value_(body_out);
+                        }
+                    }
                 } else if (part.starts_with("field=")) {
                     const std::string_view body = part.substr(std::string_view("field=").size());
                     const size_t colon = body.find(':');
@@ -2099,6 +2247,7 @@ namespace parusc::p0 {
             payload += std::to_string(s.field_align);
             append_generic_decl_payload_(payload, ast, s, types);
             append_type_impl_proto_payload_(payload, ast, s, types);
+            append_type_assoc_binding_payload_(payload, ast, s, types);
 
             const uint64_t begin = s.field_member_begin;
             const uint64_t end = begin + s.field_member_count;
@@ -4034,11 +4183,7 @@ namespace parusc::p0 {
         parus::tyck::TyckResult tyck_res;
         {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
-            if (opt.bundle.enabled ||
-                !inv.bundle_sources.empty() ||
-                !pass_opt.name_resolve.external_exports.empty()) {
-                tc.set_seed_symbol_table(&pres.sym);
-            }
+            tc.set_seed_symbol_table(&pres.sym);
             if (!opt.bundle.bundle_name.empty()) {
                 tc.set_current_bundle_name(opt.bundle.bundle_name);
             }

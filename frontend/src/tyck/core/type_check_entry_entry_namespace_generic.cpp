@@ -126,9 +126,12 @@ namespace parus::tyck {
         acts_default_operator_map_.clear();
         acts_default_method_map_.clear();
         external_acts_default_method_map_.clear();
+        acts_default_assoc_type_map_.clear();
+        external_acts_default_assoc_type_map_.clear();
+        external_acts_template_assoc_type_map_.clear();
         external_fn_overload_map_.clear();
         acts_named_decl_by_owner_and_name_.clear();
-        acts_default_decl_by_owner_.clear();
+        acts_default_decls_by_owner_.clear();
         core_impl_marker_file_ids_.clear();
         acts_selection_scope_stack_.clear();
         acts_selection_by_symbol_.clear();
@@ -215,6 +218,7 @@ namespace parus::tyck {
         stmt_resolved_symbol_cache_.assign(ast_.stmts().size(), sema::SymbolTable::kNoScope);
         expr_proto_const_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_external_callee_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_external_callee_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_external_receiver_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_call_is_c_abi_cache_.assign(ast_.exprs().size(), 0u);
         expr_call_is_c_variadic_cache_.assign(ast_.exprs().size(), 0u);
@@ -225,8 +229,19 @@ namespace parus::tyck {
         expr_loop_iterator_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_loop_iter_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_loop_iter_external_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_loop_iter_fn_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
         expr_loop_next_decl_cache_.assign(ast_.exprs().size(), ast::k_invalid_stmt);
         expr_loop_next_external_symbol_cache_.assign(ast_.exprs().size(), sema::SymbolTable::kNoScope);
+        expr_loop_next_fn_type_cache_.assign(ast_.exprs().size(), ty::kInvalidType);
+        stmt_for_source_kind_cache_.assign(ast_.stmts().size(), static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        stmt_for_binder_type_cache_.assign(ast_.stmts().size(), ty::kInvalidType);
+        stmt_for_iterator_type_cache_.assign(ast_.stmts().size(), ty::kInvalidType);
+        stmt_for_iter_decl_cache_.assign(ast_.stmts().size(), ast::k_invalid_stmt);
+        stmt_for_iter_external_symbol_cache_.assign(ast_.stmts().size(), sema::SymbolTable::kNoScope);
+        stmt_for_iter_fn_type_cache_.assign(ast_.stmts().size(), ty::kInvalidType);
+        stmt_for_next_decl_cache_.assign(ast_.stmts().size(), ast::k_invalid_stmt);
+        stmt_for_next_external_symbol_cache_.assign(ast_.stmts().size(), sema::SymbolTable::kNoScope);
+        stmt_for_next_fn_type_cache_.assign(ast_.stmts().size(), ty::kInvalidType);
         expr_external_c_bitfield_cache_.assign(ast_.exprs().size(), ExternalCBitfieldAccess{});
         expr_fstring_runtime_expr_cache_.assign(ast_.exprs().size(), ast::k_invalid_expr);
         expr_external_const_value_cache_.clear();
@@ -241,6 +256,7 @@ namespace parus::tyck {
         result_.stmt_resolved_symbol = stmt_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
+        result_.expr_external_callee_type = expr_external_callee_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
@@ -251,8 +267,19 @@ namespace parus::tyck {
         result_.expr_loop_iterator_type = expr_loop_iterator_type_cache_;
         result_.expr_loop_iter_decl = expr_loop_iter_decl_cache_;
         result_.expr_loop_iter_external_symbol = expr_loop_iter_external_symbol_cache_;
+        result_.expr_loop_iter_fn_type = expr_loop_iter_fn_type_cache_;
         result_.expr_loop_next_decl = expr_loop_next_decl_cache_;
         result_.expr_loop_next_external_symbol = expr_loop_next_external_symbol_cache_;
+        result_.expr_loop_next_fn_type = expr_loop_next_fn_type_cache_;
+        result_.stmt_for_source_kind = stmt_for_source_kind_cache_;
+        result_.stmt_for_binder_type = stmt_for_binder_type_cache_;
+        result_.stmt_for_iterator_type = stmt_for_iterator_type_cache_;
+        result_.stmt_for_iter_decl = stmt_for_iter_decl_cache_;
+        result_.stmt_for_iter_external_symbol = stmt_for_iter_external_symbol_cache_;
+        result_.stmt_for_iter_fn_type = stmt_for_iter_fn_type_cache_;
+        result_.stmt_for_next_decl = stmt_for_next_decl_cache_;
+        result_.stmt_for_next_external_symbol = stmt_for_next_external_symbol_cache_;
+        result_.stmt_for_next_fn_type = stmt_for_next_fn_type_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -736,6 +763,7 @@ namespace parus::tyck {
         result_.stmt_resolved_symbol = stmt_resolved_symbol_cache_;
         result_.expr_proto_const_decl = expr_proto_const_decl_cache_;
         result_.expr_external_callee_symbol = expr_external_callee_symbol_cache_;
+        result_.expr_external_callee_type = expr_external_callee_type_cache_;
         result_.expr_external_receiver_expr = expr_external_receiver_expr_cache_;
         result_.expr_call_is_c_abi = expr_call_is_c_abi_cache_;
         result_.expr_call_is_c_variadic = expr_call_is_c_variadic_cache_;
@@ -746,8 +774,19 @@ namespace parus::tyck {
         result_.expr_loop_iterator_type = expr_loop_iterator_type_cache_;
         result_.expr_loop_iter_decl = expr_loop_iter_decl_cache_;
         result_.expr_loop_iter_external_symbol = expr_loop_iter_external_symbol_cache_;
+        result_.expr_loop_iter_fn_type = expr_loop_iter_fn_type_cache_;
         result_.expr_loop_next_decl = expr_loop_next_decl_cache_;
         result_.expr_loop_next_external_symbol = expr_loop_next_external_symbol_cache_;
+        result_.expr_loop_next_fn_type = expr_loop_next_fn_type_cache_;
+        result_.stmt_for_source_kind = stmt_for_source_kind_cache_;
+        result_.stmt_for_binder_type = stmt_for_binder_type_cache_;
+        result_.stmt_for_iterator_type = stmt_for_iterator_type_cache_;
+        result_.stmt_for_iter_decl = stmt_for_iter_decl_cache_;
+        result_.stmt_for_iter_external_symbol = stmt_for_iter_external_symbol_cache_;
+        result_.stmt_for_iter_fn_type = stmt_for_iter_fn_type_cache_;
+        result_.stmt_for_next_decl = stmt_for_next_decl_cache_;
+        result_.stmt_for_next_external_symbol = stmt_for_next_external_symbol_cache_;
+        result_.stmt_for_next_fn_type = stmt_for_next_fn_type_cache_;
         result_.expr_external_c_bitfield = expr_external_c_bitfield_cache_;
         result_.expr_fstring_runtime_expr = expr_fstring_runtime_expr_cache_;
         result_.expr_external_const_values = expr_external_const_value_cache_;
@@ -1790,6 +1829,12 @@ namespace parus::tyck {
         if (expr_proto_const_decl_cache_.size() < expr_size) {
             expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         }
+        if (expr_external_callee_symbol_cache_.size() < expr_size) {
+            expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        }
+        if (expr_external_callee_type_cache_.size() < expr_size) {
+            expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
         if (expr_loop_source_kind_cache_.size() < expr_size) {
             expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         }
@@ -1805,11 +1850,44 @@ namespace parus::tyck {
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) {
             expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         }
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) {
+            expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
         if (expr_loop_next_decl_cache_.size() < expr_size) {
             expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         }
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) {
             expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        }
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) {
+            expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        }
+        if (stmt_for_source_kind_cache_.size() < stmt_size) {
+            stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        }
+        if (stmt_for_binder_type_cache_.size() < stmt_size) {
+            stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        }
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) {
+            stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        }
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) {
+            stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        }
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) {
+            stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        }
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) {
+            stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        }
+        if (stmt_for_next_decl_cache_.size() < stmt_size) {
+            stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        }
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) {
+            stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        }
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) {
+            stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
         }
         if (expr_external_c_bitfield_cache_.size() < expr_size) {
             expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
@@ -1997,7 +2075,15 @@ namespace parus::tyck {
         if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
             return it->second;
         }
-        const auto sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key);
+        std::optional<uint32_t> sym_sid{};
+        if (key_rewritten) {
+            sym_sid = sym_.lookup(key);
+            if (!sym_sid.has_value()) {
+                sym_sid = lookup_symbol_(key);
+            }
+        } else {
+            sym_sid = lookup_symbol_(key);
+        }
         if (sym_sid.has_value()) {
             const auto& ss = sym_.symbol(*sym_sid);
             auto pit = proto_decl_by_name_.find(ss.name);
@@ -2231,13 +2317,38 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2577,13 +2688,38 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2825,13 +2961,26 @@ namespace parus::tyck {
         if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
         if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -2972,6 +3121,13 @@ namespace parus::tyck {
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -3039,20 +3195,18 @@ namespace parus::tyck {
             acts_qname = it->second;
         }
 
-        // Prefer an explicitly declared concrete acts block over instantiating
-        // a generic template for the same owner. This avoids duplicate lowering
-        // when a library ships both generic default acts and concrete shims.
+        // Named acts remain unique per owner/name, so an explicit concrete
+        // named acts block can override a generic template instance.
+        //
+        // Default acts are composable: one owner can legitimately have
+        // multiple default acts blocks that contribute different behavior
+        // (for example value helpers plus iteration). Because of that, we do
+        // not short-circuit generic instantiation merely because another
+        // default acts block already exists for the same owner.
         if (templ.acts_has_set_name) {
             const std::string key = acts_named_decl_key_(concrete_owner_type, acts_qname);
             if (auto it = acts_named_decl_by_owner_and_name_.find(key);
                 it != acts_named_decl_by_owner_and_name_.end() &&
-                it->second != template_sid) {
-                generic_acts_instance_cache_[cache_key] = it->second;
-                return it->second;
-            }
-        } else {
-            if (auto it = acts_default_decl_by_owner_.find(concrete_owner_type);
-                it != acts_default_decl_by_owner_.end() &&
                 it->second != template_sid) {
                 generic_acts_instance_cache_[cache_key] = it->second;
                 return it->second;
@@ -3119,6 +3273,7 @@ namespace parus::tyck {
         }
         collect_acts_operator_decl_(inst_sid, inst, /*allow_named_set=*/true);
         collect_acts_method_decl_(inst_sid, inst, /*allow_named_set=*/true);
+        collect_acts_assoc_type_decl_(inst_sid, inst, /*allow_named_set=*/true);
 
         const size_t expr_size = ast_.exprs().size();
         const size_t stmt_size = ast_.stmts().size();
@@ -3138,6 +3293,13 @@ namespace parus::tyck {
         if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
         if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
         if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
         const size_t param_size = ast_.params().size();
@@ -3161,6 +3323,17 @@ namespace parus::tyck {
         if (!decompose_named_user_type_(concrete_owner_type, owner_base, owner_args)) {
             return;
         }
+
+        auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
 
         std::vector<ast::StmtId> templates;
         templates.reserve(generic_acts_template_sid_set_.size());
@@ -3187,7 +3360,7 @@ namespace parus::tyck {
             std::string templ_base;
             std::vector<ty::TypeId> templ_args;
             if (!decompose_named_user_type_(templ.acts_target_type, templ_base, templ_args)) continue;
-            if (templ_base != owner_base) continue;
+            if (!owner_base_name_matches(templ_base, owner_base)) continue;
             if (templ_args.size() != owner_args.size()) continue;
 
             (void)ensure_generic_acts_instance_(templ_sid, concrete_owner_type, owner_args, use_span);
@@ -3554,11 +3727,32 @@ namespace parus::tyck {
         const auto& tt = types_.get(owner_type);
         if (tt.kind != ty::Kind::kNamedUser) return owner_type;
 
-        if (auto sid = lookup_symbol_(types_.to_string(owner_type))) {
+        auto adopt_declared_type = [&](std::string lookup) -> ty::TypeId {
+            if (lookup.empty()) return ty::kInvalidType;
+            auto sid = lookup_symbol_(lookup);
+            if (!sid.has_value()) sid = sym_.lookup(lookup);
+            if (!sid.has_value()) return ty::kInvalidType;
             const auto& ss = sym_.symbol(*sid);
             if ((ss.kind == sema::SymbolKind::kField || ss.kind == sema::SymbolKind::kType) &&
                 ss.declared_type != ty::kInvalidType) {
+                const bool owner_has_unresolved = type_contains_unresolved_generic_param_(owner_type);
+                const bool declared_has_unresolved = type_contains_unresolved_generic_param_(ss.declared_type);
+                if (!owner_has_unresolved && declared_has_unresolved) {
+                    return ty::kInvalidType;
+                }
                 return ss.declared_type;
+            }
+            return ty::kInvalidType;
+        };
+
+        const std::string raw = types_.to_string(owner_type);
+        if (const ty::TypeId direct = adopt_declared_type(raw); direct != ty::kInvalidType) {
+            return direct;
+        }
+        if (auto rewritten = rewrite_imported_path_(raw)) {
+            if (const ty::TypeId rewritten_t = adopt_declared_type(*rewritten);
+                rewritten_t != ty::kInvalidType) {
+                return rewritten_t;
             }
         }
         return owner_type;

@@ -23,6 +23,8 @@
         proto_member_fn_sid_set_.clear();
         import_alias_to_path_.clear();
         acts_named_decl_by_owner_and_name_.clear();
+        acts_default_decls_by_owner_.clear();
+        acts_default_assoc_type_map_.clear();
         explicit_impl_proto_sids_by_type_.clear();
         collect_core_impl_marker_file_ids_(program_stmt);
 
@@ -1024,15 +1026,9 @@
                 }
 
                 if (s.acts_is_for && !s.acts_has_set_name && owner_type != ty::kInvalidType) {
-                    auto it = acts_default_decl_by_owner_.find(owner_type);
-                    if (it != acts_default_decl_by_owner_.end() && it->second != sid) {
-                        std::ostringstream oss;
-                        oss << "duplicate default acts declaration for type "
-                            << types_.to_string(owner_type);
-                        diag_(diag::Code::kTypeErrorGeneric, s.span, oss.str());
-                        err_(s.span, oss.str());
-                    } else {
-                        acts_default_decl_by_owner_[owner_type] = sid;
+                    const bool generic_owner = type_contains_unresolved_generic_param_(owner_type);
+                    if (!generic_owner) {
+                        acts_default_decls_by_owner_[owner_type].push_back(sid);
                     }
                 }
 
@@ -1137,6 +1133,7 @@
                 }
                 collect_acts_operator_decl_(sid, s, /*allow_named_set=*/true);
                 collect_acts_method_decl_(sid, s, /*allow_named_set=*/true);
+                collect_acts_assoc_type_decl_(sid, s, /*allow_named_set=*/true);
                 return;
             }
         };
@@ -1659,9 +1656,167 @@
         return true;
     }
 
+    bool TypeChecker::parse_external_acts_assoc_type_payload_(
+        std::string_view payload,
+        ty::TypeId& out_owner_type,
+        std::string& out_assoc_name,
+        ty::TypeId& out_bound_type
+    ) const {
+        out_owner_type = ty::kInvalidType;
+        out_assoc_name.clear();
+        out_bound_type = ty::kInvalidType;
+
+        auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+            auto hex_value = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    const int hi = hex_value(raw[i + 1]);
+                    const int lo = hex_value(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(raw[i]);
+            }
+            return out;
+        };
+
+        auto parse_one_assoc = [&](std::string_view raw_body) -> bool {
+            const std::string body = payload_unescape_value_(raw_body);
+            const size_t first = body.find(',');
+            if (first == std::string::npos) return false;
+            const std::string name = body.substr(0, first);
+            const std::string repr_and_sem = body.substr(first + 1);
+            if (name.empty() || repr_and_sem.empty()) return false;
+            const size_t split = repr_and_sem.find('@');
+            const std::string repr = (split == std::string::npos) ? repr_and_sem : repr_and_sem.substr(0, split);
+            const std::string sem = (split == std::string::npos) ? std::string{} : repr_and_sem.substr(split + 1);
+            const ty::TypeId parsed =
+                parus::cimport::parse_external_type_repr(repr, sem, std::string(payload), types_);
+            if (parsed == ty::kInvalidType) return false;
+            out_assoc_name = name;
+            out_bound_type = parsed;
+            return true;
+        };
+
+        size_t pos = 0;
+        while (pos < payload.size()) {
+            size_t next = payload.find('|', pos);
+            if (next == std::string_view::npos) next = payload.size();
+            const std::string_view part = payload.substr(pos, next - pos);
+            const size_t eq = part.find('=');
+            if (eq != std::string_view::npos && eq + 1 < part.size()) {
+                const std::string_view k = part.substr(0, eq);
+                const std::string_view v = part.substr(eq + 1);
+                if (k == "owner") {
+                    const std::string owner_text = payload_unescape_value_(v);
+                    if (auto owner = parse_builtin_owner_type_from_text_(owner_text)) {
+                        out_owner_type = *owner;
+                    }
+                } else if (k == "assoc_type" && parse_one_assoc(v)) {
+                    return true;
+                }
+            }
+            if (next == payload.size()) break;
+            pos = next + 1;
+        }
+        return false;
+    }
+
     void TypeChecker::collect_external_builtin_acts_methods_() {
         external_acts_default_method_map_.clear();
         external_acts_template_method_map_.clear();
+        external_acts_default_assoc_type_map_.clear();
+        external_acts_template_assoc_type_map_.clear();
+        auto parse_external_generic_decl_meta_ = [](std::string_view payload) {
+            struct ExternalGenericDeclMeta {
+                std::vector<std::string> params{};
+            };
+            auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+                auto hex_value = [](char ch) -> int {
+                    if (ch >= '0' && ch <= '9') return ch - '0';
+                    if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                    if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                    return -1;
+                };
+
+                std::string out{};
+                out.reserve(raw.size());
+                for (size_t i = 0; i < raw.size(); ++i) {
+                    if (raw[i] == '%' && i + 2 < raw.size()) {
+                        const int hi = hex_value(raw[i + 1]);
+                        const int lo = hex_value(raw[i + 2]);
+                        if (hi >= 0 && lo >= 0) {
+                            out.push_back(static_cast<char>((hi << 4) | lo));
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    out.push_back(raw[i]);
+                }
+                return out;
+            };
+
+            ExternalGenericDeclMeta meta{};
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part.starts_with("gparam=")) {
+                    meta.params.push_back(
+                        payload_unescape_value_(part.substr(std::string_view("gparam=").size()))
+                    );
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return meta;
+        };
+        auto type_contains_meta_generic_ =
+            [&](auto&& self, ty::TypeId t, const std::unordered_set<std::string>& generic_names) -> bool {
+                if (t == ty::kInvalidType || t >= types_.count()) return false;
+                const auto& tt = types_.get(t);
+                switch (tt.kind) {
+                    case ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<ty::TypeId> args{};
+                        if (!types_.decompose_named_user(t, path, args) || path.empty()) return false;
+                        if (args.empty() && path.size() == 1 &&
+                            generic_names.find(std::string(path.front())) != generic_names.end()) {
+                            return true;
+                        }
+                        for (const auto arg : args) {
+                            if (self(self, arg, generic_names)) return true;
+                        }
+                        return false;
+                    }
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kEscape:
+                    case ty::Kind::kPtr:
+                        return self(self, tt.elem, generic_names);
+                    case ty::Kind::kFn:
+                        if (self(self, tt.ret, generic_names)) return true;
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            if (self(self, types_.fn_param_at(t, i), generic_names)) return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            };
         for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
             const auto& sym = sym_.symbol(sid);
             if (!sym.is_external) continue;
@@ -1713,11 +1868,14 @@
             md.receiver_is_self = receiver_is_self;
             md.external_payload = sym.external_payload;
 
-            std::unordered_set<std::string> unresolved{};
-            collect_unresolved_generic_param_names_in_type_(owner_t, unresolved);
             std::string owner_base{};
             std::vector<ty::TypeId> owner_args{};
-            if (!unresolved.empty() &&
+            const auto meta = parse_external_generic_decl_meta_(sym.external_payload);
+            std::unordered_set<std::string> meta_generic_names(meta.params.begin(), meta.params.end());
+            const bool owner_uses_meta_generics =
+                !meta_generic_names.empty() &&
+                type_contains_meta_generic_(type_contains_meta_generic_, owner_t, meta_generic_names);
+            if (owner_uses_meta_generics &&
                 decompose_named_user_type_(owner_t, owner_base, owner_args) &&
                 !owner_base.empty()) {
                 md.owner_is_generic_template = true;
@@ -1727,6 +1885,110 @@
                 continue;
             }
             external_acts_default_method_map_[owner_t][member_name].push_back(md);
+        }
+
+        auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+            auto hex_value = [](char ch) -> int {
+                if (ch >= '0' && ch <= '9') return ch - '0';
+                if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                return -1;
+            };
+
+            std::string out{};
+            out.reserve(raw.size());
+            for (size_t i = 0; i < raw.size(); ++i) {
+                if (raw[i] == '%' && i + 2 < raw.size()) {
+                    const int hi = hex_value(raw[i + 1]);
+                    const int lo = hex_value(raw[i + 2]);
+                    if (hi >= 0 && lo >= 0) {
+                        out.push_back(static_cast<char>((hi << 4) | lo));
+                        i += 2;
+                        continue;
+                    }
+                }
+                out.push_back(raw[i]);
+            }
+            return out;
+        };
+
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external) continue;
+            const bool struct_like_external_type =
+                (sym.kind == sema::SymbolKind::kField) ||
+                (sym.kind == sema::SymbolKind::kType &&
+                 (!sym.external_field_payload.empty() ||
+                  sym.external_payload.starts_with("parus_field_decl")));
+            if (sym.kind != sema::SymbolKind::kType && !struct_like_external_type) continue;
+            if (sym.declared_type == ty::kInvalidType) continue;
+            const std::string_view assoc_payload =
+                !sym.external_field_payload.empty()
+                    ? std::string_view(sym.external_field_payload)
+                    : std::string_view(sym.external_payload);
+            if (assoc_payload.find("assoc_type=") == std::string_view::npos) continue;
+
+            const ty::TypeId owner_t = canonicalize_acts_owner_type_(sym.declared_type);
+            std::string owner_base{};
+            std::vector<ty::TypeId> owner_args{};
+            (void)decompose_named_user_type_(owner_t, owner_base, owner_args);
+            std::vector<std::string> payload_params{};
+            size_t meta_pos = 0;
+            while (meta_pos < assoc_payload.size()) {
+                size_t meta_next = assoc_payload.find('|', meta_pos);
+                if (meta_next == std::string_view::npos) meta_next = assoc_payload.size();
+                const std::string_view meta_part = assoc_payload.substr(meta_pos, meta_next - meta_pos);
+                if (meta_part.starts_with("gparam=")) {
+                    payload_params.push_back(payload_unescape_value_(
+                        meta_part.substr(std::string_view("gparam=").size())
+                    ));
+                }
+                if (meta_next == assoc_payload.size()) break;
+                meta_pos = meta_next + 1;
+            }
+            const bool owner_is_template =
+                !payload_params.empty() &&
+                !owner_base.empty();
+
+            size_t pos = 0;
+            while (pos < assoc_payload.size()) {
+                size_t next = assoc_payload.find('|', pos);
+                if (next == std::string_view::npos) next = assoc_payload.size();
+                const std::string_view part = assoc_payload.substr(pos, next - pos);
+                if (part.starts_with("assoc_type=")) {
+                    const std::string body = payload_unescape_value_(
+                        part.substr(std::string_view("assoc_type=").size())
+                    );
+                    const size_t first = body.find(',');
+                    if (first != std::string::npos) {
+                        const std::string assoc_name = body.substr(0, first);
+                        const std::string repr_and_sem = body.substr(first + 1);
+                        const size_t split = repr_and_sem.find('@');
+                        const std::string repr =
+                            (split == std::string::npos) ? repr_and_sem : repr_and_sem.substr(0, split);
+                        const std::string sem =
+                            (split == std::string::npos) ? std::string{} : repr_and_sem.substr(split + 1);
+                        const ty::TypeId bound =
+                            parus::cimport::parse_external_type_repr(repr, sem, std::string(sym.external_payload), types_);
+                        if (!assoc_name.empty() && bound != ty::kInvalidType) {
+                            ExternalActsAssocTypeDecl decl{};
+                            decl.owner_type = owner_t;
+                            decl.bound_type = bound;
+                            decl.external_payload = std::string(assoc_payload);
+                            if (owner_is_template) {
+                                decl.owner_is_generic_template = true;
+                                decl.owner_generic_arity = static_cast<uint32_t>(payload_params.size());
+                                decl.owner_base = owner_base;
+                                external_acts_template_assoc_type_map_[owner_base][assoc_name].push_back(decl);
+                            } else {
+                                external_acts_default_assoc_type_map_[owner_t][assoc_name].push_back(decl);
+                            }
+                        }
+                    }
+                }
+                if (next == assoc_payload.size()) break;
+                pos = next + 1;
+            }
         }
     }
 
@@ -2273,12 +2535,29 @@
 
         const std::string_view candidate_base = proto_qname_base(candidate_sid);
         const std::string_view expected_base = proto_qname_base(expected_sid);
-        return !candidate_base.empty() && candidate_base == expected_base;
+        if (candidate_base.empty() || expected_base.empty()) return false;
+        if (candidate_base == expected_base) return true;
+        if (candidate_base.starts_with("core::") &&
+            candidate_base.substr(std::string_view("core::").size()) == expected_base) {
+            return true;
+        }
+        if (expected_base.starts_with("core::") &&
+            expected_base.substr(std::string_view("core::").size()) == candidate_base) {
+            return true;
+        }
+        const size_t csplit = candidate_base.rfind("::");
+        const size_t esplit = expected_base.rfind("::");
+        const std::string_view cleaf =
+            (csplit == std::string_view::npos) ? candidate_base : candidate_base.substr(csplit + 2);
+        const std::string_view eleaf =
+            (esplit == std::string_view::npos) ? expected_base : expected_base.substr(esplit + 2);
+        return cleaf == eleaf;
     }
 
     bool TypeChecker::type_satisfies_proto_constraint_(ty::TypeId concrete_t, ast::StmtId proto_sid, Span use_span) {
         if (proto_sid == ast::k_invalid_stmt) return false;
         concrete_t = canonicalize_transparent_external_typedef_(concrete_t);
+        concrete_t = canonicalize_acts_owner_type_(concrete_t);
         if (is_builtin_family_proto_(proto_sid)) {
             return builtin_family_proto_satisfied_by_primitive_(concrete_t, proto_sid);
         }
@@ -2550,9 +2829,19 @@
 
             const auto expected_proto_type = ast_.stmt(proto_sid).type;
             auto matches_external_symbol = [&](const sema::Symbol& sym) -> bool {
-                if (!sym.is_external || sym.kind != sema::SymbolKind::kType) return false;
-                if (sym.external_payload.empty()) return false;
-                const auto meta = parse_external_generic_decl_meta_(sym.external_payload);
+                if (!sym.is_external) return false;
+                const bool struct_like_external_type =
+                    (sym.kind == sema::SymbolKind::kField) ||
+                    (sym.kind == sema::SymbolKind::kType &&
+                     (!sym.external_field_payload.empty() ||
+                      sym.external_payload.starts_with("parus_field_decl")));
+                if (sym.kind != sema::SymbolKind::kType && !struct_like_external_type) return false;
+                const std::string_view payload =
+                    !sym.external_field_payload.empty()
+                        ? std::string_view(sym.external_field_payload)
+                        : std::string_view(sym.external_payload);
+                if (payload.empty()) return false;
+                const auto meta = parse_external_generic_decl_meta_(payload);
                 if (meta.impl_protos.empty()) return false;
 
                 std::unordered_map<std::string, ty::TypeId> subst{};
@@ -2563,7 +2852,7 @@
 
                 for (const auto& [repr, semantic] : meta.impl_protos) {
                     if (repr.empty() && semantic.empty()) continue;
-                    auto parsed = parus::cimport::parse_external_type_repr(repr, semantic, sym.external_payload, types_);
+                    auto parsed = parus::cimport::parse_external_type_repr(repr, semantic, payload, types_);
                     if (parsed == ty::kInvalidType) continue;
                     parsed = substitute_external_generic_type_(substitute_external_generic_type_, parsed, subst, types_);
                     if (expected_proto_type != ty::kInvalidType && parsed == expected_proto_type) {
@@ -2818,6 +3107,18 @@
             diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
             err_(acts_decl.span, oss.str());
             return false;
+        }
+
+        if (!acts_decl.acts_has_set_name) {
+            auto it = acts_default_decls_by_owner_.find(owner_type);
+            if (it != acts_default_decls_by_owner_.end() && it->second.size() > 1) {
+                std::ostringstream oss;
+                oss << "duplicate default acts declaration for type "
+                    << types_.to_string(owner_type);
+                diag_(diag::Code::kTypeErrorGeneric, acts_decl.span, oss.str());
+                err_(acts_decl.span, oss.str());
+                return false;
+            }
         }
 
         const std::string bundle = current_bundle_name_();
@@ -3150,6 +3451,37 @@
         }
     }
 
+    void TypeChecker::collect_acts_assoc_type_decl_(ast::StmtId acts_decl_sid, const ast::Stmt& acts_decl, bool allow_named_set) {
+        if (!acts_decl.acts_is_for) return;
+        if (acts_decl.acts_has_set_name && !allow_named_set) return;
+        const ty::TypeId owner_type = canonicalize_acts_owner_type_(acts_decl.acts_target_type);
+        if (owner_type == ty::kInvalidType) return;
+
+        const auto& kids = ast_.stmt_children();
+        const uint32_t begin = acts_decl.stmt_begin;
+        const uint32_t end = acts_decl.stmt_begin + acts_decl.stmt_count;
+        if (begin >= kids.size() || end > kids.size()) return;
+
+        for (uint32_t i = begin; i < end; ++i) {
+            const ast::StmtId sid = kids[i];
+            if (sid == ast::k_invalid_stmt) continue;
+            const auto& member = ast_.stmt(sid);
+            if (member.kind != ast::StmtKind::kAssocTypeDecl) continue;
+            if (member.assoc_type_role != ast::AssocTypeRole::kActsImpl) continue;
+            if (member.name.empty() || member.type == ty::kInvalidType) continue;
+
+            acts_default_assoc_type_map_[owner_type]
+                [std::string(member.name)]
+                .push_back(ActsAssocTypeDecl{
+                    .assoc_sid = sid,
+                    .acts_decl_sid = acts_decl_sid,
+                    .owner_type = owner_type,
+                    .bound_type = member.type,
+                    .from_named_set = acts_decl.acts_has_set_name,
+                });
+        }
+    }
+
     std::vector<TypeChecker::ActsMethodDecl>
     TypeChecker::lookup_acts_methods_for_call_(
         ty::TypeId owner_type,
@@ -3181,6 +3513,569 @@
             if (!d.from_named_set) out.push_back(d);
         }
         return out;
+    }
+
+    std::vector<TypeChecker::ExternalActsMethodDecl>
+    TypeChecker::lookup_external_acts_methods_for_call_(
+        ty::TypeId concrete_owner_type,
+        std::string_view member_name
+    ) const {
+        std::vector<ExternalActsMethodDecl> out;
+        concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
+        if (concrete_owner_type == ty::kInvalidType || member_name.empty()) return out;
+
+        auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
+        std::string concrete_owner_base{};
+        std::vector<ty::TypeId> concrete_owner_args{};
+        const bool have_concrete_owner_base =
+            decompose_named_user_type_(concrete_owner_type, concrete_owner_base, concrete_owner_args) &&
+            !concrete_owner_base.empty();
+        auto parse_external_generic_decl_meta_ = [](std::string_view payload) {
+            struct ExternalGenericDeclMeta {
+                std::vector<std::string> params{};
+            };
+            auto payload_unescape_value_ = [](std::string_view raw) -> std::string {
+                auto hex_value = [](char ch) -> int {
+                    if (ch >= '0' && ch <= '9') return ch - '0';
+                    if (ch >= 'a' && ch <= 'f') return 10 + (ch - 'a');
+                    if (ch >= 'A' && ch <= 'F') return 10 + (ch - 'A');
+                    return -1;
+                };
+
+                std::string out{};
+                out.reserve(raw.size());
+                for (size_t i = 0; i < raw.size(); ++i) {
+                    if (raw[i] == '%' && i + 2 < raw.size()) {
+                        const int hi = hex_value(raw[i + 1]);
+                        const int lo = hex_value(raw[i + 2]);
+                        if (hi >= 0 && lo >= 0) {
+                            out.push_back(static_cast<char>((hi << 4) | lo));
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    out.push_back(raw[i]);
+                }
+                return out;
+            };
+
+            ExternalGenericDeclMeta meta{};
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part.starts_with("gparam=")) {
+                    meta.params.push_back(
+                        payload_unescape_value_(part.substr(std::string_view("gparam=").size()))
+                    );
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return meta;
+        };
+        auto type_contains_meta_generic_ =
+            [&](auto&& self, ty::TypeId t, const std::unordered_set<std::string>& generic_names) -> bool {
+                if (t == ty::kInvalidType || t >= types_.count()) return false;
+                const auto& tt = types_.get(t);
+                switch (tt.kind) {
+                    case ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<ty::TypeId> args{};
+                        if (!types_.decompose_named_user(t, path, args) || path.empty()) return false;
+                        if (args.empty() && path.size() == 1 &&
+                            generic_names.find(std::string(path.front())) != generic_names.end()) {
+                            return true;
+                        }
+                        for (const auto arg : args) {
+                            if (self(self, arg, generic_names)) return true;
+                        }
+                        return false;
+                    }
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kEscape:
+                    case ty::Kind::kPtr:
+                        return self(self, tt.elem, generic_names);
+                    case ty::Kind::kFn:
+                        if (self(self, tt.ret, generic_names)) return true;
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            if (self(self, types_.fn_param_at(t, i), generic_names)) return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            };
+
+        std::unordered_set<uint32_t> seen{};
+        for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
+            const auto& sym = sym_.symbol(sid);
+            if (!sym.is_external || sym.kind != sema::SymbolKind::kFn) continue;
+            if (sym.declared_type == ty::kInvalidType || sym.declared_type >= types_.count()) continue;
+            const auto& fn_t = types_.get(sym.declared_type);
+            if (fn_t.kind != ty::Kind::kFn || fn_t.param_count == 0) continue;
+
+            ty::TypeId owner_t = ty::kInvalidType;
+            std::string parsed_member_name{};
+            bool receiver_is_self = false;
+            if (parse_external_builtin_acts_payload_(sym.external_payload, owner_t, parsed_member_name, receiver_is_self)) {
+                if (parsed_member_name != member_name) continue;
+                if (owner_t == concrete_owner_type && seen.insert(sid).second) {
+                    ExternalActsMethodDecl md{};
+                    md.fn_symbol = sid;
+                    md.owner_type = owner_t;
+                    md.receiver_is_self = receiver_is_self;
+                    md.external_payload = sym.external_payload;
+                    out.push_back(std::move(md));
+                }
+                continue;
+            }
+
+            const std::string_view full_name = sym.name;
+            const size_t split = full_name.rfind("::");
+            if (split == std::string_view::npos) continue;
+            const std::string_view parsed_name = full_name.substr(split + 2);
+            if (parsed_name != member_name) continue;
+
+            owner_t = types_.fn_param_at(sym.declared_type, 0);
+            if (owner_t == ty::kInvalidType || owner_t >= types_.count()) continue;
+            const auto& owner_tt = types_.get(owner_t);
+            if (owner_tt.kind == ty::Kind::kBorrow) owner_t = owner_tt.elem;
+            if (owner_t == ty::kInvalidType) continue;
+
+            ExternalActsMethodDecl md{};
+            md.fn_symbol = sid;
+            md.owner_type = owner_t;
+            md.receiver_is_self = true;
+            md.external_payload = sym.external_payload;
+
+            const auto meta = parse_external_generic_decl_meta_(sym.external_payload);
+            std::unordered_set<std::string> meta_generic_names(meta.params.begin(), meta.params.end());
+            const bool owner_uses_meta_generics =
+                !meta_generic_names.empty() &&
+                type_contains_meta_generic_(type_contains_meta_generic_, owner_t, meta_generic_names);
+            if (owner_uses_meta_generics) {
+                if (!have_concrete_owner_base) continue;
+                std::string template_owner_base{};
+                std::vector<ty::TypeId> template_owner_args{};
+                if (!decompose_named_user_type_(owner_t, template_owner_base, template_owner_args) ||
+                    template_owner_base.empty()) {
+                    continue;
+                }
+                if (!owner_base_name_matches(concrete_owner_base, template_owner_base) ||
+                    template_owner_args.size() != concrete_owner_args.size()) {
+                    continue;
+                }
+                md.owner_is_generic_template = true;
+                md.owner_generic_arity = static_cast<uint32_t>(template_owner_args.size());
+                md.owner_base = template_owner_base;
+                if (seen.insert(sid).second) out.push_back(std::move(md));
+                continue;
+            }
+
+            if (owner_t == concrete_owner_type && seen.insert(sid).second) {
+                out.push_back(std::move(md));
+            }
+        }
+
+        return out;
+    }
+
+    std::optional<ty::TypeId>
+    TypeChecker::lookup_acts_assoc_type_binding_(
+        ty::TypeId owner_type,
+        std::string_view name,
+        const ActiveActsSelection* forced_selection
+    ) const {
+        owner_type = canonicalize_acts_owner_type_(owner_type);
+        if (owner_type == ty::kInvalidType || name.empty()) return std::nullopt;
+
+        auto lookup_local = [&](ty::TypeId concrete_owner) -> std::optional<ty::TypeId> {
+            auto oit = acts_default_assoc_type_map_.find(concrete_owner);
+            if (oit == acts_default_assoc_type_map_.end()) return std::nullopt;
+            auto ait = oit->second.find(std::string(name));
+            if (ait == oit->second.end()) return std::nullopt;
+
+            const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(concrete_owner);
+            if (active != nullptr && active->kind == ActiveActsSelectionKind::kNamed) {
+                for (const auto& d : ait->second) {
+                    if (d.from_named_set && d.acts_decl_sid == active->named_decl_sid) {
+                        return d.bound_type;
+                    }
+                }
+            }
+            for (const auto& d : ait->second) {
+                if (!d.from_named_set) return d.bound_type;
+            }
+            return std::nullopt;
+        };
+
+        if (auto local = lookup_local(owner_type)) return local;
+
+        auto lookup_external = [&](ty::TypeId concrete_owner) -> std::optional<ty::TypeId> {
+            auto oit = external_acts_default_assoc_type_map_.find(concrete_owner);
+            if (oit == external_acts_default_assoc_type_map_.end()) return std::nullopt;
+            auto ait = oit->second.find(std::string(name));
+            if (ait == oit->second.end() || ait->second.empty()) return std::nullopt;
+            return ait->second.front().bound_type;
+        };
+
+        if (auto external = lookup_external(owner_type)) return external;
+
+        std::string owner_base{};
+        std::vector<ty::TypeId> owner_args{};
+        if (!decompose_named_user_type_(owner_type, owner_base, owner_args) || owner_base.empty()) {
+            return std::nullopt;
+        }
+
+        auto substitute_external_generic_type_ =
+            [&](auto&& self,
+                ty::TypeId cur,
+                const std::unordered_map<std::string, ty::TypeId>& subst,
+                ty::TypePool& pool) -> ty::TypeId {
+                if (cur == ty::kInvalidType || cur >= pool.count()) return cur;
+                const auto& tt = pool.get(cur);
+                switch (tt.kind) {
+                    case ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<ty::TypeId> args{};
+                        if (!pool.decompose_named_user(cur, path, args)) return cur;
+                        if (path.size() == 1 && args.empty()) {
+                            auto it = subst.find(std::string(path.front()));
+                            if (it != subst.end()) return it->second;
+                        }
+                        bool changed = false;
+                        for (auto& arg : args) {
+                            const auto next = self(self, arg, subst, pool);
+                            if (next != arg) {
+                                arg = next;
+                                changed = true;
+                            }
+                        }
+                        if (!changed) return cur;
+                        return pool.intern_named_path_with_args(
+                            path.data(),
+                            static_cast<uint32_t>(path.size()),
+                            args.empty() ? nullptr : args.data(),
+                            static_cast<uint32_t>(args.size())
+                        );
+                    }
+                    case ty::Kind::kOptional: {
+                        const auto elem = self(self, tt.elem, subst, pool);
+                        return elem == tt.elem ? cur : pool.make_optional(elem);
+                    }
+                    case ty::Kind::kBorrow: {
+                        const auto elem = self(self, tt.elem, subst, pool);
+                        return elem == tt.elem ? cur : pool.make_borrow(elem, tt.borrow_is_mut);
+                    }
+                    case ty::Kind::kEscape: {
+                        const auto elem = self(self, tt.elem, subst, pool);
+                        return elem == tt.elem ? cur : pool.make_escape(elem);
+                    }
+                    case ty::Kind::kPtr: {
+                        const auto elem = self(self, tt.elem, subst, pool);
+                        return elem == tt.elem ? cur : pool.make_ptr(elem, tt.ptr_is_mut);
+                    }
+                    case ty::Kind::kArray: {
+                        const auto elem = self(self, tt.elem, subst, pool);
+                        return elem == tt.elem ? cur : pool.make_array(elem, tt.array_has_size, tt.array_size);
+                    }
+                    case ty::Kind::kFn: {
+                        std::vector<ty::TypeId> params{};
+                        std::vector<std::string_view> labels{};
+                        std::vector<uint8_t> defaults{};
+                        bool changed = false;
+                        params.reserve(tt.param_count);
+                        labels.reserve(tt.param_count);
+                        defaults.reserve(tt.param_count);
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            const auto p = pool.fn_param_at(cur, i);
+                            const auto np = self(self, p, subst, pool);
+                            if (np != p) changed = true;
+                            params.push_back(np);
+                            labels.push_back(pool.fn_param_label_at(cur, i));
+                            defaults.push_back(pool.fn_param_has_default_at(cur, i) ? 1u : 0u);
+                        }
+                        const auto ret = self(self, tt.ret, subst, pool);
+                        if (ret != tt.ret) changed = true;
+                        if (!changed) return cur;
+                        return pool.make_fn(
+                            ret,
+                            params.empty() ? nullptr : params.data(),
+                            tt.param_count,
+                            tt.positional_param_count,
+                            labels.empty() ? nullptr : labels.data(),
+                            defaults.empty() ? nullptr : defaults.data(),
+                            tt.fn_is_c_abi,
+                            tt.fn_is_c_variadic,
+                            tt.fn_callconv
+                        );
+                    }
+                    default:
+                        return cur;
+                }
+            };
+
+        auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
+        auto parse_external_template_params_ = [&](std::string_view payload) {
+            std::vector<std::string> params{};
+            size_t pos = 0;
+            while (pos < payload.size()) {
+                size_t next = payload.find('|', pos);
+                if (next == std::string_view::npos) next = payload.size();
+                const std::string_view part = payload.substr(pos, next - pos);
+                if (part.starts_with("gparam=")) {
+                    params.push_back(payload_unescape_value_(
+                        part.substr(std::string_view("gparam=").size())
+                    ));
+                }
+                if (next == payload.size()) break;
+                pos = next + 1;
+            }
+            return params;
+        };
+
+        std::vector<std::string> lookup_keys{};
+        lookup_keys.push_back(owner_base);
+        if (auto rewritten = rewrite_imported_path_(owner_base)) {
+            lookup_keys.push_back(*rewritten);
+        }
+        std::sort(lookup_keys.begin(), lookup_keys.end());
+        lookup_keys.erase(std::unique(lookup_keys.begin(), lookup_keys.end()), lookup_keys.end());
+
+        for (const auto& key : lookup_keys) {
+            for (const auto& [template_owner_base, assoc_map] : external_acts_template_assoc_type_map_) {
+                if (!owner_base_name_matches(key, template_owner_base)) continue;
+                auto ait = assoc_map.find(std::string(name));
+                if (ait == assoc_map.end()) continue;
+
+                for (const auto& d : ait->second) {
+                    if (!d.owner_is_generic_template) continue;
+                    if (d.owner_generic_arity != owner_args.size()) continue;
+                    std::unordered_map<std::string, ty::TypeId> subst{};
+                    std::vector<std::string_view> templ_path{};
+                    std::vector<ty::TypeId> templ_args{};
+                    if (types_.decompose_named_user(d.owner_type, templ_path, templ_args) &&
+                        templ_args.size() == owner_args.size()) {
+                        for (size_t i = 0; i < templ_args.size(); ++i) {
+                            std::vector<std::string_view> arg_path{};
+                            std::vector<ty::TypeId> arg_args{};
+                            if (!types_.decompose_named_user(templ_args[i], arg_path, arg_args) ||
+                                arg_path.size() != 1 ||
+                                !arg_args.empty()) {
+                                subst.clear();
+                                break;
+                            }
+                            subst.emplace(std::string(arg_path.front()), owner_args[i]);
+                        }
+                    } else {
+                        const auto params = parse_external_template_params_(d.external_payload);
+                        if (params.size() != owner_args.size()) continue;
+                        for (size_t i = 0; i < params.size(); ++i) {
+                            subst.emplace(params[i], owner_args[i]);
+                        }
+                    }
+                    if (subst.size() != owner_args.size()) continue;
+                    const ty::TypeId substituted = substitute_external_generic_type_(
+                        substitute_external_generic_type_,
+                        d.bound_type,
+                        subst,
+                        types_
+                    );
+                    return substituted;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    bool TypeChecker::is_self_assoc_named_type_(ty::TypeId t, std::string* out_name) const {
+        std::vector<std::string_view> path{};
+        std::vector<ty::TypeId> args{};
+        if (!types_.decompose_named_user(t, path, args)) return false;
+        if (path.size() != 2 || path[0] != "Self" || !args.empty()) return false;
+        if (out_name != nullptr) *out_name = std::string(path[1]);
+        return true;
+    }
+
+    ty::TypeId TypeChecker::substitute_self_and_assoc_type_(
+        ty::TypeId t,
+        ty::TypeId owner_type,
+        const std::unordered_map<std::string, ty::TypeId>* assoc_bindings
+    ) const {
+        auto subst_assoc = [&](std::string_view name) -> ty::TypeId {
+            if (assoc_bindings != nullptr) {
+                auto it = assoc_bindings->find(std::string(name));
+                if (it != assoc_bindings->end()) return it->second;
+            }
+            if (auto bound = lookup_acts_assoc_type_binding_(owner_type, name)) {
+                return *bound;
+            }
+            return ty::kInvalidType;
+        };
+
+        auto self = [&](auto&& self, ty::TypeId cur) -> ty::TypeId {
+            if (cur == ty::kInvalidType) return cur;
+            const auto& tt = types_.get(cur);
+            switch (tt.kind) {
+                case ty::Kind::kNamedUser: {
+                    if (is_self_named_type_(cur)) return owner_type;
+                    std::string assoc_name{};
+                    if (is_self_assoc_named_type_(cur, &assoc_name)) {
+                        const ty::TypeId bound = subst_assoc(assoc_name);
+                        return bound == ty::kInvalidType ? cur : bound;
+                    }
+                    std::vector<std::string_view> path{};
+                    std::vector<ty::TypeId> args{};
+                    if (!types_.decompose_named_user(cur, path, args) || args.empty()) return cur;
+                    bool changed = false;
+                    for (auto& arg : args) {
+                        const auto next = self(self, arg);
+                        if (next != arg) {
+                            arg = next;
+                            changed = true;
+                        }
+                    }
+                    if (!changed) return cur;
+                    return types_.intern_named_path_with_args(
+                        path.data(),
+                        static_cast<uint32_t>(path.size()),
+                        args.empty() ? nullptr : args.data(),
+                        static_cast<uint32_t>(args.size())
+                    );
+                }
+                case ty::Kind::kOptional: {
+                    const auto elem = self(self, tt.elem);
+                    return elem == tt.elem ? cur : types_.make_optional(elem);
+                }
+                case ty::Kind::kBorrow: {
+                    const auto elem = self(self, tt.elem);
+                    return elem == tt.elem ? cur : types_.make_borrow(elem, tt.borrow_is_mut);
+                }
+                case ty::Kind::kEscape: {
+                    const auto elem = self(self, tt.elem);
+                    return elem == tt.elem ? cur : types_.make_escape(elem);
+                }
+                case ty::Kind::kPtr: {
+                    const auto elem = self(self, tt.elem);
+                    return elem == tt.elem ? cur : types_.make_ptr(elem, tt.ptr_is_mut);
+                }
+                case ty::Kind::kArray: {
+                    const auto elem = self(self, tt.elem);
+                    return elem == tt.elem ? cur : types_.make_array(elem, tt.array_has_size, tt.array_size);
+                }
+                case ty::Kind::kFn: {
+                    std::vector<ty::TypeId> params{};
+                    std::vector<std::string_view> labels{};
+                    std::vector<uint8_t> defaults{};
+                    bool changed = false;
+                    params.reserve(tt.param_count);
+                    labels.reserve(tt.param_count);
+                    defaults.reserve(tt.param_count);
+                    for (uint32_t i = 0; i < tt.param_count; ++i) {
+                        const auto p = types_.fn_param_at(cur, i);
+                        const auto np = self(self, p);
+                        if (np != p) changed = true;
+                        params.push_back(np);
+                        labels.push_back(types_.fn_param_label_at(cur, i));
+                        defaults.push_back(types_.fn_param_has_default_at(cur, i) ? 1u : 0u);
+                    }
+                    const auto ret = self(self, tt.ret);
+                    if (ret != tt.ret) changed = true;
+                    if (!changed) return cur;
+                    return types_.make_fn(
+                        ret,
+                        params.empty() ? nullptr : params.data(),
+                        tt.param_count,
+                        tt.positional_param_count,
+                        labels.empty() ? nullptr : labels.data(),
+                        defaults.empty() ? nullptr : defaults.data(),
+                        tt.fn_is_c_abi,
+                        tt.fn_is_c_variadic,
+                        tt.fn_callconv
+                    );
+                }
+                default:
+                    return cur;
+            }
+        };
+
+        return self(self, t);
+    }
+
+    bool TypeChecker::collect_assoc_type_bindings_for_owner_(
+        ty::TypeId owner_type,
+        std::unordered_map<std::string, ty::TypeId>& out,
+        const ActiveActsSelection* forced_selection
+    ) const {
+        out.clear();
+        owner_type = canonicalize_acts_owner_type_(owner_type);
+        if (owner_type == ty::kInvalidType) return false;
+
+        auto oit = acts_default_assoc_type_map_.find(owner_type);
+        if (oit != acts_default_assoc_type_map_.end()) {
+            const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(owner_type);
+            for (const auto& [name, decls] : oit->second) {
+                if (active != nullptr && active->kind == ActiveActsSelectionKind::kNamed) {
+                    for (const auto& d : decls) {
+                        if (d.from_named_set && d.acts_decl_sid == active->named_decl_sid) {
+                            out[name] = d.bound_type;
+                            break;
+                        }
+                    }
+                }
+                if (out.find(name) != out.end()) continue;
+                for (const auto& d : decls) {
+                    if (!d.from_named_set) {
+                        out[name] = d.bound_type;
+                        break;
+                    }
+                }
+            }
+        }
+
+        auto eout = external_acts_default_assoc_type_map_.find(owner_type);
+        if (eout != external_acts_default_assoc_type_map_.end()) {
+            for (const auto& [name, decls] : eout->second) {
+                if (out.find(name) != out.end() || decls.empty()) continue;
+                out[name] = decls.front().bound_type;
+            }
+        }
+
+        for (const auto& [_, assoc_map] : external_acts_template_assoc_type_map_) {
+            for (const auto& [name, decls] : assoc_map) {
+                (void)decls;
+                if (out.find(name) != out.end()) continue;
+                if (auto bound = lookup_acts_assoc_type_binding_(owner_type, name, forced_selection)) {
+                    out.emplace(name, *bound);
+                }
+            }
+        }
+
+        return !out.empty();
     }
 
     /// @brief binary operator에 대응되는 기본 acts overload를 찾는다.

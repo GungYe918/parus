@@ -205,6 +205,10 @@ namespace parus::tyck {
             expr_external_callee_symbol_cache_[call_expr_id] = sema::SymbolTable::kNoScope;
         }
         if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_external_callee_type_cache_.size()) {
+            expr_external_callee_type_cache_[call_expr_id] = ty::kInvalidType;
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_external_receiver_expr_cache_.size()) {
             expr_external_receiver_expr_cache_[call_expr_id] = ast::k_invalid_expr;
         }
@@ -460,10 +464,14 @@ namespace parus::tyck {
             return out;
         };
 
-        auto cache_external_callee_ = [&](uint32_t sid) {
+        auto cache_external_callee_ = [&](uint32_t sid, ty::TypeId fn_t = ty::kInvalidType) {
             if (call_expr_id != ast::k_invalid_expr &&
                 call_expr_id < expr_external_callee_symbol_cache_.size()) {
                 expr_external_callee_symbol_cache_[call_expr_id] = sid;
+            }
+            if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_external_callee_type_cache_.size()) {
+                expr_external_callee_type_cache_[call_expr_id] = fn_t;
             }
         };
 
@@ -963,6 +971,13 @@ namespace parus::tyck {
                                         );
                                     }
                                 }
+                            }
+                        }
+                        if (!any_external_method_named) {
+                            selected_external_methods =
+                                lookup_external_acts_methods_for_call_(owner_t, rhs.text);
+                            if (!selected_external_methods.empty()) {
+                                any_external_method_named = true;
                             }
                         }
 
@@ -2077,13 +2092,6 @@ namespace parus::tyck {
                     continue;
                 }
 
-                for (uint32_t i = 0; i < fn_tt.param_count; ++i) {
-                    ty::TypeId expected = types_.fn_param_at(fn_t, i);
-                    if (!bindings.empty()) expected = substitute_generic_type_(expected, bindings);
-                    expected_params.push_back(expected);
-                }
-                if (!bindings.empty()) expected_ret = substitute_generic_type_(expected_ret, bindings);
-
                 bool constraint_ok = true;
                 for (const auto& cc : meta.constraints) {
                     auto lhs_it = bindings.find(cc.lhs);
@@ -2151,6 +2159,17 @@ namespace parus::tyck {
                 }
                 if (!constraint_ok) continue;
 
+                ty::TypeId resolved_fn_t = fn_t;
+                if (!bindings.empty()) resolved_fn_t = substitute_generic_type_(fn_t, bindings);
+                expected_params.clear();
+                if (resolved_fn_t == ty::kInvalidType || resolved_fn_t >= types_.count()) continue;
+                const auto& resolved_tt = types_.get(resolved_fn_t);
+                if (resolved_tt.kind != ty::Kind::kFn) continue;
+                expected_ret = resolved_tt.ret;
+                for (uint32_t i = 0; i < resolved_tt.param_count; ++i) {
+                    expected_params.push_back(types_.fn_param_at(resolved_fn_t, i));
+                }
+
                 if (outside_positional.size() != expected_params.size()) continue;
 
                 bool all_ok = true;
@@ -2190,14 +2209,14 @@ namespace parus::tyck {
                     selected_external_score = candidate_score;
                     selected_external_is_template = candidate_is_template;
                     selected_external_sym = sid;
-                    selected_external_fn_type = expected_ret;
+                    selected_external_fn_type = resolved_fn_t;
                 }
             }
 
             if (selected_external_sym != sema::SymbolTable::kNoScope &&
                 selected_external_fn_type != ty::kInvalidType) {
-                cache_external_callee_(selected_external_sym);
-                return {true, selected_external_fn_type};
+                cache_external_callee_(selected_external_sym, selected_external_fn_type);
+                return {true, types_.get(selected_external_fn_type).ret};
             }
             if (ext_has_arity) {
                 diag_(diag::Code::kGenericArityMismatch, e.span,
@@ -2415,6 +2434,10 @@ namespace parus::tyck {
                     expr_external_callee_symbol_cache_[call_expr_id] = direct_callee_symbol;
                 }
                 if (call_expr_id != ast::k_invalid_expr &&
+                    call_expr_id < expr_external_callee_type_cache_.size()) {
+                    expr_external_callee_type_cache_[call_expr_id] = fn_t;
+                }
+                if (call_expr_id != ast::k_invalid_expr &&
                     call_expr_id < expr_call_is_c_abi_cache_.size()) {
                     expr_call_is_c_abi_cache_[call_expr_id] = 1u;
                     expr_call_is_c_variadic_cache_[call_expr_id] = is_c_variadic ? 1u : 0u;
@@ -2483,7 +2506,7 @@ namespace parus::tyck {
             }
 
             uint32_t selected_external_sym = sema::SymbolTable::kNoScope;
-            ty::TypeId selected_external_ret_type = ty::kInvalidType;
+            ty::TypeId selected_external_fn_type = ty::kInvalidType;
             bool has_selected_external = false;
             uint32_t selected_external_score = 0xFFFF'FFFFu;
             bool selected_external_is_template = true;
@@ -2726,12 +2749,6 @@ namespace parus::tyck {
                     }
                     if (!constraint_ok) continue;
 
-                    for (uint32_t i = 1; i < total_cnt; ++i) {
-                        ty::TypeId expected = types_.fn_param_at(fn_t, i);
-                        expected = substitute_generic_type_(expected, bindings);
-                        expected_params.push_back(expected);
-                    }
-                    expected_ret = substitute_generic_type_(expected_ret, bindings);
                 } else {
                     if (!explicit_call_type_args.empty()) {
                         ext_has_arity = true;
@@ -2742,6 +2759,19 @@ namespace parus::tyck {
                     for (uint32_t i = 1; i < total_cnt; ++i) {
                         expected_params.push_back(types_.fn_param_at(fn_t, i));
                     }
+                }
+
+                ty::TypeId resolved_fn_t = fn_t;
+                if (!bindings.empty()) {
+                    resolved_fn_t = substitute_generic_type_(fn_t, bindings);
+                }
+                if (resolved_fn_t == ty::kInvalidType || resolved_fn_t >= types_.count()) continue;
+                const auto& resolved_tt = types_.get(resolved_fn_t);
+                if (resolved_tt.kind != ty::Kind::kFn || resolved_tt.param_count == 0) continue;
+                expected_params.clear();
+                expected_ret = resolved_tt.ret;
+                for (uint32_t i = 1; i < resolved_tt.param_count; ++i) {
+                    expected_params.push_back(types_.fn_param_at(resolved_fn_t, i));
                 }
 
                 const uint32_t expected_outside_positional = static_cast<uint32_t>(expected_params.size());
@@ -2775,12 +2805,12 @@ namespace parus::tyck {
                     selected_external_score = candidate_score;
                     selected_external_is_template = candidate_is_template;
                     selected_external_sym = cand.fn_symbol;
-                    selected_external_ret_type = expected_ret;
+                    selected_external_fn_type = resolved_fn_t;
                 }
             }
 
             if (selected_external_sym == sema::SymbolTable::kNoScope ||
-                selected_external_ret_type == ty::kInvalidType) {
+                selected_external_fn_type == ty::kInvalidType) {
                 if (ext_has_arity) {
                     diag_(diag::Code::kGenericArityMismatch, e.span,
                           std::to_string(ext_expected_arity),
@@ -2826,10 +2856,14 @@ namespace parus::tyck {
                 expr_external_callee_symbol_cache_[call_expr_id] = selected_external_sym;
             }
             if (call_expr_id != ast::k_invalid_expr &&
+                call_expr_id < expr_external_callee_type_cache_.size()) {
+                expr_external_callee_type_cache_[call_expr_id] = selected_external_fn_type;
+            }
+            if (call_expr_id != ast::k_invalid_expr &&
                 call_expr_id < expr_external_receiver_expr_cache_.size()) {
                 expr_external_receiver_expr_cache_[call_expr_id] = receiver_eid;
             }
-            return selected_external_ret_type;
+            return types_.get(selected_external_fn_type).ret;
         }
 
         // ------------------------------------------------------------
@@ -2879,7 +2913,7 @@ namespace parus::tyck {
                     check_all_arg_exprs_only();
                     return types_.error();
                 }
-                cache_external_callee_(direct_ident_symbol);
+                cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
                 return types_.builtin(ty::Builtin::kUnit);
             }
 
@@ -2895,7 +2929,7 @@ namespace parus::tyck {
                     check_all_arg_exprs_only();
                     return types_.error();
                 }
-                cache_external_callee_(direct_ident_symbol);
+                cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
                 return types_.builtin(ty::Builtin::kUSize);
             }
 
@@ -2923,7 +2957,7 @@ namespace parus::tyck {
                 if (!value_plan.ok) {
                     return fail_core_shape_("core::mem::replace second argument must be assignable to T");
                 }
-                cache_external_callee_(direct_ident_symbol);
+                cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
                 return value_ty;
             }
 
@@ -2948,7 +2982,7 @@ namespace parus::tyck {
                 if (!lhs_plan.ok || !rhs_plan.ok) {
                     return fail_core_shape_("core::mem::swap arguments must both be &mut T");
                 }
-                cache_external_callee_(direct_ident_symbol);
+                cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
                 return types_.builtin(ty::Builtin::kUnit);
             }
         }

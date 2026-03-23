@@ -1685,22 +1685,11 @@
         if (req.param_count != impl.param_count) return false;
         if (req.positional_param_count != impl.positional_param_count) return false;
 
+        std::unordered_map<std::string, ty::TypeId> assoc_bindings{};
+        (void)collect_assoc_type_bindings_for_owner_(owner_type, assoc_bindings);
+
         auto normalize_self = [&](ty::TypeId t) -> ty::TypeId {
-            if (t == ty::kInvalidType) return t;
-            const auto& tt = types_.get(t);
-            if (tt.kind == ty::Kind::kNamedUser && is_self_named_type_(t)) {
-                return owner_type;
-            }
-            if (tt.kind == ty::Kind::kBorrow || tt.kind == ty::Kind::kEscape) {
-                if (tt.elem == ty::kInvalidType) return t;
-                const auto& et = types_.get(tt.elem);
-                if (et.kind == ty::Kind::kNamedUser && is_self_named_type_(tt.elem)) {
-                    return (tt.kind == ty::Kind::kBorrow)
-                        ? types_.make_borrow(owner_type, tt.borrow_is_mut)
-                        : types_.make_escape(owner_type);
-                }
-            }
-            return t;
+            return substitute_self_and_assoc_type_(t, owner_type, &assoc_bindings);
         };
 
         auto is_receiver_semantic_param = [&](const ast::Param& p) -> bool {
@@ -1749,6 +1738,16 @@
             }
         }
         return false;
+    }
+
+    bool TypeChecker::proto_assoc_requirement_satisfied_by_default_acts_(
+        const ast::Stmt& req,
+        ty::TypeId owner_type
+    ) const {
+        if (req.kind != ast::StmtKind::kAssocTypeDecl) return false;
+        if (req.assoc_type_role != ast::AssocTypeRole::kProtoRequire) return false;
+        if (req.name.empty()) return false;
+        return lookup_acts_assoc_type_binding_(owner_type, req.name).has_value();
     }
 
     void TypeChecker::check_stmt_proto_decl_(ast::StmtId sid) {
@@ -1804,6 +1803,17 @@
                     } else if (m.proto_req_path_count == 0) {
                         diag_(diag::Code::kUnexpectedToken, m.span, "require target path");
                         err_(m.span, "proto require target path is missing");
+                    }
+                    continue;
+                }
+
+                if (m.kind == ast::StmtKind::kAssocTypeDecl) {
+                    if (m.assoc_type_role != ast::AssocTypeRole::kProtoRequire) {
+                        diag_(diag::Code::kUnexpectedToken, m.span, "require type Item;");
+                        err_(m.span, "proto associated type member must begin with 'require type'");
+                    } else if (m.name.empty()) {
+                        diag_(diag::Code::kTypeNameExpected, m.span);
+                        err_(m.span, "proto associated type requires a name");
                     }
                     continue;
                 }
@@ -1955,6 +1965,9 @@
                     const auto& m = ast_.stmt(msid);
                     if (m.kind == ast::StmtKind::kFnDecl &&
                         m.proto_fn_role == ast::ProtoFnRole::kRequire) {
+                        out.push_back(msid);
+                    } else if (m.kind == ast::StmtKind::kAssocTypeDecl &&
+                               m.assoc_type_role == ast::AssocTypeRole::kProtoRequire) {
                         out.push_back(msid);
                     }
                 }
@@ -2373,6 +2386,16 @@
                 for (const ast::StmtId req_sid : required) {
                     if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
                     const auto& req = ast_.stmt(req_sid);
+
+                    if (req.kind == ast::StmtKind::kAssocTypeDecl) {
+                        if (proto_assoc_requirement_satisfied_by_default_acts_(req, self_ty)) {
+                            continue;
+                        }
+                        diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                        err_(req.span, "missing proto associated type binding: " + std::string(req.name));
+                        proto_impl_ok = false;
+                        continue;
+                    }
 
                     bool satisfied_by_provide = false;
                     for (const ast::StmtId prov_sid : provided) {

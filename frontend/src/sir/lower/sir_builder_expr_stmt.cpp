@@ -293,6 +293,32 @@ namespace parus::sir::detail {
                     break;
                 }
 
+                if (e.op == parus::syntax::TokenKind::kDotDot ||
+                    e.op == parus::syntax::TokenKind::kDotDotColon) {
+                    v.kind = ValueKind::kFieldInit;
+                    v.arg_begin = (uint32_t)m.args.size();
+                    v.arg_count = 0;
+
+                    Arg start{};
+                    start.kind = ArgKind::kLabeled;
+                    start.has_label = true;
+                    start.label = "start";
+                    start.span = ast.expr(e.a).span;
+                    start.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.a);
+                    m.add_arg(start);
+                    v.arg_count++;
+
+                    Arg end{};
+                    end.kind = ArgKind::kLabeled;
+                    end.has_label = true;
+                    end.label = "end";
+                    end.span = ast.expr(e.b).span;
+                    end.value = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.b);
+                    m.add_arg(end);
+                    v.arg_count++;
+                    break;
+                }
+
                 if (overload_sid != ast::k_invalid_stmt) {
                     v.kind = ValueKind::kCall;
                     v.callee_sym = resolve_symbol_from_stmt(nres, tyck, overload_sid);
@@ -399,19 +425,31 @@ namespace parus::sir::detail {
                 if ((size_t)eid < tyck.expr_loop_iter_external_symbol.size()) {
                     v.loop_iter_external_sym = tyck.expr_loop_iter_external_symbol[eid];
                 }
+                if ((size_t)eid < tyck.expr_loop_iter_fn_type.size()) {
+                    v.loop_iter_fn_type = tyck.expr_loop_iter_fn_type[eid];
+                }
                 if ((size_t)eid < tyck.expr_loop_next_decl.size()) {
                     v.loop_next_decl_stmt = tyck.expr_loop_next_decl[eid];
                 }
                 if ((size_t)eid < tyck.expr_loop_next_external_symbol.size()) {
                     v.loop_next_external_sym = tyck.expr_loop_next_external_symbol[eid];
                 }
-
-                if (e.loop_has_header && e.loop_iter != parus::ast::k_invalid_expr &&
-                    (v.loop_source_kind == parus::LoopSourceKind::kRangeExclusive ||
-                     v.loop_source_kind == parus::LoopSourceKind::kRangeInclusive)) {
-                    const auto& range_expr = ast.expr(e.loop_iter);
-                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, range_expr.a);
-                    v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, range_expr.b);
+                if ((size_t)eid < tyck.expr_loop_next_fn_type.size()) {
+                    v.loop_next_fn_type = tyck.expr_loop_next_fn_type[eid];
+                }
+                if ((v.loop_source_kind == parus::LoopSourceKind::kRangeExclusive ||
+                     v.loop_source_kind == parus::LoopSourceKind::kRangeInclusive) &&
+                    e.loop_iter != parus::ast::k_invalid_expr &&
+                    static_cast<size_t>(e.loop_iter) < ast.exprs().size()) {
+                    const auto& src = ast.expr(e.loop_iter);
+                    if (src.kind == parus::ast::ExprKind::kBinary &&
+                        (src.op == parus::syntax::TokenKind::kDotDot ||
+                         src.op == parus::syntax::TokenKind::kDotDotColon)) {
+                        v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, src.a);
+                        v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, src.b);
+                    } else {
+                        v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.loop_iter);
+                    }
                 } else {
                     v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, e.loop_iter);
                 }
@@ -531,6 +569,9 @@ namespace parus::sir::detail {
                     external_callee_sym = tyck.expr_external_callee_symbol[eid];
                     use_external_callee = (external_callee_sym != sema::SymbolTable::kNoScope &&
                                            external_callee_sym != k_invalid_symbol);
+                }
+                if ((size_t)eid < tyck.expr_external_callee_type.size()) {
+                    v.callee_fn_type = tyck.expr_external_callee_type[eid];
                 }
                 if ((size_t)eid < tyck.expr_external_receiver_expr.size()) {
                     external_receiver_eid = tyck.expr_external_receiver_expr[eid];
@@ -1078,6 +1119,68 @@ namespace parus::sir::detail {
                 out.expr = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
                 if (s.a != parus::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
                 break;
+
+            case parus::ast::StmtKind::kFor: {
+                out.kind = StmtKind::kExprStmt;
+
+                Value v{};
+                v.kind = ValueKind::kLoopExpr;
+                v.span = s.span;
+                v.type = active_builtin_type(parus::ty::Builtin::kNull);
+                v.op = 1u;
+                v.text = s.name;
+                v.sym = resolve_loop_symbol_from_stmt(nres, sid);
+                if ((size_t)sid < tyck.stmt_for_source_kind.size()) {
+                    v.loop_source_kind =
+                        static_cast<parus::LoopSourceKind>(tyck.stmt_for_source_kind[sid]);
+                }
+                if ((size_t)sid < tyck.stmt_for_binder_type.size()) {
+                    v.loop_binder_type = tyck.stmt_for_binder_type[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_iterator_type.size()) {
+                    v.loop_iterator_type = tyck.stmt_for_iterator_type[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_iter_decl.size()) {
+                    v.loop_iter_decl_stmt = tyck.stmt_for_iter_decl[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_iter_external_symbol.size()) {
+                    v.loop_iter_external_sym = tyck.stmt_for_iter_external_symbol[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_iter_fn_type.size()) {
+                    v.loop_iter_fn_type = tyck.stmt_for_iter_fn_type[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_next_decl.size()) {
+                    v.loop_next_decl_stmt = tyck.stmt_for_next_decl[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_next_external_symbol.size()) {
+                    v.loop_next_external_sym = tyck.stmt_for_next_external_symbol[sid];
+                }
+                if ((size_t)sid < tyck.stmt_for_next_fn_type.size()) {
+                    v.loop_next_fn_type = tyck.stmt_for_next_fn_type[sid];
+                }
+                if ((v.loop_source_kind == parus::LoopSourceKind::kRangeExclusive ||
+                     v.loop_source_kind == parus::LoopSourceKind::kRangeInclusive) &&
+                    s.expr != parus::ast::k_invalid_expr &&
+                    static_cast<size_t>(s.expr) < ast.exprs().size()) {
+                    const auto& src = ast.expr(s.expr);
+                    if (src.kind == parus::ast::ExprKind::kBinary &&
+                        (src.op == parus::syntax::TokenKind::kDotDot ||
+                         src.op == parus::syntax::TokenKind::kDotDotColon)) {
+                        v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, src.a);
+                        v.c = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, src.b);
+                    } else {
+                        v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                    }
+                } else {
+                    v.a = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.expr);
+                }
+                if (s.a != parus::ast::k_invalid_stmt) {
+                    v.b = (ValueId)lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);
+                }
+                out.expr = m.add_value(v);
+                break;
+            }
+
             case parus::ast::StmtKind::kDoScope:
                 out.kind = StmtKind::kDoScopeStmt;
                 if (s.a != parus::ast::k_invalid_stmt) out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.a);

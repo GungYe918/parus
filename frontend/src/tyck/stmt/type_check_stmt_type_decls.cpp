@@ -252,6 +252,9 @@
                     if (m.kind == ast::StmtKind::kFnDecl &&
                         m.proto_fn_role == ast::ProtoFnRole::kRequire) {
                         out.push_back(msid);
+                    } else if (m.kind == ast::StmtKind::kAssocTypeDecl &&
+                               m.assoc_type_role == ast::AssocTypeRole::kProtoRequire) {
+                        out.push_back(msid);
                     }
                 }
             }
@@ -331,6 +334,15 @@
                 for (const ast::StmtId req_sid : required) {
                     if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
                     const auto& req = ast_.stmt(req_sid);
+                    if (req.kind == ast::StmtKind::kAssocTypeDecl) {
+                        if (proto_assoc_requirement_satisfied_by_default_acts_(req, self_ty)) {
+                            continue;
+                        }
+                        diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                        err_(req.span, "field does not bind proto associated type: " + std::string(req.name));
+                        proto_impl_ok = false;
+                        continue;
+                    }
                     bool satisfied_by_provide = false;
                     for (const ast::StmtId prov_sid : provided) {
                         if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
@@ -521,6 +533,9 @@
                     if (m.kind == ast::StmtKind::kFnDecl &&
                         m.proto_fn_role == ast::ProtoFnRole::kRequire) {
                         out.push_back(msid);
+                    } else if (m.kind == ast::StmtKind::kAssocTypeDecl &&
+                               m.assoc_type_role == ast::AssocTypeRole::kProtoRequire) {
+                        out.push_back(msid);
                     }
                 }
             }
@@ -601,6 +616,15 @@
                 for (const ast::StmtId req_sid : required) {
                     if (req_sid == ast::k_invalid_stmt || (size_t)req_sid >= ast_.stmts().size()) continue;
                     const auto& req = ast_.stmt(req_sid);
+                    if (req.kind == ast::StmtKind::kAssocTypeDecl) {
+                        if (proto_assoc_requirement_satisfied_by_default_acts_(req, self_ty)) {
+                            continue;
+                        }
+                        diag_(diag::Code::kProtoImplMissingMember, req.span, req.name);
+                        err_(req.span, "enum does not bind proto associated type: " + std::string(req.name));
+                        proto_impl_ok = false;
+                        continue;
+                    }
                     bool satisfied_by_provide = false;
                     for (const ast::StmtId prov_sid : provided) {
                         if (prov_sid == ast::k_invalid_stmt || (size_t)prov_sid >= ast_.stmts().size()) continue;
@@ -664,9 +688,10 @@
 
         sym_.push_scope();
 
+        ty::TypeId owner_type = ty::kInvalidType;
         if (s.acts_is_for) {
             bool owner_ok = false;
-            ty::TypeId owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
+            owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
             {
                 std::string owner_base{};
                 std::vector<ty::TypeId> owner_args{};
@@ -725,10 +750,42 @@
 
         // acts 멤버 함수의 상호 참조를 위해 먼저 시그니처를 predeclare한다.
         if (begin < kids.size() && end <= kids.size()) {
+            std::unordered_set<std::string> seen_assoc_type_names{};
             for (uint32_t i = begin; i < end; ++i) {
                 const auto sid = kids[i];
                 if (sid == ast::k_invalid_stmt) continue;
                 const auto& member = ast_.stmt(sid);
+                if (member.kind == ast::StmtKind::kAssocTypeDecl) {
+                    if (!s.acts_is_for) {
+                        diag_(diag::Code::kTypeErrorGeneric, member.span,
+                              "associated type bindings are only allowed in acts-for declarations");
+                        err_(member.span, "associated type bindings are only allowed in acts-for declarations");
+                        continue;
+                    }
+                    if (member.assoc_type_role != ast::AssocTypeRole::kActsImpl) {
+                        diag_(diag::Code::kTypeErrorGeneric, member.span,
+                              "acts associated type binding must use 'type Name = ...;'");
+                        err_(member.span, "invalid acts associated type binding");
+                        continue;
+                    }
+                    if (member.name.empty()) {
+                        diag_(diag::Code::kTypeErrorGeneric, member.span,
+                              "acts associated type binding requires a name");
+                        err_(member.span, "acts associated type binding requires a name");
+                        continue;
+                    }
+                    if (member.type == ty::kInvalidType || is_error_(member.type)) {
+                        diag_(diag::Code::kTypeErrorGeneric, member.span,
+                              "acts associated type binding requires a valid type");
+                        err_(member.span, "acts associated type binding requires a valid type");
+                        continue;
+                    }
+                    if (!seen_assoc_type_names.insert(std::string(member.name)).second) {
+                        diag_(diag::Code::kDuplicateDecl, member.span, member.name);
+                        err_(member.span, "duplicate acts associated type binding");
+                    }
+                    continue;
+                }
                 if (member.kind != ast::StmtKind::kFnDecl) continue;
 
                 if (!member.fn_is_operator) {
@@ -743,8 +800,8 @@
                                 diag_(diag::Code::kTypeErrorGeneric, p0.span,
                                       "acts-for member requires 'self' as first parameter");
                                 err_(p0.span, "acts-for member requires 'self' as first parameter");
-                            } else if (s.acts_target_type != ty::kInvalidType &&
-                                       !type_matches_acts_owner_(types_, s.acts_target_type, p0.type)) {
+                            } else if (owner_type != ty::kInvalidType &&
+                                       !type_matches_acts_owner_(types_, owner_type, p0.type)) {
                                 const std::string msg = "self receiver type must match acts target type";
                                 diag_(diag::Code::kTypeErrorGeneric, p0.span, msg);
                                 err_(p0.span, msg);
@@ -775,8 +832,8 @@
                         if (!p0.is_self) {
                             diag_(diag::Code::kOperatorSelfFirstParamRequired, p0.span);
                             err_(p0.span, "operator first parameter must be marked with self");
-                        } else if (s.acts_is_for && s.acts_target_type != ty::kInvalidType &&
-                                   !type_matches_acts_owner_(types_, s.acts_target_type, p0.type)) {
+                        } else if (s.acts_is_for && owner_type != ty::kInvalidType &&
+                                   !type_matches_acts_owner_(types_, owner_type, p0.type)) {
                             std::string msg = "operator self type must match acts target type";
                             diag_(diag::Code::kTypeErrorGeneric, p0.span, msg);
                             err_(p0.span, msg);

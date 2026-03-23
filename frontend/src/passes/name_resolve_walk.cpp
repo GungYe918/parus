@@ -449,6 +449,27 @@
                 walk_stmt(ast, r, s.b, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
                 return;
 
+            case ast::StmtKind::kFor: {
+                ScopeGuard g(sym);
+                AliasScopeGuard ag(import_aliases);
+                walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
+                if (!s.name.empty()) {
+                    const auto ins = declare_(
+                        sema::SymbolKind::kVar,
+                        s.name,
+                        ast::k_invalid_type,
+                        s.span,
+                        sym, bag, opt
+                    );
+                    if (ins.ok && !ins.is_duplicate) {
+                        const auto rid = add_resolved_(out, BindingKind::kLocalVar, ins.symbol_id, s.span);
+                        out.stmt_for_var_to_resolved[(uint32_t)id] = rid;
+                    }
+                }
+                walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                return;
+            }
+
             case ast::StmtKind::kWhile:
                 walk_expr(ast, r, s.expr, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 walk_stmt(ast, r, s.a, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
@@ -480,6 +501,7 @@
             case ast::StmtKind::kContinue:
             case ast::StmtKind::kCommitStmt:
             case ast::StmtKind::kRecastStmt:
+            case ast::StmtKind::kAssocTypeDecl:
                 return;
 
             case ast::StmtKind::kTryCatch: {

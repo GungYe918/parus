@@ -1538,6 +1538,75 @@
                 b == ty::Builtin::kCPtrDiff;
         };
 
+        if (e.op == K::kDotDot || e.op == K::kDotDotColon) {
+            if (is_infer_int(lt) && is_int(rt)) {
+                if (!resolve_infer_int_in_context_(e.a, rt)) return types_.error();
+                lt = canonicalize_transparent_external_typedef_(check_expr_(e.a));
+            } else if (is_infer_int(rt) && is_int(lt)) {
+                if (!resolve_infer_int_in_context_(e.b, lt)) return types_.error();
+                rt = canonicalize_transparent_external_typedef_(check_expr_(e.b));
+            } else if (is_infer_int(lt) && is_infer_int(rt)) {
+                const ty::TypeId default_int = types_.builtin(ty::Builtin::kI32);
+                if (!resolve_infer_int_in_context_(e.a, default_int) ||
+                    !resolve_infer_int_in_context_(e.b, default_int)) {
+                    diag_(diag::Code::kIntLiteralNeedsTypeContext, e.span);
+                    err_(e.span, "range bounds need a concrete integer type");
+                    return types_.error();
+                }
+                lt = default_int;
+                rt = default_int;
+            }
+
+            if (lt != rt && !is_error_(lt) && !is_error_(rt)) {
+                diag_(diag::Code::kTypeBinaryOperandsMustMatch, e.span,
+                      types_.to_string(lt), types_.to_string(rt));
+                err_(e.span, "range bounds must have the same type");
+                return types_.error();
+            }
+
+            auto comparable_proto = resolve_proto_sid_for_constraint_("core::constraints::Comparable");
+            if (!comparable_proto.has_value()) {
+                comparable_proto = resolve_proto_sid_for_constraint_("constraints::Comparable");
+            }
+            if (!comparable_proto.has_value()) {
+                comparable_proto = resolve_proto_sid_for_constraint_("Comparable");
+            }
+            const bool builtin_comparable =
+                builtin_family_proto_satisfied_by_primitive_name_(lt, "Comparable");
+            if (!builtin_comparable && !comparable_proto.has_value()) {
+                diag_(diag::Code::kTypeErrorGeneric, e.span,
+                      "range operator requires constraints::Comparable, but the builtin proto is unavailable");
+                err_(e.span, "range operator is unavailable because constraints::Comparable could not be resolved");
+                return types_.error();
+            }
+            if (!builtin_comparable &&
+                comparable_proto.has_value() &&
+                !type_satisfies_proto_constraint_(lt, *comparable_proto, e.span)) {
+                err_(e.span, "range bounds must satisfy constraints::Comparable");
+                return types_.error();
+            }
+
+            ty::TypeId args[] = {lt};
+            const std::string_view full_path[] = {
+                "core",
+                "range",
+                (e.op == K::kDotDot) ? std::string_view("Range") : std::string_view("RangeInclusive")
+            };
+            ty::TypeId range_ty = types_.intern_named_path_with_args(full_path, 3u, args, 1u);
+            (void)ensure_generic_field_instance_from_type_(range_ty, e.span);
+            range_ty = canonicalize_acts_owner_type_(range_ty);
+            if (field_abi_meta_by_type_.find(range_ty) == field_abi_meta_by_type_.end()) {
+                const std::string_view short_path[] = {
+                    "range",
+                    (e.op == K::kDotDot) ? std::string_view("Range") : std::string_view("RangeInclusive")
+                };
+                range_ty = types_.intern_named_path_with_args(short_path, 2u, args, 1u);
+                (void)ensure_generic_field_instance_from_type_(range_ty, e.span);
+                range_ty = canonicalize_acts_owner_type_(range_ty);
+            }
+            return range_ty;
+        }
+
         // ------------------------------------------------------------
         // Logical: and / or
         // ------------------------------------------------------------

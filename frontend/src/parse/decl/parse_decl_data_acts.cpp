@@ -218,7 +218,7 @@
         ast::TypeNodeId acts_target_type_node = ast::k_invalid_type_node;
 
         const auto is_for_token = [](const Token& t) -> bool {
-            return t.kind == K::kIdent && t.lexeme == "for";
+            return t.kind == K::kKwFor || (t.kind == K::kIdent && t.lexeme == "for");
         };
 
         const Token head_tok = cursor_.peek();
@@ -292,6 +292,37 @@
             }
 
             const auto k = cursor_.peek().kind;
+            if (k == K::kIdent && cursor_.peek().lexeme == "type") {
+                const Token type_tok = cursor_.bump(); // contextual 'type'
+                std::string_view assoc_name{};
+                const Token name_tok = cursor_.peek();
+                if (name_tok.kind == K::kIdent) {
+                    assoc_name = name_tok.lexeme;
+                    cursor_.bump();
+                } else {
+                    diag_report(diag::Code::kTypeNameExpected, name_tok.span);
+                }
+
+                if (!cursor_.eat(K::kAssign)) {
+                    diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "=");
+                    recover_to_delim(K::kAssign, K::kSemicolon, K::kRBrace);
+                    (void)cursor_.eat(K::kAssign);
+                }
+
+                auto rhs = parse_type();
+                const Span end_sp = stmt_consume_semicolon_or_recover(rhs.span.hi ? rhs.span : type_tok.span);
+
+                ast::Stmt m{};
+                m.kind = ast::StmtKind::kAssocTypeDecl;
+                m.span = span_join(type_tok.span, end_sp);
+                m.name = assoc_name;
+                m.type = rhs.id;
+                m.type_node = rhs.node;
+                m.assoc_type_role = ast::AssocTypeRole::kActsImpl;
+                members.push_back(ast_.add_stmt(m));
+                continue;
+            }
+
             const bool is_fn_member_start =
                 (k == K::kAt || k == K::kKwFn || k == K::kKwExport || k == K::kKwExtern ||
                 (k == K::kKwConst && cursor_.peek(1).kind == K::kKwFn));
@@ -313,7 +344,7 @@
             }
 
             diag_report(diag::Code::kUnexpectedToken, cursor_.peek().span,
-                        "acts member (def declaration only; use class for mixed value+behavior)");
+                        "acts member (def declaration or associated type binding)");
             recover_to_delim(K::kSemicolon, K::kRBrace);
             cursor_.eat(K::kSemicolon);
         }

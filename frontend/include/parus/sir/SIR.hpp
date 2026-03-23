@@ -164,11 +164,14 @@ namespace parus::sir {
         TypeId loop_iterator_type = k_invalid_type;
         uint32_t loop_iter_decl_stmt = 0xFFFF'FFFFu;
         SymbolId loop_iter_external_sym = k_invalid_symbol;
+        TypeId loop_iter_fn_type = k_invalid_type;
         uint32_t loop_next_decl_stmt = 0xFFFF'FFFFu;
         SymbolId loop_next_external_sym = k_invalid_symbol;
+        TypeId loop_next_fn_type = k_invalid_type;
 
         // direct callee symbol (for kCall)
         SymbolId callee_sym = k_invalid_symbol;
+        TypeId callee_fn_type = k_invalid_type;
         uint32_t callee_decl_stmt = 0xFFFF'FFFFu; // AST StmtId of selected callee decl (for overload-safe lowering)
         bool call_is_c_abi = false;
         bool call_is_c_variadic = false;

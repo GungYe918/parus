@@ -224,17 +224,145 @@ if [[ -d "${ROOT_DIR}/sysroot/.cache/exports" ]]; then
 fi
 
 echo "[install] build core bundle artifacts (export-index + libcore_ext.a)"
-CORE_SRC_ROOT="${ROOT_DIR}/sysroot/core"
-CORE_CONFIG_LEI="${CORE_SRC_ROOT}/config.lei"
-if [[ ! -f "${CORE_CONFIG_LEI}" ]]; then
-  echo "install.sh: missing core config: ${CORE_CONFIG_LEI}" >&2
+BASE_CORE_SRC_ROOT="${ROOT_DIR}/sysroot/core"
+BASE_CORE_CONFIG_LEI="${BASE_CORE_SRC_ROOT}/config.lei"
+if [[ ! -f "${BASE_CORE_CONFIG_LEI}" ]]; then
+  echo "install.sh: missing core config: ${BASE_CORE_CONFIG_LEI}" >&2
   exit 1
 fi
 
 CORE_WORK_DIR="${BUILD_DIR}/install-core"
 CORE_OBJ_DIR="${CORE_WORK_DIR}/obj"
+CORE_SRC_ROOT="${CORE_WORK_DIR}/core-src"
 rm -rf "${CORE_WORK_DIR}"
-mkdir -p "${CORE_OBJ_DIR}" "${SYSROOT_DIR}/.cache/exports"
+mkdir -p "${CORE_OBJ_DIR}" "${SYSROOT_DIR}/.cache/exports" "${CORE_SRC_ROOT}"
+cp -R "${BASE_CORE_SRC_ROOT}/." "${CORE_SRC_ROOT}/"
+CORE_CONFIG_LEI="${CORE_SRC_ROOT}/config.lei"
+
+append_core_range_iter_shims() {
+  local range_file="${CORE_SRC_ROOT}/range/range.pr"
+  local iter_file="${CORE_SRC_ROOT}/iter/iter.pr"
+  local anchor_file="${CORE_SRC_ROOT}/constraints/inst.pr"
+  local step_types=(i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize char)
+
+  if [[ -f "${range_file}" ]]; then
+    {
+      echo ""
+      echo "// install-time anchors to force monomorphization of exported generic range constructors"
+      for ty in "${step_types[@]}"; do
+        local zero_expr=""
+        case "${ty}" in
+          i8) zero_expr="0i8" ;;
+          i16) zero_expr="0i16" ;;
+          i32) zero_expr="0i32" ;;
+          i64) zero_expr="0i64" ;;
+          i128) zero_expr="0i128" ;;
+          isize) zero_expr="0isize" ;;
+          u8) zero_expr="0u8" ;;
+          u16) zero_expr="0u16" ;;
+          u32) zero_expr="0u32" ;;
+          u64) zero_expr="0u64" ;;
+          u128) zero_expr="0u128" ;;
+          usize) zero_expr="0usize" ;;
+          char) zero_expr="'a'" ;;
+        esac
+        cat <<EOF
+def __parus_install_anchor_range_ctor_${ty}() -> Range<${ty}> {
+    return range<${ty}>(${zero_expr}, ${zero_expr});
+}
+
+def __parus_install_anchor_range_inclusive_ctor_${ty}() -> RangeInclusive<${ty}> {
+    return range_inclusive<${ty}>(${zero_expr}, ${zero_expr});
+}
+
+EOF
+      done
+    } >> "${range_file}"
+  fi
+
+  if [[ -f "${iter_file}" ]]; then
+    {
+      echo ""
+      echo "// install-time anchors to force monomorphization of exported iterator methods"
+      for ty in "${step_types[@]}"; do
+        local zero_expr=""
+        case "${ty}" in
+          i8) zero_expr="0i8" ;;
+          i16) zero_expr="0i16" ;;
+          i32) zero_expr="0i32" ;;
+          i64) zero_expr="0i64" ;;
+          i128) zero_expr="0i128" ;;
+          isize) zero_expr="0isize" ;;
+          u8) zero_expr="0u8" ;;
+          u16) zero_expr="0u16" ;;
+          u32) zero_expr="0u32" ;;
+          u64) zero_expr="0u64" ;;
+          u128) zero_expr="0u128" ;;
+          usize) zero_expr="0usize" ;;
+          char) zero_expr="'a'" ;;
+        esac
+        cat <<EOF
+def __parus_install_anchor_iter_next_${ty}() -> bool {
+    let mut out: ${ty} = ${zero_expr};
+    let mut it: RangeIter<${ty}> = RangeIter<${ty}>{ cur: ${zero_expr}, end: ${zero_expr} };
+    let ok_a: bool = it.next(&mut out);
+
+    let mut it_i: RangeInclusiveIter<${ty}> =
+        RangeInclusiveIter<${ty}>{ cur: ${zero_expr}, end: ${zero_expr}, done: false };
+    let ok_b: bool = it_i.next(&mut out);
+    return ok_a or ok_b;
+}
+
+EOF
+      done
+    } >> "${iter_file}"
+  fi
+
+  if [[ -f "${anchor_file}" ]]; then
+    {
+      echo ""
+      echo "import range as range;"
+      echo "import iter as iter;"
+      echo ""
+      echo "// install-time anchors to force monomorphization of exported generic range/iter surface"
+      for ty in "${step_types[@]}"; do
+        local zero_expr=""
+        case "${ty}" in
+          i8) zero_expr="0i8" ;;
+          i16) zero_expr="0i16" ;;
+          i32) zero_expr="0i32" ;;
+          i64) zero_expr="0i64" ;;
+          i128) zero_expr="0i128" ;;
+          isize) zero_expr="0isize" ;;
+          u8) zero_expr="0u8" ;;
+          u16) zero_expr="0u16" ;;
+          u32) zero_expr="0u32" ;;
+          u64) zero_expr="0u64" ;;
+          u128) zero_expr="0u128" ;;
+          usize) zero_expr="0usize" ;;
+          char) zero_expr="'a'" ;;
+        esac
+        cat <<EOF
+def __parus_install_anchor_range_iter_${ty}() -> bool {
+    let mut out: ${ty} = ${zero_expr};
+    let r: range::Range<${ty}> = range::Range<${ty}>{ start: ${zero_expr}, end: ${zero_expr} };
+    let mut it: iter::RangeIter<${ty}> = r.into_iter();
+    let ok_a: bool = it.next(&mut out);
+
+    let ri: range::RangeInclusive<${ty}> =
+        range::RangeInclusive<${ty}>{ start: ${zero_expr}, end: ${zero_expr} };
+    let mut it_i: iter::RangeInclusiveIter<${ty}> = ri.into_iter();
+    let ok_b: bool = it_i.next(&mut out);
+    return ok_a or ok_b;
+}
+
+EOF
+      done
+    } >> "${anchor_file}"
+  fi
+}
+
+append_core_range_iter_shims
 
 CORE_UNITS_TEXT="$("${LEI_BIN}" "${CORE_CONFIG_LEI}" --list_sources --format text)"
 if [[ -z "${CORE_UNITS_TEXT}" ]]; then

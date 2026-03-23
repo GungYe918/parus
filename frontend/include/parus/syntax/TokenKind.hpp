@@ -41,6 +41,7 @@ namespace parus::syntax {
         kKwIf,
         kKwElif,
         kKwElse,
+        kKwFor,
         kKwWhile,
         kKwDo,
         kKwReturn,
@@ -202,6 +203,7 @@ namespace parus::syntax {
             case TokenKind::kKwIf:  return "if";
             case TokenKind::kKwElif: return "elif";
             case TokenKind::kKwElse: return "else";
+            case TokenKind::kKwFor: return "for";
             case TokenKind::kKwWhile: return "while";
             case TokenKind::kKwDo: return "do";
             case TokenKind::kKwLoop: return "loop";

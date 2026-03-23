@@ -47,6 +47,10 @@ namespace parus::tyck {
                 check_stmt_if_(s);
                 return;
 
+            case ast::StmtKind::kFor:
+                check_stmt_for_(sid, s);
+                return;
+
             case ast::StmtKind::kWhile:
                 check_stmt_while_(s);
                 return;
@@ -73,6 +77,8 @@ namespace parus::tyck {
             case ast::StmtKind::kCompilerDirective:
                 return;
             case ast::StmtKind::kInstDecl:
+                return;
+            case ast::StmtKind::kAssocTypeDecl:
                 return;
 
             case ast::StmtKind::kThrow:
@@ -677,6 +683,25 @@ namespace parus::tyck {
         }
         restore_ownership_state_(before);
         merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/s.b == ast::k_invalid_stmt);
+    }
+
+    void TypeChecker::check_stmt_for_(ast::StmtId sid, const ast::Stmt& s) {
+        ast::Expr loop{};
+        loop.kind = ast::ExprKind::kLoop;
+        loop.span = s.span;
+        loop.loop_has_header = true;
+        loop.loop_var = s.name;
+        loop.loop_iter = s.expr;
+        loop.loop_body = s.a;
+        loop.target_type = types_.builtin(ty::Builtin::kNull);
+
+        const ast::ExprId saved_expr_id = current_expr_id_;
+        const ast::StmtId saved_for_stmt_id = current_for_stmt_id_;
+        current_expr_id_ = ast::k_invalid_expr;
+        current_for_stmt_id_ = sid;
+        (void)check_expr_loop_(loop, Slot::kDiscard, BreakTargetKind::kStmtLoop);
+        current_expr_id_ = saved_expr_id;
+        current_for_stmt_id_ = saved_for_stmt_id;
     }
 
     void TypeChecker::check_stmt_while_(const ast::Stmt& s) {

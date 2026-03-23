@@ -1667,7 +1667,9 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"range\"") ||
         !contains(core_index_text, "\"path\":\"range_inclusive\"") ||
         !contains(core_index_text, "\"path\":\"Iterator\"") ||
-        !contains(core_index_text, "\"path\":\"Sequence\"") ||
+        !contains(core_index_text, "\"path\":\"IterSource\"") ||
+        !contains(core_index_text, "\"path\":\"IterSourceMut\"") ||
+        !contains(core_index_text, "\"path\":\"IterSourceMove\"") ||
         !contains(core_index_text, "\"path\":\"RangeIter\"") ||
         !contains(core_index_text, "\"path\":\"RangeInclusiveIter\"") ||
         !contains(core_index_text, "\"path\":\"step_next\"") ||
@@ -1678,10 +1680,13 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"Step\"") ||
         !contains(core_index_text, "\"path\":\"BinaryFloatingPoint\"") ||
         !contains(core_index_text, "parus_impl_binding|key=Impl::StepNext|mode=compiler") ||
-        !contains(core_index_text, "impl_proto=core::iter::Sequence") ||
+        !contains(core_index_text, "impl_proto=core::iter::IterSourceMove") ||
         !contains(core_index_text, "impl_proto=core::iter::Iterator") ||
+        !contains(core_index_text, "assoc_type=Item%2C") ||
+        !contains(core_index_text, "assoc_type=Iter%2C") ||
         !contains(core_index_text, "gconstraint=proto,T,core::constraints::Step") ||
         contains(core_index_text, "gconstraint=proto,T,constraints::Step") ||
+        contains(core_index_text, "\"path\":\"Sequence\"") ||
         contains(core_index_text, "\"path\":\"SignedInt\"") ||
         contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
         contains(core_index_text, "\"path\":\"Integral\"") ||
@@ -1753,14 +1758,20 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
         "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
-        "  set mut it = rx.iter();\n"
-        "  let it1: i32? = it.next();\n"
-        "  let it2: i32? = it.next();\n"
-        "  let it3: i32? = it.next();\n"
-        "  let it4: i32? = it.next();\n"
-        "  set mut single_char = rci.iter();\n"
-        "  let rc1: char? = single_char.next();\n"
-        "  let rc2: char? = single_char.next();\n"
+        "  set mut it = rx.into_iter();\n"
+        "  set mut it1 = 0i32;\n"
+        "  set mut it2 = 0i32;\n"
+        "  set mut it3 = 0i32;\n"
+        "  set mut it4 = 0i32;\n"
+        "  let ok_it1: bool = it.next(&mut it1);\n"
+        "  let ok_it2: bool = it.next(&mut it2);\n"
+        "  let ok_it3: bool = it.next(&mut it3);\n"
+        "  let ok_it4: bool = it.next(&mut it4);\n"
+        "  set mut single_char = rci.into_iter();\n"
+        "  set mut rc1 = 'x';\n"
+        "  set mut rc2 = 'x';\n"
+        "  let ok_rc1: bool = single_char.next(&mut rc1);\n"
+        "  let ok_rc2: bool = single_char.next(&mut rc2);\n"
         "  set mut loop_sum = 0i32;\n"
         "  loop (x in range::range(1i32, 4i32)) {\n"
         "    set loop_sum = loop_sum + x;\n"
@@ -1789,9 +1800,9 @@ bool test_core_seed_export_index_and_auto_injection() {
         " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
         " not rx_empty and rx_has_mid and not rx_has_hi and rx_contains_range and not rx_intersects_tail and"
         " ri_has_hi and ri_empty and rc_has_mid and not rc_has_hi and rci_single and rci_intersects and"
-        " it1 != null and it2 != null and it3 != null and it4 == null and"
-        " (it1 as! i32) == 1i32 and (it2 as! i32) == 2i32 and (it3 as! i32) == 3i32 and"
-        " rc1 != null and (rc1 as! char) == 'k' and rc2 == null and"
+        " ok_it1 and ok_it2 and ok_it3 and not ok_it4 and"
+        " it1 == 1i32 and it2 == 2i32 and it3 == 3i32 and"
+        " ok_rc1 and rc1 == 'k' and not ok_rc2 and"
         " loop_sum == 6i32 and loop_inc_sum == 6i32 and"
         " sz_i32 == 4usize and sz_text == 16usize and al_i32 == 4usize and al_text == 8usize and"
         " swap_a == 2i32 and swap_b == 1i32 and repl_old.len_bytes() == 3usize and repl.len_bytes() == 1usize and"
@@ -1935,14 +1946,20 @@ bool test_core_seed_runtime_smoke() {
         "  let rc_has_hi: bool = rc.contains('z');\n"
         "  let rci_single: bool = rci.is_singleton();\n"
         "  let rci_intersects: bool = rci.intersects(range::range_inclusive('k', 'm'));\n"
-        "  set mut it = rx.iter();\n"
-        "  let it1: i32? = it.next();\n"
-        "  let it2: i32? = it.next();\n"
-        "  let it3: i32? = it.next();\n"
-        "  let it4: i32? = it.next();\n"
-        "  set mut char_it = rci.iter();\n"
-        "  let rc1: char? = char_it.next();\n"
-        "  let rc2: char? = char_it.next();\n"
+        "  set mut it = rx.into_iter();\n"
+        "  set mut it1 = 0i32;\n"
+        "  set mut it2 = 0i32;\n"
+        "  set mut it3 = 0i32;\n"
+        "  set mut it4 = 0i32;\n"
+        "  let ok_it1: bool = it.next(&mut it1);\n"
+        "  let ok_it2: bool = it.next(&mut it2);\n"
+        "  let ok_it3: bool = it.next(&mut it3);\n"
+        "  let ok_it4: bool = it.next(&mut it4);\n"
+        "  set mut char_it = rci.into_iter();\n"
+        "  set mut rc1 = 'x';\n"
+        "  set mut rc2 = 'x';\n"
+        "  let ok_rc1: bool = char_it.next(&mut rc1);\n"
+        "  let ok_rc2: bool = char_it.next(&mut rc2);\n"
         "  set mut loop_sum = 0i32;\n"
         "  loop (x in range::range(1i32, 4i32)) {\n"
         "    set loop_sum = loop_sum + x;\n"
@@ -1982,16 +1999,16 @@ bool test_core_seed_runtime_smoke() {
         "      and not rc_has_hi\n"
         "      and rci_single\n"
         "      and rci_intersects\n"
-        "      and it1 != null\n"
-        "      and it2 != null\n"
-        "      and it3 != null\n"
-        "      and it4 == null\n"
-        "      and (it1 as! i32) == 1i32\n"
-        "      and (it2 as! i32) == 2i32\n"
-        "      and (it3 as! i32) == 3i32\n"
-        "      and rc1 != null\n"
-        "      and (rc1 as! char) == 'k'\n"
-        "      and rc2 == null\n"
+        "      and ok_it1\n"
+        "      and ok_it2\n"
+        "      and ok_it3\n"
+        "      and not ok_it4\n"
+        "      and it1 == 1i32\n"
+        "      and it2 == 2i32\n"
+        "      and it3 == 3i32\n"
+        "      and ok_rc1\n"
+        "      and rc1 == 'k'\n"
+        "      and not ok_rc2\n"
         "      and loop_sum == 6i32\n"
         "      and loop_inc_sum == 6i32\n"
         "      and sz_i32 == 4usize\n"
@@ -2076,15 +2093,22 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"range\"") ||
         !contains(installed_core_index, "\"path\":\"range_inclusive\"") ||
         !contains(installed_core_index, "\"path\":\"Iterator\"") ||
-        !contains(installed_core_index, "\"path\":\"Sequence\"") ||
+        !contains(installed_core_index, "\"path\":\"IterSource\"") ||
+        !contains(installed_core_index, "\"path\":\"IterSourceMut\"") ||
+        !contains(installed_core_index, "\"path\":\"IterSourceMove\"") ||
         !contains(installed_core_index, "\"path\":\"RangeIter\"") ||
         !contains(installed_core_index, "\"path\":\"RangeInclusiveIter\"") ||
         !contains(installed_core_index, "\"path\":\"step_next\"") ||
         !contains(installed_core_index, "\"path\":\"SignedInteger\"") ||
+        !contains(installed_core_index, "impl_proto=core::iter::IterSourceMove") ||
+        !contains(installed_core_index, "impl_proto=core::iter::Iterator") ||
+        !contains(installed_core_index, "assoc_type=Item%2C") ||
+        !contains(installed_core_index, "assoc_type=Iter%2C") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::AlignOf|mode=compiler") ||
         !contains(installed_core_index, "parus_impl_binding|key=Impl::SpinLoop|mode=compiler") ||
-        !contains(installed_core_index, "parus_impl_binding|key=Impl::StepNext|mode=compiler")) {
+        !contains(installed_core_index, "parus_impl_binding|key=Impl::StepNext|mode=compiler") ||
+        contains(installed_core_index, "\"path\":\"Sequence\"")) {
         std::filesystem::remove_all(temp_root, ec);
         return true;
     }

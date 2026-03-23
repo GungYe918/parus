@@ -374,7 +374,7 @@ namespace {
         const bool text_param_as_aggregate =
             lowered.llvm_ir.find("sink({ ptr, i64 })") != std::string::npos;
         const bool text_param_as_ptr =
-            lowered.llvm_ir.find("sink$Mnone$Rnone$Sdef_msg__text_____i32") != std::string::npos &&
+            lowered.llvm_ir.find("@p$main$_$sink$") != std::string::npos &&
             lowered.llvm_ir.find("(ptr %arg0)") != std::string::npos;
         ok &= require_(text_param_as_aggregate || text_param_as_ptr,
                        "text parameter must be lowered consistently (aggregate or ptr ABI form)");

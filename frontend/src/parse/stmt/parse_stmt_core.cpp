@@ -151,6 +151,7 @@ namespace parus {
 
         // keyword stmts
         if (tok.kind == K::kKwIf)       return parse_stmt_if();
+        if (tok.kind == K::kKwFor)      return parse_stmt_for();
         if (tok.kind == K::kKwWhile)    return parse_stmt_while();
         if (tok.kind == K::kKwDo)       return parse_stmt_do();
         if (tok.kind == K::kKwManual)   return parse_stmt_manual();
@@ -995,6 +996,53 @@ namespace parus {
             (tail_else != ast::k_invalid_stmt) ? ast_.stmt(tail_else).span : ast_.stmt(then0).span
         );
         return ast_.add_stmt(root);
+    }
+
+    ast::StmtId Parser::parse_stmt_for() {
+        using K = syntax::TokenKind;
+
+        const Token kw = cursor_.bump(); // for
+        if (!cursor_.eat(K::kLParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
+            recover_to_delim(K::kLParen, K::kRParen, K::kLBrace);
+            (void)cursor_.eat(K::kLParen);
+        }
+
+        std::string_view binder{};
+        const Token name_tok = cursor_.peek();
+        if (name_tok.kind == K::kIdent) {
+            binder = name_tok.lexeme;
+            cursor_.bump();
+        } else {
+            diag_report(diag::Code::kFieldNameExpected, name_tok.span);
+        }
+
+        if (!cursor_.eat(K::kKwIn)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "in");
+            recover_to_delim(K::kKwIn, K::kRParen, K::kLBrace);
+            (void)cursor_.eat(K::kKwIn);
+        }
+
+        ast::ExprId src = ast::k_invalid_expr;
+        if (!cursor_.at(K::kRParen) && !cursor_.at(K::kEof)) {
+            src = parse_expr();
+        }
+
+        if (!cursor_.eat(K::kRParen)) {
+            diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+            recover_to_delim(K::kRParen, K::kLBrace, K::kSemicolon);
+            (void)cursor_.eat(K::kRParen);
+        }
+
+        ast::StmtId body = parse_stmt_required_block("for");
+
+        ast::Stmt s{};
+        s.kind = ast::StmtKind::kFor;
+        s.name = binder;
+        s.expr = src;
+        s.a = body;
+        s.span = span_join(kw.span, ast_.stmt(body).span);
+        return ast_.add_stmt(s);
     }
 
     // return 파싱

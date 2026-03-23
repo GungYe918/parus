@@ -3,84 +3,106 @@ $![Impl::Core];
 import constraints as constraints;
 import iter as iter;
 
-struct Range<T>: iter::Sequence<T, iter::RangeIter<T>> {
+struct Range<T>: iter::IterSourceMove {
     start: T;
     end: T;
 };
 
-struct RangeInclusive<T>: iter::Sequence<T, iter::RangeInclusiveIter<T>> {
+struct RangeInclusive<T>: iter::IterSourceMove {
     start: T;
     end: T;
 };
 
-def range_impl_<T>(start: T, end: T) with [T: constraints::Step] -> Range<T> {
+def range_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
     return Range<T>{ start: start, end: end };
 }
 
-def range_inclusive_impl_<T>(start: T, end: T) with [T: constraints::Step] -> RangeInclusive<T> {
+def range_inclusive_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
     return RangeInclusive<T>{ start: start, end: end };
 }
 
-export def range<T>(start: T, end: T) with [T: constraints::Step] -> Range<T> {
+export def range<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
     return range_impl_<T>(start, end);
 }
 
-export def range_inclusive<T>(start: T, end: T) with [T: constraints::Step] -> RangeInclusive<T> {
+export def range_inclusive<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
     return range_inclusive_impl_<T>(start, end);
 }
 
-def range_is_empty_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
+// Installed/external callers still need concrete constructor symbols until
+// cross-bundle generic export materialization is fully converged.
+export def range(start: i8, end: i8) -> Range<i8> { return range_impl_<i8>(start, end); }
+export def range(start: i16, end: i16) -> Range<i16> { return range_impl_<i16>(start, end); }
+export def range(start: i32, end: i32) -> Range<i32> { return range_impl_<i32>(start, end); }
+export def range(start: i64, end: i64) -> Range<i64> { return range_impl_<i64>(start, end); }
+export def range(start: i128, end: i128) -> Range<i128> { return range_impl_<i128>(start, end); }
+export def range(start: isize, end: isize) -> Range<isize> { return range_impl_<isize>(start, end); }
+export def range(start: u8, end: u8) -> Range<u8> { return range_impl_<u8>(start, end); }
+export def range(start: u16, end: u16) -> Range<u16> { return range_impl_<u16>(start, end); }
+export def range(start: u32, end: u32) -> Range<u32> { return range_impl_<u32>(start, end); }
+export def range(start: u64, end: u64) -> Range<u64> { return range_impl_<u64>(start, end); }
+export def range(start: u128, end: u128) -> Range<u128> { return range_impl_<u128>(start, end); }
+export def range(start: usize, end: usize) -> Range<usize> { return range_impl_<usize>(start, end); }
+export def range(start: char, end: char) -> Range<char> { return range_impl_<char>(start, end); }
+
+export def range_inclusive(start: i8, end: i8) -> RangeInclusive<i8> { return range_inclusive_impl_<i8>(start, end); }
+export def range_inclusive(start: i16, end: i16) -> RangeInclusive<i16> { return range_inclusive_impl_<i16>(start, end); }
+export def range_inclusive(start: i32, end: i32) -> RangeInclusive<i32> { return range_inclusive_impl_<i32>(start, end); }
+export def range_inclusive(start: i64, end: i64) -> RangeInclusive<i64> { return range_inclusive_impl_<i64>(start, end); }
+export def range_inclusive(start: i128, end: i128) -> RangeInclusive<i128> { return range_inclusive_impl_<i128>(start, end); }
+export def range_inclusive(start: isize, end: isize) -> RangeInclusive<isize> { return range_inclusive_impl_<isize>(start, end); }
+export def range_inclusive(start: u8, end: u8) -> RangeInclusive<u8> { return range_inclusive_impl_<u8>(start, end); }
+export def range_inclusive(start: u16, end: u16) -> RangeInclusive<u16> { return range_inclusive_impl_<u16>(start, end); }
+export def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> { return range_inclusive_impl_<u32>(start, end); }
+export def range_inclusive(start: u64, end: u64) -> RangeInclusive<u64> { return range_inclusive_impl_<u64>(start, end); }
+export def range_inclusive(start: u128, end: u128) -> RangeInclusive<u128> { return range_inclusive_impl_<u128>(start, end); }
+export def range_inclusive(start: usize, end: usize) -> RangeInclusive<usize> { return range_inclusive_impl_<usize>(start, end); }
+export def range_inclusive(start: char, end: char) -> RangeInclusive<char> { return range_inclusive_impl_<char>(start, end); }
+
+def range_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
     return start >= end;
 }
 
-def range_contains_<T>(start: T, end: T, value: T) with [T: constraints::Step] -> bool {
+def range_contains_<T>(start: T, end: T, value: T) with [T: constraints::Comparable] -> bool {
     return value >= start and value < end;
 }
 
-def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
+def range_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
     return range_is_empty_<T>(other_start, other_end) or (other_start >= start and other_end <= end);
 }
 
-def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
+def range_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
     return not range_is_empty_<T>(start, end)
         and not range_is_empty_<T>(other_start, other_end)
         and start < other_end
         and other_start < end;
 }
 
-def range_inclusive_is_empty_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
+def range_inclusive_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
     return start > end;
 }
 
-def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: constraints::Step] -> bool {
+def range_inclusive_contains_<T>(start: T, end: T, value: T) with [T: constraints::Comparable] -> bool {
     return value >= start and value <= end;
 }
 
-def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
+def range_inclusive_contains_range_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
     return range_inclusive_is_empty_<T>(other_start, other_end) or
         (other_start >= start and other_end <= end);
 }
 
-def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Step] -> bool {
-    return  not range_inclusive_is_empty_<T>(start, end)
+def range_inclusive_intersects_<T>(start: T, end: T, other_start: T, other_end: T) with [T: constraints::Comparable] -> bool {
+    return not range_inclusive_is_empty_<T>(start, end)
         and not range_inclusive_is_empty_<T>(other_start, other_end)
         and start <= other_end
         and other_start <= end;
 }
 
-def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: constraints::Step] -> bool {
+def range_inclusive_is_singleton_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
     return not range_inclusive_is_empty_<T>(start, end) and start == end;
 }
 
-def range_iter_impl_<T>(start: T, end: T) with [T: constraints::Step] -> iter::RangeIter<T> {
-    return iter::RangeIter<T>{ cur: start, end: end };
-}
-
-def range_inclusive_iter_impl_<T>(start: T, end: T) with [T: constraints::Step] -> iter::RangeInclusiveIter<T> {
-    return iter::RangeInclusiveIter<T>{ cur: start, end: end, done: false };
-}
-
-export acts for Range<T> with [T: constraints::Step] {
+export acts for Range<T> with [T: constraints::Comparable] {
     def is_empty(self) -> bool {
         return range_is_empty_<T>(self.start, self.end);
     }
@@ -96,13 +118,18 @@ export acts for Range<T> with [T: constraints::Step] {
     def intersects(self, other: Range<T>) -> bool {
         return range_intersects_<T>(self.start, self.end, other.start, other.end);
     }
+};
 
-    def iter(self) -> iter::RangeIter<T> {
-        return range_iter_impl_<T>(self.start, self.end);
+export acts for Range<T> with [T: constraints::Step] {
+    type Item = T;
+    type Iter = iter::RangeIter<T>;
+
+    def into_iter(self move) -> iter::RangeIter<T> {
+        return iter::RangeIter<T>{ cur: self.start, end: self.end };
     }
 };
 
-export acts for RangeInclusive<T> with [T: constraints::Step] {
+export acts for RangeInclusive<T> with [T: constraints::Comparable] {
     def is_empty(self) -> bool {
         return range_inclusive_is_empty_<T>(self.start, self.end);
     }
@@ -122,740 +149,13 @@ export acts for RangeInclusive<T> with [T: constraints::Step] {
     def is_singleton(self) -> bool {
         return range_inclusive_is_singleton_<T>(self.start, self.end);
     }
-
-    def iter(self) -> iter::RangeInclusiveIter<T> {
-        return range_inclusive_iter_impl_<T>(self.start, self.end);
-    }
 };
 
-export def range(start: i8, end: i8) -> Range<i8> {
-    return range_impl_<i8>(start, end);
-}
+export acts for RangeInclusive<T> with [T: constraints::Step] {
+    type Item = T;
+    type Iter = iter::RangeInclusiveIter<T>;
 
-export def range(start: i16, end: i16) -> Range<i16> {
-    return range_impl_<i16>(start, end);
-}
-
-export def range(start: i32, end: i32) -> Range<i32> {
-    return range_impl_<i32>(start, end);
-}
-
-export def range(start: i64, end: i64) -> Range<i64> {
-    return range_impl_<i64>(start, end);
-}
-
-export def range(start: i128, end: i128) -> Range<i128> {
-    return range_impl_<i128>(start, end);
-}
-
-export def range(start: isize, end: isize) -> Range<isize> {
-    return range_impl_<isize>(start, end);
-}
-
-export def range(start: u8, end: u8) -> Range<u8> {
-    return range_impl_<u8>(start, end);
-}
-
-export def range(start: u16, end: u16) -> Range<u16> {
-    return range_impl_<u16>(start, end);
-}
-
-export def range(start: u32, end: u32) -> Range<u32> {
-    return range_impl_<u32>(start, end);
-}
-
-export def range(start: u64, end: u64) -> Range<u64> {
-    return range_impl_<u64>(start, end);
-}
-
-export def range(start: u128, end: u128) -> Range<u128> {
-    return range_impl_<u128>(start, end);
-}
-
-export def range(start: usize, end: usize) -> Range<usize> {
-    return range_impl_<usize>(start, end);
-}
-
-export def range(start: char, end: char) -> Range<char> {
-    return range_impl_<char>(start, end);
-}
-
-export def range_inclusive(start: i8, end: i8) -> RangeInclusive<i8> {
-    return range_inclusive_impl_<i8>(start, end);
-}
-
-export def range_inclusive(start: i16, end: i16) -> RangeInclusive<i16> {
-    return range_inclusive_impl_<i16>(start, end);
-}
-
-export def range_inclusive(start: i32, end: i32) -> RangeInclusive<i32> {
-    return range_inclusive_impl_<i32>(start, end);
-}
-
-export def range_inclusive(start: i64, end: i64) -> RangeInclusive<i64> {
-    return range_inclusive_impl_<i64>(start, end);
-}
-
-export def range_inclusive(start: i128, end: i128) -> RangeInclusive<i128> {
-    return range_inclusive_impl_<i128>(start, end);
-}
-
-export def range_inclusive(start: isize, end: isize) -> RangeInclusive<isize> {
-    return range_inclusive_impl_<isize>(start, end);
-}
-
-export def range_inclusive(start: u8, end: u8) -> RangeInclusive<u8> {
-    return range_inclusive_impl_<u8>(start, end);
-}
-
-export def range_inclusive(start: u16, end: u16) -> RangeInclusive<u16> {
-    return range_inclusive_impl_<u16>(start, end);
-}
-
-export def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> {
-    return range_inclusive_impl_<u32>(start, end);
-}
-
-export def range_inclusive(start: u64, end: u64) -> RangeInclusive<u64> {
-    return range_inclusive_impl_<u64>(start, end);
-}
-
-export def range_inclusive(start: u128, end: u128) -> RangeInclusive<u128> {
-    return range_inclusive_impl_<u128>(start, end);
-}
-
-export def range_inclusive(start: usize, end: usize) -> RangeInclusive<usize> {
-    return range_inclusive_impl_<usize>(start, end);
-}
-
-export def range_inclusive(start: char, end: char) -> RangeInclusive<char> {
-    return range_inclusive_impl_<char>(start, end);
-}
-
-export acts for Range<i8> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<i8>(self.start, self.end);
-    }
-
-    def contains(self, value: i8) -> bool {
-        return range_contains_<i8>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<i8>) -> bool {
-        return range_contains_range_<i8>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<i8>) -> bool {
-        return range_intersects_<i8>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<i8> {
-        return range_iter_impl_<i8>(self.start, self.end);
-    }
-};
-
-export acts for Range<i16> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<i16>(self.start, self.end);
-    }
-
-    def contains(self, value: i16) -> bool {
-        return range_contains_<i16>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<i16>) -> bool {
-        return range_contains_range_<i16>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<i16>) -> bool {
-        return range_intersects_<i16>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<i16> {
-        return range_iter_impl_<i16>(self.start, self.end);
-    }
-};
-
-export acts for Range<i32> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<i32>(self.start, self.end);
-    }
-
-    def contains(self, value: i32) -> bool {
-        return range_contains_<i32>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<i32>) -> bool {
-        return range_contains_range_<i32>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<i32>) -> bool {
-        return range_intersects_<i32>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<i32> {
-        return range_iter_impl_<i32>(self.start, self.end);
-    }
-
-};
-
-export acts for Range<i64> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<i64>(self.start, self.end);
-    }
-
-    def contains(self, value: i64) -> bool {
-        return range_contains_<i64>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<i64>) -> bool {
-        return range_contains_range_<i64>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<i64>) -> bool {
-        return range_intersects_<i64>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<i64> {
-        return range_iter_impl_<i64>(self.start, self.end);
-    }
-};
-
-export acts for Range<i128> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<i128>(self.start, self.end);
-    }
-
-    def contains(self, value: i128) -> bool {
-        return range_contains_<i128>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<i128>) -> bool {
-        return range_contains_range_<i128>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<i128>) -> bool {
-        return range_intersects_<i128>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<i128> {
-        return range_iter_impl_<i128>(self.start, self.end);
-    }
-};
-
-export acts for Range<isize> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<isize>(self.start, self.end);
-    }
-
-    def contains(self, value: isize) -> bool {
-        return range_contains_<isize>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<isize>) -> bool {
-        return range_contains_range_<isize>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<isize>) -> bool {
-        return range_intersects_<isize>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<isize> {
-        return range_iter_impl_<isize>(self.start, self.end);
-    }
-};
-
-export acts for Range<u8> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<u8>(self.start, self.end);
-    }
-
-    def contains(self, value: u8) -> bool {
-        return range_contains_<u8>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<u8>) -> bool {
-        return range_contains_range_<u8>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<u8>) -> bool {
-        return range_intersects_<u8>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<u8> {
-        return range_iter_impl_<u8>(self.start, self.end);
-    }
-};
-
-export acts for Range<u16> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<u16>(self.start, self.end);
-    }
-
-    def contains(self, value: u16) -> bool {
-        return range_contains_<u16>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<u16>) -> bool {
-        return range_contains_range_<u16>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<u16>) -> bool {
-        return range_intersects_<u16>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<u16> {
-        return range_iter_impl_<u16>(self.start, self.end);
-    }
-};
-
-export acts for Range<u32> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<u32>(self.start, self.end);
-    }
-
-    def contains(self, value: u32) -> bool {
-        return range_contains_<u32>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<u32>) -> bool {
-        return range_contains_range_<u32>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<u32>) -> bool {
-        return range_intersects_<u32>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<u32> {
-        return range_iter_impl_<u32>(self.start, self.end);
-    }
-};
-
-export acts for Range<u64> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<u64>(self.start, self.end);
-    }
-
-    def contains(self, value: u64) -> bool {
-        return range_contains_<u64>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<u64>) -> bool {
-        return range_contains_range_<u64>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<u64>) -> bool {
-        return range_intersects_<u64>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<u64> {
-        return range_iter_impl_<u64>(self.start, self.end);
-    }
-};
-
-export acts for Range<u128> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<u128>(self.start, self.end);
-    }
-
-    def contains(self, value: u128) -> bool {
-        return range_contains_<u128>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<u128>) -> bool {
-        return range_contains_range_<u128>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<u128>) -> bool {
-        return range_intersects_<u128>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<u128> {
-        return range_iter_impl_<u128>(self.start, self.end);
-    }
-};
-
-export acts for Range<usize> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<usize>(self.start, self.end);
-    }
-
-    def contains(self, value: usize) -> bool {
-        return range_contains_<usize>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<usize>) -> bool {
-        return range_contains_range_<usize>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<usize>) -> bool {
-        return range_intersects_<usize>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<usize> {
-        return range_iter_impl_<usize>(self.start, self.end);
-    }
-};
-
-export acts for Range<char> {
-    def is_empty(self) -> bool {
-        return range_is_empty_<char>(self.start, self.end);
-    }
-
-    def contains(self, value: char) -> bool {
-        return range_contains_<char>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: Range<char>) -> bool {
-        return range_contains_range_<char>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: Range<char>) -> bool {
-        return range_intersects_<char>(self.start, self.end, other.start, other.end);
-    }
-
-    def iter(self) -> iter::RangeIter<char> {
-        return range_iter_impl_<char>(self.start, self.end);
-    }
-
-};
-
-export acts for RangeInclusive<i8> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<i8>(self.start, self.end);
-    }
-
-    def contains(self, value: i8) -> bool {
-        return range_inclusive_contains_<i8>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<i8>) -> bool {
-        return range_inclusive_contains_range_<i8>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<i8>) -> bool {
-        return range_inclusive_intersects_<i8>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<i8>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<i8> {
-        return range_inclusive_iter_impl_<i8>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<i16> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<i16>(self.start, self.end);
-    }
-
-    def contains(self, value: i16) -> bool {
-        return range_inclusive_contains_<i16>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<i16>) -> bool {
-        return range_inclusive_contains_range_<i16>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<i16>) -> bool {
-        return range_inclusive_intersects_<i16>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<i16>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<i16> {
-        return range_inclusive_iter_impl_<i16>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<i32> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<i32>(self.start, self.end);
-    }
-
-    def contains(self, value: i32) -> bool {
-        return range_inclusive_contains_<i32>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<i32>) -> bool {
-        return range_inclusive_contains_range_<i32>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<i32>) -> bool {
-        return range_inclusive_intersects_<i32>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<i32>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<i32> {
-        return range_inclusive_iter_impl_<i32>(self.start, self.end);
-    }
-
-};
-
-export acts for RangeInclusive<i64> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<i64>(self.start, self.end);
-    }
-
-    def contains(self, value: i64) -> bool {
-        return range_inclusive_contains_<i64>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<i64>) -> bool {
-        return range_inclusive_contains_range_<i64>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<i64>) -> bool {
-        return range_inclusive_intersects_<i64>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<i64>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<i64> {
-        return range_inclusive_iter_impl_<i64>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<i128> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<i128>(self.start, self.end);
-    }
-
-    def contains(self, value: i128) -> bool {
-        return range_inclusive_contains_<i128>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<i128>) -> bool {
-        return range_inclusive_contains_range_<i128>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<i128>) -> bool {
-        return range_inclusive_intersects_<i128>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<i128>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<i128> {
-        return range_inclusive_iter_impl_<i128>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<isize> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<isize>(self.start, self.end);
-    }
-
-    def contains(self, value: isize) -> bool {
-        return range_inclusive_contains_<isize>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<isize>) -> bool {
-        return range_inclusive_contains_range_<isize>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<isize>) -> bool {
-        return range_inclusive_intersects_<isize>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<isize>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<isize> {
-        return range_inclusive_iter_impl_<isize>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<u8> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<u8>(self.start, self.end);
-    }
-
-    def contains(self, value: u8) -> bool {
-        return range_inclusive_contains_<u8>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<u8>) -> bool {
-        return range_inclusive_contains_range_<u8>(self.start, self.end, other.start, other.end);
+    def into_iter(self move) -> iter::RangeInclusiveIter<T> {
+        return iter::RangeInclusiveIter<T>{ cur: self.start, end: self.end, done: false };
     }
-
-    def intersects(self, other: RangeInclusive<u8>) -> bool {
-        return range_inclusive_intersects_<u8>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<u8>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<u8> {
-        return range_inclusive_iter_impl_<u8>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<u16> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<u16>(self.start, self.end);
-    }
-
-    def contains(self, value: u16) -> bool {
-        return range_inclusive_contains_<u16>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<u16>) -> bool {
-        return range_inclusive_contains_range_<u16>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<u16>) -> bool {
-        return range_inclusive_intersects_<u16>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<u16>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<u16> {
-        return range_inclusive_iter_impl_<u16>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<u32> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<u32>(self.start, self.end);
-    }
-
-    def contains(self, value: u32) -> bool {
-        return range_inclusive_contains_<u32>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<u32>) -> bool {
-        return range_inclusive_contains_range_<u32>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<u32>) -> bool {
-        return range_inclusive_intersects_<u32>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<u32>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<u32> {
-        return range_inclusive_iter_impl_<u32>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<u64> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<u64>(self.start, self.end);
-    }
-
-    def contains(self, value: u64) -> bool {
-        return range_inclusive_contains_<u64>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<u64>) -> bool {
-        return range_inclusive_contains_range_<u64>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<u64>) -> bool {
-        return range_inclusive_intersects_<u64>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<u64>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<u64> {
-        return range_inclusive_iter_impl_<u64>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<u128> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<u128>(self.start, self.end);
-    }
-
-    def contains(self, value: u128) -> bool {
-        return range_inclusive_contains_<u128>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<u128>) -> bool {
-        return range_inclusive_contains_range_<u128>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<u128>) -> bool {
-        return range_inclusive_intersects_<u128>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<u128>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<u128> {
-        return range_inclusive_iter_impl_<u128>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<usize> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<usize>(self.start, self.end);
-    }
-
-    def contains(self, value: usize) -> bool {
-        return range_inclusive_contains_<usize>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<usize>) -> bool {
-        return range_inclusive_contains_range_<usize>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<usize>) -> bool {
-        return range_inclusive_intersects_<usize>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<usize>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<usize> {
-        return range_inclusive_iter_impl_<usize>(self.start, self.end);
-    }
-};
-
-export acts for RangeInclusive<char> {
-    def is_empty(self) -> bool {
-        return range_inclusive_is_empty_<char>(self.start, self.end);
-    }
-
-    def contains(self, value: char) -> bool {
-        return range_inclusive_contains_<char>(self.start, self.end, value);
-    }
-
-    def contains_range(self, other: RangeInclusive<char>) -> bool {
-        return range_inclusive_contains_range_<char>(self.start, self.end, other.start, other.end);
-    }
-
-    def intersects(self, other: RangeInclusive<char>) -> bool {
-        return range_inclusive_intersects_<char>(self.start, self.end, other.start, other.end);
-    }
-
-    def is_singleton(self) -> bool {
-        return range_inclusive_is_singleton_<char>(self.start, self.end);
-    }
-
-    def iter(self) -> iter::RangeInclusiveIter<char> {
-        return range_inclusive_iter_impl_<char>(self.start, self.end);
-    }
-
 };

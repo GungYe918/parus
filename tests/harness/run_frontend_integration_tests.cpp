@@ -664,6 +664,49 @@ namespace {
 
     static bool test_loop_expr_break_infer_context_propagates() {
         const std::string src = R"(
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
+            };
+
+            proto IterSourceMove {
+                require type Item;
+                require type Iter;
+                require into_iter(src: Self) -> Self::Iter;
+            };
+
+            struct CounterIter: Iterator {
+                cur: i32;
+                end: i32;
+            };
+
+            acts for CounterIter {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
+                    if (self.cur > self.end) {
+                        return false;
+                    }
+                    *out = self.cur;
+                    self.cur = self.cur + 1i32;
+                    return true;
+                }
+            };
+
+            struct Counter: IterSourceMove {
+                start: i32;
+                end: i32;
+            };
+
+            acts for Counter {
+                type Item = i32;
+                type Iter = CounterIter;
+
+                def into_iter(self move) -> CounterIter {
+                    return CounterIter{ cur: self.start, end: self.end };
+                }
+            };
+
             def take(x: i32?) -> i32 {
                 if (x == null) { return 0i32; }
                 return 42i32;
@@ -682,7 +725,7 @@ namespace {
                 let b: i32? = loop {
                     break 42;
                 };
-                let c: i32? = loop (x in 1..:4) {
+                let c: i32? = loop (x in Counter{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -760,8 +803,51 @@ namespace {
             }
         )";
         const std::string mismatch_src = R"(
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
+            };
+
+            proto IterSourceMove {
+                require type Item;
+                require type Iter;
+                require into_iter(src: Self) -> Self::Iter;
+            };
+
+            struct CounterIter: Iterator {
+                cur: i32;
+                end: i32;
+            };
+
+            acts for CounterIter {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
+                    if (self.cur > self.end) {
+                        return false;
+                    }
+                    *out = self.cur;
+                    self.cur = self.cur + 1i32;
+                    return true;
+                }
+            };
+
+            struct Counter: IterSourceMove {
+                start: i32;
+                end: i32;
+            };
+
+            acts for Counter {
+                type Item = i32;
+                type Iter = CounterIter;
+
+                def into_iter(self move) -> CounterIter {
+                    return CounterIter{ cur: self.start, end: self.end };
+                }
+            };
+
             def main() -> i32 {
-                let y: i32 = loop (x in 1..:4) {
+                let y: i32 = loop (x in Counter{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -792,15 +878,58 @@ namespace {
 
     static bool test_nullable_coalesce_rhs_context_propagates() {
         const std::string src = R"(
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
+            };
+
+            proto IterSourceMove {
+                require type Item;
+                require type Iter;
+                require into_iter(src: Self) -> Self::Iter;
+            };
+
+            struct CounterIter: Iterator {
+                cur: i32;
+                end: i32;
+            };
+
+            acts for CounterIter {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
+                    if (self.cur > self.end) {
+                        return false;
+                    }
+                    *out = self.cur;
+                    self.cur = self.cur + 1i32;
+                    return true;
+                }
+            };
+
+            struct Counter: IterSourceMove {
+                start: i32;
+                end: i32;
+            };
+
+            acts for Counter {
+                type Item = i32;
+                type Iter = CounterIter;
+
+                def into_iter(self move) -> CounterIter {
+                    return CounterIter{ cur: self.start, end: self.end };
+                }
+            };
+
             def main() -> i32 {
-                set inferred = loop (x in 1..:4) {
+                set inferred = loop (x in Counter{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
                 };
                 let inferred_value: i32 = inferred ?? 0;
 
-                let a: i32? = loop (x in 1..:4) {
+                let a: i32? = loop (x in Counter{ start: 1i32, end: 4i32 }) {
                     if (x == 4) {
                         break 42;
                     }
@@ -1622,31 +1751,36 @@ namespace {
 
     static bool test_iter_proto_default_acts_satisfaction_ok() {
         const std::string ok_src = R"(
-            proto Iterator<Item> {
-                require next(it: &mut Self) -> Item?;
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
             };
 
-            struct CounterIter: Iterator<i32> {
+            struct CounterIter: Iterator {
                 cur: i32;
                 end: i32;
             };
 
             acts for CounterIter {
-                def next(self mut) -> i32? {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
                     if (self.cur >= self.end) {
-                        return null;
+                        return false;
                     }
-                    let out: i32 = self.cur;
+                    *out = self.cur;
                     self.cur = self.cur + 1i32;
-                    return out;
+                    return true;
                 }
             };
 
             def main() -> i32 {
                 set mut it = CounterIter{ cur: 1i32, end: 3i32 };
-                let a: i32? = it.next();
-                let b: i32? = it.next();
-                if (a != null and b != null and (a as! i32) == 1i32 and (b as! i32) == 2i32) {
+                set mut a = 0i32;
+                set mut b = 0i32;
+                let ok_a: bool = it.next(&mut a);
+                let ok_b: bool = it.next(&mut b);
+                if (ok_a and ok_b and a == 1i32 and b == 2i32) {
                     return 42i32;
                 }
                 return 0i32;
@@ -1654,11 +1788,12 @@ namespace {
         )";
 
         const std::string err_src = R"(
-            proto Iterator<Item> {
-                require next(it: &mut Self) -> Item?;
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
             };
 
-            struct CounterIter: Iterator<i32> {
+            struct CounterIter: Iterator {
                 cur: i32;
                 end: i32;
             };
@@ -1687,56 +1822,73 @@ namespace {
 
     static bool test_core_iter_sequence_loop_bridge_ok() {
         const std::string src = R"(
-            proto Iterator<Item> {
-                require next(it: &mut Self) -> Item?;
+            proto Iterator {
+                require type Item;
+                require next(it: &mut Self, out: &mut Self::Item) -> bool;
             };
 
-            proto Sequence<Item, Iter> {
-                require iter(seq: &Self) -> Iter;
+            proto IterSourceMove {
+                require type Item;
+                require type Iter;
+                require into_iter(src: Self) -> Self::Iter;
             };
 
-            struct CounterIter: Iterator<i32> {
+            struct CounterIter: Iterator {
                 cur: i32;
                 end: i32;
             };
 
             acts for CounterIter {
-                def next(self mut) -> i32? {
+                type Item = i32;
+
+                def next(self mut, out: &mut i32) -> bool {
                     if (self.cur >= self.end) {
-                        return null;
+                        return false;
                     }
-                    let out: i32 = self.cur;
+                    *out = self.cur;
                     self.cur = self.cur + 1i32;
-                    return out;
+                    return true;
                 }
             };
 
-            struct Counter: Sequence<i32, CounterIter> {
+            struct Counter: IterSourceMove {
                 start: i32;
                 end: i32;
             };
 
             acts for Counter {
-                def iter(self) -> CounterIter {
+                type Item = i32;
+                type Iter = CounterIter;
+
+                def into_iter(self move) -> CounterIter {
                     return CounterIter{ cur: self.start, end: self.end };
                 }
             };
 
             def main() -> i32 {
-                set mut it = Counter{ start: 1i32, end: 4i32 }.iter();
-                let a: i32? = it.next();
-                let b: i32? = it.next();
-                let c: i32? = it.next();
-                let d: i32? = it.next();
+                set mut it = Counter{ start: 1i32, end: 4i32 }.into_iter();
+                set mut a = 0i32;
+                set mut b = 0i32;
+                set mut c = 0i32;
+                set mut d = 0i32;
+                let ok_a: bool = it.next(&mut a);
+                let ok_b: bool = it.next(&mut b);
+                let ok_c: bool = it.next(&mut c);
+                let ok_d: bool = it.next(&mut d);
 
                 set mut sum = 0i32;
                 loop (x in Counter{ start: 1i32, end: 4i32 }) {
                     set sum = sum + x;
                 }
 
-                if (a != null and b != null and c != null and d == null and
-                    (a as! i32) == 1i32 and (b as! i32) == 2i32 and (c as! i32) == 3i32 and
-                    sum == 6i32) {
+                set mut sum_for = 0i32;
+                for (x in Counter{ start: 1i32, end: 4i32 }) {
+                    set sum_for = sum_for + x;
+                }
+
+                if (ok_a and ok_b and ok_c and not ok_d and
+                    a == 1i32 and b == 2i32 and c == 3i32 and
+                    sum == 6i32 and sum_for == 6i32) {
                     return 42i32;
                 }
                 return 0i32;

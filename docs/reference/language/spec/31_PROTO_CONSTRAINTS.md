@@ -17,6 +17,7 @@
 proto ProtoName [: BaseProto, ...] {
   require struct(Path);
   require acts(IOOps);
+  require type Item;
   require hash(v: Self) -> u64;
   provide def id() -> i32 { return 0i32; }
   provide const VERSION: i32 = 1i32;
@@ -27,19 +28,21 @@ proto ProtoName [: BaseProto, ...] {
 2. `proto ... with require(...)` 꼬리 문법은 제거되었다.
 3. `proto A: B, C`에서 `:` 뒤 대상은 `proto`만 허용한다.
 4. `require` 항목에는 `proto(...)`를 허용하지 않는다.
-5. `require` 함수 시그니처는 `def` 없이 `require foo(...) -> T;` 형태를 사용한다.
-6. `provide def`는 본문이 필수다.
-7. `provide const`만 변수 제공으로 허용한다.
-8. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
-9. proto `require/provide` 함수에서 `self` 리시버 파라미터는 금지한다.
+5. `require type Name;`는 required associated type slot을 선언한다.
+6. `require` 함수 시그니처는 `def` 없이 `require foo(...) -> T;` 형태를 사용한다.
+7. `provide def`는 본문이 필수다.
+8. `provide const`만 변수 제공으로 허용한다.
+9. `provide const`는 정적(read-only) 상수로 취급하며 쓰기/가변 상태를 만들 수 없다.
+10. proto `require/provide` 함수에서 `self` 리시버 파라미터는 금지한다.
 
 ## 19.3 require/provide 항목 의미론
 
 1. `require struct/enum/class/actor/acts(Path);`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
-2. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
-3. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
-4. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
-5. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
+2. `require type Name;`는 구현체가 채워야 하는 associated type을 선언한다.
+3. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
+4. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.
+5. `provide const`는 인스턴스 필드가 아니라 프로그램 정적 수명 상수다.
+6. `provide const` 초기화식은 컴파일타임 평가 가능해야 한다.
 
 ## 19.4 상속/클로저 규칙
 
@@ -52,9 +55,9 @@ proto ProtoName [: BaseProto, ...] {
 
 1. `class Name : ProtoA, ...` 선언으로 proto 제약을 부착할 수 있다.
 2. `struct Name : ProtoA, ...`, `enum Name : ProtoA, ...`도 선언상 허용된다.
-3. 적용 가능한 proto는 effective required fn set이 비어 있어야 한다.
-4. `struct/enum`은 함수 멤버를 가지지 않으므로 default-only proto만 허용된다.
-5. 시그니처 매칭은 `Self`를 구현체 concrete 타입으로 정규화해 비교한다.
+3. 적용 가능한 proto는 effective required fn set과 required associated type set이 모두 충족되어야 한다.
+4. `struct/enum`도 default `acts for T`를 통해 함수 requirement와 associated type requirement를 충족할 수 있다.
+5. 시그니처 매칭은 `Self`와 `Self::Assoc`를 구현체 concrete 타입 + acts binding 기준으로 정규화해 비교한다.
 6. class/proto 멤버 경로 호출(`Class::m`, `Proto::m`)은 허용하지 않는다.
 7. proto `provide` 멤버 접근/호출은 `->`만 사용한다(`v->id()`, `v->Proto.id()`, `v->CONST`).
 8. `.`와 `->`는 교차 fallback하지 않는다.
@@ -130,16 +133,19 @@ primitive family classifier는 `core::constraints/proto.pr`의 builtin `use Foo;
 3. `SignedInteger`
 4. `UnsignedInteger`
 5. `BinaryFloatingPoint`
+6. `Step`
 
 규칙:
 
 1. signed integer primitive는 `SignedInteger`, `BinaryInteger`, `Comparable`를 만족한다.
 2. unsigned integer primitive는 `UnsignedInteger`, `BinaryInteger`, `Comparable`를 만족한다.
-3. `char`는 `Comparable`를 만족한다.
-4. `f32`, `f64`는 `BinaryFloatingPoint`를 만족한다.
-5. user-defined type이 이 builtin proto를 직접 `:`로 구현하는 것은 금지한다.
-6. 이 proto들은 primitive family filter 용도로만 우선 사용한다.
-7. 장기적으로 builtin/external type proto conformance나 structural satisfaction from `acts`가 생기면 library-only surface로 내릴 후보들이다.
+3. `Step`은 discrete successor가 있는 primitive family filter다.
+4. `i*`, `u*`, `isize`, `usize`, `char`는 `Step`을 만족한다.
+5. `char`는 `Comparable`도 만족한다.
+6. `f32`, `f64`는 `BinaryFloatingPoint`를 만족한다.
+7. user-defined type이 이 builtin proto를 직접 `:`로 구현하는 것은 금지한다.
+8. 이 proto들은 primitive family filter 용도로만 우선 사용한다.
+9. 장기적으로 builtin/external type proto conformance나 structural satisfaction from `acts`가 생기면 library-only surface로 내릴 후보들이다.
 
 ## 19.9 의존 순환 금지
 

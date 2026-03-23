@@ -5,6 +5,8 @@
 
 namespace parus::sir::detail {
 
+    TypeId active_builtin_type(parus::ty::Builtin b);
+
     /// @brief Tyck 결과에서 AST expression의 최종 타입을 조회한다.
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid);
 
@@ -28,6 +30,10 @@ namespace parus::sir::detail {
     SymbolId resolve_loop_symbol_from_expr(
         const passes::NameResolveResult& nres,
         parus::ast::ExprId eid
+    );
+    SymbolId resolve_loop_symbol_from_stmt(
+        const passes::NameResolveResult& nres,
+        parus::ast::StmtId sid
     );
 
     /// @brief place expression의 root 심볼(ident/index.base)을 찾는다.

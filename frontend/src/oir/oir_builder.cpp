@@ -4,6 +4,7 @@
 
 #include <parus/ast/Nodes.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
+#include <parus/common/ModulePath.hpp>
 #include <parus/sir/Verify.hpp>
 #include <parus/syntax/TokenKind.hpp>
 
@@ -54,6 +55,9 @@ namespace parus::oir {
             std::vector<ParsedExternalParusFieldMember> members{};
         };
 
+        std::string normalize_symbol_fragment_(std::string_view in);
+        uint64_t fnv1a64_(std::string_view s);
+
         bool known_concrete_leaf_type_name_without_symbols_(
             const parus::sir::Module& sir,
             const parus::ty::TypePool& types,
@@ -103,6 +107,127 @@ namespace parus::oir {
                 out.push_back(c);
             }
             return out;
+        }
+
+        std::string last_path_segment_(std::string_view qname) {
+            const size_t pos = qname.rfind("::");
+            return (pos == std::string_view::npos)
+                ? std::string(qname)
+                : std::string(qname.substr(pos + 2));
+        }
+
+        std::string build_parus_link_name_from_qname_and_sig_(
+            std::string_view bundle_name,
+            std::string_view qname,
+            std::string_view sig_repr,
+            std::string_view mode = "none"
+        ) {
+            std::string path = "_";
+            std::string base = std::string(qname);
+            if (const size_t pos = base.rfind("::"); pos != std::string::npos) {
+                path = base.substr(0, pos);
+                base = base.substr(pos + 2);
+                size_t p = 0;
+                while ((p = path.find("::", p)) != std::string::npos) {
+                    path.replace(p, 2, "__");
+                    p += 2;
+                }
+            }
+
+            const std::string bundle =
+                bundle_name.empty() ? std::string("main") : std::string(bundle_name);
+            const std::string sig =
+                sig_repr.empty() ? std::string("def(?)") : std::string(sig_repr);
+            const std::string canonical =
+                "bundle=" + bundle + "|path=" + path +
+                "|name=" + base +
+                "|mode=" + std::string(mode) + "|recv=none|sig=" + sig;
+            std::ostringstream hs;
+            hs << std::hex << fnv1a64_(canonical);
+
+            return "p$" + normalize_symbol_fragment_(bundle) + "$" +
+                normalize_symbol_fragment_(path) + "$" +
+                normalize_symbol_fragment_(base) + "$M" +
+                normalize_symbol_fragment_(mode) + "$Rnone$S" +
+                normalize_symbol_fragment_(sig) + "$H" + hs.str();
+        }
+
+        std::string build_parus_link_name_from_fn_type_(
+            std::string_view bundle_name,
+            std::string_view qname,
+            TypeId fn_type,
+            const parus::ty::TypePool& types
+        ) {
+            return build_parus_link_name_from_qname_and_sig_(
+                bundle_name,
+                qname,
+                types.to_export_string(fn_type)
+            );
+        }
+
+        std::string relativize_external_fn_sig_repr_(
+            const parus::sema::Symbol& ss,
+            TypeId fn_type,
+            const parus::ty::TypePool& types
+        ) {
+            std::string sig = types.to_export_string(fn_type);
+            if (sig.empty()) return sig;
+
+            auto replace_all_ = [](std::string& text,
+                                   std::string_view from,
+                                   std::string_view to) {
+                if (from.empty()) return;
+                size_t pos = 0;
+                while ((pos = text.find(from, pos)) != std::string::npos) {
+                    text.replace(pos, from.size(), to);
+                    pos += to.size();
+                }
+            };
+
+            if (!ss.decl_module_head.empty()) {
+                const std::string full_module_prefix = ss.decl_module_head + "::";
+                replace_all_(sig, full_module_prefix, "");
+            }
+            if (!ss.decl_bundle_name.empty()) {
+                const std::string bundle_prefix = ss.decl_bundle_name + "::";
+                replace_all_(sig, bundle_prefix, "");
+            }
+            if (const std::string short_head =
+                    parus::short_core_module_head(ss.decl_bundle_name, ss.decl_module_head);
+                !short_head.empty()) {
+                const std::string short_module_prefix = short_head + "::";
+                replace_all_(sig, short_module_prefix, "");
+            }
+            return sig;
+        }
+
+        std::string maybe_specialize_external_generic_link_name_(
+            const parus::sema::Symbol& ss,
+            TypeId fn_type,
+            const parus::ty::TypePool& types
+        ) {
+            if (ss.kind != parus::sema::SymbolKind::kFn) {
+                return !ss.link_name.empty() ? ss.link_name : ss.name;
+            }
+            if (fn_type == parus::ty::kInvalidType || fn_type >= types.count() ||
+                !types.is_fn(fn_type) || types.fn_is_c_abi(fn_type)) {
+                return !ss.link_name.empty() ? ss.link_name : ss.name;
+            }
+            if (ss.external_payload.find("parus_generic_decl") == std::string::npos) {
+                return !ss.link_name.empty() ? ss.link_name : ss.name;
+            }
+
+            // Generic external decls are exported with template-shaped link names.
+            // When we materialize a concrete instance, remangle from the concrete fn type
+            // so installed/local builds agree on a unique symbol per monomorphization.
+            const std::string bundle =
+                ss.decl_bundle_name.empty() ? std::string("main") : ss.decl_bundle_name;
+            const std::string leaf = last_path_segment_(!ss.name.empty() ? ss.name : ss.link_name);
+            return build_parus_link_name_from_qname_and_sig_(
+                bundle,
+                leaf,
+                relativize_external_fn_sig_repr_(ss, fn_type, types)
+            );
         }
 
         ParsedExternalRecordLayout parse_external_record_layout_payload_(std::string_view payload) {
@@ -430,10 +555,10 @@ namespace parus::oir {
             const std::unordered_set<TypeId>* actor_types = nullptr;
             const ActorRuntimeFuncs* actor_runtime = nullptr;
             std::unordered_map<parus::sir::ValueId, ValueId>* escape_value_map = nullptr;
-            const std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
-            const std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
-            const std::unordered_map<std::string, FuncId>* fn_link_name_to_func = nullptr;
-            const std::unordered_map<std::string, FuncId>* fn_source_name_to_func = nullptr;
+            std::unordered_map<parus::sir::SymbolId, FuncId>* fn_symbol_to_func = nullptr;
+            std::unordered_map<parus::sir::SymbolId, std::vector<FuncId>>* fn_symbol_to_funcs = nullptr;
+            std::unordered_map<std::string, FuncId>* fn_link_name_to_func = nullptr;
+            std::unordered_map<std::string, FuncId>* fn_source_name_to_func = nullptr;
             const std::unordered_map<uint32_t, FuncId>* fn_decl_to_func = nullptr;
             const std::unordered_map<parus::sir::SymbolId, uint32_t>* global_symbol_to_global = nullptr;
             const std::unordered_map<TypeId, FuncId>* class_deinit_map = nullptr;
@@ -445,6 +570,7 @@ namespace parus::oir {
             bool fn_is_throwing = false;
 
             Function* def = nullptr;
+            FuncId def_id = kInvalidId;
             BlockId cur_bb = kInvalidId;
 
             // symbol -> SSA value or slot
@@ -501,6 +627,131 @@ namespace parus::oir {
                     if (f.self_type == t) return &f;
                 }
                 return nullptr;
+            }
+
+            ValueId add_block_param_local_(BlockId bb, TypeId ty) {
+                if (out == nullptr || bb == kInvalidId || static_cast<size_t>(bb) >= out->blocks.size()) {
+                    return kInvalidId;
+                }
+                auto& block = out->blocks[bb];
+                Value v{};
+                v.ty = ty;
+                v.eff = Effect::Pure;
+                v.def_a = bb;
+                v.def_b = static_cast<uint32_t>(block.params.size());
+                const ValueId vid = out->add_value(v);
+                block.params.push_back(vid);
+                return vid;
+            }
+
+            bool func_matches_fn_type_(FuncId fid, TypeId fn_type) const {
+                if (out == nullptr || types == nullptr || fid == kInvalidId || fn_type == kInvalidId) return false;
+                if (static_cast<size_t>(fid) >= out->funcs.size() || fn_type >= types->count()) return false;
+                const auto& tt = types->get(fn_type);
+                if (tt.kind != parus::ty::Kind::kFn) return false;
+                const auto& f = out->funcs[fid];
+                if (f.ret_ty != static_cast<TypeId>(tt.ret)) return false;
+                if (f.entry == kInvalidId || static_cast<size_t>(f.entry) >= out->blocks.size()) return false;
+                const auto& entry = out->blocks[f.entry];
+                if (entry.params.size() != tt.param_count) return false;
+                for (uint32_t i = 0; i < tt.param_count; ++i) {
+                    const ValueId p = entry.params[i];
+                    if (static_cast<size_t>(p) >= out->values.size()) return false;
+                    if (out->values[p].ty != static_cast<TypeId>(types->fn_param_at(fn_type, i))) return false;
+                }
+                return true;
+            }
+
+            FuncId ensure_external_func_for_symbol_(parus::sir::SymbolId sid, TypeId fn_type) {
+                if (out == nullptr || types == nullptr || symtab == nullptr) return kInvalidId;
+                if (sid == parus::sir::k_invalid_symbol ||
+                    static_cast<size_t>(sid) >= symtab->symbols().size() ||
+                    fn_type == kInvalidId ||
+                    fn_type >= types->count()) {
+                    return kInvalidId;
+                }
+                const auto& ss = symtab->symbol(sid);
+                if (ss.kind != parus::sema::SymbolKind::kFn) return kInvalidId;
+                const auto& fn_tt = types->get(fn_type);
+                if (fn_tt.kind != parus::ty::Kind::kFn) return kInvalidId;
+
+                if (fn_symbol_to_funcs != nullptr) {
+                    auto fit = fn_symbol_to_funcs->find(sid);
+                    if (fit != fn_symbol_to_funcs->end()) {
+                        for (const auto fid : fit->second) {
+                            if (func_matches_fn_type_(fid, fn_type)) return fid;
+                        }
+                    }
+                }
+
+                const std::string link_name =
+                    maybe_specialize_external_generic_link_name_(ss, fn_type, *types);
+                if (link_name.empty()) return kInvalidId;
+
+                if (fn_link_name_to_func != nullptr) {
+                    auto fit = fn_link_name_to_func->find(link_name);
+                    if (fit != fn_link_name_to_func->end() &&
+                        func_matches_fn_type_(fit->second, fn_type)) {
+                        if (fn_symbol_to_func != nullptr) {
+                            (*fn_symbol_to_func)[sid] = fit->second;
+                        }
+                        if (fn_symbol_to_funcs != nullptr) {
+                            auto& fids = (*fn_symbol_to_funcs)[sid];
+                            if (std::find(fids.begin(), fids.end(), fit->second) == fids.end()) {
+                                fids.push_back(fit->second);
+                            }
+                        }
+                        return fit->second;
+                    }
+                }
+
+                Function f{};
+                f.name = link_name;
+                f.source_name = ss.name.empty() ? link_name : ss.name;
+                f.abi = types->fn_is_c_abi(fn_type) ? FunctionAbi::C : FunctionAbi::Parus;
+                switch (types->fn_callconv(fn_type)) {
+                    case parus::ty::CCallConv::kCdecl: f.c_callconv = CCallConv::Cdecl; break;
+                    case parus::ty::CCallConv::kStdCall: f.c_callconv = CCallConv::StdCall; break;
+                    case parus::ty::CCallConv::kFastCall: f.c_callconv = CCallConv::FastCall; break;
+                    case parus::ty::CCallConv::kVectorCall: f.c_callconv = CCallConv::VectorCall; break;
+                    case parus::ty::CCallConv::kWin64: f.c_callconv = CCallConv::Win64; break;
+                    case parus::ty::CCallConv::kSysV: f.c_callconv = CCallConv::SysV; break;
+                    case parus::ty::CCallConv::kDefault:
+                    default:
+                        f.c_callconv = CCallConv::Default;
+                        break;
+                }
+                f.is_extern = true;
+                f.is_c_variadic = types->fn_is_c_variadic(fn_type);
+                f.c_fixed_param_count = fn_tt.param_count;
+                f.ret_ty = static_cast<TypeId>(fn_tt.ret);
+
+                const BlockId entry = out->add_block(Block{});
+                f.entry = entry;
+                f.blocks.push_back(entry);
+
+                const FuncId fid = out->add_func(f);
+                if (def_id != kInvalidId && static_cast<size_t>(def_id) < out->funcs.size()) {
+                    def = &out->funcs[def_id];
+                }
+                if (fn_link_name_to_func != nullptr && fn_link_name_to_func->find(f.name) == fn_link_name_to_func->end()) {
+                    (*fn_link_name_to_func)[f.name] = fid;
+                }
+                if (fn_source_name_to_func != nullptr &&
+                    !f.source_name.empty() &&
+                    fn_source_name_to_func->find(f.source_name) == fn_source_name_to_func->end()) {
+                    (*fn_source_name_to_func)[f.source_name] = fid;
+                }
+                if (fn_symbol_to_func != nullptr && fn_symbol_to_func->find(sid) == fn_symbol_to_func->end()) {
+                    (*fn_symbol_to_func)[sid] = fid;
+                }
+                if (fn_symbol_to_funcs != nullptr) {
+                    (*fn_symbol_to_funcs)[sid].push_back(fid);
+                }
+                for (uint32_t pi = 0; pi < fn_tt.param_count; ++pi) {
+                    (void)add_block_param_local_(entry, static_cast<TypeId>(types->fn_param_at(fn_type, pi)));
+                }
+                return fid;
             }
 
             std::pair<uint32_t, uint32_t> type_size_align_(TypeId tid) const {
@@ -1316,8 +1567,10 @@ namespace parus::oir {
                         static_cast<size_t>(sym) < symtab->symbols().size()) {
                         const auto& ss = symtab->symbol(sym);
                         if (ss.kind == parus::sema::SymbolKind::kFn) {
-                            if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
-                                auto fit = fn_link_name_to_func->find(ss.link_name);
+                            const std::string effective_link_name =
+                                maybe_specialize_external_generic_link_name_(ss, ss.declared_type, *types);
+                            if (fn_link_name_to_func != nullptr && !effective_link_name.empty()) {
+                                auto fit = fn_link_name_to_func->find(effective_link_name);
                                 if (fit != fn_link_name_to_func->end() &&
                                     out != nullptr &&
                                     (size_t)fit->second < out->funcs.size()) {
@@ -1835,47 +2088,41 @@ namespace parus::oir {
         /// @brief 함수 이름 + 시그니처를 기반으로 OIR 내부 함수명을 생성한다.
         std::string mangle_func_name_(
             const parus::sir::Func& sf,
+            const parus::sir::Module& sir,
             const parus::ty::TypePool& types,
             std::string_view bundle_name
         ) {
-            std::string sig = (sf.sig != parus::ty::kInvalidType)
-                ? types.to_string(sf.sig)
-                : std::string("def(?)");
-
-            const std::string qname(sf.name);
-            std::string path = "_";
-            std::string base = qname;
-            if (const size_t pos = qname.rfind("::"); pos != std::string::npos) {
-                path = qname.substr(0, pos);
-                base = qname.substr(pos + 2);
-                size_t p = 0;
-                while ((p = path.find("::", p)) != std::string::npos) {
-                    path.replace(p, 2, "__");
-                    p += 2;
+            std::string sig{};
+            const uint64_t pb = sf.param_begin;
+            const uint64_t pe = pb + sf.param_count;
+            if (pb <= sir.params.size() && pe <= sir.params.size() &&
+                sf.ret != parus::ty::kInvalidType) {
+                sig = "def(";
+                for (uint32_t pi = 0; pi < sf.param_count; ++pi) {
+                    if (pi != 0) sig += ", ";
+                    sig += types.to_export_string(sir.params[sf.param_begin + pi].type);
                 }
+                sig += ") -> ";
+                sig += types.to_export_string(sf.ret);
+            } else {
+                sig = (sf.sig != parus::ty::kInvalidType)
+                    ? types.to_export_string(sf.sig)
+                    : std::string("def(?)");
             }
 
+            const std::string qname(sf.name);
             std::string mode = "none";
             switch (sf.fn_mode) {
                 case parus::sir::FnMode::kPub: mode = "pub"; break;
                 case parus::sir::FnMode::kSub: mode = "sub"; break;
                 case parus::sir::FnMode::kNone: default: mode = "none"; break;
             }
-
-            const std::string bundle = bundle_name.empty() ? std::string("main") : std::string(bundle_name);
-            const std::string canonical =
-                "bundle=" + bundle + "|path=" + path +
-                "|name=" + base +
-                "|mode=" + mode +
-                "|recv=none|sig=" + sig;
-            std::ostringstream hs;
-            hs << std::hex << fnv1a64_(canonical);
-
-            return "p$" + normalize_symbol_fragment_(bundle) + "$" +
-                normalize_symbol_fragment_(path) + "$" +
-                normalize_symbol_fragment_(base) + "$M" +
-                normalize_symbol_fragment_(mode) + "$Rnone$S" +
-                normalize_symbol_fragment_(sig) + "$H" + hs.str();
+            return build_parus_link_name_from_qname_and_sig_(
+                bundle_name,
+                qname,
+                sig,
+                mode
+            );
         }
 
         std::string make_module_init_symbol_name_(
@@ -2538,6 +2785,13 @@ namespace parus::oir {
                 // 오버로드 decl-id가 이미 선택된 경우(direct_callee 유효)는
                 // 해당 결정을 유지한다. 심볼 기반 재선택은 decl-id 정보가
                 // 없는 일반 call 경로에서만 수행한다.
+                if (direct_callee == kInvalidId &&
+                    v.callee_sym != parus::sir::k_invalid_symbol &&
+                    v.callee_fn_type != parus::sir::k_invalid_type) {
+                    direct_callee = ensure_external_func_for_symbol_(
+                        v.callee_sym, static_cast<TypeId>(v.callee_fn_type));
+                }
+
                 if (callee == kInvalidId &&
                     direct_callee == kInvalidId &&
                     v.callee_sym != parus::sir::k_invalid_symbol &&
@@ -2597,8 +2851,10 @@ namespace parus::oir {
                     static_cast<size_t>(v.callee_sym) < symtab->symbols().size()) {
                     const auto& ss = symtab->symbol(v.callee_sym);
                     if (ss.kind == parus::sema::SymbolKind::kFn) {
-                        if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
-                            auto fit = fn_link_name_to_func->find(ss.link_name);
+                        const std::string effective_link_name =
+                            maybe_specialize_external_generic_link_name_(ss, ss.declared_type, *types);
+                        if (fn_link_name_to_func != nullptr && !effective_link_name.empty()) {
+                            auto fit = fn_link_name_to_func->find(effective_link_name);
                             if (fit != fn_link_name_to_func->end() &&
                                 out != nullptr &&
                                 (size_t)fit->second < out->funcs.size()) {
@@ -2989,6 +3245,39 @@ namespace parus::oir {
                             );
                         }
                     }
+                    if (sub.kind == parus::sir::ValueKind::kFieldInit &&
+                        types != nullptr &&
+                        (size_t)sub.arg_begin + (size_t)sub.arg_count <= sir->args.size()) {
+                        bool is_range_value = false;
+                        bool hi_inclusive = false;
+                        if (sub.type != parus::sir::k_invalid_type) {
+                            const auto& sub_ty = types->get(sub.type);
+                            if (sub_ty.kind == parus::ty::Kind::kNamedUser) {
+                                std::vector<std::string_view> path{};
+                                std::vector<parus::ty::TypeId> type_args{};
+                                if (types->decompose_named_user(sub.type, path, type_args) && !path.empty()) {
+                                    const std::string_view leaf = path.back();
+                                    if (leaf == "Range" || leaf == "RangeInclusive") {
+                                        is_range_value = true;
+                                        hi_inclusive = (leaf == "RangeInclusive");
+                                    }
+                                }
+                            }
+                        }
+                        if (is_range_value) {
+                            ValueId lo = kInvalidId;
+                            ValueId hi = kInvalidId;
+                            for (uint32_t i = 0; i < sub.arg_count; ++i) {
+                                const auto& a = sir->args[sub.arg_begin + i];
+                                if (!a.has_label) continue;
+                                if (a.label == "start") lo = lower_value(a.value);
+                                else if (a.label == "end") hi = lower_value(a.value);
+                            }
+                            if (lo != kInvalidId && hi != kInvalidId) {
+                                return emit_slice_view(v.type, base, lo, hi, hi_inclusive);
+                            }
+                        }
+                    }
                 }
 
                 ValueId idx = lower_value(v.b);
@@ -3238,13 +3527,18 @@ namespace parus::oir {
                 };
 
                 auto resolve_loop_direct_callee_ = [&](uint32_t decl_sid,
-                                                       parus::sir::SymbolId callee_sym) -> FuncId {
+                                                       parus::sir::SymbolId callee_sym,
+                                                       TypeId fn_type) -> FuncId {
                     if (decl_sid != 0xFFFF'FFFFu && fn_decl_to_func != nullptr) {
                         auto dit = fn_decl_to_func->find(decl_sid);
                         if (dit != fn_decl_to_func->end() &&
                             (size_t)dit->second < out->funcs.size()) {
                             return dit->second;
                         }
+                    }
+                    if (callee_sym != parus::sir::k_invalid_symbol && fn_type != kInvalidId) {
+                        const FuncId fid = ensure_external_func_for_symbol_(callee_sym, fn_type);
+                        if (fid != kInvalidId) return fid;
                     }
                     if (callee_sym != parus::sir::k_invalid_symbol &&
                         fn_symbol_to_func != nullptr) {
@@ -3259,8 +3553,10 @@ namespace parus::oir {
                         static_cast<size_t>(callee_sym) < symtab->symbols().size()) {
                         const auto& ss = symtab->symbol(callee_sym);
                         if (ss.kind == parus::sema::SymbolKind::kFn) {
-                            if (fn_link_name_to_func != nullptr && !ss.link_name.empty()) {
-                                auto fit = fn_link_name_to_func->find(ss.link_name);
+                            const std::string effective_link_name =
+                                maybe_specialize_external_generic_link_name_(ss, ss.declared_type, *types);
+                            if (fn_link_name_to_func != nullptr && !effective_link_name.empty()) {
+                                auto fit = fn_link_name_to_func->find(effective_link_name);
                                 if (fit != fn_link_name_to_func->end() &&
                                     (size_t)fit->second < out->funcs.size()) {
                                     return fit->second;
@@ -3311,9 +3607,15 @@ namespace parus::oir {
                     }
 
                     const FuncId iter_callee =
-                        resolve_loop_direct_callee_(v.loop_iter_decl_stmt, v.loop_iter_external_sym);
+                        resolve_loop_direct_callee_(
+                            v.loop_iter_decl_stmt,
+                            v.loop_iter_external_sym,
+                            static_cast<TypeId>(v.loop_iter_fn_type));
                     const FuncId next_callee =
-                        resolve_loop_direct_callee_(v.loop_next_decl_stmt, v.loop_next_external_sym);
+                        resolve_loop_direct_callee_(
+                            v.loop_next_decl_stmt,
+                            v.loop_next_external_sym,
+                            static_cast<TypeId>(v.loop_next_fn_type));
                     if (iter_callee == kInvalidId || next_callee == kInvalidId) {
                         report_lowering_error("sequence loop lowering failed: unresolved iter/next target");
                         def->blocks.push_back(exit_bb);
@@ -3328,37 +3630,37 @@ namespace parus::oir {
                     const ValueId iter_slot = emit_alloca((TypeId)v.loop_iterator_type);
                     emit_store(iter_slot, iter_value);
 
-                    const TypeId next_opt_ty =
-                        (types != nullptr)
-                            ? (TypeId)const_cast<parus::ty::TypePool*>(types)->make_optional(binder_ty)
-                            : kInvalidId;
+                    if (binder_ty == kInvalidId) {
+                        report_lowering_error("sequence loop lowering failed: missing binder type metadata");
+                        def->blocks.push_back(exit_bb);
+                        cur_bb = exit_bb;
+                        return emit_const_null(v.type);
+                    }
+                    const ValueId item_slot = emit_alloca(binder_ty);
                     const BlockId head_bb = new_block();
                     const BlockId body_bb = new_block();
                     const BlockId latch_bb = new_block();
-                    const ValueId body_next = add_block_param(body_bb, next_opt_ty);
 
                     if (!has_term()) br(head_bb, {});
 
                     def->blocks.push_back(head_bb);
                     cur_bb = head_bb;
                     {
-                        std::vector<ValueId> next_args{iter_slot};
+                        std::vector<ValueId> next_args{iter_slot, item_slot};
                         coerce_args_for_direct_loop_(next_callee, next_args);
-                        const ValueId next_opt = emit_direct_call(next_opt_ty, next_callee, std::move(next_args));
-                        const ValueId is_done =
-                            emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, next_opt, emit_const_null(next_opt_ty));
-                        condbr(is_done,
-                               exit_bb,
-                               expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{},
+                        const ValueId has_next =
+                            emit_direct_call(bool_type_(), next_callee, std::move(next_args));
+                        condbr(has_next,
                                body_bb,
-                               {next_opt});
+                               {},
+                               exit_bb,
+                               expects_break_value ? std::vector<ValueId>{emit_const_null(v.type)} : std::vector<ValueId>{});
                     }
 
                     def->blocks.push_back(body_bb);
                     cur_bb = body_bb;
                     const size_t loop_scope_base = env_stack.size();
-                    const ValueId elem =
-                        emit_cast(binder_ty, Effect::MayTrap, CastKind::AsB, binder_ty, body_next);
+                    const ValueId elem = emit_load(binder_ty, item_slot);
                     loop_stack.push_back(LoopContext{
                         .break_bb = exit_bb,
                         .continue_bb = latch_bb,
@@ -4999,7 +5301,6 @@ namespace parus::oir {
                     return false;
             }
         };
-
         for (size_t i = 0; i < sir_.funcs.size(); ++i) {
             const auto& sf = sir_.funcs[i];
             const bool compiler_owned_impl =
@@ -5042,7 +5343,7 @@ namespace parus::oir {
             } else {
                 f.name = (sf.abi == parus::sir::FuncAbi::kC)
                     ? std::string(sf.name)
-                    : mangle_func_name_(sf, ty_, sir_.bundle_name);
+                    : mangle_func_name_(sf, sir_, ty_, sir_.bundle_name);
             }
             f.source_name = sf.name;
             f.abi = map_func_abi_(sf.abi);
@@ -5058,22 +5359,52 @@ namespace parus::oir {
             f.actor_owner_type = sf.actor_owner_type;
             f.ret_ty = (TypeId)sf.ret;
 
-            const BlockId entry = out.mod.add_block(Block{});
-            f.entry = entry;
-            f.blocks.push_back(entry);
-
-            const FuncId fid = out.mod.add_func(f);
-            sir_to_oir_func[i] = fid;
-            sir_to_entry[i] = entry;
-            fn_link_name_to_func[out.mod.funcs[fid].name] = fid;
-            fn_source_name_to_func[out.mod.funcs[fid].source_name] = fid;
-            const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
-            if (pend <= (uint64_t)sir_.params.size()) {
-                for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
-                    const auto& sp = sir_.params[sf.param_begin + pidx];
-                    (void)add_block_param_oir(entry, (TypeId)sp.type);
+            FuncId fid = kInvalidId;
+            BlockId entry = kInvalidId;
+            if (auto it = fn_link_name_to_func.find(f.name); it != fn_link_name_to_func.end()) {
+                const FuncId cand = it->second;
+                if (static_cast<size_t>(cand) < out.mod.funcs.size() &&
+                    out.mod.funcs[cand].is_extern) {
+                    fid = cand;
+                    entry = out.mod.funcs[fid].entry;
+                    auto& existing = out.mod.funcs[fid];
+                    existing.source_name = sf.name;
+                    existing.abi = f.abi;
+                    existing.c_callconv = f.c_callconv;
+                    existing.is_extern = false;
+                    existing.is_c_variadic = f.is_c_variadic;
+                    existing.c_fixed_param_count = f.c_fixed_param_count;
+                    existing.is_pure = f.is_pure;
+                    existing.is_comptime = f.is_comptime;
+                    existing.is_const = f.is_const;
+                    existing.is_actor_member = f.is_actor_member;
+                    existing.is_actor_init = f.is_actor_init;
+                    existing.actor_owner_type = f.actor_owner_type;
+                    existing.ret_ty = f.ret_ty;
                 }
             }
+
+            if (fid == kInvalidId) {
+                entry = out.mod.add_block(Block{});
+                f.entry = entry;
+                f.blocks.push_back(entry);
+
+                fid = out.mod.add_func(f);
+                fn_link_name_to_func[out.mod.funcs[fid].name] = fid;
+                fn_source_name_to_func[out.mod.funcs[fid].source_name] = fid;
+                const uint64_t pend = (uint64_t)sf.param_begin + (uint64_t)sf.param_count;
+                if (pend <= (uint64_t)sir_.params.size()) {
+                    for (uint32_t pidx = 0; pidx < sf.param_count; ++pidx) {
+                        const auto& sp = sir_.params[sf.param_begin + pidx];
+                        (void)add_block_param_oir(entry, (TypeId)sp.type);
+                    }
+                }
+            } else if (!sf.name.empty()) {
+                fn_source_name_to_func[std::string(sf.name)] = fid;
+            }
+
+            sir_to_oir_func[i] = fid;
+            sir_to_entry[i] = entry;
             if (sf.is_actor_member || sf.is_actor_init) {
                 out.mod.funcs[fid].actor_ctx_param_index =
                     static_cast<uint32_t>(out.mod.blocks[entry].params.size());
@@ -5089,6 +5420,52 @@ namespace parus::oir {
             }
             if (sf.origin_stmt != 0xFFFF'FFFFu) {
                 fn_decl_to_func[sf.origin_stmt] = fid;
+            }
+        }
+
+        if (sym_ != nullptr) {
+            for (uint32_t sid = 0; sid < sym_->symbols().size(); ++sid) {
+                const auto& ss = sym_->symbol(sid);
+                if (!ss.is_external || ss.kind != parus::sema::SymbolKind::kFn) continue;
+                if (ss.declared_type == parus::ty::kInvalidType || ss.declared_type >= ty_.count()) continue;
+                const auto& fn_ty = ty_.get(ss.declared_type);
+                if (fn_ty.kind != parus::ty::Kind::kFn) continue;
+                if (sir_type_contains_unresolved_generic_param(
+                        sir_type_contains_unresolved_generic_param,
+                        ss.declared_type)) {
+                    continue;
+                }
+
+                const std::string link_name =
+                    maybe_specialize_external_generic_link_name_(ss, ss.declared_type, ty_);
+                if (link_name.empty()) continue;
+                if (fn_link_name_to_func.find(link_name) != fn_link_name_to_func.end()) continue;
+                if (!ss.name.empty() && fn_source_name_to_func.find(ss.name) != fn_source_name_to_func.end()) {
+                    continue;
+                }
+
+                Function f{};
+                f.name = link_name;
+                f.source_name = ss.name.empty() ? link_name : ss.name;
+                f.abi = ty_.fn_is_c_abi(ss.declared_type) ? FunctionAbi::C : FunctionAbi::Parus;
+                f.c_callconv = map_c_callconv_(static_cast<parus::sir::CCallConv>(ty_.fn_callconv(ss.declared_type)));
+                f.is_extern = true;
+                f.is_c_variadic = ty_.fn_is_c_variadic(ss.declared_type);
+                f.c_fixed_param_count = fn_ty.param_count;
+                f.ret_ty = fn_ty.ret;
+
+                const BlockId entry = out.mod.add_block(Block{});
+                f.entry = entry;
+                f.blocks.push_back(entry);
+
+                const FuncId fid = out.mod.add_func(f);
+                fn_link_name_to_func[f.name] = fid;
+                fn_source_name_to_func[f.source_name] = fid;
+                fn_symbol_to_func[sid] = fid;
+                fn_symbol_to_funcs[sid].push_back(fid);
+                for (uint32_t pi = 0; pi < fn_ty.param_count; ++pi) {
+                    (void)add_block_param_oir(entry, (TypeId)ty_.fn_param_at(ss.declared_type, pi));
+                }
             }
         }
 
@@ -5150,6 +5527,7 @@ namespace parus::oir {
             fb.exc_type_global = exc_type_gid;
             fb.fn_is_throwing = sf.is_throwing;
             fb.def = &out.mod.funcs[fid];
+            fb.def_id = fid;
             fb.cur_bb = entry;
 
             for (const auto& kv : sorted_globals) {
