@@ -1,0 +1,287 @@
+$![Impl::Core];
+
+import constraints as constraints;
+
+def min_usize_(lhs: usize, rhs: usize) -> usize {
+    if (lhs < rhs) { return lhs; }
+    return rhs;
+}
+
+def suffix_offset_(len: usize, suffix_len: usize) -> usize {
+    return len - suffix_len;
+}
+
+def len_impl_<T>(xs: T[]) -> usize {
+    return xs.len;
+}
+
+def is_empty_impl_<T>(xs: T[]) -> bool {
+    return xs.len == 0usize;
+}
+
+def as_ptr_impl_<T>(xs: T[]) -> *const T {
+    return xs.data;
+}
+
+def subslice_impl_<T>(xs: T[], start: usize, end: usize) -> T[] {
+    return xs[start..end];
+}
+
+def take_front_impl_<T>(xs: T[], n: usize) -> T[] {
+    let clamped: usize = min_usize_(n, xs.len);
+    return xs[0usize..clamped];
+}
+
+def drop_front_impl_<T>(xs: T[], n: usize) -> T[] {
+    let clamped: usize = min_usize_(n, xs.len);
+    return xs[clamped..xs.len];
+}
+
+def take_back_impl_<T>(xs: T[], n: usize) -> T[] {
+    let total_len: usize = xs.len;
+    let clamped: usize = min_usize_(n, total_len);
+    let start: usize = total_len - clamped;
+    return xs[start..total_len];
+}
+
+def drop_back_impl_<T>(xs: T[], n: usize) -> T[] {
+    let total_len: usize = xs.len;
+    let clamped: usize = min_usize_(n, total_len);
+    let end: usize = total_len - clamped;
+    return xs[0usize..end];
+}
+
+def equal_impl_<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool {
+    if (lhs.len != rhs.len) {
+        return false;
+    }
+    set mut i = 0usize;
+    while (i < lhs.len) {
+        if (not (lhs[i] == rhs[i])) {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+def starts_with_impl_<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable] -> bool {
+    if (prefix.len > xs.len) {
+        return false;
+    }
+    set mut i = 0usize;
+    while (i < prefix.len) {
+        if (not (xs[i] == prefix[i])) {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+def ends_with_impl_<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -> bool {
+    if (suffix.len > xs.len) {
+        return false;
+    }
+    let offset: usize = suffix_offset_(xs.len, suffix.len);
+    set mut i = 0usize;
+    while (i < suffix.len) {
+        if (not (xs[offset + i] == suffix[i])) {
+            return false;
+        }
+        i = i + 1usize;
+    }
+    return true;
+}
+
+export def len<T>(xs: T[]) -> usize { return len_impl_<T>(xs); }
+export def is_empty<T>(xs: T[]) -> bool { return is_empty_impl_<T>(xs); }
+export def as_ptr<T>(xs: T[]) -> *const T { return as_ptr_impl_<T>(xs); }
+export def subslice<T>(xs: T[], start: usize, end: usize) -> T[] { return subslice_impl_<T>(xs, start, end); }
+export def take_front<T>(xs: T[], n: usize) -> T[] { return take_front_impl_<T>(xs, n); }
+export def drop_front<T>(xs: T[], n: usize) -> T[] { return drop_front_impl_<T>(xs, n); }
+export def take_back<T>(xs: T[], n: usize) -> T[] { return take_back_impl_<T>(xs, n); }
+export def drop_back<T>(xs: T[], n: usize) -> T[] { return drop_back_impl_<T>(xs, n); }
+export def equal<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool { return equal_impl_<T>(lhs, rhs); }
+export def starts_with<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable] -> bool { return starts_with_impl_<T>(xs, prefix); }
+export def ends_with<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -> bool { return ends_with_impl_<T>(xs, suffix); }
+
+// Installed/external callers still need concrete helper symbols until
+// cross-bundle generic export materialization is fully converged.
+export def len(xs: bool[]) -> usize { return len_impl_<bool>(xs); }
+export def len(xs: char[]) -> usize { return len_impl_<char>(xs); }
+export def len(xs: i8[]) -> usize { return len_impl_<i8>(xs); }
+export def len(xs: i16[]) -> usize { return len_impl_<i16>(xs); }
+export def len(xs: i32[]) -> usize { return len_impl_<i32>(xs); }
+export def len(xs: i64[]) -> usize { return len_impl_<i64>(xs); }
+export def len(xs: i128[]) -> usize { return len_impl_<i128>(xs); }
+export def len(xs: isize[]) -> usize { return len_impl_<isize>(xs); }
+export def len(xs: u8[]) -> usize { return len_impl_<u8>(xs); }
+export def len(xs: u16[]) -> usize { return len_impl_<u16>(xs); }
+export def len(xs: u32[]) -> usize { return len_impl_<u32>(xs); }
+export def len(xs: u64[]) -> usize { return len_impl_<u64>(xs); }
+export def len(xs: u128[]) -> usize { return len_impl_<u128>(xs); }
+export def len(xs: usize[]) -> usize { return len_impl_<usize>(xs); }
+export def len(xs: f32[]) -> usize { return len_impl_<f32>(xs); }
+export def len(xs: f64[]) -> usize { return len_impl_<f64>(xs); }
+
+export def is_empty(xs: bool[]) -> bool { return is_empty_impl_<bool>(xs); }
+export def is_empty(xs: char[]) -> bool { return is_empty_impl_<char>(xs); }
+export def is_empty(xs: i8[]) -> bool { return is_empty_impl_<i8>(xs); }
+export def is_empty(xs: i16[]) -> bool { return is_empty_impl_<i16>(xs); }
+export def is_empty(xs: i32[]) -> bool { return is_empty_impl_<i32>(xs); }
+export def is_empty(xs: i64[]) -> bool { return is_empty_impl_<i64>(xs); }
+export def is_empty(xs: i128[]) -> bool { return is_empty_impl_<i128>(xs); }
+export def is_empty(xs: isize[]) -> bool { return is_empty_impl_<isize>(xs); }
+export def is_empty(xs: u8[]) -> bool { return is_empty_impl_<u8>(xs); }
+export def is_empty(xs: u16[]) -> bool { return is_empty_impl_<u16>(xs); }
+export def is_empty(xs: u32[]) -> bool { return is_empty_impl_<u32>(xs); }
+export def is_empty(xs: u64[]) -> bool { return is_empty_impl_<u64>(xs); }
+export def is_empty(xs: u128[]) -> bool { return is_empty_impl_<u128>(xs); }
+export def is_empty(xs: usize[]) -> bool { return is_empty_impl_<usize>(xs); }
+export def is_empty(xs: f32[]) -> bool { return is_empty_impl_<f32>(xs); }
+export def is_empty(xs: f64[]) -> bool { return is_empty_impl_<f64>(xs); }
+
+export def as_ptr(xs: bool[]) -> *const bool { return as_ptr_impl_<bool>(xs); }
+export def as_ptr(xs: char[]) -> *const char { return as_ptr_impl_<char>(xs); }
+export def as_ptr(xs: i8[]) -> *const i8 { return as_ptr_impl_<i8>(xs); }
+export def as_ptr(xs: i16[]) -> *const i16 { return as_ptr_impl_<i16>(xs); }
+export def as_ptr(xs: i32[]) -> *const i32 { return as_ptr_impl_<i32>(xs); }
+export def as_ptr(xs: i64[]) -> *const i64 { return as_ptr_impl_<i64>(xs); }
+export def as_ptr(xs: i128[]) -> *const i128 { return as_ptr_impl_<i128>(xs); }
+export def as_ptr(xs: isize[]) -> *const isize { return as_ptr_impl_<isize>(xs); }
+export def as_ptr(xs: u8[]) -> *const u8 { return as_ptr_impl_<u8>(xs); }
+export def as_ptr(xs: u16[]) -> *const u16 { return as_ptr_impl_<u16>(xs); }
+export def as_ptr(xs: u32[]) -> *const u32 { return as_ptr_impl_<u32>(xs); }
+export def as_ptr(xs: u64[]) -> *const u64 { return as_ptr_impl_<u64>(xs); }
+export def as_ptr(xs: u128[]) -> *const u128 { return as_ptr_impl_<u128>(xs); }
+export def as_ptr(xs: usize[]) -> *const usize { return as_ptr_impl_<usize>(xs); }
+export def as_ptr(xs: f32[]) -> *const f32 { return as_ptr_impl_<f32>(xs); }
+export def as_ptr(xs: f64[]) -> *const f64 { return as_ptr_impl_<f64>(xs); }
+
+export def subslice(xs: bool[], start: usize, end: usize) -> bool[] { return subslice_impl_<bool>(xs, start, end); }
+export def subslice(xs: char[], start: usize, end: usize) -> char[] { return subslice_impl_<char>(xs, start, end); }
+export def subslice(xs: i8[], start: usize, end: usize) -> i8[] { return subslice_impl_<i8>(xs, start, end); }
+export def subslice(xs: i16[], start: usize, end: usize) -> i16[] { return subslice_impl_<i16>(xs, start, end); }
+export def subslice(xs: i32[], start: usize, end: usize) -> i32[] { return subslice_impl_<i32>(xs, start, end); }
+export def subslice(xs: i64[], start: usize, end: usize) -> i64[] { return subslice_impl_<i64>(xs, start, end); }
+export def subslice(xs: i128[], start: usize, end: usize) -> i128[] { return subslice_impl_<i128>(xs, start, end); }
+export def subslice(xs: isize[], start: usize, end: usize) -> isize[] { return subslice_impl_<isize>(xs, start, end); }
+export def subslice(xs: u8[], start: usize, end: usize) -> u8[] { return subslice_impl_<u8>(xs, start, end); }
+export def subslice(xs: u16[], start: usize, end: usize) -> u16[] { return subslice_impl_<u16>(xs, start, end); }
+export def subslice(xs: u32[], start: usize, end: usize) -> u32[] { return subslice_impl_<u32>(xs, start, end); }
+export def subslice(xs: u64[], start: usize, end: usize) -> u64[] { return subslice_impl_<u64>(xs, start, end); }
+export def subslice(xs: u128[], start: usize, end: usize) -> u128[] { return subslice_impl_<u128>(xs, start, end); }
+export def subslice(xs: usize[], start: usize, end: usize) -> usize[] { return subslice_impl_<usize>(xs, start, end); }
+export def subslice(xs: f32[], start: usize, end: usize) -> f32[] { return subslice_impl_<f32>(xs, start, end); }
+export def subslice(xs: f64[], start: usize, end: usize) -> f64[] { return subslice_impl_<f64>(xs, start, end); }
+
+export def take_front(xs: bool[], n: usize) -> bool[] { return take_front_impl_<bool>(xs, n); }
+export def take_front(xs: char[], n: usize) -> char[] { return take_front_impl_<char>(xs, n); }
+export def take_front(xs: i8[], n: usize) -> i8[] { return take_front_impl_<i8>(xs, n); }
+export def take_front(xs: i16[], n: usize) -> i16[] { return take_front_impl_<i16>(xs, n); }
+export def take_front(xs: i32[], n: usize) -> i32[] { return take_front_impl_<i32>(xs, n); }
+export def take_front(xs: i64[], n: usize) -> i64[] { return take_front_impl_<i64>(xs, n); }
+export def take_front(xs: i128[], n: usize) -> i128[] { return take_front_impl_<i128>(xs, n); }
+export def take_front(xs: isize[], n: usize) -> isize[] { return take_front_impl_<isize>(xs, n); }
+export def take_front(xs: u8[], n: usize) -> u8[] { return take_front_impl_<u8>(xs, n); }
+export def take_front(xs: u16[], n: usize) -> u16[] { return take_front_impl_<u16>(xs, n); }
+export def take_front(xs: u32[], n: usize) -> u32[] { return take_front_impl_<u32>(xs, n); }
+export def take_front(xs: u64[], n: usize) -> u64[] { return take_front_impl_<u64>(xs, n); }
+export def take_front(xs: u128[], n: usize) -> u128[] { return take_front_impl_<u128>(xs, n); }
+export def take_front(xs: usize[], n: usize) -> usize[] { return take_front_impl_<usize>(xs, n); }
+export def take_front(xs: f32[], n: usize) -> f32[] { return take_front_impl_<f32>(xs, n); }
+export def take_front(xs: f64[], n: usize) -> f64[] { return take_front_impl_<f64>(xs, n); }
+
+export def drop_front(xs: bool[], n: usize) -> bool[] { return drop_front_impl_<bool>(xs, n); }
+export def drop_front(xs: char[], n: usize) -> char[] { return drop_front_impl_<char>(xs, n); }
+export def drop_front(xs: i8[], n: usize) -> i8[] { return drop_front_impl_<i8>(xs, n); }
+export def drop_front(xs: i16[], n: usize) -> i16[] { return drop_front_impl_<i16>(xs, n); }
+export def drop_front(xs: i32[], n: usize) -> i32[] { return drop_front_impl_<i32>(xs, n); }
+export def drop_front(xs: i64[], n: usize) -> i64[] { return drop_front_impl_<i64>(xs, n); }
+export def drop_front(xs: i128[], n: usize) -> i128[] { return drop_front_impl_<i128>(xs, n); }
+export def drop_front(xs: isize[], n: usize) -> isize[] { return drop_front_impl_<isize>(xs, n); }
+export def drop_front(xs: u8[], n: usize) -> u8[] { return drop_front_impl_<u8>(xs, n); }
+export def drop_front(xs: u16[], n: usize) -> u16[] { return drop_front_impl_<u16>(xs, n); }
+export def drop_front(xs: u32[], n: usize) -> u32[] { return drop_front_impl_<u32>(xs, n); }
+export def drop_front(xs: u64[], n: usize) -> u64[] { return drop_front_impl_<u64>(xs, n); }
+export def drop_front(xs: u128[], n: usize) -> u128[] { return drop_front_impl_<u128>(xs, n); }
+export def drop_front(xs: usize[], n: usize) -> usize[] { return drop_front_impl_<usize>(xs, n); }
+export def drop_front(xs: f32[], n: usize) -> f32[] { return drop_front_impl_<f32>(xs, n); }
+export def drop_front(xs: f64[], n: usize) -> f64[] { return drop_front_impl_<f64>(xs, n); }
+
+export def take_back(xs: bool[], n: usize) -> bool[] { return take_back_impl_<bool>(xs, n); }
+export def take_back(xs: char[], n: usize) -> char[] { return take_back_impl_<char>(xs, n); }
+export def take_back(xs: i8[], n: usize) -> i8[] { return take_back_impl_<i8>(xs, n); }
+export def take_back(xs: i16[], n: usize) -> i16[] { return take_back_impl_<i16>(xs, n); }
+export def take_back(xs: i32[], n: usize) -> i32[] { return take_back_impl_<i32>(xs, n); }
+export def take_back(xs: i64[], n: usize) -> i64[] { return take_back_impl_<i64>(xs, n); }
+export def take_back(xs: i128[], n: usize) -> i128[] { return take_back_impl_<i128>(xs, n); }
+export def take_back(xs: isize[], n: usize) -> isize[] { return take_back_impl_<isize>(xs, n); }
+export def take_back(xs: u8[], n: usize) -> u8[] { return take_back_impl_<u8>(xs, n); }
+export def take_back(xs: u16[], n: usize) -> u16[] { return take_back_impl_<u16>(xs, n); }
+export def take_back(xs: u32[], n: usize) -> u32[] { return take_back_impl_<u32>(xs, n); }
+export def take_back(xs: u64[], n: usize) -> u64[] { return take_back_impl_<u64>(xs, n); }
+export def take_back(xs: u128[], n: usize) -> u128[] { return take_back_impl_<u128>(xs, n); }
+export def take_back(xs: usize[], n: usize) -> usize[] { return take_back_impl_<usize>(xs, n); }
+export def take_back(xs: f32[], n: usize) -> f32[] { return take_back_impl_<f32>(xs, n); }
+export def take_back(xs: f64[], n: usize) -> f64[] { return take_back_impl_<f64>(xs, n); }
+
+export def drop_back(xs: bool[], n: usize) -> bool[] { return drop_back_impl_<bool>(xs, n); }
+export def drop_back(xs: char[], n: usize) -> char[] { return drop_back_impl_<char>(xs, n); }
+export def drop_back(xs: i8[], n: usize) -> i8[] { return drop_back_impl_<i8>(xs, n); }
+export def drop_back(xs: i16[], n: usize) -> i16[] { return drop_back_impl_<i16>(xs, n); }
+export def drop_back(xs: i32[], n: usize) -> i32[] { return drop_back_impl_<i32>(xs, n); }
+export def drop_back(xs: i64[], n: usize) -> i64[] { return drop_back_impl_<i64>(xs, n); }
+export def drop_back(xs: i128[], n: usize) -> i128[] { return drop_back_impl_<i128>(xs, n); }
+export def drop_back(xs: isize[], n: usize) -> isize[] { return drop_back_impl_<isize>(xs, n); }
+export def drop_back(xs: u8[], n: usize) -> u8[] { return drop_back_impl_<u8>(xs, n); }
+export def drop_back(xs: u16[], n: usize) -> u16[] { return drop_back_impl_<u16>(xs, n); }
+export def drop_back(xs: u32[], n: usize) -> u32[] { return drop_back_impl_<u32>(xs, n); }
+export def drop_back(xs: u64[], n: usize) -> u64[] { return drop_back_impl_<u64>(xs, n); }
+export def drop_back(xs: u128[], n: usize) -> u128[] { return drop_back_impl_<u128>(xs, n); }
+export def drop_back(xs: usize[], n: usize) -> usize[] { return drop_back_impl_<usize>(xs, n); }
+export def drop_back(xs: f32[], n: usize) -> f32[] { return drop_back_impl_<f32>(xs, n); }
+export def drop_back(xs: f64[], n: usize) -> f64[] { return drop_back_impl_<f64>(xs, n); }
+
+export def equal(lhs: char[], rhs: char[]) -> bool { return equal_impl_<char>(lhs, rhs); }
+export def equal(lhs: i8[], rhs: i8[]) -> bool { return equal_impl_<i8>(lhs, rhs); }
+export def equal(lhs: i16[], rhs: i16[]) -> bool { return equal_impl_<i16>(lhs, rhs); }
+export def equal(lhs: i32[], rhs: i32[]) -> bool { return equal_impl_<i32>(lhs, rhs); }
+export def equal(lhs: i64[], rhs: i64[]) -> bool { return equal_impl_<i64>(lhs, rhs); }
+export def equal(lhs: i128[], rhs: i128[]) -> bool { return equal_impl_<i128>(lhs, rhs); }
+export def equal(lhs: isize[], rhs: isize[]) -> bool { return equal_impl_<isize>(lhs, rhs); }
+export def equal(lhs: u8[], rhs: u8[]) -> bool { return equal_impl_<u8>(lhs, rhs); }
+export def equal(lhs: u16[], rhs: u16[]) -> bool { return equal_impl_<u16>(lhs, rhs); }
+export def equal(lhs: u32[], rhs: u32[]) -> bool { return equal_impl_<u32>(lhs, rhs); }
+export def equal(lhs: u64[], rhs: u64[]) -> bool { return equal_impl_<u64>(lhs, rhs); }
+export def equal(lhs: u128[], rhs: u128[]) -> bool { return equal_impl_<u128>(lhs, rhs); }
+export def equal(lhs: usize[], rhs: usize[]) -> bool { return equal_impl_<usize>(lhs, rhs); }
+
+export def starts_with(xs: char[], prefix: char[]) -> bool { return starts_with_impl_<char>(xs, prefix); }
+export def starts_with(xs: i8[], prefix: i8[]) -> bool { return starts_with_impl_<i8>(xs, prefix); }
+export def starts_with(xs: i16[], prefix: i16[]) -> bool { return starts_with_impl_<i16>(xs, prefix); }
+export def starts_with(xs: i32[], prefix: i32[]) -> bool { return starts_with_impl_<i32>(xs, prefix); }
+export def starts_with(xs: i64[], prefix: i64[]) -> bool { return starts_with_impl_<i64>(xs, prefix); }
+export def starts_with(xs: i128[], prefix: i128[]) -> bool { return starts_with_impl_<i128>(xs, prefix); }
+export def starts_with(xs: isize[], prefix: isize[]) -> bool { return starts_with_impl_<isize>(xs, prefix); }
+export def starts_with(xs: u8[], prefix: u8[]) -> bool { return starts_with_impl_<u8>(xs, prefix); }
+export def starts_with(xs: u16[], prefix: u16[]) -> bool { return starts_with_impl_<u16>(xs, prefix); }
+export def starts_with(xs: u32[], prefix: u32[]) -> bool { return starts_with_impl_<u32>(xs, prefix); }
+export def starts_with(xs: u64[], prefix: u64[]) -> bool { return starts_with_impl_<u64>(xs, prefix); }
+export def starts_with(xs: u128[], prefix: u128[]) -> bool { return starts_with_impl_<u128>(xs, prefix); }
+export def starts_with(xs: usize[], prefix: usize[]) -> bool { return starts_with_impl_<usize>(xs, prefix); }
+
+export def ends_with(xs: char[], suffix: char[]) -> bool { return ends_with_impl_<char>(xs, suffix); }
+export def ends_with(xs: i8[], suffix: i8[]) -> bool { return ends_with_impl_<i8>(xs, suffix); }
+export def ends_with(xs: i16[], suffix: i16[]) -> bool { return ends_with_impl_<i16>(xs, suffix); }
+export def ends_with(xs: i32[], suffix: i32[]) -> bool { return ends_with_impl_<i32>(xs, suffix); }
+export def ends_with(xs: i64[], suffix: i64[]) -> bool { return ends_with_impl_<i64>(xs, suffix); }
+export def ends_with(xs: i128[], suffix: i128[]) -> bool { return ends_with_impl_<i128>(xs, suffix); }
+export def ends_with(xs: isize[], suffix: isize[]) -> bool { return ends_with_impl_<isize>(xs, suffix); }
+export def ends_with(xs: u8[], suffix: u8[]) -> bool { return ends_with_impl_<u8>(xs, suffix); }
+export def ends_with(xs: u16[], suffix: u16[]) -> bool { return ends_with_impl_<u16>(xs, suffix); }
+export def ends_with(xs: u32[], suffix: u32[]) -> bool { return ends_with_impl_<u32>(xs, suffix); }
+export def ends_with(xs: u64[], suffix: u64[]) -> bool { return ends_with_impl_<u64>(xs, suffix); }
+export def ends_with(xs: u128[], suffix: u128[]) -> bool { return ends_with_impl_<u128>(xs, suffix); }
+export def ends_with(xs: usize[], suffix: usize[]) -> bool { return ends_with_impl_<usize>(xs, suffix); }

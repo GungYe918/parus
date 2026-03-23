@@ -191,6 +191,126 @@ def usize_is_power_of_two_(x: usize) -> bool {
     return true;
 }
 
+def i8_pow_(base: i8, exp: u32) -> i8 {
+    set mut acc = 1i8;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def i16_pow_(base: i16, exp: u32) -> i16 {
+    set mut acc = 1i16;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def i32_pow_(base: i32, exp: u32) -> i32 {
+    set mut acc = 1i32;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def i64_pow_(base: i64, exp: u32) -> i64 {
+    set mut acc = 1i64;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def i128_pow_(base: i128, exp: u32) -> i128 {
+    set mut acc = 1i128;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def isize_pow_(base: isize, exp: u32) -> isize {
+    set mut acc = 1isize;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def u8_pow_(base: u8, exp: u32) -> u8 {
+    set mut acc = 1u8;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def u16_pow_(base: u16, exp: u32) -> u16 {
+    set mut acc = 1u16;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def u32_pow_(base: u32, exp: u32) -> u32 {
+    set mut acc = 1u32;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def u64_pow_(base: u64, exp: u32) -> u64 {
+    set mut acc = 1u64;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def u128_pow_(base: u128, exp: u32) -> u128 {
+    set mut acc = 1u128;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
+def usize_pow_(base: usize, exp: u32) -> usize {
+    set mut acc = 1usize;
+    set mut i = 0u32;
+    while (i < exp) {
+        acc = acc * base;
+        i = i + 1u32;
+    }
+    return acc;
+}
+
 export acts for i8 {
     def cmp(self, rhs: i8) -> cmp::Ordering {
         if (i8_value_(self) < rhs) { return cmp::ordering_less(); }
@@ -216,6 +336,18 @@ export acts for i8 {
 
     def is_zero(self) -> bool {
         return i8_value_(self) == 0i8;
+    }
+
+    def is_even(self) -> bool {
+        return (i8_value_(self) % 2i8) == 0i8;
+    }
+
+    def is_odd(self) -> bool {
+        return (i8_value_(self) % 2i8) != 0i8;
+    }
+
+    def pow(self, exp: u32) -> i8 {
+        return i8_pow_(i8_value_(self), exp);
     }
 
     def div_euclid(self, rhs: i8) -> i8 {
@@ -273,6 +405,18 @@ export acts for i16 {
         return i16_value_(self) == 0i16;
     }
 
+    def is_even(self) -> bool {
+        return (i16_value_(self) % 2i16) == 0i16;
+    }
+
+    def is_odd(self) -> bool {
+        return (i16_value_(self) % 2i16) != 0i16;
+    }
+
+    def pow(self, exp: u32) -> i16 {
+        return i16_pow_(i16_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: i16) -> i16 {
         return i16_div_euclid_(i16_value_(self), rhs);
     }
@@ -326,6 +470,18 @@ export acts for i32 {
 
     def is_zero(self) -> bool {
         return i32_value_(self) == 0i32;
+    }
+
+    def is_even(self) -> bool {
+        return (i32_value_(self) % 2i32) == 0i32;
+    }
+
+    def is_odd(self) -> bool {
+        return (i32_value_(self) % 2i32) != 0i32;
+    }
+
+    def pow(self, exp: u32) -> i32 {
+        return i32_pow_(i32_value_(self), exp);
     }
 
     def div_euclid(self, rhs: i32) -> i32 {
@@ -383,6 +539,18 @@ export acts for i64 {
         return i64_value_(self) == 0i64;
     }
 
+    def is_even(self) -> bool {
+        return (i64_value_(self) % 2i64) == 0i64;
+    }
+
+    def is_odd(self) -> bool {
+        return (i64_value_(self) % 2i64) != 0i64;
+    }
+
+    def pow(self, exp: u32) -> i64 {
+        return i64_pow_(i64_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: i64) -> i64 {
         return i64_div_euclid_(i64_value_(self), rhs);
     }
@@ -436,6 +604,18 @@ export acts for i128 {
 
     def is_zero(self) -> bool {
         return i128_value_(self) == 0i128;
+    }
+
+    def is_even(self) -> bool {
+        return (i128_value_(self) % 2i128) == 0i128;
+    }
+
+    def is_odd(self) -> bool {
+        return (i128_value_(self) % 2i128) != 0i128;
+    }
+
+    def pow(self, exp: u32) -> i128 {
+        return i128_pow_(i128_value_(self), exp);
     }
 
     def div_euclid(self, rhs: i128) -> i128 {
@@ -493,6 +673,18 @@ export acts for isize {
         return isize_value_(self) == 0isize;
     }
 
+    def is_even(self) -> bool {
+        return (isize_value_(self) % 2isize) == 0isize;
+    }
+
+    def is_odd(self) -> bool {
+        return (isize_value_(self) % 2isize) != 0isize;
+    }
+
+    def pow(self, exp: u32) -> isize {
+        return isize_pow_(isize_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: isize) -> isize {
         return isize_div_euclid_(isize_value_(self), rhs);
     }
@@ -548,6 +740,18 @@ export acts for u8 {
         return u8_value_(self) == 0u8;
     }
 
+    def is_even(self) -> bool {
+        return (u8_value_(self) % 2u8) == 0u8;
+    }
+
+    def is_odd(self) -> bool {
+        return (u8_value_(self) % 2u8) != 0u8;
+    }
+
+    def pow(self, exp: u32) -> u8 {
+        return u8_pow_(u8_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: u8) -> u8 {
         return u8_value_(self) / rhs;
     }
@@ -586,6 +790,18 @@ export acts for u16 {
 
     def is_zero(self) -> bool {
         return u16_value_(self) == 0u16;
+    }
+
+    def is_even(self) -> bool {
+        return (u16_value_(self) % 2u16) == 0u16;
+    }
+
+    def is_odd(self) -> bool {
+        return (u16_value_(self) % 2u16) != 0u16;
+    }
+
+    def pow(self, exp: u32) -> u16 {
+        return u16_pow_(u16_value_(self), exp);
     }
 
     def div_euclid(self, rhs: u16) -> u16 {
@@ -628,6 +844,18 @@ export acts for u32 {
         return u32_value_(self) == 0u32;
     }
 
+    def is_even(self) -> bool {
+        return (u32_value_(self) % 2u32) == 0u32;
+    }
+
+    def is_odd(self) -> bool {
+        return (u32_value_(self) % 2u32) != 0u32;
+    }
+
+    def pow(self, exp: u32) -> u32 {
+        return u32_pow_(u32_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: u32) -> u32 {
         return u32_value_(self) / rhs;
     }
@@ -666,6 +894,18 @@ export acts for u64 {
 
     def is_zero(self) -> bool {
         return u64_value_(self) == 0u64;
+    }
+
+    def is_even(self) -> bool {
+        return (u64_value_(self) % 2u64) == 0u64;
+    }
+
+    def is_odd(self) -> bool {
+        return (u64_value_(self) % 2u64) != 0u64;
+    }
+
+    def pow(self, exp: u32) -> u64 {
+        return u64_pow_(u64_value_(self), exp);
     }
 
     def div_euclid(self, rhs: u64) -> u64 {
@@ -708,6 +948,18 @@ export acts for u128 {
         return u128_value_(self) == 0u128;
     }
 
+    def is_even(self) -> bool {
+        return (u128_value_(self) % 2u128) == 0u128;
+    }
+
+    def is_odd(self) -> bool {
+        return (u128_value_(self) % 2u128) != 0u128;
+    }
+
+    def pow(self, exp: u32) -> u128 {
+        return u128_pow_(u128_value_(self), exp);
+    }
+
     def div_euclid(self, rhs: u128) -> u128 {
         return u128_value_(self) / rhs;
     }
@@ -746,6 +998,18 @@ export acts for usize {
 
     def is_zero(self) -> bool {
         return usize_value_(self) == 0usize;
+    }
+
+    def is_even(self) -> bool {
+        return (usize_value_(self) % 2usize) == 0usize;
+    }
+
+    def is_odd(self) -> bool {
+        return (usize_value_(self) % 2usize) != 0usize;
+    }
+
+    def pow(self, exp: u32) -> usize {
+        return usize_pow_(usize_value_(self), exp);
     }
 
     def div_euclid(self, rhs: usize) -> usize {

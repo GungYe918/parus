@@ -1,5 +1,7 @@
 $![Impl::Core];
 
+import constraints as constraints;
+
 // Three-way comparison result for freestanding core operations.
 export enum Ordering {
     case Less,
@@ -19,3 +21,114 @@ export def ordering_equal() -> Ordering {
 export def ordering_greater() -> Ordering {
     return Ordering::Greater();
 }
+
+export acts for Ordering {
+    def is_less(self) -> bool {
+        let ord: Ordering = *self;
+        switch (ord) {
+        case Ordering::Less: { return true; }
+        default: {}
+        }
+        return false;
+    }
+
+    def is_equal(self) -> bool {
+        let ord: Ordering = *self;
+        switch (ord) {
+        case Ordering::Equal: { return true; }
+        default: {}
+        }
+        return false;
+    }
+
+    def is_greater(self) -> bool {
+        let ord: Ordering = *self;
+        switch (ord) {
+        case Ordering::Greater: { return true; }
+        default: {}
+        }
+        return false;
+    }
+
+    def reverse(self) -> Ordering {
+        let ord: Ordering = *self;
+        switch (ord) {
+        case Ordering::Less: { return Ordering::Greater(); }
+        case Ordering::Equal: { return Ordering::Equal(); }
+        case Ordering::Greater: { return Ordering::Less(); }
+        }
+        return Ordering::Equal();
+    }
+};
+
+def min_impl_<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+    if (lhs < rhs) { return lhs; }
+    return rhs;
+}
+
+def max_impl_<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+    if (lhs > rhs) { return lhs; }
+    return rhs;
+}
+
+def clamp_impl_<T>(value: T, lo: T, hi: T) with [T: constraints::Comparable] -> T {
+    if (value < lo) { return lo; }
+    if (value > hi) { return hi; }
+    return value;
+}
+
+export def min<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+    return min_impl_<T>(lhs, rhs);
+}
+
+export def max<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+    return max_impl_<T>(lhs, rhs);
+}
+
+export def clamp<T>(value: T, lo: T, hi: T) with [T: constraints::Comparable] -> T {
+    return clamp_impl_<T>(value, lo, hi);
+}
+
+// Installed/external callers still need concrete helper symbols until
+// cross-bundle generic export materialization is fully converged.
+export def min(lhs: i8, rhs: i8) -> i8 { return min_impl_<i8>(lhs, rhs); }
+export def min(lhs: i16, rhs: i16) -> i16 { return min_impl_<i16>(lhs, rhs); }
+export def min(lhs: i32, rhs: i32) -> i32 { return min_impl_<i32>(lhs, rhs); }
+export def min(lhs: i64, rhs: i64) -> i64 { return min_impl_<i64>(lhs, rhs); }
+export def min(lhs: i128, rhs: i128) -> i128 { return min_impl_<i128>(lhs, rhs); }
+export def min(lhs: isize, rhs: isize) -> isize { return min_impl_<isize>(lhs, rhs); }
+export def min(lhs: u8, rhs: u8) -> u8 { return min_impl_<u8>(lhs, rhs); }
+export def min(lhs: u16, rhs: u16) -> u16 { return min_impl_<u16>(lhs, rhs); }
+export def min(lhs: u32, rhs: u32) -> u32 { return min_impl_<u32>(lhs, rhs); }
+export def min(lhs: u64, rhs: u64) -> u64 { return min_impl_<u64>(lhs, rhs); }
+export def min(lhs: u128, rhs: u128) -> u128 { return min_impl_<u128>(lhs, rhs); }
+export def min(lhs: usize, rhs: usize) -> usize { return min_impl_<usize>(lhs, rhs); }
+export def min(lhs: char, rhs: char) -> char { return min_impl_<char>(lhs, rhs); }
+
+export def max(lhs: i8, rhs: i8) -> i8 { return max_impl_<i8>(lhs, rhs); }
+export def max(lhs: i16, rhs: i16) -> i16 { return max_impl_<i16>(lhs, rhs); }
+export def max(lhs: i32, rhs: i32) -> i32 { return max_impl_<i32>(lhs, rhs); }
+export def max(lhs: i64, rhs: i64) -> i64 { return max_impl_<i64>(lhs, rhs); }
+export def max(lhs: i128, rhs: i128) -> i128 { return max_impl_<i128>(lhs, rhs); }
+export def max(lhs: isize, rhs: isize) -> isize { return max_impl_<isize>(lhs, rhs); }
+export def max(lhs: u8, rhs: u8) -> u8 { return max_impl_<u8>(lhs, rhs); }
+export def max(lhs: u16, rhs: u16) -> u16 { return max_impl_<u16>(lhs, rhs); }
+export def max(lhs: u32, rhs: u32) -> u32 { return max_impl_<u32>(lhs, rhs); }
+export def max(lhs: u64, rhs: u64) -> u64 { return max_impl_<u64>(lhs, rhs); }
+export def max(lhs: u128, rhs: u128) -> u128 { return max_impl_<u128>(lhs, rhs); }
+export def max(lhs: usize, rhs: usize) -> usize { return max_impl_<usize>(lhs, rhs); }
+export def max(lhs: char, rhs: char) -> char { return max_impl_<char>(lhs, rhs); }
+
+export def clamp(value: i8, lo: i8, hi: i8) -> i8 { return clamp_impl_<i8>(value, lo, hi); }
+export def clamp(value: i16, lo: i16, hi: i16) -> i16 { return clamp_impl_<i16>(value, lo, hi); }
+export def clamp(value: i32, lo: i32, hi: i32) -> i32 { return clamp_impl_<i32>(value, lo, hi); }
+export def clamp(value: i64, lo: i64, hi: i64) -> i64 { return clamp_impl_<i64>(value, lo, hi); }
+export def clamp(value: i128, lo: i128, hi: i128) -> i128 { return clamp_impl_<i128>(value, lo, hi); }
+export def clamp(value: isize, lo: isize, hi: isize) -> isize { return clamp_impl_<isize>(value, lo, hi); }
+export def clamp(value: u8, lo: u8, hi: u8) -> u8 { return clamp_impl_<u8>(value, lo, hi); }
+export def clamp(value: u16, lo: u16, hi: u16) -> u16 { return clamp_impl_<u16>(value, lo, hi); }
+export def clamp(value: u32, lo: u32, hi: u32) -> u32 { return clamp_impl_<u32>(value, lo, hi); }
+export def clamp(value: u64, lo: u64, hi: u64) -> u64 { return clamp_impl_<u64>(value, lo, hi); }
+export def clamp(value: u128, lo: u128, hi: u128) -> u128 { return clamp_impl_<u128>(value, lo, hi); }
+export def clamp(value: usize, lo: usize, hi: usize) -> usize { return clamp_impl_<usize>(value, lo, hi); }
+export def clamp(value: char, lo: char, hi: char) -> char { return clamp_impl_<char>(value, lo, hi); }

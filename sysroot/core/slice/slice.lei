@@ -1,6 +1,6 @@
-export plan cmp_module = module & {
+export plan slice_module = module & {
   sources = [
-    "cmp/ordering.pr",
+    "slice/slice.pr",
   ];
   imports = ["constraints"];
   cimport = {

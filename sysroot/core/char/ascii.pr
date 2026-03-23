@@ -6,6 +6,13 @@ def char_value_(c: &char) -> char {
     return c + '\0';
 }
 
+def char_len_utf8_(c: char) -> usize {
+    if (c <= '') { return 1usize; }
+    if (c <= '߿') { return 2usize; }
+    if (c <= '￿') { return 3usize; }
+    return 4usize;
+}
+
 def ascii_is_upper_(c: char) -> bool {
     return c >= 'A' and c <= 'Z';
 }
@@ -151,6 +158,10 @@ export acts for char {
 
     def is_ascii(self) -> bool {
         return char_value_(self) <= '~';
+    }
+
+    def len_utf8(self) -> usize {
+        return char_len_utf8_(char_value_(self));
     }
 
     def is_ascii_digit(self) -> bool {
