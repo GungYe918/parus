@@ -101,8 +101,11 @@
 4. `starts_with`, `ends_with`
 5. prefix/suffix helper
 6. `String`
+7. `core::slice`와 직접 연결되는 generic `u8[]` view bridge
 
-즉 이번 라운드는 iterator 자체가 아니라, 이후 `core::iter`와 `core::text::bytes()`를 올릴 수 있는 기반을 여는 작업이다.
+`core::slice` 자체는 이미 별도 모듈로 들어왔지만, `text`는 아직 generic `u8[]` view constructor/bridge가 없다. 그래서 `text.starts_with`, `text.ends_with`, `text.bytes()` 같은 2차 helper는 계속 보류한다.
+
+즉 현재 단계는 iterator와 slice foundation은 열린 상태이고, 이후 `core::text::bytes()`를 올릴 수 있는 byte-view bridge가 다음 선행 조건이다.
 
 ## Recommended Next Order
 
