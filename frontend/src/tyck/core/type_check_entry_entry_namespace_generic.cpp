@@ -1862,7 +1862,8 @@ namespace parus::tyck {
     std::optional<ast::StmtId> TypeChecker::resolve_proto_decl_from_type_(
         ty::TypeId proto_type,
         Span use_span,
-        bool* out_typed_path_failure
+        bool* out_typed_path_failure,
+        bool emit_diag
     ) {
         if (out_typed_path_failure) *out_typed_path_failure = false;
         if (proto_type == ty::kInvalidType) return std::nullopt;
@@ -1891,6 +1892,11 @@ namespace parus::tyck {
                         return pit->second;
                     }
                 }
+            }
+        }
+        if (!direct_name.empty()) {
+            if (auto sid = resolve_proto_sid_for_constraint_(direct_name)) {
+                return sid;
             }
         }
 
@@ -1940,9 +1946,11 @@ namespace parus::tyck {
                     templ_sid = it->second.sid;
                 } else {
                     if (out_typed_path_failure) *out_typed_path_failure = true;
-                    diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span,
-                          base_key, "proto", kind_name(it->second.kind));
-                    err_(use_span, "generic type path target kind mismatch");
+                    if (emit_diag) {
+                        diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span,
+                              base_key, "proto", kind_name(it->second.kind));
+                        err_(use_span, "generic type path target kind mismatch");
+                    }
                     return std::nullopt;
                 }
             }
@@ -1950,16 +1958,20 @@ namespace parus::tyck {
 
         if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
             if (out_typed_path_failure) *out_typed_path_failure = true;
-            diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
-            err_(use_span, "generic proto template not found: " + base_key);
+            if (emit_diag) {
+                diag_(diag::Code::kGenericTypePathTemplateNotFound, use_span, base_key);
+                err_(use_span, "generic proto template not found: " + base_key);
+            }
             return std::nullopt;
         }
 
         const auto& templ = ast_.stmt(templ_sid);
         if (templ.kind != ast::StmtKind::kProtoDecl) {
             if (out_typed_path_failure) *out_typed_path_failure = true;
-            diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span, base_key, "proto", "non-proto");
-            err_(use_span, "generic type path target is not proto: " + base_key);
+            if (emit_diag) {
+                diag_(diag::Code::kGenericTypePathTemplateKindMismatch, use_span, base_key, "proto", "non-proto");
+                err_(use_span, "generic type path target is not proto: " + base_key);
+            }
             return std::nullopt;
         }
 
@@ -1967,9 +1979,11 @@ namespace parus::tyck {
         const uint32_t got = static_cast<uint32_t>(args.size());
         if (expected != got) {
             if (out_typed_path_failure) *out_typed_path_failure = true;
-            diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
-                  base_key, std::to_string(expected), std::to_string(got));
-            err_(use_span, "generic proto arity mismatch");
+            if (emit_diag) {
+                diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                      base_key, std::to_string(expected), std::to_string(got));
+                err_(use_span, "generic proto arity mismatch");
+            }
             return std::nullopt;
         }
         if (expected == 0) {
@@ -2381,12 +2395,22 @@ namespace parus::tyck {
                         }
 
                         if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
-                            auto proto_sid = resolve_proto_sid_for_constraint_(cc.rhs);
+                            ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                            if (rhs_t == ty::kInvalidType) {
+                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                                err_(use_span, "external generic struct constraint references unknown proto");
+                                return std::nullopt;
+                            }
+                            rhs_t = substitute_generic_type_(rhs_t, subst);
+                            bool typed_path_failure = false;
+                            auto proto_sid = resolve_proto_decl_from_type_(rhs_t, use_span, &typed_path_failure, /*emit_diag=*/false);
                             if (!proto_sid.has_value()) {
                                 if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
                                     continue;
                                 }
-                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                                if (!typed_path_failure) {
+                                    diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                                }
                                 err_(use_span, "external generic struct constraint references unknown proto");
                                 return std::nullopt;
                             }

@@ -26,7 +26,7 @@
 
 ## 2. 비가역 결정 사항 (Non-negotiable)
 
-1. 제약 문법은 `with [T: Proto, ...]` 단일형만 허용한다.
+1. 제약 문법은 `with [T: ProtoTarget, ...]` 단일형만 허용한다.
 1. 기본 경로는 정적 모노모피제이션이다.
 1. `dyn`은 명시 경계 전용이며 정적 제네릭과 분리한다.
 1. `acts`는 정책/연산자 계층이며 런타임 다형성 수단이 아니다.
@@ -46,7 +46,7 @@
 현재 저장소는 다음이 이미 존재한다.
 
 1. 함수 generic 파라미터 파싱(`<T, U>`)  
-1. 함수 제약절 파싱(`with [T: Proto]`)  
+1. 함수 제약절 파싱(`with [T: ProtoTarget]`)  
 1. 함수 제네릭 호출 해석(`foo<T>(...)`) 및 인스턴스화/중복제거
 1. `class/proto/acts(owner-only)` 제네릭 선언 파싱 및 concrete materialization(정적 경로)
 1. 선언 시점/인스턴스화 시점 제약 검증(unknown type param/proto path/unsatisfied)
@@ -86,7 +86,8 @@ GenericParamClauseOpt := "<" TypeParam ("," TypeParam)* ">" | ε ;
 TypeParam := Ident ;
 
 ConstraintClauseOpt := "with" "[" Constraint ("," Constraint)* "]" | ε ;
-Constraint := TypeParam ":" ProtoPath ;
+Constraint := TypeParam ":" ProtoTarget ;
+ProtoTarget := TypePath ;
 
 TypePath := Path GenericArgsOpt ;
 GenericArgsOpt := "<" Type ("," Type)* ">" | ε ;
@@ -109,6 +110,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. `acts` 제네릭은 owner 타입 표기만 허용한다.
 1. 금지: `acts for Vec<T> <T> { ... }`
 1. 허용: `acts for Vec<T> with [T: Proto] { ... }`
+1. 허용: `acts for Vec<T> with [T: Into<i32>] { ... }`
 
 ---
 

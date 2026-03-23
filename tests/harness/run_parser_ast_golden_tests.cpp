@@ -840,7 +840,11 @@ static void dump_stmt_(
                             }
                         } else {
                             line += " : ";
-                            line += escape_string_(join_path_(ast, c.proto_path_begin, c.proto_path_count));
+                            if (c.rhs_type != parus::ty::kInvalidType && state.types != nullptr) {
+                                line += escape_string_(state.types->to_string(c.rhs_type));
+                            } else {
+                                line += "<invalid>";
+                            }
                         }
                         append_line_(out, depth + 2, line);
                     }

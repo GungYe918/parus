@@ -470,7 +470,11 @@ namespace parusc::p0 {
                     payload += "proto,";
                     payload += payload_escape_value_(cc.type_param);
                     payload += ",";
-                    payload += payload_escape_value_(path_join_(ast, cc.proto_path_begin, cc.proto_path_count));
+                    payload += payload_escape_value_(
+                        (cc.rhs_type != parus::ty::kInvalidType)
+                            ? types.to_export_string(cc.rhs_type)
+                            : std::string("<invalid>")
+                    );
                 } else {
                     payload += "type_eq,";
                     payload += payload_escape_value_(cc.type_param);
@@ -545,7 +549,11 @@ namespace parusc::p0 {
                         payload += "proto,";
                         payload += payload_escape_value_(cc.type_param);
                         payload += ",";
-                        payload += payload_escape_value_(path_join_(ast, cc.proto_path_begin, cc.proto_path_count));
+                        payload += payload_escape_value_(
+                            (cc.rhs_type != parus::ty::kInvalidType)
+                                ? types.to_export_string(cc.rhs_type)
+                                : std::string("<invalid>")
+                        );
                     } else {
                         payload += "type_eq,";
                         payload += payload_escape_value_(cc.type_param);
@@ -1839,7 +1847,11 @@ namespace parusc::p0 {
                         const std::string lhs = payload_unescape_value_(body.substr(comma1 + 1, comma2 - comma1 - 1));
                         std::string rhs = payload_unescape_value_(body.substr(comma2 + 1));
                         if (kind == "proto") {
-                            rhs = canonicalize_symbolic_path_with_symbols_(rhs, sym);
+                            rhs = canonicalize_payload_type_meta_with_symbols_(
+                                rhs,
+                                std::string_view{},
+                                sym
+                            ).first;
                         } else if (kind == "type_eq") {
                             rhs = canonicalize_payload_type_meta_with_symbols_(rhs, std::string_view{}, sym).first;
                         }
@@ -1970,13 +1982,14 @@ namespace parusc::p0 {
                         const std::string lhs = payload_unescape_value_(body.substr(comma1 + 1, comma2 - comma1 - 1));
                         std::string rhs = payload_unescape_value_(body.substr(comma2 + 1));
                         if (kind == "proto") {
-                            rhs = qualify_symbolic_path_for_bundle_(
+                            rhs = qualify_payload_type_meta_for_bundle_(
                                 rhs,
+                                std::string_view{},
                                 bundle_name,
                                 current_module_head,
                                 dep_module_heads,
                                 current_module_local_symbols
-                            );
+                            ).first;
                         } else if (kind == "type_eq") {
                             rhs = qualify_payload_type_meta_for_bundle_(
                                 rhs,

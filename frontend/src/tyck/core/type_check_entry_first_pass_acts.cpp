@@ -2362,6 +2362,41 @@
         }
     }
 
+    void TypeChecker::collect_unresolved_generic_param_names_in_proto_target_(
+        ty::TypeId t,
+        std::unordered_set<std::string>& out
+    ) const {
+        if (t == ty::kInvalidType) return;
+        const auto& tt = types_.get(t);
+        switch (tt.kind) {
+            case ty::Kind::kNamedUser: {
+                std::vector<std::string_view> path{};
+                std::vector<ty::TypeId> args{};
+                if (!types_.decompose_named_user(t, path, args) || path.empty()) return;
+                for (const auto arg : args) {
+                    collect_unresolved_generic_param_names_in_type_(arg, out);
+                }
+                return;
+            }
+            case ty::Kind::kOptional:
+            case ty::Kind::kArray:
+            case ty::Kind::kBorrow:
+            case ty::Kind::kEscape:
+            case ty::Kind::kPtr:
+                collect_unresolved_generic_param_names_in_type_(tt.elem, out);
+                return;
+            case ty::Kind::kFn: {
+                collect_unresolved_generic_param_names_in_type_(tt.ret, out);
+                for (uint32_t i = 0; i < tt.param_count; ++i) {
+                    collect_unresolved_generic_param_names_in_type_(types_.fn_param_at(t, i), out);
+                }
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
     std::optional<ast::StmtId> TypeChecker::resolve_proto_sid_for_constraint_(std::string_view raw) const {
         if (raw.empty()) return std::nullopt;
         const bool qualified_raw = raw.find("::") != std::string_view::npos;
@@ -2521,36 +2556,49 @@
             return false;
         }
 
+        const auto& candidate_stmt = ast_.stmt(candidate_sid);
+        const auto& expected_stmt = ast_.stmt(expected_sid);
+        if (candidate_stmt.type != ty::kInvalidType &&
+            expected_stmt.type != ty::kInvalidType &&
+            candidate_stmt.type == expected_stmt.type) {
+            return true;
+        }
+
         auto proto_qname_base = [&](ast::StmtId sid) -> std::string_view {
             std::string_view qname = ast_.stmt(sid).name;
             if (auto it = proto_qualified_name_by_stmt_.find(sid); it != proto_qualified_name_by_stmt_.end()) {
                 qname = it->second;
             }
-            const size_t generic_pos = qname.find('<');
-            if (generic_pos != std::string_view::npos) {
-                qname = qname.substr(0, generic_pos);
+            return qname;
+        };
+
+        const auto normalize_core_prefix = [](std::string_view qname) -> std::string_view {
+            if (qname.starts_with("core::")) {
+                return qname.substr(std::string_view("core::").size());
             }
             return qname;
         };
 
-        const std::string_view candidate_base = proto_qname_base(candidate_sid);
-        const std::string_view expected_base = proto_qname_base(expected_sid);
-        if (candidate_base.empty() || expected_base.empty()) return false;
-        if (candidate_base == expected_base) return true;
-        if (candidate_base.starts_with("core::") &&
-            candidate_base.substr(std::string_view("core::").size()) == expected_base) {
+        const std::string_view candidate_qname = proto_qname_base(candidate_sid);
+        const std::string_view expected_qname = proto_qname_base(expected_sid);
+        if (candidate_qname.empty() || expected_qname.empty()) return false;
+        if (candidate_qname == expected_qname) return true;
+        if (normalize_core_prefix(candidate_qname) == normalize_core_prefix(expected_qname)) {
             return true;
         }
-        if (expected_base.starts_with("core::") &&
-            expected_base.substr(std::string_view("core::").size()) == candidate_base) {
-            return true;
+
+        const bool candidate_is_applied = candidate_qname.find('<') != std::string_view::npos;
+        const bool expected_is_applied = expected_qname.find('<') != std::string_view::npos;
+        if (candidate_is_applied || expected_is_applied) {
+            return false;
         }
-        const size_t csplit = candidate_base.rfind("::");
-        const size_t esplit = expected_base.rfind("::");
+
+        const size_t csplit = candidate_qname.rfind("::");
+        const size_t esplit = expected_qname.rfind("::");
         const std::string_view cleaf =
-            (csplit == std::string_view::npos) ? candidate_base : candidate_base.substr(csplit + 2);
+            (csplit == std::string_view::npos) ? candidate_qname : candidate_qname.substr(csplit + 2);
         const std::string_view eleaf =
-            (esplit == std::string_view::npos) ? expected_base : expected_base.substr(esplit + 2);
+            (esplit == std::string_view::npos) ? expected_qname : expected_qname.substr(esplit + 2);
         return cleaf == eleaf;
     }
 
@@ -2929,36 +2977,57 @@
         }
 
         if (cc.kind == ast::FnConstraintKind::kProto) {
-            const std::string proto_path = path_join_(cc.proto_path_begin, cc.proto_path_count);
-            const bool proto_is_leaf = proto_path.find("::") == std::string::npos;
-            auto proto_sid = resolve_proto_sid_for_constraint_(proto_path);
+            ty::TypeId rhs = cc.rhs_type;
+            if (rhs == ty::kInvalidType) {
+                out.kind = GenericConstraintFailure::Kind::kProtoNotFound;
+                out.rhs_proto = "<invalid>";
+                return false;
+            }
+            rhs = substitute_generic_type_(rhs, bindings);
+            std::unordered_set<std::string> unresolved{};
+            collect_unresolved_generic_param_names_in_proto_target_(rhs, unresolved);
+            if (!unresolved.empty()) {
+                out.kind = GenericConstraintFailure::Kind::kUnknownTypeParam;
+                out.lhs_type_param = *unresolved.begin();
+                return false;
+            }
+
+            const std::string proto_repr = types_.to_string(rhs);
+            const bool proto_is_leaf = proto_repr.find("::") == std::string::npos;
+            bool typed_path_failure = false;
+            auto proto_sid = resolve_proto_decl_from_type_(rhs, use_span, &typed_path_failure, /*emit_diag=*/false);
             if (!proto_sid.has_value()) {
                 if (proto_is_leaf &&
-                    builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, proto_path)) {
+                    builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, proto_repr)) {
                     return true;
                 }
-                const size_t pos = proto_path.rfind("::");
+                if (typed_path_failure) {
+                    out.kind = GenericConstraintFailure::Kind::kProtoNotFound;
+                    out.rhs_proto = proto_repr;
+                    return false;
+                }
+                const size_t pos = proto_repr.rfind("::");
                 const std::string_view leaf =
-                    (pos == std::string::npos) ? std::string_view(proto_path)
-                                               : std::string_view(proto_path).substr(pos + 2);
+                    (pos == std::string::npos) ? std::string_view(proto_repr)
+                                               : std::string_view(proto_repr).substr(pos + 2);
                 if (proto_is_leaf &&
                     (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
                      leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint" ||
                      leaf == "Step")) {
                     out.kind = GenericConstraintFailure::Kind::kProtoUnsatisfied;
                     out.lhs_type_param = std::string(cc.type_param);
-                    out.rhs_proto = proto_path;
+                    out.rhs_proto = proto_repr;
                     out.concrete_lhs = types_.to_string(lhs_it->second);
                     return false;
                 }
                 out.kind = GenericConstraintFailure::Kind::kProtoNotFound;
-                out.rhs_proto = proto_path;
+                out.rhs_proto = proto_repr;
                 return false;
             }
             if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, use_span)) {
                 out.kind = GenericConstraintFailure::Kind::kProtoUnsatisfied;
                 out.lhs_type_param = std::string(cc.type_param);
-                out.rhs_proto = proto_path;
+                out.rhs_proto = proto_repr;
                 out.concrete_lhs = types_.to_string(lhs_it->second);
                 return false;
             }
@@ -3018,18 +3087,31 @@
             }
 
             if (c.kind == ast::FnConstraintKind::kProto) {
-                const std::string proto_path = path_join_(c.proto_path_begin, c.proto_path_count);
-                const bool proto_is_leaf = proto_path.find("::") == std::string::npos;
-                if (!resolve_proto_sid_for_constraint_(proto_path).has_value()) {
-                    const size_t pos = proto_path.rfind("::");
+                std::unordered_set<std::string> unresolved{};
+                collect_unresolved_generic_param_names_in_proto_target_(c.rhs_type, unresolved);
+                for (const auto& name : unresolved) {
+                    if (generic_params.find(name) != generic_params.end()) continue;
+                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, c.span, name);
+                    err_(c.span, "constraint references unknown generic type parameter");
+                    ok = false;
+                }
+
+                const std::string proto_repr =
+                    (c.rhs_type != ty::kInvalidType) ? types_.to_string(c.rhs_type) : std::string("<invalid>");
+                const bool proto_is_leaf = proto_repr.find("::") == std::string::npos;
+                bool typed_path_failure = false;
+                if (!resolve_proto_decl_from_type_(c.rhs_type, c.span, &typed_path_failure, /*emit_diag=*/false).has_value()) {
+                    const size_t pos = proto_repr.rfind("::");
                     const std::string_view leaf =
-                        (pos == std::string::npos) ? std::string_view(proto_path)
-                                                   : std::string_view(proto_path).substr(pos + 2);
+                        (pos == std::string::npos) ? std::string_view(proto_repr)
+                                                   : std::string_view(proto_repr).substr(pos + 2);
                     if (!(proto_is_leaf &&
                           (leaf == "Comparable" || leaf == "BinaryInteger" || leaf == "SignedInteger" ||
                            leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint" ||
                            leaf == "Step"))) {
-                        diag_(diag::Code::kGenericConstraintProtoNotFound, c.span, proto_path);
+                        if (!typed_path_failure) {
+                            diag_(diag::Code::kGenericConstraintProtoNotFound, c.span, proto_repr);
+                        }
                         err_(c.span, "unknown proto in generic constraint");
                         ok = false;
                     }

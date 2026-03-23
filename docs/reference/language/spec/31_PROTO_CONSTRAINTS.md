@@ -95,11 +95,17 @@ def main() -> i32 {
 5. 허용: `acts for Vec<T> with [T: Proto] { ... }`
 6. 금지: `acts for Vec<T> <T> { ... }`
 7. `with [...]` constraint atom은 다음 두 가지를 지원한다.
-   - `T: SomeProto`
+   - `T: ProtoTarget`
    - `T == TypeExpr`
 8. `T == U`는 `TypeExpr`의 한 형태로 허용한다.
 9. `with [...]` 안의 comma는 AND 의미만 가진다.
 10. 새 constraint 절 문법이나 bool expression 기반 constraint language는 도입하지 않는다.
+
+`ProtoTarget` 규칙:
+
+1. plain proto path(`Comparable`)를 허용한다.
+2. generic-applied proto target(`Into<i32>`, `Iterator<Self::Item>`)을 허용한다.
+3. ordinary type(`i32`, non-proto `Foo<T>`)은 허용하지 않는다.
 
 예시:
 
@@ -119,6 +125,10 @@ def only_i32<T>(x: T) with [T == i32] -> i32 {
 
 def same<T, U>(x: T, y: U) with [T == U] -> bool {
   return true;
+}
+
+def convert_i32<T>(x: T) with [T: Into<i32>] -> i32 {
+  return x.into();
 }
 ```
 

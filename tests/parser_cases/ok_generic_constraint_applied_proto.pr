@@ -1,0 +1,32 @@
+proto Into<T> {
+  require into(v: Self) -> T;
+};
+
+struct Token<T> with [T: Into<i32>] {
+  raw: i32;
+};
+
+acts for Token<T> with [T: Into<i32>] {
+  def project(self) -> i32 {
+    return self.raw;
+  }
+};
+
+def into_i32<T>(value: T) with [T: Into<i32>] -> i32 {
+  return value.into();
+}
+
+struct Wrapper : Into<i32> {
+  value: i32;
+};
+
+acts for Wrapper {
+  def into(self move) -> i32 {
+    return self.value;
+  }
+};
+
+def main() -> i32 {
+  let tk: Token<Wrapper> = Token<Wrapper>{ raw: 7i32 };
+  return tk.project();
+}

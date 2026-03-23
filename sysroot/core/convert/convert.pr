@@ -4,23 +4,6 @@ export proto Into<T> {
     require into(v: Self) -> T;
 };
 
-export proto AsRef<T> {
-    require as_ref(v: &Self) -> &T;
-};
-
-export proto AsMut<T> {
-    require as_mut(v: &mut Self) -> &mut T;
-};
-
-// v1 helper note:
-// generic proto-instantiated constraints (`with [U: Into<T>]`) are not
-// available yet, so these wrappers stay unconstrained and rely on method
-// resolution at concrete instantiation sites.
-//
-// `AsRef`/`AsMut` free helpers are intentionally deferred for now.
-// Current capability analysis rejects returning borrow values from ordinary
-// function bodies, so only the value-returning `into` helper is executable in
-// pure library form today.
-export def into<T, U>(value: U) -> T {
+export def into<T, U>(value: U) with [U: Into<T>] -> T {
     return value.into();
 }

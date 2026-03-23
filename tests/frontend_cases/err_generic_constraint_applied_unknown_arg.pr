@@ -1,0 +1,7 @@
+proto Into<T> {
+  require into(v: Self) -> T;
+};
+
+def bad<T>(value: T) with [T: Into<U>] -> T {
+  return value;
+}

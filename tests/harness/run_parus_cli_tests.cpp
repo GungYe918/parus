@@ -1677,8 +1677,6 @@ bool test_core_seed_export_index_and_auto_injection() {
     }
     if (!contains(core_index_text, "\"path\":\"Range\"") ||
         !contains(core_index_text, "\"path\":\"Into\"") ||
-        !contains(core_index_text, "\"path\":\"AsRef\"") ||
-        !contains(core_index_text, "\"path\":\"AsMut\"") ||
         !contains(core_index_text, "\"path\":\"into\"") ||
         !contains(core_index_text, "\"path\":\"RangeInclusive\"") ||
         !contains(core_index_text, "\"path\":\"range\"") ||
@@ -1704,6 +1702,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "gconstraint=proto,T,core::constraints::Step") ||
         contains(core_index_text, "gconstraint=proto,T,constraints::Step") ||
         contains(core_index_text, "\"path\":\"Sequence\"") ||
+        contains(core_index_text, "\"path\":\"AsRef\"") ||
+        contains(core_index_text, "\"path\":\"AsMut\"") ||
         contains(core_index_text, "\"path\":\"SignedInt\"") ||
         contains(core_index_text, "\"path\":\"UnsignedInt\"") ||
         contains(core_index_text, "\"path\":\"Integral\"") ||
@@ -1763,7 +1763,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
-        "  let convert_i: i32 = ConvertBox::acts(default)::into(ConvertBox{ value: 5i32 });\n"
+        "  let convert_i: i32 = convert::into<i32, ConvertBox>(ConvertBox{ value: 5i32 });\n"
         "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
         "  let xs: i32[] = arr;\n"
         "  let empty_xs: i32[] = arr[0i32..0i32];\n"
@@ -2011,7 +2011,7 @@ bool test_core_seed_runtime_smoke() {
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
-        "  let convert_i: i32 = ConvertBox::acts(default)::into(ConvertBox{ value: 5i32 });\n"
+        "  let convert_i: i32 = convert::into<i32, ConvertBox>(ConvertBox{ value: 5i32 });\n"
         "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
         "  let xs: i32[] = arr;\n"
         "  let empty_xs: i32[] = arr[0i32..0i32];\n"

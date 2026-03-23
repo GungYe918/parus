@@ -740,6 +740,10 @@ namespace parus::tyck {
             ty::TypeId t,
             std::unordered_set<std::string>& out
         ) const;
+        void collect_unresolved_generic_param_names_in_proto_target_(
+            ty::TypeId t,
+            std::unordered_set<std::string>& out
+        ) const;
         std::optional<ast::StmtId> resolve_proto_sid_for_constraint_(std::string_view raw) const;
         bool is_builtin_family_proto_(ast::StmtId proto_sid) const;
         bool builtin_family_proto_satisfied_by_primitive_name_(ty::TypeId concrete_t, std::string_view proto_name) const;
@@ -834,7 +838,8 @@ namespace parus::tyck {
         std::optional<ast::StmtId> resolve_proto_decl_from_type_(
             ty::TypeId proto_type,
             Span use_span,
-            bool* out_typed_path_failure = nullptr
+            bool* out_typed_path_failure = nullptr,
+            bool emit_diag = true
         );
         std::optional<ast::StmtId> resolve_proto_decl_from_path_ref_(
             const ast::PathRef& pr,

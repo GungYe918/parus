@@ -1832,14 +1832,6 @@ namespace {
                 require into(v: Self) -> T;
             };
 
-            proto AsRef<T> {
-                require as_ref(v: &Self) -> &T;
-            };
-
-            proto AsMut<T> {
-                require as_mut(v: &mut Self) -> &mut T;
-            };
-
             struct Wrapper : Into<i32> {
                 value: i32;
             };
@@ -1850,7 +1842,7 @@ namespace {
                 }
             };
 
-            def into<T, U>(value: U) -> T {
+            def into<T, U>(value: U) with [U: Into<T>] -> T {
                 return value.into();
             }
 
@@ -1903,7 +1895,7 @@ namespace {
                 require into(v: Self) -> T;
             };
 
-            def into<T, U>(value: U) -> T {
+            def into<T, U>(value: U) with [U: Into<T>] -> T {
                 return value.into();
             }
 
@@ -1924,7 +1916,65 @@ namespace {
         ok &= require_(bad_sig_prog.bag.has_code(parus::diag::Code::kProtoImplMissingMember),
                        "mismatched Into impl must report ProtoImplMissingMember");
         ok &= require_(!bad_sig_ty.errors.empty(), "mismatched Into impl must fail typecheck");
-        ok &= require_(!bad_call_ty.errors.empty(), "calling unconstrained convert::into on bool must fail");
+        ok &= require_(!bad_call_ty.errors.empty(), "calling constrained convert::into on bool must fail");
+        return ok;
+    }
+
+    static bool test_applied_proto_constraints_across_with_sites_ok() {
+        const std::string src = R"(
+            proto Into<T> {
+                require into(v: Self) -> T;
+            };
+
+            struct Wrapper : Into<i32> {
+                value: i32;
+            };
+
+            acts for Wrapper {
+                def into(self move) -> i32 {
+                    return self.value;
+                }
+            };
+
+            def convert<T>(value: T) with [T: Into<i32>] -> i32 {
+                return value.into();
+            }
+
+            struct Token<T> with [T: Into<i32>] {
+                raw: i32;
+            };
+
+            class Holder<T> with [T: Into<i32>] {
+                value: T;
+                init(v: T) {
+                    self.value = v;
+                }
+            };
+
+            acts for Token<T> with [T: Into<i32>] {
+                def project(self) -> i32 {
+                    return self.raw;
+                }
+            };
+
+            def main() -> i32 {
+                let v0: i32 = convert<Wrapper>(Wrapper{ value: 5i32 });
+                let tk: Token<Wrapper> = Token<Wrapper>{ raw: 6i32 };
+                let v1: i32 = tk.project();
+                if (v0 == 5i32 and v1 == 6i32) {
+                    return 42i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "applied proto constraint sample must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "applied proto constraint sample must typecheck");
         return ok;
     }
 
@@ -3220,6 +3270,7 @@ int main() {
         {"core_slice_comparable_gate_rejected", test_core_slice_comparable_gate_rejected},
         {"core_convert_surface_ok", test_core_convert_surface_ok},
         {"core_convert_missing_member_rejected", test_core_convert_missing_member_rejected},
+        {"applied_proto_constraints_across_with_sites_ok", test_applied_proto_constraints_across_with_sites_ok},
         {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
         {"iter_proto_default_acts_satisfaction_ok", test_iter_proto_default_acts_satisfaction_ok},
         {"core_iter_sequence_loop_bridge_ok", test_core_iter_sequence_loop_bridge_ok},
