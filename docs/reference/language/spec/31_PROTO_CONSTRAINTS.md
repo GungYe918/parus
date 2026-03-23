@@ -15,8 +15,8 @@
 
 ```parus
 proto ProtoName [: BaseProto, ...] {
-  require struct(Path);
-  require acts(IOOps);
+  require struct Path;
+  require acts IOOps;
   require type Item;
   require hash(v: Self) -> u64;
   provide def id() -> i32 { return 0i32; }
@@ -37,7 +37,7 @@ proto ProtoName [: BaseProto, ...] {
 
 ## 19.3 require/provide 항목 의미론
 
-1. `require struct/enum/class/actor/acts(Path);`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
+1. `require struct/enum/class/actor/acts Path;`는 선언 존재 + 가시성 + 종류 일치를 요구한다.
 2. `require type Name;`는 구현체가 채워야 하는 associated type을 선언한다.
 3. `require foo(...) -> T;`는 proto 계약 함수를 선언한다.
 4. `provide def`는 계약을 충족시키는 기본 구현을 제공한다.

@@ -749,11 +749,25 @@ namespace parus {
                     continue;
                 }
 
+                const auto proto_require_kind_name = [&](ast::ProtoRequireKind req_kind) -> const char* {
+                    switch (req_kind) {
+                        case ast::ProtoRequireKind::kStruct: return "struct";
+                        case ast::ProtoRequireKind::kEnum: return "enum";
+                        case ast::ProtoRequireKind::kClass: return "class";
+                        case ast::ProtoRequireKind::kActor: return "actor";
+                        case ast::ProtoRequireKind::kActs: return "acts";
+                        case ast::ProtoRequireKind::kNone: break;
+                    }
+                    return "require";
+                };
+
                 const auto parse_require_kind_item = [&](ast::ProtoRequireKind req_kind) -> ast::StmtId {
-                    if (!cursor_.eat(K::kLParen)) {
-                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, "(");
-                        recover_to_delim(K::kLParen, K::kRParen, K::kSemicolon);
-                        (void)cursor_.eat(K::kLParen);
+                    const bool saw_legacy_lparen = cursor_.at(K::kLParen);
+                    if (saw_legacy_lparen) {
+                        const Token legacy_lparen = cursor_.bump();
+                        const std::string replacement = std::string("proto require kind items now use decl-like syntax: require ") +
+                                                        proto_require_kind_name(req_kind) + " Foo;";
+                        diag_report(diag::Code::kUnexpectedToken, legacy_lparen.span, replacement);
                     }
 
                     ast::PathRef pr{};
@@ -765,10 +779,24 @@ namespace parus {
                         path_ok = parse_type_path_ref(pr, /*allow_leading_coloncolon=*/true);
                     }
 
-                    if (!cursor_.eat(K::kRParen)) {
-                        diag_report(diag::Code::kExpectedToken, cursor_.peek().span, ")");
+                    if (cursor_.at(K::kRParen)) {
+                        const Token legacy_rparen = cursor_.bump();
+                        diag_report(
+                            diag::Code::kUnexpectedToken,
+                            legacy_rparen.span,
+                            "remove ')' from proto require kind item; use decl-like syntax"
+                        );
+                    } else if (saw_legacy_lparen && !cursor_.at(K::kSemicolon) && !cursor_.at(K::kRBrace) &&
+                               !cursor_.at(K::kEof)) {
                         recover_to_delim(K::kRParen, K::kSemicolon, K::kRBrace);
-                        (void)cursor_.eat(K::kRParen);
+                        if (cursor_.at(K::kRParen)) {
+                            const Token legacy_rparen = cursor_.bump();
+                            diag_report(
+                                diag::Code::kUnexpectedToken,
+                                legacy_rparen.span,
+                                "remove ')' from proto require kind item; use decl-like syntax"
+                            );
+                        }
                     }
 
                     Span end_sp = req_tok.span;

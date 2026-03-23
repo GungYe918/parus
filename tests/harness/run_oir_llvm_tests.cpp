@@ -1813,7 +1813,7 @@ namespace {
     static bool test_proto_provide_const_struct_arrow_value_() {
         const std::string src = R"(
             proto Equatable {
-                require struct(Vec2);
+                require struct Vec2;
 
                 provide const vx: Vec2 = Vec2 {
                     x: 42i32, y: 42i32

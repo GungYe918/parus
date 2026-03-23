@@ -1,6 +1,6 @@
 proto P {
   require id(self) -> i32;
-  require class(MissingType);
+  require class MissingType;
 };
 
 class A: P {
