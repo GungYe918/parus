@@ -1563,6 +1563,7 @@ bool test_core_seed_export_index_and_auto_injection() {
     const std::filesystem::path hint_mod = core_root / "hint/hint.pr";
     const std::filesystem::path iter_mod = core_root / "iter/iter.pr";
     const std::filesystem::path range_mod = core_root / "range/range.pr";
+    const std::filesystem::path slice_mod = core_root / "slice/slice.pr";
     if (!std::filesystem::exists(ext_types, ec) ||
         !std::filesystem::exists(ext_cstr, ec) ||
         !std::filesystem::exists(ext_errors, ec) ||
@@ -1577,7 +1578,8 @@ bool test_core_seed_export_index_and_auto_injection() {
         !std::filesystem::exists(mem_mod, ec) ||
         !std::filesystem::exists(hint_mod, ec) ||
         !std::filesystem::exists(iter_mod, ec) ||
-        !std::filesystem::exists(range_mod, ec)) {
+        !std::filesystem::exists(range_mod, ec) ||
+        !std::filesystem::exists(slice_mod, ec)) {
         std::cerr << "core seed source files are missing\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1593,7 +1595,7 @@ bool test_core_seed_export_index_and_auto_injection() {
                 {ext_types, "ext", {}},
                 {ext_cstr, "ext", {}},
                 {ext_errors, "ext", {}},
-                {cmp_ordering, "cmp", {}},
+                {cmp_ordering, "cmp", {"constraints"}},
                 {bool_acts, "bool", {"cmp"}},
                 {num_int, "num", {"cmp"}},
                 {num_float, "num", {"cmp"}},
@@ -1605,6 +1607,7 @@ bool test_core_seed_export_index_and_auto_injection() {
                 {hint_mod, "hint", {}},
                 {iter_mod, "iter", {"constraints"}},
                 {range_mod, "range", {"constraints", "iter"}},
+                {slice_mod, "slice", {"constraints"}},
             },
             core_index,
             out_emit)) {
@@ -1631,13 +1634,20 @@ bool test_core_seed_export_index_and_auto_injection() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
+    if (!contains(core_index_text, "parus_builtin_acts|owner=i32|member=is_even|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=u32|member=pow|self=1")) {
+        std::cerr << "core export-index must include integer helper builtin acts payloads\n" << core_index_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
     if (!contains(core_index_text, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1")) {
         std::cerr << "core export-index must include f32.partial_cmp builtin acts payload\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
     if (!contains(core_index_text, "parus_builtin_acts|owner=char|member=is_ascii_hexdigit|self=1") ||
-        !contains(core_index_text, "parus_builtin_acts|owner=char|member=to_digit|self=1")) {
+        !contains(core_index_text, "parus_builtin_acts|owner=char|member=to_digit|self=1") ||
+        !contains(core_index_text, "parus_builtin_acts|owner=char|member=len_utf8|self=1")) {
         std::cerr << "core export-index must include char builtin acts payloads\n" << core_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -1705,6 +1715,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
+        "import slice as slice;\n"
         "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
@@ -1718,6 +1729,9 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let lhs: i32 = 1i32;\n"
         "  let rhs: i32 = 2i32;\n"
         "  let a: i32 = lhs.min(rhs);\n"
+        "  let even_ok: bool = 4i32.is_even();\n"
+        "  let odd_ok: bool = 5i32.is_odd();\n"
+        "  let pow_ok: u32 = 3u32.pow(4u32);\n"
         "  let raw: f32 = 1.0f32;\n"
         "  let b: core::cmp::Ordering? = raw.partial_cmp(2.0f32);\n"
         "  let b0: core::cmp::Ordering = b ?? cmp::ordering_equal();\n"
@@ -1725,11 +1739,46 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  let c: char = 'f';\n"
         "  let hex: bool = c.is_ascii_hexdigit();\n"
         "  let digit: u32? = c.to_digit(16u32);\n"
+        "  let utf1: usize = 'A'.len_utf8();\n"
+        "  let utf2: usize = 'é'.len_utf8();\n"
+        "  let utf3: usize = '한'.len_utf8();\n"
+        "  let utf4: usize = '😀'.len_utf8();\n"
         "  let s: text = \"abc\";\n"
         "  let empty: text = \"\";\n"
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
+        "  let xs: i32[] = arr;\n"
+        "  let empty_xs: i32[] = arr[0i32..0i32];\n"
+        "  let prefix: i32[] = arr[0i32..2i32];\n"
+        "  let middle: i32[] = arr[1i32..3i32];\n"
+        "  let suffix: i32[] = arr[2i32..4i32];\n"
+        "  let xs_len: usize = slice::len(xs);\n"
+        "  let xs_empty: bool = slice::is_empty(empty_xs);\n"
+        "  let xs_ptr: *const i32 = slice::as_ptr(xs);\n"
+        "  let mid_slice: i32[] = slice::subslice(xs, 1usize, 3usize);\n"
+        "  let front: i32[] = slice::take_front(xs, 2usize);\n"
+        "  let dropf: i32[] = slice::drop_front(xs, 2usize);\n"
+        "  let back: i32[] = slice::take_back(xs, 2usize);\n"
+        "  let dropb: i32[] = slice::drop_back(xs, 2usize);\n"
+        "  let full: i32[] = slice::take_front(xs, 99usize);\n"
+        "  let none: i32[] = slice::drop_front(xs, 99usize);\n"
+        "  let slice_eq: bool = slice::equal(front, prefix);\n"
+        "  let slice_sub_eq: bool = slice::equal(mid_slice, middle);\n"
+        "  let slice_dropf_eq: bool = slice::equal(dropf, suffix);\n"
+        "  let slice_back_eq: bool = slice::equal(back, suffix);\n"
+        "  let slice_dropb_eq: bool = slice::equal(dropb, prefix);\n"
+        "  let slice_full_eq: bool = slice::equal(full, xs);\n"
+        "  let slice_starts: bool = slice::starts_with(xs, prefix);\n"
+        "  let slice_ends: bool = slice::ends_with(xs, suffix);\n"
+        "  let cmp_min_v: i32 = cmp::min(3i32, 7i32);\n"
+        "  let cmp_max_v: char = cmp::max('a', 'z');\n"
+        "  let cmp_clamp_v: i32 = cmp::clamp(5i32, 1i32, 4i32);\n"
+        "  let ord_less: bool = cmp::ordering_less().is_less();\n"
+        "  let ord_eq: bool = cmp::ordering_equal().is_equal();\n"
+        "  let ord_gt: bool = cmp::ordering_greater().is_greater();\n"
+        "  let ord_rev: core::cmp::Ordering = cmp::ordering_greater().reverse();\n"
         "  let sz_i32: usize = mem::size_of<i32>();\n"
         "  let sz_text: usize = mem::size_of<text>();\n"
         "  let al_i32: usize = mem::align_of<i32>();\n"
@@ -1796,8 +1845,18 @@ bool test_core_seed_export_index_and_auto_injection() {
         "  case core::cmp::Ordering::Less: { partial_ok = true; }\n"
         "  default: {}\n"
         "  }\n"
-        "  if (bool_ok and ord_ok and partial_ok and hex and bool_true and bool_false and not raw_nan and"
+        "  set mut ord_rev_ok = false;\n"
+        "  switch (ord_rev) {\n"
+        "  case core::cmp::Ordering::Less: { ord_rev_ok = true; }\n"
+        "  default: {}\n"
+        "  }\n"
+        "  if (bool_ok and ord_ok and partial_ok and ord_less and ord_eq and ord_gt and ord_rev_ok and"
+        " even_ok and odd_ok and pow_ok == 81u32 and hex and bool_true and bool_false and not raw_nan and"
+        " utf1 == 1usize and utf2 == 2usize and utf3 == 3usize and utf4 == 4usize and"
         " s_len == 3usize and s_empty and (digit ?? 0u32) == 15u32 and bridged_len == 5usize and"
+        " xs_len == 4usize and xs_empty and slice_eq and slice_sub_eq and"
+        " slice_dropf_eq and slice_back_eq and slice_dropb_eq and slice_full_eq and slice::is_empty(none) and"
+        " slice_starts and slice_ends and cmp_min_v == 3i32 and cmp_max_v == 'z' and cmp_clamp_v == 4i32 and"
         " not rx_empty and rx_has_mid and not rx_has_hi and rx_contains_range and not rx_intersects_tail and"
         " ri_has_hi and ri_empty and rc_has_mid and not rc_has_hi and rci_single and rci_intersects and"
         " ok_it1 and ok_it2 and ok_it3 and not ok_it4 and"
@@ -1868,7 +1927,7 @@ bool test_core_seed_runtime_smoke() {
 
     const std::filesystem::path repo_root = std::filesystem::path(PARUS_MAIN_PR).parent_path();
     const std::filesystem::path core_root = repo_root / "sysroot/core";
-    const std::array<std::filesystem::path, 15> core_seed_sources = {
+    const std::array<std::filesystem::path, 16> core_seed_sources = {
         core_root / "ext/types.pr",
         core_root / "ext/cstr.pr",
         core_root / "ext/errors.pr",
@@ -1884,6 +1943,7 @@ bool test_core_seed_runtime_smoke() {
         core_root / "hint/hint.pr",
         core_root / "iter/iter.pr",
         core_root / "range/range.pr",
+        core_root / "slice/slice.pr",
     };
 
     const auto main_pr = temp_root / "main.pr";
@@ -1896,6 +1956,7 @@ bool test_core_seed_runtime_smoke() {
         "import iter as iter;\n"
         "import mem as mem;\n"
         "import range as range;\n"
+        "import slice as slice;\n"
         "\n"
         "def cold(flag: bool) -> i32 {\n"
         "  if (flag) { return 7i32; }\n"
@@ -1907,16 +1968,55 @@ bool test_core_seed_runtime_smoke() {
         "  let bf: bool = false.is_false();\n"
         "  let neg: i32 = -3i32;\n"
         "  let mag: i32 = neg.abs();\n"
+        "  let even_ok: bool = 4i32.is_even();\n"
+        "  let odd_ok: bool = 5i32.is_odd();\n"
+        "  let pow_i: i32 = 3i32.pow(3u32);\n"
+        "  let pow_u: u32 = 3u32.pow(4u32);\n"
         "  let pow8: bool = 8u32.is_power_of_two();\n"
         "  let c: char = 'a';\n"
         "  let up: char = c.to_ascii_upper();\n"
         "  let digit_hex: u32? = 'F'.to_digit(16u32);\n"
         "  let digit_oob: u32? = '8'.to_digit(8u32);\n"
+        "  let utf1: usize = 'A'.len_utf8();\n"
+        "  let utf2: usize = 'é'.len_utf8();\n"
+        "  let utf3: usize = '한'.len_utf8();\n"
+        "  let utf4: usize = '😀'.len_utf8();\n"
         "  let s: text = \"abc\";\n"
         "  let empty: text = \"\";\n"
         "  let s_len: usize = s.len_bytes();\n"
         "  let s_empty: bool = empty.is_empty();\n"
         "  let s_ptr: *const u8 = s.as_ptr();\n"
+        "  let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];\n"
+        "  let xs: i32[] = arr;\n"
+        "  let empty_xs: i32[] = arr[0i32..0i32];\n"
+        "  let prefix: i32[] = arr[0i32..2i32];\n"
+        "  let middle: i32[] = arr[1i32..3i32];\n"
+        "  let suffix: i32[] = arr[2i32..4i32];\n"
+        "  let xs_len: usize = slice::len(xs);\n"
+        "  let xs_empty: bool = slice::is_empty(empty_xs);\n"
+        "  let xs_ptr: *const i32 = slice::as_ptr(xs);\n"
+        "  let mid_slice: i32[] = slice::subslice(xs, 1usize, 3usize);\n"
+        "  let front: i32[] = slice::take_front(xs, 2usize);\n"
+        "  let dropf: i32[] = slice::drop_front(xs, 2usize);\n"
+        "  let back: i32[] = slice::take_back(xs, 2usize);\n"
+        "  let dropb: i32[] = slice::drop_back(xs, 2usize);\n"
+        "  let full: i32[] = slice::take_front(xs, 99usize);\n"
+        "  let none: i32[] = slice::drop_front(xs, 99usize);\n"
+        "  let slice_eq: bool = slice::equal(front, prefix);\n"
+        "  let slice_sub_eq: bool = slice::equal(mid_slice, middle);\n"
+        "  let slice_dropf_eq: bool = slice::equal(dropf, suffix);\n"
+        "  let slice_back_eq: bool = slice::equal(back, suffix);\n"
+        "  let slice_dropb_eq: bool = slice::equal(dropb, prefix);\n"
+        "  let slice_full_eq: bool = slice::equal(full, xs);\n"
+        "  let slice_starts: bool = slice::starts_with(xs, prefix);\n"
+        "  let slice_ends: bool = slice::ends_with(xs, suffix);\n"
+        "  let cmp_min_v: i32 = cmp::min(3i32, 7i32);\n"
+        "  let cmp_max_v: char = cmp::max('a', 'z');\n"
+        "  let cmp_clamp_v: i32 = cmp::clamp(5i32, 1i32, 4i32);\n"
+        "  let ord_less: bool = cmp::ordering_less().is_less();\n"
+        "  let ord_eq: bool = cmp::ordering_equal().is_equal();\n"
+        "  let ord_gt: bool = cmp::ordering_greater().is_greater();\n"
+        "  let ord_rev: core::cmp::Ordering = cmp::ordering_greater().reverse();\n"
         "  let sz_i32: usize = mem::size_of<i32>();\n"
         "  let sz_text: usize = mem::size_of<text>();\n"
         "  let sz_arr: usize = mem::size_of<i32[4]>();\n"
@@ -1973,20 +2073,52 @@ bool test_core_seed_runtime_smoke() {
         "  case core::cmp::Ordering::Greater: { bo_ok = true; }\n"
         "  default: {}\n"
         "  }\n"
+        "  set mut ord_rev_ok = false;\n"
+        "  switch (ord_rev) {\n"
+        "  case core::cmp::Ordering::Less: { ord_rev_ok = true; }\n"
+        "  default: {}\n"
+        "  }\n"
         "  manual[abi] {\n"
         "    let shadow: text = text{ data: s_ptr, len: s_len };\n"
+        "    let shadow_ptr: *const i32 = xs_ptr;\n"
         "    if (shadow.len_bytes() != 3usize) { return 0i32; }\n"
         "  }\n"
         "  if (bo_ok\n"
+        "      and ord_less\n"
+        "      and ord_eq\n"
+        "      and ord_gt\n"
+        "      and ord_rev_ok\n"
         "      and bt\n"
         "      and bf\n"
         "      and mag == 3i32\n"
+        "      and even_ok\n"
+        "      and odd_ok\n"
+        "      and pow_i == 27i32\n"
+        "      and pow_u == 81u32\n"
         "      and pow8\n"
         "      and up == 'A'\n"
+        "      and utf1 == 1usize\n"
+        "      and utf2 == 2usize\n"
+        "      and utf3 == 3usize\n"
+        "      and utf4 == 4usize\n"
         "      and (digit_hex ?? 0u32) == 15u32\n"
         "      and (digit_oob ?? 99u32) == 99u32\n"
         "      and s_len == 3usize\n"
         "      and s_empty\n"
+        "      and xs_len == 4usize\n"
+        "      and xs_empty\n"
+        "      and slice_eq\n"
+        "      and slice_sub_eq\n"
+        "      and slice_dropf_eq\n"
+        "      and slice_back_eq\n"
+        "      and slice_dropb_eq\n"
+        "      and slice_full_eq\n"
+        "      and slice::is_empty(none)\n"
+        "      and slice_starts\n"
+        "      and slice_ends\n"
+        "      and cmp_min_v == 3i32\n"
+        "      and cmp_max_v == 'z'\n"
+        "      and cmp_clamp_v == 4i32\n"
         "      and tv_len == 5usize\n"
         "      and not rx_empty\n"
         "      and rx_has_mid\n"
@@ -2076,10 +2208,13 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "parus_builtin_acts|owner=bool|member=is_true|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=bool|member=is_false|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=i32|member=div_euclid|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=i32|member=is_even|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=u32|member=pow|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=u32|member=is_power_of_two|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=f32|member=partial_cmp|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=char|member=eq_ignore_ascii_case|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=char|member=to_digit|self=1") ||
+        !contains(installed_core_index, "parus_builtin_acts|owner=char|member=len_utf8|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=text|member=len_bytes|self=1") ||
         !contains(installed_core_index, "parus_builtin_acts|owner=text|member=as_ptr|self=1") ||
         !contains(installed_core_index, "\"path\":\"size_of\"") ||

@@ -1676,6 +1676,156 @@ namespace {
         return ok;
     }
 
+    static bool test_core_slice_surface_ok() {
+        const std::string src = R"(
+            def min_usize_(lhs: usize, rhs: usize) -> usize {
+                if (lhs < rhs) { return lhs; }
+                return rhs;
+            }
+
+            def len<T>(xs: T[]) -> usize {
+                return xs.len;
+            }
+
+            def is_empty<T>(xs: T[]) -> bool {
+                return xs.len == 0usize;
+            }
+
+            def as_ptr<T>(xs: T[]) -> *const T {
+                return xs.data;
+            }
+
+            def subslice<T>(xs: T[], start: usize, end: usize) -> T[] {
+                return xs[start..end];
+            }
+
+            def take_front<T>(xs: T[], n: usize) -> T[] {
+                let clamped: usize = min_usize_(n, xs.len);
+                return xs[0usize..clamped];
+            }
+
+            def drop_front<T>(xs: T[], n: usize) -> T[] {
+                let clamped: usize = min_usize_(n, xs.len);
+                return xs[clamped..xs.len];
+            }
+
+            def take_back<T>(xs: T[], n: usize) -> T[] {
+                let clamped: usize = min_usize_(n, xs.len);
+                return xs[xs.len - clamped..xs.len];
+            }
+
+            def drop_back<T>(xs: T[], n: usize) -> T[] {
+                let clamped: usize = min_usize_(n, xs.len);
+                return xs[0usize..xs.len - clamped];
+            }
+
+            def equal<T>(lhs: T[], rhs: T[]) with [T: Comparable] -> bool {
+                if (lhs.len != rhs.len) {
+                    return false;
+                }
+                set mut i = 0usize;
+                while (i < lhs.len) {
+                    if (not (lhs[i] == rhs[i])) {
+                        return false;
+                    }
+                    i = i + 1usize;
+                }
+                return true;
+            }
+
+            def starts_with<T>(xs: T[], prefix: T[]) with [T: Comparable] -> bool {
+                if (prefix.len > xs.len) {
+                    return false;
+                }
+                set mut i = 0usize;
+                while (i < prefix.len) {
+                    if (not (xs[i] == prefix[i])) {
+                        return false;
+                    }
+                    i = i + 1usize;
+                }
+                return true;
+            }
+
+            def ends_with<T>(xs: T[], suffix: T[]) with [T: Comparable] -> bool {
+                if (suffix.len > xs.len) {
+                    return false;
+                }
+                let offset: usize = xs.len - suffix.len;
+                set mut i = 0usize;
+                while (i < suffix.len) {
+                    if (not (xs[offset + i] == suffix[i])) {
+                        return false;
+                    }
+                    i = i + 1usize;
+                }
+                return true;
+            }
+
+            def main() -> i32 {
+                let arr: i32[4] = [1i32, 2i32, 3i32, 4i32];
+                let xs: i32[] = arr;
+                let empty: i32[] = arr[0i32..0i32];
+                let prefix: i32[] = arr[0i32..2i32];
+                let middle: i32[] = arr[1i32..3i32];
+                let suffix: i32[] = arr[2i32..4i32];
+                let ptr: *const i32 = as_ptr(xs);
+                let mid: i32[] = subslice(xs, 1usize, 3usize);
+                let front: i32[] = take_front(xs, 2usize);
+                let dropf: i32[] = drop_front(xs, 2usize);
+                let back: i32[] = take_back(xs, 2usize);
+                let dropb: i32[] = drop_back(xs, 2usize);
+                let full: i32[] = take_front(xs, 99usize);
+                let none: i32[] = drop_front(xs, 99usize);
+                if (len(xs) == 4usize and is_empty(empty) and
+                    equal(mid, middle) and equal(front, prefix) and equal(dropf, suffix) and
+                    equal(back, suffix) and equal(dropb, prefix) and equal(full, xs) and is_empty(none) and
+                    starts_with(xs, prefix) and ends_with(xs, suffix)) {
+                    manual[abi] {
+                        let q: *const i32 = ptr;
+                    }
+                    return 42i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "core slice surface source must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "core slice surface source must not emit tyck errors");
+        ok &= require_(cap.ok, "core slice surface source must pass capability check");
+        ok &= require_(sir.cap.ok, "core slice surface source must pass SIR capability check");
+        return ok;
+    }
+
+    static bool test_core_slice_comparable_gate_rejected() {
+        const std::string src = R"(
+            def starts_with<T>(xs: T[], prefix: T[]) with [T: Comparable] -> bool {
+                return true;
+            }
+
+            def main() -> bool {
+                let xs: f32[2] = [1.0f32, 2.0f32];
+                let prefix: f32[1] = [1.0f32];
+                return starts_with(xs, prefix);
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(!ty.errors.empty(), "slice helper on f32[] must fail Comparable gate");
+        return ok;
+    }
+
     static bool test_generic_acts_owner_constraint_ok() {
         const std::string ok_src = R"(
             class Box<T> {
@@ -2964,6 +3114,8 @@ int main() {
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
         {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},
         {"core_range_surface_ok", test_core_range_surface_ok},
+        {"core_slice_surface_ok", test_core_slice_surface_ok},
+        {"core_slice_comparable_gate_rejected", test_core_slice_comparable_gate_rejected},
         {"generic_acts_owner_constraint_ok", test_generic_acts_owner_constraint_ok},
         {"iter_proto_default_acts_satisfaction_ok", test_iter_proto_default_acts_satisfaction_ok},
         {"core_iter_sequence_loop_bridge_ok", test_core_iter_sequence_loop_bridge_ok},
