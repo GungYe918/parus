@@ -214,12 +214,14 @@ namespace parusc::dump {
     static const char* stmt_kind_name(parus::ast::StmtKind k) {
         using K = parus::ast::StmtKind;
         switch (k) {
+            case K::kError: return "Error";
             case K::kEmpty: return "Empty";
             case K::kExprStmt: return "ExprStmt";
             case K::kBlock: return "Block";
             case K::kVar: return "Var";
             case K::kIf: return "If";
             case K::kWhile: return "While";
+            case K::kFor: return "For";
             case K::kDoScope: return "DoScope";
             case K::kDoWhile: return "DoWhile";
             case K::kManual: return "Manual";
@@ -235,6 +237,7 @@ namespace parusc::dump {
             case K::kRecastStmt: return "RecastStmt";
             case K::kFnDecl: return "FnDecl";
             case K::kFieldDecl: return "FieldDecl";
+            case K::kAssocTypeDecl: return "AssocTypeDecl";
             case K::kEnumDecl: return "EnumDecl";
             case K::kProtoDecl: return "ProtoDecl";
             case K::kClassDecl: return "ClassDecl";
@@ -244,7 +247,6 @@ namespace parusc::dump {
             case K::kCompilerDirective: return "CompilerDirective";
             case K::kCompilerIntrinsicDirective: return "CompilerIntrinsicDirective";
             case K::kSwitch: return "Switch";
-            case K::kError: return "Error";
         }
         return "Unknown";
     }

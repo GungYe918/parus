@@ -336,6 +336,52 @@ namespace parus::tyck {
         const std::string decl_name = is_global_decl
             ? qualify_decl_name_(s.name)
             : std::string(s.name);
+        const auto check_consume_place = [&](ast::ExprId place_eid,
+                                             ty::TypeId& out_opt_type,
+                                             ty::TypeId& out_payload_type) -> bool {
+            out_opt_type = ty::kInvalidType;
+            out_payload_type = ty::kInvalidType;
+
+            if (!is_place_expr_(place_eid)) {
+                diag_(diag::Code::kVarConsumeElseRequiresPlace, s.span);
+                err_(s.span, "consume-binding rhs must be a mutable place expression");
+                if (place_eid != ast::k_invalid_expr) {
+                    (void)check_expr_(place_eid, Slot::kValue);
+                }
+                return false;
+            }
+
+            ty::TypeId place_t = check_expr_place_no_read_(place_eid);
+            if (is_error_(place_t)) return false;
+
+            const auto root = root_place_symbol_(place_eid);
+            if (!root.has_value() || !is_mutable_symbol_(*root)) {
+                diag_(diag::Code::kVarConsumeElseRequiresMutablePlace, s.span);
+                err_(s.span, "consume-binding rhs place must be writable");
+                return false;
+            }
+
+            if (!is_optional_(place_t)) {
+                diag_(diag::Code::kVarConsumeElseRequiresOptionalPlace, s.span, types_.to_string(place_t));
+                err_(s.span, "consume-binding rhs must have optional type");
+                return false;
+            }
+
+            out_opt_type = place_t;
+            out_payload_type = optional_elem_(place_t);
+            return out_payload_type != ty::kInvalidType;
+        };
+        const auto check_consume_else_block = [&]() {
+            if (!s.var_has_consume_else || s.b == ast::k_invalid_stmt) return;
+            const OwnershipStateMap before_else = capture_ownership_state_();
+            restore_ownership_state_(before_else);
+            check_stmt_(s.b);
+            if (!stmt_diverges_(s.b, /*loop_control_counts=*/true)) {
+                diag_(diag::Code::kVarConsumeElseMustDiverge, ast_.stmt(s.b).span);
+                err_(ast_.stmt(s.b).span, "consume-binding else block must not fall through");
+            }
+            restore_ownership_state_(before_else);
+        };
 
         if (s.type != ty::kInvalidType && is_va_list_type_(s.type)) {
             const std::string msg = "vaList may only appear in C ABI function parameter types";
@@ -494,7 +540,25 @@ namespace parus::tyck {
             }
 
             ty::TypeId init_t = ty::kInvalidType;
-            if (s.init != ast::k_invalid_expr) {
+            if (s.var_has_consume_else) {
+                ty::TypeId source_opt_t = ty::kInvalidType;
+                ty::TypeId payload_t = ty::kInvalidType;
+                if (s.init != ast::k_invalid_expr &&
+                    check_consume_place(s.init, source_opt_t, payload_t)) {
+                    init_t = payload_t;
+                    if (s.type != ty::kInvalidType &&
+                        !is_error_(s.type) &&
+                        !is_error_(payload_t) &&
+                        !can_assign_(s.type, payload_t) &&
+                        !(is_optional_(s.type) &&
+                          can_assign_(optional_elem_(s.type), payload_t))) {
+                        diag_(diag::Code::kTypeLetInitMismatch, s.span,
+                            s.name, types_.to_string(s.type), types_.to_string(payload_t));
+                        err_(s.span, "let init mismatch");
+                    }
+                }
+                check_consume_else_block();
+            } else if (s.init != ast::k_invalid_expr) {
                 const CoercionPlan init_plan = classify_assign_with_coercion_(
                     AssignSite::LetInit, s.type, s.init, s.span);
                 init_t = init_plan.src_after;
@@ -545,7 +609,9 @@ namespace parus::tyck {
             // (선택) let의 경우도 AST에 vt를 확정 기록 (이미 s.type이지만, invalid였으면 error로)
             ast_.stmt_mut(sid).type = vt;
             if (var_sym != sema::SymbolTable::kNoScope && !is_global_decl && is_move_only_type_(vt)) {
-                if (s.init != ast::k_invalid_expr) {
+                if (s.var_has_consume_else) {
+                    mark_symbol_initialized_(var_sym);
+                } else if (s.init != ast::k_invalid_expr) {
                     mark_expr_move_consumed_(s.init, vt, s.span);
                     mark_symbol_initialized_(var_sym);
                 } else {
@@ -574,12 +640,25 @@ namespace parus::tyck {
         }
 
         // (A) RHS 타입 계산
-        ty::TypeId rhs = check_expr_(s.init);
+        ty::TypeId rhs = ty::kInvalidType;
+        if (s.var_has_consume_else) {
+            ty::TypeId source_opt_t = ty::kInvalidType;
+            ty::TypeId payload_t = ty::kInvalidType;
+            if (check_consume_place(s.init, source_opt_t, payload_t)) {
+                rhs = payload_t;
+            } else {
+                rhs = types_.error();
+            }
+            check_consume_else_block();
+        } else {
+            rhs = check_expr_(s.init);
+        }
 
         // (B) set x = null; 금지
         const ast::Expr& init_e = ast_.expr(s.init);
         const bool rhs_is_null_lit = (init_e.kind == ast::ExprKind::kNullLit);
-        if (rhs_is_null_lit || rhs == types_.builtin(ty::Builtin::kNull)) {
+        if (!s.var_has_consume_else &&
+            (rhs_is_null_lit || rhs == types_.builtin(ty::Builtin::kNull))) {
             diag_(diag::Code::kSetCannotInferFromNull, s.span, s.name);
             err_(s.span, "set cannot infer type from null (use let with explicit optional type)");
             rhs = types_.error(); // 계속 진행용
@@ -614,7 +693,7 @@ namespace parus::tyck {
         }
 
         // (E) set x = <int literal> 이면: declared_type을 "{integer}"로 바꾸고 pending을 sym-id로 저장
-        if (init_e.kind == ast::ExprKind::kIntLit) {
+        if (!s.var_has_consume_else && init_e.kind == ast::ExprKind::kIntLit) {
             const ParsedIntLiteral lit = parse_int_literal_(init_e.text);
             num::BigInt v;
             if (!lit.ok || !num::BigInt::parse_dec(lit.digits_no_sep, v)) {
@@ -651,8 +730,12 @@ namespace parus::tyck {
         // (F) AST에 “추론된 타입” 기록
         ast_.stmt_mut(sid).type = inferred;
         if (ins.ok && !is_global_decl && is_move_only_type_(inferred)) {
-            mark_expr_move_consumed_(s.init, inferred, s.span);
-            mark_symbol_initialized_(ins.symbol_id);
+            if (s.var_has_consume_else) {
+                mark_symbol_initialized_(ins.symbol_id);
+            } else {
+                mark_expr_move_consumed_(s.init, inferred, s.span);
+                mark_symbol_initialized_(ins.symbol_id);
+            }
         }
         if (ins.ok && s.var_has_acts_binding) {
             (void)bind_symbol_acts_selection_(ins.symbol_id, inferred, s, s.span);

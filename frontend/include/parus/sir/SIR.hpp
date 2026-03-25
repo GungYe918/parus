@@ -254,6 +254,7 @@ namespace parus::sir {
         TypeId type = k_invalid_type;
 
         bool is_mut = false;
+        bool is_self = false;
 
         bool has_default = false;
         ValueId default_value = k_invalid_value;
@@ -346,6 +347,7 @@ namespace parus::sir {
         bool is_mut = false;
         bool is_static = false;
         bool is_const = false;
+        bool has_consume_else = false;
         // manual stmt permission bitset (get/set/abi)
         uint8_t manual_perm_mask = 0;
         std::string_view name{};

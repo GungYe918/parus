@@ -74,6 +74,13 @@ namespace parus::diag {
         kSetInitializerRequired,          // set must always have '=' initializer
         kStaticVarExpectedLetOrSet,       // 'static' must be followed by [mut] let/set
         kStaticVarRequiresInitializer,    // static var must have initializer
+        kVarConsumeElseOnlyOnLetSet,      // consume-binding else is only allowed on let/set locals
+        kVarConsumeElseExpectedBlock,     // consume-binding else requires block
+        kVarConsumeElseWithActsUnsupported, // consume-binding cannot combine with with acts(...)
+        kVarConsumeElseRequiresPlace,     // consume-binding rhs must be place
+        kVarConsumeElseRequiresOptionalPlace, // consume-binding rhs must be optional place
+        kVarConsumeElseRequiresMutablePlace, // consume-binding rhs must be mutable place
+        kVarConsumeElseMustDiverge,       // consume-binding else block must diverge
 
         // def param default rules
         kFnParamDefaultNotAllowedOutsideNamedGroup, // positional param can't have "= expr"

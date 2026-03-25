@@ -1,0 +1,18 @@
+proto Recoverable {};
+
+struct Logger {
+  value: i32;
+};
+
+enum LogErr: Recoverable {
+  case Missing,
+};
+
+static mut LOG: Logger? = null;
+
+def take_log?() -> ~Logger {
+  let v: Logger = LOG else {
+    throw LogErr::Missing();
+  };
+  return ~v;
+}

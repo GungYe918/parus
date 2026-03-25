@@ -2039,7 +2039,6 @@ namespace parus::tyck {
                 std::unordered_map<std::string, ty::TypeId> bindings{};
                 std::vector<ty::TypeId> expected_params{};
                 expected_params.reserve(fn_tt.param_count);
-                ty::TypeId expected_ret = fn_tt.ret;
 
                 if (!meta.params.empty()) {
                     if (!explicit_call_type_args.empty()) {
@@ -2176,7 +2175,6 @@ namespace parus::tyck {
                 if (resolved_fn_t == ty::kInvalidType || resolved_fn_t >= types_.count()) continue;
                 const auto& resolved_tt = types_.get(resolved_fn_t);
                 if (resolved_tt.kind != ty::Kind::kFn) continue;
-                expected_ret = resolved_tt.ret;
                 for (uint32_t i = 0; i < resolved_tt.param_count; ++i) {
                     expected_params.push_back(types_.fn_param_at(resolved_fn_t, i));
                 }
@@ -2649,7 +2647,6 @@ namespace parus::tyck {
                 std::unordered_map<std::string, ty::TypeId> bindings{};
                 std::vector<ty::TypeId> expected_params{};
                 expected_params.reserve(total_cnt > 0 ? total_cnt - 1u : 0u);
-                ty::TypeId expected_ret = types_.get(fn_t).ret;
 
                 if (cand.owner_is_generic_template) {
                     std::string concrete_owner_base{};
@@ -2822,7 +2819,6 @@ namespace parus::tyck {
                 const auto& resolved_tt = types_.get(resolved_fn_t);
                 if (resolved_tt.kind != ty::Kind::kFn || resolved_tt.param_count == 0) continue;
                 expected_params.clear();
-                expected_ret = resolved_tt.ret;
                 for (uint32_t i = 1; i < resolved_tt.param_count; ++i) {
                     expected_params.push_back(types_.fn_param_at(resolved_fn_t, i));
                 }

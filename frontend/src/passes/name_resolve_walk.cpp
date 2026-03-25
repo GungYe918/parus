@@ -407,6 +407,9 @@
                 if (s.init != ast::k_invalid_expr) {
                     walk_expr(ast, r, s.init, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths);
                 }
+                if (s.var_has_consume_else && s.b != ast::k_invalid_stmt) {
+                    walk_stmt(ast, r, s.b, sym, bag, opt, out, param_symbol_ids, namespace_stack, import_aliases, known_namespace_paths, /*file_scope=*/false);
+                }
 
                 const bool is_global_decl =
                     s.is_static || s.is_const || s.is_extern || s.is_export || (s.link_abi == ast::LinkAbi::kC);

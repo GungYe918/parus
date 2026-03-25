@@ -1037,8 +1037,12 @@ namespace parus::sir::detail {
                 out.is_mut = s.is_mut;
                 out.is_static = s.is_static;
                 out.is_const = s.is_const;
+                out.has_consume_else = s.var_has_consume_else;
                 out.name = s.name;
                 out.init = lower_expr(m, out_has_any_write, ast, sym, nres, tyck, s.init);
+                if (s.var_has_consume_else && s.b != parus::ast::k_invalid_stmt) {
+                    out.b = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, s.b);
+                }
 
                 // decl symbol from stmt
                 out.sym = resolve_symbol_from_stmt(nres, tyck, sid);

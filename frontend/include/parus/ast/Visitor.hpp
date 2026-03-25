@@ -31,6 +31,7 @@ namespace parus::ast {
         kExprStmtExpr,
         kVarInit,
         kVarExpr,
+        kVarConsumeElse,
         kReturnExpr,
         kThrowExpr,
         kIfCond,
@@ -227,6 +228,9 @@ namespace parus::ast {
                 case StmtKind::kVar:
                     visit_expr_inner(ast, s.init, v);
                     visit_expr_inner(ast, s.expr, v);
+                    if (s.var_has_consume_else) {
+                        visit_stmt_child_if_(ast, id, s, StmtChildRole::kVarConsumeElse, s.b, v);
+                    }
                     break;
 
                 case StmtKind::kReturn:

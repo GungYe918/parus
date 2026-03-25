@@ -714,6 +714,9 @@ namespace parus::sir {
                         return;
 
                     case StmtKind::kVarDecl: {
+                            if (s.has_consume_else) {
+                                analyze_value_(s.init, ValueUse::kAssignLhs, k_invalid_symbol);
+                            }
                             SymbolId init_owner = k_invalid_symbol;
                             if (s.sym != k_invalid_symbol && is_borrow_type_(value_type_(s.init))) {
                                 // let/set으로 borrow를 재바인딩하는 경우 기존 owner borrow를 정리한다.
@@ -727,6 +730,14 @@ namespace parus::sir {
                             }
                         if (is_escape_type_(value_type_(s.init)) && !s.is_static) {
                             report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
+                        }
+                        if (s.has_consume_else && is_escape_type_(s.declared_type) && !s.is_static) {
+                            report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
+                        }
+                        if (s.has_consume_else && s.b != k_invalid_block) {
+                            const FlowState in = capture_flow_state_();
+                            (void)analyze_block_with_flow_(s.b, in);
+                            restore_flow_state_(in);
                         }
                         if (s.sym != k_invalid_symbol) {
                             clear_moved_(s.sym);

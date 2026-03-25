@@ -663,6 +663,7 @@ namespace parus::ast {
         uint32_t var_acts_set_path_begin = 0;
         uint32_t var_acts_set_path_count = 0;
         std::string_view var_acts_set_name{};
+        bool var_has_consume_else = false;
 
         // ---- nest decl ----
         uint32_t nest_path_begin = 0;

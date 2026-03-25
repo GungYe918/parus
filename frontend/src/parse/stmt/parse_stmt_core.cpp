@@ -764,6 +764,8 @@ namespace parus {
         uint32_t var_acts_set_path_begin = 0;
         uint32_t var_acts_set_path_count = 0;
         std::string_view var_acts_set_name{};
+        bool var_has_consume_else = false;
+        ast::StmtId var_consume_else_block = ast::k_invalid_stmt;
 
         const auto is_with_token = [](const Token& tok) -> bool {
             return tok.kind == K::kKwWith;
@@ -878,6 +880,45 @@ namespace parus {
         // canonical placement: `... = expr with acts(NameOrDefault);`
         (void)parse_with_acts_clause(/*record_binding=*/true, /*allow_assign_recovery=*/false);
 
+        // optional consume-binding: `let/set ... = PLACE else { ... };`
+        if (cursor_.at(K::kKwElse)) {
+            cursor_.bump(); // else
+
+            if (is_static || is_const) {
+                diag_report(diag::Code::kVarConsumeElseOnlyOnLetSet, cursor_.prev().span);
+            }
+            if (var_has_acts_binding) {
+                diag_report(diag::Code::kVarConsumeElseWithActsUnsupported, cursor_.prev().span);
+                var_has_acts_binding = false;
+                var_acts_is_default = false;
+                var_acts_target_type = ast::k_invalid_type;
+                var_acts_target_type_node = ast::k_invalid_type_node;
+                var_acts_set_path_begin = 0;
+                var_acts_set_path_count = 0;
+                var_acts_set_name = {};
+            }
+
+            if (!cursor_.at(K::kLBrace)) {
+                diag_report(diag::Code::kVarConsumeElseExpectedBlock, cursor_.peek().span);
+                recover_to_delim(K::kSemicolon, K::kRBrace, K::kEof);
+            } else {
+                var_has_consume_else = !(is_static || is_const);
+                var_consume_else_block = parse_stmt_block();
+            }
+        }
+
+        if (is_with_token(cursor_.peek()) && cursor_.peek(1).kind == K::kKwActs) {
+            diag_report(diag::Code::kVarConsumeElseWithActsUnsupported, cursor_.peek().span);
+            (void)parse_with_acts_clause(/*record_binding=*/false, /*allow_assign_recovery=*/false);
+            var_has_acts_binding = false;
+            var_acts_is_default = false;
+            var_acts_target_type = ast::k_invalid_type;
+            var_acts_target_type_node = ast::k_invalid_type_node;
+            var_acts_set_path_begin = 0;
+            var_acts_set_path_count = 0;
+            var_acts_set_name = {};
+        }
+
         // ---- ';' or recover ----
         const Span end = stmt_consume_semicolon_or_recover(cursor_.prev().span);
 
@@ -898,6 +939,8 @@ namespace parus {
         s.var_acts_set_path_begin = var_acts_set_path_begin;
         s.var_acts_set_path_count = var_acts_set_path_count;
         s.var_acts_set_name = var_acts_set_name;
+        s.var_has_consume_else = var_has_consume_else;
+        s.b = var_consume_else_block;
         s.span = span_join(start_tok.span, end);
         return ast_.add_stmt(s);
     }

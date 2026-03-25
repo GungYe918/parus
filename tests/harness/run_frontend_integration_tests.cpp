@@ -2539,6 +2539,42 @@ namespace {
         return ok;
     }
 
+    static bool test_consume_binding_static_optional_escape() {
+        const std::string src = R"(
+            proto Recoverable {};
+
+            struct Logger {
+                value: i32;
+            };
+
+            enum LogErr: Recoverable {
+                case Missing,
+            };
+
+            static mut LOG: Logger? = null;
+
+            def take_log?() -> ~Logger {
+                let v: Logger = LOG else {
+                    throw LogErr::Missing();
+                };
+                return ~v;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "consume-binding from static optional must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "consume-binding from static optional must typecheck");
+        ok &= require_(cap.ok, "consume-binding from static optional must pass capability check");
+        ok &= require_(sir.cap.ok, "consume-binding from static optional must pass SIR capability check");
+        return ok;
+    }
+
     static bool test_sir_handle_verify_rejects_materialized_handle() {
         // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
         const std::string src = R"(
@@ -3283,6 +3319,7 @@ int main() {
         {"cap_shared_write_conflict", test_cap_shared_write_conflict},
         {"escape_requires_static_or_boundary", test_escape_requires_static_or_boundary},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
+        {"consume_binding_static_optional_escape", test_consume_binding_static_optional_escape},
         {"sir_handle_verify_rejects_materialized_handle", test_sir_handle_verify_rejects_materialized_handle},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},

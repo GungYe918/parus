@@ -152,19 +152,6 @@ namespace parus::oir {
                 normalize_symbol_fragment_(sig) + "$H" + hs.str();
         }
 
-        std::string build_parus_link_name_from_fn_type_(
-            std::string_view bundle_name,
-            std::string_view qname,
-            TypeId fn_type,
-            const parus::ty::TypePool& types
-        ) {
-            return build_parus_link_name_from_qname_and_sig_(
-                bundle_name,
-                qname,
-                types.to_export_string(fn_type)
-            );
-        }
-
         std::string relativize_external_fn_sig_repr_(
             const parus::sema::Symbol& ss,
             TypeId fn_type,
@@ -582,6 +569,7 @@ namespace parus::oir {
             };
 
             std::unordered_map<parus::sir::SymbolId, Binding> env;
+            std::unordered_map<parus::sir::SymbolId, ValueId> home_slots;
 
             struct LoopContext {
                 BlockId break_bb = kInvalidId;
@@ -1008,6 +996,52 @@ namespace parus::oir {
                     else env_stack.back().undo.push_back({sym, Binding{false, false, kInvalidId, kInvalidId}});
                 }
                 env[sym] = b;
+            }
+
+            void remember_home_slot(parus::sir::SymbolId sym, ValueId slot) {
+                if (sym == parus::sir::k_invalid_symbol || slot == kInvalidId) return;
+                home_slots[sym] = slot;
+            }
+
+            bool should_remember_home_slot(TypeId ty) const {
+                if (types == nullptr || ty == kInvalidId) return true;
+                const auto& tt = types->get(ty);
+                switch (tt.kind) {
+                    case parus::ty::Kind::kBorrow:
+                    case parus::ty::Kind::kEscape:
+                    case parus::ty::Kind::kPtr:
+                    case parus::ty::Kind::kFn:
+                        return false;
+                    default:
+                        return true;
+                }
+            }
+
+            ValueId lookup_bound_slot(parus::sir::SymbolId sym) const {
+                if (sym == parus::sir::k_invalid_symbol) return kInvalidId;
+                if (auto it = home_slots.find(sym); it != home_slots.end()) {
+                    return it->second;
+                }
+                auto it = env.find(sym);
+                if (it == env.end() || !it->second.is_slot) return kInvalidId;
+                return it->second.v;
+            }
+
+            std::optional<parus::sir::SymbolId> place_root_local_sym(parus::sir::ValueId vid) const {
+                if (sir == nullptr || vid == parus::sir::k_invalid_value || (size_t)vid >= sir->values.size()) {
+                    return std::nullopt;
+                }
+                const auto& v = sir->values[vid];
+                switch (v.kind) {
+                    case parus::sir::ValueKind::kLocal:
+                        if (v.sym != parus::sir::k_invalid_symbol) return v.sym;
+                        return std::nullopt;
+                    case parus::sir::ValueKind::kIndex:
+                    case parus::sir::ValueKind::kField:
+                        return place_root_local_sym(v.a);
+                    default:
+                        return std::nullopt;
+                }
             }
 
             // -----------------------
@@ -1541,6 +1575,7 @@ namespace parus::oir {
             // SIR -> OIR lowering
             // -----------------------
             ValueId lower_value(parus::sir::ValueId vid);
+            ValueId lower_place(parus::sir::ValueId vid, TypeId* out_place_ty = nullptr);
             void    lower_stmt(uint32_t stmt_index);
             void    lower_block(parus::sir::BlockId bid);
             void    lower_block_with_try_guard(parus::sir::BlockId bid, const TryContext& tc);
@@ -2373,6 +2408,124 @@ namespace parus::oir {
             // but verify() will later ensure terminators exist.
             (void)join_param;
             return join_param;
+        }
+
+        ValueId FuncBuild::lower_place(parus::sir::ValueId vid, TypeId* out_place_ty) {
+            if (out_place_ty != nullptr) {
+                *out_place_ty = parus::ty::kInvalidType;
+            }
+            if (vid == parus::sir::k_invalid_value || sir == nullptr ||
+                (size_t)vid >= sir->values.size()) {
+                report_lowering_error("place lowering failed: invalid SIR value id");
+                return kInvalidId;
+            }
+
+            const auto& v = sir->values[vid];
+            const TypeId place_ty =
+                (v.place_elem_type != parus::sir::k_invalid_type)
+                    ? (TypeId)v.place_elem_type
+                    : (TypeId)v.type;
+            if (out_place_ty != nullptr) {
+                *out_place_ty = place_ty;
+            }
+
+            auto lower_subplace_base = [&](parus::sir::ValueId base_vid) -> ValueId {
+                if (sir == nullptr || base_vid == parus::sir::k_invalid_value ||
+                    (size_t)base_vid >= sir->values.size()) {
+                    return lower_place(base_vid);
+                }
+                const auto& base_sv = sir->values[base_vid];
+                const TypeId base_ty =
+                    (base_sv.place_elem_type != parus::sir::k_invalid_type)
+                        ? (TypeId)base_sv.place_elem_type
+                        : (TypeId)base_sv.type;
+                if (types != nullptr && base_ty != kInvalidId) {
+                    const auto& bt = types->get(base_ty);
+                    if (bt.kind == parus::ty::Kind::kBorrow ||
+                        bt.kind == parus::ty::Kind::kEscape ||
+                        bt.kind == parus::ty::Kind::kPtr) {
+                        return lower_value(base_vid);
+                    }
+                }
+                return lower_place(base_vid);
+            };
+
+            if (v.kind == parus::sir::ValueKind::kIndex ||
+                v.kind == parus::sir::ValueKind::kField) {
+                if (auto root_sym = place_root_local_sym(vid); root_sym.has_value()) {
+                    if (const ValueId root_slot = lookup_bound_slot(*root_sym); root_slot != kInvalidId) {
+                        const auto rebuild = [&](parus::sir::ValueId cur_vid) -> ValueId {
+                            const auto& cur = sir->values[cur_vid];
+                            const TypeId cur_place_ty =
+                                (cur.place_elem_type != parus::sir::k_invalid_type)
+                                    ? (TypeId)cur.place_elem_type
+                                    : (TypeId)cur.type;
+                            switch (cur.kind) {
+                                case parus::sir::ValueKind::kLocal:
+                                    return root_slot;
+                                case parus::sir::ValueKind::kIndex: {
+                                    ValueId base_place = lower_subplace_base(cur.a);
+                                    ValueId idx = lower_value(cur.b);
+                                    return emit_index(cur_place_ty, base_place, idx);
+                                }
+                                case parus::sir::ValueKind::kField: {
+                                    ValueId base_place = lower_subplace_base(cur.a);
+                                    return emit_field(cur_place_ty, base_place, std::string(cur.text), {
+                                        .is_valid = cur.external_c_bitfield.is_valid,
+                                        .storage_offset_bytes = cur.external_c_bitfield.storage_offset_bytes,
+                                        .bit_offset = cur.external_c_bitfield.bit_offset,
+                                        .bit_width = cur.external_c_bitfield.bit_width,
+                                        .bit_signed = cur.external_c_bitfield.bit_signed,
+                                    });
+                                }
+                                default:
+                                    report_lowering_error("place lowering failed: rooted rebuild hit non-place node");
+                                    return lower_value(cur_vid);
+                            }
+                        };
+                        return rebuild(vid);
+                    }
+                }
+            }
+
+            switch (v.kind) {
+                case parus::sir::ValueKind::kLocal:
+                    if (const ValueId slot = lookup_bound_slot(v.sym); slot != kInvalidId) {
+                        return slot;
+                    }
+                    return ensure_slot(v.sym, place_ty);
+
+                case parus::sir::ValueKind::kIndex: {
+                    ValueId base_place = lower_subplace_base(v.a);
+                    ValueId idx = lower_value(v.b);
+                    return emit_index(place_ty, base_place, idx);
+                }
+
+                case parus::sir::ValueKind::kField: {
+                    ValueId base_place = lower_subplace_base(v.a);
+                    return emit_field(place_ty, base_place, std::string(v.text), {
+                        .is_valid = v.external_c_bitfield.is_valid,
+                        .storage_offset_bytes = v.external_c_bitfield.storage_offset_bytes,
+                        .bit_offset = v.external_c_bitfield.bit_offset,
+                        .bit_width = v.external_c_bitfield.bit_width,
+                        .bit_signed = v.external_c_bitfield.bit_signed,
+                    });
+                }
+
+                case parus::sir::ValueKind::kUnary: {
+                    auto tk = static_cast<parus::syntax::TokenKind>(v.op);
+                    if (tk == parus::syntax::TokenKind::kStar) {
+                        return lower_value(v.a);
+                    }
+                    break;
+                }
+
+                default:
+                    break;
+            }
+
+            report_lowering_error("place lowering failed: value is not an addressable place");
+            return lower_value(vid);
         }
 
         ValueId FuncBuild::lower_value(parus::sir::ValueId vid) {
@@ -3419,18 +3572,8 @@ namespace parus::oir {
                     return rhs; // assign expr result
                 }
 
-                // local 외 place(index/field 등)은 generic store로 남긴다.
-                // (백엔드에서 place 해석을 확장할 수 있도록 형태를 유지)
-                ValueId place_v = kInvalidId;
-                TypeId place_target_ty = kInvalidId;
-                if (place.kind == parus::sir::ValueKind::kUnary &&
-                    place.op == static_cast<uint32_t>(parus::syntax::TokenKind::kStar) &&
-                    place.a != parus::sir::k_invalid_value) {
-                    place_v = lower_value(place.a);
-                    place_target_ty = (TypeId)place.type;
-                } else {
-                    place_v = lower_value(v.a);
-                }
+                TypeId place_target_ty = parus::ty::kInvalidType;
+                ValueId place_v = lower_place(v.a, &place_target_ty);
                 if (place_v != kInvalidId && (size_t)place_v < out->values.size()) {
                     if (place_target_ty == kInvalidId) {
                         place_target_ty = out->values[place_v].ty;
@@ -3478,9 +3621,16 @@ namespace parus::oir {
                     return oldv;
                 }
 
-                ValueId src = lower_value(v.a);
+                TypeId place_target_ty = kInvalidId;
+                ValueId slot = lower_place(v.a, &place_target_ty);
+                if (place_target_ty == kInvalidId) {
+                    place_target_ty = v.type;
+                }
+                ValueId oldv = emit_load(place_target_ty, slot);
                 ValueId one = emit_const_int(v.type, "1");
-                return emit_binop(v.type, Effect::Pure, BinOp::Add, src, one);
+                ValueId next = emit_binop(v.type, Effect::Pure, BinOp::Add, oldv, one);
+                emit_store(slot, next);
+                return oldv;
             }
 
             case parus::sir::ValueKind::kBlockExpr:
@@ -3919,51 +4069,118 @@ namespace parus::oir {
 
             switch (s.kind) {
             case parus::sir::StmtKind::kVarDecl: {
-                // let / set
                 TypeId declared = s.declared_type;
+                auto materialize_var_decl_ = [&](ValueId init, bool consume_init_sir) {
+                    init = coerce_value_for_target(declared, init);
+
+                    const auto existing = env.find(s.sym);
+                    const bool reassign_existing = s.is_set && existing != env.end();
+                    const bool needs_cleanup = type_needs_drop_(declared);
+
+                    if (reassign_existing) {
+                        ValueId slot = ensure_slot(s.sym, declared);
+                        emit_store(slot, init);
+                        if (consume_init_sir) {
+                            if (s.init == parus::sir::k_invalid_value) {
+                                mark_symbol_moved(s.sym, /*moved=*/true);
+                            } else {
+                                consume_owned_sir_value_(s.init, declared);
+                            }
+                        }
+                        return;
+                    }
+
+                    if (needs_cleanup) {
+                        ValueId slot = emit_alloca(declared);
+                        emit_store(slot, init);
+                        const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared);
+                        bind(s.sym, Binding{true, false, slot, cleanup_id});
+                        if (should_remember_home_slot(declared)) {
+                            remember_home_slot(s.sym, slot);
+                        }
+                        if (consume_init_sir) {
+                            if (s.init == parus::sir::k_invalid_value) {
+                                mark_symbol_moved(s.sym, /*moved=*/true);
+                            } else {
+                                consume_owned_sir_value_(s.init, declared);
+                            }
+                        }
+                        return;
+                    }
+
+                    if (s.is_set || s.is_mut) {
+                        ValueId slot = emit_alloca(declared);
+                        emit_store(slot, init);
+                        bind(s.sym, Binding{true, false, slot, kInvalidId});
+                        if (should_remember_home_slot(declared)) {
+                            remember_home_slot(s.sym, slot);
+                        }
+                    } else {
+                        bind(s.sym, Binding{false, false, init, kInvalidId});
+                    }
+
+                    if (consume_init_sir) {
+                        consume_owned_sir_value_(s.init, declared);
+                    }
+                };
+
+                if (s.has_consume_else &&
+                    s.init != parus::sir::k_invalid_value &&
+                    (size_t)s.init < sir->values.size()) {
+                    const auto& place = sir->values[s.init];
+                    TypeId opt_ty = place.type;
+                    TypeId payload_ty = declared;
+                    if (types != nullptr &&
+                        opt_ty != kInvalidId &&
+                        opt_ty < types->count()) {
+                        const auto& tt = types->get(opt_ty);
+                        if (tt.kind == parus::ty::Kind::kOptional && tt.elem != kInvalidId) {
+                            payload_ty = tt.elem;
+                        }
+                    }
+
+                    ValueId place_slot = kInvalidId;
+                    ValueId current_opt = emit_const_null(opt_ty);
+                    place_slot = lower_place(s.init, &opt_ty);
+                    if (place_slot != kInvalidId &&
+                        (size_t)place_slot < out->values.size() &&
+                        opt_ty == kInvalidId) {
+                        opt_ty = out->values[place_slot].ty;
+                    }
+                    current_opt = emit_load(opt_ty, place_slot);
+
+                    const ValueId is_null =
+                        emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, current_opt, emit_const_null(opt_ty));
+                    const BlockId fail_bb = new_block();
+                    const BlockId succ_bb = new_block();
+                    condbr(is_null, fail_bb, {}, succ_bb, {});
+
+                    def->blocks.push_back(fail_bb);
+                    cur_bb = fail_bb;
+                    push_scope();
+                    if (s.b != parus::sir::k_invalid_block) lower_block(s.b);
+                    pop_scope();
+                    if (!has_term()) {
+                        report_lowering_error("consume-binding else block must diverge");
+                        br(succ_bb, {});
+                    }
+
+                    def->blocks.push_back(succ_bb);
+                    cur_bb = succ_bb;
+                    const ValueId payload =
+                        emit_cast(payload_ty, Effect::MayTrap, CastKind::AsB, payload_ty, current_opt);
+                    emit_store(place_slot, emit_const_null(opt_ty));
+                    if (place.kind == parus::sir::ValueKind::kLocal &&
+                        place.sym != parus::sir::k_invalid_symbol) {
+                        mark_symbol_moved(place.sym, /*moved=*/false);
+                    }
+                    materialize_var_decl_(payload, /*consume_init_sir=*/false);
+                    return;
+                }
+
                 ValueId init = (s.init != parus::sir::k_invalid_value) ? lower_value(s.init)
-                                                                    : emit_const_null(declared);
-                init = coerce_value_for_target(declared, init);
-
-                const auto existing = env.find(s.sym);
-                const bool reassign_existing = s.is_set && existing != env.end();
-
-                const bool needs_cleanup = type_needs_drop_(declared);
-
-                if (reassign_existing) {
-                    ValueId slot = ensure_slot(s.sym, declared);
-                    emit_store(slot, init);
-                    if (s.init == parus::sir::k_invalid_value) {
-                        mark_symbol_moved(s.sym, /*moved=*/true);
-                    } else {
-                        consume_owned_sir_value_(s.init, declared);
-                    }
-                    return;
-                }
-
-                if (needs_cleanup) {
-                    ValueId slot = emit_alloca(declared);
-                    emit_store(slot, init);
-                    const uint32_t cleanup_id = register_cleanup(s.sym, slot, declared);
-                    bind(s.sym, Binding{true, false, slot, cleanup_id});
-                    if (s.init == parus::sir::k_invalid_value) {
-                        mark_symbol_moved(s.sym, /*moved=*/true);
-                    } else {
-                        consume_owned_sir_value_(s.init, declared);
-                    }
-                    return;
-                }
-
-                // if set or mut => slot
-                if (s.is_set || s.is_mut) {
-                    ValueId slot = emit_alloca(declared);
-                    emit_store(slot, init);
-                    bind(s.sym, Binding{true, false, slot, kInvalidId});
-                } else {
-                    // immutable let => SSA binding
-                    bind(s.sym, Binding{false, false, init, kInvalidId});
-                }
-                consume_owned_sir_value_(s.init, declared);
+                                                                       : emit_const_null(declared);
+                materialize_var_decl_(init, /*consume_init_sir=*/true);
                 return;
             }
 
@@ -5637,10 +5854,18 @@ namespace parus::oir {
                         fb.emit_store(slot, pv);
                         const uint32_t cleanup_id = fb.register_cleanup(sp.sym, slot, (TypeId)sp.type);
                         fb.bind(sp.sym, FuncBuild::Binding{true, false, slot, cleanup_id});
+                        if (!(sp.is_self && sp.is_mut) &&
+                            fb.should_remember_home_slot((TypeId)sp.type)) {
+                            fb.remember_home_slot(sp.sym, slot);
+                        }
                     } else if (sp.is_mut) {
                         ValueId slot = fb.emit_alloca((TypeId)sp.type);
                         fb.emit_store(slot, pv);
                         fb.bind(sp.sym, FuncBuild::Binding{true, false, slot, kInvalidId});
+                        if (!(sp.is_self && sp.is_mut) &&
+                            fb.should_remember_home_slot((TypeId)sp.type)) {
+                            fb.remember_home_slot(sp.sym, slot);
+                        }
                     } else {
                         fb.bind(sp.sym, FuncBuild::Binding{false, false, pv, kInvalidId});
                     }

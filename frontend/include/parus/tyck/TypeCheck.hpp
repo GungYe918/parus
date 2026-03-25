@@ -243,6 +243,7 @@ namespace parus::tyck {
         void check_stmt_field_decl_(ast::StmtId sid);
         void check_stmt_enum_decl_(ast::StmtId sid);
         void check_stmt_acts_decl_(ast::StmtId sid, const ast::Stmt& s);
+        bool stmt_diverges_(ast::StmtId sid, bool loop_control_counts) const;
 
         // expr
         ty::TypeId check_expr_(ast::ExprId eid);

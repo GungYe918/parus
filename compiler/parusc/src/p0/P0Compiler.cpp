@@ -338,23 +338,6 @@ namespace parusc::p0 {
             return out;
         }
 
-        std::string path_join_(
-            const parus::ast::AstArena& ast,
-            uint32_t begin,
-            uint32_t count
-        ) {
-            const auto& segs = ast.path_segs();
-            const uint64_t end = static_cast<uint64_t>(begin) + count;
-            if (begin > segs.size() || end > segs.size()) return {};
-
-            std::string out{};
-            for (uint32_t i = 0; i < count; ++i) {
-                if (i) out += "::";
-                out += std::string(segs[begin + i]);
-            }
-            return out;
-        }
-
         std::string payload_escape_value_(std::string_view raw) {
             static constexpr char kHex[] = "0123456789ABCDEF";
             std::string out{};
@@ -527,7 +510,6 @@ namespace parusc::p0 {
             if (owner_repr.empty()) return;
 
             const auto& stmts = ast.stmts();
-            const auto& kids = ast.stmt_children();
             std::unordered_set<std::string> emitted{};
             std::unordered_set<uint32_t> emitted_constraint_stmts{};
 
@@ -1517,46 +1499,6 @@ namespace parusc::p0 {
             };
 
             return walk(walk, tid);
-        }
-
-        std::string qualify_symbolic_path_for_bundle_(
-            std::string_view raw_path,
-            std::string_view bundle_name,
-            std::string_view current_module_head,
-            const std::unordered_set<std::string>& dep_module_heads,
-            const std::unordered_set<std::string>& current_module_local_symbols
-        ) {
-            if (raw_path.empty() || bundle_name.empty()) return std::string(raw_path);
-            const std::string bundle_prefix = std::string(bundle_name) + "::";
-            if (raw_path == bundle_name || raw_path.starts_with(bundle_prefix)) {
-                return std::string(raw_path);
-            }
-            if (raw_path.starts_with("core::")) {
-                return std::string(raw_path);
-            }
-
-            const size_t split = raw_path.find("::");
-            if (split == std::string_view::npos) {
-                if (!current_module_head.empty() &&
-                    current_module_local_symbols.find(std::string(raw_path)) != current_module_local_symbols.end()) {
-                    return std::string(bundle_name) + "::" +
-                           std::string(current_module_head) + "::" +
-                           std::string(raw_path);
-                }
-                return std::string(raw_path);
-            }
-
-            const std::string_view head = raw_path.substr(0, split);
-            if (!current_module_head.empty()) {
-                const std::string cur_prefix = std::string(current_module_head) + "::";
-                if (raw_path.starts_with(cur_prefix)) {
-                    return std::string(bundle_name) + "::" + std::string(raw_path);
-                }
-            }
-            if (dep_module_heads.find(std::string(head)) != dep_module_heads.end()) {
-                return std::string(bundle_name) + "::" + std::string(raw_path);
-            }
-            return std::string(raw_path);
         }
 
         const parus::sema::Symbol* find_exact_symbol_by_name_(

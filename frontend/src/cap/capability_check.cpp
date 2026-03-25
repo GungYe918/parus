@@ -320,6 +320,9 @@ namespace parus::cap {
                         if (s.init != ast::k_invalid_expr) {
                             walk_expr_(s.init, ExprUse::kValue);
                         }
+                        if (s.var_has_consume_else && s.b != ast::k_invalid_stmt) {
+                            walk_stmt_(s.b);
+                        }
                         return;
                     }
 

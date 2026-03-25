@@ -141,6 +141,7 @@ static const char* stmt_kind_name_(parus::ast::StmtKind k) {
         case K::kVar: return "Var";
         case K::kIf: return "If";
         case K::kWhile: return "While";
+        case K::kFor: return "For";
         case K::kDoScope: return "DoScope";
         case K::kDoWhile: return "DoWhile";
         case K::kManual: return "Manual";
@@ -155,6 +156,7 @@ static const char* stmt_kind_name_(parus::ast::StmtKind k) {
         case K::kSwitch: return "Switch";
         case K::kFnDecl: return "FnDecl";
         case K::kFieldDecl: return "FieldDecl";
+        case K::kAssocTypeDecl: return "AssocTypeDecl";
         case K::kEnumDecl: return "EnumDecl";
         case K::kProtoDecl: return "ProtoDecl";
         case K::kClassDecl: return "ClassDecl";
@@ -689,6 +691,10 @@ static void dump_stmt_(
             append_line_(out, depth + 1, "is_extern=" + std::string(s.is_extern ? "1" : "0"));
             dump_type_ref_(ast, s.type_node, depth + 1, out, state, "type");
             dump_expr_ref_(ast, s.init, depth + 1, out, state, "init");
+            if (s.var_has_consume_else) {
+                append_line_(out, depth + 1, "consume_else=1");
+                dump_stmt_ref_(ast, s.b, depth + 1, out, state, "consume_else_block");
+            }
             if (s.var_has_acts_binding) {
                 append_line_(out, depth + 1, "acts_binding=1");
                 append_line_(out, depth + 1, "acts_default=" + std::string(s.var_acts_is_default ? "1" : "0"));

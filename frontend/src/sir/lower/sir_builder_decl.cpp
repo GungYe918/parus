@@ -223,6 +223,7 @@ namespace parus::sir::detail {
             sp.name = p.name;
             sp.type = p.type;
             sp.is_mut = p.is_mut;
+            sp.is_self = p.is_self;
             sp.is_named_group = p.is_named_group;
             sp.span = p.span;
 

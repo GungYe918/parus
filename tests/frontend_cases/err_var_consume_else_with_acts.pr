@@ -1,0 +1,7 @@
+def main() -> i32 {
+  let mut x: i32? = 1i32;
+  let v: i32 = x with acts(default) else {
+    return 0i32;
+  };
+  return v;
+}

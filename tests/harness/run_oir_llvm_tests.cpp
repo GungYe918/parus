@@ -150,7 +150,7 @@ namespace {
         return out;
     }
 
-    /// @brief 소스 기반 index lowering이 실제 메모리 주소 계산(getelementptr)을 생성하는지 검사한다.
+    /// @brief 소스 기반 index lowering이 typed getelementptr 기반 주소 계산을 생성하는지 검사한다.
     static bool test_source_index_lowering_uses_gep() {
         const std::string src = R"(
             def main() -> i32 {
@@ -172,8 +172,11 @@ namespace {
         );
 
         ok &= require_(lowered.ok, "LLVM text lowering for index case must succeed");
-        ok &= require_(lowered.llvm_ir.find("getelementptr i8") != std::string::npos,
-                       "index lowering must emit byte-address GEP");
+        ok &= require_(
+            lowered.llvm_ir.find("getelementptr i32") != std::string::npos ||
+                lowered.llvm_ir.find("getelementptr [3 x i32]") != std::string::npos,
+            "index lowering must emit typed GEP"
+        );
         ok &= require_(lowered.llvm_ir.find("store i32") != std::string::npos,
                        "index assignment must emit typed store");
         ok &= require_(lowered.llvm_ir.find("load i32") != std::string::npos,

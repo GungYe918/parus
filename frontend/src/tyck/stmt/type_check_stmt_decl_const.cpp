@@ -1,3 +1,65 @@
+    bool TypeChecker::stmt_diverges_(ast::StmtId sid, bool loop_control_counts) const {
+        if (sid == ast::k_invalid_stmt) return false;
+        const ast::Stmt& st = ast_.stmt(sid);
+
+        switch (st.kind) {
+            case ast::StmtKind::kReturn:
+            case ast::StmtKind::kThrow:
+                return true;
+
+            case ast::StmtKind::kBreak:
+            case ast::StmtKind::kContinue:
+                return loop_control_counts;
+
+            case ast::StmtKind::kExprStmt:
+                if (st.expr == ast::k_invalid_expr ||
+                    static_cast<size_t>(st.expr) >= expr_type_cache_.size()) {
+                    return false;
+                }
+                return expr_type_cache_[st.expr] == types_.builtin(ty::Builtin::kNever);
+
+            case ast::StmtKind::kBlock: {
+                if (st.stmt_count == 0) return false;
+                const auto& children = ast_.stmt_children();
+                const ast::StmtId last = children[st.stmt_begin + (st.stmt_count - 1)];
+                return stmt_diverges_(last, loop_control_counts);
+            }
+
+            case ast::StmtKind::kIf:
+                if (st.a == ast::k_invalid_stmt || st.b == ast::k_invalid_stmt) return false;
+                return stmt_diverges_(st.a, loop_control_counts) &&
+                    stmt_diverges_(st.b, loop_control_counts);
+
+            case ast::StmtKind::kDoScope:
+            case ast::StmtKind::kManual:
+                return (st.a != ast::k_invalid_stmt) ? stmt_diverges_(st.a, loop_control_counts) : false;
+
+            case ast::StmtKind::kTryCatch: {
+                if (st.a == ast::k_invalid_stmt) return false;
+                if (!stmt_diverges_(st.a, loop_control_counts)) return false;
+                if (st.catch_clause_count == 0) return false;
+                const auto& catches = ast_.try_catch_clauses();
+                const uint32_t cb = st.catch_clause_begin;
+                const uint32_t ce = st.catch_clause_begin + st.catch_clause_count;
+                if (ce > catches.size()) return false;
+                for (uint32_t i = cb; i < ce; ++i) {
+                    const auto& cc = catches[i];
+                    if (cc.body == ast::k_invalid_stmt) return false;
+                    if (!stmt_diverges_(cc.body, loop_control_counts)) return false;
+                }
+                return true;
+            }
+
+            case ast::StmtKind::kWhile:
+            case ast::StmtKind::kDoWhile:
+            case ast::StmtKind::kSwitch:
+                return false;
+
+            default:
+                return false;
+        }
+    }
+
     void TypeChecker::check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s) {
         const ast::Stmt fn = s;
         // ----------------------------
@@ -316,71 +378,7 @@
         const ty::TypeId fn_ret = fn_ctx_.ret;
 
         if (!fn.is_extern && !is_unit(fn_ret) && !is_never(fn_ret)) {
-            // body가 항상 return 하는지 검사
-            auto stmt_always_returns = [&](auto&& self, ast::StmtId sid) -> bool {
-                if (sid == ast::k_invalid_stmt) return false;
-                const ast::Stmt& st = ast_.stmt(sid);
-
-                switch (st.kind) {
-                    case ast::StmtKind::kReturn:
-                    case ast::StmtKind::kThrow:
-                        return true;
-
-                    case ast::StmtKind::kExprStmt:
-                        if (st.expr == ast::k_invalid_expr ||
-                            static_cast<size_t>(st.expr) >= expr_type_cache_.size()) {
-                            return false;
-                        }
-                        return expr_type_cache_[st.expr] == types_.builtin(ty::Builtin::kNever);
-
-                    case ast::StmtKind::kBlock: {
-                        // v0 정책: block의 마지막 stmt가 항상 return이면 block이 항상 return
-                        if (st.stmt_count == 0) return false;
-                        const auto& children = ast_.stmt_children();
-                        const ast::StmtId last = children[st.stmt_begin + (st.stmt_count - 1)];
-                        return self(self, last);
-                    }
-
-                    case ast::StmtKind::kIf: {
-                        // then/else 둘 다 return해야 if가 return
-                        if (st.a == ast::k_invalid_stmt) return false;
-                        if (st.b == ast::k_invalid_stmt) return false;
-                        return self(self, st.a) && self(self, st.b);
-                    }
-
-                    case ast::StmtKind::kDoScope:
-                    case ast::StmtKind::kManual:
-                        return (st.a != ast::k_invalid_stmt) ? self(self, st.a) : false;
-
-                    case ast::StmtKind::kTryCatch: {
-                        // v0 정책: try body와 모든 catch body가 return하면 always-return으로 본다.
-                        if (st.a == ast::k_invalid_stmt) return false;
-                        if (!self(self, st.a)) return false;
-                        if (st.catch_clause_count == 0) return false;
-                        const auto& catches = ast_.try_catch_clauses();
-                        const uint32_t cb = st.catch_clause_begin;
-                        const uint32_t ce = st.catch_clause_begin + st.catch_clause_count;
-                        if (ce > catches.size()) return false;
-                        for (uint32_t i = cb; i < ce; ++i) {
-                            const auto& cc = catches[i];
-                            if (cc.body == ast::k_invalid_stmt) return false;
-                            if (!self(self, cc.body)) return false;
-                        }
-                        return true;
-                    }
-
-                    // while/loop/switch 등은 v0에서 보수적으로 false
-                    case ast::StmtKind::kWhile:
-                    case ast::StmtKind::kDoWhile:
-                    case ast::StmtKind::kSwitch:
-                        return false;
-
-                    default:
-                        return false;
-                }
-            };
-
-            const bool ok_all_paths = stmt_always_returns(stmt_always_returns, fn.a);
+            const bool ok_all_paths = stmt_diverges_(fn.a, /*loop_control_counts=*/false);
             if (!ok_all_paths) {
                 // 여기서 “return 누락” 진단
                 // (diag code는 새로 만드는 게 정석: kMissingReturn)

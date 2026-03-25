@@ -398,6 +398,9 @@ namespace parus::sir::detail {
 
             case StmtKind::kVarDecl:
                 join_value(s.init);
+                if (s.has_consume_else && s.b != k_invalid_block) {
+                    join_block(s.b);
+                }
                 break;
 
             case StmtKind::kIfStmt:

@@ -139,6 +139,11 @@ namespace parus::sir {
                     break;
                 case StmtKind::kVarDecl:
                     need_value(s.init, "init");
+                    if (s.has_consume_else && !valid_block_id_(m, s.b)) {
+                        std::ostringstream oss;
+                        oss << "stmt #" << sid << " consume-else block has invalid block id " << s.b;
+                        push_error_(errs, oss.str());
+                    }
                     break;
                 case StmtKind::kThrowStmt:
                     need_value(s.expr, "throw payload");

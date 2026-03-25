@@ -85,6 +85,13 @@ namespace parus::diag {
             case Code::kSetInitializerRequired: return "SetInitializerRequired";
             case Code::kStaticVarExpectedLetOrSet: return "StaticVarExpectedLetOrSet";
             case Code::kStaticVarRequiresInitializer: return "StaticVarRequiresInitializer";
+            case Code::kVarConsumeElseOnlyOnLetSet: return "VarConsumeElseOnlyOnLetSet";
+            case Code::kVarConsumeElseExpectedBlock: return "VarConsumeElseExpectedBlock";
+            case Code::kVarConsumeElseWithActsUnsupported: return "VarConsumeElseWithActsUnsupported";
+            case Code::kVarConsumeElseRequiresPlace: return "VarConsumeElseRequiresPlace";
+            case Code::kVarConsumeElseRequiresOptionalPlace: return "VarConsumeElseRequiresOptionalPlace";
+            case Code::kVarConsumeElseRequiresMutablePlace: return "VarConsumeElseRequiresMutablePlace";
+            case Code::kVarConsumeElseMustDiverge: return "VarConsumeElseMustDiverge";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "FnOnlyOneNamedGroupAllowed";
             case Code::kFnNamedGroupMixedWithPositional: return "FnNamedGroupMixedWithPositional";
@@ -443,6 +450,13 @@ namespace parus::diag {
             case Code::kSetInitializerRequired: return "'set' declaration requires '=' initializer";
             case Code::kStaticVarExpectedLetOrSet: return "'static' declaration must be followed by [mut] let/set";
             case Code::kStaticVarRequiresInitializer: return "static variable requires an initializer";
+            case Code::kVarConsumeElseOnlyOnLetSet: return "consume-binding else is only allowed on local let/set declarations";
+            case Code::kVarConsumeElseExpectedBlock: return "consume-binding requires an else block '{ ... }'";
+            case Code::kVarConsumeElseWithActsUnsupported: return "consume-binding does not support 'with acts(...)' on the same declaration in this round";
+            case Code::kVarConsumeElseRequiresPlace: return "consume-binding rhs must be a mutable place expression";
+            case Code::kVarConsumeElseRequiresOptionalPlace: return "consume-binding rhs must have optional type 'T?'";
+            case Code::kVarConsumeElseRequiresMutablePlace: return "consume-binding rhs place must be writable";
+            case Code::kVarConsumeElseMustDiverge: return "consume-binding else block must not fall through";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "function parameters allow at most one named-group '{ ... }'";
             case Code::kFnNamedGroupMixedWithPositional: return "function declaration must be either positional-only '(a: T, b: U)' or named-group-only '({a: T, ...})'";
@@ -807,6 +821,13 @@ namespace parus::diag {
             case Code::kSetInitializerRequired: return "set 선언에는 '=' 초기화식이 반드시 필요합니다";
             case Code::kStaticVarExpectedLetOrSet: return "'static' 선언 뒤에는 [mut] let/set이 와야 합니다";
             case Code::kStaticVarRequiresInitializer: return "static 변수는 초기화식이 반드시 필요합니다";
+            case Code::kVarConsumeElseOnlyOnLetSet: return "consume-binding else는 지역 let/set 선언에서만 사용할 수 있습니다";
+            case Code::kVarConsumeElseExpectedBlock: return "consume-binding에는 else 블록 '{ ... }'이 필요합니다";
+            case Code::kVarConsumeElseWithActsUnsupported: return "이번 라운드에서는 consume-binding과 'with acts(...)'를 같은 선언에 함께 쓸 수 없습니다";
+            case Code::kVarConsumeElseRequiresPlace: return "consume-binding의 오른쪽은 mutable place expression이어야 합니다";
+            case Code::kVarConsumeElseRequiresOptionalPlace: return "consume-binding의 오른쪽은 optional 타입 'T?'이어야 합니다";
+            case Code::kVarConsumeElseRequiresMutablePlace: return "consume-binding의 source place는 쓰기 가능해야 합니다";
+            case Code::kVarConsumeElseMustDiverge: return "consume-binding의 else 블록은 fallthrough 없이 종료되어야 합니다";
 
             case Code::kFnOnlyOneNamedGroupAllowed: return "함수 파라미터에서는 named-group '{ ... }'를 최대 1개만 사용할 수 있습니다";
             case Code::kFnNamedGroupMixedWithPositional: return "함수 선언은 positional-only '(a: T, b: U)' 또는 named-group-only '({a: T, ...})' 중 하나여야 합니다";

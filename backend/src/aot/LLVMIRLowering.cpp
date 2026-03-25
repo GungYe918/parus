@@ -248,21 +248,6 @@ namespace parus::backend::aot {
             return std::nullopt;
         }
 
-        std::optional<uint64_t> core_ext_builtin_alias_size_(
-            const parus::ty::TypePool& types,
-            parus::ty::TypeId tid
-        ) {
-            const auto llvm_ty = core_ext_builtin_alias_llvm_ty_(types, tid);
-            if (!llvm_ty.has_value()) return std::nullopt;
-            if (*llvm_ty == "void") return uint64_t{1};
-            if (*llvm_ty == "i8") return uint64_t{1};
-            if (*llvm_ty == "i16") return uint64_t{2};
-            if (*llvm_ty == "i32" || *llvm_ty == "float") return uint64_t{4};
-            if (*llvm_ty == "i64" || *llvm_ty == "double" || *llvm_ty == "ptr") return uint64_t{8};
-            if (*llvm_ty == "i128" || *llvm_ty == "fp128") return uint64_t{16};
-            return std::nullopt;
-        }
-
         /// @brief LLVM 타입 문자열이 aggregate(구조체/배열)인지 검사한다.
         bool is_aggregate_llvm_ty_(const std::string& ty) {
             if (ty.empty()) return false;
@@ -530,155 +515,6 @@ namespace parus::backend::aot {
             );
         }
 
-        /// @brief 타입의 대략적 바이트 크기를 계산한다.
-        uint64_t type_size_bytes_rec_(
-            const parus::ty::TypePool& types,
-            parus::ty::TypeId tid,
-            uint32_t depth,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts,
-            const std::unordered_set<parus::ty::TypeId>* actor_types,
-            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types
-        ) {
-            if (tid == parus::ty::kInvalidType) return 8;
-            if (depth > 8) return 8;
-
-            const auto& t = types.get(tid);
-            using K = parus::ty::Kind;
-            using B = parus::ty::Builtin;
-
-            switch (t.kind) {
-                case K::kError:
-                    return 8;
-                case K::kBuiltin:
-                    switch (t.builtin) {
-                        case B::kBool: return 1;
-                        case B::kI8:
-                        case B::kU8:
-                        case B::kCChar:
-                        case B::kCSChar:
-                        case B::kCUChar:
-                            return 1;
-                        case B::kI16:
-                        case B::kU16:
-                        case B::kCShort:
-                        case B::kCUShort:
-                            return 2;
-                        case B::kI32:
-                        case B::kU32:
-                        case B::kF32:
-                        case B::kChar:
-                        case B::kCInt:
-                        case B::kCUInt:
-                        case B::kCFloat:
-                            return 4;
-                        case B::kText: return 16;
-                        case B::kCLong:
-                        case B::kCULong:
-#if defined(_WIN64)
-                            return 4;
-#else
-                            return 8;
-#endif
-                        case B::kI64:
-                        case B::kU64:
-                        case B::kF64:
-                        case B::kISize:
-                        case B::kUSize:
-                        case B::kCLongLong:
-                        case B::kCULongLong:
-                        case B::kCDouble:
-                        case B::kCSize:
-                        case B::kCSSize:
-                        case B::kCPtrDiff:
-                        case B::kVaList:
-                        case B::kNull:
-                        case B::kInferInteger:
-                        case B::kUnit:
-                        case B::kNever:
-                            return 8;
-                        case B::kCVoid:
-                            return 1;
-                        case B::kI128:
-                        case B::kU128:
-                        case B::kF128:
-                            return 16;
-                    }
-                    return 8;
-                case K::kOptional:
-                    return std::max<uint64_t>(
-                        2,
-                        1 + type_size_bytes_rec_(
-                            types,
-                            t.elem,
-                            depth + 1,
-                            named_layouts,
-                            actor_types,
-                            scalar_enum_types
-                        )
-                    );
-                case K::kArray: {
-                    const uint64_t elem = std::max<uint64_t>(
-                        1,
-                        type_size_bytes_rec_(
-                            types,
-                            t.elem,
-                            depth + 1,
-                            named_layouts,
-                            actor_types,
-                            scalar_enum_types
-                        )
-                    );
-                    if (t.array_has_size) return elem * std::max<uint64_t>(1, t.array_size);
-                    return 16; // {ptr,len}
-                }
-                case K::kBorrow:
-                case K::kEscape:
-                case K::kPtr:
-                case K::kFn:
-                    return 8;
-                case K::kNamedUser: {
-                    if (is_core_ext_cstr_type_(types, tid)) {
-                        return 16;
-                    }
-                    if (const auto alias_size = core_ext_builtin_alias_size_(types, tid); alias_size.has_value()) {
-                        return *alias_size;
-                    }
-                    if (scalar_enum_types != nullptr) {
-                        auto enum_it = scalar_enum_types->find(tid);
-                        if (enum_it != scalar_enum_types->end()) {
-                            if (enum_it->second == "i8") return 1;
-                            if (enum_it->second == "i16") return 2;
-                            if (enum_it->second == "i32") return 4;
-                            if (enum_it->second == "i64") return 8;
-                            if (enum_it->second == "i128") return 16;
-                        }
-                    }
-                    if (actor_types != nullptr && actor_types->find(tid) != actor_types->end()) {
-                        return 8;
-                    }
-                    if (named_layouts != nullptr) {
-                        auto it = named_layouts->find(tid);
-                        if (it != named_layouts->end()) {
-                            return std::max<uint64_t>(1u, it->second.size);
-                        }
-                    }
-                    return 32;
-                }
-            }
-            return 8;
-        }
-
-        /// @brief 타입의 대략적 바이트 크기를 계산한다.
-        uint64_t type_size_bytes_(
-            const parus::ty::TypePool& types,
-            parus::ty::TypeId tid,
-            const std::unordered_map<parus::ty::TypeId, NamedLayoutInfo>* named_layouts = nullptr,
-            const std::unordered_set<parus::ty::TypeId>* actor_types = nullptr,
-            const std::unordered_map<parus::ty::TypeId, std::string>* scalar_enum_types = nullptr
-        ) {
-            return type_size_bytes_rec_(types, tid, 0, named_layouts, actor_types, scalar_enum_types);
-        }
-
         /// @brief OIR 모듈에서 value 사용 문맥(값/슬롯)을 수집한다.
         std::vector<ValueUseInfo> build_value_use_table_(const parus::oir::Module& m) {
             std::vector<ValueUseInfo> uses(m.values.size());
@@ -902,8 +738,8 @@ namespace parus::backend::aot {
                     continue;
                 }
                 if (std::holds_alternative<parus::oir::InstCast>(inst.data)) {
-                    const auto& c = std::get<parus::oir::InstCast>(inst.data);
-                    out[inst.result] = map_type_(types, c.to, &named_layouts, &actor_types, &scalar_enum_types);
+                    out[inst.result] =
+                        map_type_(types, m.values[inst.result].ty, &named_layouts, &actor_types, &scalar_enum_types);
                     if (is_aggregate_llvm_ty_(out[inst.result])) out[inst.result] = "ptr";
                 }
             }
@@ -1280,6 +1116,8 @@ namespace parus::backend::aot {
 
             struct ArrayViewInfo {
                 parus::ty::TypeId array_type = parus::ty::kInvalidType;
+                parus::ty::TypeId elem_type = parus::ty::kInvalidType;
+                std::string elem_llvm_ty{};
                 std::string data_ptr{};
                 std::string len_i64{};
                 bool has_static_len = false;
@@ -1316,11 +1154,22 @@ namespace parus::backend::aot {
 
                 ArrayViewInfo out{};
                 out.array_type = arr_tid;
+                out.elem_type = at.elem;
+                if (at.elem != parus::ty::kInvalidType) {
+                    out.elem_llvm_ty =
+                        map_type_(types_, at.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                    if (out.elem_llvm_ty == "void") out.elem_llvm_ty = "i8";
+                }
 
                 const std::string base_ptr = slot_ptr_ref_(os, base);
                 if (base_ptr == "null") return std::nullopt;
                 if (at.array_has_size) {
-                    out.data_ptr = base_ptr;
+                    const std::string arr_ty =
+                        map_type_(types_, arr_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                    const std::string data_gep = next_tmp_();
+                    os << "  " << data_gep << " = getelementptr " << arr_ty
+                       << ", ptr " << base_ptr << ", i32 0, i64 0\n";
+                    out.data_ptr = data_gep;
                     out.has_static_len = true;
                     out.static_len = at.array_size;
                     out.len_i64 = std::to_string(at.array_size);
@@ -1813,26 +1662,20 @@ namespace parus::backend::aot {
                     emit_default_value_result_(os, inst.result);
                     return;
                 }
-                const uint64_t elem_size = std::max<uint64_t>(
-                    1,
-                    type_size_bytes_(types_, elem_ty_id, &named_layouts_, &actor_types_, &scalar_enum_types_)
-                );
-
-                std::string byte_off = idx64;
-                if (elem_size != 1) {
-                    const std::string mul_tmp = next_tmp_();
-                    os << "  " << mul_tmp << " = mul i64 " << idx64 << ", " << elem_size << "\n";
-                    byte_off = mul_tmp;
-                }
-
-                const std::string byte_ptr = next_tmp_();
-                os << "  " << byte_ptr << " = getelementptr i8, ptr " << data_ptr << ", i64 " << byte_off << "\n";
+                std::string elem_full_ty =
+                    map_type_(types_, elem_ty_id, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                if (elem_full_ty == "void") elem_full_ty = "i8";
 
                 const std::string typed_ptr = next_tmp_();
-                os << "  " << typed_ptr << " = bitcast ptr " << byte_ptr << " to ptr\n";
+                os << "  " << typed_ptr << " = getelementptr " << elem_full_ty
+                   << ", ptr " << data_ptr << ", i64 " << idx64 << "\n";
                 address_ref_by_value_[inst.result] = typed_ptr;
 
                 const std::string rty = value_ty_(inst.result);
+                if (rty == "ptr") {
+                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
+                    return;
+                }
                 if (is_value_read_(inst.result)) {
                     os << "  " << vref_(inst.result) << " = load " << rty << ", ptr " << typed_ptr << "\n";
                     return;
@@ -1849,11 +1692,6 @@ namespace parus::backend::aot {
                     } else {
                         os << "  " << vref_(inst.result) << " = add i64 0, 0\n";
                     }
-                    return;
-                }
-
-                if (rty == "ptr") {
-                    os << "  " << vref_(inst.result) << " = bitcast ptr " << typed_ptr << " to ptr\n";
                     return;
                 }
 
@@ -1929,13 +1767,7 @@ namespace parus::backend::aot {
                 os << "  " << in_bounds << " = and i1 " << lo_ok << ", " << hi_ok << "\n";
                 emit_bounds_check_(os, in_bounds);
 
-                parus::ty::TypeId elem_ty = parus::ty::kInvalidType;
-                if (const auto arr_tid = base_view->array_type; arr_tid != parus::ty::kInvalidType) {
-                    const auto& arr_t = types_.get(arr_tid);
-                    if (arr_t.kind == parus::ty::Kind::kArray) {
-                        elem_ty = arr_t.elem;
-                    }
-                }
+                parus::ty::TypeId elem_ty = base_view->elem_type;
                 if (elem_ty == parus::ty::kInvalidType) {
                     const auto ret_tid = value_type_id_(inst.result);
                     if (ret_tid != parus::ty::kInvalidType) {
@@ -1951,19 +1783,13 @@ namespace parus::backend::aot {
                     os << "  " << vref_(inst.result) << " = bitcast ptr " << slot << " to ptr\n";
                     return;
                 }
-                const uint64_t elem_size = std::max<uint64_t>(
-                    1,
-                    type_size_bytes_(types_, elem_ty, &named_layouts_, &actor_types_, &scalar_enum_types_)
-                );
-
-                std::string byte_off = lo64;
-                if (elem_size != 1) {
-                    const std::string mul_tmp = next_tmp_();
-                    os << "  " << mul_tmp << " = mul i64 " << lo64 << ", " << elem_size << "\n";
-                    byte_off = mul_tmp;
-                }
                 const std::string data_start = next_tmp_();
-                os << "  " << data_start << " = getelementptr i8, ptr " << base_view->data_ptr << ", i64 " << byte_off << "\n";
+                const std::string elem_ty_str =
+                    !base_view->elem_llvm_ty.empty()
+                        ? base_view->elem_llvm_ty
+                        : map_type_(types_, elem_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                os << "  " << data_start << " = getelementptr " << elem_ty_str
+                   << ", ptr " << base_view->data_ptr << ", i64 " << lo64 << "\n";
 
                 const std::string len = next_tmp_();
                 os << "  " << len << " = sub i64 " << hi_exclusive << ", " << lo64 << "\n";
@@ -2501,15 +2327,16 @@ namespace parus::backend::aot {
                             if (inst.result == kInvalidId) return;
                             const auto rty = value_ty_(inst.result);
                             const auto src_tid = value_type_id_(x.src);
+                            const auto result_tid = value_type_id_(inst.result);
 
-                            if (x.to != parus::ty::kInvalidType) {
-                                const auto& to_tt = types_.get(x.to);
-                                if (to_tt.kind == parus::ty::Kind::kOptional &&
-                                    to_tt.elem != parus::ty::kInvalidType) {
+                            if (result_tid != parus::ty::kInvalidType) {
+                                const auto& result_tt = types_.get(result_tid);
+                                if (result_tt.kind == parus::ty::Kind::kOptional &&
+                                    result_tt.elem != parus::ty::kInvalidType) {
                                     const std::string opt_ty = map_type_(
-                                        types_, x.to, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                        types_, result_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                     std::string elem_ty = map_type_(
-                                        types_, to_tt.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                                        types_, result_tt.elem, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                     if (elem_ty == "void") elem_ty = "i8";
 
                                     const std::string slot = next_tmp_();

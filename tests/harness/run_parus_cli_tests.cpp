@@ -3453,6 +3453,83 @@ bool test_iteration_range_loop_runtime() {
     return true;
 }
 
+bool test_consume_binding_optional_escape_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-consume-binding-escape-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "static mut LOG: i32? = 17i32;\n"
+        "static mut LOG2: i32? = 5i32;\n"
+        "static mut FALLBACK: i32 = 9i32;\n"
+        "\n"
+        "def take_value() -> i32 {\n"
+        "  let v: i32 = LOG else {\n"
+        "    return 9i32;\n"
+        "  };\n"
+        "  return v;\n"
+        "}\n"
+        "\n"
+        "def take_handle() -> ~i32 {\n"
+        "  let v: i32 = LOG2 else {\n"
+        "    return ~FALLBACK;\n"
+        "  };\n"
+        "  return ~v;\n"
+        "}\n"
+        "\n"
+        "def sink(h: ~i32) -> i32 {\n"
+        "  return 30i32;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return take_value() + take_value() + sink(take_handle());\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write consume-binding escape runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for consume-binding escape runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "consume-binding + escape runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "consume-binding + escape runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:56")) {
+        std::cerr << "consume-binding + escape runtime exit mismatch (expected 56)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
 bool test_iteration_unsupported_iterable_hard_error() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -6483,19 +6560,20 @@ int main() {
     const bool ok70 = test_iteration_array_loop_runtime();
     const bool ok71 = test_iteration_slice_loop_runtime();
     const bool ok72 = test_iteration_range_loop_runtime();
-    const bool ok73 = test_iteration_unsupported_iterable_hard_error();
-    const bool ok74 = test_iteration_pure_infer_range_runtime_and_regressions();
-    const bool ok75 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
-    const bool ok76 = test_unsuffixed_array_literal_slice_runtime_and_llvm();
-    const bool ok77 = test_unsuffixed_named_array_to_slice_runtime();
-    const bool ok78 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
-    const bool ok79 = test_unsuffixed_array_literal_float_context_rejected();
-    const bool ok80 = test_iteration_loop_break_value_context_syntax_only();
-    const bool ok81 = test_core_seed_export_index_and_auto_injection();
-    const bool ok82 = test_core_seed_runtime_smoke();
-    const bool ok83 = test_text_view_cstr_preflight_syntax_only();
-    const bool ok84 = test_cstr_private_fields_hidden_but_helpers_work();
-    const bool ok85 = test_external_generic_constraints_v2_work();
+    const bool ok73 = test_consume_binding_optional_escape_runtime();
+    const bool ok74 = test_iteration_unsupported_iterable_hard_error();
+    const bool ok75 = test_iteration_pure_infer_range_runtime_and_regressions();
+    const bool ok76 = test_iteration_loop_binder_variadic_typedef_arg_compiles();
+    const bool ok77 = test_unsuffixed_array_literal_slice_runtime_and_llvm();
+    const bool ok78 = test_unsuffixed_named_array_to_slice_runtime();
+    const bool ok79 = test_unsuffixed_array_literal_call_arg_and_return_contexts();
+    const bool ok80 = test_unsuffixed_array_literal_float_context_rejected();
+    const bool ok81 = test_iteration_loop_break_value_context_syntax_only();
+    const bool ok82 = test_core_seed_export_index_and_auto_injection();
+    const bool ok83 = test_core_seed_runtime_smoke();
+    const bool ok84 = test_text_view_cstr_preflight_syntax_only();
+    const bool ok85 = test_cstr_private_fields_hidden_but_helpers_work();
+    const bool ok86 = test_external_generic_constraints_v2_work();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -6504,7 +6582,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85) {
+        !ok83 || !ok84 || !ok85 || !ok86) {
         return 1;
     }
 

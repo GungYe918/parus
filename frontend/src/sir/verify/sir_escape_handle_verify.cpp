@@ -170,9 +170,10 @@ namespace parus::sir {
         for (uint32_t sid = 0; sid < (uint32_t)m.stmts.size(); ++sid) {
             const auto& s = m.stmts[sid];
             if (s.kind != StmtKind::kVarDecl) continue;
+            if (s.is_static) continue;
+
             if (s.init == k_invalid_value || (size_t)s.init >= m.values.size()) continue;
             if (m.values[s.init].kind != ValueKind::kEscape) continue;
-            if (s.is_static) continue;
 
             std::ostringstream oss;
             oss << "stmt #" << sid
