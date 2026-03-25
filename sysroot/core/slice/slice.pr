@@ -2,56 +2,47 @@ $![Impl::Core];
 
 import constraints as constraints;
 
-def min_usize_(lhs: usize, rhs: usize) -> usize {
-    if (lhs < rhs) { return lhs; }
-    return rhs;
-}
-
-def suffix_offset_(len: usize, suffix_len: usize) -> usize {
-    return len - suffix_len;
-}
-
-def len_impl_<T>(xs: T[]) -> usize {
+export def len<T>(xs: T[]) -> usize {
     return xs.len;
 }
 
-def is_empty_impl_<T>(xs: T[]) -> bool {
+export def is_empty<T>(xs: T[]) -> bool {
     return xs.len == 0usize;
 }
 
-def as_ptr_impl_<T>(xs: T[]) -> *const T {
+export def as_ptr<T>(xs: T[]) -> *const T {
     return xs.data;
 }
 
-def subslice_impl_<T>(xs: T[], start: usize, end: usize) -> T[] {
+export def subslice<T>(xs: T[], start: usize, end: usize) -> T[] {
     return xs[start..end];
 }
 
-def take_front_impl_<T>(xs: T[], n: usize) -> T[] {
-    let clamped: usize = min_usize_(n, xs.len);
+export def take_front<T>(xs: T[], n: usize) -> T[] {
+    let clamped: usize = if (n < xs.len) { n } else { xs.len };
     return xs[0usize..clamped];
 }
 
-def drop_front_impl_<T>(xs: T[], n: usize) -> T[] {
-    let clamped: usize = min_usize_(n, xs.len);
+export def drop_front<T>(xs: T[], n: usize) -> T[] {
+    let clamped: usize = if (n < xs.len) { n } else { xs.len };
     return xs[clamped..xs.len];
 }
 
-def take_back_impl_<T>(xs: T[], n: usize) -> T[] {
+export def take_back<T>(xs: T[], n: usize) -> T[] {
     let total_len: usize = xs.len;
-    let clamped: usize = min_usize_(n, total_len);
+    let clamped: usize = if (n < total_len) { n } else { total_len };
     let start: usize = total_len - clamped;
     return xs[start..total_len];
 }
 
-def drop_back_impl_<T>(xs: T[], n: usize) -> T[] {
+export def drop_back<T>(xs: T[], n: usize) -> T[] {
     let total_len: usize = xs.len;
-    let clamped: usize = min_usize_(n, total_len);
+    let clamped: usize = if (n < total_len) { n } else { total_len };
     let end: usize = total_len - clamped;
     return xs[0usize..end];
 }
 
-def equal_impl_<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool {
+export def equal<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool {
     if (lhs.len != rhs.len) {
         return false;
     }
@@ -65,7 +56,7 @@ def equal_impl_<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool
     return true;
 }
 
-def starts_with_impl_<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable] -> bool {
+export def starts_with<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable] -> bool {
     if (prefix.len > xs.len) {
         return false;
     }
@@ -79,11 +70,11 @@ def starts_with_impl_<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable]
     return true;
 }
 
-def ends_with_impl_<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -> bool {
+export def ends_with<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -> bool {
     if (suffix.len > xs.len) {
         return false;
     }
-    let offset: usize = suffix_offset_(xs.len, suffix.len);
+    let offset: usize = xs.len - suffix.len;
     set mut i = 0usize;
     while (i < suffix.len) {
         if (not (xs[offset + i] == suffix[i])) {
@@ -93,15 +84,3 @@ def ends_with_impl_<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -
     }
     return true;
 }
-
-export def len<T>(xs: T[]) -> usize { return len_impl_<T>(xs); }
-export def is_empty<T>(xs: T[]) -> bool { return is_empty_impl_<T>(xs); }
-export def as_ptr<T>(xs: T[]) -> *const T { return as_ptr_impl_<T>(xs); }
-export def subslice<T>(xs: T[], start: usize, end: usize) -> T[] { return subslice_impl_<T>(xs, start, end); }
-export def take_front<T>(xs: T[], n: usize) -> T[] { return take_front_impl_<T>(xs, n); }
-export def drop_front<T>(xs: T[], n: usize) -> T[] { return drop_front_impl_<T>(xs, n); }
-export def take_back<T>(xs: T[], n: usize) -> T[] { return take_back_impl_<T>(xs, n); }
-export def drop_back<T>(xs: T[], n: usize) -> T[] { return drop_back_impl_<T>(xs, n); }
-export def equal<T>(lhs: T[], rhs: T[]) with [T: constraints::Comparable] -> bool { return equal_impl_<T>(lhs, rhs); }
-export def starts_with<T>(xs: T[], prefix: T[]) with [T: constraints::Comparable] -> bool { return starts_with_impl_<T>(xs, prefix); }
-export def ends_with<T>(xs: T[], suffix: T[]) with [T: constraints::Comparable] -> bool { return ends_with_impl_<T>(xs, suffix); }

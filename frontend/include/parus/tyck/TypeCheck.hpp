@@ -27,6 +27,59 @@ namespace parus::type {
 
 namespace parus::tyck {
 
+    struct ImportedProtoIdentity {
+        std::string bundle{};
+        std::string module_head{};
+        std::string path{};
+    };
+
+    struct ImportedFnConstraintMeta {
+        ast::FnConstraintKind kind = ast::FnConstraintKind::kProto;
+        std::string lhs{};
+        std::string rhs_type_repr{};
+        ImportedProtoIdentity proto{};
+    };
+
+    struct ImportedFnTemplate {
+        ast::StmtId template_sid = ast::k_invalid_stmt;
+        std::string producer_bundle{};
+        std::string module_head{};
+        std::string public_path{};
+        std::string link_name{};
+        std::string lookup_name{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
+        bool is_public_export = false;
+        ty::TypeId declared_type = ty::kInvalidType;
+        std::vector<ImportedFnConstraintMeta> constraints{};
+    };
+
+    struct MonoTemplateRef {
+        enum class SourceKind : uint8_t {
+            kLocalFn = 0,
+            kImportedFn,
+        };
+
+        SourceKind source = SourceKind::kLocalFn;
+        ast::StmtId template_sid = ast::k_invalid_stmt;
+        std::string producer_bundle{};
+        std::string template_symbol{};
+        std::string link_name{};
+    };
+
+    struct MonoRequest {
+        MonoTemplateRef templ{};
+        std::vector<ty::TypeId> concrete_args{};
+        std::string target_lane{};
+        std::string abi_lane{};
+    };
+
+    struct MonoInstance {
+        ast::StmtId decl_sid = ast::k_invalid_stmt;
+        ty::TypeId fn_type = ty::kInvalidType;
+    };
+
     // tyck의 에러는 우선 compile-safe한 독립 포맷으로 저장
     // (diag::Bag 연동은 프로젝트 내 Diagnostic API가 확정되면 쉽게 브릿지 가능)
     struct TyError {
@@ -135,6 +188,12 @@ namespace parus::tyck {
         }
         void set_file_bundle_overrides(std::unordered_map<uint32_t, std::string> file_bundles) {
             explicit_file_bundle_overrides_ = std::move(file_bundles);
+        }
+        void set_file_module_head_overrides(std::unordered_map<uint32_t, std::string> file_module_heads) {
+            explicit_file_module_head_overrides_ = std::move(file_module_heads);
+        }
+        void set_imported_fn_templates(std::vector<ImportedFnTemplate> templates) {
+            explicit_imported_fn_templates_ = std::move(templates);
         }
 
         // program(StmtId) 하나를 타입체크
@@ -417,6 +476,7 @@ namespace parus::tyck {
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_value_cache_;
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
+        ast::StmtId current_stmt_id_ = ast::k_invalid_stmt;
         ast::StmtId current_for_stmt_id_ = ast::k_invalid_stmt;
 
         // builtin text type for string literals
@@ -645,6 +705,8 @@ namespace parus::tyck {
         std::unordered_set<uint32_t> explicit_core_impl_marker_file_ids_;
         std::unordered_set<uint32_t> core_impl_marker_file_ids_;
         std::unordered_map<uint32_t, std::string> explicit_file_bundle_overrides_;
+        std::unordered_map<uint32_t, std::string> explicit_file_module_head_overrides_;
+        std::vector<ImportedFnTemplate> explicit_imported_fn_templates_{};
 
         enum class BuiltinActsApiGroup : uint8_t {
             IntLike = 0,
@@ -728,6 +790,7 @@ namespace parus::tyck {
         ) const;
         void collect_external_builtin_acts_methods_();
         void collect_external_proto_stubs_();
+        void register_imported_fn_templates_();
         void ensure_builtin_family_proto_aliases_();
         std::string current_bundle_name_() const;
         std::string bundle_name_for_file_(uint32_t file_id) const;
@@ -763,6 +826,10 @@ namespace parus::tyck {
             const std::unordered_map<std::string, ty::TypeId>& bindings,
             Span use_span,
             GenericConstraintFailure& out
+        );
+        std::optional<ast::StmtId> resolve_imported_proto_sid_by_identity_(
+            const ImportedProtoIdentity& identity,
+            Span use_span
         );
         bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
@@ -971,6 +1038,10 @@ namespace parus::tyck {
             const std::vector<ty::TypeId>& concrete_args,
             Span call_span
         );
+        std::optional<MonoInstance> ensure_monomorphized_free_function_(
+            const MonoRequest& request,
+            Span use_span
+        );
 
         struct FieldAbiMeta {
             ast::StmtId sid = ast::k_invalid_stmt;
@@ -1010,7 +1081,12 @@ namespace parus::tyck {
         ) const;
         void collect_external_enum_metadata_();
         std::unordered_set<ast::StmtId> generic_fn_template_sid_set_;
+        std::unordered_set<ast::StmtId> imported_fn_template_sid_set_;
+        std::unordered_map<ast::StmtId, size_t> imported_fn_template_index_by_sid_;
+        std::unordered_map<std::string, ast::StmtId> imported_fn_template_sid_by_lookup_name_;
+        std::unordered_map<std::string, ast::StmtId> imported_fn_template_sid_by_link_name_;
         std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> imported_fn_instance_cache_;
         std::unordered_set<ast::StmtId> generic_fn_checked_instances_;
         std::unordered_set<ast::StmtId> generic_fn_checking_instances_;
         std::vector<ast::StmtId> generic_instantiated_fn_sids_;

@@ -1787,24 +1787,6 @@ namespace parus::oir {
                     return emit_field(want_ptr_ty, src_value, "ptr_");
                 };
 
-                auto is_text_type = [&](TypeId t) -> bool {
-                    if (t == kInvalidId) return false;
-                    const auto& tt0 = types->get(t);
-                    if ((tt0.kind == parus::ty::Kind::kBorrow ||
-                         tt0.kind == parus::ty::Kind::kEscape) &&
-                        tt0.elem != kInvalidId) {
-                        t = tt0.elem;
-                    }
-                    if (t == kInvalidId) return false;
-                    const auto& tt = types->get(t);
-                    return tt.kind == parus::ty::Kind::kBuiltin &&
-                           tt.builtin == parus::ty::Builtin::kText;
-                };
-
-                if (is_c_char_ptr_type(dst_ty) && is_text_type(src_ty)) {
-                    return emit_field(dst_ty, src, "data");
-                }
-
                 if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
                     return emit_core_ext_cstr_ptr_(src, dst_ty);
                 }

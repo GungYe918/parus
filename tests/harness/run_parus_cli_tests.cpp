@@ -2556,7 +2556,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto ok_pr = temp_root / "ok.pr";
     const std::string ok_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def main() -> i32 {\n"
         "  let a: i32 = api::only_i32(1i32);\n"
@@ -2626,7 +2625,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto ok_struct_pr = temp_root / "ok_struct.pr";
     const std::string ok_struct_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def f(x: api::OnlyI32<i32>) -> i32 {\n"
         "  return 0i32;\n"
@@ -2649,7 +2647,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto bad_eq_pr = temp_root / "bad_eq.pr";
     const std::string bad_eq_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return api::only_i32(1u32);\n"
@@ -2672,7 +2669,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto bad_struct_pr = temp_root / "bad_struct.pr";
     const std::string bad_struct_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def f(x: api::OnlyI32<u32>) -> i32 {\n"
         "  return 0i32;\n"
@@ -2696,7 +2692,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto bad_proto_pr = temp_root / "bad_proto.pr";
     const std::string bad_proto_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def main() -> i32 {\n"
         "  return api::signed_only(1u32);\n"
@@ -2719,7 +2714,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto ok_acts_pr = temp_root / "ok_acts.pr";
     const std::string ok_acts_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def main(x: api::Box<i32>) -> bool {\n"
         "  return x.same();\n"
@@ -2742,7 +2736,6 @@ bool test_external_generic_constraints_v2_work() {
     const auto bad_acts_pr = temp_root / "bad_acts.pr";
     const std::string bad_acts_src =
         "import api as api;\n"
-        "import constraints as constraints;\n"
         "\n"
         "def main(x: api::Box<bool>) -> bool {\n"
         "  return x.same();\n"
@@ -4346,7 +4339,7 @@ bool test_c_header_import_cstr_runtime_prints_consistent_output() {
         "import ext as ext;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  set x = ext::from_ptr(\"Hello, World!!\");\n"
+        "  set x = ext::from_raw_parts(c\"Hello, World!!\", 15usize);\n"
         "  manual[abi] {\n"
         "    c::printf(x);\n"
         "    c::printf(\"\\n\");\n"

@@ -1545,12 +1545,22 @@ namespace parus::tyck {
                                 is_cimport_call = true;
                                 cimport_callee_symbol = *sid;
                             }
-                            auto it = fn_decl_by_name_.find(callee_name);
-                            if (it != fn_decl_by_name_.end()) {
-                                overload_decl_ids = it->second;
-                            } else if (sym.is_external &&
-                                       sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                overload_decl_ids = collect_local_sidecar_overloads_for_external_name_(sym);
+                            if (sym.is_external &&
+                                !sym.link_name.empty() &&
+                                sym.external_payload.find("parus_generic_decl") != std::string::npos) {
+                                if (auto templ_it = imported_fn_template_sid_by_link_name_.find(sym.link_name);
+                                    templ_it != imported_fn_template_sid_by_link_name_.end()) {
+                                    overload_decl_ids = {templ_it->second};
+                                }
+                            }
+                            if (overload_decl_ids.empty()) {
+                                auto it = fn_decl_by_name_.find(callee_name);
+                                if (it != fn_decl_by_name_.end()) {
+                                    overload_decl_ids = it->second;
+                                } else if (sym.is_external &&
+                                           sym.external_payload.find("parus_generic_decl") != std::string::npos) {
+                                    overload_decl_ids = collect_local_sidecar_overloads_for_external_name_(sym);
+                                }
                             }
                         }
                     }
@@ -1597,9 +1607,19 @@ namespace parus::tyck {
                                     cimport_callee_symbol = resolved_sid;
                                 }
                                 if (overload_decl_ids.empty()) {
-                                    auto it = fn_decl_by_name_.find(callee_name);
-                                    if (it != fn_decl_by_name_.end()) {
-                                        overload_decl_ids = it->second;
+                                    if (resolved_sym.is_external &&
+                                        !resolved_sym.link_name.empty() &&
+                                        resolved_sym.external_payload.find("parus_generic_decl") != std::string::npos) {
+                                        if (auto templ_it = imported_fn_template_sid_by_link_name_.find(resolved_sym.link_name);
+                                            templ_it != imported_fn_template_sid_by_link_name_.end()) {
+                                            overload_decl_ids = {templ_it->second};
+                                        }
+                                    }
+                                    if (overload_decl_ids.empty()) {
+                                        auto it = fn_decl_by_name_.find(callee_name);
+                                        if (it != fn_decl_by_name_.end()) {
+                                            overload_decl_ids = it->second;
+                                        }
                                     }
                                 }
                             }
@@ -1687,6 +1707,19 @@ namespace parus::tyck {
 
         if (fallback_ret == ty::kInvalidType) fallback_ret = types_.error();
         if (callee_name.empty()) callee_name = "<callee>";
+
+        if (!overload_decl_ids.empty()) {
+            std::unordered_set<ast::StmtId> seen_overload_sids{};
+            seen_overload_sids.reserve(overload_decl_ids.size());
+            std::vector<ast::StmtId> deduped_overload_sids{};
+            deduped_overload_sids.reserve(overload_decl_ids.size());
+            for (const auto sid : overload_decl_ids) {
+                if (seen_overload_sids.insert(sid).second) {
+                    deduped_overload_sids.push_back(sid);
+                }
+            }
+            overload_decl_ids = std::move(deduped_overload_sids);
+        }
 
         if (form == CallForm::kMixedInvalid) {
             diag_(diag::Code::kCallArgMixNotAllowed, e.span);
@@ -3301,6 +3334,8 @@ namespace parus::tyck {
             ast::StmtId decl_id = ast::k_invalid_stmt;
             ty::TypeId ret = ty::kInvalidType;
             bool is_generic = false;
+            bool is_imported_template = false;
+            bool needs_materialization = false;
             std::vector<std::string> generic_param_names;
             std::unordered_map<std::string, ty::TypeId> generic_bindings;
             std::vector<ty::TypeId> generic_concrete_args;
@@ -3321,7 +3356,10 @@ namespace parus::tyck {
 
             Candidate c{};
             c.decl_id = sid;
+            c.is_imported_template =
+                imported_fn_template_sid_set_.find(sid) != imported_fn_template_sid_set_.end();
             c.is_generic = (def.fn_generic_param_count > 0);
+            c.needs_materialization = c.is_generic || c.is_imported_template;
             if (c.is_generic) {
                 c.generic_param_names = collect_generic_param_names_(def);
                 if (!explicit_call_type_args.empty()) {
@@ -3781,17 +3819,37 @@ namespace parus::tyck {
 
         const Candidate& selected = candidates[final_matches.front()];
         ast::StmtId selected_decl_sid = selected.decl_id;
-        if (selected.is_generic) {
-            auto inst_sid = ensure_generic_function_instance_(
-                selected.decl_id,
-                selected.generic_concrete_args,
-                e.span
-            );
-            if (!inst_sid.has_value()) {
+        if (selected.needs_materialization) {
+            MonoRequest req{};
+            req.templ.template_sid = selected.decl_id;
+            req.templ.source = selected.is_imported_template
+                ? MonoTemplateRef::SourceKind::kImportedFn
+                : MonoTemplateRef::SourceKind::kLocalFn;
+            req.templ.producer_bundle = current_bundle_name_();
+            req.templ.template_symbol = fn_qualified_name_by_stmt_.count(selected.decl_id)
+                ? fn_qualified_name_by_stmt_.at(selected.decl_id)
+                : std::string(ast_.stmt(selected.decl_id).name);
+            if (selected.is_imported_template) {
+                if (auto it = imported_fn_template_index_by_sid_.find(selected.decl_id);
+                    it != imported_fn_template_index_by_sid_.end() &&
+                    it->second < explicit_imported_fn_templates_.size()) {
+                    const auto& imported = explicit_imported_fn_templates_[it->second];
+                    req.templ.producer_bundle = imported.producer_bundle;
+                    req.templ.template_symbol = imported.lookup_name.empty()
+                        ? req.templ.template_symbol
+                        : imported.lookup_name;
+                    req.templ.link_name = imported.link_name;
+                }
+            }
+            req.concrete_args = selected.generic_concrete_args;
+            req.target_lane = "default";
+            req.abi_lane = "static";
+            auto inst = ensure_monomorphized_free_function_(req, e.span);
+            if (!inst.has_value()) {
                 check_all_arg_exprs_only();
                 return types_.error();
             }
-            selected_decl_sid = *inst_sid;
+            selected_decl_sid = inst->decl_sid;
         }
         if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_overload_target_cache_.size()) {

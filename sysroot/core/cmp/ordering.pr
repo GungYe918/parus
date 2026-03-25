@@ -61,30 +61,18 @@ export acts for Ordering {
     }
 };
 
-def min_impl_<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+export def min<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
     if (lhs < rhs) { return lhs; }
     return rhs;
 }
 
-def max_impl_<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+export def max<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
     if (lhs > rhs) { return lhs; }
     return rhs;
 }
 
-def clamp_impl_<T>(value: T, lo: T, hi: T) with [T: constraints::Comparable] -> T {
+export def clamp<T>(value: T, lo: T, hi: T) with [T: constraints::Comparable] -> T {
     if (value < lo) { return lo; }
     if (value > hi) { return hi; }
     return value;
-}
-
-export def min<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
-    return min_impl_<T>(lhs, rhs);
-}
-
-export def max<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
-    return max_impl_<T>(lhs, rhs);
-}
-
-export def clamp<T>(value: T, lo: T, hi: T) with [T: constraints::Comparable] -> T {
-    return clamp_impl_<T>(value, lo, hi);
 }

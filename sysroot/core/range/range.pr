@@ -13,20 +13,12 @@ struct RangeInclusive<T>: iter::IterSourceMove {
     end: T;
 };
 
-def range_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
+export def range<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
     return Range<T>{ start: start, end: end };
 }
 
-def range_inclusive_impl_<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
-    return RangeInclusive<T>{ start: start, end: end };
-}
-
-export def range<T>(start: T, end: T) with [T: constraints::Comparable] -> Range<T> {
-    return range_impl_<T>(start, end);
-}
-
 export def range_inclusive<T>(start: T, end: T) with [T: constraints::Comparable] -> RangeInclusive<T> {
-    return range_inclusive_impl_<T>(start, end);
+    return RangeInclusive<T>{ start: start, end: end };
 }
 
 def range_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {

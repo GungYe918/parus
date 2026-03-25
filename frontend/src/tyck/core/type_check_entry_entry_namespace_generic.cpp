@@ -138,7 +138,12 @@ namespace parus::tyck {
         field_abi_meta_by_type_.clear();
         enum_abi_meta_by_type_.clear();
         generic_fn_template_sid_set_.clear();
+        imported_fn_template_sid_set_.clear();
+        imported_fn_template_index_by_sid_.clear();
+        imported_fn_template_sid_by_lookup_name_.clear();
+        imported_fn_template_sid_by_link_name_.clear();
         generic_fn_instance_cache_.clear();
+        imported_fn_instance_cache_.clear();
         generic_fn_checked_instances_.clear();
         generic_fn_checking_instances_.clear();
         generic_instantiated_fn_sids_.clear();
@@ -318,6 +323,7 @@ namespace parus::tyck {
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
         first_pass_collect_top_level_(program_stmt);
+        register_imported_fn_templates_();
         if (core_context_invalid_) {
             result_.ok = false;
             return result_;
@@ -1644,7 +1650,8 @@ namespace parus::tyck {
             return std::nullopt;
         }
         const ast::Stmt templ = ast_.stmt(template_sid);
-        if (templ.kind != ast::StmtKind::kFnDecl || templ.fn_generic_param_count == 0) {
+        const bool imported_template = imported_fn_template_sid_set_.find(template_sid) != imported_fn_template_sid_set_.end();
+        if (templ.kind != ast::StmtKind::kFnDecl) {
             return template_sid;
         }
 
@@ -1859,7 +1866,55 @@ namespace parus::tyck {
             pending_generic_instance_queue_.push_back(inst_sid);
         }
 
+        if (imported_template) {
+            imported_fn_instance_cache_[cache_key] = inst_sid;
+        }
+
         return inst_sid;
+    }
+
+    std::optional<MonoInstance> TypeChecker::ensure_monomorphized_free_function_(
+        const MonoRequest& request,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        if (request.templ.source == MonoTemplateRef::SourceKind::kImportedFn) {
+            std::ostringstream key_oss;
+            key_oss << request.templ.producer_bundle << "|"
+                    << request.templ.template_symbol << "|"
+                    << request.target_lane << "|"
+                    << request.abi_lane << "|";
+            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+                if (i) key_oss << ",";
+                key_oss << request.concrete_args[i];
+            }
+            const std::string key = key_oss.str();
+            if (auto it = imported_fn_instance_cache_.find(key);
+                it != imported_fn_instance_cache_.end()) {
+                MonoInstance out{};
+                out.decl_sid = it->second;
+                out.fn_type = ast_.stmt(it->second).type;
+                return out;
+            }
+            auto sid = ensure_generic_function_instance_(request.templ.template_sid, request.concrete_args, use_span);
+            if (!sid.has_value()) return std::nullopt;
+            imported_fn_instance_cache_[key] = *sid;
+            MonoInstance out{};
+            out.decl_sid = *sid;
+            out.fn_type = ast_.stmt(*sid).type;
+            return out;
+        }
+
+        auto sid = ensure_generic_function_instance_(request.templ.template_sid, request.concrete_args, use_span);
+        if (!sid.has_value()) return std::nullopt;
+        MonoInstance out{};
+        out.decl_sid = *sid;
+        out.fn_type = ast_.stmt(*sid).type;
+        return out;
     }
 
     std::string TypeChecker::path_ref_display_(const ast::PathRef& pr) const {
@@ -3429,6 +3484,30 @@ namespace parus::tyck {
     }
 
     std::string TypeChecker::current_module_head_() const {
+        auto module_head_for_file = [&](uint32_t file_id) -> std::string {
+            if (auto it = explicit_file_module_head_overrides_.find(file_id);
+                it != explicit_file_module_head_overrides_.end() &&
+                !it->second.empty()) {
+                return it->second;
+            }
+            return {};
+        };
+
+        if (current_stmt_id_ != ast::k_invalid_stmt &&
+            static_cast<size_t>(current_stmt_id_) < ast_.stmts().size()) {
+            if (const std::string overridden = module_head_for_file(ast_.stmt(current_stmt_id_).span.file_id);
+                !overridden.empty()) {
+                return overridden;
+            }
+        }
+        if (current_expr_id_ != ast::k_invalid_expr &&
+            static_cast<size_t>(current_expr_id_) < ast_.exprs().size()) {
+            if (const std::string overridden = module_head_for_file(ast_.expr(current_expr_id_).span.file_id);
+                !overridden.empty()) {
+                return overridden;
+            }
+        }
+
         const std::string ns = current_namespace_prefix_();
         if (!ns.empty()) return ns;
         const auto& syms = sym_.symbols();
@@ -3686,12 +3765,12 @@ namespace parus::tyck {
             return std::find(candidates.begin(), candidates.end(), std::string(query)) != candidates.end();
         };
 
-        auto scan_symbols = [&](bool external_only) -> std::optional<uint32_t> {
+        auto scan_symbols = [&](bool external_only, std::string_view query) -> std::optional<uint32_t> {
             const auto& syms = sym_.symbols();
             for (uint32_t sid = 0; sid < syms.size(); ++sid) {
                 const auto& ss = syms[sid];
                 if (external_only != ss.is_external) continue;
-                if (!module_head_candidate_match(ss, key)) continue;
+                if (!module_head_candidate_match(ss, query)) continue;
                 if (auto it = private_class_member_qname_owner_.find(ss.name);
                     it != private_class_member_qname_owner_.end() &&
                     !can_access_class_member_(it->second, ast::FieldMember::Visibility::kPrivate)) {
@@ -3702,11 +3781,29 @@ namespace parus::tyck {
             return std::nullopt;
         };
 
+        if (key.find("::") == std::string::npos) {
+            const std::string current_bundle = current_bundle_name_();
+            const std::string current_head =
+                parus::normalize_core_public_module_head(current_bundle, current_module_head_());
+            if (!current_head.empty()) {
+                const std::string head_qname = current_head + "::" + key;
+                if (auto sid = lookup_visible(head_qname)) {
+                    return sid;
+                }
+                if (auto sid = scan_symbols(/*external_only=*/false, head_qname)) {
+                    return sid;
+                }
+                if (auto sid = scan_symbols(/*external_only=*/true, head_qname)) {
+                    return sid;
+                }
+            }
+        }
+
         if (key.find("::") != std::string::npos) {
-            if (auto sid = scan_symbols(/*external_only=*/false)) {
+            if (auto sid = scan_symbols(/*external_only=*/false, key)) {
                 return sid;
             }
-            if (auto sid = scan_symbols(/*external_only=*/true)) {
+            if (auto sid = scan_symbols(/*external_only=*/true, key)) {
                 return sid;
             }
         }
@@ -3803,6 +3900,126 @@ namespace parus::tyck {
             generic_proto_template_sid_set_.insert(stub_sid);
         }
         return stub_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::resolve_imported_proto_sid_by_identity_(
+        const ImportedProtoIdentity& identity,
+        Span use_span
+    ) {
+        if (identity.path.empty()) return std::nullopt;
+
+        if (auto it = proto_decl_by_name_.find(identity.path); it != proto_decl_by_name_.end()) {
+            return it->second;
+        }
+
+        const std::string wanted_head =
+            parus::normalize_core_public_module_head(identity.bundle, identity.module_head);
+        for (const auto& ss : sym_.symbols()) {
+            if (!ss.is_external || ss.kind != sema::SymbolKind::kType) continue;
+            if (!identity.bundle.empty() && ss.decl_bundle_name != identity.bundle) continue;
+            const std::string symbol_head =
+                parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+            if (!wanted_head.empty() && symbol_head != wanted_head) continue;
+
+            const auto candidates = parus::candidate_names_for_external_export(
+                ss.name,
+                symbol_head,
+                ss.decl_bundle_name,
+                current_module_head_()
+            );
+            const bool name_match =
+                ss.name == identity.path ||
+                std::find(candidates.begin(), candidates.end(), identity.path) != candidates.end();
+            if (!name_match) continue;
+
+            if (auto sid = ensure_external_proto_stub_from_symbol_(ss)) {
+                return sid;
+            }
+        }
+
+        if (auto sid = resolve_proto_sid_for_constraint_(identity.path)) {
+            return sid;
+        }
+
+        (void)use_span;
+        return std::nullopt;
+    }
+
+    void TypeChecker::register_imported_fn_templates_() {
+        imported_fn_template_sid_set_.clear();
+        imported_fn_template_index_by_sid_.clear();
+        imported_fn_template_sid_by_lookup_name_.clear();
+        imported_fn_template_sid_by_link_name_.clear();
+        if (explicit_imported_fn_templates_.empty()) return;
+
+        auto already_has_decl = [&](std::string_view name, ast::StmtId sid) -> bool {
+            auto it = fn_decl_by_name_.find(std::string(name));
+            if (it == fn_decl_by_name_.end()) return false;
+            return std::find(it->second.begin(), it->second.end(), sid) != it->second.end();
+        };
+        auto register_name = [&](std::string_view name, ast::StmtId sid) {
+            if (name.empty()) return;
+            if (!already_has_decl(name, sid)) {
+                fn_decl_by_name_[std::string(name)].push_back(sid);
+            }
+        };
+
+        for (size_t idx = 0; idx < explicit_imported_fn_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_fn_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& fn_stmt = ast_.stmt_mut(templ.template_sid);
+            if (fn_stmt.kind != ast::StmtKind::kFnDecl) continue;
+
+            imported_fn_template_sid_set_.insert(templ.template_sid);
+            imported_fn_template_index_by_sid_[templ.template_sid] = idx;
+            if (!templ.lookup_name.empty()) {
+                imported_fn_template_sid_by_lookup_name_[templ.lookup_name] = templ.template_sid;
+                register_name(templ.lookup_name, templ.template_sid);
+                fn_qualified_name_by_stmt_[templ.template_sid] = templ.lookup_name;
+            }
+            if (!templ.link_name.empty()) {
+                imported_fn_template_sid_by_link_name_[templ.link_name] = templ.template_sid;
+            }
+            register_name(templ.public_path, templ.template_sid);
+            if (!templ.public_path.empty()) {
+                const size_t last = templ.public_path.rfind("::");
+                const std::string_view leaf =
+                    (last == std::string::npos)
+                        ? std::string_view(templ.public_path)
+                        : std::string_view(templ.public_path).substr(last + 2);
+                register_name(leaf, templ.template_sid);
+            }
+
+            for (const auto& ss : sym_.symbols()) {
+                if (ss.kind != sema::SymbolKind::kFn) continue;
+                if (ss.decl_bundle_name != templ.producer_bundle) continue;
+                if (!templ.module_head.empty() && ss.decl_module_head != templ.module_head) continue;
+                if (!templ.link_name.empty() && ss.link_name != templ.link_name) continue;
+                register_name(ss.name, templ.template_sid);
+            }
+
+            const uint64_t begin = fn_stmt.fn_constraint_begin;
+            const uint64_t end = begin + fn_stmt.fn_constraint_count;
+            if (begin > ast_.fn_constraint_decls().size() || end > ast_.fn_constraint_decls().size()) {
+                continue;
+            }
+            auto& constraints = ast_.fn_constraint_decls_mut();
+            for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                const auto& meta = templ.constraints[i];
+                auto& cc = constraints[begin + i];
+                if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, fn_stmt.span)) {
+                    const auto& proto_decl = ast_.stmt(*proto_sid);
+                    if (proto_decl.type != ty::kInvalidType) {
+                        cc.rhs_type = proto_decl.type;
+                    }
+                }
+            }
+        }
     }
 
     void TypeChecker::push_alias_scope_() {

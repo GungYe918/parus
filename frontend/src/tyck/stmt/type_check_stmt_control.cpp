@@ -25,6 +25,13 @@ namespace parus::tyck {
     using detail::parse_int_literal_;
 
     void TypeChecker::check_stmt_(ast::StmtId sid) {
+        const ast::StmtId saved_stmt_id = current_stmt_id_;
+        current_stmt_id_ = sid;
+        struct RestoreStmtId {
+            ast::StmtId& slot;
+            ast::StmtId saved;
+            ~RestoreStmtId() { slot = saved; }
+        } restore_stmt_id{current_stmt_id_, saved_stmt_id};
         const ast::Stmt s = ast_.stmt(sid);
 
         switch (s.kind) {

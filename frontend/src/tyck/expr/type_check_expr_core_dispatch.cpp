@@ -890,7 +890,17 @@ namespace parus::tyck {
                 break;
 
             case ast::ExprKind::kIdent: {
-                auto id = lookup_symbol_(e.text);
+                std::optional<uint32_t> id{};
+                if (eid < expr_resolved_symbol_cache_.size()) {
+                    const uint32_t cached = expr_resolved_symbol_cache_[eid];
+                    if (cached != sema::SymbolTable::kNoScope &&
+                        cached < sym_.symbols().size()) {
+                        id = cached;
+                    }
+                }
+                if (!id.has_value()) {
+                    id = lookup_symbol_(e.text);
+                }
                 if (!id && !fn_sid_stack_.empty()) {
                     const ast::StmtId cur_fn_sid = fn_sid_stack_.back();
                     if (cur_fn_sid != ast::k_invalid_stmt && (size_t)cur_fn_sid < ast_.stmts().size()) {

@@ -38,6 +38,7 @@
 
 #include <filesystem>
 #include <cctype>
+#include <functional>
 #include <algorithm>
 #include <cstdlib>
 #include <fstream>
@@ -180,24 +181,159 @@ namespace parusc::p0 {
             bool is_export = false;
         };
 
-        struct TemplateSidecarExportKey {
-            std::string path{};
-            std::string link_name{};
+        struct TemplateSidecarArg {
+            uint8_t kind = 0;
+            bool has_label = false;
+            bool is_hole = false;
+            std::string label{};
+            uint32_t expr = parus::ast::k_invalid_expr;
         };
 
-        struct TemplateSidecarEntry {
+        struct TemplateSidecarFieldInit {
+            std::string name{};
+            uint32_t expr = parus::ast::k_invalid_expr;
+        };
+
+        struct TemplateSidecarFStringPart {
+            bool is_expr = false;
+            std::string text{};
+            uint32_t expr = parus::ast::k_invalid_expr;
+        };
+
+        struct TemplateSidecarSwitchCase {
+            bool is_default = false;
+            uint8_t pat_kind = 0;
+            std::string pat_text{};
+            uint32_t body = parus::ast::k_invalid_stmt;
+        };
+
+        struct TemplateSidecarGenericParam {
+            std::string name{};
+        };
+
+        struct TemplateSidecarFnConstraint {
+            uint8_t kind = 0;
+            std::string type_param{};
+            std::string rhs_type_repr{};
+            parus::tyck::ImportedProtoIdentity proto{};
+        };
+
+        struct TemplateSidecarParam {
+            std::string name{};
+            std::string type_repr{};
+            bool is_mut = false;
+            bool is_self = false;
+            uint8_t self_kind = 0;
+            bool has_default = false;
+            uint32_t default_expr = parus::ast::k_invalid_expr;
+            bool is_named_group = false;
+        };
+
+        struct TemplateSidecarExpr {
+            uint8_t kind = 0;
+            uint8_t op = 0;
+            uint32_t a = parus::ast::k_invalid_expr;
+            uint32_t b = parus::ast::k_invalid_expr;
+            uint32_t c = parus::ast::k_invalid_expr;
+            bool unary_is_mut = false;
+            std::string text{};
+            bool string_is_raw = false;
+            bool string_is_format = false;
+            uint32_t string_part_begin = 0;
+            uint32_t string_part_count = 0;
+            std::string string_folded_text{};
+            uint32_t arg_begin = 0;
+            uint32_t arg_count = 0;
+            uint32_t call_type_arg_begin = 0;
+            uint32_t call_type_arg_count = 0;
+            bool call_from_pipe = false;
+            uint32_t field_init_begin = 0;
+            uint32_t field_init_count = 0;
+            std::string field_init_type_repr{};
+            uint32_t block_stmt = parus::ast::k_invalid_stmt;
+            uint32_t block_tail = parus::ast::k_invalid_expr;
+            bool loop_has_header = false;
+            std::string loop_var{};
+            uint32_t loop_iter = parus::ast::k_invalid_expr;
+            uint32_t loop_body = parus::ast::k_invalid_stmt;
+            std::string cast_type_repr{};
+            uint8_t cast_kind = 0;
+            std::string target_type_repr{};
+        };
+
+        struct TemplateSidecarStmt {
+            uint8_t kind = 0;
+            uint32_t expr = parus::ast::k_invalid_expr;
+            uint32_t init = parus::ast::k_invalid_expr;
+            uint32_t a = parus::ast::k_invalid_stmt;
+            uint32_t b = parus::ast::k_invalid_stmt;
+            uint32_t stmt_begin = 0;
+            uint32_t stmt_count = 0;
+            uint32_t case_begin = 0;
+            uint32_t case_count = 0;
+            bool has_default = false;
+            bool is_set = false;
+            bool is_mut = false;
+            bool is_static = false;
+            bool is_const = false;
+            bool is_extern = false;
+            uint8_t link_abi = 0;
+            std::string name{};
+            std::string type_repr{};
+            bool is_export = false;
+            uint8_t fn_mode = 0;
+            std::string fn_ret_repr{};
+            bool is_pure = false;
+            bool is_comptime = false;
+            bool is_commit = false;
+            bool is_recast = false;
+            bool is_throwing = false;
+            bool fn_is_const = false;
+            uint32_t param_begin = 0;
+            uint32_t param_count = 0;
+            uint32_t positional_param_count = 0;
+            bool has_named_group = false;
+            bool fn_is_c_variadic = false;
+            bool fn_is_proto_sig = false;
+            uint32_t fn_generic_param_begin = 0;
+            uint32_t fn_generic_param_count = 0;
+            uint32_t fn_constraint_begin = 0;
+            uint32_t fn_constraint_count = 0;
+            uint8_t manual_perm_mask = 0;
+            bool var_has_consume_else = false;
+        };
+
+        struct TemplateSidecarFunction {
             std::string bundle{};
             std::string module_head{};
+            std::string public_path{};
+            std::string link_name{};
+            std::string lookup_name{};
             std::string decl_file{};
-            std::string source{};
-            std::vector<TemplateSidecarExportKey> exports{};
+            uint32_t decl_line = 1;
+            uint32_t decl_col = 1;
+            bool is_public_export = false;
+            std::string declared_type_repr{};
+            std::string declared_type_semantic{};
+            std::vector<TemplateSidecarStmt> stmts{};
+            std::vector<uint32_t> stmt_children{};
+            std::vector<TemplateSidecarExpr> exprs{};
+            std::vector<TemplateSidecarParam> params{};
+            std::vector<TemplateSidecarSwitchCase> switch_cases{};
+            std::vector<TemplateSidecarArg> args{};
+            std::vector<TemplateSidecarFieldInit> field_inits{};
+            std::vector<TemplateSidecarFStringPart> fstring_parts{};
+            std::vector<std::string> type_args{};
+            std::vector<TemplateSidecarGenericParam> generic_params{};
+            std::vector<TemplateSidecarFnConstraint> constraints{};
+            uint32_t root_stmt = parus::ast::k_invalid_stmt;
         };
 
         struct LoadedExternalIndex {
             std::string export_index_path{};
             std::string bundle{};
             std::vector<ExportSurfaceEntry> entries{};
-            std::vector<TemplateSidecarEntry> sidecars{};
+            std::vector<TemplateSidecarFunction> sidecars{};
         };
 
         std::string json_escape_text_(std::string_view s) {
@@ -238,24 +374,6 @@ namespace parusc::p0 {
             }
             out += ".templates.json";
             return out;
-        }
-
-        std::string build_sidecar_export_key_(
-            std::string_view bundle,
-            std::string_view module_head,
-            std::string_view path,
-            std::string_view link_name
-        ) {
-            std::string key{};
-            key.reserve(bundle.size() + module_head.size() + path.size() + link_name.size() + 8u);
-            key.append(bundle);
-            key.push_back('|');
-            key.append(module_head);
-            key.push_back('|');
-            key.append(path);
-            key.push_back('|');
-            key.append(link_name);
-            return key;
         }
 
         std::string build_enum_decl_payload_(
@@ -2471,516 +2589,469 @@ namespace parusc::p0 {
             dedupe_export_surface_(out);
         }
 
-        std::string extract_stmt_source_(
-            const parus::ast::AstArena& ast,
-            parus::ast::StmtId sid,
-            const parus::SourceManager& sm
-        ) {
-            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
-                return {};
-            }
-            const auto& s = ast.stmt(sid);
-            const auto src = sm.content(s.span.file_id);
-            if (s.span.hi < s.span.lo || s.span.hi > src.size()) return {};
-            return std::string(src.substr(s.span.lo, s.span.hi - s.span.lo));
-        }
-
-        std::string build_directive_path_text_(
-            const parus::ast::AstArena& ast,
-            uint32_t begin,
-            uint32_t count
-        ) {
-            if (count == 0) return {};
-            const auto& segs = ast.path_segs();
-            const uint64_t lo = begin;
-            const uint64_t hi = lo + count;
-            if (!(lo <= segs.size() && hi <= segs.size())) return {};
-
+        std::string join_path_text_(const std::vector<std::string>& segs) {
             std::ostringstream oss{};
-            for (uint32_t i = 0; i < count; ++i) {
+            for (size_t i = 0; i < segs.size(); ++i) {
                 if (i) oss << "::";
-                oss << segs[begin + i];
+                oss << segs[i];
             }
             return oss.str();
         }
 
-        std::string build_attached_intrinsic_directive_prefix_(
-            const parus::ast::AstArena& ast,
-            const parus::ast::Stmt& s
-        ) {
-            if (s.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective ||
-                s.directive_key_path_count == 0) {
-                return {};
+        std::vector<std::string> split_path_text_(std::string_view text) {
+            std::vector<std::string> out{};
+            if (text.empty()) return out;
+            size_t pos = 0;
+            while (pos < text.size()) {
+                const size_t next = text.find("::", pos);
+                const size_t end = (next == std::string_view::npos) ? text.size() : next;
+                if (end > pos) {
+                    out.emplace_back(text.substr(pos, end - pos));
+                }
+                if (next == std::string_view::npos) break;
+                pos = next + 2;
             }
-            const std::string key =
-                build_directive_path_text_(ast, s.directive_key_path_begin, s.directive_key_path_count);
-            if (key.empty()) return {};
-
-            std::ostringstream oss{};
-            oss << "$![" << key;
-            if (s.directive_target_path_count > 0) {
-                const std::string target = build_directive_path_text_(
-                    ast,
-                    s.directive_target_path_begin,
-                    s.directive_target_path_count
-                );
-                if (target.empty()) return {};
-                oss << " = " << target;
-            }
-            oss << "]\n";
-            return oss.str();
+            return out;
         }
 
-        std::string build_stmt_sidecar_source_(
-            const parus::ast::AstArena& ast,
-            parus::ast::StmtId sid,
-            const parus::SourceManager& sm
+        std::string build_template_lookup_name_(
+            std::string_view bundle_name,
+            std::string_view module_head,
+            std::string_view public_path,
+            std::string_view link_name
         ) {
-            const std::string raw = extract_stmt_source_(ast, sid, sm);
-            if (raw.empty()) return {};
-            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
-                return raw;
-            }
-
-            const auto& s = ast.stmt(sid);
-            const std::string prefix = build_attached_intrinsic_directive_prefix_(ast, s);
-            if (prefix.empty()) return raw;
-
-            size_t first = raw.find_first_not_of(" \t\r\n");
-            if (first != std::string::npos && raw.compare(first, 3, "$![") == 0) {
-                return raw;
-            }
-            return prefix + raw;
+            const std::string seed =
+                std::string(bundle_name) + "|" +
+                std::string(module_head) + "|" +
+                std::string(public_path) + "|" +
+                std::string(link_name);
+            std::ostringstream hs{};
+            hs << std::hex << fnv1a64_(seed);
+            return "__parus_template$" + hs.str();
         }
 
-        bool is_sidecar_omittable_intrinsic_directive_(
+        parus::tyck::ImportedProtoIdentity build_constraint_proto_identity_(
             const parus::ast::AstArena& ast,
-            const parus::ast::Stmt& s
-        ) {
-            if (s.kind != parus::ast::StmtKind::kCompilerIntrinsicDirective) return false;
-            if (s.directive_target_path_count != 0) return false;
-            if (s.directive_key_path_count != 2) return false;
-            const auto& segs = ast.path_segs();
-            const uint64_t begin = s.directive_key_path_begin;
-            const uint64_t end = begin + s.directive_key_path_count;
-            if (!(begin <= segs.size() && end <= segs.size())) return false;
-            return segs[s.directive_key_path_begin] == "Impl" &&
-                   segs[s.directive_key_path_begin + 1] == "Core";
-        }
-
-        std::string build_field_decl_sidecar_stub_(
-            const parus::ast::AstArena& ast,
+            const parus::ast::FnConstraintDecl& cc,
             const parus::ty::TypePool& types,
-            const parus::ast::Stmt& s
+            std::string_view bundle_name,
+            std::string_view current_module_head
         ) {
-            if (s.kind != parus::ast::StmtKind::kFieldDecl || s.name.empty()) return {};
+            parus::tyck::ImportedProtoIdentity out{};
+            if (cc.kind != parus::ast::FnConstraintKind::kProto) return out;
 
-            std::ostringstream oss{};
-            oss << "struct " << s.name;
-            if (s.decl_generic_param_count > 0) {
-                oss << "<";
-                const auto& gps = ast.generic_param_decls();
-                for (uint32_t i = 0; i < s.decl_generic_param_count; ++i) {
-                    if (i) oss << ", ";
-                    const uint32_t idx = s.decl_generic_param_begin + i;
-                    if (idx >= gps.size()) return {};
-                    oss << gps[idx].name;
-                }
-                oss << ">";
-            }
-            if (s.decl_constraint_count > 0) {
-                const auto& ccs = ast.fn_constraint_decls();
-                oss << " with [";
-                for (uint32_t i = 0; i < s.decl_constraint_count; ++i) {
-                    if (i) oss << ", ";
-                    const uint32_t idx = s.decl_constraint_begin + i;
-                    if (idx >= ccs.size()) return {};
-                    const auto& cc = ccs[idx];
-                    oss << cc.type_param << " ";
-                    if (cc.kind == parus::ast::FnConstraintKind::kProto) {
-                        oss << ": ";
-                    } else {
-                        oss << "== ";
+            if (cc.rhs_type != parus::ty::kInvalidType) {
+                std::vector<std::string_view> rhs_path{};
+                std::vector<parus::ty::TypeId> rhs_args{};
+                if (types.decompose_named_user(cc.rhs_type, rhs_path, rhs_args) && !rhs_path.empty()) {
+                    std::vector<std::string> segs{};
+                    segs.reserve(rhs_path.size());
+                    for (const auto seg : rhs_path) segs.emplace_back(seg);
+                    const bool bundle_qualified =
+                        segs.size() >= 3u ||
+                        (segs.size() >= 2u && !bundle_name.empty() && segs.front() == bundle_name);
+                    if (bundle_qualified) {
+                        out.bundle = segs.front();
+                        if (segs.size() >= 3u) {
+                            std::vector<std::string> head_segs(segs.begin() + 1, segs.end() - 1);
+                            out.module_head = normalize_core_public_module_head_(
+                                out.bundle,
+                                join_path_text_(head_segs)
+                            );
+                            std::vector<std::string> public_path_segs(segs.begin() + 1, segs.end());
+                            out.path = join_path_text_(public_path_segs);
+                        } else {
+                            out.module_head.clear();
+                            out.path = segs.back();
+                        }
+                        return out;
                     }
-                    if (cc.rhs_type == parus::ty::kInvalidType) return {};
-                    oss << types.to_export_string(cc.rhs_type);
                 }
-                oss << "]";
             }
-            oss << " {\n";
 
-            const auto& members = ast.field_members();
-            const uint64_t begin = s.field_member_begin;
-            const uint64_t end = begin + s.field_member_count;
-            if (!(begin <= members.size() && end <= members.size())) return {};
-            for (uint32_t i = 0; i < s.field_member_count; ++i) {
-                const auto& member = members[s.field_member_begin + i];
-                if (member.name.empty()) continue;
-                if (member.type == parus::ty::kInvalidType) return {};
-                oss << "    " << member.name << ": " << types.to_string(member.type) << ";\n";
+            std::vector<std::string> segs{};
+            const auto& path_segs = ast.path_segs();
+            const uint64_t begin = cc.proto_path_begin;
+            const uint64_t end = begin + cc.proto_path_count;
+            if (begin <= path_segs.size() && end <= path_segs.size()) {
+                segs.reserve(cc.proto_path_count);
+                for (uint32_t i = 0; i < cc.proto_path_count; ++i) {
+                    segs.emplace_back(path_segs[cc.proto_path_begin + i]);
+                }
             }
-            oss << "};";
-            return oss.str();
+            out.path = join_path_text_(segs);
+            if (out.path.empty()) return out;
+
+            if (segs.size() > 1u) {
+                std::vector<std::string> head_segs(segs.begin(), segs.end() - 1);
+                const std::string raw_head = join_path_text_(head_segs);
+                out.module_head = normalize_core_public_module_head_(bundle_name, raw_head);
+                if (bundle_name == "core" ||
+                    raw_head == current_module_head ||
+                    (!current_module_head.empty() &&
+                     current_module_head.starts_with(raw_head + "::"))) {
+                    out.bundle = std::string(bundle_name);
+                }
+            } else {
+                out.module_head = normalize_core_public_module_head_(bundle_name, current_module_head);
+                out.bundle = std::string(bundle_name);
+            }
+            return out;
         }
 
-        void collect_same_file_fn_deps_from_stmt_(
+        bool serialize_top_level_free_function_sidecar_(
             const parus::ast::AstArena& ast,
-            parus::ast::StmtId sid,
-            const parus::tyck::TyckResult& tyck_res,
-            uint32_t current_file_id,
-            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
-            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
-            bool& ok,
-            std::string& out_err
-        );
-
-        void collect_same_file_fn_deps_from_expr_(
-            const parus::ast::AstArena& ast,
-            parus::ast::ExprId eid,
-            const parus::tyck::TyckResult& tyck_res,
-            uint32_t current_file_id,
-            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
-            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
-            bool& ok,
+            parus::ast::StmtId fn_sid,
+            const parus::ty::TypePool& types,
+            const parus::SourceManager& sm,
+            std::string_view decl_file,
+            std::string_view bundle_name,
+            std::string_view module_head,
+            std::string_view public_path,
+            std::string_view link_name_override,
+            TemplateSidecarFunction& out,
             std::string& out_err
         ) {
-            if (!ok || eid == parus::ast::k_invalid_expr || static_cast<size_t>(eid) >= ast.exprs().size()) return;
-            const auto& e = ast.expr(eid);
+            out = TemplateSidecarFunction{};
+            out_err.clear();
+            if (fn_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(fn_sid) >= ast.stmts().size()) {
+                out_err = "invalid function sidecar root";
+                return false;
+            }
+            const auto& root_fn = ast.stmt(fn_sid);
+            if (root_fn.kind != parus::ast::StmtKind::kFnDecl || root_fn.a == parus::ast::k_invalid_stmt) {
+                out_err = "template sidecar requires top-level body-bearing free function";
+                return false;
+            }
 
-            auto maybe_add_same_file_callee_ = [&](parus::ast::ExprId call_eid, parus::ast::ExprId callee_eid) {
-                if (!ok || static_cast<size_t>(call_eid) >= tyck_res.expr_overload_target.size()) return;
-                parus::ast::StmtId target_sid = tyck_res.expr_overload_target[call_eid];
-                if ((target_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(target_sid) >= ast.stmts().size()) &&
-                    callee_eid != parus::ast::k_invalid_expr &&
-                    static_cast<size_t>(callee_eid) < tyck_res.expr_overload_target.size()) {
-                    target_sid = tyck_res.expr_overload_target[callee_eid];
+            out.bundle = std::string(bundle_name);
+            out.module_head = normalize_core_public_module_head_(bundle_name, module_head);
+            out.public_path = std::string(public_path);
+            out.link_name = !link_name_override.empty()
+                ? std::string(link_name_override)
+                : build_function_link_name_(
+                    bundle_name,
+                    public_path,
+                    root_fn.fn_mode,
+                    (root_fn.type != parus::ty::kInvalidType) ? types.to_export_string(root_fn.type) : std::string("def(?)"),
+                    root_fn.link_abi == parus::ast::LinkAbi::kC
+                );
+            out.lookup_name = build_template_lookup_name_(out.bundle, out.module_head, out.public_path, out.link_name);
+            out.decl_file = std::string(decl_file);
+            const auto lc = sm.line_col(root_fn.span.file_id, root_fn.span.lo);
+            out.decl_line = lc.line;
+            out.decl_col = lc.col;
+            out.is_public_export = root_fn.is_export && root_fn.fn_generic_param_count > 0;
+            if (root_fn.type != parus::ty::kInvalidType) {
+                out.declared_type_repr = types.to_export_string(root_fn.type);
+                out.declared_type_semantic =
+                    parus::cimport::serialize_type_semantic_from_type(root_fn.type, types);
+            }
+
+            const auto type_repr_or_empty = [&](parus::ty::TypeId tid) -> std::string {
+                return (tid != parus::ty::kInvalidType) ? types.to_export_string(tid) : std::string{};
+            };
+            const auto canonical_type_repr_or_empty = [&](parus::ty::TypeId tid) -> std::string {
+                std::string repr = type_repr_or_empty(tid);
+                if (tid == parus::ty::kInvalidType || repr.empty()) return repr;
+                const auto& tt = types.get(tid);
+                if (tt.kind != parus::ty::Kind::kNamedUser) return repr;
+                std::vector<std::string_view> path{};
+                std::vector<parus::ty::TypeId> args{};
+                if (!types.decompose_named_user(tid, path, args) || path.empty() || path.size() > 1) {
+                    return repr;
                 }
-                if (target_sid == parus::ast::k_invalid_stmt ||
-                    static_cast<size_t>(target_sid) >= ast.stmts().size()) {
-                    return;
-                }
-                const auto& target = ast.stmt(target_sid);
-                if (target.kind != parus::ast::StmtKind::kFnDecl ||
-                    target.span.file_id != current_file_id) {
-                    return;
-                }
-                if (top_level_fn_sids.find(target_sid) == top_level_fn_sids.end()) {
-                    ok = false;
-                    out_err =
-                        "template sidecar currently supports only same-file top-level free function dependencies";
-                    return;
-                }
-                if (closure_fn_sids.insert(target_sid).second) {
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, target_sid, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                }
+                const std::string canonical_head =
+                    normalize_core_public_module_head_(bundle_name, module_head);
+                if (canonical_head.empty()) return repr;
+                return canonical_head + "::" + repr;
             };
 
-            switch (e.kind) {
-                case parus::ast::ExprKind::kUnary:
-                case parus::ast::ExprKind::kPostfixUnary:
-                case parus::ast::ExprKind::kCast:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kBinary:
-                case parus::ast::ExprKind::kAssign:
-                case parus::ast::ExprKind::kIndex:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kTernary:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.c, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kCall: {
-                    maybe_add_same_file_callee_(eid, e.a);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    const auto& args = ast.args();
-                    const uint64_t begin = e.arg_begin;
-                    const uint64_t end = begin + e.arg_count;
-                    if (begin <= args.size() && end <= args.size()) {
-                        for (uint32_t i = 0; i < e.arg_count; ++i) {
-                            collect_same_file_fn_deps_from_expr_(
-                                ast,
-                                args[e.arg_begin + i].expr,
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                case parus::ast::ExprKind::kArrayLit: {
-                    const auto& args = ast.args();
-                    const uint64_t begin = e.arg_begin;
-                    const uint64_t end = begin + e.arg_count;
-                    if (begin <= args.size() && end <= args.size()) {
-                        for (uint32_t i = 0; i < e.arg_count; ++i) {
-                            collect_same_file_fn_deps_from_expr_(
-                                ast,
-                                args[e.arg_begin + i].expr,
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                case parus::ast::ExprKind::kFieldInit: {
-                    const auto& inits = ast.field_init_entries();
-                    const uint64_t begin = e.field_init_begin;
-                    const uint64_t end = begin + e.field_init_count;
-                    if (begin <= inits.size() && end <= inits.size()) {
-                        for (uint32_t i = 0; i < e.field_init_count; ++i) {
-                            collect_same_file_fn_deps_from_expr_(
-                                ast,
-                                inits[e.field_init_begin + i].expr,
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
-                        }
-                    }
-                    return;
-                }
-
-                case parus::ast::ExprKind::kIfExpr:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, e.block_stmt, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.block_tail, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.c, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kBlockExpr:
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, e.block_stmt, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.block_tail, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kLoop:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, e.loop_iter, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, e.loop_body, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::ExprKind::kIntLit:
-                case parus::ast::ExprKind::kFloatLit:
-                case parus::ast::ExprKind::kStringLit:
-                case parus::ast::ExprKind::kCharLit:
-                case parus::ast::ExprKind::kBoolLit:
-                case parus::ast::ExprKind::kNullLit:
-                case parus::ast::ExprKind::kIdent:
-                case parus::ast::ExprKind::kHole:
-                case parus::ast::ExprKind::kMacroCall:
-                case parus::ast::ExprKind::kError:
-                default:
-                    return;
+            const auto& gps = ast.generic_param_decls();
+            const auto& constraints = ast.fn_constraint_decls();
+            for (uint32_t i = 0; i < root_fn.fn_generic_param_count; ++i) {
+                const uint32_t idx = root_fn.fn_generic_param_begin + i;
+                if (idx >= gps.size()) break;
+                TemplateSidecarGenericParam gp{};
+                gp.name = std::string(gps[idx].name);
+                out.generic_params.push_back(std::move(gp));
             }
-        }
+            for (uint32_t i = 0; i < root_fn.fn_constraint_count; ++i) {
+                const uint32_t idx = root_fn.fn_constraint_begin + i;
+                if (idx >= constraints.size()) break;
+                const auto& cc = constraints[idx];
+                TemplateSidecarFnConstraint meta{};
+                meta.kind = static_cast<uint8_t>(cc.kind);
+                meta.type_param = std::string(cc.type_param);
+                meta.rhs_type_repr = type_repr_or_empty(cc.rhs_type);
+                meta.proto = build_constraint_proto_identity_(ast, cc, types, bundle_name, module_head);
+                out.constraints.push_back(std::move(meta));
+            }
 
-        void collect_same_file_fn_deps_from_stmt_(
-            const parus::ast::AstArena& ast,
-            parus::ast::StmtId sid,
-            const parus::tyck::TyckResult& tyck_res,
-            uint32_t current_file_id,
-            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
-            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
-            bool& ok,
-            std::string& out_err
-        ) {
-            if (!ok || sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
-            const auto& s = ast.stmt(sid);
-            switch (s.kind) {
-                case parus::ast::StmtKind::kBlock: {
+            std::unordered_map<parus::ast::ExprId, uint32_t> expr_map{};
+            std::unordered_map<parus::ast::StmtId, uint32_t> stmt_map{};
+
+            std::function<uint32_t(parus::ast::ExprId)> serialize_expr{};
+            std::function<uint32_t(parus::ast::StmtId)> serialize_stmt{};
+
+            serialize_expr = [&](parus::ast::ExprId eid) -> uint32_t {
+                if (eid == parus::ast::k_invalid_expr || static_cast<size_t>(eid) >= ast.exprs().size()) {
+                    return parus::ast::k_invalid_expr;
+                }
+                if (auto it = expr_map.find(eid); it != expr_map.end()) return it->second;
+
+                const auto idx = static_cast<uint32_t>(out.exprs.size());
+                expr_map[eid] = idx;
+                out.exprs.push_back(TemplateSidecarExpr{});
+                TemplateSidecarExpr se{};
+                const auto& e = ast.expr(eid);
+                se.kind = static_cast<uint8_t>(e.kind);
+                se.op = static_cast<uint8_t>(e.op);
+                se.unary_is_mut = e.unary_is_mut;
+                se.text = std::string(e.text);
+                se.string_is_raw = e.string_is_raw;
+                se.string_is_format = e.string_is_format;
+                se.string_folded_text = std::string(e.string_folded_text);
+                se.call_from_pipe = e.call_from_pipe;
+                se.loop_has_header = e.loop_has_header;
+                se.loop_var = std::string(e.loop_var);
+                se.cast_kind = static_cast<uint8_t>(e.cast_kind);
+                se.cast_type_repr = type_repr_or_empty(e.cast_type);
+                se.target_type_repr = type_repr_or_empty(e.target_type);
+                if (e.kind == parus::ast::ExprKind::kFieldInit) {
+                    if (e.field_init_type_node != parus::ast::k_invalid_type_node &&
+                        static_cast<size_t>(e.field_init_type_node) < ast.type_nodes().size()) {
+                        const auto& tn = ast.type_node(e.field_init_type_node);
+                        se.field_init_type_repr = canonical_type_repr_or_empty(tn.resolved_type);
+                    }
+                    if (se.field_init_type_repr.empty()) {
+                        se.field_init_type_repr = std::string(e.text);
+                    }
+                }
+
+                se.a = serialize_expr(e.a);
+                se.b = serialize_expr(e.b);
+                se.c = serialize_expr(e.c);
+                se.block_tail = serialize_expr(e.block_tail);
+                se.loop_iter = serialize_expr(e.loop_iter);
+                se.block_stmt = serialize_stmt(e.block_stmt);
+                se.loop_body = serialize_stmt(e.loop_body);
+
+                const auto& args = ast.args();
+                const uint64_t arg_begin = e.arg_begin;
+                const uint64_t arg_end = arg_begin + e.arg_count;
+                if (arg_begin <= args.size() && arg_end <= args.size()) {
+                    se.arg_begin = static_cast<uint32_t>(out.args.size());
+                    for (uint32_t i = 0; i < e.arg_count; ++i) {
+                        const auto& a = args[e.arg_begin + i];
+                        TemplateSidecarArg sa{};
+                        sa.kind = static_cast<uint8_t>(a.kind);
+                        sa.has_label = a.has_label;
+                        sa.is_hole = a.is_hole;
+                        sa.label = std::string(a.label);
+                        sa.expr = serialize_expr(a.expr);
+                        out.args.push_back(std::move(sa));
+                    }
+                    se.arg_count = e.arg_count;
+                }
+
+                const auto& type_args = ast.type_args();
+                const uint64_t type_begin = e.call_type_arg_begin;
+                const uint64_t type_end = type_begin + e.call_type_arg_count;
+                if (type_begin <= type_args.size() && type_end <= type_args.size()) {
+                    se.call_type_arg_begin = static_cast<uint32_t>(out.type_args.size());
+                    for (uint32_t i = 0; i < e.call_type_arg_count; ++i) {
+                        out.type_args.push_back(type_repr_or_empty(type_args[e.call_type_arg_begin + i]));
+                    }
+                    se.call_type_arg_count = e.call_type_arg_count;
+                }
+
+                const auto& inits = ast.field_init_entries();
+                const uint64_t init_begin = e.field_init_begin;
+                const uint64_t init_end = init_begin + e.field_init_count;
+                if (init_begin <= inits.size() && init_end <= inits.size()) {
+                    se.field_init_begin = static_cast<uint32_t>(out.field_inits.size());
+                    for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                        const auto& init = inits[e.field_init_begin + i];
+                        TemplateSidecarFieldInit si{};
+                        si.name = std::string(init.name);
+                        si.expr = serialize_expr(init.expr);
+                        out.field_inits.push_back(std::move(si));
+                    }
+                    se.field_init_count = e.field_init_count;
+                }
+
+                const auto& parts = ast.fstring_parts();
+                const uint64_t part_begin = e.string_part_begin;
+                const uint64_t part_end = part_begin + e.string_part_count;
+                if (part_begin <= parts.size() && part_end <= parts.size()) {
+                    se.string_part_begin = static_cast<uint32_t>(out.fstring_parts.size());
+                    for (uint32_t i = 0; i < e.string_part_count; ++i) {
+                        const auto& part = parts[e.string_part_begin + i];
+                        TemplateSidecarFStringPart sp{};
+                        sp.is_expr = part.is_expr;
+                        sp.text = std::string(part.text);
+                        sp.expr = serialize_expr(part.expr);
+                        out.fstring_parts.push_back(std::move(sp));
+                    }
+                    se.string_part_count = e.string_part_count;
+                }
+
+                out.exprs[idx] = std::move(se);
+                return idx;
+            };
+
+            serialize_stmt = [&](parus::ast::StmtId sid) -> uint32_t {
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
+                    return parus::ast::k_invalid_stmt;
+                }
+                if (auto it = stmt_map.find(sid); it != stmt_map.end()) return it->second;
+
+                const auto idx = static_cast<uint32_t>(out.stmts.size());
+                stmt_map[sid] = idx;
+                out.stmts.push_back(TemplateSidecarStmt{});
+                TemplateSidecarStmt ss{};
+                const auto& s = ast.stmt(sid);
+                ss.kind = static_cast<uint8_t>(s.kind);
+                ss.expr = serialize_expr(s.expr);
+                ss.init = serialize_expr(s.init);
+                ss.a = serialize_stmt(s.a);
+                ss.b = serialize_stmt(s.b);
+                ss.case_begin = 0;
+                ss.case_count = 0;
+                ss.has_default = s.has_default;
+                ss.is_set = s.is_set;
+                ss.is_mut = s.is_mut;
+                ss.is_static = s.is_static;
+                ss.is_const = s.is_const;
+                ss.is_extern = s.is_extern;
+                ss.link_abi = static_cast<uint8_t>(s.link_abi);
+                ss.name = std::string(s.name);
+                ss.type_repr = type_repr_or_empty(s.type);
+                ss.is_export = s.is_export;
+                ss.fn_mode = static_cast<uint8_t>(s.fn_mode);
+                ss.fn_ret_repr = type_repr_or_empty(s.fn_ret);
+                ss.is_pure = s.is_pure;
+                ss.is_comptime = s.is_comptime;
+                ss.is_commit = s.is_commit;
+                ss.is_recast = s.is_recast;
+                ss.is_throwing = s.is_throwing;
+                ss.fn_is_const = s.fn_is_const;
+                ss.positional_param_count = s.positional_param_count;
+                ss.has_named_group = s.has_named_group;
+                ss.fn_is_c_variadic = s.fn_is_c_variadic;
+                ss.fn_is_proto_sig = s.fn_is_proto_sig;
+                ss.manual_perm_mask = s.manual_perm_mask;
+                ss.var_has_consume_else = s.var_has_consume_else;
+
+                if (s.kind == parus::ast::StmtKind::kBlock) {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
                     const uint64_t end = begin + s.stmt_count;
                     if (begin <= kids.size() && end <= kids.size()) {
+                        ss.stmt_begin = static_cast<uint32_t>(out.stmt_children.size());
+                        out.stmt_children.resize(out.stmt_children.size() + s.stmt_count,
+                                                 parus::ast::k_invalid_stmt);
                         for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                            collect_same_file_fn_deps_from_stmt_(
-                                ast,
-                                kids[s.stmt_begin + i],
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
+                            out.stmt_children[ss.stmt_begin + i] =
+                                serialize_stmt(kids[s.stmt_begin + i]);
                         }
+                        ss.stmt_count = s.stmt_count;
                     }
-                    return;
+                    out.stmts[idx] = std::move(ss);
+                    return idx;
                 }
 
-                case parus::ast::StmtKind::kExprStmt:
-                case parus::ast::StmtKind::kReturn:
-                case parus::ast::StmtKind::kThrow:
-                case parus::ast::StmtKind::kRequire:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::StmtKind::kVar:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, s.init, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::StmtKind::kIf:
-                case parus::ast::StmtKind::kWhile:
-                case parus::ast::StmtKind::kDoWhile:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::StmtKind::kFor:
-                case parus::ast::StmtKind::kDoScope:
-                case parus::ast::StmtKind::kManual:
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                case parus::ast::StmtKind::kTryCatch: {
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    const auto& clauses = ast.try_catch_clauses();
-                    const uint64_t begin = s.catch_clause_begin;
-                    const uint64_t end = begin + s.catch_clause_count;
-                    if (begin <= clauses.size() && end <= clauses.size()) {
-                        for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
-                            collect_same_file_fn_deps_from_stmt_(
-                                ast,
-                                clauses[s.catch_clause_begin + i].body,
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
-                        }
+                if (s.kind == parus::ast::StmtKind::kFnDecl) {
+                    if (sid != fn_sid) {
+                        out.stmts[idx] = std::move(ss);
+                        out_err = "typed template payload v2 currently does not support nested function declarations";
+                        return idx;
                     }
-                    return;
+                    ss.param_begin = static_cast<uint32_t>(out.params.size());
+                    for (uint32_t i = 0; i < s.param_count; ++i) {
+                        const auto& p = ast.params()[s.param_begin + i];
+                        TemplateSidecarParam sp{};
+                        sp.name = std::string(p.name);
+                        sp.type_repr = type_repr_or_empty(p.type);
+                        sp.is_mut = p.is_mut;
+                        sp.is_self = p.is_self;
+                        sp.self_kind = static_cast<uint8_t>(p.self_kind);
+                        sp.has_default = p.has_default;
+                        sp.default_expr = serialize_expr(p.default_expr);
+                        sp.is_named_group = p.is_named_group;
+                        out.params.push_back(std::move(sp));
+                    }
+                    ss.param_count = s.param_count;
+                    ss.fn_generic_param_begin = 0;
+                    ss.fn_generic_param_count = static_cast<uint32_t>(out.generic_params.size());
+                    ss.fn_constraint_begin = 0;
+                    ss.fn_constraint_count = static_cast<uint32_t>(out.constraints.size());
+                    out.stmts[idx] = std::move(ss);
+                    return idx;
                 }
 
-                case parus::ast::StmtKind::kSwitch: {
-                    collect_same_file_fn_deps_from_expr_(
-                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                if (s.kind == parus::ast::StmtKind::kSwitch) {
                     const auto& cases = ast.switch_cases();
                     const uint64_t begin = s.case_begin;
                     const uint64_t end = begin + s.case_count;
                     if (begin <= cases.size() && end <= cases.size()) {
+                        ss.case_begin = static_cast<uint32_t>(out.switch_cases.size());
+                        ss.case_count = s.case_count;
                         for (uint32_t i = 0; i < s.case_count; ++i) {
-                            collect_same_file_fn_deps_from_stmt_(
-                                ast,
-                                cases[s.case_begin + i].body,
-                                tyck_res,
-                                current_file_id,
-                                top_level_fn_sids,
-                                closure_fn_sids,
-                                ok,
-                                out_err
-                            );
+                            const auto& sc = cases[s.case_begin + i];
+                            TemplateSidecarSwitchCase out_sc{};
+                            out_sc.is_default = sc.is_default;
+                            out_sc.pat_kind = static_cast<uint8_t>(sc.pat_kind);
+                            out_sc.pat_text = std::string(sc.pat_text);
+                            out_sc.body = serialize_stmt(sc.body);
+                            out.switch_cases.push_back(std::move(out_sc));
                         }
                     }
-                    return;
+                    out.stmts[idx] = std::move(ss);
+                    return idx;
                 }
 
-                case parus::ast::StmtKind::kFnDecl:
-                    collect_same_file_fn_deps_from_stmt_(
-                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
-                    return;
-
-                default:
-                    return;
-            }
-        }
-
-        std::string build_sidecar_wrapped_source_(
-            std::string_view bundle_name,
-            std::string_view module_head,
-            const std::vector<std::string>& snippets
-        ) {
-            auto append_wrapped_ = [&](std::ostringstream& oss, std::string_view head) {
-                if (snippets.empty()) return;
-                if (head.empty()) {
-                    for (size_t i = 0; i < snippets.size(); ++i) {
-                        oss << snippets[i];
-                        if (i + 1 != snippets.size()) oss << "\n\n";
-                    }
-                    oss << "\n";
-                    return;
+                switch (s.kind) {
+                    case parus::ast::StmtKind::kEmpty:
+                    case parus::ast::StmtKind::kExprStmt:
+                    case parus::ast::StmtKind::kVar:
+                    case parus::ast::StmtKind::kIf:
+                    case parus::ast::StmtKind::kFor:
+                    case parus::ast::StmtKind::kWhile:
+                    case parus::ast::StmtKind::kDoScope:
+                    case parus::ast::StmtKind::kDoWhile:
+                    case parus::ast::StmtKind::kManual:
+                    case parus::ast::StmtKind::kReturn:
+                    case parus::ast::StmtKind::kRequire:
+                    case parus::ast::StmtKind::kThrow:
+                    case parus::ast::StmtKind::kBreak:
+                    case parus::ast::StmtKind::kContinue:
+                        out.stmts[idx] = std::move(ss);
+                        return idx;
+                    default:
+                        out.stmts[idx] = std::move(ss);
+                        out_err = "typed template payload v2 currently supports free-function bodies without try/type-decl statements";
+                        return idx;
                 }
-                oss << "nest " << head << " {\n";
-                for (const auto& snippet : snippets) {
-                    oss << snippet << "\n\n";
-                }
-                oss << "}\n";
             };
 
-            std::ostringstream oss{};
-            if (bundle_name == "core") {
-                oss << "$![Impl::Core];\n\n";
-            }
-            append_wrapped_(oss, module_head);
-            return oss.str();
+            out.root_stmt = serialize_stmt(fn_sid);
+            return out_err.empty();
         }
 
-        void dedupe_template_sidecars_(std::vector<TemplateSidecarEntry>& entries) {
+        void dedupe_template_sidecars_(std::vector<TemplateSidecarFunction>& entries) {
             std::unordered_set<std::string> seen{};
-            std::vector<TemplateSidecarEntry> deduped{};
+            std::vector<TemplateSidecarFunction> deduped{};
             deduped.reserve(entries.size());
             for (auto& e : entries) {
                 std::string key = e.bundle;
                 key.push_back('|');
                 key.append(e.module_head);
                 key.push_back('|');
-                key.append(e.decl_file);
-                for (const auto& ex : e.exports) {
-                    key.push_back('|');
-                    key.append(ex.path);
-                    key.push_back('|');
-                    key.append(ex.link_name);
-                }
+                key.append(e.lookup_name);
+                key.push_back('|');
+                key.append(e.link_name);
                 if (!seen.insert(key).second) continue;
                 deduped.push_back(std::move(e));
             }
@@ -2991,13 +3062,13 @@ namespace parusc::p0 {
             const parus::ast::AstArena& ast,
             parus::ast::StmtId root,
             const parus::ty::TypePool& types,
-            const parus::tyck::TyckResult& tyck_res,
             const parus::SourceManager& sm,
             uint32_t current_file_id,
             std::string_view decl_file,
             std::string_view bundle_name,
             std::string_view module_head,
-            std::vector<TemplateSidecarEntry>& out,
+            const std::vector<ExportSurfaceEntry>& current_exports,
+            std::vector<TemplateSidecarFunction>& out,
             std::string& out_err
         ) {
             out.clear();
@@ -3009,221 +3080,92 @@ namespace parusc::p0 {
             const auto& rs = ast.stmt(root);
             if (rs.kind != parus::ast::StmtKind::kBlock) return true;
 
-            std::vector<parus::ast::StmtId> top_level_current{};
-            std::unordered_set<parus::ast::StmtId> body_bearing_top_level_fn_sids{};
-            std::unordered_set<parus::ast::StmtId> exported_generic_fn_sids{};
+            std::vector<std::string> ns{};
+            const auto collect_stmt = [&](const auto& self, parus::ast::StmtId sid) -> bool {
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
+                    return true;
+                }
+                const auto& s = ast.stmt(sid);
+                if (s.span.file_id != current_file_id) return true;
+
+                if (s.kind == parus::ast::StmtKind::kBlock) {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin > kids.size() || end > kids.size()) return true;
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        if (!self(self, kids[s.stmt_begin + i])) return false;
+                    }
+                    return true;
+                }
+
+                if (s.kind == parus::ast::StmtKind::kNestDecl && !s.nest_is_file_directive) {
+                    const auto& segs = ast.path_segs();
+                    const uint64_t begin = s.nest_path_begin;
+                    const uint64_t end = begin + s.nest_path_count;
+                    uint32_t pushed = 0;
+                    if (begin <= segs.size() && end <= segs.size()) {
+                        for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                            ns.push_back(std::string(segs[s.nest_path_begin + i]));
+                            ++pushed;
+                        }
+                    }
+                    const bool ok = self(self, s.a);
+                    while (pushed > 0) {
+                        ns.pop_back();
+                        --pushed;
+                    }
+                    return ok;
+                }
+
+                if (s.kind != parus::ast::StmtKind::kFnDecl ||
+                    s.name.empty() ||
+                    s.a == parus::ast::k_invalid_stmt ||
+                    std::string_view(s.name).starts_with("__parus_install_anchor_")) {
+                    return true;
+                }
+                if (s.fn_generic_param_count == 0) {
+                    return true;
+                }
+
+                const auto lc = sm.line_col(s.span.file_id, s.span.lo);
+                std::string qname = qualify_name_(ns, s.name);
+                std::string link_name_override{};
+                for (const auto& ex : current_exports) {
+                    if (ex.kind != parus::sema::SymbolKind::kFn) continue;
+                    if (ex.decl_file != decl_file) continue;
+                    if (ex.decl_line != lc.line || ex.decl_col != lc.col) continue;
+                    qname = ex.path;
+                    link_name_override = ex.link_name;
+                    break;
+                }
+                TemplateSidecarFunction one{};
+                if (!serialize_top_level_free_function_sidecar_(
+                        ast,
+                        sid,
+                        types,
+                        sm,
+                        decl_file,
+                        bundle_name,
+                        module_head,
+                        qname,
+                        link_name_override,
+                        one,
+                        out_err)) {
+                    return false;
+                }
+                out.push_back(std::move(one));
+                return true;
+            };
+
             const auto& kids = ast.stmt_children();
             const uint64_t begin = rs.stmt_begin;
             const uint64_t end = begin + rs.stmt_count;
-            if (!(begin <= kids.size() && end <= kids.size())) return true;
-
+            if (begin > kids.size() || end > kids.size()) return true;
             for (uint32_t i = 0; i < rs.stmt_count; ++i) {
-                const auto sid = kids[rs.stmt_begin + i];
-                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
-                const auto& s = ast.stmt(sid);
-                if (s.span.file_id != current_file_id) continue;
-                top_level_current.push_back(sid);
-                if (s.kind == parus::ast::StmtKind::kFnDecl && !s.name.empty()) {
-                    const std::string fn_snippet = build_stmt_sidecar_source_(ast, sid, sm);
-                    const bool has_body = fn_snippet.find('{') != std::string::npos;
-                    if (has_body) {
-                        body_bearing_top_level_fn_sids.insert(sid);
-                    }
-                    if (has_body && s.is_export && s.fn_generic_param_count > 0) {
-                        exported_generic_fn_sids.insert(sid);
-                    }
-                }
+                if (!collect_stmt(collect_stmt, kids[rs.stmt_begin + i])) return false;
             }
-
-            if (exported_generic_fn_sids.empty()) return true;
-
-            std::unordered_set<parus::ast::StmtId> closure_fn_sids{};
-            bool closure_ok = true;
-            std::string closure_err{};
-            for (const auto sid : exported_generic_fn_sids) {
-                closure_fn_sids.insert(sid);
-                collect_same_file_fn_deps_from_stmt_(
-                    ast,
-                    sid,
-                    tyck_res,
-                    current_file_id,
-                    body_bearing_top_level_fn_sids,
-                    closure_fn_sids,
-                    closure_ok,
-                    closure_err
-                );
-                if (!closure_ok) {
-                    out_err = closure_err.empty()
-                        ? "failed to collect same-file generic free function dependency closure"
-                        : closure_err;
-                    return false;
-                }
-            }
-
-            std::vector<std::string> snippets{};
-            std::vector<TemplateSidecarExportKey> exports{};
-            snippets.reserve(top_level_current.size());
-            exports.reserve(exported_generic_fn_sids.size());
-            for (size_t top_idx = 0; top_idx < top_level_current.size(); ++top_idx) {
-                const auto sid = top_level_current[top_idx];
-                const auto& s = ast.stmt(sid);
-                if (is_sidecar_omittable_intrinsic_directive_(ast, s)) continue;
-                const bool directive_attaches_to_closure_fn =
-                    (s.kind == parus::ast::StmtKind::kCompilerDirective ||
-                     s.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective) &&
-                    (top_idx + 1u) < top_level_current.size() &&
-                    closure_fn_sids.find(top_level_current[top_idx + 1u]) != closure_fn_sids.end() &&
-                    ast.stmt(top_level_current[top_idx + 1u]).kind == parus::ast::StmtKind::kFnDecl;
-                const bool include_stmt =
-                    (s.kind == parus::ast::StmtKind::kUse) ||
-                    directive_attaches_to_closure_fn ||
-                    (s.kind == parus::ast::StmtKind::kEnumDecl) ||
-                    (s.kind == parus::ast::StmtKind::kFieldDecl) ||
-                    (s.kind == parus::ast::StmtKind::kFnDecl &&
-                     body_bearing_top_level_fn_sids.find(sid) != body_bearing_top_level_fn_sids.end() &&
-                     !std::string_view(s.name).starts_with("__parus_install_anchor_"));
-                if (!include_stmt) continue;
-                std::string snippet{};
-                if (s.kind == parus::ast::StmtKind::kFieldDecl) {
-                    snippet = build_field_decl_sidecar_stub_(ast, types, s);
-                } else {
-                    snippet = build_stmt_sidecar_source_(ast, sid, sm);
-                }
-                if (snippet.empty()) {
-                    out_err = "failed to extract template sidecar source snippet";
-                    return false;
-                }
-                snippets.push_back(snippet);
-            }
-
-            for (const auto sid : top_level_current) {
-                const auto& s = ast.stmt(sid);
-                if (s.kind != parus::ast::StmtKind::kFnDecl ||
-                    exported_generic_fn_sids.find(sid) == exported_generic_fn_sids.end()) {
-                    continue;
-                }
-                const std::string sig_repr =
-                    (s.type != parus::ty::kInvalidType) ? types.to_export_string(s.type) : std::string("def(?)");
-                TemplateSidecarExportKey ex{};
-                ex.path = std::string(s.name);
-                ex.link_name = build_function_link_name_(
-                    bundle_name,
-                    std::string(s.name),
-                    s.fn_mode,
-                    sig_repr,
-                    s.link_abi == parus::ast::LinkAbi::kC
-                );
-                exports.push_back(std::move(ex));
-            }
-
-            if (exports.empty() || snippets.empty()) return true;
-
-            const std::string public_module_head =
-                normalize_core_public_module_head_(bundle_name, module_head);
-            TemplateSidecarEntry entry{};
-            entry.bundle = std::string(bundle_name);
-            entry.module_head = public_module_head;
-            entry.decl_file = std::string(decl_file);
-            entry.source = build_sidecar_wrapped_source_(bundle_name, public_module_head, snippets);
-            entry.exports = std::move(exports);
-            out.push_back(std::move(entry));
             dedupe_template_sidecars_(out);
-            return true;
-        }
-
-        bool inject_template_sidecars_into_ast_(
-            const std::vector<LoadedExternalIndex>& loaded,
-            parus::SourceManager& sm,
-            parus::ast::AstArena& ast,
-            parus::ty::TypePool& types,
-            parus::diag::Bag& bag,
-            uint32_t max_errors,
-            parus::ast::StmtId root,
-            std::string_view current_norm,
-            std::unordered_set<std::string>& out_sidecar_export_keys,
-            std::unordered_map<uint32_t, std::string>& out_sidecar_file_bundles,
-            std::string& out_err
-        ) {
-            out_sidecar_export_keys.clear();
-            out_sidecar_file_bundles.clear();
-            out_err.clear();
-            if (root == parus::ast::k_invalid_stmt || static_cast<size_t>(root) >= ast.stmts().size()) {
-                return true;
-            }
-            const auto& root_stmt = ast.stmt(root);
-            if (root_stmt.kind != parus::ast::StmtKind::kBlock) {
-                out_err = "template sidecar injection requires program root block";
-                return false;
-            }
-            const auto& root_kids = ast.stmt_children();
-            const uint64_t root_begin = root_stmt.stmt_begin;
-            const uint64_t root_end = root_begin + root_stmt.stmt_count;
-            if (!(root_begin <= root_kids.size() && root_end <= root_kids.size())) {
-                out_err = "template sidecar injection requires valid program root child range";
-                return false;
-            }
-            std::vector<parus::ast::StmtId> merged_root_children{};
-            merged_root_children.reserve(root_stmt.stmt_count + 32u);
-            for (uint32_t i = 0; i < root_stmt.stmt_count; ++i) {
-                merged_root_children.push_back(root_kids[root_stmt.stmt_begin + i]);
-            }
-
-            size_t ordinal = 0;
-            for (const auto& idx : loaded) {
-                for (const auto& entry : idx.sidecars) {
-                    const bool same_current_file =
-                        !entry.decl_file.empty() &&
-                        parus::normalize_path(entry.decl_file) == current_norm;
-                    if (same_current_file) continue;
-
-                    for (const auto& ex : entry.exports) {
-                        out_sidecar_export_keys.insert(
-                            build_sidecar_export_key_(idx.bundle, entry.module_head, ex.path, ex.link_name));
-                    }
-                    if (entry.source.empty()) continue;
-
-                    std::string pseudo_path =
-                        (entry.decl_file.empty() ? std::string("<template-sidecar>")
-                                                 : entry.decl_file) +
-                        "#templates:" + std::to_string(ordinal++);
-                    const uint32_t fid = sm.add(std::move(pseudo_path), entry.source);
-                    if (!idx.bundle.empty()) {
-                        out_sidecar_file_bundles[fid] = idx.bundle;
-                    }
-                    auto tokens = lex_with_sm_(sm, fid, &bag);
-                    if (bag.has_error()) {
-                        out_err = "failed to lex template sidecar";
-                        return false;
-                    }
-
-                    parus::ParserFeatureFlags flags{};
-                    parus::Parser parser(tokens, ast, types, &bag, max_errors, flags);
-                    const auto parsed_root = parser.parse_program();
-                    if (bag.has_error()) {
-                        out_err = "failed to parse template sidecar";
-                        return false;
-                    }
-                    if (parsed_root == parus::ast::k_invalid_stmt ||
-                        static_cast<size_t>(parsed_root) >= ast.stmts().size()) {
-                        continue;
-                    }
-                    const auto& parsed = ast.stmt(parsed_root);
-                    if (parsed.kind != parus::ast::StmtKind::kBlock) continue;
-                    const auto& kids = ast.stmt_children();
-                    const uint64_t begin = parsed.stmt_begin;
-                    const uint64_t end = begin + parsed.stmt_count;
-                    if (!(begin <= kids.size() && end <= kids.size())) continue;
-                    for (uint32_t i = 0; i < parsed.stmt_count; ++i) {
-                        merged_root_children.push_back(kids[parsed.stmt_begin + i]);
-                    }
-                }
-            }
-            auto& all_kids = ast.stmt_children_mut();
-            const uint32_t new_begin = static_cast<uint32_t>(all_kids.size());
-            all_kids.insert(all_kids.end(), merged_root_children.begin(), merged_root_children.end());
-            auto& root_stmt_mut = ast.stmt_mut(root);
-            root_stmt_mut.stmt_begin = new_begin;
-            root_stmt_mut.stmt_count = static_cast<uint32_t>(merged_root_children.size());
             return true;
         }
 
@@ -3438,6 +3380,85 @@ namespace parusc::p0 {
             return false;
         }
 
+        bool parse_json_array_string_field_(
+            std::string_view text,
+            std::string_view key,
+            std::vector<std::string>& out
+        ) {
+            out.clear();
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find('[', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+
+            while (pos < text.size()) {
+                while (pos < text.size() &&
+                       (std::isspace(static_cast<unsigned char>(text[pos])) || text[pos] == ',')) {
+                    ++pos;
+                }
+                if (pos >= text.size()) return false;
+                if (text[pos] == ']') return true;
+                if (text[pos] != '"') return false;
+                ++pos;
+                std::string raw{};
+                bool escaped = false;
+                for (; pos < text.size(); ++pos) {
+                    const char c = text[pos];
+                    if (escaped) {
+                        raw.push_back(c);
+                        escaped = false;
+                        continue;
+                    }
+                    if (c == '\\') {
+                        raw.push_back(c);
+                        escaped = true;
+                        continue;
+                    }
+                    if (c == '"') break;
+                    raw.push_back(c);
+                }
+                if (pos >= text.size() || text[pos] != '"') return false;
+                std::string decoded{};
+                if (!json_unescape_text_(raw, decoded)) return false;
+                out.push_back(std::move(decoded));
+                ++pos;
+            }
+            return false;
+        }
+
+        bool parse_json_array_uint_field_(
+            std::string_view text,
+            std::string_view key,
+            std::vector<uint32_t>& out
+        ) {
+            out.clear();
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find('[', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+
+            while (pos < text.size()) {
+                while (pos < text.size() &&
+                       (std::isspace(static_cast<unsigned char>(text[pos])) || text[pos] == ',')) {
+                    ++pos;
+                }
+                if (pos >= text.size()) return false;
+                if (text[pos] == ']') return true;
+                size_t end = pos;
+                while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
+                if (end == pos) return false;
+                try {
+                    out.push_back(static_cast<uint32_t>(std::stoul(std::string(text.substr(pos, end - pos)))));
+                } catch (...) {
+                    return false;
+                }
+                pos = end;
+            }
+            return false;
+        }
+
         bool load_export_index_(
             const std::string& path,
             std::string& bundle_name,
@@ -3562,7 +3583,7 @@ namespace parusc::p0 {
         bool write_template_sidecar_(
             const std::string& export_index_path,
             const std::string& bundle_name,
-            const std::vector<TemplateSidecarEntry>& entries,
+            const std::vector<TemplateSidecarFunction>& entries,
             std::string& out_err
         ) {
             namespace fs = std::filesystem;
@@ -3586,23 +3607,227 @@ namespace parusc::p0 {
                 return false;
             }
 
+            const auto emit_q = [&](std::string_view v) {
+                ofs << "\"" << json_escape_text_(v) << "\"";
+            };
+            const auto emit_bool = [&](bool v) {
+                ofs << (v ? "true" : "false");
+            };
+            const auto emit_uint = [&](uint32_t v) {
+                ofs << v;
+            };
+
             ofs << "{\n";
-            ofs << "  \"version\": 1,\n";
+            ofs << "  \"version\": 2,\n";
             ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
             ofs << "  \"templates\": [\n";
             for (size_t i = 0; i < entries.size(); ++i) {
                 const auto& e = entries[i];
-                ofs << "    {\"module_head\":\"" << json_escape_text_(e.module_head)
-                    << "\",\"decl_file\":\"" << json_escape_text_(e.decl_file)
-                    << "\",\"source\":\"" << json_escape_text_(e.source)
-                    << "\",\"exports\":[";
-                for (size_t j = 0; j < e.exports.size(); ++j) {
-                    const auto& ex = e.exports[j];
-                    ofs << "{\"kind\":\"fn\",\"path\":\"" << json_escape_text_(ex.path)
-                        << "\",\"link_name\":\"" << json_escape_text_(ex.link_name) << "\"}";
-                    if (j + 1 != e.exports.size()) ofs << ",";
+                ofs << "    {";
+                ofs << "\"bundle\":"; emit_q(e.bundle);
+                ofs << ",\"module_head\":"; emit_q(e.module_head);
+                ofs << ",\"public_path\":"; emit_q(e.public_path);
+                ofs << ",\"link_name\":"; emit_q(e.link_name);
+                ofs << ",\"lookup_name\":"; emit_q(e.lookup_name);
+                ofs << ",\"decl_file\":"; emit_q(e.decl_file);
+                ofs << ",\"decl_line\":"; emit_uint(e.decl_line);
+                ofs << ",\"decl_col\":"; emit_uint(e.decl_col);
+                ofs << ",\"is_public_export\":"; emit_bool(e.is_public_export);
+                ofs << ",\"declared_type_repr\":"; emit_q(e.declared_type_repr);
+                ofs << ",\"declared_type_semantic\":"; emit_q(e.declared_type_semantic);
+                ofs << ",\"root_stmt\":"; emit_uint(e.root_stmt);
+
+                ofs << ",\"stmts\":[";
+                for (size_t j = 0; j < e.stmts.size(); ++j) {
+                    const auto& s = e.stmts[j];
+                    ofs << "{";
+                    ofs << "\"kind\":"; emit_uint(s.kind);
+                    ofs << ",\"expr\":"; emit_uint(s.expr);
+                    ofs << ",\"init\":"; emit_uint(s.init);
+                    ofs << ",\"a\":"; emit_uint(s.a);
+                    ofs << ",\"b\":"; emit_uint(s.b);
+                    ofs << ",\"stmt_begin\":"; emit_uint(s.stmt_begin);
+                    ofs << ",\"stmt_count\":"; emit_uint(s.stmt_count);
+                    ofs << ",\"case_begin\":"; emit_uint(s.case_begin);
+                    ofs << ",\"case_count\":"; emit_uint(s.case_count);
+                    ofs << ",\"has_default\":"; emit_bool(s.has_default);
+                    ofs << ",\"is_set\":"; emit_bool(s.is_set);
+                    ofs << ",\"is_mut\":"; emit_bool(s.is_mut);
+                    ofs << ",\"is_static\":"; emit_bool(s.is_static);
+                    ofs << ",\"is_const\":"; emit_bool(s.is_const);
+                    ofs << ",\"is_extern\":"; emit_bool(s.is_extern);
+                    ofs << ",\"link_abi\":"; emit_uint(s.link_abi);
+                    ofs << ",\"name\":"; emit_q(s.name);
+                    ofs << ",\"type_repr\":"; emit_q(s.type_repr);
+                    ofs << ",\"is_export\":"; emit_bool(s.is_export);
+                    ofs << ",\"fn_mode\":"; emit_uint(s.fn_mode);
+                    ofs << ",\"fn_ret_repr\":"; emit_q(s.fn_ret_repr);
+                    ofs << ",\"is_pure\":"; emit_bool(s.is_pure);
+                    ofs << ",\"is_comptime\":"; emit_bool(s.is_comptime);
+                    ofs << ",\"is_commit\":"; emit_bool(s.is_commit);
+                    ofs << ",\"is_recast\":"; emit_bool(s.is_recast);
+                    ofs << ",\"is_throwing\":"; emit_bool(s.is_throwing);
+                    ofs << ",\"fn_is_const\":"; emit_bool(s.fn_is_const);
+                    ofs << ",\"param_begin\":"; emit_uint(s.param_begin);
+                    ofs << ",\"param_count\":"; emit_uint(s.param_count);
+                    ofs << ",\"positional_param_count\":"; emit_uint(s.positional_param_count);
+                    ofs << ",\"has_named_group\":"; emit_bool(s.has_named_group);
+                    ofs << ",\"fn_is_c_variadic\":"; emit_bool(s.fn_is_c_variadic);
+                    ofs << ",\"fn_is_proto_sig\":"; emit_bool(s.fn_is_proto_sig);
+                    ofs << ",\"fn_generic_param_begin\":"; emit_uint(s.fn_generic_param_begin);
+                    ofs << ",\"fn_generic_param_count\":"; emit_uint(s.fn_generic_param_count);
+                    ofs << ",\"fn_constraint_begin\":"; emit_uint(s.fn_constraint_begin);
+                    ofs << ",\"fn_constraint_count\":"; emit_uint(s.fn_constraint_count);
+                    ofs << ",\"manual_perm_mask\":"; emit_uint(s.manual_perm_mask);
+                    ofs << ",\"var_has_consume_else\":"; emit_bool(s.var_has_consume_else);
+                    ofs << "}";
+                    if (j + 1 != e.stmts.size()) ofs << ",";
                 }
-                ofs << "]}";
+                ofs << "]";
+
+                ofs << ",\"stmt_children\":[";
+                for (size_t j = 0; j < e.stmt_children.size(); ++j) {
+                    emit_uint(e.stmt_children[j]);
+                    if (j + 1 != e.stmt_children.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"exprs\":[";
+                for (size_t j = 0; j < e.exprs.size(); ++j) {
+                    const auto& x = e.exprs[j];
+                    ofs << "{";
+                    ofs << "\"kind\":"; emit_uint(x.kind);
+                    ofs << ",\"op\":"; emit_uint(x.op);
+                    ofs << ",\"a\":"; emit_uint(x.a);
+                    ofs << ",\"b\":"; emit_uint(x.b);
+                    ofs << ",\"c\":"; emit_uint(x.c);
+                    ofs << ",\"unary_is_mut\":"; emit_bool(x.unary_is_mut);
+                    ofs << ",\"text\":"; emit_q(x.text);
+                    ofs << ",\"string_is_raw\":"; emit_bool(x.string_is_raw);
+                    ofs << ",\"string_is_format\":"; emit_bool(x.string_is_format);
+                    ofs << ",\"string_part_begin\":"; emit_uint(x.string_part_begin);
+                    ofs << ",\"string_part_count\":"; emit_uint(x.string_part_count);
+                    ofs << ",\"string_folded_text\":"; emit_q(x.string_folded_text);
+                    ofs << ",\"arg_begin\":"; emit_uint(x.arg_begin);
+                    ofs << ",\"arg_count\":"; emit_uint(x.arg_count);
+                    ofs << ",\"call_type_arg_begin\":"; emit_uint(x.call_type_arg_begin);
+                    ofs << ",\"call_type_arg_count\":"; emit_uint(x.call_type_arg_count);
+                    ofs << ",\"call_from_pipe\":"; emit_bool(x.call_from_pipe);
+                    ofs << ",\"field_init_begin\":"; emit_uint(x.field_init_begin);
+                    ofs << ",\"field_init_count\":"; emit_uint(x.field_init_count);
+                    ofs << ",\"field_init_type_repr\":"; emit_q(x.field_init_type_repr);
+                    ofs << ",\"block_stmt\":"; emit_uint(x.block_stmt);
+                    ofs << ",\"block_tail\":"; emit_uint(x.block_tail);
+                    ofs << ",\"loop_has_header\":"; emit_bool(x.loop_has_header);
+                    ofs << ",\"loop_var\":"; emit_q(x.loop_var);
+                    ofs << ",\"loop_iter\":"; emit_uint(x.loop_iter);
+                    ofs << ",\"loop_body\":"; emit_uint(x.loop_body);
+                    ofs << ",\"cast_type_repr\":"; emit_q(x.cast_type_repr);
+                    ofs << ",\"cast_kind\":"; emit_uint(x.cast_kind);
+                    ofs << ",\"target_type_repr\":"; emit_q(x.target_type_repr);
+                    ofs << "}";
+                    if (j + 1 != e.exprs.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"params\":[";
+                for (size_t j = 0; j < e.params.size(); ++j) {
+                    const auto& p = e.params[j];
+                    ofs << "{";
+                    ofs << "\"name\":"; emit_q(p.name);
+                    ofs << ",\"type_repr\":"; emit_q(p.type_repr);
+                    ofs << ",\"is_mut\":"; emit_bool(p.is_mut);
+                    ofs << ",\"is_self\":"; emit_bool(p.is_self);
+                    ofs << ",\"self_kind\":"; emit_uint(p.self_kind);
+                    ofs << ",\"has_default\":"; emit_bool(p.has_default);
+                    ofs << ",\"default_expr\":"; emit_uint(p.default_expr);
+                    ofs << ",\"is_named_group\":"; emit_bool(p.is_named_group);
+                    ofs << "}";
+                    if (j + 1 != e.params.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"switch_cases\":[";
+                for (size_t j = 0; j < e.switch_cases.size(); ++j) {
+                    const auto& sc = e.switch_cases[j];
+                    ofs << "{";
+                    ofs << "\"is_default\":"; emit_bool(sc.is_default);
+                    ofs << ",\"pat_kind\":"; emit_uint(sc.pat_kind);
+                    ofs << ",\"pat_text\":"; emit_q(sc.pat_text);
+                    ofs << ",\"body\":"; emit_uint(sc.body);
+                    ofs << "}";
+                    if (j + 1 != e.switch_cases.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"args\":[";
+                for (size_t j = 0; j < e.args.size(); ++j) {
+                    const auto& a = e.args[j];
+                    ofs << "{";
+                    ofs << "\"kind\":"; emit_uint(a.kind);
+                    ofs << ",\"has_label\":"; emit_bool(a.has_label);
+                    ofs << ",\"is_hole\":"; emit_bool(a.is_hole);
+                    ofs << ",\"label\":"; emit_q(a.label);
+                    ofs << ",\"expr\":"; emit_uint(a.expr);
+                    ofs << "}";
+                    if (j + 1 != e.args.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"field_inits\":[";
+                for (size_t j = 0; j < e.field_inits.size(); ++j) {
+                    const auto& fi = e.field_inits[j];
+                    ofs << "{";
+                    ofs << "\"name\":"; emit_q(fi.name);
+                    ofs << ",\"expr\":"; emit_uint(fi.expr);
+                    ofs << "}";
+                    if (j + 1 != e.field_inits.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"fstring_parts\":[";
+                for (size_t j = 0; j < e.fstring_parts.size(); ++j) {
+                    const auto& fp = e.fstring_parts[j];
+                    ofs << "{";
+                    ofs << "\"is_expr\":"; emit_bool(fp.is_expr);
+                    ofs << ",\"text\":"; emit_q(fp.text);
+                    ofs << ",\"expr\":"; emit_uint(fp.expr);
+                    ofs << "}";
+                    if (j + 1 != e.fstring_parts.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"type_args\":[";
+                for (size_t j = 0; j < e.type_args.size(); ++j) {
+                    emit_q(e.type_args[j]);
+                    if (j + 1 != e.type_args.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"generic_params\":[";
+                for (size_t j = 0; j < e.generic_params.size(); ++j) {
+                    ofs << "{\"name\":";
+                    emit_q(e.generic_params[j].name);
+                    ofs << "}";
+                    if (j + 1 != e.generic_params.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"constraints\":[";
+                for (size_t j = 0; j < e.constraints.size(); ++j) {
+                    const auto& c = e.constraints[j];
+                    ofs << "{";
+                    ofs << "\"kind\":"; emit_uint(static_cast<uint32_t>(c.kind));
+                    ofs << ",\"lhs\":"; emit_q(c.type_param);
+                    ofs << ",\"rhs_type_repr\":"; emit_q(c.rhs_type_repr);
+                    ofs << ",\"proto_bundle\":"; emit_q(c.proto.bundle);
+                    ofs << ",\"proto_module_head\":"; emit_q(c.proto.module_head);
+                    ofs << ",\"proto_path\":"; emit_q(c.proto.path);
+                    ofs << "}";
+                    if (j + 1 != e.constraints.size()) ofs << ",";
+                }
+                ofs << "]";
+                ofs << "}";
                 if (i + 1 != entries.size()) ofs << ",";
                 ofs << "\n";
             }
@@ -3619,7 +3844,7 @@ namespace parusc::p0 {
         bool load_template_sidecar_(
             const std::string& export_index_path,
             std::string_view bundle_name,
-            std::vector<TemplateSidecarEntry>& out,
+            std::vector<TemplateSidecarFunction>& out,
             std::string& out_err
         ) {
             out.clear();
@@ -3644,8 +3869,8 @@ namespace parusc::p0 {
             }
 
             uint32_t version = 0;
-            if (!parse_json_uint_field_(text, "version", version) || version != 1) {
-                out_err = "unsupported template-sidecar version (expected v1) in: " + path;
+            if (!parse_json_uint_field_(text, "version", version) || version != 2) {
+                out_err = "unsupported template-sidecar version (expected v2) in: " + path;
                 return false;
             }
 
@@ -3666,48 +3891,272 @@ namespace parusc::p0 {
             }
 
             for (const auto& obj : objects) {
-                std::string module_head_raw{};
-                std::string decl_file{};
-                std::string source{};
-                if (!parse_json_string_field_(obj, "module_head", module_head_raw) ||
-                    !parse_json_string_field_(obj, "decl_file", decl_file) ||
-                    !parse_json_string_field_(obj, "source", source)) {
+                TemplateSidecarFunction entry{};
+                if (!parse_json_string_field_(obj, "bundle", entry.bundle) ||
+                    !parse_json_string_field_(obj, "module_head", entry.module_head) ||
+                    !parse_json_string_field_(obj, "public_path", entry.public_path) ||
+                    !parse_json_string_field_(obj, "link_name", entry.link_name) ||
+                    !parse_json_string_field_(obj, "lookup_name", entry.lookup_name) ||
+                    !parse_json_string_field_(obj, "decl_file", entry.decl_file) ||
+                    !parse_json_uint_field_(obj, "decl_line", entry.decl_line) ||
+                    !parse_json_uint_field_(obj, "decl_col", entry.decl_col) ||
+                    !parse_json_bool_field_(obj, "is_public_export", entry.is_public_export) ||
+                    !parse_json_string_field_(obj, "declared_type_repr", entry.declared_type_repr) ||
+                    !parse_json_string_field_optional_(obj, "declared_type_semantic", entry.declared_type_semantic) ||
+                    !parse_json_uint_field_(obj, "root_stmt", entry.root_stmt)) {
                     out_err = "invalid template-sidecar entry in: " + path;
                     return false;
                 }
+                entry.module_head = normalize_core_public_module_head_(entry.bundle, entry.module_head);
+                entry.decl_file = parus::normalize_path(entry.decl_file);
 
-                std::vector<std::string> export_objects{};
-                if (!parse_json_array_object_slices_(obj, "exports", export_objects)) {
-                    out_err = "invalid template-sidecar exports array in: " + path;
+                std::vector<std::string> stmt_objs{};
+                if (!parse_json_array_object_slices_(obj, "stmts", stmt_objs)) {
+                    out_err = "invalid template-sidecar stmts array in: " + path;
+                    return false;
+                }
+                for (const auto& stmt_obj : stmt_objs) {
+                    TemplateSidecarStmt s{};
+                    uint32_t stmt_kind = 0;
+                    uint32_t stmt_link_abi = 0;
+                    uint32_t stmt_fn_mode = 0;
+                    uint32_t stmt_perm_mask = 0;
+                    if (!parse_json_uint_field_(stmt_obj, "kind", stmt_kind) ||
+                        !parse_json_uint_field_(stmt_obj, "expr", s.expr) ||
+                        !parse_json_uint_field_(stmt_obj, "init", s.init) ||
+                        !parse_json_uint_field_(stmt_obj, "a", s.a) ||
+                        !parse_json_uint_field_(stmt_obj, "b", s.b) ||
+                        !parse_json_uint_field_(stmt_obj, "stmt_begin", s.stmt_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "stmt_count", s.stmt_count) ||
+                        !parse_json_uint_field_(stmt_obj, "case_begin", s.case_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "case_count", s.case_count) ||
+                        !parse_json_bool_field_(stmt_obj, "has_default", s.has_default) ||
+                        !parse_json_bool_field_(stmt_obj, "is_set", s.is_set) ||
+                        !parse_json_bool_field_(stmt_obj, "is_mut", s.is_mut) ||
+                        !parse_json_bool_field_(stmt_obj, "is_static", s.is_static) ||
+                        !parse_json_bool_field_(stmt_obj, "is_const", s.is_const) ||
+                        !parse_json_bool_field_(stmt_obj, "is_extern", s.is_extern) ||
+                        !parse_json_uint_field_(stmt_obj, "link_abi", stmt_link_abi) ||
+                        !parse_json_string_field_(stmt_obj, "name", s.name) ||
+                        !parse_json_string_field_(stmt_obj, "type_repr", s.type_repr) ||
+                        !parse_json_bool_field_(stmt_obj, "is_export", s.is_export) ||
+                        !parse_json_uint_field_(stmt_obj, "fn_mode", stmt_fn_mode) ||
+                        !parse_json_string_field_(stmt_obj, "fn_ret_repr", s.fn_ret_repr) ||
+                        !parse_json_bool_field_(stmt_obj, "is_pure", s.is_pure) ||
+                        !parse_json_bool_field_(stmt_obj, "is_comptime", s.is_comptime) ||
+                        !parse_json_bool_field_(stmt_obj, "is_commit", s.is_commit) ||
+                        !parse_json_bool_field_(stmt_obj, "is_recast", s.is_recast) ||
+                        !parse_json_bool_field_(stmt_obj, "is_throwing", s.is_throwing) ||
+                        !parse_json_bool_field_(stmt_obj, "fn_is_const", s.fn_is_const) ||
+                        !parse_json_uint_field_(stmt_obj, "param_begin", s.param_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "param_count", s.param_count) ||
+                        !parse_json_uint_field_(stmt_obj, "positional_param_count", s.positional_param_count) ||
+                        !parse_json_bool_field_(stmt_obj, "has_named_group", s.has_named_group) ||
+                        !parse_json_bool_field_(stmt_obj, "fn_is_c_variadic", s.fn_is_c_variadic) ||
+                        !parse_json_bool_field_(stmt_obj, "fn_is_proto_sig", s.fn_is_proto_sig) ||
+                        !parse_json_uint_field_(stmt_obj, "fn_generic_param_begin", s.fn_generic_param_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "fn_generic_param_count", s.fn_generic_param_count) ||
+                        !parse_json_uint_field_(stmt_obj, "fn_constraint_begin", s.fn_constraint_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "fn_constraint_count", s.fn_constraint_count) ||
+                        !parse_json_uint_field_(stmt_obj, "manual_perm_mask", stmt_perm_mask) ||
+                        !parse_json_bool_field_(stmt_obj, "var_has_consume_else", s.var_has_consume_else)) {
+                        out_err = "invalid template-sidecar stmt entry in: " + path;
+                        return false;
+                    }
+                    s.kind = static_cast<uint8_t>(stmt_kind);
+                    s.link_abi = static_cast<uint8_t>(stmt_link_abi);
+                    s.fn_mode = static_cast<uint8_t>(stmt_fn_mode);
+                    s.manual_perm_mask = static_cast<uint8_t>(stmt_perm_mask);
+                    entry.stmts.push_back(std::move(s));
+                }
+
+                if (!parse_json_array_uint_field_(obj, "stmt_children", entry.stmt_children)) {
+                    out_err = "invalid template-sidecar stmt_children array in: " + path;
                     return false;
                 }
 
-                TemplateSidecarEntry entry{};
-                entry.bundle = sidecar_bundle;
-                entry.module_head = normalize_core_public_module_head_(sidecar_bundle, module_head_raw);
-                entry.decl_file = parus::normalize_path(decl_file);
-                entry.source = std::move(source);
-
-                for (const auto& ex_obj : export_objects) {
-                    std::string kind_s{};
-                    std::string ex_path{};
-                    std::string link_name{};
-                    if (!parse_json_string_field_(ex_obj, "kind", kind_s) ||
-                        !parse_json_string_field_(ex_obj, "path", ex_path) ||
-                        !parse_json_string_field_(ex_obj, "link_name", link_name)) {
-                        out_err = "invalid template-sidecar export entry in: " + path;
+                std::vector<std::string> expr_objs{};
+                if (!parse_json_array_object_slices_(obj, "exprs", expr_objs)) {
+                    out_err = "invalid template-sidecar exprs array in: " + path;
+                    return false;
+                }
+                for (const auto& expr_obj : expr_objs) {
+                    TemplateSidecarExpr x{};
+                    uint32_t expr_kind = 0;
+                    uint32_t expr_op = 0;
+                    uint32_t expr_cast_kind = 0;
+                    if (!parse_json_uint_field_(expr_obj, "kind", expr_kind) ||
+                        !parse_json_uint_field_(expr_obj, "op", expr_op) ||
+                        !parse_json_uint_field_(expr_obj, "a", x.a) ||
+                        !parse_json_uint_field_(expr_obj, "b", x.b) ||
+                        !parse_json_uint_field_(expr_obj, "c", x.c) ||
+                        !parse_json_bool_field_(expr_obj, "unary_is_mut", x.unary_is_mut) ||
+                        !parse_json_string_field_(expr_obj, "text", x.text) ||
+                        !parse_json_bool_field_(expr_obj, "string_is_raw", x.string_is_raw) ||
+                        !parse_json_bool_field_(expr_obj, "string_is_format", x.string_is_format) ||
+                        !parse_json_uint_field_(expr_obj, "string_part_begin", x.string_part_begin) ||
+                        !parse_json_uint_field_(expr_obj, "string_part_count", x.string_part_count) ||
+                        !parse_json_string_field_(expr_obj, "string_folded_text", x.string_folded_text) ||
+                        !parse_json_uint_field_(expr_obj, "arg_begin", x.arg_begin) ||
+                        !parse_json_uint_field_(expr_obj, "arg_count", x.arg_count) ||
+                        !parse_json_uint_field_(expr_obj, "call_type_arg_begin", x.call_type_arg_begin) ||
+                        !parse_json_uint_field_(expr_obj, "call_type_arg_count", x.call_type_arg_count) ||
+                        !parse_json_bool_field_(expr_obj, "call_from_pipe", x.call_from_pipe) ||
+                        !parse_json_uint_field_(expr_obj, "field_init_begin", x.field_init_begin) ||
+                        !parse_json_uint_field_(expr_obj, "field_init_count", x.field_init_count) ||
+                        !parse_json_string_field_(expr_obj, "field_init_type_repr", x.field_init_type_repr) ||
+                        !parse_json_uint_field_(expr_obj, "block_stmt", x.block_stmt) ||
+                        !parse_json_uint_field_(expr_obj, "block_tail", x.block_tail) ||
+                        !parse_json_bool_field_(expr_obj, "loop_has_header", x.loop_has_header) ||
+                        !parse_json_string_field_(expr_obj, "loop_var", x.loop_var) ||
+                        !parse_json_uint_field_(expr_obj, "loop_iter", x.loop_iter) ||
+                        !parse_json_uint_field_(expr_obj, "loop_body", x.loop_body) ||
+                        !parse_json_string_field_(expr_obj, "cast_type_repr", x.cast_type_repr) ||
+                        !parse_json_uint_field_(expr_obj, "cast_kind", expr_cast_kind) ||
+                        !parse_json_string_field_(expr_obj, "target_type_repr", x.target_type_repr)) {
+                        out_err = "invalid template-sidecar expr entry in: " + path;
                         return false;
                     }
-                    if (kind_s != "fn") continue;
-                    TemplateSidecarExportKey ex{};
-                    ex.path = std::move(ex_path);
-                    ex.link_name = std::move(link_name);
-                    entry.exports.push_back(std::move(ex));
+                    x.kind = static_cast<uint8_t>(expr_kind);
+                    x.op = static_cast<uint8_t>(expr_op);
+                    x.cast_kind = static_cast<uint8_t>(expr_cast_kind);
+                    entry.exprs.push_back(std::move(x));
                 }
 
-                if (!entry.exports.empty() && !entry.source.empty()) {
-                    out.push_back(std::move(entry));
+                std::vector<std::string> switch_case_objs{};
+                if (!parse_json_array_object_slices_(obj, "switch_cases", switch_case_objs)) {
+                    out_err = "invalid template-sidecar switch_cases array in: " + path;
+                    return false;
                 }
+                for (const auto& switch_case_obj : switch_case_objs) {
+                    TemplateSidecarSwitchCase sc{};
+                    uint32_t pat_kind = 0;
+                    if (!parse_json_bool_field_(switch_case_obj, "is_default", sc.is_default) ||
+                        !parse_json_uint_field_(switch_case_obj, "pat_kind", pat_kind) ||
+                        !parse_json_string_field_(switch_case_obj, "pat_text", sc.pat_text) ||
+                        !parse_json_uint_field_(switch_case_obj, "body", sc.body)) {
+                        out_err = "invalid template-sidecar switch case entry in: " + path;
+                        return false;
+                    }
+                    sc.pat_kind = static_cast<uint8_t>(pat_kind);
+                    entry.switch_cases.push_back(std::move(sc));
+                }
+
+                std::vector<std::string> param_objs{};
+                if (!parse_json_array_object_slices_(obj, "params", param_objs)) {
+                    out_err = "invalid template-sidecar params array in: " + path;
+                    return false;
+                }
+                for (const auto& param_obj : param_objs) {
+                    TemplateSidecarParam p{};
+                    uint32_t param_self_kind = 0;
+                    if (!parse_json_string_field_(param_obj, "name", p.name) ||
+                        !parse_json_string_field_(param_obj, "type_repr", p.type_repr) ||
+                        !parse_json_bool_field_(param_obj, "is_mut", p.is_mut) ||
+                        !parse_json_bool_field_(param_obj, "is_self", p.is_self) ||
+                        !parse_json_uint_field_(param_obj, "self_kind", param_self_kind) ||
+                        !parse_json_bool_field_(param_obj, "has_default", p.has_default) ||
+                        !parse_json_uint_field_(param_obj, "default_expr", p.default_expr) ||
+                        !parse_json_bool_field_(param_obj, "is_named_group", p.is_named_group)) {
+                        out_err = "invalid template-sidecar param entry in: " + path;
+                        return false;
+                    }
+                    p.self_kind = static_cast<uint8_t>(param_self_kind);
+                    entry.params.push_back(std::move(p));
+                }
+
+                std::vector<std::string> arg_objs{};
+                if (!parse_json_array_object_slices_(obj, "args", arg_objs)) {
+                    out_err = "invalid template-sidecar args array in: " + path;
+                    return false;
+                }
+                for (const auto& arg_obj : arg_objs) {
+                    TemplateSidecarArg a{};
+                    uint32_t arg_kind = 0;
+                    if (!parse_json_uint_field_(arg_obj, "kind", arg_kind) ||
+                        !parse_json_bool_field_(arg_obj, "has_label", a.has_label) ||
+                        !parse_json_bool_field_(arg_obj, "is_hole", a.is_hole) ||
+                        !parse_json_string_field_(arg_obj, "label", a.label) ||
+                        !parse_json_uint_field_(arg_obj, "expr", a.expr)) {
+                        out_err = "invalid template-sidecar arg entry in: " + path;
+                        return false;
+                    }
+                    a.kind = static_cast<uint8_t>(arg_kind);
+                    entry.args.push_back(std::move(a));
+                }
+
+                std::vector<std::string> init_objs{};
+                if (!parse_json_array_object_slices_(obj, "field_inits", init_objs)) {
+                    out_err = "invalid template-sidecar field_inits array in: " + path;
+                    return false;
+                }
+                for (const auto& init_obj : init_objs) {
+                    TemplateSidecarFieldInit fi{};
+                    if (!parse_json_string_field_(init_obj, "name", fi.name) ||
+                        !parse_json_uint_field_(init_obj, "expr", fi.expr)) {
+                        out_err = "invalid template-sidecar field_init entry in: " + path;
+                        return false;
+                    }
+                    entry.field_inits.push_back(std::move(fi));
+                }
+
+                std::vector<std::string> fpart_objs{};
+                if (!parse_json_array_object_slices_(obj, "fstring_parts", fpart_objs)) {
+                    out_err = "invalid template-sidecar fstring_parts array in: " + path;
+                    return false;
+                }
+                for (const auto& part_obj : fpart_objs) {
+                    TemplateSidecarFStringPart fp{};
+                    if (!parse_json_bool_field_(part_obj, "is_expr", fp.is_expr) ||
+                        !parse_json_string_field_(part_obj, "text", fp.text) ||
+                        !parse_json_uint_field_(part_obj, "expr", fp.expr)) {
+                        out_err = "invalid template-sidecar fstring part entry in: " + path;
+                        return false;
+                    }
+                    entry.fstring_parts.push_back(std::move(fp));
+                }
+
+                if (!parse_json_array_string_field_(obj, "type_args", entry.type_args)) {
+                    out_err = "invalid template-sidecar type_args array in: " + path;
+                    return false;
+                }
+
+                std::vector<std::string> gp_objs{};
+                if (!parse_json_array_object_slices_(obj, "generic_params", gp_objs)) {
+                    out_err = "invalid template-sidecar generic_params array in: " + path;
+                    return false;
+                }
+                for (const auto& gp_obj : gp_objs) {
+                    TemplateSidecarGenericParam gp{};
+                    if (!parse_json_string_field_(gp_obj, "name", gp.name)) {
+                        out_err = "invalid template-sidecar generic param entry in: " + path;
+                        return false;
+                    }
+                    entry.generic_params.push_back(std::move(gp));
+                }
+
+                std::vector<std::string> constraint_objs{};
+                if (!parse_json_array_object_slices_(obj, "constraints", constraint_objs)) {
+                    out_err = "invalid template-sidecar constraints array in: " + path;
+                    return false;
+                }
+                for (const auto& constraint_obj : constraint_objs) {
+                    TemplateSidecarFnConstraint c{};
+                    uint32_t constraint_kind = 0;
+                    if (!parse_json_uint_field_(constraint_obj, "kind", constraint_kind) ||
+                        !parse_json_string_field_(constraint_obj, "lhs", c.type_param) ||
+                        !parse_json_string_field_(constraint_obj, "rhs_type_repr", c.rhs_type_repr) ||
+                        !parse_json_string_field_optional_(constraint_obj, "proto_bundle", c.proto.bundle) ||
+                        !parse_json_string_field_optional_(constraint_obj, "proto_module_head", c.proto.module_head) ||
+                        !parse_json_string_field_optional_(constraint_obj, "proto_path", c.proto.path)) {
+                        out_err = "invalid template-sidecar constraint entry in: " + path;
+                        return false;
+                    }
+                    c.kind = static_cast<uint8_t>(constraint_kind);
+                    entry.constraints.push_back(std::move(c));
+                }
+
+                out.push_back(std::move(entry));
             }
             return true;
         }
@@ -3735,6 +4184,400 @@ namespace parusc::p0 {
             parus::ty::TypePool& types
         ) {
             return parus::cimport::parse_external_type_repr(type_repr, type_semantic, inst_payload, types);
+        }
+
+        std::string_view clone_sv_into_ast_(parus::ast::AstArena& dst, std::string_view s);
+
+        bool load_imported_fn_templates_into_ast_(
+            const std::vector<LoadedExternalIndex>& loaded,
+            std::string_view current_norm,
+            parus::SourceManager& sm,
+            parus::ast::AstArena& ast,
+            parus::ty::TypePool& types,
+            std::vector<parus::tyck::ImportedFnTemplate>& out_templates,
+            std::unordered_map<uint32_t, std::string>& out_file_bundle_overrides,
+            std::unordered_map<uint32_t, std::string>& out_file_module_head_overrides,
+            std::string& out_err
+        ) {
+            out_templates.clear();
+            out_file_bundle_overrides.clear();
+            out_file_module_head_overrides.clear();
+            out_err.clear();
+
+            const auto make_anchor_span = [&](const TemplateSidecarFunction& templ) -> parus::Span {
+                std::string fake{};
+                if (templ.decl_line > 1) fake.append(templ.decl_line - 1, '\n');
+                if (templ.decl_col > 1) fake.append(templ.decl_col - 1, ' ');
+                const uint32_t lo = static_cast<uint32_t>(fake.size());
+                fake.push_back('x');
+                const std::string fake_name =
+                    templ.decl_file + "#template:" +
+                    (!templ.lookup_name.empty() ? templ.lookup_name : templ.link_name);
+                const uint32_t fid = sm.add(fake_name, std::move(fake));
+                out_file_bundle_overrides[fid] = templ.bundle;
+                out_file_module_head_overrides[fid] = templ.module_head;
+                return parus::Span{fid, lo, lo + 1};
+            };
+
+            const auto add_type_node_for = [&](parus::ty::TypeId tid, const parus::Span& sp) -> parus::ast::TypeNodeId {
+                if (tid == parus::ty::kInvalidType) return parus::ast::k_invalid_type_node;
+                parus::ast::TypeNode tn{};
+                tn.kind = parus::ast::TypeNodeKind::kError;
+                tn.span = sp;
+                tn.resolved_type = tid;
+                return ast.add_type_node(tn);
+            };
+
+            for (const auto& index : loaded) {
+                for (const auto& templ : index.sidecars) {
+                    if (!templ.decl_file.empty() && templ.decl_file == current_norm) continue;
+                    if (templ.root_stmt == parus::ast::k_invalid_stmt ||
+                        templ.root_stmt >= templ.stmts.size()) {
+                        out_err = "typed template sidecar missing valid root stmt: " + templ.lookup_name;
+                        return false;
+                    }
+
+                    const parus::Span anchor = make_anchor_span(templ);
+
+                    std::unordered_map<uint32_t, parus::ast::ExprId> expr_map{};
+                    std::unordered_map<uint32_t, parus::ast::StmtId> stmt_map{};
+
+                    std::function<parus::ast::ExprId(uint32_t)> clone_expr{};
+                    std::function<parus::ast::StmtId(uint32_t)> clone_stmt{};
+
+                    clone_expr = [&](uint32_t src_idx) -> parus::ast::ExprId {
+                        if (src_idx == parus::ast::k_invalid_expr || src_idx >= templ.exprs.size()) {
+                            return parus::ast::k_invalid_expr;
+                        }
+                        if (auto it = expr_map.find(src_idx); it != expr_map.end()) return it->second;
+
+                        const auto& src = templ.exprs[src_idx];
+                        parus::ast::Expr e{};
+                        e.kind = static_cast<parus::ast::ExprKind>(src.kind);
+                        e.span = anchor;
+                        e.op = static_cast<parus::syntax::TokenKind>(src.op);
+                        e.unary_is_mut = src.unary_is_mut;
+                        e.text = clone_sv_into_ast_(ast, src.text);
+                        e.string_is_raw = src.string_is_raw;
+                        e.string_is_format = src.string_is_format;
+                        e.string_folded_text = clone_sv_into_ast_(ast, src.string_folded_text);
+                        e.call_from_pipe = src.call_from_pipe;
+                        e.loop_has_header = src.loop_has_header;
+                        e.loop_var = clone_sv_into_ast_(ast, src.loop_var);
+                        e.cast_kind = static_cast<parus::ast::CastKind>(src.cast_kind);
+
+                        const parus::ast::ExprId eid = ast.add_expr(e);
+                        expr_map[src_idx] = eid;
+                        parus::ast::Expr dst = ast.expr(eid);
+
+                        dst.a = clone_expr(src.a);
+                        dst.b = clone_expr(src.b);
+                        dst.c = clone_expr(src.c);
+                        dst.block_tail = clone_expr(src.block_tail);
+                        dst.loop_iter = clone_expr(src.loop_iter);
+                        dst.block_stmt = clone_stmt(src.block_stmt);
+                        dst.loop_body = clone_stmt(src.loop_body);
+
+                        const uint64_t arg_begin = src.arg_begin;
+                        const uint64_t arg_end = arg_begin + src.arg_count;
+                        if (arg_begin <= templ.args.size() && arg_end <= templ.args.size()) {
+                            dst.arg_begin = static_cast<uint32_t>(ast.args().size());
+                            dst.arg_count = src.arg_count;
+                            for (uint32_t i = 0; i < src.arg_count; ++i) {
+                                const auto& a = templ.args[src.arg_begin + i];
+                                parus::ast::Arg out_a{};
+                                out_a.kind = static_cast<parus::ast::ArgKind>(a.kind);
+                                out_a.has_label = a.has_label;
+                                out_a.is_hole = a.is_hole;
+                                out_a.label = clone_sv_into_ast_(ast, a.label);
+                                out_a.expr = clone_expr(a.expr);
+                                out_a.span = anchor;
+                                ast.add_arg(out_a);
+                            }
+                        }
+
+                        const uint64_t type_begin = src.call_type_arg_begin;
+                        const uint64_t type_end = type_begin + src.call_type_arg_count;
+                        if (type_begin <= templ.type_args.size() && type_end <= templ.type_args.size()) {
+                            dst.call_type_arg_begin = static_cast<uint32_t>(ast.type_args().size());
+                            dst.call_type_arg_count = src.call_type_arg_count;
+                            for (uint32_t i = 0; i < src.call_type_arg_count; ++i) {
+                                const auto tid = parse_type_repr_into_(
+                                    templ.type_args[src.call_type_arg_begin + i],
+                                    std::string_view{},
+                                    std::string_view{},
+                                    types
+                                );
+                                ast.add_type_arg(tid);
+                            }
+                        }
+
+                        const uint64_t init_begin = src.field_init_begin;
+                        const uint64_t init_end = init_begin + src.field_init_count;
+                        if (init_begin <= templ.field_inits.size() && init_end <= templ.field_inits.size()) {
+                            dst.field_init_begin = static_cast<uint32_t>(ast.field_init_entries().size());
+                            dst.field_init_count = src.field_init_count;
+                            for (uint32_t i = 0; i < src.field_init_count; ++i) {
+                                const auto& fi = templ.field_inits[src.field_init_begin + i];
+                                parus::ast::FieldInitEntry out_fi{};
+                                out_fi.name = clone_sv_into_ast_(ast, fi.name);
+                                out_fi.expr = clone_expr(fi.expr);
+                                out_fi.span = anchor;
+                                ast.add_field_init_entry(out_fi);
+                            }
+                        }
+
+                        const uint64_t part_begin = src.string_part_begin;
+                        const uint64_t part_end = part_begin + src.string_part_count;
+                        if (part_begin <= templ.fstring_parts.size() && part_end <= templ.fstring_parts.size()) {
+                            dst.string_part_begin = static_cast<uint32_t>(ast.fstring_parts().size());
+                            dst.string_part_count = src.string_part_count;
+                            for (uint32_t i = 0; i < src.string_part_count; ++i) {
+                                const auto& fp = templ.fstring_parts[src.string_part_begin + i];
+                                parus::ast::FStringPart out_fp{};
+                                out_fp.is_expr = fp.is_expr;
+                                out_fp.text = clone_sv_into_ast_(ast, fp.text);
+                                out_fp.expr = clone_expr(fp.expr);
+                                out_fp.span = anchor;
+                                ast.add_fstring_part(out_fp);
+                            }
+                        }
+
+                        if (!src.field_init_type_repr.empty()) {
+                            const auto tid = parse_type_repr_into_(
+                                src.field_init_type_repr,
+                                std::string_view{},
+                                std::string_view{},
+                                types
+                            );
+                            dst.field_init_type_node = add_type_node_for(tid, anchor);
+                        }
+                        if (!src.cast_type_repr.empty()) {
+                            dst.cast_type = parse_type_repr_into_(
+                                src.cast_type_repr,
+                                std::string_view{},
+                                std::string_view{},
+                                types
+                            );
+                            dst.cast_type_node = add_type_node_for(dst.cast_type, anchor);
+                        }
+                        if (!src.target_type_repr.empty()) {
+                            dst.target_type = parse_type_repr_into_(
+                                src.target_type_repr,
+                                std::string_view{},
+                                std::string_view{},
+                                types
+                            );
+                        }
+
+                        ast.expr_mut(eid) = std::move(dst);
+                        return eid;
+                    };
+
+                    clone_stmt = [&](uint32_t src_idx) -> parus::ast::StmtId {
+                        if (src_idx == parus::ast::k_invalid_stmt || src_idx >= templ.stmts.size()) {
+                            return parus::ast::k_invalid_stmt;
+                        }
+                        if (auto it = stmt_map.find(src_idx); it != stmt_map.end()) return it->second;
+
+                        const auto& src = templ.stmts[src_idx];
+                        parus::ast::Stmt s{};
+                        s.kind = static_cast<parus::ast::StmtKind>(src.kind);
+                        s.span = anchor;
+                        s.expr = clone_expr(src.expr);
+                        s.init = clone_expr(src.init);
+                        s.is_set = src.is_set;
+                        s.is_mut = src.is_mut;
+                        s.is_static = src.is_static;
+                        s.is_const = src.is_const;
+                        s.is_extern = src.is_extern;
+                        s.link_abi = static_cast<parus::ast::LinkAbi>(src.link_abi);
+                        s.name = clone_sv_into_ast_(ast, src.name);
+                        s.is_export = src.is_export;
+                        s.fn_mode = static_cast<parus::ast::FnMode>(src.fn_mode);
+                        s.is_pure = src.is_pure;
+                        s.is_comptime = src.is_comptime;
+                        s.is_commit = src.is_commit;
+                        s.is_recast = src.is_recast;
+                        s.is_throwing = src.is_throwing;
+                        s.fn_is_const = src.fn_is_const;
+                        s.positional_param_count = src.positional_param_count;
+                        s.has_named_group = src.has_named_group;
+                        s.fn_is_c_variadic = src.fn_is_c_variadic;
+                        s.fn_is_proto_sig = src.fn_is_proto_sig;
+                        s.manual_perm_mask = src.manual_perm_mask;
+                        s.var_has_consume_else = src.var_has_consume_else;
+
+                        if (!src.type_repr.empty()) {
+                            s.type = parse_type_repr_into_(src.type_repr, std::string_view{}, std::string_view{}, types);
+                            s.type_node = add_type_node_for(s.type, anchor);
+                        }
+                        if (!src.fn_ret_repr.empty()) {
+                            s.fn_ret = parse_type_repr_into_(src.fn_ret_repr, std::string_view{}, std::string_view{}, types);
+                            s.fn_ret_type_node = add_type_node_for(s.fn_ret, anchor);
+                        }
+                        const parus::ast::StmtId sid = ast.add_stmt(s);
+                        stmt_map[src_idx] = sid;
+                        parus::ast::Stmt dst = ast.stmt(sid);
+
+                        dst.a = clone_stmt(src.a);
+                        dst.b = clone_stmt(src.b);
+
+                        if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kBlock)) {
+                            const uint64_t begin = src.stmt_begin;
+                            const uint64_t end = begin + src.stmt_count;
+                            if (begin <= templ.stmt_children.size() && end <= templ.stmt_children.size()) {
+                                dst.stmt_begin = static_cast<uint32_t>(ast.stmt_children().size());
+                                dst.stmt_count = src.stmt_count;
+                                for (uint32_t i = 0; i < src.stmt_count; ++i) {
+                                    ast.add_stmt_child(parus::ast::k_invalid_stmt);
+                                }
+                                for (uint32_t i = 0; i < src.stmt_count; ++i) {
+                                    ast.stmt_children_mut()[dst.stmt_begin + i] =
+                                        clone_stmt(templ.stmt_children[src.stmt_begin + i]);
+                                }
+                            }
+                        } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kSwitch)) {
+                            const uint64_t begin = src.case_begin;
+                            const uint64_t end = begin + src.case_count;
+                            if (begin > templ.switch_cases.size() || end > templ.switch_cases.size()) {
+                                out_err = "typed template sidecar switch case range out of bounds: " + templ.lookup_name;
+                                ast.stmt_mut(sid) = std::move(dst);
+                                return sid;
+                            }
+                            dst.case_begin = static_cast<uint32_t>(ast.switch_cases().size());
+                            dst.case_count = src.case_count;
+                            dst.has_default = src.has_default;
+                            for (uint32_t i = 0; i < src.case_count; ++i) {
+                                const auto& sc = templ.switch_cases[src.case_begin + i];
+                                parus::ast::SwitchCase out_sc{};
+                                out_sc.is_default = sc.is_default;
+                                out_sc.pat_kind = static_cast<parus::ast::CasePatKind>(sc.pat_kind);
+                                out_sc.pat_text = clone_sv_into_ast_(ast, sc.pat_text);
+                                out_sc.body = clone_stmt(sc.body);
+                                out_sc.span = anchor;
+                                ast.add_switch_case(out_sc);
+                            }
+                        } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kFnDecl)) {
+                            dst.param_begin = static_cast<uint32_t>(ast.params().size());
+                            dst.param_count = src.param_count;
+                            const uint64_t p_begin = src.param_begin;
+                            const uint64_t p_end = p_begin + src.param_count;
+                            if (p_begin > templ.params.size() || p_end > templ.params.size()) {
+                                out_err = "typed template sidecar param range out of bounds: " + templ.lookup_name;
+                                return sid;
+                            }
+                            for (uint32_t i = 0; i < src.param_count; ++i) {
+                                const auto& p = templ.params[src.param_begin + i];
+                                parus::ast::Param out_p{};
+                                out_p.name = clone_sv_into_ast_(ast, p.name);
+                                out_p.is_mut = p.is_mut;
+                                out_p.is_self = p.is_self;
+                                out_p.self_kind = static_cast<parus::ast::SelfReceiverKind>(p.self_kind);
+                                out_p.has_default = p.has_default;
+                                out_p.default_expr = clone_expr(p.default_expr);
+                                out_p.is_named_group = p.is_named_group;
+                                out_p.span = anchor;
+                                if (!p.type_repr.empty()) {
+                                    out_p.type = parse_type_repr_into_(
+                                        p.type_repr,
+                                        std::string_view{},
+                                        std::string_view{},
+                                        types
+                                    );
+                                    out_p.type_node = add_type_node_for(out_p.type, anchor);
+                                }
+                                ast.add_param(out_p);
+                            }
+                        }
+                        ast.stmt_mut(sid) = std::move(dst);
+                        return sid;
+                    };
+
+                    const uint32_t gp_begin = static_cast<uint32_t>(ast.generic_param_decls().size());
+                    for (const auto& gp : templ.generic_params) {
+                        parus::ast::GenericParamDecl out_gp{};
+                        out_gp.name = clone_sv_into_ast_(ast, gp.name);
+                        out_gp.span = anchor;
+                        ast.add_generic_param_decl(out_gp);
+                    }
+
+                    const uint32_t cc_begin = static_cast<uint32_t>(ast.fn_constraint_decls().size());
+                    for (const auto& cc : templ.constraints) {
+                        parus::ast::FnConstraintDecl out_cc{};
+                        out_cc.kind = static_cast<parus::ast::FnConstraintKind>(cc.kind);
+                        out_cc.type_param = clone_sv_into_ast_(ast, cc.type_param);
+                        out_cc.span = anchor;
+                        if (!cc.rhs_type_repr.empty()) {
+                            out_cc.rhs_type = parse_type_repr_into_(
+                                cc.rhs_type_repr,
+                                std::string_view{},
+                                std::string_view{},
+                                types
+                            );
+                        }
+                        if (!cc.proto.path.empty()) {
+                            const auto segs = split_path_text_(cc.proto.path);
+                            out_cc.proto_path_begin = static_cast<uint32_t>(ast.path_segs().size());
+                            out_cc.proto_path_count = static_cast<uint32_t>(segs.size());
+                            for (const auto& seg : segs) {
+                                ast.add_path_seg(seg);
+                            }
+                        }
+                        ast.add_fn_constraint_decl(out_cc);
+                    }
+
+                    const auto root_sid = clone_stmt(templ.root_stmt);
+                    if (!out_err.empty()) return false;
+                    if (root_sid == parus::ast::k_invalid_stmt ||
+                        static_cast<size_t>(root_sid) >= ast.stmts().size()) {
+                        out_err = "typed template sidecar failed to reconstruct root fn: " + templ.lookup_name;
+                        return false;
+                    }
+                    auto& root_stmt = ast.stmt_mut(root_sid);
+                    if (root_stmt.kind != parus::ast::StmtKind::kFnDecl) {
+                        out_err = "typed template sidecar root is not fn decl: " + templ.lookup_name;
+                        return false;
+                    }
+                    root_stmt.fn_generic_param_begin = gp_begin;
+                    root_stmt.fn_generic_param_count = static_cast<uint32_t>(templ.generic_params.size());
+                    root_stmt.fn_constraint_begin = cc_begin;
+                    root_stmt.fn_constraint_count = static_cast<uint32_t>(templ.constraints.size());
+                    if (!templ.declared_type_repr.empty()) {
+                        root_stmt.type = parse_type_repr_into_(
+                            templ.declared_type_repr,
+                            templ.declared_type_semantic,
+                            std::string_view{},
+                            types
+                        );
+                    }
+
+                    parus::tyck::ImportedFnTemplate out_t{};
+                    out_t.template_sid = root_sid;
+                    out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
+                    out_t.module_head = templ.module_head;
+                    out_t.public_path = templ.public_path;
+                    out_t.link_name = templ.link_name;
+                    out_t.lookup_name = templ.lookup_name;
+                    out_t.decl_file = templ.decl_file;
+                    out_t.decl_line = templ.decl_line;
+                    out_t.decl_col = templ.decl_col;
+                    out_t.is_public_export = templ.is_public_export;
+                    out_t.declared_type = root_stmt.type;
+                    out_t.constraints.reserve(templ.constraints.size());
+                    for (const auto& cc : templ.constraints) {
+                        parus::tyck::ImportedFnConstraintMeta meta{};
+                        meta.kind = static_cast<parus::ast::FnConstraintKind>(cc.kind);
+                        meta.lhs = cc.type_param;
+                        meta.rhs_type_repr = cc.rhs_type_repr;
+                        meta.proto = cc.proto;
+                        out_t.constraints.push_back(std::move(meta));
+                    }
+                    out_templates.push_back(std::move(out_t));
+                }
+            }
+
+            return true;
         }
 
 #if PARUSC_HAS_AOT_BACKEND
@@ -4943,38 +5786,6 @@ namespace parusc::p0 {
             return (diag_rc != 0) ? 1 : 0;
         }
 
-        std::unordered_set<std::string> sidecar_backed_generic_export_keys{};
-        std::unordered_map<uint32_t, std::string> sidecar_file_bundle_overrides{};
-        std::string inject_err{};
-        if (!inject_template_sidecars_into_ast_(
-                loaded_external_indices,
-                sm,
-                ast,
-                types,
-                bag,
-                opt.max_errors,
-                root,
-                current_norm,
-                sidecar_backed_generic_export_keys,
-                sidecar_file_bundle_overrides,
-                inject_err)) {
-            if (!inject_err.empty()) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kTypeErrorGeneric,
-                    root_span
-                );
-                d.add_arg(inject_err);
-                bag.add(std::move(d));
-            }
-            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-            return (diag_rc != 0) ? 1 : 0;
-        }
-        if (bag.has_error()) {
-            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-            return (diag_rc != 0) ? 1 : 0;
-        }
-
         auto type_resolve = parus::type::resolve_program_types(ast, types, root, bag);
         if (bag.has_error() || !type_resolve.ok) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
@@ -5149,6 +5960,33 @@ namespace parusc::p0 {
             return (diag_rc != 0) ? 1 : 0;
         }
 
+        std::vector<parus::tyck::ImportedFnTemplate> imported_fn_templates{};
+        std::unordered_map<uint32_t, std::string> sidecar_file_bundle_overrides{};
+        std::unordered_map<uint32_t, std::string> sidecar_file_module_head_overrides{};
+        std::string sidecar_load_err{};
+        if (!load_imported_fn_templates_into_ast_(
+                loaded_external_indices,
+                current_norm,
+                sm,
+                ast,
+                types,
+                imported_fn_templates,
+                sidecar_file_bundle_overrides,
+                sidecar_file_module_head_overrides,
+                sidecar_load_err)) {
+            if (!sidecar_load_err.empty()) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kTypeErrorGeneric,
+                    root_span
+                );
+                d.add_arg(sidecar_load_err);
+                bag.add(std::move(d));
+            }
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
         parus::tyck::TyckResult tyck_res;
         {
             parus::tyck::TypeChecker tc(ast, types, bag, &type_resolve, &pres.generic_prep);
@@ -5156,11 +5994,17 @@ namespace parusc::p0 {
             if (!opt.bundle.bundle_name.empty()) {
                 tc.set_current_bundle_name(opt.bundle.bundle_name);
             }
+            if (!imported_fn_templates.empty()) {
+                tc.set_imported_fn_templates(std::move(imported_fn_templates));
+            }
             if (!core_impl_marker_file_ids.empty()) {
                 tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));
             }
             if (!sidecar_file_bundle_overrides.empty()) {
                 tc.set_file_bundle_overrides(std::move(sidecar_file_bundle_overrides));
+            }
+            if (!sidecar_file_module_head_overrides.empty()) {
+                tc.set_file_module_head_overrides(std::move(sidecar_file_module_head_overrides));
             }
             tyck_res = tc.check_program(root);
         }
@@ -5209,18 +6053,18 @@ namespace parusc::p0 {
                 current_dir,
                 typed_exports
             );
-            std::vector<TemplateSidecarEntry> current_sidecars{};
+            std::vector<TemplateSidecarFunction> current_sidecars{};
             std::string sidecar_err{};
             if (!collect_typed_current_template_sidecars_(
                     ast,
                     root,
                     types,
-                    tyck_res,
                     sm,
                     file_id,
                     current_norm,
                     opt.bundle.bundle_name,
                     pass_opt.name_resolve.current_module_head,
+                    typed_exports,
                     current_sidecars,
                     sidecar_err)) {
                 parus::diag::Diagnostic d(
@@ -5235,9 +6079,8 @@ namespace parusc::p0 {
                 const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
                 return (diag_rc != 0) ? 1 : 0;
             }
-
             std::vector<ExportSurfaceEntry> merged_exports = typed_exports;
-            std::vector<TemplateSidecarEntry> merged_sidecars = current_sidecars;
+            std::vector<TemplateSidecarFunction> merged_sidecars = current_sidecars;
             for (const auto& loaded : loaded_external_indices) {
                 if (loaded.bundle != opt.bundle.bundle_name) continue;
                 merged_exports.insert(merged_exports.end(), loaded.entries.begin(), loaded.entries.end());
