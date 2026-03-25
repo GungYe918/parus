@@ -41,7 +41,9 @@ Parus의 monomorphization은 아래 3단계 모델로 고정한다.
 
 이번 라운드 활성화 범위:
 
-1. exported generic free function
+1. local generic free function
+2. external imported generic free function
+3. external template dependency closure 내부의 hidden free function
 
 ### 2.2 Request
 
@@ -112,13 +114,14 @@ Request는 아래 정보를 갖는다.
 ### 5.2 External
 
 export-index만으로는 external generic free function body를 복원할 수 없다.  
-따라서 external exported generic free function은 **adjacent template sidecar**를 통해 template source를 제공한다.
+따라서 external exported generic free function은 **adjacent template sidecar**를 통해 typed template payload를 제공한다.
 
-v1 원칙:
+v2 원칙:
 
 1. producer bundle은 export-index와 별도의 optional sidecar를 낸다.
-2. consumer bundle은 sidecar가 있으면 그 template source를 local template로 로드한다.
-3. 이후 local monomorphization service가 같은 방식으로 concrete instance를 만든다.
+2. consumer bundle은 sidecar가 있으면 그 typed template payload를 imported template table로 로드한다.
+3. imported template는 raw source 재파싱 없이 consumer AST/typed lane에 직접 적재된다.
+4. 이후 local monomorphization service가 local template와 같은 request/key 규칙으로 concrete instance를 만든다.
 
 이 과정은 generic ABI 호출이 아니라 **consumer-local monomorphic recompilation**이다.
 
@@ -126,12 +129,38 @@ v1 원칙:
 
 ## 6. External Template Sidecar
 
-이번 라운드의 sidecar는 raw source closure 기반이다.
+이번 라운드의 sidecar는 **typed template payload v2**로 고정한다.  
+raw source closure 재파싱 모델은 제거한다.
 
 포함 범위:
 
 1. exported generic free function
-2. 그 body가 참조하는 same-file free-function dependency closure
+2. 그 body가 참조하는 same-bundle free-function dependency closure
+3. dependency closure 내부 hidden helper free function의 typed body payload
+
+payload 원칙:
+
+1. `Template identity`
+   - producer bundle
+   - module head
+   - public path
+   - link name
+   - hidden sidecar lookup name
+2. `Typed signature/meta`
+   - function type repr
+   - generic params
+   - constraint list
+3. `Canonical constraint target`
+   - proto bundle
+   - proto module head
+   - proto path
+   - applied type args repr
+4. `Typed body payload`
+   - raw source가 아니라 typed stmt/expr recipe
+5. `Dependency refs`
+   - sidecar closure 안의 free function reference는 hidden lookup name으로 canonicalize
+6. `Decl span/file`
+   - diagnostics용 decl file / line / col
 
 이번 라운드 비범위:
 
@@ -171,9 +200,11 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 1. 공통 monomorphization 문서/모델 고정
 2. exported generic free function의 cross-bundle template import
-3. consumer-local monomorphization
-4. installed core generic helper 복원
-5. concrete shim 제거
+3. raw-source sidecar를 typed template payload v2로 교체
+4. local/external generic free function을 common request/key 규칙으로 통합
+5. imported generic metadata의 proto constraint를 consumer import 없이 canonical identity로 resolve
+6. installed core generic helper 복원
+7. concrete shim 제거
 
 이번 라운드에서 아직 열지 않는 것:
 
@@ -195,6 +226,11 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 따라서 `~`는 이 문서의 직접 범위가 아니다.  
 `~` 정책은 `/Users/gungye/workspace/Lang/gaupel/docs/reference/language/spec/19.md`에서 별도로 고정한다.
+
+이번 라운드의 교차점은 딱 하나다.
+
+1. monomorphization service는 `~`를 특별취급하지 않는다.
+2. `~`의 local SSA alias vs storage materialization 판단은 ownership policy가 맡는다.
 
 ---
 
@@ -221,3 +257,5 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 3. 정적 generic lane은 on-demand local monomorphization + direct code only로 고정
 4. external activation v1은 exported generic free function first로 고정
 5. sidecar 기반 consumer-local monomorphization 방향을 정본으로 확정
+6. raw-source sidecar는 typed template payload v2로 교체
+7. consumer import 없는 canonical proto identity resolution은 imported generic metadata에만 적용

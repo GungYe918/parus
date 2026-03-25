@@ -112,7 +112,9 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 
 이번 라운드 activation:
 
-1. exported generic free function only
+1. local generic free function
+2. external imported generic free function
+3. external typed sidecar dependency closure 내부 hidden free function
 
 ---
 
@@ -160,6 +162,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. 동일 인스턴스 키는 번들 전체에서 중복 생성하지 않는다.
 1. external generic free function도 같은 인스턴스 모델을 쓴다.
 1. external lane도 dictionary ABI가 아니라 local monomorphic instance를 만든다.
+1. imported hidden helper free function도 동일한 request/key/cache 규칙을 쓴다.
 
 인스턴스 키:
 
@@ -261,6 +264,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. exported generic free function의 cross-bundle 사용
 1. installed core generic helper 호출
 1. consumer-local on-demand monomorphization
+1. imported typed sidecar dependency closure 내부 hidden helper free function
 
 비활성 범위:
 
@@ -271,9 +275,34 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 구현 모델:
 
 1. producer bundle은 export-index 옆에 optional template sidecar를 쓴다.
-1. sidecar는 raw source closure 기반으로 시작한다.
-1. consumer bundle은 sidecar를 local template source로 로드한다.
-1. 이후 기존 local instantiation service가 concrete instance를 만든다.
+1. sidecar는 raw source가 아니라 typed template payload v2를 사용한다.
+1. consumer bundle은 sidecar를 imported template table로 로드한다.
+1. imported template table은 program root에 pseudo-source를 주입하지 않는다.
+1. local/external free function은 같은 monomorphization request/key/cache를 사용한다.
+1. external generic metadata 안의 proto target은 canonical proto identity로 resolve하며 consumer lexical import를 요구하지 않는다.
+
+typed sidecar v2 payload:
+
+1. template identity
+   - producer bundle
+   - module head
+   - public path
+   - link name
+   - hidden sidecar lookup name
+1. typed signature/meta
+   - function type repr
+   - generic params
+   - constraint list
+1. canonical proto target
+   - proto bundle
+   - proto module head
+   - proto path
+   - applied type args repr
+1. typed body payload
+   - raw source가 아니라 typed stmt/expr recipe
+1. dependency closure
+   - same-bundle free-function closure까지 허용
+   - free function 이외의 private state/class static/private field shape 의존은 reject
 
 성능 원칙:
 
@@ -288,8 +317,15 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. `cmp::min<T>`
 1. `slice::len<T>`
 1. `range<T>`
+1. external user library의 exported generic free function
 
 같은 installed/external 경계 generic helper가 concrete shim 없이 동작해야 한다.
+
+또한 아래가 같이 성립해야 한다.
+
+1. source-level `with [T: constraints::Comparable]`는 계속 import가 필요하다.
+1. imported generic metadata 안의 same constraint는 consumer import 없이 해석된다.
+1. `text -> *const c_char` dead bridge는 제거된다.
 
 ## 6.2 v2: Generic Acts + Coherence
 

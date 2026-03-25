@@ -212,3 +212,17 @@ export def add(a: i32, b: i32) -> i32 {
 11-b. `core::ext::vaList`는 opaque 타입이며 C ABI 함수 시그니처 파라미터 위치에서만 허용한다.
 11-c. `-fno-core`(또는 `PARUS_NO_CORE=1`)에서 c-import를 사용하면 하드 에러다.
 11-d. `text`는 C ABI 타입으로 허용하지 않으며, 문자열 경계는 `*const core::ext::c_char`와 명시 변환으로 처리한다.
+11-e. `text -> *const core::ext::c_char` hidden lowering bridge는 허용하지 않는다. 타입체커가 거부한 C ABI 경계 변환을 lowering이 복구해서는 안 된다.
+
+## 18.13 Imported Generic Metadata Resolution (Normative)
+
+1. source-level path lookup과 imported generic metadata lookup은 구분한다.
+2. 사용자가 소스에 직접 쓴 path는 본 문서의 ordinary import/head/deps 규칙을 그대로 따른다.
+3. imported generic free function metadata 안의 proto constraint target은 lexical import로 다시 찾지 않는다.
+4. imported metadata는 canonical proto identity를 사용한다.
+4-a. producer bundle
+4-b. proto module head
+4-c. proto public path
+5. consumer는 이 canonical identity를 기준으로 proto stub 또는 imported proto symbol을 직접 resolve한다.
+6. 따라서 소비자는 라이브러리 내부 constraint vocabulary를 다시 import하지 않아도 된다.
+7. 이 완화는 imported metadata 경로에만 적용되며, source-level explicit import requirement를 제거하지 않는다.

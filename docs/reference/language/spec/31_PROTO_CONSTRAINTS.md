@@ -101,6 +101,13 @@ def main() -> i32 {
 9. `with [...]` 안의 comma는 AND 의미만 가진다.
 10. 새 constraint 절 문법이나 bool expression 기반 constraint language는 도입하지 않는다.
 
+import 규칙:
+
+1. source-level constraint target은 ordinary path lookup 규칙을 따른다.
+2. 따라서 사용자가 직접 `with [T: constraints::Comparable]`를 쓰는 경우 lexical import가 계속 필요하다.
+3. 이 규칙 완화는 source 문법이 아니라 imported generic metadata 해석 문제와 분리한다.
+4. external generic free function sidecar/import 경로에서는 canonical proto identity를 사용하므로, consumer는 library 내부 constraint proto를 다시 import하지 않아도 된다.
+
 `ProtoTarget` 규칙:
 
 1. plain proto path(`Comparable`)를 허용한다.
@@ -131,6 +138,32 @@ def convert_i32<T>(x: T) with [T: Into<i32>] -> i32 {
   return x.into();
 }
 ```
+
+external/imported generic 예시:
+
+라이브러리:
+
+```parus
+import constraints as constraints;
+
+export def ordered_min<T>(lhs: T, rhs: T) with [T: constraints::Comparable] -> T {
+  if (lhs <= rhs) { return lhs; }
+  return rhs;
+}
+```
+
+소비자:
+
+```parus
+import api as api;
+
+def main() -> i32 {
+  return api::ordered_min(1i32, 2i32);
+}
+```
+
+위 소비자 코드는 `constraints`를 직접 import하지 않아도 된다.  
+이 완화는 imported metadata에만 적용되며, 소비자 source가 자기 파일 안에서 직접 `with [T: constraints::Comparable]`를 쓸 때는 계속 import가 필요하다.
 
 ## 19.8 builtin proto family
 
