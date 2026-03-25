@@ -9,7 +9,8 @@
         }
 
         const ty::TypeId self_ty = (s.type == ty::kInvalidType)
-            ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
+            ? types_.intern_ident(
+                  s.name.empty() ? std::string("Self") : qualify_decl_name_(std::string(s.name)))
             : s.type;
 
         if (self_ty != ty::kInvalidType) {
@@ -163,7 +164,7 @@
 
         ty::TypeId self_ty = s.type;
         if (self_ty == ty::kInvalidType && !s.name.empty()) {
-            self_ty = types_.intern_ident(s.name);
+            self_ty = types_.intern_ident(qualify_decl_name_(std::string(s.name)));
         }
         if (self_ty != ty::kInvalidType) {
             FieldAbiMeta meta{};
@@ -406,7 +407,7 @@
 
         ty::TypeId self_ty = s.type;
         if (self_ty == ty::kInvalidType && !s.name.empty()) {
-            self_ty = types_.intern_ident(s.name);
+            self_ty = types_.intern_ident(qualify_decl_name_(std::string(s.name)));
         }
         if (self_ty == ty::kInvalidType) {
             diag_(diag::Code::kTypeErrorGeneric, s.span, "enum type id is invalid");
@@ -781,10 +782,9 @@
                 const size_t owner_split = owner_key.rfind("::");
                 const std::string owner_leaf =
                     (owner_split == std::string::npos) ? owner_key : owner_key.substr(owner_split + 2);
-                const bool rewritten_lookup = rewrite_imported_path_(owner_key).has_value();
-                if (auto rewritten = rewrite_imported_path_(owner_key)) {
-                    owner_key = *rewritten;
-                } else if (qualified_path_requires_import_(owner_key)) {
+                const bool owner_had_alias = rewrite_imported_path_(owner_key).has_value();
+                const bool rewritten_lookup = apply_imported_path_rewrite_(owner_key);
+                if (!owner_had_alias && qualified_path_requires_import_(owner_key)) {
                     return ast::k_invalid_stmt;
                 }
 

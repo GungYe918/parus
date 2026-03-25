@@ -431,6 +431,37 @@ namespace parus::tyck {
             return std::string(name.substr(0, pos));
         };
 
+        auto collect_local_sidecar_overloads_for_external_name_ = [&](const sema::Symbol& sym) {
+            std::vector<ast::StmtId> out{};
+            std::vector<std::string> candidate_names{};
+            auto add_name = [&](std::string candidate) {
+                if (candidate.empty()) return;
+                if (std::find(candidate_names.begin(), candidate_names.end(), candidate) != candidate_names.end()) {
+                    return;
+                }
+                candidate_names.push_back(std::move(candidate));
+            };
+
+            add_name(sym.name);
+            add_name(visible_external_fn_name_(sym.name));
+
+            const std::string visible = visible_external_fn_name_(sym.name);
+            if (visible.starts_with("core::")) {
+                add_name(visible.substr(std::string("core::").size()));
+            } else if (sym.decl_bundle_name == "core") {
+                add_name(std::string("core::") + visible);
+            }
+
+            for (const auto& name : candidate_names) {
+                auto it = fn_decl_by_name_.find(name);
+                if (it == fn_decl_by_name_.end()) continue;
+                out.insert(out.end(), it->second.begin(), it->second.end());
+            }
+            std::sort(out.begin(), out.end());
+            out.erase(std::unique(out.begin(), out.end()), out.end());
+            return out;
+        };
+
         auto is_external_free_fn_candidate_ = [&](const sema::Symbol& ss) -> bool {
             if (ss.kind != sema::SymbolKind::kFn) return false;
             if (parse_impl_binding_mode_(ss.external_payload) == "compiler") return false;
@@ -511,10 +542,7 @@ namespace parus::tyck {
             const ast::Expr& recv_expr = ast_.expr(recv_eid);
             if (recv_expr.kind == ast::ExprKind::kIdent) {
                 std::string recv_lookup = std::string(recv_expr.text);
-                const bool recv_rewritten = rewrite_imported_path_(recv_lookup).has_value();
-                if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
-                    recv_lookup = *rewritten;
-                }
+                const bool recv_rewritten = apply_imported_path_rewrite_(recv_lookup);
                 if (auto recv_sid = recv_rewritten ? sym_.lookup(recv_lookup) : lookup_symbol_(recv_lookup)) {
                     const auto& recv_sym = sym_.symbol(*recv_sid);
                     if (recv_sym.kind == sema::SymbolKind::kType) {
@@ -927,10 +955,7 @@ namespace parus::tyck {
                         const ast::Expr& recv_expr = ast_.expr(callee_expr.a);
                         if (recv_expr.kind == ast::ExprKind::kIdent) {
                             std::string recv_lookup = std::string(recv_expr.text);
-                            const bool recv_rewritten = rewrite_imported_path_(recv_lookup).has_value();
-                            if (auto rewritten = rewrite_imported_path_(recv_lookup)) {
-                                recv_lookup = *rewritten;
-                            }
+                            const bool recv_rewritten = apply_imported_path_rewrite_(recv_lookup);
                             if (auto recv_sid = recv_rewritten ? sym_.lookup(recv_lookup) : lookup_symbol_(recv_lookup)) {
                                 bound_selection = lookup_symbol_acts_selection_(*recv_sid);
                             }
@@ -1050,10 +1075,7 @@ namespace parus::tyck {
 
                     auto resolve_plain_enum_owner = [&](const std::string& raw_name) -> ast::StmtId {
                         std::string key = raw_name;
-                        const bool key_rewritten = rewrite_imported_path_(key).has_value();
-                        if (auto rewritten = rewrite_imported_path_(key)) {
-                            key = *rewritten;
-                        }
+                        const bool key_rewritten = apply_imported_path_rewrite_(key);
 
                         if (key.find("::") == std::string::npos) {
                             ast::StmtId local_found = ast::k_invalid_stmt;
@@ -1299,10 +1321,7 @@ namespace parus::tyck {
                     callee_name = std::string(callee_expr.text);
 
                     std::string owner_lookup = explicit_acts.owner_path;
-                    const bool owner_rewritten = rewrite_imported_path_(owner_lookup).has_value();
-                    if (auto rewritten = rewrite_imported_path_(owner_lookup)) {
-                        owner_lookup = *rewritten;
-                    }
+                    const bool owner_rewritten = apply_imported_path_rewrite_(owner_lookup);
 
                     const auto owner_sid = owner_rewritten ? sym_.lookup(owner_lookup) : lookup_symbol_(owner_lookup);
                     if (!owner_sid.has_value()) {
@@ -1407,10 +1426,7 @@ namespace parus::tyck {
             if (!is_explicit_acts_path_call) {
                 if (callee_expr.kind == ast::ExprKind::kIdent) {
                     std::string lookup_name = std::string(callee_expr.text);
-                    const bool lookup_rewritten = rewrite_imported_path_(lookup_name).has_value();
-                    if (auto rewritten = rewrite_imported_path_(lookup_name)) {
-                        lookup_name = *rewritten;
-                    }
+                    const bool lookup_rewritten = apply_imported_path_rewrite_(lookup_name);
 
                     callee_name = lookup_name;
                     if (auto sid = lookup_rewritten ? sym_.lookup(lookup_name) : lookup_symbol_(lookup_name)) {
@@ -1532,6 +1548,9 @@ namespace parus::tyck {
                             auto it = fn_decl_by_name_.find(callee_name);
                             if (it != fn_decl_by_name_.end()) {
                                 overload_decl_ids = it->second;
+                            } else if (sym.is_external &&
+                                       sym.external_payload.find("parus_generic_decl") != std::string::npos) {
+                                overload_decl_ids = collect_local_sidecar_overloads_for_external_name_(sym);
                             }
                         }
                     }
@@ -2224,36 +2243,12 @@ namespace parus::tyck {
 
             if (selected_external_sym != sema::SymbolTable::kNoScope &&
                 selected_external_fn_type != ty::kInvalidType) {
-                if (is_core_module_fn_(selected_external_sym, "convert", "into") &&
-                    call_expr_id != ast::k_invalid_expr &&
-                    static_cast<size_t>(call_expr_id) < ast_.exprs().size() &&
-                    form == CallForm::kPositionalOnly &&
-                    outside_positional.size() == 1 &&
-                    outside_labeled.empty() &&
-                    outside_positional[0] != nullptr &&
-                    outside_positional[0]->expr != ast::k_invalid_expr) {
-                    ast::Expr recv_member{};
-                    recv_member.kind = ast::ExprKind::kIdent;
-                    recv_member.span = ast_.expr(e.a).span;
-                    recv_member.text = ast_.add_owned_string("into");
-                    const ast::ExprId recv_member_eid = ast_.add_expr(recv_member);
-
-                    ast::Expr rewritten_callee{};
-                    rewritten_callee.kind = ast::ExprKind::kBinary;
-                    rewritten_callee.span = e.span;
-                    rewritten_callee.op = K::kDot;
-                    rewritten_callee.a = outside_positional[0]->expr;
-                    rewritten_callee.b = recv_member_eid;
-                    const ast::ExprId rewritten_callee_eid = ast_.add_expr(rewritten_callee);
-
-                    auto& rewritten_call = ast_.expr_mut(call_expr_id);
-                    rewritten_call.a = rewritten_callee_eid;
-                    rewritten_call.arg_begin = 0;
-                    rewritten_call.arg_count = 0;
-                    rewritten_call.call_type_arg_begin = 0;
-                    rewritten_call.call_type_arg_count = 0;
-
-                    return {true, check_expr_call_(rewritten_call)};
+                if (selected_external_is_template) {
+                    diag_(diag::Code::kTypeErrorGeneric, e.span,
+                          "external generic free function template is unavailable across bundle boundary");
+                    err_(e.span, "external generic free function requires template-sidecar materialization");
+                    check_all_arg_exprs_only();
+                    return {true, fallback_ret};
                 }
                 cache_external_callee_(selected_external_sym, selected_external_fn_type);
                 return {true, types_.get(selected_external_fn_type).ret};

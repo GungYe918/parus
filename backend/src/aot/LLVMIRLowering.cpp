@@ -1045,6 +1045,75 @@ namespace parus::backend::aot {
                 return m_.values[v].ty;
             }
 
+            parus::ty::TypeId slot_storage_type_id_(parus::oir::ValueId slot) const {
+                auto tid = value_type_id_(slot);
+                if (tid == parus::ty::kInvalidType || tid >= types_.count()) return tid;
+                const auto& t = types_.get(tid);
+                if ((t.kind == parus::ty::Kind::kPtr ||
+                     t.kind == parus::ty::Kind::kBorrow ||
+                     t.kind == parus::ty::Kind::kEscape) &&
+                    t.elem != parus::ty::kInvalidType) {
+                    return t.elem;
+                }
+                return tid;
+            }
+
+            std::optional<std::string> logical_indirect_aggregate_ty_(
+                parus::oir::ValueId v
+            ) const {
+                const auto tid = value_type_id_(v);
+                if (tid == parus::ty::kInvalidType || tid >= types_.count()) return std::nullopt;
+                const auto& t = types_.get(tid);
+                if (t.kind == parus::ty::Kind::kPtr ||
+                    t.kind == parus::ty::Kind::kBorrow ||
+                    t.kind == parus::ty::Kind::kEscape) {
+                    return std::nullopt;
+                }
+                const std::string full_ty =
+                    map_type_(types_, tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                if (!is_aggregate_llvm_ty_(full_ty)) return std::nullopt;
+                return full_ty;
+            }
+
+            std::optional<std::string> ensure_indirect_aggregate_addr_(
+                std::ostringstream& os,
+                parus::oir::ValueId v
+            ) {
+                const auto full_ty = logical_indirect_aggregate_ty_(v);
+                if (!full_ty.has_value()) return std::nullopt;
+
+                if (auto it = address_ref_by_value_.find(v); it != address_ref_by_value_.end()) {
+                    return it->second;
+                }
+
+                if (auto info = const_text_info_of_value_(v); info.has_value() && *full_ty == "{ ptr, i64 }") {
+                    const std::string slot = next_tmp_();
+                    os << "  " << slot << " = alloca " << *full_ty << "\n";
+
+                    const std::string data_gep = next_tmp_();
+                    os << "  " << data_gep << " = getelementptr " << *full_ty
+                       << ", ptr " << slot << ", i32 0, i32 0\n";
+                    const std::string data_ptr = next_tmp_();
+                    os << "  " << data_ptr << " = getelementptr ["
+                       << info->storage_len << " x i8], ptr @" << info->symbol
+                       << ", i32 0, i32 0\n";
+                    os << "  store ptr " << data_ptr << ", ptr " << data_gep << "\n";
+
+                    const std::string len_gep = next_tmp_();
+                    os << "  " << len_gep << " = getelementptr " << *full_ty
+                       << ", ptr " << slot << ", i32 0, i32 1\n";
+                    os << "  store i64 " << info->len << ", ptr " << len_gep << "\n";
+
+                    address_ref_by_value_[v] = slot;
+                    return slot;
+                }
+
+                if (value_ty_(v) == "ptr") {
+                    return vref_(v);
+                }
+                return std::nullopt;
+            }
+
             /// @brief 값이 InstConstText에서 만들어진 경우 text constant 메타를 반환한다.
             std::optional<TextConstantInfo> const_text_info_of_value_(parus::oir::ValueId v) const {
                 using namespace parus::oir;
@@ -1516,6 +1585,19 @@ namespace parus::backend::aot {
                 const std::string& want
             ) {
                 const std::string cur = value_ty_(src);
+                if (cur == "ptr") {
+                    if (auto agg_ty = logical_indirect_aggregate_ty_(src); agg_ty.has_value()) {
+                        if (is_aggregate_llvm_ty_(want) || want == *agg_ty) {
+                            if (auto addr = ensure_indirect_aggregate_addr_(os, src); addr.has_value()) {
+                                const std::string loaded =
+                                    safe_load_aggregate_from_ptr_(os, *agg_ty, *addr);
+                                return (*agg_ty == want)
+                                    ? loaded
+                                    : coerce_ref_(os, loaded, *agg_ty, want);
+                            }
+                        }
+                    }
+                }
                 const auto tid = value_type_id_(src);
                 if (tid != parus::ty::kInvalidType &&
                     tid < types_.count()) {
@@ -2527,9 +2609,12 @@ namespace parus::backend::aot {
                             for (size_t ai = 0; ai < x.args.size(); ++ai) {
                                 const std::string src_ty = value_ty_(x.args[ai]);
                                 std::string want = src_ty;
+                                bool want_parus_indirect_aggregate = false;
                                 if (direct.has_value()) {
                                     if (ai < direct->param_tys.size()) {
                                         want = direct->param_tys[ai];
+                                        want_parus_indirect_aggregate =
+                                            direct->abi != parus::oir::FunctionAbi::C && want == "ptr";
                                     } else if (direct->is_variadic &&
                                                ai >= static_cast<size_t>(direct->fixed_param_count)) {
                                         want = promote_c_variadic_abi_ty(src_ty);
@@ -2543,6 +2628,13 @@ namespace parus::backend::aot {
                                     }
                                 }
                                 arg_tys.push_back(want);
+                                if (want_parus_indirect_aggregate) {
+                                    if (auto addr = ensure_indirect_aggregate_addr_(os, x.args[ai]);
+                                        addr.has_value()) {
+                                        arg_vals.push_back(*addr);
+                                        continue;
+                                    }
+                                }
                                 arg_vals.push_back(coerce_value_(os, x.args[ai], want));
                             }
 
@@ -2841,12 +2933,12 @@ namespace parus::backend::aot {
                             }
                             const auto ptr = slot_ptr_ref_(os, x.slot);
 
-                            const auto slot_tid = value_type_id_(x.slot);
+                            const auto slot_tid = slot_storage_type_id_(x.slot);
                             if (slot_tid != parus::ty::kInvalidType) {
                                 const std::string slot_full_ty = map_type_(
                                     types_, slot_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
                                 if (is_aggregate_llvm_ty_(slot_full_ty)) {
-                                    const auto value_tid = value_type_id_(x.value);
+                                    const auto value_tid = slot_storage_type_id_(x.value);
                                     if (value_tid != parus::ty::kInvalidType) {
                                         const std::string value_full_ty = map_type_(
                                             types_, value_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);

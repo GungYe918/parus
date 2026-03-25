@@ -127,7 +127,7 @@ root:
                             text="arr"
                         index:
                           Expr(IntLit)
-                            text="0i32"
+                            text="0usize"
                     consume_else=1
                     consume_else_block:
                       Stmt(Block)

@@ -382,10 +382,9 @@ namespace parus::tyck {
             auto resolve_proto_sid_no_diag = [&](const ast::PathRef& pr) -> std::optional<ast::StmtId> {
                 std::string key = path_join_(pr.path_begin, pr.path_count);
                 if (key.empty()) return std::nullopt;
-                const bool key_rewritten = rewrite_imported_path_(key).has_value();
-                if (auto rewritten = rewrite_imported_path_(key)) {
-                    key = *rewritten;
-                } else if (qualified_path_requires_import_(key)) {
+                const bool key_had_alias = rewrite_imported_path_(key).has_value();
+                const bool key_rewritten = apply_imported_path_rewrite_(key);
+                if (!key_had_alias && qualified_path_requires_import_(key)) {
                     return std::nullopt;
                 }
 
@@ -546,7 +545,18 @@ namespace parus::tyck {
         push_alias_scope_();
         for (uint32_t i = 0; i < root.stmt_count; ++i) {
             const ast::StmtId child_id = ast_.stmt_children()[root.stmt_begin + i];
+            if (child_id == ast::k_invalid_stmt || static_cast<size_t>(child_id) >= ast_.stmts().size()) {
+                continue;
+            }
+            const auto& child = ast_.stmt(child_id);
+            const auto saved_ns = namespace_stack_;
+            if (auto it = explicit_file_bundle_overrides_.find(child.span.file_id);
+                it != explicit_file_bundle_overrides_.end() &&
+                it->second != current_bundle_name_()) {
+                namespace_stack_.clear();
+            }
             check_stmt_(child_id);
+            namespace_stack_ = saved_ns;
             // 에러가 나도 계속 진행(정책)
         }
 
@@ -1873,11 +1883,34 @@ namespace parus::tyck {
         }
 
         std::string direct_name = types_.to_string(proto_type);
+        auto resolve_by_unique_leaf = [&](std::string_view raw_name) -> std::optional<ast::StmtId> {
+            if (raw_name.empty()) return std::nullopt;
+            const size_t sep = raw_name.rfind("::");
+            const std::string_view leaf =
+                (sep != std::string_view::npos && sep + 2 < raw_name.size()) ? raw_name.substr(sep + 2) : raw_name;
+            if (leaf.empty()) return std::nullopt;
+            std::optional<ast::StmtId> unique{};
+            bool ambiguous = false;
+            for (const auto& [name, sid] : proto_decl_by_name_) {
+                const size_t name_sep = name.rfind("::");
+                const std::string_view candidate_leaf =
+                    (name_sep == std::string::npos) ? std::string_view(name)
+                                                    : std::string_view(name).substr(name_sep + 2);
+                if (candidate_leaf != leaf) continue;
+                if (unique.has_value() && *unique != sid) {
+                    ambiguous = true;
+                    break;
+                }
+                unique = sid;
+            }
+            if (ambiguous) return std::nullopt;
+            return unique;
+        };
+
         if (!direct_name.empty()) {
-            const bool direct_rewritten = rewrite_imported_path_(direct_name).has_value();
-            if (auto rewritten = rewrite_imported_path_(direct_name)) {
-                direct_name = *rewritten;
-            } else if (qualified_path_requires_import_(direct_name)) {
+            const bool direct_had_alias = rewrite_imported_path_(direct_name).has_value();
+            const bool direct_rewritten = apply_imported_path_rewrite_(direct_name);
+            if (!direct_had_alias && qualified_path_requires_import_(direct_name)) {
                 direct_name.clear();
             }
             if (!direct_name.empty()) {
@@ -1891,6 +1924,12 @@ namespace parus::tyck {
                     if (pit != proto_decl_by_name_.end()) {
                         return pit->second;
                     }
+                    if (auto external_sid = ensure_external_proto_stub_from_symbol_(ss)) {
+                        return *external_sid;
+                    }
+                }
+                if (auto sid = resolve_by_unique_leaf(direct_name)) {
+                    return sid;
                 }
             }
         }
@@ -1908,10 +1947,9 @@ namespace parus::tyck {
         }
 
         std::string base_key = base;
-        const bool base_rewritten = rewrite_imported_path_(base_key).has_value();
-        if (auto rewritten = rewrite_imported_path_(base_key)) {
-            base_key = *rewritten;
-        } else if (qualified_path_requires_import_(base_key)) {
+        const bool base_had_alias = rewrite_imported_path_(base_key).has_value();
+        const bool base_rewritten = apply_imported_path_rewrite_(base_key);
+        if (!base_had_alias && qualified_path_requires_import_(base_key)) {
             base_key.clear();
         }
 
@@ -1925,6 +1963,13 @@ namespace parus::tyck {
                 auto pit = proto_decl_by_name_.find(ss.name);
                 if (pit != proto_decl_by_name_.end()) {
                     templ_sid = pit->second;
+                } else if (auto external_sid = ensure_external_proto_stub_from_symbol_(ss)) {
+                    templ_sid = *external_sid;
+                }
+            }
+            if (templ_sid == ast::k_invalid_stmt) {
+                if (auto sid = resolve_by_unique_leaf(base_key)) {
+                    templ_sid = *sid;
                 }
             }
         }
@@ -2021,10 +2066,9 @@ namespace parus::tyck {
 
         std::string key = path_join_(pr.path_begin, pr.path_count);
         if (key.empty()) return std::nullopt;
-        const bool key_rewritten = rewrite_imported_path_(key).has_value();
-        if (auto rewritten = rewrite_imported_path_(key)) {
-            key = *rewritten;
-        } else if (qualified_path_requires_import_(key)) {
+        const bool key_had_alias = rewrite_imported_path_(key).has_value();
+        const bool key_rewritten = apply_imported_path_rewrite_(key);
+        if (!key_had_alias && qualified_path_requires_import_(key)) {
             return std::nullopt;
         }
         if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
@@ -2045,38 +2089,8 @@ namespace parus::tyck {
             if (pit != proto_decl_by_name_.end()) {
                 return pit->second;
             }
-            const bool external_proto_symbol =
-                ss.is_external &&
-                ss.kind == sema::SymbolKind::kType &&
-                ss.external_payload.starts_with("parus_decl_kind=proto");
-            if (external_proto_symbol) {
-                const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
-                ast::Stmt stub{};
-                stub.kind = ast::StmtKind::kProtoDecl;
-                stub.span = ss.decl_span;
-                stub.name = ss.name;
-                stub.type = ss.declared_type;
-                stub.is_export = ss.is_export;
-                for (const auto& name : meta.params) {
-                    ast::GenericParamDecl gp{};
-                    gp.name = ast_.add_owned_string(name);
-                    gp.span = ss.decl_span;
-                    if (stub.decl_generic_param_count == 0) {
-                        stub.decl_generic_param_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
-                    }
-                    ast_.add_generic_param_decl(gp);
-                    ++stub.decl_generic_param_count;
-                }
-                const auto stub_sid = ast_.add_stmt(stub);
-                proto_decl_by_name_[ss.name] = stub_sid;
-                proto_qualified_name_by_stmt_[stub_sid] = ss.name;
-                if (ss.declared_type != ty::kInvalidType) {
-                    proto_decl_by_type_[ss.declared_type] = stub_sid;
-                }
-                if (stub.decl_generic_param_count > 0) {
-                    generic_proto_template_sid_set_.insert(stub_sid);
-                }
-                return stub_sid;
+            if (auto external_sid = ensure_external_proto_stub_from_symbol_(ss)) {
+                return *external_sid;
             }
         }
         if (typed_path_failure && out_typed_path_failure) {
@@ -2362,85 +2376,87 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        auto fit = field_abi_meta_by_type_.find(ss.declared_type);
-        if (fit == field_abi_meta_by_type_.end()) {
-            const std::string_view external_field_payload =
-                !ss.external_field_payload.empty()
-                    ? std::string_view(ss.external_field_payload)
-                    : std::string_view(ss.external_payload);
-            if (ss.is_external && external_field_payload.starts_with("parus_field_decl")) {
-                const auto meta = parse_external_generic_decl_meta_(external_field_payload);
-                if (!meta.params.empty() || !meta.constraints.empty()) {
-                    if (args.size() != meta.params.size()) {
-                        diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
-                              base_key,
-                              std::to_string(meta.params.size()),
-                              std::to_string(args.size()));
-                        err_(use_span, "external generic struct arity mismatch");
+        const std::string_view external_field_payload =
+            !ss.external_field_payload.empty()
+                ? std::string_view(ss.external_field_payload)
+                : std::string_view(ss.external_payload);
+        if (ss.is_external && external_field_payload.starts_with("parus_field_decl")) {
+            const auto meta = parse_external_generic_decl_meta_(external_field_payload);
+            if (!meta.params.empty() || !meta.constraints.empty()) {
+                if (args.size() != meta.params.size()) {
+                    diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
+                          base_key,
+                          std::to_string(meta.params.size()),
+                          std::to_string(args.size()));
+                    err_(use_span, "external generic struct arity mismatch");
+                    return std::nullopt;
+                }
+
+                std::unordered_map<std::string, ty::TypeId> subst{};
+                subst.reserve(meta.params.size());
+                for (size_t i = 0; i < meta.params.size(); ++i) {
+                    subst.emplace(meta.params[i], args[i]);
+                }
+
+                for (const auto& cc : meta.constraints) {
+                    auto lhs_it = subst.find(cc.lhs);
+                    if (lhs_it == subst.end()) {
+                        diag_(diag::Code::kGenericUnknownTypeParamInConstraint, use_span, cc.lhs);
+                        err_(use_span, "external generic struct constraint references unknown generic parameter");
                         return std::nullopt;
                     }
 
-                    std::unordered_map<std::string, ty::TypeId> subst{};
-                    subst.reserve(meta.params.size());
-                    for (size_t i = 0; i < meta.params.size(); ++i) {
-                        subst.emplace(meta.params[i], args[i]);
-                    }
-
-                    for (const auto& cc : meta.constraints) {
-                        auto lhs_it = subst.find(cc.lhs);
-                        if (lhs_it == subst.end()) {
-                            diag_(diag::Code::kGenericUnknownTypeParamInConstraint, use_span, cc.lhs);
-                            err_(use_span, "external generic struct constraint references unknown generic parameter");
-                            return std::nullopt;
-                        }
-
-                        if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
-                            ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
-                            if (rhs_t == ty::kInvalidType) {
-                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
-                                err_(use_span, "external generic struct constraint references unknown proto");
-                                return std::nullopt;
-                            }
-                            rhs_t = substitute_generic_type_(rhs_t, subst);
-                            bool typed_path_failure = false;
-                            auto proto_sid = resolve_proto_decl_from_type_(rhs_t, use_span, &typed_path_failure, /*emit_diag=*/false);
-                            if (!proto_sid.has_value()) {
-                                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
-                                    continue;
-                                }
-                                if (!typed_path_failure) {
-                                    diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
-                                }
-                                err_(use_span, "external generic struct constraint references unknown proto");
-                                return std::nullopt;
-                            }
-                            if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, use_span)) {
-                                diag_(diag::Code::kGenericDeclConstraintUnsatisfied, use_span,
-                                      cc.lhs, cc.rhs, types_.to_string(lhs_it->second));
-                                err_(use_span, "external generic struct proto constraint unsatisfied");
-                                return std::nullopt;
-                            }
-                            continue;
-                        }
-
+                    if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
                         ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
                         if (rhs_t == ty::kInvalidType) {
-                            err_(use_span, "failed to decode external generic struct equality constraint");
+                            diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                            err_(use_span, "external generic struct constraint references unknown proto");
                             return std::nullopt;
                         }
                         rhs_t = substitute_generic_type_(rhs_t, subst);
-                        const ty::TypeId lhs_t = canonicalize_transparent_external_typedef_(lhs_it->second);
-                        rhs_t = canonicalize_transparent_external_typedef_(rhs_t);
-                        if (lhs_t != rhs_t) {
-                            diag_(diag::Code::kGenericConstraintTypeMismatch, use_span,
-                                  cc.lhs, cc.rhs,
-                                  types_.to_string(lhs_t), types_.to_string(rhs_t));
-                            err_(use_span, "external generic struct equality constraint unsatisfied");
+                        bool typed_path_failure = false;
+                        auto proto_sid = resolve_proto_decl_from_type_(rhs_t, use_span, &typed_path_failure, /*emit_diag=*/false);
+                        if (!proto_sid.has_value()) {
+                            if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                                continue;
+                            }
+                            if (!typed_path_failure) {
+                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                            }
+                            err_(use_span, "external generic struct constraint references unknown proto");
                             return std::nullopt;
                         }
+                        if (!type_satisfies_proto_constraint_(lhs_it->second, *proto_sid, use_span)) {
+                            diag_(diag::Code::kGenericDeclConstraintUnsatisfied, use_span,
+                                  cc.lhs, cc.rhs, types_.to_string(lhs_it->second));
+                            err_(use_span, "external generic struct proto constraint unsatisfied");
+                            return std::nullopt;
+                        }
+                        continue;
+                    }
+
+                    ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                    if (rhs_t == ty::kInvalidType) {
+                        err_(use_span, "failed to decode external generic struct equality constraint");
+                        return std::nullopt;
+                    }
+                    rhs_t = substitute_generic_type_(rhs_t, subst);
+                    const ty::TypeId lhs_t = canonicalize_transparent_external_typedef_(lhs_it->second);
+                    rhs_t = canonicalize_transparent_external_typedef_(rhs_t);
+                    if (lhs_t != rhs_t) {
+                        diag_(diag::Code::kGenericConstraintTypeMismatch, use_span,
+                              cc.lhs, cc.rhs,
+                              types_.to_string(lhs_t), types_.to_string(rhs_t));
+                        err_(use_span, "external generic struct equality constraint unsatisfied");
+                        return std::nullopt;
                     }
                 }
+            }
+        }
 
+        auto fit = field_abi_meta_by_type_.find(ss.declared_type);
+        if (fit == field_abi_meta_by_type_.end()) {
+            if (ss.is_external && external_field_payload.starts_with("parus_field_decl")) {
                 ast::Stmt stub{};
                 stub.kind = ast::StmtKind::kFieldDecl;
                 stub.span = ss.decl_span;
@@ -3347,7 +3363,21 @@ namespace parus::tyck {
 
     std::string TypeChecker::resolve_import_path_for_alias_(std::string_view raw_path) const {
         if (raw_path.empty()) return {};
-        if (!raw_path.starts_with('.')) return std::string(raw_path);
+        if (!raw_path.starts_with('.')) {
+            if (current_bundle_name_() != "core" &&
+                raw_path.find("::") == std::string_view::npos) {
+                const std::string wanted = "core::" + std::string(raw_path);
+                for (const auto& ss : sym_.symbols()) {
+                    if (!ss.is_external || ss.decl_bundle_name != "core") continue;
+                    const std::string public_head =
+                        parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+                    if (public_head == wanted) {
+                        return public_head;
+                    }
+                }
+            }
+            return std::string(raw_path);
+        }
 
         size_t dot_count = 0;
         while (dot_count < raw_path.size() && raw_path[dot_count] == '.') {
@@ -3399,6 +3429,8 @@ namespace parus::tyck {
     }
 
     std::string TypeChecker::current_module_head_() const {
+        const std::string ns = current_namespace_prefix_();
+        if (!ns.empty()) return ns;
         const auto& syms = sym_.symbols();
         for (const auto& s : syms) {
             if (s.is_external) continue;
@@ -3533,6 +3565,16 @@ namespace parus::tyck {
         std::string out = *resolved;
         out += path.substr(pos);
         return out;
+    }
+
+    bool TypeChecker::apply_imported_path_rewrite_(std::string& path) const {
+        if (path.empty()) return false;
+        if (auto rewritten = rewrite_imported_path_(path)) {
+            const bool changed = (*rewritten != path);
+            path = *rewritten;
+            return changed;
+        }
+        return false;
     }
 
     bool TypeChecker::qualified_path_requires_import_(std::string_view raw_path) const {
@@ -3721,6 +3763,46 @@ namespace parus::tyck {
             }
         }
         return owner_type;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_external_proto_stub_from_symbol_(const sema::Symbol& ss) {
+        if (!ss.is_external) return std::nullopt;
+        if (ss.kind != sema::SymbolKind::kType) return std::nullopt;
+        if (!ss.external_payload.starts_with("parus_decl_kind=proto")) return std::nullopt;
+
+        if (auto it = proto_decl_by_name_.find(ss.name); it != proto_decl_by_name_.end()) {
+            return it->second;
+        }
+
+        ast::Stmt stub{};
+        stub.kind = ast::StmtKind::kProtoDecl;
+        stub.span = ss.decl_span;
+        stub.name = ss.name;
+        stub.type = ss.declared_type;
+        stub.is_export = ss.is_export;
+
+        const auto meta = parse_external_generic_decl_meta_(ss.external_payload);
+        for (const auto& name : meta.params) {
+            ast::GenericParamDecl gp{};
+            gp.name = ast_.add_owned_string(name);
+            gp.span = ss.decl_span;
+            if (stub.decl_generic_param_count == 0) {
+                stub.decl_generic_param_begin = static_cast<uint32_t>(ast_.generic_param_decls().size());
+            }
+            ast_.add_generic_param_decl(gp);
+            ++stub.decl_generic_param_count;
+        }
+
+        const auto stub_sid = ast_.add_stmt(stub);
+        proto_decl_by_name_[ss.name] = stub_sid;
+        proto_qualified_name_by_stmt_[stub_sid] = ss.name;
+        if (ss.declared_type != ty::kInvalidType) {
+            proto_decl_by_type_[ss.declared_type] = stub_sid;
+        }
+        if (stub.decl_generic_param_count > 0) {
+            generic_proto_template_sid_set_.insert(stub_sid);
+        }
+        return stub_sid;
     }
 
     void TypeChecker::push_alias_scope_() {

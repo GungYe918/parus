@@ -968,10 +968,7 @@ namespace parus::tyck {
 
         auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
             std::string key = "Recoverable";
-            const bool key_rewritten = rewrite_imported_path_(key).has_value();
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            }
+            const bool key_rewritten = apply_imported_path_rewrite_(key);
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
@@ -1048,10 +1045,7 @@ namespace parus::tyck {
 
         auto resolve_recoverable_proto = [&]() -> std::optional<ast::StmtId> {
             std::string key = "Recoverable";
-            const bool key_rewritten = rewrite_imported_path_(key).has_value();
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            }
+            const bool key_rewritten = apply_imported_path_rewrite_(key);
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
@@ -1142,6 +1136,66 @@ namespace parus::tyck {
     }
 
     void TypeChecker::check_stmt_switch_(const ast::Stmt& s) {
+        auto switch_types_equivalent = [&](auto&& self, ty::TypeId lhs, ty::TypeId rhs) -> bool {
+            lhs = canonicalize_transparent_external_typedef_(lhs);
+            rhs = canonicalize_transparent_external_typedef_(rhs);
+            if (lhs == rhs) return true;
+            if (lhs == ty::kInvalidType || rhs == ty::kInvalidType) return false;
+            if (is_error_(lhs) || is_error_(rhs)) return false;
+            if (lhs >= types_.count() || rhs >= types_.count()) return false;
+
+            const auto& lt = types_.get(lhs);
+            const auto& rt = types_.get(rhs);
+            if (lt.kind != rt.kind) return false;
+
+            switch (lt.kind) {
+                case ty::Kind::kBuiltin:
+                    return lt.builtin == rt.builtin;
+                case ty::Kind::kBorrow:
+                    return lt.borrow_is_mut == rt.borrow_is_mut &&
+                           self(self, lt.elem, rt.elem);
+                case ty::Kind::kEscape:
+                case ty::Kind::kOptional:
+                case ty::Kind::kPtr:
+                    return self(self, lt.elem, rt.elem);
+                case ty::Kind::kArray:
+                    return lt.array_has_size == rt.array_has_size &&
+                           (!lt.array_has_size || lt.array_size == rt.array_size) &&
+                           self(self, lt.elem, rt.elem);
+                case ty::Kind::kNamedUser: {
+                    std::string lhs_base{};
+                    std::string rhs_base{};
+                    std::vector<ty::TypeId> lhs_args{};
+                    std::vector<ty::TypeId> rhs_args{};
+                    if (!decompose_named_user_type_(lhs, lhs_base, lhs_args) &&
+                        types_.get(lhs).kind == ty::Kind::kNamedUser) {
+                        lhs_base = types_.to_string(lhs);
+                    }
+                    if (!decompose_named_user_type_(rhs, rhs_base, rhs_args) &&
+                        types_.get(rhs).kind == ty::Kind::kNamedUser) {
+                        rhs_base = types_.to_string(rhs);
+                    }
+                    auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                        if (full == suffix) return true;
+                        if (full.size() <= suffix.size() + 2u) return false;
+                        if (!full.ends_with(suffix)) return false;
+                        const size_t split = full.size() - suffix.size();
+                        return full[split - 1] == ':' && full[split - 2] == ':';
+                    };
+                    if (!(suffix_match(lhs_base, rhs_base) || suffix_match(rhs_base, lhs_base))) {
+                        return false;
+                    }
+                    if (lhs_args.size() != rhs_args.size()) return false;
+                    for (size_t i = 0; i < lhs_args.size(); ++i) {
+                        if (!self(self, lhs_args[i], rhs_args[i])) return false;
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        };
+
         ty::TypeId scrut_t = ty::kInvalidType;
         if (s.expr != ast::k_invalid_expr) {
             scrut_t = check_expr_(s.expr);
@@ -1186,7 +1240,8 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeErrorGeneric, c.span,
                           std::string("invalid enum pattern target: ") + enum_path);
                     err_(c.span, "invalid enum switch pattern target");
-                } else if (scrut_enum_t != ty::kInvalidType && scrut_enum_t != case_enum_t) {
+                } else if (scrut_enum_t != ty::kInvalidType &&
+                           !switch_types_equivalent(switch_types_equivalent, scrut_enum_t, case_enum_t)) {
                     diag_(diag::Code::kTypeMismatch, c.span,
                           types_.to_string(scrut_enum_t), types_.to_string(case_enum_t));
                     err_(c.span, "enum case pattern type does not match switch scrutinee");

@@ -109,13 +109,6 @@ namespace parus::sir {
                 push_error_(errs, oss.str());
             }
 
-            if (!h.from_static && h.boundary == EscapeBoundaryKind::kNone) {
-                std::ostringstream oss;
-                oss << "escape-handle #" << i
-                    << " violates static/boundary rule (non-static origin with boundary=none)";
-                push_error_(errs, oss.str());
-            }
-
             if (h.from_static) {
                 if (h.origin_sym == k_invalid_symbol ||
                     static_symbols.find(h.origin_sym) == static_symbols.end()) {
@@ -174,6 +167,11 @@ namespace parus::sir {
 
             if (s.init == k_invalid_value || (size_t)s.init >= m.values.size()) continue;
             if (m.values[s.init].kind != ValueKind::kEscape) continue;
+            const bool escape_alias_var =
+                s.is_set &&
+                !s.is_mut &&
+                !s.is_static;
+            if (escape_alias_var) continue;
 
             std::ostringstream oss;
             oss << "stmt #" << sid

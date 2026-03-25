@@ -180,6 +180,26 @@ namespace parusc::p0 {
             bool is_export = false;
         };
 
+        struct TemplateSidecarExportKey {
+            std::string path{};
+            std::string link_name{};
+        };
+
+        struct TemplateSidecarEntry {
+            std::string bundle{};
+            std::string module_head{};
+            std::string decl_file{};
+            std::string source{};
+            std::vector<TemplateSidecarExportKey> exports{};
+        };
+
+        struct LoadedExternalIndex {
+            std::string export_index_path{};
+            std::string bundle{};
+            std::vector<ExportSurfaceEntry> entries{};
+            std::vector<TemplateSidecarEntry> sidecars{};
+        };
+
         std::string json_escape_text_(std::string_view s) {
             std::string out;
             out.reserve(s.size() + 8);
@@ -206,6 +226,36 @@ namespace parusc::p0 {
                 }
             }
             return out;
+        }
+
+        std::string template_sidecar_path_(std::string_view export_index_path) {
+            std::string out(export_index_path);
+            constexpr std::string_view kSuffix = ".exports.json";
+            if (out.size() >= kSuffix.size() &&
+                std::string_view(out).substr(out.size() - kSuffix.size()) == kSuffix) {
+                out.replace(out.size() - kSuffix.size(), kSuffix.size(), ".templates.json");
+                return out;
+            }
+            out += ".templates.json";
+            return out;
+        }
+
+        std::string build_sidecar_export_key_(
+            std::string_view bundle,
+            std::string_view module_head,
+            std::string_view path,
+            std::string_view link_name
+        ) {
+            std::string key{};
+            key.reserve(bundle.size() + module_head.size() + path.size() + link_name.size() + 8u);
+            key.append(bundle);
+            key.push_back('|');
+            key.append(module_head);
+            key.push_back('|');
+            key.append(path);
+            key.push_back('|');
+            key.append(link_name);
+            return key;
         }
 
         std::string build_enum_decl_payload_(
@@ -2421,6 +2471,762 @@ namespace parusc::p0 {
             dedupe_export_surface_(out);
         }
 
+        std::string extract_stmt_source_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId sid,
+            const parus::SourceManager& sm
+        ) {
+            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
+                return {};
+            }
+            const auto& s = ast.stmt(sid);
+            const auto src = sm.content(s.span.file_id);
+            if (s.span.hi < s.span.lo || s.span.hi > src.size()) return {};
+            return std::string(src.substr(s.span.lo, s.span.hi - s.span.lo));
+        }
+
+        std::string build_directive_path_text_(
+            const parus::ast::AstArena& ast,
+            uint32_t begin,
+            uint32_t count
+        ) {
+            if (count == 0) return {};
+            const auto& segs = ast.path_segs();
+            const uint64_t lo = begin;
+            const uint64_t hi = lo + count;
+            if (!(lo <= segs.size() && hi <= segs.size())) return {};
+
+            std::ostringstream oss{};
+            for (uint32_t i = 0; i < count; ++i) {
+                if (i) oss << "::";
+                oss << segs[begin + i];
+            }
+            return oss.str();
+        }
+
+        std::string build_attached_intrinsic_directive_prefix_(
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s
+        ) {
+            if (s.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective ||
+                s.directive_key_path_count == 0) {
+                return {};
+            }
+            const std::string key =
+                build_directive_path_text_(ast, s.directive_key_path_begin, s.directive_key_path_count);
+            if (key.empty()) return {};
+
+            std::ostringstream oss{};
+            oss << "$![" << key;
+            if (s.directive_target_path_count > 0) {
+                const std::string target = build_directive_path_text_(
+                    ast,
+                    s.directive_target_path_begin,
+                    s.directive_target_path_count
+                );
+                if (target.empty()) return {};
+                oss << " = " << target;
+            }
+            oss << "]\n";
+            return oss.str();
+        }
+
+        std::string build_stmt_sidecar_source_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId sid,
+            const parus::SourceManager& sm
+        ) {
+            const std::string raw = extract_stmt_source_(ast, sid, sm);
+            if (raw.empty()) return {};
+            if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
+                return raw;
+            }
+
+            const auto& s = ast.stmt(sid);
+            const std::string prefix = build_attached_intrinsic_directive_prefix_(ast, s);
+            if (prefix.empty()) return raw;
+
+            size_t first = raw.find_first_not_of(" \t\r\n");
+            if (first != std::string::npos && raw.compare(first, 3, "$![") == 0) {
+                return raw;
+            }
+            return prefix + raw;
+        }
+
+        bool is_sidecar_omittable_intrinsic_directive_(
+            const parus::ast::AstArena& ast,
+            const parus::ast::Stmt& s
+        ) {
+            if (s.kind != parus::ast::StmtKind::kCompilerIntrinsicDirective) return false;
+            if (s.directive_target_path_count != 0) return false;
+            if (s.directive_key_path_count != 2) return false;
+            const auto& segs = ast.path_segs();
+            const uint64_t begin = s.directive_key_path_begin;
+            const uint64_t end = begin + s.directive_key_path_count;
+            if (!(begin <= segs.size() && end <= segs.size())) return false;
+            return segs[s.directive_key_path_begin] == "Impl" &&
+                   segs[s.directive_key_path_begin + 1] == "Core";
+        }
+
+        std::string build_field_decl_sidecar_stub_(
+            const parus::ast::AstArena& ast,
+            const parus::ty::TypePool& types,
+            const parus::ast::Stmt& s
+        ) {
+            if (s.kind != parus::ast::StmtKind::kFieldDecl || s.name.empty()) return {};
+
+            std::ostringstream oss{};
+            oss << "struct " << s.name;
+            if (s.decl_generic_param_count > 0) {
+                oss << "<";
+                const auto& gps = ast.generic_param_decls();
+                for (uint32_t i = 0; i < s.decl_generic_param_count; ++i) {
+                    if (i) oss << ", ";
+                    const uint32_t idx = s.decl_generic_param_begin + i;
+                    if (idx >= gps.size()) return {};
+                    oss << gps[idx].name;
+                }
+                oss << ">";
+            }
+            if (s.decl_constraint_count > 0) {
+                const auto& ccs = ast.fn_constraint_decls();
+                oss << " with [";
+                for (uint32_t i = 0; i < s.decl_constraint_count; ++i) {
+                    if (i) oss << ", ";
+                    const uint32_t idx = s.decl_constraint_begin + i;
+                    if (idx >= ccs.size()) return {};
+                    const auto& cc = ccs[idx];
+                    oss << cc.type_param << " ";
+                    if (cc.kind == parus::ast::FnConstraintKind::kProto) {
+                        oss << ": ";
+                    } else {
+                        oss << "== ";
+                    }
+                    if (cc.rhs_type == parus::ty::kInvalidType) return {};
+                    oss << types.to_export_string(cc.rhs_type);
+                }
+                oss << "]";
+            }
+            oss << " {\n";
+
+            const auto& members = ast.field_members();
+            const uint64_t begin = s.field_member_begin;
+            const uint64_t end = begin + s.field_member_count;
+            if (!(begin <= members.size() && end <= members.size())) return {};
+            for (uint32_t i = 0; i < s.field_member_count; ++i) {
+                const auto& member = members[s.field_member_begin + i];
+                if (member.name.empty()) continue;
+                if (member.type == parus::ty::kInvalidType) return {};
+                oss << "    " << member.name << ": " << types.to_string(member.type) << ";\n";
+            }
+            oss << "};";
+            return oss.str();
+        }
+
+        void collect_same_file_fn_deps_from_stmt_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId sid,
+            const parus::tyck::TyckResult& tyck_res,
+            uint32_t current_file_id,
+            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
+            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
+            bool& ok,
+            std::string& out_err
+        );
+
+        void collect_same_file_fn_deps_from_expr_(
+            const parus::ast::AstArena& ast,
+            parus::ast::ExprId eid,
+            const parus::tyck::TyckResult& tyck_res,
+            uint32_t current_file_id,
+            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
+            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
+            bool& ok,
+            std::string& out_err
+        ) {
+            if (!ok || eid == parus::ast::k_invalid_expr || static_cast<size_t>(eid) >= ast.exprs().size()) return;
+            const auto& e = ast.expr(eid);
+
+            auto maybe_add_same_file_callee_ = [&](parus::ast::ExprId call_eid, parus::ast::ExprId callee_eid) {
+                if (!ok || static_cast<size_t>(call_eid) >= tyck_res.expr_overload_target.size()) return;
+                parus::ast::StmtId target_sid = tyck_res.expr_overload_target[call_eid];
+                if ((target_sid == parus::ast::k_invalid_stmt || static_cast<size_t>(target_sid) >= ast.stmts().size()) &&
+                    callee_eid != parus::ast::k_invalid_expr &&
+                    static_cast<size_t>(callee_eid) < tyck_res.expr_overload_target.size()) {
+                    target_sid = tyck_res.expr_overload_target[callee_eid];
+                }
+                if (target_sid == parus::ast::k_invalid_stmt ||
+                    static_cast<size_t>(target_sid) >= ast.stmts().size()) {
+                    return;
+                }
+                const auto& target = ast.stmt(target_sid);
+                if (target.kind != parus::ast::StmtKind::kFnDecl ||
+                    target.span.file_id != current_file_id) {
+                    return;
+                }
+                if (top_level_fn_sids.find(target_sid) == top_level_fn_sids.end()) {
+                    ok = false;
+                    out_err =
+                        "template sidecar currently supports only same-file top-level free function dependencies";
+                    return;
+                }
+                if (closure_fn_sids.insert(target_sid).second) {
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, target_sid, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                }
+            };
+
+            switch (e.kind) {
+                case parus::ast::ExprKind::kUnary:
+                case parus::ast::ExprKind::kPostfixUnary:
+                case parus::ast::ExprKind::kCast:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kBinary:
+                case parus::ast::ExprKind::kAssign:
+                case parus::ast::ExprKind::kIndex:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kTernary:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.c, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kCall: {
+                    maybe_add_same_file_callee_(eid, e.a);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    const auto& args = ast.args();
+                    const uint64_t begin = e.arg_begin;
+                    const uint64_t end = begin + e.arg_count;
+                    if (begin <= args.size() && end <= args.size()) {
+                        for (uint32_t i = 0; i < e.arg_count; ++i) {
+                            collect_same_file_fn_deps_from_expr_(
+                                ast,
+                                args[e.arg_begin + i].expr,
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::ExprKind::kArrayLit: {
+                    const auto& args = ast.args();
+                    const uint64_t begin = e.arg_begin;
+                    const uint64_t end = begin + e.arg_count;
+                    if (begin <= args.size() && end <= args.size()) {
+                        for (uint32_t i = 0; i < e.arg_count; ++i) {
+                            collect_same_file_fn_deps_from_expr_(
+                                ast,
+                                args[e.arg_begin + i].expr,
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::ExprKind::kFieldInit: {
+                    const auto& inits = ast.field_init_entries();
+                    const uint64_t begin = e.field_init_begin;
+                    const uint64_t end = begin + e.field_init_count;
+                    if (begin <= inits.size() && end <= inits.size()) {
+                        for (uint32_t i = 0; i < e.field_init_count; ++i) {
+                            collect_same_file_fn_deps_from_expr_(
+                                ast,
+                                inits[e.field_init_begin + i].expr,
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::ExprKind::kIfExpr:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, e.block_stmt, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.block_tail, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.c, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kBlockExpr:
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, e.block_stmt, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.block_tail, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kLoop:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, e.loop_iter, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, e.loop_body, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::ExprKind::kIntLit:
+                case parus::ast::ExprKind::kFloatLit:
+                case parus::ast::ExprKind::kStringLit:
+                case parus::ast::ExprKind::kCharLit:
+                case parus::ast::ExprKind::kBoolLit:
+                case parus::ast::ExprKind::kNullLit:
+                case parus::ast::ExprKind::kIdent:
+                case parus::ast::ExprKind::kHole:
+                case parus::ast::ExprKind::kMacroCall:
+                case parus::ast::ExprKind::kError:
+                default:
+                    return;
+            }
+        }
+
+        void collect_same_file_fn_deps_from_stmt_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId sid,
+            const parus::tyck::TyckResult& tyck_res,
+            uint32_t current_file_id,
+            const std::unordered_set<parus::ast::StmtId>& top_level_fn_sids,
+            std::unordered_set<parus::ast::StmtId>& closure_fn_sids,
+            bool& ok,
+            std::string& out_err
+        ) {
+            if (!ok || sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
+            const auto& s = ast.stmt(sid);
+            switch (s.kind) {
+                case parus::ast::StmtKind::kBlock: {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                            collect_same_file_fn_deps_from_stmt_(
+                                ast,
+                                kids[s.stmt_begin + i],
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::StmtKind::kExprStmt:
+                case parus::ast::StmtKind::kReturn:
+                case parus::ast::StmtKind::kThrow:
+                case parus::ast::StmtKind::kRequire:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::StmtKind::kVar:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, s.init, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::StmtKind::kIf:
+                case parus::ast::StmtKind::kWhile:
+                case parus::ast::StmtKind::kDoWhile:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.b, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::StmtKind::kFor:
+                case parus::ast::StmtKind::kDoScope:
+                case parus::ast::StmtKind::kManual:
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                case parus::ast::StmtKind::kTryCatch: {
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    const auto& clauses = ast.try_catch_clauses();
+                    const uint64_t begin = s.catch_clause_begin;
+                    const uint64_t end = begin + s.catch_clause_count;
+                    if (begin <= clauses.size() && end <= clauses.size()) {
+                        for (uint32_t i = 0; i < s.catch_clause_count; ++i) {
+                            collect_same_file_fn_deps_from_stmt_(
+                                ast,
+                                clauses[s.catch_clause_begin + i].body,
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::StmtKind::kSwitch: {
+                    collect_same_file_fn_deps_from_expr_(
+                        ast, s.expr, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    const auto& cases = ast.switch_cases();
+                    const uint64_t begin = s.case_begin;
+                    const uint64_t end = begin + s.case_count;
+                    if (begin <= cases.size() && end <= cases.size()) {
+                        for (uint32_t i = 0; i < s.case_count; ++i) {
+                            collect_same_file_fn_deps_from_stmt_(
+                                ast,
+                                cases[s.case_begin + i].body,
+                                tyck_res,
+                                current_file_id,
+                                top_level_fn_sids,
+                                closure_fn_sids,
+                                ok,
+                                out_err
+                            );
+                        }
+                    }
+                    return;
+                }
+
+                case parus::ast::StmtKind::kFnDecl:
+                    collect_same_file_fn_deps_from_stmt_(
+                        ast, s.a, tyck_res, current_file_id, top_level_fn_sids, closure_fn_sids, ok, out_err);
+                    return;
+
+                default:
+                    return;
+            }
+        }
+
+        std::string build_sidecar_wrapped_source_(
+            std::string_view bundle_name,
+            std::string_view module_head,
+            const std::vector<std::string>& snippets
+        ) {
+            auto append_wrapped_ = [&](std::ostringstream& oss, std::string_view head) {
+                if (snippets.empty()) return;
+                if (head.empty()) {
+                    for (size_t i = 0; i < snippets.size(); ++i) {
+                        oss << snippets[i];
+                        if (i + 1 != snippets.size()) oss << "\n\n";
+                    }
+                    oss << "\n";
+                    return;
+                }
+                oss << "nest " << head << " {\n";
+                for (const auto& snippet : snippets) {
+                    oss << snippet << "\n\n";
+                }
+                oss << "}\n";
+            };
+
+            std::ostringstream oss{};
+            if (bundle_name == "core") {
+                oss << "$![Impl::Core];\n\n";
+            }
+            append_wrapped_(oss, module_head);
+            return oss.str();
+        }
+
+        void dedupe_template_sidecars_(std::vector<TemplateSidecarEntry>& entries) {
+            std::unordered_set<std::string> seen{};
+            std::vector<TemplateSidecarEntry> deduped{};
+            deduped.reserve(entries.size());
+            for (auto& e : entries) {
+                std::string key = e.bundle;
+                key.push_back('|');
+                key.append(e.module_head);
+                key.push_back('|');
+                key.append(e.decl_file);
+                for (const auto& ex : e.exports) {
+                    key.push_back('|');
+                    key.append(ex.path);
+                    key.push_back('|');
+                    key.append(ex.link_name);
+                }
+                if (!seen.insert(key).second) continue;
+                deduped.push_back(std::move(e));
+            }
+            entries = std::move(deduped);
+        }
+
+        bool collect_typed_current_template_sidecars_(
+            const parus::ast::AstArena& ast,
+            parus::ast::StmtId root,
+            const parus::ty::TypePool& types,
+            const parus::tyck::TyckResult& tyck_res,
+            const parus::SourceManager& sm,
+            uint32_t current_file_id,
+            std::string_view decl_file,
+            std::string_view bundle_name,
+            std::string_view module_head,
+            std::vector<TemplateSidecarEntry>& out,
+            std::string& out_err
+        ) {
+            out.clear();
+            out_err.clear();
+
+            if (root == parus::ast::k_invalid_stmt || static_cast<size_t>(root) >= ast.stmts().size()) {
+                return true;
+            }
+            const auto& rs = ast.stmt(root);
+            if (rs.kind != parus::ast::StmtKind::kBlock) return true;
+
+            std::vector<parus::ast::StmtId> top_level_current{};
+            std::unordered_set<parus::ast::StmtId> body_bearing_top_level_fn_sids{};
+            std::unordered_set<parus::ast::StmtId> exported_generic_fn_sids{};
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = rs.stmt_begin;
+            const uint64_t end = begin + rs.stmt_count;
+            if (!(begin <= kids.size() && end <= kids.size())) return true;
+
+            for (uint32_t i = 0; i < rs.stmt_count; ++i) {
+                const auto sid = kids[rs.stmt_begin + i];
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) continue;
+                const auto& s = ast.stmt(sid);
+                if (s.span.file_id != current_file_id) continue;
+                top_level_current.push_back(sid);
+                if (s.kind == parus::ast::StmtKind::kFnDecl && !s.name.empty()) {
+                    const std::string fn_snippet = build_stmt_sidecar_source_(ast, sid, sm);
+                    const bool has_body = fn_snippet.find('{') != std::string::npos;
+                    if (has_body) {
+                        body_bearing_top_level_fn_sids.insert(sid);
+                    }
+                    if (has_body && s.is_export && s.fn_generic_param_count > 0) {
+                        exported_generic_fn_sids.insert(sid);
+                    }
+                }
+            }
+
+            if (exported_generic_fn_sids.empty()) return true;
+
+            std::unordered_set<parus::ast::StmtId> closure_fn_sids{};
+            bool closure_ok = true;
+            std::string closure_err{};
+            for (const auto sid : exported_generic_fn_sids) {
+                closure_fn_sids.insert(sid);
+                collect_same_file_fn_deps_from_stmt_(
+                    ast,
+                    sid,
+                    tyck_res,
+                    current_file_id,
+                    body_bearing_top_level_fn_sids,
+                    closure_fn_sids,
+                    closure_ok,
+                    closure_err
+                );
+                if (!closure_ok) {
+                    out_err = closure_err.empty()
+                        ? "failed to collect same-file generic free function dependency closure"
+                        : closure_err;
+                    return false;
+                }
+            }
+
+            std::vector<std::string> snippets{};
+            std::vector<TemplateSidecarExportKey> exports{};
+            snippets.reserve(top_level_current.size());
+            exports.reserve(exported_generic_fn_sids.size());
+            for (size_t top_idx = 0; top_idx < top_level_current.size(); ++top_idx) {
+                const auto sid = top_level_current[top_idx];
+                const auto& s = ast.stmt(sid);
+                if (is_sidecar_omittable_intrinsic_directive_(ast, s)) continue;
+                const bool directive_attaches_to_closure_fn =
+                    (s.kind == parus::ast::StmtKind::kCompilerDirective ||
+                     s.kind == parus::ast::StmtKind::kCompilerIntrinsicDirective) &&
+                    (top_idx + 1u) < top_level_current.size() &&
+                    closure_fn_sids.find(top_level_current[top_idx + 1u]) != closure_fn_sids.end() &&
+                    ast.stmt(top_level_current[top_idx + 1u]).kind == parus::ast::StmtKind::kFnDecl;
+                const bool include_stmt =
+                    (s.kind == parus::ast::StmtKind::kUse) ||
+                    directive_attaches_to_closure_fn ||
+                    (s.kind == parus::ast::StmtKind::kEnumDecl) ||
+                    (s.kind == parus::ast::StmtKind::kFieldDecl) ||
+                    (s.kind == parus::ast::StmtKind::kFnDecl &&
+                     body_bearing_top_level_fn_sids.find(sid) != body_bearing_top_level_fn_sids.end() &&
+                     !std::string_view(s.name).starts_with("__parus_install_anchor_"));
+                if (!include_stmt) continue;
+                std::string snippet{};
+                if (s.kind == parus::ast::StmtKind::kFieldDecl) {
+                    snippet = build_field_decl_sidecar_stub_(ast, types, s);
+                } else {
+                    snippet = build_stmt_sidecar_source_(ast, sid, sm);
+                }
+                if (snippet.empty()) {
+                    out_err = "failed to extract template sidecar source snippet";
+                    return false;
+                }
+                snippets.push_back(snippet);
+            }
+
+            for (const auto sid : top_level_current) {
+                const auto& s = ast.stmt(sid);
+                if (s.kind != parus::ast::StmtKind::kFnDecl ||
+                    exported_generic_fn_sids.find(sid) == exported_generic_fn_sids.end()) {
+                    continue;
+                }
+                const std::string sig_repr =
+                    (s.type != parus::ty::kInvalidType) ? types.to_export_string(s.type) : std::string("def(?)");
+                TemplateSidecarExportKey ex{};
+                ex.path = std::string(s.name);
+                ex.link_name = build_function_link_name_(
+                    bundle_name,
+                    std::string(s.name),
+                    s.fn_mode,
+                    sig_repr,
+                    s.link_abi == parus::ast::LinkAbi::kC
+                );
+                exports.push_back(std::move(ex));
+            }
+
+            if (exports.empty() || snippets.empty()) return true;
+
+            const std::string public_module_head =
+                normalize_core_public_module_head_(bundle_name, module_head);
+            TemplateSidecarEntry entry{};
+            entry.bundle = std::string(bundle_name);
+            entry.module_head = public_module_head;
+            entry.decl_file = std::string(decl_file);
+            entry.source = build_sidecar_wrapped_source_(bundle_name, public_module_head, snippets);
+            entry.exports = std::move(exports);
+            out.push_back(std::move(entry));
+            dedupe_template_sidecars_(out);
+            return true;
+        }
+
+        bool inject_template_sidecars_into_ast_(
+            const std::vector<LoadedExternalIndex>& loaded,
+            parus::SourceManager& sm,
+            parus::ast::AstArena& ast,
+            parus::ty::TypePool& types,
+            parus::diag::Bag& bag,
+            uint32_t max_errors,
+            parus::ast::StmtId root,
+            std::string_view current_norm,
+            std::unordered_set<std::string>& out_sidecar_export_keys,
+            std::unordered_map<uint32_t, std::string>& out_sidecar_file_bundles,
+            std::string& out_err
+        ) {
+            out_sidecar_export_keys.clear();
+            out_sidecar_file_bundles.clear();
+            out_err.clear();
+            if (root == parus::ast::k_invalid_stmt || static_cast<size_t>(root) >= ast.stmts().size()) {
+                return true;
+            }
+            const auto& root_stmt = ast.stmt(root);
+            if (root_stmt.kind != parus::ast::StmtKind::kBlock) {
+                out_err = "template sidecar injection requires program root block";
+                return false;
+            }
+            const auto& root_kids = ast.stmt_children();
+            const uint64_t root_begin = root_stmt.stmt_begin;
+            const uint64_t root_end = root_begin + root_stmt.stmt_count;
+            if (!(root_begin <= root_kids.size() && root_end <= root_kids.size())) {
+                out_err = "template sidecar injection requires valid program root child range";
+                return false;
+            }
+            std::vector<parus::ast::StmtId> merged_root_children{};
+            merged_root_children.reserve(root_stmt.stmt_count + 32u);
+            for (uint32_t i = 0; i < root_stmt.stmt_count; ++i) {
+                merged_root_children.push_back(root_kids[root_stmt.stmt_begin + i]);
+            }
+
+            size_t ordinal = 0;
+            for (const auto& idx : loaded) {
+                for (const auto& entry : idx.sidecars) {
+                    const bool same_current_file =
+                        !entry.decl_file.empty() &&
+                        parus::normalize_path(entry.decl_file) == current_norm;
+                    if (same_current_file) continue;
+
+                    for (const auto& ex : entry.exports) {
+                        out_sidecar_export_keys.insert(
+                            build_sidecar_export_key_(idx.bundle, entry.module_head, ex.path, ex.link_name));
+                    }
+                    if (entry.source.empty()) continue;
+
+                    std::string pseudo_path =
+                        (entry.decl_file.empty() ? std::string("<template-sidecar>")
+                                                 : entry.decl_file) +
+                        "#templates:" + std::to_string(ordinal++);
+                    const uint32_t fid = sm.add(std::move(pseudo_path), entry.source);
+                    if (!idx.bundle.empty()) {
+                        out_sidecar_file_bundles[fid] = idx.bundle;
+                    }
+                    auto tokens = lex_with_sm_(sm, fid, &bag);
+                    if (bag.has_error()) {
+                        out_err = "failed to lex template sidecar";
+                        return false;
+                    }
+
+                    parus::ParserFeatureFlags flags{};
+                    parus::Parser parser(tokens, ast, types, &bag, max_errors, flags);
+                    const auto parsed_root = parser.parse_program();
+                    if (bag.has_error()) {
+                        out_err = "failed to parse template sidecar";
+                        return false;
+                    }
+                    if (parsed_root == parus::ast::k_invalid_stmt ||
+                        static_cast<size_t>(parsed_root) >= ast.stmts().size()) {
+                        continue;
+                    }
+                    const auto& parsed = ast.stmt(parsed_root);
+                    if (parsed.kind != parus::ast::StmtKind::kBlock) continue;
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = parsed.stmt_begin;
+                    const uint64_t end = begin + parsed.stmt_count;
+                    if (!(begin <= kids.size() && end <= kids.size())) continue;
+                    for (uint32_t i = 0; i < parsed.stmt_count; ++i) {
+                        merged_root_children.push_back(kids[parsed.stmt_begin + i]);
+                    }
+                }
+            }
+            auto& all_kids = ast.stmt_children_mut();
+            const uint32_t new_begin = static_cast<uint32_t>(all_kids.size());
+            all_kids.insert(all_kids.end(), merged_root_children.begin(), merged_root_children.end());
+            auto& root_stmt_mut = ast.stmt_mut(root);
+            root_stmt_mut.stmt_begin = new_begin;
+            root_stmt_mut.stmt_count = static_cast<uint32_t>(merged_root_children.size());
+            return true;
+        }
+
         void validate_same_folder_export_collisions_(
             const std::vector<ExportSurfaceEntry>& entries,
             parus::diag::Bag& bag,
@@ -2749,6 +3555,175 @@ namespace parusc::p0 {
                 e.decl_bundle = bundle_name;
                 e.is_export = is_export;
                 out.push_back(std::move(e));
+            }
+            return true;
+        }
+
+        bool write_template_sidecar_(
+            const std::string& export_index_path,
+            const std::string& bundle_name,
+            const std::vector<TemplateSidecarEntry>& entries,
+            std::string& out_err
+        ) {
+            namespace fs = std::filesystem;
+            out_err.clear();
+
+            const std::string out_path = template_sidecar_path_(export_index_path);
+            std::error_code ec{};
+            const fs::path p(out_path);
+            const auto dir = p.parent_path();
+            if (!dir.empty()) {
+                fs::create_directories(dir, ec);
+                if (ec) {
+                    out_err = "failed to create template-sidecar directory: " + dir.string();
+                    return false;
+                }
+            }
+
+            std::ofstream ofs(out_path, std::ios::binary | std::ios::trunc);
+            if (!ofs.is_open()) {
+                out_err = "failed to open template-sidecar output: " + out_path;
+                return false;
+            }
+
+            ofs << "{\n";
+            ofs << "  \"version\": 1,\n";
+            ofs << "  \"bundle\": \"" << json_escape_text_(bundle_name) << "\",\n";
+            ofs << "  \"templates\": [\n";
+            for (size_t i = 0; i < entries.size(); ++i) {
+                const auto& e = entries[i];
+                ofs << "    {\"module_head\":\"" << json_escape_text_(e.module_head)
+                    << "\",\"decl_file\":\"" << json_escape_text_(e.decl_file)
+                    << "\",\"source\":\"" << json_escape_text_(e.source)
+                    << "\",\"exports\":[";
+                for (size_t j = 0; j < e.exports.size(); ++j) {
+                    const auto& ex = e.exports[j];
+                    ofs << "{\"kind\":\"fn\",\"path\":\"" << json_escape_text_(ex.path)
+                        << "\",\"link_name\":\"" << json_escape_text_(ex.link_name) << "\"}";
+                    if (j + 1 != e.exports.size()) ofs << ",";
+                }
+                ofs << "]}";
+                if (i + 1 != entries.size()) ofs << ",";
+                ofs << "\n";
+            }
+            ofs << "  ]\n";
+            ofs << "}\n";
+
+            if (!ofs.good()) {
+                out_err = "failed to write template-sidecar output: " + out_path;
+                return false;
+            }
+            return true;
+        }
+
+        bool load_template_sidecar_(
+            const std::string& export_index_path,
+            std::string_view bundle_name,
+            std::vector<TemplateSidecarEntry>& out,
+            std::string& out_err
+        ) {
+            out.clear();
+            out_err.clear();
+
+            namespace fs = std::filesystem;
+            std::error_code ec{};
+            const std::string path = template_sidecar_path_(export_index_path);
+            if (!fs::exists(path, ec)) {
+                if (ec) {
+                    out_err = "failed to stat template-sidecar file: " + path;
+                    return false;
+                }
+                return true;
+            }
+
+            std::string text{};
+            std::string io_err{};
+            if (!parus::open_file(path, text, io_err)) {
+                out_err = "failed to open template-sidecar file: " + path;
+                return false;
+            }
+
+            uint32_t version = 0;
+            if (!parse_json_uint_field_(text, "version", version) || version != 1) {
+                out_err = "unsupported template-sidecar version (expected v1) in: " + path;
+                return false;
+            }
+
+            std::string sidecar_bundle{};
+            if (!parse_json_string_field_(text, "bundle", sidecar_bundle) || sidecar_bundle.empty()) {
+                out_err = "invalid template-sidecar bundle name in: " + path;
+                return false;
+            }
+            if (!bundle_name.empty() && sidecar_bundle != bundle_name) {
+                out_err = "template-sidecar bundle mismatch in: " + path;
+                return false;
+            }
+
+            std::vector<std::string> objects{};
+            if (!parse_json_array_object_slices_(text, "templates", objects)) {
+                out_err = "invalid template-sidecar templates array in: " + path;
+                return false;
+            }
+
+            for (const auto& obj : objects) {
+                std::string module_head_raw{};
+                std::string decl_file{};
+                std::string source{};
+                if (!parse_json_string_field_(obj, "module_head", module_head_raw) ||
+                    !parse_json_string_field_(obj, "decl_file", decl_file) ||
+                    !parse_json_string_field_(obj, "source", source)) {
+                    out_err = "invalid template-sidecar entry in: " + path;
+                    return false;
+                }
+
+                std::vector<std::string> export_objects{};
+                if (!parse_json_array_object_slices_(obj, "exports", export_objects)) {
+                    out_err = "invalid template-sidecar exports array in: " + path;
+                    return false;
+                }
+
+                TemplateSidecarEntry entry{};
+                entry.bundle = sidecar_bundle;
+                entry.module_head = normalize_core_public_module_head_(sidecar_bundle, module_head_raw);
+                entry.decl_file = parus::normalize_path(decl_file);
+                entry.source = std::move(source);
+
+                for (const auto& ex_obj : export_objects) {
+                    std::string kind_s{};
+                    std::string ex_path{};
+                    std::string link_name{};
+                    if (!parse_json_string_field_(ex_obj, "kind", kind_s) ||
+                        !parse_json_string_field_(ex_obj, "path", ex_path) ||
+                        !parse_json_string_field_(ex_obj, "link_name", link_name)) {
+                        out_err = "invalid template-sidecar export entry in: " + path;
+                        return false;
+                    }
+                    if (kind_s != "fn") continue;
+                    TemplateSidecarExportKey ex{};
+                    ex.path = std::move(ex_path);
+                    ex.link_name = std::move(link_name);
+                    entry.exports.push_back(std::move(ex));
+                }
+
+                if (!entry.exports.empty() && !entry.source.empty()) {
+                    out.push_back(std::move(entry));
+                }
+            }
+            return true;
+        }
+
+        bool load_external_index_(
+            const std::string& path,
+            LoadedExternalIndex& out,
+            std::string& out_err
+        ) {
+            out = LoadedExternalIndex{};
+            out.export_index_path = path;
+            if (!load_export_index_(path, out.bundle, out.entries, out_err)) {
+                return false;
+            }
+            if (!load_template_sidecar_(path, out.bundle, out.sidecars, out_err)) {
+                return false;
             }
             return true;
         }
@@ -3414,12 +4389,6 @@ namespace parusc::p0 {
             return (diag_rc != 0 || !macro_ok) ? 1 : 0;
         }
 
-        auto type_resolve = parus::type::resolve_program_types(ast, types, root, bag);
-        if (bag.has_error() || !type_resolve.ok) {
-            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-            return (diag_rc != 0 || !type_resolve.ok) ? 1 : 0;
-        }
-
         const std::string current_dir = parent_dir_norm_(current_norm);
         std::vector<ExportSurfaceEntry> cimport_surface{};
         std::vector<std::string> cimport_include_dirs_norm{};
@@ -3938,6 +4907,80 @@ namespace parusc::p0 {
             }
         }
 
+        std::vector<std::string> external_index_paths{};
+        external_index_paths.reserve(
+            inv.load_export_index_paths.size() + (auto_core_export_index_path.empty() ? 0u : 1u)
+        );
+        if (!auto_core_export_index_path.empty()) {
+            external_index_paths.push_back(auto_core_export_index_path);
+        }
+        for (const auto& p : inv.load_export_index_paths) {
+            const std::string norm = parus::normalize_path(p);
+            if (std::find(external_index_paths.begin(), external_index_paths.end(), norm) == external_index_paths.end()) {
+                external_index_paths.push_back(norm);
+            }
+        }
+
+        std::vector<LoadedExternalIndex> loaded_external_indices{};
+        loaded_external_indices.reserve(external_index_paths.size());
+        for (const auto& idx_path : external_index_paths) {
+            LoadedExternalIndex loaded{};
+            std::string load_err{};
+            if (!load_external_index_(idx_path, loaded, load_err)) {
+                const parus::diag::Code code = load_err.starts_with("missing export-index file")
+                    ? parus::diag::Code::kExportIndexMissing
+                    : parus::diag::Code::kExportIndexSchema;
+                parus::diag::Diagnostic d(parus::diag::Severity::kError, code, root_span);
+                d.add_arg(load_err);
+                bag.add(std::move(d));
+                continue;
+            }
+            qualify_export_surface_entries_for_bundle_(loaded.entries, loaded.bundle);
+            loaded_external_indices.push_back(std::move(loaded));
+        }
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        std::unordered_set<std::string> sidecar_backed_generic_export_keys{};
+        std::unordered_map<uint32_t, std::string> sidecar_file_bundle_overrides{};
+        std::string inject_err{};
+        if (!inject_template_sidecars_into_ast_(
+                loaded_external_indices,
+                sm,
+                ast,
+                types,
+                bag,
+                opt.max_errors,
+                root,
+                current_norm,
+                sidecar_backed_generic_export_keys,
+                sidecar_file_bundle_overrides,
+                inject_err)) {
+            if (!inject_err.empty()) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kTypeErrorGeneric,
+                    root_span
+                );
+                d.add_arg(inject_err);
+                bag.add(std::move(d));
+            }
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+        if (bag.has_error()) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0) ? 1 : 0;
+        }
+
+        auto type_resolve = parus::type::resolve_program_types(ast, types, root, bag);
+        if (bag.has_error() || !type_resolve.ok) {
+            const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            return (diag_rc != 0 || !type_resolve.ok) ? 1 : 0;
+        }
+
         std::vector<ExportSurfaceEntry> bundle_surface{};
         if (opt.bundle.enabled || !opt.bundle.emit_export_index_path.empty() || !inv.load_export_index_paths.empty()) {
             std::vector<std::string> sources = inv.bundle_sources;
@@ -4068,36 +5111,10 @@ namespace parusc::p0 {
             add_external(e, /*same_bundle=*/false);
         }
 
-        std::vector<std::string> external_index_paths{};
-        external_index_paths.reserve(inv.load_export_index_paths.size() + (auto_core_export_index_path.empty() ? 0u : 1u));
-        if (!auto_core_export_index_path.empty()) {
-            external_index_paths.push_back(auto_core_export_index_path);
-        }
-        for (const auto& p : inv.load_export_index_paths) {
-            const std::string norm = parus::normalize_path(p);
-            if (std::find(external_index_paths.begin(), external_index_paths.end(), norm) == external_index_paths.end()) {
-                external_index_paths.push_back(norm);
-            }
-        }
-
-        for (const auto& idx_path : external_index_paths) {
-            std::string dep_bundle{};
-            std::vector<ExportSurfaceEntry> dep_entries{};
-            std::string load_err{};
-            if (!load_export_index_(idx_path, dep_bundle, dep_entries, load_err)) {
-                const parus::diag::Code code = load_err.starts_with("missing export-index file")
-                    ? parus::diag::Code::kExportIndexMissing
-                    : parus::diag::Code::kExportIndexSchema;
-                parus::diag::Diagnostic d(parus::diag::Severity::kError, code, root_span);
-                d.add_arg(load_err);
-                bag.add(std::move(d));
-                continue;
-            }
-
-            qualify_export_surface_entries_for_bundle_(dep_entries, dep_bundle);
-            for (auto& e : dep_entries) {
-                if (e.decl_bundle.empty()) e.decl_bundle = dep_bundle;
-                const bool same_bundle = opt.bundle.enabled && dep_bundle == opt.bundle.bundle_name;
+        for (const auto& loaded : loaded_external_indices) {
+            for (auto e : loaded.entries) {
+                if (e.decl_bundle.empty()) e.decl_bundle = loaded.bundle;
+                const bool same_bundle = opt.bundle.enabled && loaded.bundle == opt.bundle.bundle_name;
                 if (same_bundle && e.decl_file == current_norm) continue;
                 add_external(e, same_bundle);
             }
@@ -4142,10 +5159,18 @@ namespace parusc::p0 {
             if (!core_impl_marker_file_ids.empty()) {
                 tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));
             }
+            if (!sidecar_file_bundle_overrides.empty()) {
+                tc.set_file_bundle_overrides(std::move(sidecar_file_bundle_overrides));
+            }
             tyck_res = tc.check_program(root);
         }
         if (bag.has_error() || !tyck_res.errors.empty()) {
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+            if (!tyck_res.errors.empty()) {
+                for (const auto& err : tyck_res.errors) {
+                    std::cerr << "error: type-check: " << err.message << "\n";
+                }
+            }
             return (diag_rc != 0 || !tyck_res.errors.empty()) ? 1 : 0;
         }
 
@@ -4184,31 +5209,45 @@ namespace parusc::p0 {
                 current_dir,
                 typed_exports
             );
+            std::vector<TemplateSidecarEntry> current_sidecars{};
+            std::string sidecar_err{};
+            if (!collect_typed_current_template_sidecars_(
+                    ast,
+                    root,
+                    types,
+                    tyck_res,
+                    sm,
+                    file_id,
+                    current_norm,
+                    opt.bundle.bundle_name,
+                    pass_opt.name_resolve.current_module_head,
+                    current_sidecars,
+                    sidecar_err)) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kTypeErrorGeneric,
+                    root_span
+                );
+                d.add_arg(sidecar_err.empty()
+                    ? std::string("failed to collect template sidecar")
+                    : sidecar_err);
+                bag.add(std::move(d));
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
 
             std::vector<ExportSurfaceEntry> merged_exports = typed_exports;
-            for (const auto& idx_path : inv.load_export_index_paths) {
-                std::string dep_bundle{};
-                std::vector<ExportSurfaceEntry> dep_entries{};
-                std::string load_err{};
-                if (!load_export_index_(idx_path, dep_bundle, dep_entries, load_err)) {
-                    parus::diag::Diagnostic d(
-                        parus::diag::Severity::kError,
-                        parus::diag::Code::kExportIndexSchema,
-                        root_span
-                    );
-                    d.add_arg(load_err);
-                    bag.add(std::move(d));
-                    const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
-                    return (diag_rc != 0) ? 1 : 0;
-                }
-                if (dep_bundle != opt.bundle.bundle_name) {
-                    continue;
-                }
-                merged_exports.insert(merged_exports.end(), dep_entries.begin(), dep_entries.end());
+            std::vector<TemplateSidecarEntry> merged_sidecars = current_sidecars;
+            for (const auto& loaded : loaded_external_indices) {
+                if (loaded.bundle != opt.bundle.bundle_name) continue;
+                merged_exports.insert(merged_exports.end(), loaded.entries.begin(), loaded.entries.end());
+                merged_sidecars.insert(
+                    merged_sidecars.end(), loaded.sidecars.begin(), loaded.sidecars.end());
             }
 
             qualify_export_surface_entries_for_bundle_(merged_exports, opt.bundle.bundle_name);
             dedupe_export_surface_(merged_exports);
+            dedupe_template_sidecars_(merged_sidecars);
             validate_same_folder_export_collisions_(merged_exports, bag, root_span);
             if (bag.has_error()) {
                 const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
@@ -4220,6 +5259,21 @@ namespace parusc::p0 {
                                      opt.bundle.bundle_name,
                                      merged_exports,
                                      write_err)) {
+                parus::diag::Diagnostic d(
+                    parus::diag::Severity::kError,
+                    parus::diag::Code::kExportIndexSchema,
+                    root_span
+                );
+                d.add_arg(write_err);
+                bag.add(std::move(d));
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
+            if (!write_template_sidecar_(
+                    opt.bundle.emit_export_index_path,
+                    opt.bundle.bundle_name,
+                    merged_sidecars,
+                    write_err)) {
                 parus::diag::Diagnostic d(
                     parus::diag::Severity::kError,
                     parus::diag::Code::kExportIndexSchema,

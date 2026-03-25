@@ -8,7 +8,7 @@ def pop(opt: i32?) -> i32 {
 
 def pop_index(xs: i32?[]) -> i32 {
     set mut arr = xs;
-    set v = arr[0i32] else {
+    set v = arr[0usize] else {
         return 1i32;
     };
     return v;

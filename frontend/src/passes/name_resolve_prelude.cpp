@@ -203,7 +203,20 @@ namespace parus::passes {
         const NameResolveOptions& opt
     ) {
         if (raw_path.empty()) return {};
-        if (!raw_path.starts_with('.')) return std::string(raw_path);
+        if (!raw_path.starts_with('.')) {
+            if (opt.current_bundle_name != "core" &&
+                raw_path.find("::") == std::string_view::npos) {
+                for (const auto& ex : opt.external_exports) {
+                    if (ex.decl_bundle_name != "core") continue;
+                    const std::string public_head =
+                        parus::normalize_core_public_module_head(ex.decl_bundle_name, ex.module_head);
+                    if (public_head == "core::" + std::string(raw_path)) {
+                        return public_head;
+                    }
+                }
+            }
+            return std::string(raw_path);
+        }
 
         size_t dot_count = 0;
         while (dot_count < raw_path.size() && raw_path[dot_count] == '.') {
@@ -296,15 +309,16 @@ namespace parus::passes {
 
     static bool is_symbol_visible_from_use_site_(
         const sema::Symbol& symobj,
+        uint32_t use_site_file_id,
         const NameResolveOptions& opt
     ) {
         if (symobj.is_external) {
             return symobj.is_export;
         }
 
-        if (opt.current_file_id != 0 &&
+        if (use_site_file_id != 0 &&
             symobj.decl_file_id != 0 &&
-            symobj.decl_file_id != opt.current_file_id &&
+            symobj.decl_file_id != use_site_file_id &&
             !symobj.is_export) {
             return false;
         }

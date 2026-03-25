@@ -1631,7 +1631,10 @@ namespace parus::oir {
                         const auto& wt = types->get(want_ty);
                         if (wt.kind == parus::ty::Kind::kNamedUser ||
                             wt.kind == parus::ty::Kind::kArray ||
-                            wt.kind == parus::ty::Kind::kOptional) {
+                            wt.kind == parus::ty::Kind::kOptional ||
+                            wt.kind == parus::ty::Kind::kPtr ||
+                            wt.kind == parus::ty::Kind::kBorrow ||
+                            wt.kind == parus::ty::Kind::kEscape) {
                             return it->second.v;
                         }
                     }
@@ -1783,6 +1786,24 @@ namespace parus::oir {
                     }
                     return emit_field(want_ptr_ty, src_value, "ptr_");
                 };
+
+                auto is_text_type = [&](TypeId t) -> bool {
+                    if (t == kInvalidId) return false;
+                    const auto& tt0 = types->get(t);
+                    if ((tt0.kind == parus::ty::Kind::kBorrow ||
+                         tt0.kind == parus::ty::Kind::kEscape) &&
+                        tt0.elem != kInvalidId) {
+                        t = tt0.elem;
+                    }
+                    if (t == kInvalidId) return false;
+                    const auto& tt = types->get(t);
+                    return tt.kind == parus::ty::Kind::kBuiltin &&
+                           tt.builtin == parus::ty::Builtin::kText;
+                };
+
+                if (is_c_char_ptr_type(dst_ty) && is_text_type(src_ty)) {
+                    return emit_field(dst_ty, src, "data");
+                }
 
                 if (is_c_char_ptr_type(dst_ty) && is_core_ext_cstr_type(src_ty)) {
                     return emit_core_ext_cstr_ptr_(src, dst_ty);
@@ -4073,6 +4094,19 @@ namespace parus::oir {
                 auto materialize_var_decl_ = [&](ValueId init, bool consume_init_sir) {
                     init = coerce_value_for_target(declared, init);
 
+                    const bool escape_alias_binding =
+                        !s.is_static &&
+                        s.is_set &&
+                        !s.is_mut &&
+                        declared != kInvalidId &&
+                        types != nullptr &&
+                        types->get(declared).kind == parus::ty::Kind::kEscape &&
+                        init != kInvalidId &&
+                        (size_t)init < out->values.size() &&
+                        out->values[init].ty != kInvalidId &&
+                        out->values[init].ty < types->count() &&
+                        types->get(out->values[init].ty).kind == parus::ty::Kind::kEscape;
+
                     const auto existing = env.find(s.sym);
                     const bool reassign_existing = s.is_set && existing != env.end();
                     const bool needs_cleanup = type_needs_drop_(declared);
@@ -4087,6 +4121,11 @@ namespace parus::oir {
                                 consume_owned_sir_value_(s.init, declared);
                             }
                         }
+                        return;
+                    }
+
+                    if (escape_alias_binding) {
+                        bind(s.sym, Binding{false, false, init, kInvalidId});
                         return;
                     }
 
@@ -5847,6 +5886,17 @@ namespace parus::oir {
                     if (pidx >= out.mod.blocks[entry].params.size()) continue;
                     ValueId pv = out.mod.blocks[entry].params[pidx];
                     if (sp.sym == parus::sir::k_invalid_symbol) continue;
+
+                    const auto& param_tt = ty_.get((TypeId)sp.type);
+                    if ((param_tt.kind == parus::ty::Kind::kBorrow ||
+                         param_tt.kind == parus::ty::Kind::kPtr) &&
+                        pv != kInvalidId) {
+                        // Borrow/raw-pointer params are already address-carrying values.
+                        // Binding them as direct-address locals keeps subplace lowering
+                        // on the pointee instead of slotifying the pointer bytes.
+                        fb.bind(sp.sym, FuncBuild::Binding{true, true, pv, kInvalidId});
+                        continue;
+                    }
 
                     const bool needs_cleanup = fb.type_needs_drop_((TypeId)sp.type);
                     if (needs_cleanup) {

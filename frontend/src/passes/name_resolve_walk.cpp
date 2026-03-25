@@ -1,11 +1,3 @@
-    static bool same_external_module_head_(
-        std::string_view current_module_head,
-        std::string_view external_module_head,
-        std::string_view decl_bundle_name
-    ) {
-        return parus::same_external_module_head(current_module_head, external_module_head, decl_bundle_name);
-    }
-
     static std::vector<std::string> candidate_names_for_external_export_(
         const NameResolveOptions::ExternalExport& ex,
         std::string_view current_module_head
@@ -184,7 +176,7 @@
                         report(bag, diag::Severity::kError, diag::Code::kUndefinedName, e.span, e.text);
                     } else {
                         const auto& symobj = sym.symbol(*sid);
-                        if (!is_symbol_visible_from_use_site_(symobj, opt)) {
+                        if (!is_symbol_visible_from_use_site_(symobj, e.span.file_id, opt)) {
                             if (!opt.current_bundle_name.empty() &&
                                 !symobj.decl_bundle_name.empty() &&
                                 symobj.decl_bundle_name != opt.current_bundle_name) {
@@ -1057,15 +1049,21 @@
                 const uint64_t pbegin = s.nest_path_begin;
                 const uint64_t pend = pbegin + s.nest_path_count;
                 if (pbegin <= segs.size() && pend <= segs.size()) {
-                    for (uint32_t j = 0; j < s.nest_path_count; ++j) {
-                        namespace_stack.push_back(std::string(segs[s.nest_path_begin + j]));
+                    const std::string file_head = path_join_(ast, s.nest_path_begin, s.nest_path_count);
+                    const bool redundant_with_module_head =
+                        !opt.current_module_head.empty() &&
+                        file_head == opt.current_module_head;
+                    if (!redundant_with_module_head) {
+                        for (uint32_t j = 0; j < s.nest_path_count; ++j) {
+                            namespace_stack.push_back(std::string(segs[s.nest_path_begin + j]));
+                        }
+                        report(bag,
+                               diag::Severity::kWarning,
+                               diag::Code::kNestNotUsedForModuleResolution,
+                               s.span,
+                               file_head);
                     }
                     file_namespace_set = true;
-                    report(bag,
-                           diag::Severity::kWarning,
-                           diag::Code::kNestNotUsedForModuleResolution,
-                           s.span,
-                           path_join_(ast, s.nest_path_begin, s.nest_path_count));
                 }
                 continue;
             }
@@ -1125,24 +1123,6 @@
 
             auto& se = sym.symbol_mut(*existing);
             if (!se.is_external || se.kind != kind) return false;
-
-            if (!opt.current_bundle_name.empty() &&
-                !se.decl_bundle_name.empty() &&
-                se.decl_bundle_name != opt.current_bundle_name) {
-                return false;
-            }
-
-            if (!opt.current_module_head.empty() &&
-                !se.decl_module_head.empty() &&
-                !same_external_module_head_(opt.current_module_head, se.decl_module_head, se.decl_bundle_name)) {
-                return false;
-            }
-
-            if (!opt.current_source_dir_norm.empty() &&
-                !se.decl_source_dir_norm.empty() &&
-                se.decl_source_dir_norm != opt.current_source_dir_norm) {
-                return false;
-            }
 
             se.declared_type = declared_type;
             se.decl_span = decl_span;
@@ -1217,7 +1197,13 @@
 
         if (s.kind == ast::StmtKind::kFieldDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kField,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kField, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1234,7 +1220,13 @@
 
         if (s.kind == ast::StmtKind::kEnumDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kType,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1251,7 +1243,13 @@
 
         if (s.kind == ast::StmtKind::kProtoDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kType,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1297,7 +1295,13 @@
 
         if (s.kind == ast::StmtKind::kClassDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kType,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1361,7 +1365,13 @@
 
         if (s.kind == ast::StmtKind::kActorDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kType,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kType, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1409,7 +1419,13 @@
             if (!is_global_decl) return;
 
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kVar,
+                    s.type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kVar, qname, s.type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);
@@ -1426,7 +1442,13 @@
 
         if (s.kind == ast::StmtKind::kActsDecl) {
             const std::string qname = qualify_name_(namespace_stack, s.name);
-            if (!sym.lookup(qname)) {
+            if (!reify_external_placeholder_as_local(
+                    qname,
+                    sema::SymbolKind::kAct,
+                    ast::k_invalid_type,
+                    s.span,
+                    s.is_export) &&
+                !sym.lookup(qname)) {
                 auto ins = declare_(sema::SymbolKind::kAct, qname, ast::k_invalid_type, s.span, sym, bag, opt);
                 if (ins.ok && !ins.is_duplicate) {
                     auto& se = sym.symbol_mut(ins.symbol_id);

@@ -5,7 +5,6 @@
             diag_(diag::Code::kTopLevelMustBeBlock, prog.span);
             return;
         }
-
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
         class_qualified_name_by_stmt_.clear();
@@ -28,9 +27,7 @@
         explicit_impl_proto_sids_by_type_.clear();
         collect_core_impl_marker_file_ids_(program_stmt);
 
-        const std::string current_bundle = current_bundle_name_();
-        if (!core_impl_marker_file_ids_.empty() && current_bundle != "core") {
-            Span marker_span = prog.span;
+        if (!core_impl_marker_file_ids_.empty()) {
             const auto& kids = ast_.stmt_children();
             const uint64_t begin = prog.stmt_begin;
             const uint64_t end = begin + prog.stmt_count;
@@ -40,19 +37,20 @@
                     if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
                     const auto& s = ast_.stmt(sid);
                     if (!is_core_impl_marker_stmt_(s)) continue;
-                    marker_span = s.span;
-                    break;
+                    const std::string file_bundle = bundle_name_for_file_(s.span.file_id);
+                    if (file_bundle == "core") continue;
+
+                    std::ostringstream oss;
+                    oss << "$![Impl::Core]; is allowed only when bundle-name is 'core' (current bundle: '"
+                        << (file_bundle.empty() ? "<unknown>" : file_bundle)
+                        << "'); core file requires bundle context (use parus check sysroot/core/config.lei)";
+                    const std::string msg = oss.str();
+                    diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
+                    err_(s.span, msg);
+                    core_context_invalid_ = true;
+                    return;
                 }
             }
-            std::ostringstream oss;
-            oss << "$![Impl::Core]; is allowed only when bundle-name is 'core' (current bundle: '"
-                << (current_bundle.empty() ? "<unknown>" : current_bundle)
-                << "'); core file requires bundle context (use parus check sysroot/core/config.lei)";
-            const std::string msg = oss.str();
-            diag_(diag::Code::kTypeErrorGeneric, marker_span, msg);
-            err_(marker_span, msg);
-            core_context_invalid_ = true;
-            return;
         }
 
         auto build_fn_sig = [&](const ast::Stmt& s) -> ty::TypeId {
@@ -219,8 +217,8 @@
             if (s.kind == ast::StmtKind::kUse &&
                 s.use_kind == ast::UseKind::kCoreBuiltinUse) {
                 const std::string qname = qualify_decl_name_(s.use_name);
-                const std::string current_bundle = current_bundle_name_();
-                if (current_bundle != "core") {
+                const std::string file_bundle = bundle_name_for_file_(s.span.file_id);
+                if (file_bundle != "core") {
                     const std::string msg = "core builtin use is allowed only in bundle-name 'core'";
                     diag_(diag::Code::kTypeErrorGeneric, s.span, msg);
                     err_(s.span, msg);
@@ -353,8 +351,8 @@
                     impl_binding != ImplBindingKind::kNone &&
                     s.a == ast::k_invalid_stmt;
                 if (compiler_owned_impl) {
-                    const std::string current_bundle = current_bundle_name_();
-                    if (current_bundle != "core" ||
+                    const std::string file_bundle = bundle_name_for_file_(s.span.file_id);
+                    if (file_bundle != "core" ||
                         core_impl_marker_file_ids_.find(s.span.file_id) == core_impl_marker_file_ids_.end()) {
                         const std::string msg =
                             "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'";
@@ -1143,7 +1141,17 @@
         const uint64_t end = begin + prog.stmt_count;
         if (begin <= kids.size() && end <= kids.size()) {
             for (uint32_t i = 0; i < prog.stmt_count; ++i) {
-                collect_stmt(collect_stmt, kids[prog.stmt_begin + i]);
+                const ast::StmtId sid = kids[prog.stmt_begin + i];
+                if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) continue;
+                const auto& s = ast_.stmt(sid);
+                const auto saved_ns = namespace_stack_;
+                if (auto it = explicit_file_bundle_overrides_.find(s.span.file_id);
+                    it != explicit_file_bundle_overrides_.end() &&
+                    it->second != current_bundle_name_()) {
+                    namespace_stack_.clear();
+                }
+                collect_stmt(collect_stmt, sid);
+                namespace_stack_ = saved_ns;
             }
         }
 
@@ -1827,6 +1835,7 @@
             std::string member_name{};
             bool receiver_is_self = false;
             if (parse_external_builtin_acts_payload_(sym.external_payload, owner_t, member_name, receiver_is_self)) {
+                owner_t = canonicalize_acts_owner_type_(owner_t);
                 ExternalActsMethodDecl md{};
                 md.fn_symbol = sid;
                 md.owner_type = owner_t;
@@ -1857,6 +1866,7 @@
             if (owner_tt.kind == ty::Kind::kBorrow) {
                 owner_t = owner_tt.elem;
             }
+            owner_t = canonicalize_acts_owner_type_(owner_t);
             if (owner_t == ty::kInvalidType) continue;
 
             member_name.assign(full_name.substr(split + 2));
@@ -1872,12 +1882,17 @@
             std::vector<ty::TypeId> owner_args{};
             const auto meta = parse_external_generic_decl_meta_(sym.external_payload);
             std::unordered_set<std::string> meta_generic_names(meta.params.begin(), meta.params.end());
-            const bool owner_uses_meta_generics =
+            const bool owner_contains_named_meta_generic =
                 !meta_generic_names.empty() &&
                 type_contains_meta_generic_(type_contains_meta_generic_, owner_t, meta_generic_names);
-            if (owner_uses_meta_generics &&
+            const bool owner_has_template_shape =
                 decompose_named_user_type_(owner_t, owner_base, owner_args) &&
-                !owner_base.empty()) {
+                !owner_base.empty() &&
+                !owner_args.empty() &&
+                meta.params.size() >= owner_args.size();
+            const bool owner_uses_meta_generics =
+                owner_contains_named_meta_generic || owner_has_template_shape;
+            if (owner_uses_meta_generics && !owner_base.empty()) {
                 md.owner_is_generic_template = true;
                 md.owner_generic_arity = static_cast<uint32_t>(owner_args.size());
                 md.owner_base = owner_base;
@@ -2401,10 +2416,9 @@
         if (raw.empty()) return std::nullopt;
         const bool qualified_raw = raw.find("::") != std::string_view::npos;
         auto try_resolve = [&](std::string key) -> std::optional<ast::StmtId> {
-            const bool key_rewritten = rewrite_imported_path_(key).has_value();
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            } else if (qualified_path_requires_import_(key)) {
+            const bool key_had_alias = rewrite_imported_path_(key).has_value();
+            const bool key_rewritten = apply_imported_path_rewrite_(key);
+            if (!key_had_alias && qualified_path_requires_import_(key)) {
                 return std::nullopt;
             }
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
@@ -2434,9 +2448,11 @@
         }
 
         const size_t sep = raw.rfind("::");
-        if (!qualified_raw && sep != std::string_view::npos && sep + 2 < raw.size()) {
-            const std::string_view leaf = raw.substr(sep + 2);
+        const std::string_view leaf =
+            (sep != std::string_view::npos && sep + 2 < raw.size()) ? raw.substr(sep + 2) : raw;
+        if (!leaf.empty()) {
             std::optional<ast::StmtId> unique{};
+            bool ambiguous = false;
             for (const auto& [name, sid] : proto_decl_by_name_) {
                 const size_t name_sep = name.rfind("::");
                 const std::string_view candidate_leaf =
@@ -2444,12 +2460,12 @@
                                                     : std::string_view(name).substr(name_sep + 2);
                 if (candidate_leaf != leaf) continue;
                 if (unique.has_value() && *unique != sid) {
-                    unique.reset();
+                    ambiguous = true;
                     break;
                 }
                 unique = sid;
             }
-            if (unique.has_value()) {
+            if (!ambiguous && unique.has_value()) {
                 return unique;
             }
         }
@@ -3078,7 +3094,7 @@
         for (uint32_t ci = 0; ci < count; ++ci) {
             const uint32_t idx = begin + ci;
             if (idx >= ast_.fn_constraint_decls().size()) break;
-            const auto& c = ast_.fn_constraint_decls()[idx];
+            auto& c = ast_.fn_constraint_decls_mut()[idx];
 
             if (generic_params.find(std::string(c.type_param)) == generic_params.end()) {
                 diag_(diag::Code::kGenericUnknownTypeParamInConstraint, c.span, c.type_param);
@@ -3100,7 +3116,14 @@
                     (c.rhs_type != ty::kInvalidType) ? types_.to_string(c.rhs_type) : std::string("<invalid>");
                 const bool proto_is_leaf = proto_repr.find("::") == std::string::npos;
                 bool typed_path_failure = false;
-                if (!resolve_proto_decl_from_type_(c.rhs_type, c.span, &typed_path_failure, /*emit_diag=*/false).has_value()) {
+                if (auto proto_sid =
+                        resolve_proto_decl_from_type_(c.rhs_type, c.span, &typed_path_failure, /*emit_diag=*/false);
+                    proto_sid.has_value()) {
+                    const auto& proto_decl = ast_.stmt(*proto_sid);
+                    if (proto_decl.type != ty::kInvalidType) {
+                        c.rhs_type = proto_decl.type;
+                    }
+                } else {
                     const size_t pos = proto_repr.rfind("::");
                     const std::string_view leaf =
                         (pos == std::string::npos) ? std::string_view(proto_repr)
@@ -3166,6 +3189,13 @@
         return {};
     }
 
+    std::string TypeChecker::bundle_name_for_file_(uint32_t file_id) const {
+        if (auto it = explicit_file_bundle_overrides_.find(file_id); it != explicit_file_bundle_overrides_.end()) {
+            return it->second;
+        }
+        return current_bundle_name_();
+    }
+
     bool TypeChecker::enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type) {
         if (!acts_decl.acts_is_for) return true;
 
@@ -3203,7 +3233,7 @@
             }
         }
 
-        const std::string bundle = current_bundle_name_();
+        const std::string bundle = bundle_name_for_file_(acts_decl.span.file_id);
         const bool bundle_ok =
             policy.reserved_bundle.empty() ||
             bundle == policy.reserved_bundle;
@@ -3601,6 +3631,7 @@
         std::vector<ExternalActsMethodDecl> out;
         concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
         if (concrete_owner_type == ty::kInvalidType || member_name.empty()) return out;
+        const std::string concrete_owner_export = types_.to_export_string(concrete_owner_type);
 
         auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) -> bool {
             if (lhs == rhs) return true;
@@ -3732,6 +3763,7 @@
             if (owner_t == ty::kInvalidType || owner_t >= types_.count()) continue;
             const auto& owner_tt = types_.get(owner_t);
             if (owner_tt.kind == ty::Kind::kBorrow) owner_t = owner_tt.elem;
+            owner_t = canonicalize_acts_owner_type_(owner_t);
             if (owner_t == ty::kInvalidType) continue;
 
             ExternalActsMethodDecl md{};
@@ -3742,15 +3774,21 @@
 
             const auto meta = parse_external_generic_decl_meta_(sym.external_payload);
             std::unordered_set<std::string> meta_generic_names(meta.params.begin(), meta.params.end());
-            const bool owner_uses_meta_generics =
+            std::string template_owner_base{};
+            std::vector<ty::TypeId> template_owner_args{};
+            const bool owner_contains_named_meta_generic =
                 !meta_generic_names.empty() &&
                 type_contains_meta_generic_(type_contains_meta_generic_, owner_t, meta_generic_names);
+            const bool owner_has_template_shape =
+                decompose_named_user_type_(owner_t, template_owner_base, template_owner_args) &&
+                !template_owner_base.empty() &&
+                !template_owner_args.empty() &&
+                meta.params.size() >= template_owner_args.size();
+            const bool owner_uses_meta_generics =
+                owner_contains_named_meta_generic || owner_has_template_shape;
             if (owner_uses_meta_generics) {
                 if (!have_concrete_owner_base) continue;
-                std::string template_owner_base{};
-                std::vector<ty::TypeId> template_owner_args{};
-                if (!decompose_named_user_type_(owner_t, template_owner_base, template_owner_args) ||
-                    template_owner_base.empty()) {
+                if (!owner_has_template_shape) {
                     continue;
                 }
                 if (!owner_base_name_matches(concrete_owner_base, template_owner_base) ||
@@ -3760,11 +3798,18 @@
                 md.owner_is_generic_template = true;
                 md.owner_generic_arity = static_cast<uint32_t>(template_owner_args.size());
                 md.owner_base = template_owner_base;
-                if (seen.insert(sid).second) out.push_back(std::move(md));
+                if (seen.insert(sid).second) {
+                    out.push_back(std::move(md));
+                }
                 continue;
             }
 
-            if (owner_t == concrete_owner_type && seen.insert(sid).second) {
+            const std::string owner_export = types_.to_export_string(owner_t);
+            const bool owner_matches =
+                owner_t == concrete_owner_type ||
+                owner_export == concrete_owner_export ||
+                owner_base_name_matches(owner_export, concrete_owner_export);
+            if (owner_matches && seen.insert(sid).second) {
                 out.push_back(std::move(md));
             }
         }

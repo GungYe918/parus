@@ -214,8 +214,8 @@
         if (has_impl_binding) {
             const bool compiler_owned_impl = (fn.a == ast::k_invalid_stmt);
             if (compiler_owned_impl) {
-                const std::string current_bundle = current_bundle_name_();
-                if (current_bundle != "core" ||
+                const std::string file_bundle = bundle_name_for_file_(fn.span.file_id);
+                if (file_bundle != "core" ||
                     core_impl_marker_file_ids_.find(fn.span.file_id) == core_impl_marker_file_ids_.end()) {
                     const std::string msg =
                         "bodyless recognized $![Impl::*] binding requires bundle 'core' and file marker '$![Impl::Core];'";
@@ -292,6 +292,50 @@
         fn_ctx_.has_exception_construct = false;
         fn_ctx_.ret = (ret == ty::kInvalidType) ? types_.error() : ret;
         fn_sid_stack_.push_back(sid);
+
+        std::vector<std::string> saved_namespace_stack = namespace_stack_;
+        auto restore_namespace_stack = [&]() {
+            namespace_stack_ = std::move(saved_namespace_stack);
+        };
+        auto strip_inst_suffix = [](std::string_view qname) -> std::string_view {
+            const size_t last_colons = qname.rfind("::");
+            const size_t last_lt = qname.rfind('<');
+            const size_t last_gt = qname.rfind('>');
+            if (last_lt == std::string_view::npos || last_gt == std::string_view::npos) return qname;
+            if (last_gt + 1 != qname.size()) return qname;
+            if (last_colons != std::string_view::npos && last_lt < last_colons + 2) return qname;
+            return qname.substr(0, last_lt);
+        };
+        auto apply_function_namespace = [&](std::string_view qname) {
+            qname = strip_inst_suffix(qname);
+            const size_t split = qname.rfind("::");
+            if (split == std::string_view::npos) return;
+            const std::string_view ns = qname.substr(0, split);
+            if (ns.empty()) return;
+            std::vector<std::string> replacement{};
+            size_t pos = 0;
+            while (pos < ns.size()) {
+                const size_t next = ns.find("::", pos);
+                if (next == std::string_view::npos) {
+                    replacement.push_back(std::string(ns.substr(pos)));
+                    break;
+                }
+                replacement.push_back(std::string(ns.substr(pos, next - pos)));
+                pos = next + 2;
+            }
+            namespace_stack_ = std::move(replacement);
+        };
+
+        if (sid != ast::k_invalid_stmt) {
+            if (auto it = fn_qualified_name_by_stmt_.find(sid); it != fn_qualified_name_by_stmt_.end()) {
+                apply_function_namespace(it->second);
+            } else if (sid < stmt_resolved_symbol_cache_.size()) {
+                const uint32_t sym_sid = stmt_resolved_symbol_cache_[sid];
+                if (sym_sid != sema::SymbolTable::kNoScope && sym_sid < sym_.symbols().size()) {
+                    apply_function_namespace(sym_.symbol(sym_sid).name);
+                }
+            }
+        }
 
         // ----------------------------
         // 2) 파라미터 심볼 삽입 + default expr 검사
@@ -394,6 +438,7 @@
         if (!fn_sid_stack_.empty()) {
             fn_sid_stack_.pop_back();
         }
+        restore_namespace_stack();
         sym_.pop_scope();
         restore_ownership_state_(saved_ownership);
     }
@@ -1773,7 +1818,8 @@
         }
 
         const ty::TypeId self_ty = (s.type == ty::kInvalidType)
-            ? types_.intern_ident(s.name.empty() ? std::string("Self") : std::string(s.name))
+            ? types_.intern_ident(
+                  s.name.empty() ? std::string("Self") : qualify_decl_name_(std::string(s.name)))
             : s.type;
 
         if (self_ty != ty::kInvalidType) {
@@ -2194,10 +2240,9 @@
         auto is_non_proto_base = [&](std::string_view raw) -> bool {
             if (raw.empty()) return false;
             std::string key(raw);
-            const bool key_rewritten = rewrite_imported_path_(key).has_value();
-            if (auto rewritten = rewrite_imported_path_(key)) {
-                key = *rewritten;
-            } else if (qualified_path_requires_import_(key)) {
+            const bool key_had_alias = rewrite_imported_path_(key).has_value();
+            const bool key_rewritten = apply_imported_path_rewrite_(key);
+            if (!key_had_alias && qualified_path_requires_import_(key)) {
                 return false;
             }
             if (proto_decl_by_name_.find(key) != proto_decl_by_name_.end()) return false;

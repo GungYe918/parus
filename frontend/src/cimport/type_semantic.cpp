@@ -83,7 +83,14 @@ namespace parus::cimport {
                     case 'n': {
                         out = TypeSemanticNode{};
                         out.kind = TypeSemanticKind::kNamed;
-                        return parse_len_string_(out.name);
+                        if (!parse_len_string_(out.name)) return false;
+                        if (!eat('[')) return true;
+                        while (!eof() && text[pos] != ']') {
+                            TypeSemanticNode child{};
+                            if (!parse_node(child)) return false;
+                            out.children.push_back(std::move(child));
+                        }
+                        return eat(']');
                     }
                     case 'o': {
                         out = TypeSemanticNode{};
@@ -179,6 +186,11 @@ namespace parus::cimport {
                     out += std::to_string(node.name.size());
                     out.push_back('_');
                     out += node.name;
+                    if (!node.children.empty()) {
+                        out.push_back('[');
+                        for (const auto& child : node.children) serialize_into_(out, child);
+                        out.push_back(']');
+                    }
                     return;
                 case TypeSemanticKind::kOptional:
                     out.push_back('o');
@@ -267,11 +279,49 @@ namespace parus::cimport {
             return types.intern_path(segs.data(), static_cast<uint32_t>(segs.size()));
         }
 
+        bool split_named_path_(std::string_view name, std::vector<std::string_view>& out_segs) {
+            out_segs.clear();
+            if (name.empty()) return false;
+            size_t begin = 0;
+            while (begin < name.size()) {
+                const size_t split = name.find("::", begin);
+                const size_t end = (split == std::string_view::npos) ? name.size() : split;
+                const std::string_view seg = name.substr(begin, end - begin);
+                if (seg.empty()) return false;
+                out_segs.push_back(seg);
+                if (split == std::string_view::npos) break;
+                begin = split + 2;
+            }
+            return !out_segs.empty();
+        }
+
         ty::TypeId build_node_(const TypeSemanticNode& node, ty::TypePool& types) {
             switch (node.kind) {
                 case TypeSemanticKind::kBuiltin:
                 case TypeSemanticKind::kNamed:
-                    return intern_named_(node.name, types);
+                    if (node.kind == TypeSemanticKind::kBuiltin) {
+                        return intern_named_(node.name, types);
+                    }
+                    if (node.children.empty()) {
+                        return intern_named_(node.name, types);
+                    }
+                    {
+                        std::vector<std::string_view> segs{};
+                        if (!split_named_path_(node.name, segs)) return ty::kInvalidType;
+                        std::vector<ty::TypeId> args{};
+                        args.reserve(node.children.size());
+                        for (const auto& child : node.children) {
+                            const ty::TypeId arg = build_node_(child, types);
+                            if (arg == ty::kInvalidType) return ty::kInvalidType;
+                            args.push_back(arg);
+                        }
+                        return types.intern_named_path_with_args(
+                            segs.data(),
+                            static_cast<uint32_t>(segs.size()),
+                            args.data(),
+                            static_cast<uint32_t>(args.size())
+                        );
+                    }
                 case TypeSemanticKind::kOptional:
                     if (node.children.size() != 1u) return ty::kInvalidType;
                     return types.make_optional(build_node_(node.children[0], types));
@@ -356,7 +406,23 @@ namespace parus::cimport {
                 return true;
             case ty::Kind::kNamedUser:
                 out.kind = TypeSemanticKind::kNamed;
-                out.name = std::string(types.to_string(type));
+                {
+                    std::vector<std::string_view> path{};
+                    std::vector<ty::TypeId> args{};
+                    if (!types.decompose_named_user(type, path, args) || path.empty()) {
+                        return false;
+                    }
+                    for (size_t i = 0; i < path.size(); ++i) {
+                        if (i) out.name += "::";
+                        out.name += std::string(path[i]);
+                    }
+                    out.children.resize(args.size());
+                    for (size_t i = 0; i < args.size(); ++i) {
+                        if (!build_type_semantic_from_type(args[i], types, out.children[i])) {
+                            return false;
+                        }
+                    }
+                }
                 return true;
             case ty::Kind::kOptional:
                 out.kind = TypeSemanticKind::kOptional;

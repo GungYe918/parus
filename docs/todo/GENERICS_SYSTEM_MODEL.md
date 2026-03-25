@@ -79,6 +79,43 @@ v1 코어 위에 아래 안정화 규칙을 추가 적용한다.
 
 ---
 
+## 3.2 v1.2 공통 Monomorphization 계층 고정
+
+v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가 아니라
+공통 계층으로 고정한다.
+
+핵심 모델:
+
+1. `Template`
+1. `Request`
+1. `Instance`
+
+정본:
+
+1. `/Users/gungye/workspace/Lang/gaupel/docs/reference/abi/v0.0.1/GENERICS_MODEL.md`
+
+고정 규칙:
+
+1. parse/name-resolve/tyck는 typed template graph를 만든다.
+1. concrete code/layout이 필요해지면 `Request`를 만든다.
+1. request key는 canonical instance key로 dedup한다.
+1. materialization은 tyck 이후, SIR 이전에 수행한다.
+1. SIR/OIR/LLVM은 concrete instance만 본다.
+
+장기 범위:
+
+1. generic free function
+1. generic class member/static/lifecycle member
+1. generic struct/class/enum concrete layout
+1. generic proto `provide def` / `provide const`
+1. generic acts member/operator
+
+이번 라운드 activation:
+
+1. exported generic free function only
+
+---
+
 ## 4. 표면 문법 고정 (완성 상태 기준)
 
 ```ebnf
@@ -121,6 +158,8 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. 제네릭 함수/타입은 concrete 타입 튜플마다 인스턴스를 만든다.
 1. 한 인스턴스는 단일 concrete 시그니처를 가진다.
 1. 동일 인스턴스 키는 번들 전체에서 중복 생성하지 않는다.
+1. external generic free function도 같은 인스턴스 모델을 쓴다.
+1. external lane도 dictionary ABI가 아니라 local monomorphic instance를 만든다.
 
 인스턴스 키:
 
@@ -128,6 +167,14 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. generic param 순서
 1. concrete type tuple
 1. target triple / abi line / bundle hash
+
+정본 ABI 표현:
+
+1. `producer bundle`
+1. `template symbol`
+1. `concrete tuple`
+1. `target`
+1. `abi`
 
 ## 5.2 제약 검사
 
@@ -177,6 +224,11 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. generic struct 선언은 v1에서 지원하고, generic actor 선언은 v1 비지원으로 명시 진단 제공
 1. SIR/OIR/LLVM까지 인스턴스 lowering 연결
 
+현 구현 메모:
+
+1. local generic instance는 이 단계에서 이미 동작한다.
+1. external/imported generic free function body는 이 단계만으로는 복원되지 않는다.
+
 구현 항목:
 
 1. AST에 generic owner 메타 정리 (`generic param begin/count`, constraint refs)
@@ -201,6 +253,43 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. `def id<T>(x: T) -> T` 호출이 concrete로 생성
 1. `with [T: Proto]` 위반 시 인스턴스화 지점 진단
 1. 같은 인스턴스 재사용(중복 코드 생성 없음)
+
+## 6.1.1 v1 Round 1 Activation: Exported Generic Free Function
+
+이번 라운드 활성화 범위는 아래로 고정한다.
+
+1. exported generic free function의 cross-bundle 사용
+1. installed core generic helper 호출
+1. consumer-local on-demand monomorphization
+
+비활성 범위:
+
+1. exported generic class body import
+1. exported generic proto body import
+1. exported generic acts body import
+
+구현 모델:
+
+1. producer bundle은 export-index 옆에 optional template sidecar를 쓴다.
+1. sidecar는 raw source closure 기반으로 시작한다.
+1. consumer bundle은 sidecar를 local template source로 로드한다.
+1. 이후 기존 local instantiation service가 concrete instance를 만든다.
+
+성능 원칙:
+
+1. on-demand only
+1. direct code only
+1. no dictionary ABI
+1. no erased generic ABI
+1. no pre-expanded concrete matrix
+
+이번 라운드 acceptance:
+
+1. `cmp::min<T>`
+1. `slice::len<T>`
+1. `range<T>`
+
+같은 installed/external 경계 generic helper가 concrete shim 없이 동작해야 한다.
 
 ## 6.2 v2: Generic Acts + Coherence
 

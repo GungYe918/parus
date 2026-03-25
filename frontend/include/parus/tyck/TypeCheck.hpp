@@ -133,6 +133,9 @@ namespace parus::tyck {
         void set_core_impl_marker_file_ids(std::unordered_set<uint32_t> file_ids) {
             explicit_core_impl_marker_file_ids_ = std::move(file_ids);
         }
+        void set_file_bundle_overrides(std::unordered_map<uint32_t, std::string> file_bundles) {
+            explicit_file_bundle_overrides_ = std::move(file_bundles);
+        }
 
         // program(StmtId) 하나를 타입체크
         TyckResult check_program(ast::StmtId program_stmt);
@@ -529,12 +532,14 @@ namespace parus::tyck {
         std::string qualify_decl_name_(std::string_view base_name) const;
         std::optional<uint32_t> lookup_symbol_(std::string_view name) const;
         std::optional<std::string> rewrite_imported_path_(std::string_view path) const;
+        bool apply_imported_path_rewrite_(std::string& path) const;
         bool qualified_path_requires_import_(std::string_view raw_path) const;
         std::string current_namespace_prefix_() const;
         std::string current_module_head_() const;
         std::string path_join_(uint32_t begin, uint32_t count) const;
         std::string resolve_import_path_for_alias_(std::string_view raw_path) const;
         ty::TypeId canonicalize_acts_owner_type_(ty::TypeId owner_type) const;
+        std::optional<ast::StmtId> ensure_external_proto_stub_from_symbol_(const sema::Symbol& ss);
         void collect_known_namespace_paths_(ast::StmtId program_stmt);
         void collect_file_import_aliases_(ast::StmtId program_stmt);
         bool is_known_namespace_path_(std::string_view path) const;
@@ -639,6 +644,7 @@ namespace parus::tyck {
         std::unordered_map<ty::TypeId, std::vector<ast::StmtId>> acts_default_decls_by_owner_;
         std::unordered_set<uint32_t> explicit_core_impl_marker_file_ids_;
         std::unordered_set<uint32_t> core_impl_marker_file_ids_;
+        std::unordered_map<uint32_t, std::string> explicit_file_bundle_overrides_;
 
         enum class BuiltinActsApiGroup : uint8_t {
             IntLike = 0,
@@ -724,6 +730,7 @@ namespace parus::tyck {
         void collect_external_proto_stubs_();
         void ensure_builtin_family_proto_aliases_();
         std::string current_bundle_name_() const;
+        std::string bundle_name_for_file_(uint32_t file_id) const;
         void collect_core_impl_marker_file_ids_(ast::StmtId program_stmt);
         bool is_core_impl_marker_stmt_(const ast::Stmt& s) const;
         ImplBindingKind parse_impl_binding_payload_(std::string_view payload) const;

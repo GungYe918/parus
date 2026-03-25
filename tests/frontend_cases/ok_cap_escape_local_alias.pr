@@ -1,0 +1,10 @@
+// 허용 케이스: set-도입 local ~ alias는 direct passthrough에 한해 허용
+def sink(h: ~i32) -> i32 {
+  return 0i32;
+}
+
+def main() -> i32 {
+  let mut x: i32 = 1i32;
+  set h = ~x;
+  return sink(h);
+}

@@ -2491,13 +2491,16 @@ namespace {
         return ok;
     }
 
-    static bool test_escape_requires_static_or_boundary() {
-        // ~는 static place이거나 return/call-arg 경계에서만 허용되어야 한다.
+    static bool test_escape_set_alias_passthrough_ok() {
+        // set-도입 local ~ alias는 storage materialization이 아니라 direct passthrough면 허용돼야 한다.
         const std::string src = R"(
-            def main() -> i32 {
-                set x = 1i32;
-                set h = ~x;
+            def sink(h: ~i32) -> i32 {
                 return 0i32;
+            }
+            def main() -> i32 {
+                let mut x: i32 = 1i32;
+                set h = ~x;
+                return sink(h);
             }
         )";
 
@@ -2508,10 +2511,12 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!sir.cap.ok, "non-boundary ~ on non-static place must fail SIR capability check");
-        ok &= require_(p.bag.has_code(parus::diag::Code::kSirEscapeBoundaryViolation),
-            "non-boundary ~ on non-static place must emit SirEscapeBoundaryViolation");
-        ok &= require_(cap.ok, "AST capability pass should keep lightweight behavior for boundary checks");
+        ok &= require_(!p.bag.has_error(), "set-introduced local ~ alias must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "set-introduced local ~ alias must typecheck");
+        ok &= require_(cap.ok, "AST capability pass must allow local ~ alias passthrough");
+        ok &= require_(sir.cap.ok, "SIR capability pass must allow local ~ alias passthrough");
+        ok &= require_(sir.handle_verify_errors.empty(),
+            "SIR handle verifier must accept local ~ alias passthrough");
         return ok;
     }
 
@@ -3317,7 +3322,7 @@ int main() {
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},
         {"cap_mut_conflict_with_shared", test_cap_mut_conflict_with_shared},
         {"cap_shared_write_conflict", test_cap_shared_write_conflict},
-        {"escape_requires_static_or_boundary", test_escape_requires_static_or_boundary},
+        {"escape_set_alias_passthrough_ok", test_escape_set_alias_passthrough_ok},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
         {"consume_binding_static_optional_escape", test_consume_binding_static_optional_escape},
         {"sir_handle_verify_rejects_materialized_handle", test_sir_handle_verify_rejects_materialized_handle},

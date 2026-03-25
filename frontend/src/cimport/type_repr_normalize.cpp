@@ -172,6 +172,13 @@ namespace parus::cimport {
                         ty::TypeId out = preferred;
                         if (pref_tt.kind == sem_tt.kind) {
                             switch (pref_tt.kind) {
+                                case ty::Kind::kNamedUser: {
+                                    // For imported nominal types, semantic form carries the canonical
+                                    // fully-qualified identity. Keep repr text for syntax fidelity,
+                                    // but use semantic type as the merged nominal anchor.
+                                    out = semantic;
+                                    break;
+                                }
                                 case ty::Kind::kFn: {
                                     if (pref_tt.param_count == sem_tt.param_count &&
                                         pref_tt.positional_param_count == sem_tt.positional_param_count) {

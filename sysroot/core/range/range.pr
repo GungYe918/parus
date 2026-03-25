@@ -29,36 +29,6 @@ export def range_inclusive<T>(start: T, end: T) with [T: constraints::Comparable
     return range_inclusive_impl_<T>(start, end);
 }
 
-// Installed/external callers still need concrete constructor symbols until
-// cross-bundle generic export materialization is fully converged.
-export def range(start: i8, end: i8) -> Range<i8> { return range_impl_<i8>(start, end); }
-export def range(start: i16, end: i16) -> Range<i16> { return range_impl_<i16>(start, end); }
-export def range(start: i32, end: i32) -> Range<i32> { return range_impl_<i32>(start, end); }
-export def range(start: i64, end: i64) -> Range<i64> { return range_impl_<i64>(start, end); }
-export def range(start: i128, end: i128) -> Range<i128> { return range_impl_<i128>(start, end); }
-export def range(start: isize, end: isize) -> Range<isize> { return range_impl_<isize>(start, end); }
-export def range(start: u8, end: u8) -> Range<u8> { return range_impl_<u8>(start, end); }
-export def range(start: u16, end: u16) -> Range<u16> { return range_impl_<u16>(start, end); }
-export def range(start: u32, end: u32) -> Range<u32> { return range_impl_<u32>(start, end); }
-export def range(start: u64, end: u64) -> Range<u64> { return range_impl_<u64>(start, end); }
-export def range(start: u128, end: u128) -> Range<u128> { return range_impl_<u128>(start, end); }
-export def range(start: usize, end: usize) -> Range<usize> { return range_impl_<usize>(start, end); }
-export def range(start: char, end: char) -> Range<char> { return range_impl_<char>(start, end); }
-
-export def range_inclusive(start: i8, end: i8) -> RangeInclusive<i8> { return range_inclusive_impl_<i8>(start, end); }
-export def range_inclusive(start: i16, end: i16) -> RangeInclusive<i16> { return range_inclusive_impl_<i16>(start, end); }
-export def range_inclusive(start: i32, end: i32) -> RangeInclusive<i32> { return range_inclusive_impl_<i32>(start, end); }
-export def range_inclusive(start: i64, end: i64) -> RangeInclusive<i64> { return range_inclusive_impl_<i64>(start, end); }
-export def range_inclusive(start: i128, end: i128) -> RangeInclusive<i128> { return range_inclusive_impl_<i128>(start, end); }
-export def range_inclusive(start: isize, end: isize) -> RangeInclusive<isize> { return range_inclusive_impl_<isize>(start, end); }
-export def range_inclusive(start: u8, end: u8) -> RangeInclusive<u8> { return range_inclusive_impl_<u8>(start, end); }
-export def range_inclusive(start: u16, end: u16) -> RangeInclusive<u16> { return range_inclusive_impl_<u16>(start, end); }
-export def range_inclusive(start: u32, end: u32) -> RangeInclusive<u32> { return range_inclusive_impl_<u32>(start, end); }
-export def range_inclusive(start: u64, end: u64) -> RangeInclusive<u64> { return range_inclusive_impl_<u64>(start, end); }
-export def range_inclusive(start: u128, end: u128) -> RangeInclusive<u128> { return range_inclusive_impl_<u128>(start, end); }
-export def range_inclusive(start: usize, end: usize) -> RangeInclusive<usize> { return range_inclusive_impl_<usize>(start, end); }
-export def range_inclusive(start: char, end: char) -> RangeInclusive<char> { return range_inclusive_impl_<char>(start, end); }
-
 def range_is_empty_<T>(start: T, end: T) with [T: constraints::Comparable] -> bool {
     return start >= end;
 }

@@ -24,6 +24,7 @@ namespace parus::sir {
             kValue,
             kBorrowOperand,
             kEscapeOperand,
+            kEscapeAliasInit,
             kAssignLhs,
             kCallArg,
             kReturnValue,
@@ -63,11 +64,13 @@ namespace parus::sir {
         struct SymbolTraits {
             bool is_mut = false;
             bool is_static = false;
+            bool is_escape_alias = false;
         };
 
         struct FlowState {
             std::unordered_map<SymbolId, bool> moved_true;
             std::vector<ActiveBorrow> active_borrows;
+            bool terminated = false;
         };
 
         /// @brief SIR 값/문장을 순회하며 capability 충돌, UAF, escape 경계를 정밀 검증한다.
@@ -91,6 +94,7 @@ namespace parus::sir {
                 // Analyze them in value context so metadata is materialized before OIR gate.
                 current_fn_is_pure_ = false;
                 current_fn_is_comptime_ = false;
+                path_terminated_ = false;
                 active_borrows_.clear();
                 moved_by_escape_.clear();
                 scopes_.clear();
@@ -429,6 +433,12 @@ namespace parus::sir {
                 return it->second.is_static;
             }
 
+            bool is_escape_alias_symbol_(SymbolId sym) const {
+                auto it = symbol_traits_.find(sym);
+                if (it == symbol_traits_.end()) return false;
+                return it->second.is_escape_alias;
+            }
+
             /// @brief 주어진 place와 겹치는 활성 '&mut' borrow 존재 여부를 반환한다.
             bool has_active_mut_(const PlaceRef& place) const {
                 for (const auto& b : active_borrows_) {
@@ -473,6 +483,7 @@ namespace parus::sir {
                 for (const auto& b : active_borrows_) {
                     append_unique_borrow_(st.active_borrows, b);
                 }
+                st.terminated = path_terminated_;
                 return st;
             }
 
@@ -483,20 +494,32 @@ namespace parus::sir {
                     if (moved) moved_by_escape_[sym] = true;
                 }
                 active_borrows_ = st.active_borrows;
+                path_terminated_ = st.terminated;
             }
 
             /// @brief CFG 합류점에서 두 경로의 moved/borrow 상태를 보수적으로 OR-merge 한다.
             static FlowState merge_flow_state_(const FlowState& a, const FlowState& b) {
+                if (a.terminated && b.terminated) {
+                    FlowState out{};
+                    out.terminated = true;
+                    return out;
+                }
+                if (a.terminated) return b;
+                if (b.terminated) return a;
+
                 FlowState out = a;
                 for (const auto& [sym, moved] : b.moved_true) {
                     if (moved) out.moved_true[sym] = true;
                 }
                 out.active_borrows = merge_borrow_set_(a.active_borrows, b.active_borrows);
+                out.terminated = false;
                 return out;
             }
 
             /// @brief 두 흐름 상태가 같은지(논리적으로) 비교한다.
             static bool flow_state_equal_(const FlowState& a, const FlowState& b) {
+                if (a.terminated != b.terminated) return false;
+                if (a.terminated && b.terminated) return true;
                 if (a.moved_true.size() != b.moved_true.size()) return false;
                 for (const auto& [sym, moved] : a.moved_true) {
                     auto it = b.moved_true.find(sym);
@@ -623,10 +646,8 @@ namespace parus::sir {
 
                 if (boundary == EscapeBoundaryKind::kReturn || boundary == EscapeBoundaryKind::kCallArg) {
                     meta.kind = EscapeHandleKind::kCallerSlot;
-                } else if (from_static) {
-                    meta.kind = EscapeHandleKind::kTrivial;
                 } else {
-                    meta.kind = EscapeHandleKind::kStackSlot;
+                    meta.kind = EscapeHandleKind::kTrivial;
                 }
 
                 // v0: 내부는 비물질화 토큰으로 유지하고 ABI 경계에서만 패킹.
@@ -658,6 +679,11 @@ namespace parus::sir {
                     auto& t = symbol_traits_[s.sym];
                     t.is_mut = s.is_mut;
                     t.is_static = s.is_static;
+                    t.is_escape_alias =
+                        s.is_set &&
+                        !s.is_mut &&
+                        !s.is_static &&
+                        is_escape_type_(value_type_(s.init));
                 }
                 for (const auto& g : m_.globals) {
                     if (g.sym == k_invalid_symbol) continue;
@@ -675,6 +701,7 @@ namespace parus::sir {
                 moved_by_escape_.clear();
                 scopes_.clear();
                 visiting_blocks_.clear();
+                path_terminated_ = false;
 
                 const auto& f = m_.funcs[fid];
                 current_fn_is_pure_ = f.is_pure;
@@ -696,6 +723,7 @@ namespace parus::sir {
                 if (end <= (uint64_t)m_.stmts.size()) {
                     for (uint32_t i = 0; i < b.stmt_count; ++i) {
                         analyze_stmt_(b.stmt_begin + i);
+                        if (path_terminated_) break;
                     }
                 }
                 leave_scope_();
@@ -724,11 +752,20 @@ namespace parus::sir {
                                 init_owner = s.sym;
                             }
 
-                            analyze_value_(s.init, ValueUse::kValue, init_owner);
+                            const bool escape_alias_init =
+                                s.is_set &&
+                                !s.is_mut &&
+                                !s.is_static &&
+                                is_escape_type_(value_type_(s.init));
+                            analyze_value_(
+                                s.init,
+                                escape_alias_init ? ValueUse::kEscapeAliasInit : ValueUse::kValue,
+                                init_owner
+                            );
                             if (is_borrow_type_(value_type_(s.init)) && s.is_static) {
                                 report_(diag::Code::kBorrowEscapeToStorage, s.span);
                             }
-                        if (is_escape_type_(value_type_(s.init)) && !s.is_static) {
+                        if (is_escape_type_(value_type_(s.init)) && !s.is_static && !escape_alias_init) {
                             report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
                         }
                         if (s.has_consume_else && is_escape_type_(s.declared_type) && !s.is_static) {
@@ -747,6 +784,7 @@ namespace parus::sir {
 
                     case StmtKind::kThrowStmt:
                         analyze_value_(s.expr, ValueUse::kValue);
+                        path_terminated_ = true;
                         return;
 
                     case StmtKind::kTryCatchStmt: {
@@ -851,13 +889,16 @@ namespace parus::sir {
                         if (is_borrow_type_(value_type_(s.expr))) {
                             report_(diag::Code::kBorrowEscapeFromReturn, s.span);
                         }
+                        path_terminated_ = true;
                         return;
 
                     case StmtKind::kBreak:
                         if (s.expr != k_invalid_value) analyze_value_(s.expr, ValueUse::kValue);
+                        path_terminated_ = true;
                         return;
 
                     case StmtKind::kContinue:
+                        path_terminated_ = true;
                         return;
 
                     case StmtKind::kCommitStmt:
@@ -912,6 +953,15 @@ namespace parus::sir {
                 switch (v.kind) {
                     case ValueKind::kLocal: {
                         if (v.sym == k_invalid_symbol) return;
+                        if (is_escape_alias_symbol_(v.sym)) {
+                            check_use_after_move_(vid, use, v.span);
+                            if (use != ValueUse::kCallArg && use != ValueUse::kReturnValue) {
+                                report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
+                                return;
+                            }
+                            mark_moved_(v.sym);
+                            return;
+                        }
                         check_use_after_move_(vid, use, v.span);
                         check_place_access_conflicts_(vid, use, v.span);
                         return;
@@ -991,11 +1041,13 @@ namespace parus::sir {
                                 report_(diag::Code::kEscapeWhileBorrowActive, v.span);
                             }
 
-                            if (!is_escape_boundary_use_(use) && !is_symbol_static_(*root)) {
+                            const bool passthrough_use =
+                                is_escape_boundary_use_(use) || use == ValueUse::kEscapeAliasInit;
+                            if (!passthrough_use && !is_symbol_static_(*root)) {
                                 report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
                             }
                             mark_moved_(*root);
-                        } else if (!is_escape_boundary_use_(use)) {
+                        } else if (!(is_escape_boundary_use_(use) || use == ValueUse::kEscapeAliasInit)) {
                             report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
                         }
                         return;
@@ -1156,6 +1208,7 @@ namespace parus::sir {
             std::unordered_map<ValueId, uint32_t> escape_meta_by_value_;
             std::vector<ScopeState> scopes_;
             std::unordered_set<BlockId> visiting_blocks_;
+            bool path_terminated_ = false;
         };
 
     } // namespace
