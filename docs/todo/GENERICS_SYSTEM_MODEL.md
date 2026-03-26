@@ -117,6 +117,22 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 3. local/external generic acts declaration whole-body import/materialization
 4. local/external generic class declaration whole-body import/materialization
 5. external typed sidecar dependency closure 내부 hidden free function
+6. external typed sidecar dependency closure 내부 hidden helper `struct/enum`
+
+## 3.3 Direct Next Step Freeze
+
+다음 직접 구현 라운드는 아래로 고정한다.
+
+1. external generic type body dependency closure를 `struct/enum` first로 연다.
+2. closure-private same-bundle helper `struct/enum`를 materialization 전용 내부 의존성으로 안정화한다.
+3. imported generic enum body를 common monomorphization service로 올린다.
+4. helper `class/actor` dependency closure 여부는 그 다음 라운드에서 결정한다.
+
+고정 규칙:
+
+1. source-level explicit import 규칙은 유지한다.
+2. 완화되는 것은 imported metadata와 closure-internal dependency materialization뿐이다.
+3. 새 core surface 추가보다 generics stabilization이 계속 우선이다.
 
 ---
 

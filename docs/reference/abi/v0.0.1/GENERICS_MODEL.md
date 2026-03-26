@@ -141,8 +141,10 @@ raw source closure 재파싱 모델은 제거한다.
 2. exported generic proto declaration whole-body payload
 3. exported generic acts declaration whole-body payload
 4. exported generic class declaration whole-body payload
-5. 그 body가 참조하는 same-bundle free-function dependency closure
-6. dependency closure 내부 hidden helper free function의 typed body payload
+5. exported generic root body가 참조하는 same-bundle free-function dependency closure
+6. exported generic root body가 참조하는 same-bundle helper `struct/enum` type-body dependency closure
+7. dependency closure 내부 hidden helper free function의 typed body payload
+8. dependency closure 내부 hidden helper `struct/enum` typed body payload
 
 payload 원칙:
 
@@ -165,14 +167,16 @@ payload 원칙:
    - raw source가 아니라 typed stmt/expr recipe
 5. `Dependency refs`
    - sidecar closure 안의 free function reference는 hidden lookup name으로 canonicalize
+   - helper `struct/enum` body dependency는 canonical type identity로 canonicalize
 6. `Decl span/file`
    - diagnostics용 decl file / line / col
 
 이번 라운드 비범위:
 
 1. IR-level template serialization
-2. external generic field/enum/type body dependency closure 확장
-3. dyn/object-safe dispatch lane
+2. helper `class/actor` dependency closure
+3. global private state / class-static mutable state dependency closure
+4. dyn/object-safe dispatch lane
 
 sidecar가 있어도 export-index version은 유지한다.  
 sidecar는 adjacent optional file이며, 없으면 기존 non-template import는 그대로 동작한다.
@@ -211,12 +215,14 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 5. imported generic metadata의 proto constraint를 consumer import 없이 canonical identity로 resolve
 6. exported generic proto/acts declaration whole-body import
 7. exported generic class declaration whole-body import
-8. installed core generic helper와 generic member surface 복원
-9. concrete shim 제거
+8. imported generic `struct/enum` common mono activation
+9. exported generic root의 helper `struct/enum` type-body dependency closure
+10. installed core generic helper와 generic member surface 복원
+11. concrete shim 제거
 
 이번 라운드에서 아직 열지 않는 것:
 
-1. external generic field/enum/type body dependency closure 확장
+1. helper `class/actor` dependency closure 확장
 2. generic actor lane 공통 mono 이전
 3. dyn/object lane
 

@@ -227,3 +227,9 @@ export def add(a: i32, b: i32) -> i32 {
 6. 따라서 소비자는 라이브러리 내부 constraint vocabulary를 다시 import하지 않아도 된다.
 7. class/proto/acts whole-body import도 같은 canonical identity 규칙을 사용한다.
 8. 이 완화는 imported metadata 경로에만 적용되며, source-level explicit import requirement를 제거하지 않는다.
+9. imported generic root는 exported root declaration만이 아니라 typed dependency closure를 함께 반입할 수 있다.
+10. 이번 라운드의 closure 허용 범위는 아래로 제한한다.
+10-a. same-bundle free-function dependency
+10-b. same-bundle helper `struct/enum` type-body dependency
+11. closure-private helper type/function은 materialization 전용 내부 의존성으로만 사용된다.
+12. consumer source는 closure-private helper를 lexical import 없이 직접 참조할 수 없다.
