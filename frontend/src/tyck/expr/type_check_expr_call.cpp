@@ -649,14 +649,17 @@ namespace parus::tyck {
                                                       std::string_view member_name,
                                                       std::optional<std::string_view> qualifier,
                                                       Span member_span,
-                                                      std::vector<ast::StmtId>& out) -> bool {
+                                                      std::vector<ast::StmtId>& out,
+                                                      bool emit_diag = true) -> bool {
             out.clear();
             if (owner_t == ty::kInvalidType) return false;
 
             const ast::StmtId owner_sid = resolve_owner_decl_sid_for_proto(owner_t);
             if (owner_sid == ast::k_invalid_stmt || (size_t)owner_sid >= ast_.stmts().size()) {
-                diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
-                err_(member_span, "proto arrow member is unavailable for this receiver type");
+                if (emit_diag) {
+                    diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                    err_(member_span, "proto arrow member is unavailable for this receiver type");
+                }
                 return false;
             }
 
@@ -670,6 +673,12 @@ namespace parus::tyck {
                     if (auto psid = resolve_proto_decl_from_path_ref_(refs[i], member_span)) {
                         collect_proto_closure(collect_proto_closure, *psid, declared_proto_sids);
                     }
+                }
+            }
+            if (auto it = explicit_impl_proto_sids_by_type_.find(canonicalize_acts_owner_type_(owner_t));
+                it != explicit_impl_proto_sids_by_type_.end()) {
+                for (const auto psid : it->second) {
+                    collect_proto_closure(collect_proto_closure, psid, declared_proto_sids);
                 }
             }
 
@@ -692,8 +701,10 @@ namespace parus::tyck {
                     }
                 }
                 if (narrowed.empty()) {
-                    diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
-                    err_(member_span, "unknown proto qualifier on arrow access");
+                    if (emit_diag) {
+                        diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                        err_(member_span, "unknown proto qualifier on arrow access");
+                    }
                     return false;
                 }
                 filtered_proto_sids = std::move(narrowed);
@@ -723,20 +734,26 @@ namespace parus::tyck {
             }
 
             if (out.empty()) {
-                diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
-                err_(member_span, "proto arrow call target is not found");
+                if (emit_diag) {
+                    diag_(diag::Code::kProtoArrowMemberNotFound, member_span, std::string(member_name));
+                    err_(member_span, "proto arrow call target is not found");
+                }
                 return false;
             }
 
             if (!qualifier.has_value() && provider_proto_sids.size() > 1) {
-                diag_(diag::Code::kProtoArrowQualifierRequired, member_span, std::string(member_name));
-                err_(member_span, "arrow member is provided by multiple protos; use receiver->Proto.member");
+                if (emit_diag) {
+                    diag_(diag::Code::kProtoArrowQualifierRequired, member_span, std::string(member_name));
+                    err_(member_span, "arrow member is provided by multiple protos; use receiver->Proto.member");
+                }
                 return false;
             }
 
             if (qualifier.has_value() && provider_proto_sids.size() > 1) {
-                diag_(diag::Code::kProtoArrowMemberAmbiguous, member_span, std::string(member_name));
-                err_(member_span, "arrow member remains ambiguous in qualified proto closure");
+                if (emit_diag) {
+                    diag_(diag::Code::kProtoArrowMemberAmbiguous, member_span, std::string(member_name));
+                    err_(member_span, "arrow member remains ambiguous in qualified proto closure");
+                }
                 return false;
             }
 
@@ -962,6 +979,7 @@ namespace parus::tyck {
                         }
 
                         const auto selected_methods = lookup_acts_methods_for_call_(owner_t, rhs.text, bound_selection);
+                        auto effective_selected_methods = selected_methods;
                         bool any_method_named = false;
                         if (owner_t != ty::kInvalidType) {
                             auto oit = acts_default_method_map_.find(owner_t);
@@ -1006,8 +1024,19 @@ namespace parus::tyck {
                             }
                         }
 
+                        if (effective_selected_methods.empty() &&
+                            any_external_method_named &&
+                            owner_t != ty::kInvalidType &&
+                            materialize_imported_acts_templates_for_member_(owner_t, rhs.text, rhs.span)) {
+                            effective_selected_methods =
+                                lookup_acts_methods_for_call_(owner_t, rhs.text, bound_selection);
+                            if (!effective_selected_methods.empty()) {
+                                any_method_named = true;
+                            }
+                        }
+
                         bool has_self_receiver_candidate = false;
-                        for (const auto& md : selected_methods) {
+                        for (const auto& md : effective_selected_methods) {
                             if (md.fn_sid == ast::k_invalid_stmt) continue;
                             if (!md.receiver_is_self) continue;
                             has_self_receiver_candidate = true;
@@ -1035,12 +1064,12 @@ namespace parus::tyck {
                                 check_all_arg_exprs_only();
                                 return types_.error();
                             }
-                        } else if (any_method_named && !selected_methods.empty()) {
+                        } else if (any_method_named && !effective_selected_methods.empty()) {
                             diag_(diag::Code::kDotMethodSelfRequired, rhs.span, rhs.text);
                             err_(rhs.span, "dot call requires self receiver on acts method");
                             check_all_arg_exprs_only();
                             return types_.error();
-                        } else if (any_method_named && selected_methods.empty()) {
+                        } else if (any_method_named && effective_selected_methods.empty()) {
                             std::ostringstream oss;
                             oss << "no active acts method '" << rhs.text
                                 << "' for type " << types_.to_string(owner_t)
@@ -1050,6 +1079,16 @@ namespace parus::tyck {
                             err_(rhs.span, oss.str());
                             check_all_arg_exprs_only();
                             return types_.error();
+                        } else {
+                            std::vector<ast::StmtId> proto_overloads;
+                            if (collect_proto_arrow_call_overloads(
+                                    owner_t, rhs.text, std::nullopt, rhs.span, proto_overloads, /*emit_diag=*/false)) {
+                                overload_decl_ids.insert(overload_decl_ids.end(), proto_overloads.begin(), proto_overloads.end());
+                                is_dot_method_call = true;
+                                dot_owner_type = owner_t;
+                                dot_needs_self_normalization = false;
+                                callee_name = types_.to_string(owner_t) + "." + std::string(rhs.text);
+                            }
                         }
                     }
                     }
@@ -2001,6 +2040,7 @@ namespace parus::tyck {
             bool has_selected_external = false;
             uint32_t selected_external_score = 0xFFFF'FFFFu;
             bool selected_external_is_template = true;
+            std::vector<ty::TypeId> selected_external_generic_args{};
             bool ext_has_arity = false;
             uint32_t ext_expected_arity = 0;
             uint32_t ext_got_arity = 0;
@@ -2153,20 +2193,33 @@ namespace parus::tyck {
                     }
 
                     if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
-                        ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
-                        if (rhs_t == ty::kInvalidType) {
-                            ext_has_proto_not_found = true;
-                            ext_proto_not_found = cc.rhs;
-                            constraint_ok = false;
-                            break;
+                        std::optional<ast::StmtId> proto_sid{};
+                        {
+                            ImportedProtoIdentity identity{};
+                            identity.path = cc.rhs;
+                            proto_sid = resolve_imported_proto_sid_by_identity_(identity, e.span);
                         }
-                        rhs_t = substitute_generic_type_(rhs_t, bindings);
+                        ty::TypeId rhs_t = ty::kInvalidType;
+                        if (proto_sid.has_value()) {
+                            const auto& proto_decl = ast_.stmt(*proto_sid);
+                            rhs_t = proto_decl.type;
+                        } else {
+                            rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                            if (rhs_t == ty::kInvalidType) {
+                                ext_has_proto_not_found = true;
+                                ext_proto_not_found = cc.rhs;
+                                constraint_ok = false;
+                                break;
+                            }
+                            rhs_t = substitute_generic_type_(rhs_t, bindings);
+                        }
                         const bool proto_is_leaf = cc.rhs.find("::") == std::string::npos;
                         bool typed_path_failure = false;
-                        auto proto_sid = resolve_proto_decl_from_type_(rhs_t, e.span, &typed_path_failure, /*emit_diag=*/false);
                         if (!proto_sid.has_value()) {
-                            if (proto_is_leaf &&
-                                builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                            proto_sid = resolve_proto_decl_from_type_(rhs_t, e.span, &typed_path_failure, /*emit_diag=*/false);
+                        }
+                        if (!proto_sid.has_value()) {
+                            if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
                                 continue;
                             }
                             const size_t pos = cc.rhs.rfind("::");
@@ -2578,6 +2631,7 @@ namespace parus::tyck {
             bool has_selected_external = false;
             uint32_t selected_external_score = 0xFFFF'FFFFu;
             bool selected_external_is_template = true;
+            std::vector<ty::TypeId> selected_external_generic_args{};
             bool ext_has_arity = false;
             uint32_t ext_expected_arity = 0;
             uint32_t ext_got_arity = 0;
@@ -2759,20 +2813,33 @@ namespace parus::tyck {
                         }
 
                         if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
-                            ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
-                            if (rhs_t == ty::kInvalidType) {
-                                ext_has_proto_not_found = true;
-                                ext_proto_not_found = cc.rhs;
-                                constraint_ok = false;
-                                break;
+                            std::optional<ast::StmtId> proto_sid{};
+                            {
+                                ImportedProtoIdentity identity{};
+                                identity.path = cc.rhs;
+                                proto_sid = resolve_imported_proto_sid_by_identity_(identity, e.span);
                             }
-                            rhs_t = substitute_generic_type_(rhs_t, bindings);
+                            ty::TypeId rhs_t = ty::kInvalidType;
+                            if (proto_sid.has_value()) {
+                                const auto& proto_decl = ast_.stmt(*proto_sid);
+                                rhs_t = proto_decl.type;
+                            } else {
+                                rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
+                                if (rhs_t == ty::kInvalidType) {
+                                    ext_has_proto_not_found = true;
+                                    ext_proto_not_found = cc.rhs;
+                                    constraint_ok = false;
+                                    break;
+                                }
+                                rhs_t = substitute_generic_type_(rhs_t, bindings);
+                            }
                             const bool proto_is_leaf = cc.rhs.find("::") == std::string::npos;
                             bool typed_path_failure = false;
-                            auto proto_sid = resolve_proto_decl_from_type_(rhs_t, e.span, &typed_path_failure, /*emit_diag=*/false);
                             if (!proto_sid.has_value()) {
-                                if (proto_is_leaf &&
-                                    builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
+                                proto_sid = resolve_proto_decl_from_type_(rhs_t, e.span, &typed_path_failure, /*emit_diag=*/false);
+                            }
+                            if (!proto_sid.has_value()) {
+                                if (builtin_family_proto_satisfied_by_primitive_name_(lhs_it->second, cc.rhs)) {
                                     continue;
                                 }
                                 const size_t pos = cc.rhs.rfind("::");
@@ -2883,6 +2950,16 @@ namespace parus::tyck {
                     selected_external_is_template = candidate_is_template;
                     selected_external_sym = cand.fn_symbol;
                     selected_external_fn_type = resolved_fn_t;
+                    selected_external_generic_args.clear();
+                    if (!meta.params.empty()) {
+                        selected_external_generic_args.reserve(meta.params.size());
+                        for (const auto& name : meta.params) {
+                            auto bit = bindings.find(name);
+                            selected_external_generic_args.push_back(
+                                bit != bindings.end() ? bit->second : ty::kInvalidType
+                            );
+                        }
+                    }
                 }
             }
 
@@ -2928,19 +3005,86 @@ namespace parus::tyck {
                 return fallback_ret;
             }
 
-            if (call_expr_id != ast::k_invalid_expr &&
-                call_expr_id < expr_external_callee_symbol_cache_.size()) {
-                expr_external_callee_symbol_cache_[call_expr_id] = selected_external_sym;
+            if (selected_external_sym < sym_.symbols().size()) {
+                const auto& selected_sym = sym_.symbol(selected_external_sym);
+                const size_t selected_split = selected_sym.name.rfind("::");
+                const std::string_view selected_member_name =
+                    (selected_split == std::string::npos)
+                        ? std::string_view(selected_sym.name)
+                        : std::string_view(selected_sym.name).substr(selected_split + 2);
+
+                if (dot_owner_type != ty::kInvalidType &&
+                    !selected_member_name.empty() &&
+                    materialize_imported_acts_templates_for_member_(dot_owner_type, selected_member_name, e.span)) {
+                    const auto rebound_local_methods =
+                        lookup_acts_methods_for_call_(dot_owner_type, selected_member_name, nullptr);
+                    for (const auto& md : rebound_local_methods) {
+                        if (md.fn_sid == ast::k_invalid_stmt) continue;
+                        overload_decl_ids.push_back(md.fn_sid);
+                    }
+                    if (!overload_decl_ids.empty()) {
+                        external_overload_methods.clear();
+                    }
+                }
+
+                ast::StmtId imported_template_sid = ast::k_invalid_stmt;
+                if (overload_decl_ids.empty() && !selected_sym.link_name.empty()) {
+                    if (auto it = imported_fn_template_sid_by_link_name_.find(selected_sym.link_name);
+                        it != imported_fn_template_sid_by_link_name_.end()) {
+                        imported_template_sid = it->second;
+                    }
+                }
+                if (overload_decl_ids.empty() &&
+                    imported_template_sid == ast::k_invalid_stmt &&
+                    !selected_sym.name.empty()) {
+                    if (auto it = imported_fn_template_sid_by_lookup_name_.find(selected_sym.name);
+                        it != imported_fn_template_sid_by_lookup_name_.end()) {
+                        imported_template_sid = it->second;
+                    }
+                }
+
+                if (imported_template_sid != ast::k_invalid_stmt) {
+                    MonoRequest req{};
+                    req.templ.template_sid = imported_template_sid;
+                    req.templ.source = MonoTemplateRef::SourceKind::kImportedFn;
+                    req.templ.producer_bundle = current_bundle_name_();
+                    req.templ.template_symbol = selected_sym.name;
+                    req.templ.link_name = selected_sym.link_name;
+                    if (auto it = imported_fn_template_index_by_sid_.find(imported_template_sid);
+                        it != imported_fn_template_index_by_sid_.end() &&
+                        it->second < explicit_imported_fn_templates_.size()) {
+                        const auto& imported = explicit_imported_fn_templates_[it->second];
+                        req.templ.producer_bundle = imported.producer_bundle;
+                        req.templ.template_symbol = imported.lookup_name.empty()
+                            ? req.templ.template_symbol
+                            : imported.lookup_name;
+                        req.templ.link_name = imported.link_name;
+                    }
+                    req.concrete_args = selected_external_generic_args;
+                    req.target_lane = "default";
+                    req.abi_lane = "static";
+                    if (auto inst = ensure_monomorphized_free_function_(req, e.span); inst.has_value()) {
+                        overload_decl_ids = {inst->decl_sid};
+                        external_overload_methods.clear();
+                    }
+                }
             }
-            if (call_expr_id != ast::k_invalid_expr &&
-                call_expr_id < expr_external_callee_type_cache_.size()) {
-                expr_external_callee_type_cache_[call_expr_id] = selected_external_fn_type;
+
+            if (overload_decl_ids.empty()) {
+                if (call_expr_id != ast::k_invalid_expr &&
+                    call_expr_id < expr_external_callee_symbol_cache_.size()) {
+                    expr_external_callee_symbol_cache_[call_expr_id] = selected_external_sym;
+                }
+                if (call_expr_id != ast::k_invalid_expr &&
+                    call_expr_id < expr_external_callee_type_cache_.size()) {
+                    expr_external_callee_type_cache_[call_expr_id] = selected_external_fn_type;
+                }
+                if (call_expr_id != ast::k_invalid_expr &&
+                    call_expr_id < expr_external_receiver_expr_cache_.size()) {
+                    expr_external_receiver_expr_cache_[call_expr_id] = receiver_eid;
+                }
+                return types_.get(selected_external_fn_type).ret;
             }
-            if (call_expr_id != ast::k_invalid_expr &&
-                call_expr_id < expr_external_receiver_expr_cache_.size()) {
-                expr_external_receiver_expr_cache_[call_expr_id] = receiver_eid;
-            }
-            return types_.get(selected_external_fn_type).ret;
         }
 
         // ------------------------------------------------------------
@@ -3008,6 +3152,51 @@ namespace parus::tyck {
                 }
                 cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
                 return types_.builtin(ty::Builtin::kUSize);
+            }
+
+            if (impl_binding == ImplBindingKind::kStepNext) {
+                if (form != CallForm::kPositionalOnly || outside_positional.size() != 1 || !outside_labeled.empty()) {
+                    return fail_core_shape_("core::iter::step_next expects positional(T)");
+                }
+                if (explicit_call_type_args.size() != 1) {
+                    diag_(diag::Code::kGenericArityMismatch, e.span, "1",
+                          std::to_string(explicit_call_type_args.size()));
+                    err_(e.span, "core::iter::step_next requires one explicit type argument");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+
+                const ty::TypeId value_ty = explicit_call_type_args[0];
+                const CoercionPlan value_plan = classify_assign_with_coercion_(
+                    AssignSite::CallArg,
+                    value_ty,
+                    outside_positional[0]->expr,
+                    outside_positional[0]->span
+                );
+                if (!value_plan.ok) {
+                    return fail_core_shape_("core::iter::step_next argument must be assignable to T");
+                }
+
+                bool step_ok = builtin_family_proto_satisfied_by_primitive_name_(value_ty, "Step");
+                if (!step_ok) {
+                    ImportedProtoIdentity identity{};
+                    identity.bundle = "core";
+                    identity.module_head = "core::constraints";
+                    identity.path = "core::constraints::Step";
+                    if (auto proto_sid = resolve_imported_proto_sid_by_identity_(identity, e.span)) {
+                        step_ok = type_satisfies_proto_constraint_(value_ty, *proto_sid, e.span);
+                    }
+                }
+                if (!step_ok) {
+                    diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
+                          "T", "core::constraints::Step", types_.to_string(value_ty));
+                    err_(e.span, "core::iter::step_next requires T: Step");
+                    check_all_arg_exprs_only();
+                    return types_.error();
+                }
+
+                cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
+                return types_.make_optional(value_ty);
             }
 
             if (overload_decl_ids.empty() &&
@@ -3854,6 +4043,18 @@ namespace parus::tyck {
         if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_overload_target_cache_.size()) {
             expr_overload_target_cache_[call_expr_id] = selected_decl_sid;
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_external_callee_symbol_cache_.size()) {
+            expr_external_callee_symbol_cache_[call_expr_id] = sema::SymbolTable::kNoScope;
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_external_callee_type_cache_.size()) {
+            expr_external_callee_type_cache_[call_expr_id] = ty::kInvalidType;
+        }
+        if (call_expr_id != ast::k_invalid_expr &&
+            call_expr_id < expr_external_receiver_expr_cache_.size()) {
+            expr_external_receiver_expr_cache_[call_expr_id] = ast::k_invalid_expr;
         }
         if (call_expr_id != ast::k_invalid_expr &&
             call_expr_id < expr_ctor_owner_type_cache_.size()) {

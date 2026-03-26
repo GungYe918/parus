@@ -800,6 +800,19 @@
                 const auto& fn = ast_.stmt(sid);
                 if (!local_receiver_matches(fn)) return false;
                 if (out.ok) {
+                    const bool current_is_external =
+                        out.decl_sid == ast::k_invalid_stmt &&
+                        out.external_sym != sema::SymbolTable::kNoScope;
+                    if (current_is_external) {
+                        out.decl_sid = sid;
+                        out.external_sym = sema::SymbolTable::kNoScope;
+                        out.external_is_template = false;
+                        out.fn_type = fn.type;
+                        return true;
+                    }
+                    if (out.decl_sid == sid) {
+                        return true;
+                    }
                     diag_(diag::Code::kTypeErrorGeneric, member_span,
                           "ambiguous iteration method '" + std::string(member_name) + "'");
                     err_(member_span, "ambiguous iteration method");
@@ -819,6 +832,9 @@
                     const bool current_is_external =
                         out.decl_sid == ast::k_invalid_stmt &&
                         out.external_sym != sema::SymbolTable::kNoScope;
+                    if (!current_is_external) {
+                        return true;
+                    }
                     if (current_is_external) {
                         if (out.fn_type == fn_t) {
                             if (out.external_is_template && !candidate_is_template) {
@@ -878,6 +894,14 @@
 
             for (const auto& md : lookup_acts_methods_for_call_(owner_t, member_name, nullptr)) {
                 (void)adopt_local(md.fn_sid);
+            }
+
+            if (!out.ok &&
+                owner_t != ty::kInvalidType &&
+                materialize_imported_acts_templates_for_member_(owner_t, member_name, member_span)) {
+                for (const auto& md : lookup_acts_methods_for_call_(owner_t, member_name, nullptr)) {
+                    (void)adopt_local(md.fn_sid);
+                }
             }
 
             auto oit = external_acts_default_method_map_.find(owner_t);
@@ -1033,6 +1057,16 @@
                     fn_t = substitute_generic_type_(fn_t, bindings);
                 }
                 (void)adopt_external(md.fn_symbol, fn_t, /*candidate_is_template=*/md.owner_is_generic_template);
+            }
+
+            if (out.ok &&
+                out.decl_sid == ast::k_invalid_stmt &&
+                out.external_sym != sema::SymbolTable::kNoScope &&
+                owner_t != ty::kInvalidType &&
+                materialize_imported_acts_templates_for_member_(owner_t, member_name, member_span)) {
+                for (const auto& md : lookup_acts_methods_for_call_(owner_t, member_name, nullptr)) {
+                    (void)adopt_local(md.fn_sid);
+                }
             }
 
             if (!out.ok) {

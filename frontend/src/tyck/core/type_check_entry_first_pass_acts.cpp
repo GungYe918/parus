@@ -3599,25 +3599,80 @@
         std::vector<ActsMethodDecl> out;
         owner_type = canonicalize_acts_owner_type_(owner_type);
         if (owner_type == ty::kInvalidType || name.empty()) return out;
-        auto oit = acts_default_method_map_.find(owner_type);
-        if (oit == acts_default_method_map_.end()) return out;
-        auto mit = oit->second.find(std::string(name));
-        if (mit == oit->second.end()) return out;
+
+        auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
+        auto owner_types_match = [&](ty::TypeId lhs, ty::TypeId rhs) -> bool {
+            lhs = canonicalize_acts_owner_type_(lhs);
+            rhs = canonicalize_acts_owner_type_(rhs);
+            if (lhs == rhs) return true;
+            if (canonicalize_transparent_external_typedef_(lhs) ==
+                canonicalize_transparent_external_typedef_(rhs)) {
+                return true;
+            }
+
+            std::string lhs_base{};
+            std::string rhs_base{};
+            std::vector<ty::TypeId> lhs_args{};
+            std::vector<ty::TypeId> rhs_args{};
+            if (decompose_named_user_type_(lhs, lhs_base, lhs_args) &&
+                decompose_named_user_type_(rhs, rhs_base, rhs_args) &&
+                owner_base_name_matches(lhs_base, rhs_base) &&
+                lhs_args.size() == rhs_args.size()) {
+                bool all_same = true;
+                for (size_t i = 0; i < lhs_args.size(); ++i) {
+                    if (canonicalize_transparent_external_typedef_(lhs_args[i]) !=
+                        canonicalize_transparent_external_typedef_(rhs_args[i])) {
+                        all_same = false;
+                        break;
+                    }
+                }
+                if (all_same) return true;
+            }
+
+            return types_.to_string(lhs) == types_.to_string(rhs);
+        };
+
+        std::vector<ActsMethodDecl> matching_decls{};
+        if (auto oit = acts_default_method_map_.find(owner_type);
+            oit != acts_default_method_map_.end()) {
+            if (auto mit = oit->second.find(std::string(name)); mit != oit->second.end()) {
+                matching_decls.insert(matching_decls.end(), mit->second.begin(), mit->second.end());
+            }
+        }
+        if (matching_decls.empty()) {
+            for (const auto& [candidate_owner, member_map] : acts_default_method_map_) {
+                if (!owner_types_match(candidate_owner, owner_type)) continue;
+                auto mit = member_map.find(std::string(name));
+                if (mit == member_map.end()) continue;
+                matching_decls.insert(matching_decls.end(), mit->second.begin(), mit->second.end());
+            }
+        }
+        if (matching_decls.empty()) return out;
 
         const auto* active = forced_selection ? forced_selection : lookup_active_acts_selection_(owner_type);
         if (active == nullptr || active->kind == ActiveActsSelectionKind::kDefaultOnly) {
-            for (const auto& d : mit->second) {
+            for (const auto& d : matching_decls) {
                 if (!d.from_named_set) out.push_back(d);
             }
             return out;
         }
 
-        for (const auto& d : mit->second) {
+        for (const auto& d : matching_decls) {
             if (d.from_named_set && d.acts_decl_sid == active->named_decl_sid) {
                 out.push_back(d);
             }
         }
-        for (const auto& d : mit->second) {
+        for (const auto& d : matching_decls) {
             if (!d.from_named_set) out.push_back(d);
         }
         return out;

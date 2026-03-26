@@ -323,7 +323,9 @@ namespace parus::tyck {
         //   이미 구현된 first_pass_collect_top_level_()를 정식으로 사용한다.
         // ---------------------------------------------------------
         first_pass_collect_top_level_(program_stmt);
+        register_imported_proto_templates_();
         register_imported_fn_templates_();
+        register_imported_acts_templates_();
         if (core_context_invalid_) {
             result_.ok = false;
             return result_;
@@ -1028,6 +1030,90 @@ namespace parus::tyck {
         std::string& out_base,
         std::vector<ty::TypeId>& out_args
     ) const {
+        auto normalize_base = [](std::string& s) {
+            const size_t lt = s.find('<');
+            if (lt != std::string::npos) {
+                s.erase(lt);
+            }
+        };
+        auto try_reparse_repr = [&](std::string_view repr) -> bool {
+            const size_t lt = repr.find('<');
+            const size_t gt = repr.rfind('>');
+            if (lt == std::string::npos || gt == std::string::npos || lt >= gt) {
+                return false;
+            }
+
+            const ty::TypeId reparsed =
+                parus::cimport::parse_external_type_repr(repr, {}, {}, types_);
+            if (reparsed != ty::kInvalidType && reparsed != t) {
+                std::vector<std::string_view> reparsed_path{};
+                std::vector<ty::TypeId> reparsed_args{};
+                if (types_.decompose_named_user(reparsed, reparsed_path, reparsed_args) &&
+                    !reparsed_path.empty() &&
+                    !reparsed_args.empty()) {
+                    out_base.clear();
+                    out_args = reparsed_args;
+                    for (size_t i = 0; i < reparsed_path.size(); ++i) {
+                        if (i) out_base += "::";
+                        out_base.append(reparsed_path[i].data(), reparsed_path[i].size());
+                    }
+                    normalize_base(out_base);
+                    return true;
+                }
+                out_args.clear();
+            }
+
+            auto trim = [](std::string_view s) -> std::string_view {
+                while (!s.empty() &&
+                       (s.front() == ' ' || s.front() == '\t' ||
+                        s.front() == '\n' || s.front() == '\r')) {
+                    s.remove_prefix(1);
+                }
+                while (!s.empty() &&
+                       (s.back() == ' ' || s.back() == '\t' ||
+                        s.back() == '\n' || s.back() == '\r')) {
+                    s.remove_suffix(1);
+                }
+                return s;
+            };
+
+            const std::string_view base_sv = trim(repr.substr(0, lt));
+            std::string_view args_sv = repr.substr(lt + 1, gt - lt - 1);
+            out_args.clear();
+            int depth = 0;
+            size_t begin = 0;
+            for (size_t i = 0; i <= args_sv.size(); ++i) {
+                const bool at_end = (i == args_sv.size());
+                const char ch = at_end ? ',' : args_sv[i];
+                if (!at_end) {
+                    if (ch == '<') {
+                        ++depth;
+                    } else if (ch == '>') {
+                        if (depth > 0) --depth;
+                    }
+                }
+                if ((at_end || ch == ',') && depth == 0) {
+                    const std::string_view part = trim(args_sv.substr(begin, i - begin));
+                    if (part.empty()) {
+                        out_args.clear();
+                        return false;
+                    }
+                    const ty::TypeId arg_t =
+                        parus::cimport::parse_external_type_repr(part, {}, {}, types_);
+                    if (arg_t == ty::kInvalidType) {
+                        out_args.clear();
+                        return false;
+                    }
+                    out_args.push_back(arg_t);
+                    begin = i + 1;
+                }
+            }
+            if (out_args.empty()) return false;
+            out_base.assign(base_sv.data(), base_sv.size());
+            normalize_base(out_base);
+            return true;
+        };
+
         out_base.clear();
         out_args.clear();
         if (t == ty::kInvalidType) return false;
@@ -1038,11 +1124,26 @@ namespace parus::tyck {
             return false;
         }
 
+        if (out_args.empty()) {
+            if (try_reparse_repr(types_.to_string(t))) {
+                return true;
+            }
+            if (try_reparse_repr(types_.to_export_string(t))) {
+                return true;
+            }
+        }
+
+        if (out_args.empty()) {
+            out_base.clear();
+            return false;
+        }
+
         for (size_t i = 0; i < path.size(); ++i) {
             if (i) out_base += "::";
             out_base.append(path[i].data(), path[i].size());
         }
-        return !out_args.empty();
+        normalize_base(out_base);
+        return true;
     }
 
     bool TypeChecker::type_contains_unresolved_generic_param_(ty::TypeId t) const {
@@ -1917,6 +2018,34 @@ namespace parus::tyck {
         return out;
     }
 
+    std::optional<ast::StmtId> TypeChecker::ensure_monomorphized_proto_(
+        const MonoRequest& request,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        return ensure_generic_proto_instance_(request.templ.template_sid, request.concrete_args, use_span);
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_monomorphized_acts_(
+        const MonoRequest& request,
+        ty::TypeId concrete_owner_type,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        return ensure_generic_acts_instance_(
+            request.templ.template_sid,
+            concrete_owner_type,
+            request.concrete_args,
+            use_span
+        );
+    }
+
     std::string TypeChecker::path_ref_display_(const ast::PathRef& pr) const {
         if (pr.type != ty::kInvalidType) {
             return types_.to_string(pr.type);
@@ -2090,7 +2219,31 @@ namespace parus::tyck {
             return templ_sid;
         }
 
-        const auto inst = ensure_generic_proto_instance_(templ_sid, args, use_span);
+        MonoRequest req{};
+        req.templ.template_sid = templ_sid;
+        req.templ.producer_bundle = current_bundle_name_();
+        req.templ.template_symbol = base_key;
+        req.concrete_args = args;
+        req.target_lane.clear();
+        req.abi_lane.clear();
+        if (imported_proto_template_sid_set_.find(templ_sid) != imported_proto_template_sid_set_.end()) {
+            req.templ.source = MonoTemplateRef::SourceKind::kImportedProto;
+            if (auto it = imported_proto_template_index_by_sid_.find(templ_sid);
+                it != imported_proto_template_index_by_sid_.end() &&
+                it->second < explicit_imported_proto_templates_.size()) {
+                const auto& templ_meta = explicit_imported_proto_templates_[it->second];
+                req.templ.producer_bundle = templ_meta.producer_bundle;
+                req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            req.templ.source = MonoTemplateRef::SourceKind::kLocalProto;
+            if (auto it = proto_qualified_name_by_stmt_.find(templ_sid); it != proto_qualified_name_by_stmt_.end()) {
+                req.templ.template_symbol = it->second;
+            }
+        }
+
+        const auto inst = ensure_monomorphized_proto_(req, use_span);
         if (!inst.has_value() && out_typed_path_failure) {
             *out_typed_path_failure = true;
         }
@@ -2575,6 +2728,50 @@ namespace parus::tyck {
                     }
                     if (next == ss.external_payload.size()) break;
                     pos = next + 1;
+                }
+
+                const auto payload_meta = parse_external_generic_decl_meta_(external_field_payload);
+                if (!payload_meta.impl_protos.empty()) {
+                    auto parse_impl_proto_type = [&](std::string_view repr,
+                                                     std::string_view semantic) -> ty::TypeId {
+                        std::vector<std::string> candidates{};
+                        candidates.emplace_back(repr);
+                        if (repr.find("::") == std::string_view::npos && !ss.decl_module_head.empty()) {
+                            const std::string canonical_head =
+                                parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+                            if (!canonical_head.empty()) {
+                                candidates.push_back(canonical_head + "::" + std::string(repr));
+                            }
+                            if (canonical_head != ss.decl_module_head) {
+                                candidates.push_back(ss.decl_module_head + "::" + std::string(repr));
+                            }
+                        }
+                        std::sort(candidates.begin(), candidates.end());
+                        candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+                        for (const auto& candidate : candidates) {
+                            const ty::TypeId parsed = parus::cimport::parse_external_type_repr(
+                                candidate,
+                                semantic,
+                                ss.external_payload,
+                                types_
+                            );
+                            if (parsed != ty::kInvalidType) return parsed;
+                        }
+                        return ty::kInvalidType;
+                    };
+
+                    for (const auto& [proto_repr, proto_semantic] : payload_meta.impl_protos) {
+                        const ty::TypeId proto_type = parse_impl_proto_type(proto_repr, proto_semantic);
+                        if (proto_type == ty::kInvalidType) continue;
+                        ast::PathRef pr{};
+                        pr.type = proto_type;
+                        pr.span = ss.decl_span;
+                        if (stub.decl_path_ref_count == 0) {
+                            stub.decl_path_ref_begin = static_cast<uint32_t>(ast_.path_refs().size());
+                        }
+                        ast_.add_path_ref(pr);
+                        ++stub.decl_path_ref_count;
+                    }
                 }
 
                 const ast::StmtId stub_sid = ast_.add_stmt(stub);
@@ -3112,6 +3309,9 @@ namespace parus::tyck {
         const auto& kids = ast_.stmt_children();
         const uint64_t begin = inst.stmt_begin;
         const uint64_t end = begin + inst.stmt_count;
+        if (stmt_resolved_symbol_cache_.size() < ast_.stmts().size()) {
+            stmt_resolved_symbol_cache_.resize(ast_.stmts().size(), sema::SymbolTable::kNoScope);
+        }
         if (begin <= kids.size() && end <= kids.size()) {
             for (uint32_t i = inst.stmt_begin; i < inst.stmt_begin + inst.stmt_count; ++i) {
                 const ast::StmtId msid = kids[i];
@@ -3132,8 +3332,11 @@ namespace parus::tyck {
                     fn_decl_by_name_[mqname].push_back(msid);
                     if (auto existing = sym_.lookup_in_current(mqname)) {
                         (void)sym_.update_declared_type(*existing, m.type);
+                        stmt_resolved_symbol_cache_[msid] = *existing;
                     } else {
-                        (void)sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                        auto ins = sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                        stmt_resolved_symbol_cache_[msid] =
+                            ins.ok ? ins.symbol_id : sema::SymbolTable::kNoScope;
                     }
                 }
             }
@@ -3193,24 +3396,42 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
+        const std::vector<std::string> decl_generic_names = collect_decl_generic_param_names_(templ);
         std::string owner_base;
         std::vector<ty::TypeId> owner_generic_params;
-        if (!decompose_named_user_type_(templ.acts_target_type, owner_base, owner_generic_params)) {
+        const bool have_owner_template_shape =
+            decompose_named_user_type_(templ.acts_target_type, owner_base, owner_generic_params);
+        const size_t expected_arg_count =
+            have_owner_template_shape ? owner_generic_params.size() : decl_generic_names.size();
+        if (expected_arg_count == 0) {
             return template_sid;
         }
-        if (owner_generic_params.size() != concrete_args.size()) {
+        if (expected_arg_count != concrete_args.size()) {
             diag_(diag::Code::kGenericTypePathArityMismatch, use_span,
-                  owner_base,
-                  std::to_string(owner_generic_params.size()),
+                  owner_base.empty() ? std::string(templ.name) : owner_base,
+                  std::to_string(expected_arg_count),
                   std::to_string(concrete_args.size()));
             err_(use_span, "generic acts owner arity mismatch");
             return std::nullopt;
         }
-
-        std::vector<std::string> generic_names;
-        generic_names.reserve(owner_generic_params.size());
-        for (const auto t : owner_generic_params) {
-            generic_names.push_back(types_.to_string(t));
+        std::vector<std::string> generic_names = decl_generic_names;
+        if (generic_names.empty()) {
+            generic_names.reserve(expected_arg_count);
+            if (have_owner_template_shape) {
+                for (const auto t : owner_generic_params) {
+                    generic_names.push_back(types_.to_string(t));
+                }
+            }
+        } else {
+            if (have_owner_template_shape) {
+                for (const auto t : owner_generic_params) {
+                    const std::string alias = types_.to_string(t);
+                    if (alias.empty()) continue;
+                    if (std::find(generic_names.begin(), generic_names.end(), alias) == generic_names.end()) {
+                        generic_names.push_back(alias);
+                    }
+                }
+            }
         }
 
         std::ostringstream key_oss;
@@ -3251,8 +3472,22 @@ namespace parus::tyck {
 
         std::unordered_map<std::string, ty::TypeId> subst;
         subst.reserve(generic_names.size());
-        for (size_t i = 0; i < generic_names.size(); ++i) {
-            subst.emplace(generic_names[i], concrete_args[i]);
+        const size_t concrete_count = concrete_args.size();
+        const size_t primary_count = std::min(decl_generic_names.size(), concrete_count);
+        for (size_t i = 0; i < primary_count; ++i) {
+            subst.emplace(decl_generic_names[i], concrete_args[i]);
+        }
+        if (primary_count == 0) {
+            for (size_t i = 0; i < std::min(generic_names.size(), concrete_count); ++i) {
+                subst.emplace(generic_names[i], concrete_args[i]);
+            }
+        } else if (have_owner_template_shape) {
+            for (size_t i = 0; i < owner_generic_params.size() && i < concrete_count; ++i) {
+                const std::string alias = types_.to_string(owner_generic_params[i]);
+                if (!alias.empty()) {
+                    subst.emplace(alias, concrete_args[i]);
+                }
+            }
         }
 
         for (uint32_t ci = 0; ci < templ.decl_constraint_count; ++ci) {
@@ -3302,10 +3537,93 @@ namespace parus::tyck {
         inst.decl_generic_param_begin = 0;
         inst.decl_generic_param_count = 0;
 
+        const auto& kids = ast_.stmt_children();
+        const uint64_t mb = inst.stmt_begin;
+        const uint64_t me = mb + inst.stmt_count;
+        if (mb <= kids.size() && me <= kids.size()) {
+            auto rebuild_member_fn_type = [&](ast::StmtId msid) {
+                if (msid == ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast_.stmts().size()) return;
+                auto& member = ast_.stmt_mut(msid);
+                if (member.kind != ast::StmtKind::kFnDecl) return;
+
+                std::vector<ty::TypeId> params{};
+                std::vector<std::string_view> labels{};
+                std::vector<uint8_t> has_default_flags{};
+                params.reserve(member.param_count);
+                labels.reserve(member.param_count);
+                has_default_flags.reserve(member.param_count);
+                auto& all_params = ast_.params_mut();
+                for (uint32_t pi = 0; pi < member.param_count; ++pi) {
+                    const uint32_t pidx = member.param_begin + pi;
+                    if (pidx >= all_params.size()) break;
+                    auto& p = all_params[pidx];
+                    if (p.is_self) {
+                        switch (p.self_kind) {
+                            case ast::SelfReceiverKind::kRead:
+                                p.type = types_.make_borrow(concrete_owner_type, /*is_mut=*/false);
+                                break;
+                            case ast::SelfReceiverKind::kMut:
+                                p.type = types_.make_borrow(concrete_owner_type, /*is_mut=*/true);
+                                break;
+                            case ast::SelfReceiverKind::kMove:
+                                p.type = concrete_owner_type;
+                                break;
+                            case ast::SelfReceiverKind::kNone:
+                                p.type = types_.make_borrow(concrete_owner_type, /*is_mut=*/false);
+                                break;
+                        }
+                    }
+                    params.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                    labels.push_back(p.name);
+                    has_default_flags.push_back(p.has_default ? 1u : 0u);
+                }
+                ty::TypeId ret = member.fn_ret;
+                if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+                member.type = types_.make_fn(
+                    ret,
+                    params.empty() ? nullptr : params.data(),
+                    static_cast<uint32_t>(params.size()),
+                    member.positional_param_count,
+                    labels.empty() ? nullptr : labels.data(),
+                    has_default_flags.empty() ? nullptr : has_default_flags.data()
+                );
+            };
+
+            for (uint32_t i = inst.stmt_begin; i < inst.stmt_begin + inst.stmt_count; ++i) {
+                rebuild_member_fn_type(kids[i]);
+            }
+        }
+
         acts_qualified_name_by_stmt_[inst_sid] = acts_qname;
 
         if (inst.acts_has_set_name) {
             acts_named_decl_by_owner_and_name_[acts_named_decl_key_(concrete_owner_type, acts_qname)] = inst_sid;
+        } else {
+            acts_default_decls_by_owner_[concrete_owner_type].push_back(inst_sid);
+        }
+        if (stmt_resolved_symbol_cache_.size() < ast_.stmts().size()) {
+            stmt_resolved_symbol_cache_.resize(ast_.stmts().size(), sema::SymbolTable::kNoScope);
+        }
+        if (mb <= kids.size() && me <= kids.size()) {
+            for (uint32_t i = inst.stmt_begin; i < inst.stmt_begin + inst.stmt_count; ++i) {
+                const ast::StmtId msid = kids[i];
+                if (msid == ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast_.stmts().size()) continue;
+                const auto& m = ast_.stmt(msid);
+                if (m.kind != ast::StmtKind::kFnDecl) continue;
+                std::string mqname = acts_qname;
+                if (!mqname.empty()) mqname += "::";
+                mqname += std::string(m.name);
+                fn_qualified_name_by_stmt_[msid] = mqname;
+                fn_decl_by_name_[mqname].push_back(msid);
+                if (auto existing = sym_.lookup_in_current(mqname)) {
+                    (void)sym_.update_declared_type(*existing, m.type);
+                    stmt_resolved_symbol_cache_[msid] = *existing;
+                } else {
+                    auto ins = sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                    const uint32_t sym_id = ins.ok ? ins.symbol_id : sema::SymbolTable::kNoScope;
+                    stmt_resolved_symbol_cache_[msid] = sym_id;
+                }
+            }
         }
         collect_acts_operator_decl_(inst_sid, inst, /*allow_named_set=*/true);
         collect_acts_method_decl_(inst_sid, inst, /*allow_named_set=*/true);
@@ -3354,11 +3672,19 @@ namespace parus::tyck {
         concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
         if (concrete_owner_type == ty::kInvalidType) return;
 
+        auto strip_generic_suffix = [](std::string s) {
+            if (const size_t lt = s.find('<'); lt != std::string::npos) {
+                s.erase(lt);
+            }
+            return s;
+        };
+
         std::string owner_base;
         std::vector<ty::TypeId> owner_args;
         if (!decompose_named_user_type_(concrete_owner_type, owner_base, owner_args)) {
             return;
         }
+        owner_base = strip_generic_suffix(owner_base);
 
         auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) {
             if (lhs == rhs) return true;
@@ -3396,10 +3722,33 @@ namespace parus::tyck {
             std::string templ_base;
             std::vector<ty::TypeId> templ_args;
             if (!decompose_named_user_type_(templ.acts_target_type, templ_base, templ_args)) continue;
+            templ_base = strip_generic_suffix(templ_base);
             if (!owner_base_name_matches(templ_base, owner_base)) continue;
             if (templ_args.size() != owner_args.size()) continue;
 
-            (void)ensure_generic_acts_instance_(templ_sid, concrete_owner_type, owner_args, use_span);
+            MonoRequest req{};
+            req.templ.template_sid = templ_sid;
+            req.templ.producer_bundle = current_bundle_name_();
+            req.templ.template_symbol = templ_base;
+            req.concrete_args = owner_args;
+            if (imported_acts_template_sid_set_.find(templ_sid) != imported_acts_template_sid_set_.end()) {
+                req.templ.source = MonoTemplateRef::SourceKind::kImportedActs;
+                if (auto it = imported_acts_template_index_by_sid_.find(templ_sid);
+                    it != imported_acts_template_index_by_sid_.end() &&
+                    it->second < explicit_imported_acts_templates_.size()) {
+                    const auto& templ_meta = explicit_imported_acts_templates_[it->second];
+                    req.templ.producer_bundle = templ_meta.producer_bundle;
+                    req.templ.template_symbol =
+                        !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+                }
+            } else {
+                req.templ.source = MonoTemplateRef::SourceKind::kLocalActs;
+                if (auto it = acts_qualified_name_by_stmt_.find(templ_sid); it != acts_qualified_name_by_stmt_.end()) {
+                    req.templ.template_symbol = it->second;
+                }
+            }
+
+            (void)ensure_monomorphized_acts_(req, concrete_owner_type, use_span);
         }
     }
 
@@ -3831,14 +4180,71 @@ namespace parus::tyck {
         const auto& tt = types_.get(owner_type);
         if (tt.kind != ty::Kind::kNamedUser) return owner_type;
 
+        std::vector<std::string_view> owner_path{};
+        std::vector<ty::TypeId> owner_args{};
+        if (!types_.decompose_named_user(owner_type, owner_path, owner_args) || owner_path.empty()) {
+            return owner_type;
+        }
+
+        auto intern_named_with_existing_args = [&](std::string_view qname) -> ty::TypeId {
+            if (qname.empty()) return ty::kInvalidType;
+            std::vector<std::string> storage{};
+            std::vector<std::string_view> segs{};
+            size_t pos = 0;
+            while (pos < qname.size()) {
+                const size_t next = qname.find("::", pos);
+                if (next == std::string_view::npos) {
+                    storage.emplace_back(qname.substr(pos));
+                    break;
+                }
+                storage.emplace_back(qname.substr(pos, next - pos));
+                pos = next + 2;
+            }
+            if (storage.empty()) return ty::kInvalidType;
+            segs.reserve(storage.size());
+            for (const auto& seg : storage) segs.push_back(seg);
+            return types_.intern_named_path_with_args(
+                segs.data(),
+                static_cast<uint32_t>(segs.size()),
+                owner_args.empty() ? nullptr : owner_args.data(),
+                static_cast<uint32_t>(owner_args.size())
+            );
+        };
+
         auto adopt_declared_type = [&](std::string lookup) -> ty::TypeId {
             if (lookup.empty()) return ty::kInvalidType;
             auto sid = lookup_symbol_(lookup);
             if (!sid.has_value()) sid = sym_.lookup(lookup);
             if (!sid.has_value()) return ty::kInvalidType;
             const auto& ss = sym_.symbol(*sid);
-            if ((ss.kind == sema::SymbolKind::kField || ss.kind == sema::SymbolKind::kType) &&
-                ss.declared_type != ty::kInvalidType) {
+            if (ss.kind != sema::SymbolKind::kField && ss.kind != sema::SymbolKind::kType) {
+                return ty::kInvalidType;
+            }
+            if (!owner_args.empty()) {
+                if (ss.declared_type != ty::kInvalidType) {
+                    std::vector<std::string_view> declared_path{};
+                    std::vector<ty::TypeId> declared_args{};
+                    if (types_.decompose_named_user(ss.declared_type, declared_path, declared_args) &&
+                        !declared_path.empty()) {
+                        if (!declared_args.empty()) {
+                            return ss.declared_type;
+                        }
+                        return types_.intern_named_path_with_args(
+                            declared_path.data(),
+                            static_cast<uint32_t>(declared_path.size()),
+                            owner_args.data(),
+                            static_cast<uint32_t>(owner_args.size())
+                        );
+                    }
+                }
+                if (ss.name.find('<') == std::string::npos) {
+                    if (const ty::TypeId rebuilt = intern_named_with_existing_args(ss.name);
+                        rebuilt != ty::kInvalidType) {
+                        return rebuilt;
+                    }
+                }
+            }
+            if (ss.declared_type != ty::kInvalidType) {
                 const bool owner_has_unresolved = type_contains_unresolved_generic_param_(owner_type);
                 const bool declared_has_unresolved = type_contains_unresolved_generic_param_(ss.declared_type);
                 if (!owner_has_unresolved && declared_has_unresolved) {
@@ -4020,6 +4426,322 @@ namespace parus::tyck {
                 }
             }
         }
+    }
+
+    void TypeChecker::register_imported_proto_templates_() {
+        imported_proto_template_sid_set_.clear();
+        imported_proto_template_index_by_sid_.clear();
+        if (explicit_imported_proto_templates_.empty()) return;
+
+        for (size_t idx = 0; idx < explicit_imported_proto_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_proto_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& proto_stmt = ast_.stmt_mut(templ.template_sid);
+            if (proto_stmt.kind != ast::StmtKind::kProtoDecl) continue;
+
+            imported_proto_template_sid_set_.insert(templ.template_sid);
+            imported_proto_template_index_by_sid_[templ.template_sid] = idx;
+            generic_proto_template_sid_set_.insert(templ.template_sid);
+
+            std::string qname = !templ.public_path.empty() ? templ.public_path : templ.lookup_name;
+            if (qname.empty()) {
+                qname = std::string(proto_stmt.name);
+            }
+            const std::string canonical_head =
+                parus::normalize_core_public_module_head(templ.producer_bundle, templ.module_head);
+            if (!qname.empty() &&
+                qname.find("::") == std::string::npos &&
+                !canonical_head.empty()) {
+                qname = canonical_head + "::" + qname;
+            }
+            if (!qname.empty()) {
+                proto_qualified_name_by_stmt_[templ.template_sid] = qname;
+                proto_decl_by_name_[qname] = templ.template_sid;
+                const size_t split = qname.rfind("::");
+                const std::string leaf =
+                    (split == std::string::npos) ? qname : qname.substr(split + 2);
+                if (!leaf.empty() && proto_decl_by_name_.find(leaf) == proto_decl_by_name_.end()) {
+                    proto_decl_by_name_[leaf] = templ.template_sid;
+                }
+            }
+
+            if (templ.declared_type != ty::kInvalidType) {
+                proto_stmt.type = templ.declared_type;
+                proto_decl_by_type_[templ.declared_type] = templ.template_sid;
+            }
+
+            if (!qname.empty()) {
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind == sema::SymbolKind::kType && proto_stmt.type != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, proto_stmt.type);
+                    }
+                } else {
+                    (void)sym_.insert(sema::SymbolKind::kType, qname, proto_stmt.type, proto_stmt.span);
+                }
+            }
+
+            const uint64_t begin = proto_stmt.decl_constraint_begin;
+            const uint64_t end = begin + proto_stmt.decl_constraint_count;
+            if (begin > ast_.fn_constraint_decls().size() || end > ast_.fn_constraint_decls().size()) {
+                continue;
+            }
+            auto& constraints = ast_.fn_constraint_decls_mut();
+            for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                const auto& meta = templ.constraints[i];
+                auto& cc = constraints[begin + i];
+                if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, proto_stmt.span)) {
+                    const auto& proto_decl = ast_.stmt(*proto_sid);
+                    if (proto_decl.type != ty::kInvalidType) {
+                        cc.rhs_type = proto_decl.type;
+                    }
+                }
+            }
+        }
+    }
+
+    void TypeChecker::register_imported_acts_templates_() {
+        imported_acts_template_sid_set_.clear();
+        imported_acts_template_index_by_sid_.clear();
+        if (explicit_imported_acts_templates_.empty()) return;
+
+        for (size_t idx = 0; idx < explicit_imported_acts_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_acts_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& acts_stmt = ast_.stmt_mut(templ.template_sid);
+            if (acts_stmt.kind != ast::StmtKind::kActsDecl) continue;
+
+            imported_acts_template_sid_set_.insert(templ.template_sid);
+            imported_acts_template_index_by_sid_[templ.template_sid] = idx;
+            if (acts_stmt.acts_is_for) {
+                generic_acts_template_sid_set_.insert(templ.template_sid);
+                const ty::TypeId owner_type = canonicalize_acts_owner_type_(acts_stmt.acts_target_type);
+                if (owner_type != ty::kInvalidType && owner_type != acts_stmt.acts_target_type) {
+                    acts_stmt.acts_target_type = owner_type;
+                }
+
+                const auto& kids = ast_.stmt_children();
+                const uint64_t begin = acts_stmt.stmt_begin;
+                const uint64_t end = begin + acts_stmt.stmt_count;
+                if (begin <= kids.size() && end <= kids.size() && owner_type != ty::kInvalidType) {
+                    auto rebuild_member_fn_type = [&](ast::StmtId msid) {
+                        if (msid == ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast_.stmts().size()) return;
+                        auto& ms = ast_.stmt_mut(msid);
+                        if (ms.kind != ast::StmtKind::kFnDecl) return;
+
+                        auto& params = ast_.params_mut();
+                        std::vector<ty::TypeId> param_types{};
+                        std::vector<std::string_view> labels{};
+                        std::vector<uint8_t> has_defaults{};
+                        param_types.reserve(ms.param_count);
+                        labels.reserve(ms.param_count);
+                        has_defaults.reserve(ms.param_count);
+                        for (uint32_t pi = 0; pi < ms.param_count; ++pi) {
+                            const uint32_t pidx = ms.param_begin + pi;
+                            if (pidx >= params.size()) break;
+                            auto& p = params[pidx];
+                            if (p.is_self) {
+                                switch (p.self_kind) {
+                                    case ast::SelfReceiverKind::kRead:
+                                        p.type = types_.make_borrow(owner_type, /*is_mut=*/false);
+                                        break;
+                                    case ast::SelfReceiverKind::kMut:
+                                        p.type = types_.make_borrow(owner_type, /*is_mut=*/true);
+                                        break;
+                                    case ast::SelfReceiverKind::kMove:
+                                        p.type = owner_type;
+                                        break;
+                                    case ast::SelfReceiverKind::kNone:
+                                        p.type = types_.make_borrow(owner_type, /*is_mut=*/false);
+                                        break;
+                                }
+                            }
+                            param_types.push_back(p.type == ty::kInvalidType ? types_.error() : p.type);
+                            labels.push_back(p.name);
+                            has_defaults.push_back(p.has_default ? 1u : 0u);
+                        }
+                        ty::TypeId ret = ms.fn_ret;
+                        if (ret == ty::kInvalidType) ret = types_.builtin(ty::Builtin::kUnit);
+                        ms.type = types_.make_fn(
+                            ret,
+                            param_types.empty() ? nullptr : param_types.data(),
+                            static_cast<uint32_t>(param_types.size()),
+                            ms.positional_param_count,
+                            labels.empty() ? nullptr : labels.data(),
+                            has_defaults.empty() ? nullptr : has_defaults.data()
+                        );
+                    };
+
+                    for (uint32_t i = 0; i < acts_stmt.stmt_count; ++i) {
+                        rebuild_member_fn_type(kids[acts_stmt.stmt_begin + i]);
+                    }
+                }
+            }
+
+            std::string qname = !templ.public_path.empty() ? templ.public_path : templ.lookup_name;
+            if (qname.empty()) {
+                qname = std::string(acts_stmt.name);
+            }
+            const std::string canonical_head =
+                parus::normalize_core_public_module_head(templ.producer_bundle, templ.module_head);
+            if (!qname.empty() &&
+                qname.find("::") == std::string::npos &&
+                !canonical_head.empty()) {
+                qname = canonical_head + "::" + qname;
+            }
+            acts_qualified_name_by_stmt_[templ.template_sid] = qname;
+
+            if (!qname.empty()) {
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind != sema::SymbolKind::kAct) {
+                        std::ostringstream oss;
+                        oss << "duplicate symbol (imported acts): " << qname;
+                        diag_(diag::Code::kDuplicateDecl, acts_stmt.span, qname);
+                        err_(acts_stmt.span, oss.str());
+                    }
+                } else {
+                    (void)sym_.insert(sema::SymbolKind::kAct, qname, ty::kInvalidType, acts_stmt.span);
+                }
+            }
+
+            const uint64_t begin = acts_stmt.decl_constraint_begin;
+            const uint64_t end = begin + acts_stmt.decl_constraint_count;
+            if (begin > ast_.fn_constraint_decls().size() || end > ast_.fn_constraint_decls().size()) {
+                continue;
+            }
+            auto& constraints = ast_.fn_constraint_decls_mut();
+            for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                const auto& meta = templ.constraints[i];
+                auto& cc = constraints[begin + i];
+                if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, acts_stmt.span)) {
+                    const auto& proto_decl = ast_.stmt(*proto_sid);
+                    if (proto_decl.type != ty::kInvalidType) {
+                        cc.rhs_type = proto_decl.type;
+                    }
+                }
+            }
+        }
+    }
+
+    bool TypeChecker::materialize_imported_acts_templates_for_member_(
+        ty::TypeId concrete_owner_type,
+        std::string_view member_name,
+        Span use_span
+    ) {
+        concrete_owner_type = canonicalize_acts_owner_type_(concrete_owner_type);
+        if (concrete_owner_type == ty::kInvalidType || member_name.empty()) return false;
+        if (explicit_imported_acts_templates_.empty()) return false;
+
+        auto strip_generic_suffix = [](std::string s) {
+            if (const size_t lt = s.find('<'); lt != std::string::npos) {
+                s.erase(lt);
+            }
+            return s;
+        };
+
+        auto owner_base_name_matches = [](std::string_view lhs, std::string_view rhs) -> bool {
+            if (lhs == rhs) return true;
+            auto suffix_match = [](std::string_view full, std::string_view suffix) -> bool {
+                if (full.size() <= suffix.size() + 2u) return false;
+                if (!full.ends_with(suffix)) return false;
+                const size_t split = full.size() - suffix.size();
+                return full[split - 1] == ':' && full[split - 2] == ':';
+            };
+            return suffix_match(lhs, rhs) || suffix_match(rhs, lhs);
+        };
+
+        std::string concrete_owner_base{};
+        std::vector<ty::TypeId> concrete_owner_args{};
+        const bool have_named_owner =
+            decompose_named_user_type_(concrete_owner_type, concrete_owner_base, concrete_owner_args) &&
+            !concrete_owner_base.empty();
+        concrete_owner_base = strip_generic_suffix(concrete_owner_base);
+        const std::string concrete_owner_export = types_.to_export_string(concrete_owner_type);
+
+        auto template_contains_member = [&](ast::StmtId templ_sid) -> bool {
+            if (templ_sid == ast::k_invalid_stmt || static_cast<size_t>(templ_sid) >= ast_.stmts().size()) {
+                return false;
+            }
+            const auto& acts_stmt = ast_.stmt(templ_sid);
+            if (acts_stmt.kind != ast::StmtKind::kActsDecl) return false;
+            const auto& kids = ast_.stmt_children();
+            const uint64_t begin = acts_stmt.stmt_begin;
+            const uint64_t end = begin + acts_stmt.stmt_count;
+            if (begin > kids.size() || end > kids.size()) return false;
+            for (uint32_t i = 0; i < acts_stmt.stmt_count; ++i) {
+                const ast::StmtId msid = kids[acts_stmt.stmt_begin + i];
+                if (msid == ast::k_invalid_stmt || static_cast<size_t>(msid) >= ast_.stmts().size()) continue;
+                const auto& member = ast_.stmt(msid);
+                if (member.kind == ast::StmtKind::kFnDecl && member.name == member_name) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        bool materialized_any = false;
+        for (size_t idx = 0; idx < explicit_imported_acts_templates_.size(); ++idx) {
+            const auto& templ_meta = explicit_imported_acts_templates_[idx];
+            const ast::StmtId templ_sid = templ_meta.template_sid;
+            if (!template_contains_member(templ_sid)) continue;
+            if (templ_sid == ast::k_invalid_stmt || static_cast<size_t>(templ_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+            const auto& templ_stmt = ast_.stmt(templ_sid);
+            if (templ_stmt.kind != ast::StmtKind::kActsDecl || !templ_stmt.acts_is_for) continue;
+
+            const ty::TypeId templ_owner_type = canonicalize_acts_owner_type_(templ_stmt.acts_target_type);
+            std::vector<ty::TypeId> concrete_args{};
+
+            std::string templ_owner_base{};
+            std::vector<ty::TypeId> templ_owner_args{};
+            const bool templ_has_named_owner =
+                decompose_named_user_type_(templ_owner_type, templ_owner_base, templ_owner_args) &&
+                !templ_owner_base.empty();
+            templ_owner_base = strip_generic_suffix(templ_owner_base);
+
+            if (templ_has_named_owner) {
+                if (!have_named_owner) continue;
+                if (!owner_base_name_matches(concrete_owner_base, templ_owner_base) ||
+                    concrete_owner_args.size() != templ_owner_args.size()) {
+                    continue;
+                }
+                concrete_args = concrete_owner_args;
+            } else {
+                const std::string templ_owner_export = types_.to_export_string(templ_owner_type);
+                const bool owner_matches =
+                    templ_owner_type == concrete_owner_type ||
+                    templ_owner_export == concrete_owner_export ||
+                    owner_base_name_matches(templ_owner_export, concrete_owner_export);
+                if (!owner_matches) continue;
+            }
+
+            MonoRequest req{};
+            req.templ.template_sid = templ_sid;
+            req.templ.source = MonoTemplateRef::SourceKind::kImportedActs;
+            req.templ.producer_bundle = templ_meta.producer_bundle;
+            req.templ.template_symbol =
+                !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            req.concrete_args = concrete_args;
+            req.target_lane = "default";
+            req.abi_lane = "static";
+            if (ensure_monomorphized_acts_(req, concrete_owner_type, use_span).has_value()) {
+                materialized_any = true;
+            }
+        }
+
+        return materialized_any;
     }
 
     void TypeChecker::push_alias_scope_() {

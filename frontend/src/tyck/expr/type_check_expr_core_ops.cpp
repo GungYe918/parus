@@ -1089,6 +1089,12 @@
                     }
                 }
             }
+            if (auto it = explicit_impl_proto_sids_by_type_.find(canonicalize_acts_owner_type_(owner_t));
+                it != explicit_impl_proto_sids_by_type_.end()) {
+                for (const auto psid : it->second) {
+                    collect_proto_closure(collect_proto_closure, psid, proto_sids);
+                }
+            }
 
             std::unordered_set<ast::StmtId> filtered{};
             for (const ast::StmtId psid : proto_sids) {

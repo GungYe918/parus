@@ -2506,11 +2506,18 @@ bool test_external_generic_constraints_v2_work() {
     const std::string lib_src =
         "nest api;\n"
         "import constraints as constraints;\n"
+        "import range as range;\n"
         "struct OnlyI32<T> with [T == i32] {\n"
         "  value: T;\n"
         "};\n"
         "struct Box<T> {\n"
         "  value: T;\n"
+        "};\n"
+        "export proto Defaulted<T> {\n"
+        "  provide const ZERO: i32 = 4i32;\n"
+        "  provide def value_or_zero() -> i32 {\n"
+        "    return 7i32;\n"
+        "  }\n"
         "};\n"
         "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
         "  return 1i32;\n"
@@ -2521,6 +2528,11 @@ bool test_external_generic_constraints_v2_work() {
         "export acts for Box<T> with [T: constraints::Comparable] {\n"
         "  def same(self) -> bool {\n"
         "    return self.value >= self.value;\n"
+        "  }\n"
+        "};\n"
+        "export acts for range::Range<T> with [T: constraints::Comparable] {\n"
+        "  def has_same_bounds(self, other: range::Range<T>) -> bool {\n"
+        "    return self.start == other.start and self.end == other.end;\n"
         "  }\n"
         "};\n";
     if (!write_text(lib_pr, lib_src)) {
@@ -2749,11 +2761,65 @@ bool test_external_generic_constraints_v2_work() {
         "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_acts_pr.string() +
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
         "\" --load-export-index \"" + lib_index.string() + "\"");
-    std::filesystem::remove_all(temp_root, ec);
-
     if (rc_bad_acts == 0 || !contains(out_bad_acts, "GenericConstraintUnsatisfied")) {
         std::cerr << "external generic acts proto mismatch must report GenericConstraintUnsatisfied\n"
                   << out_bad_acts;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto runtime_pr = temp_root / "runtime.pr";
+    const std::string runtime_src =
+        "import api as api;\n"
+        "import range as range;\n"
+        "\n"
+        "struct LocalBox<T>: api::Defaulted<T> {\n"
+        "  value: T;\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let b: LocalBox<i32> = LocalBox<i32>{ value: 3i32 };\n"
+        "  let z: i32 = b->ZERO;\n"
+        "  let x: i32 = b.value_or_zero();\n"
+        "  let r1: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  let r2: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  let r3: core::range::Range<i32> = range::range(2i32, 5i32);\n"
+        "  let ok_same: bool = r1.has_same_bounds(r2);\n"
+        "  let ok_diff: bool = r1.has_same_bounds(r3);\n"
+        "  if (z == 4i32 and x == 7i32 and ok_same and (not ok_diff)) {\n"
+        "    return 42i32;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(runtime_pr, runtime_src)) {
+        std::cerr << "failed to write external generic proto/acts runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto runtime_exe = temp_root / "runtime";
+    auto [rc_runtime_build, out_runtime_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + runtime_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + runtime_exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_runtime_build != 0) {
+        std::cerr << "external generic proto/acts runtime sample should compile/link\n" << out_runtime_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_runtime_run, out_runtime_run] = run_capture("\"" + runtime_exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_runtime_run != 0) {
+        std::cerr << "external generic proto/acts runtime sample should execute\n" << out_runtime_run;
+        return false;
+    }
+    if (!contains(out_runtime_run, "EXIT:42")) {
+        std::cerr << "external generic proto/acts runtime exit mismatch (expected 42)\n"
+                  << out_runtime_run;
         return false;
     }
     return true;
