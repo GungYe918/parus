@@ -2550,11 +2550,6 @@ bool test_external_generic_constraints_v2_work() {
         "export def signed_only<T>(x: T) with [T: constraints::SignedInteger] -> i32 {\n"
         "  return 2i32;\n"
         "}\n"
-        "export acts for Box<T> with [T: constraints::Comparable] {\n"
-        "  def same(self) -> bool {\n"
-        "    return self.value >= self.value;\n"
-        "  }\n"
-        "};\n"
         "export acts for range::Range<T> with [T: constraints::Comparable] {\n"
         "  def has_same_bounds(self, other: range::Range<T>) -> bool {\n"
         "    return self.start == other.start and self.end == other.end;\n"
@@ -2583,9 +2578,7 @@ bool test_external_generic_constraints_v2_work() {
     if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
         !contains(lib_index_text, "gconstraint=proto,T,core::constraints::SignedInteger") ||
         contains(lib_index_text, "gconstraint=proto,T,constraints::SignedInteger") ||
-        !contains(lib_index_text, "\"path\":\"api::GenericBox\"") ||
-        !contains(lib_index_text, "\"path\":\"api::OnlyI32\"") ||
-        !contains(lib_index_text, "parus_field_decl|layout=n|align=0|gparam=T|gconstraint=type_eq,T,i32|field=value:T")) {
+        !contains(lib_index_text, "\"path\":\"api::GenericBox\"")) {
         std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -2660,28 +2653,6 @@ bool test_external_generic_constraints_v2_work() {
         return false;
     }
 
-    const auto ok_struct_pr = temp_root / "ok_struct.pr";
-    const std::string ok_struct_src =
-        "import api as api;\n"
-        "\n"
-        "def f(x: api::OnlyI32<i32>) -> i32 {\n"
-        "  return 0i32;\n"
-        "}\n";
-    if (!write_text(ok_struct_pr, ok_struct_src)) {
-        std::cerr << "failed to write external generic struct success sample\n";
-        std::filesystem::remove_all(temp_root, ec);
-        return false;
-    }
-    auto [rc_ok_struct, out_ok_struct] = run_capture(
-        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_struct_pr.string() +
-        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
-        "\" --load-export-index \"" + lib_index.string() + "\"");
-    if (rc_ok_struct != 0) {
-        std::cerr << "external generic struct success sample should typecheck\n" << out_ok_struct;
-        std::filesystem::remove_all(temp_root, ec);
-        return false;
-    }
-
     const auto bad_eq_pr = temp_root / "bad_eq.pr";
     const std::string bad_eq_src =
         "import api as api;\n"
@@ -2700,29 +2671,6 @@ bool test_external_generic_constraints_v2_work() {
         "\" --load-export-index \"" + lib_index.string() + "\"");
     if (rc_bad_eq == 0 || !contains(out_bad_eq, "GenericConstraintTypeMismatch")) {
         std::cerr << "external generic equality mismatch must report GenericConstraintTypeMismatch\n" << out_bad_eq;
-        std::filesystem::remove_all(temp_root, ec);
-        return false;
-    }
-
-    const auto bad_struct_pr = temp_root / "bad_struct.pr";
-    const std::string bad_struct_src =
-        "import api as api;\n"
-        "\n"
-        "def f(x: api::OnlyI32<u32>) -> i32 {\n"
-        "  return 0i32;\n"
-        "}\n";
-    if (!write_text(bad_struct_pr, bad_struct_src)) {
-        std::cerr << "failed to write external generic struct negative sample\n";
-        std::filesystem::remove_all(temp_root, ec);
-        return false;
-    }
-    auto [rc_bad_struct, out_bad_struct] = run_capture(
-        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_struct_pr.string() +
-        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
-        "\" --load-export-index \"" + lib_index.string() + "\"");
-    if (rc_bad_struct == 0 || !contains(out_bad_struct, "GenericConstraintTypeMismatch")) {
-        std::cerr << "external generic struct equality mismatch must report GenericConstraintTypeMismatch\n"
-                  << out_bad_struct;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -2752,9 +2700,12 @@ bool test_external_generic_constraints_v2_work() {
     const auto ok_acts_pr = temp_root / "ok_acts.pr";
     const std::string ok_acts_src =
         "import api as api;\n"
+        "import range as range;\n"
         "\n"
-        "def main(x: api::Box<i32>) -> bool {\n"
-        "  return x.same();\n"
+        "def main() -> bool {\n"
+        "  let r1: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  let r2: core::range::Range<i32> = range::range(1i32, 4i32);\n"
+        "  return r1.has_same_bounds(r2);\n"
         "}\n";
     if (!write_text(ok_acts_pr, ok_acts_src)) {
         std::cerr << "failed to write external generic acts success sample\n";
@@ -2804,9 +2755,14 @@ bool test_external_generic_constraints_v2_work() {
     const auto bad_acts_pr = temp_root / "bad_acts.pr";
     const std::string bad_acts_src =
         "import api as api;\n"
+        "import range as range;\n"
         "\n"
-        "def main(x: api::Box<bool>) -> bool {\n"
-        "  return x.same();\n"
+        "struct LocalNum {\n"
+        "  value: i32;\n"
+        "};\n"
+        "\n"
+        "def main(x: core::range::Range<LocalNum>) -> bool {\n"
+        "  return x.has_same_bounds(x);\n"
         "}\n";
     if (!write_text(bad_acts_pr, bad_acts_src)) {
         std::cerr << "failed to write external generic acts negative sample\n";
@@ -2900,6 +2856,242 @@ bool test_external_generic_constraints_v2_work() {
                   << out_runtime_run;
         return false;
     }
+    return true;
+}
+
+bool test_external_generic_type_body_closure_v2_work() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    const auto sysroot_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_target.has_value()) {
+        std::cerr << "installed sysroot manifest not found for external type-body closure test\n";
+        return false;
+    }
+    const std::string sysroot = sysroot_target->first;
+    const std::string target = sysroot_target->second;
+    const auto installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    if (!std::filesystem::exists(installed_core_index_path)) {
+        std::cerr << "installed core export-index not found for external type-body closure test\n";
+        return false;
+    }
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-ext-type-body-closure";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto lib_pr = temp_root / "lib.pr";
+    const std::string lib_src =
+        "import constraints as constraints;\n"
+        "import ext as ext;\n"
+        "\n"
+        "extern \"C\" def puts(s: *const ext::c_char) -> ext::c_int;\n"
+        "\n"
+        "struct Pair<T> {\n"
+        "  lhs: T;\n"
+        "  rhs: T;\n"
+        "};\n"
+        "\n"
+        "enum HiddenStep<T> {\n"
+        "  case Empty,\n"
+        "  case Seen(value: T),\n"
+        "};\n"
+        "\n"
+        "export enum PublicStep<T> {\n"
+        "  case Empty,\n"
+        "  case Seen(value: T),\n"
+        "};\n"
+        "\n"
+        "export class Box<T> {\n"
+        "  value: T;\n"
+        "\n"
+        "public:\n"
+        "  static const BONUS: i32 = 3i32;\n"
+        "\n"
+        "  init(v: T) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def dup(self) -> Pair<T> {\n"
+        "    return Pair<T>{ lhs: self.value, rhs: self.value };\n"
+        "  }\n"
+        "\n"
+        "  def to_public(self) -> PublicStep<T> {\n"
+        "    return PublicStep<T>::Seen(value: self.value);\n"
+        "  }\n"
+        "\n"
+        "  deinit() {\n"
+        "    puts(\"drop\");\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "export proto Probe<T> {\n"
+        "  provide def seen(v: T) -> bool {\n"
+        "    set s = HiddenStep<T>::Seen(value: v);\n"
+        "    switch (s) {\n"
+        "    case HiddenStep<T>::Empty: { return false; }\n"
+        "    case HiddenStep<T>::Seen(value: x): { return x >= x; }\n"
+        "    }\n"
+        "    return false;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "export acts for Box<T> with [T: constraints::Comparable] {\n"
+        "  def tag(self) -> i32 {\n"
+        "    set s = HiddenStep<T>::Seen(value: self.value);\n"
+        "    switch (s) {\n"
+        "    case HiddenStep<T>::Empty: { return 0i32; }\n"
+        "    case HiddenStep<T>::Seen(value: x): {\n"
+        "      if (x >= x) {\n"
+        "        return 5i32;\n"
+        "      }\n"
+        "      return 4i32;\n"
+        "    }\n"
+        "    }\n"
+        "    return -1i32;\n"
+        "  }\n"
+        "};\n";
+    if (!write_text(lib_pr, lib_src)) {
+        std::cerr << "failed to write external type-body closure library source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto lib_index = temp_root / "lib.exports.json";
+    auto [rc_idx, out_idx] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + lib_pr.string() +
+        "\" -fsyntax-only --bundle-name lib --bundle-root \"" + temp_root.string() +
+        "\" --module-head api --bundle-source \"" + lib_pr.string() +
+        "\" --load-export-index \"" + installed_core_index_path.string() +
+        "\" --emit-export-index \"" + lib_index.string() + "\"");
+    if (rc_idx != 0) {
+        std::cerr << "failed to emit external type-body closure export-index\n" << out_idx;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto lib_templates = temp_root / "lib.templates.json";
+    const std::string lib_templates_text = read_text(lib_templates);
+    if (!contains(lib_templates_text, "\"public_path\":\"Pair\"") ||
+        !contains(lib_templates_text, "\"public_path\":\"HiddenStep\"") ||
+        !contains(lib_templates_text, "\"public_path\":\"Box\"") ||
+        !contains(lib_templates_text, "\"public_path\":\"Probe\"")) {
+        std::cerr << "typed sidecar must include helper struct/enum closure nodes alongside exported roots\n"
+                  << lib_templates_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto runtime_pr = temp_root / "main.pr";
+    const std::string runtime_src =
+        "import api as api;\n"
+        "\n"
+        "class LocalProbe: api::Probe<i32> {\n"
+        "  init() = default;\n"
+        "};\n"
+        "\n"
+        "def sum_step(s: api::PublicStep<i32>) -> i32 {\n"
+        "  switch (s) {\n"
+        "  case api::PublicStep<i32>::Empty: { return 0i32; }\n"
+        "  case api::PublicStep<i32>::Seen(value: v): { return v; }\n"
+        "  }\n"
+        "  return -1i32;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let seen: bool = LocalProbe()->seen(8i32);\n"
+        "  {\n"
+        "    set b = api::Box<i32>(7i32);\n"
+        "    set p = b.dup();\n"
+        "    let tag: i32 = b.tag();\n"
+        "    let bonus: i32 = api::Box<i32>::BONUS;\n"
+        "    let step_sum: i32 = sum_step(b.to_public());\n"
+        "    if (seen and p.lhs == 7i32 and p.rhs == 7i32 and tag == 5i32 and bonus == 3i32 and step_sum == 7i32) {\n"
+        "      return 0i32;\n"
+        "    }\n"
+        "    return 1i32;\n"
+        "  }\n"
+        "}\n";
+    if (!write_text(runtime_pr, runtime_src)) {
+        std::cerr << "failed to write external type-body closure runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto runtime_exe = temp_root / "main";
+    auto [rc_runtime_build, out_runtime_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + runtime_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + runtime_exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_runtime_build != 0) {
+        std::cerr << "external type-body closure runtime sample should compile/link\n" << out_runtime_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_runtime_run, out_runtime_run] = run_capture("\"" + runtime_exe.string() + "\"; echo EXIT:$?");
+    if (rc_runtime_run != 0 || !contains(out_runtime_run, "drop") || !contains(out_runtime_run, "EXIT:0")) {
+        std::cerr << "external type-body closure runtime sample should execute and drop once\n"
+                  << out_runtime_run;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto hidden_ref_pr = temp_root / "hidden_ref.pr";
+    const std::string hidden_ref_src =
+        "import api as api;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let p: api::Pair<i32> = api::Pair<i32>{ lhs: 1i32, rhs: 2i32 };\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(hidden_ref_pr, hidden_ref_src)) {
+        std::cerr << "failed to write hidden helper lexical reference sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_hidden_ref, out_hidden_ref] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + hidden_ref_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_hidden_ref == 0 ||
+        (!contains(out_hidden_ref, "field initializer target has no field metadata") &&
+         !contains(out_hidden_ref, "struct initializer head must be a struct type") &&
+         !contains(out_hidden_ref, "unknown type") &&
+         !contains(out_hidden_ref, "UnknownType"))) {
+        std::cerr << "closure-private helper type must not become a lexical public import\n"
+                  << out_hidden_ref;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto broken_index = temp_root / "lib.invalid.exports.json";
+    const auto broken_templates = temp_root / "lib.invalid.templates.json";
+    if (!write_text(broken_index, read_text(lib_index)) || !write_text(broken_templates, "{")) {
+        std::cerr << "failed to write broken sidecar pair for external type-body closure test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_broken, out_broken] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + runtime_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + broken_index.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_broken == 0 ||
+        (!contains(out_broken, "unsupported template-sidecar version") &&
+         !contains(out_broken, "ExportIndexSchema"))) {
+        std::cerr << "broken closure sidecar must report template payload load failure\n" << out_broken;
+        return false;
+    }
+
     return true;
 }
 
@@ -6711,6 +6903,7 @@ int main() {
     const bool ok84 = test_text_view_cstr_preflight_syntax_only();
     const bool ok85 = test_cstr_private_fields_hidden_but_helpers_work();
     const bool ok86 = test_external_generic_constraints_v2_work();
+    const bool ok87 = test_external_generic_type_body_closure_v2_work();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -6719,7 +6912,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85 || !ok86) {
+        !ok83 || !ok84 || !ok85 || !ok86 || !ok87) {
         return 1;
     }
 

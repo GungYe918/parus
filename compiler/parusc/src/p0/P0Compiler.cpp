@@ -201,6 +201,14 @@ namespace parusc::p0 {
             uint8_t visibility = 0;
         };
 
+        struct TemplateSidecarEnumVariant {
+            std::string name{};
+            uint32_t payload_begin = 0;
+            uint32_t payload_count = 0;
+            bool has_discriminant = false;
+            int64_t discriminant = 0;
+        };
+
         struct TemplateSidecarFStringPart {
             bool is_expr = false;
             std::string text{};
@@ -211,7 +219,19 @@ namespace parusc::p0 {
             bool is_default = false;
             uint8_t pat_kind = 0;
             std::string pat_text{};
+            std::string enum_type_repr{};
+            std::string enum_type_semantic{};
+            std::string enum_variant_name{};
+            uint32_t enum_bind_begin = 0;
+            uint32_t enum_bind_count = 0;
             uint32_t body = parus::ast::k_invalid_stmt;
+        };
+
+        struct TemplateSidecarSwitchEnumBind {
+            std::string field_name{};
+            std::string bind_name{};
+            std::string bind_type_repr{};
+            std::string bind_type_semantic{};
         };
 
         struct TemplateSidecarGenericParam {
@@ -335,6 +355,8 @@ namespace parusc::p0 {
             uint32_t field_align = 0;
             uint32_t field_member_begin = 0;
             uint32_t field_member_count = 0;
+            uint32_t enum_variant_begin = 0;
+            uint32_t enum_variant_count = 0;
             uint8_t proto_fn_role = 0;
             uint8_t proto_require_kind = 0;
             uint8_t assoc_type_role = 0;
@@ -366,9 +388,11 @@ namespace parusc::p0 {
             std::vector<TemplateSidecarExpr> exprs{};
             std::vector<TemplateSidecarParam> params{};
             std::vector<TemplateSidecarSwitchCase> switch_cases{};
+            std::vector<TemplateSidecarSwitchEnumBind> switch_enum_binds{};
             std::vector<TemplateSidecarArg> args{};
             std::vector<TemplateSidecarFieldInit> field_inits{};
             std::vector<TemplateSidecarFieldMember> field_members{};
+            std::vector<TemplateSidecarEnumVariant> enum_variants{};
             std::vector<TemplateSidecarFStringPart> fstring_parts{};
             std::vector<std::string> type_args{};
             std::vector<TemplateSidecarGenericParam> generic_params{};
@@ -2775,8 +2799,10 @@ namespace parusc::p0 {
             const bool is_proto = root_decl.kind == parus::ast::StmtKind::kProtoDecl;
             const bool is_acts = root_decl.kind == parus::ast::StmtKind::kActsDecl;
             const bool is_class = root_decl.kind == parus::ast::StmtKind::kClassDecl;
-            if (!is_free_fn && !is_proto && !is_acts && !is_class) {
-                out_err = "template sidecar requires top-level generic fn/proto/acts/class declaration";
+            const bool is_field = root_decl.kind == parus::ast::StmtKind::kFieldDecl;
+            const bool is_enum = root_decl.kind == parus::ast::StmtKind::kEnumDecl;
+            if (!is_free_fn && !is_proto && !is_acts && !is_class && !is_field && !is_enum) {
+                out_err = "template sidecar requires top-level fn/proto/acts/class/struct/enum declaration";
                 return false;
             }
 
@@ -2867,7 +2893,7 @@ namespace parusc::p0 {
                 out.constraints.push_back(std::move(meta));
             }
 
-            if (is_proto || is_class) {
+            if (is_proto || is_class || is_field) {
                 const auto& refs = ast.path_refs();
                 const uint64_t begin = root_decl.decl_path_ref_begin;
                 const uint64_t end = begin + root_decl.decl_path_ref_count;
@@ -2900,12 +2926,12 @@ namespace parusc::p0 {
                 }
             }
 
-            if (is_class) {
+            if (is_class || is_field) {
                 const auto& members = ast.field_members();
                 const uint64_t begin = root_decl.field_member_begin;
                 const uint64_t end = begin + root_decl.field_member_count;
                 if (begin > members.size() || end > members.size()) {
-                    out_err = "typed template payload v2 class field-member range out of bounds";
+                    out_err = "typed template payload v2 field-member range out of bounds";
                     return false;
                 }
                 for (uint32_t i = 0; i < root_decl.field_member_count; ++i) {
@@ -2919,6 +2945,47 @@ namespace parusc::p0 {
                     }
                     out_member.visibility = static_cast<uint8_t>(member.visibility);
                     out.field_members.push_back(std::move(out_member));
+                }
+            }
+
+            if (is_enum) {
+                const auto& variants = ast.enum_variant_decls();
+                const uint64_t vbegin = root_decl.enum_variant_begin;
+                const uint64_t vend = vbegin + root_decl.enum_variant_count;
+                if (vbegin > variants.size() || vend > variants.size()) {
+                    out_err = "typed template payload v2 enum variant range out of bounds";
+                    return false;
+                }
+
+                const auto& members = ast.field_members();
+                for (uint32_t i = 0; i < root_decl.enum_variant_count; ++i) {
+                    const auto& variant = variants[root_decl.enum_variant_begin + i];
+                    TemplateSidecarEnumVariant out_variant{};
+                    out_variant.name = std::string(variant.name);
+                    out_variant.payload_begin = static_cast<uint32_t>(out.field_members.size());
+                    out_variant.payload_count = variant.payload_count;
+                    out_variant.has_discriminant = variant.has_discriminant;
+                    out_variant.discriminant = variant.discriminant;
+
+                    const uint64_t pbegin = variant.payload_begin;
+                    const uint64_t pend = pbegin + variant.payload_count;
+                    if (pbegin > members.size() || pend > members.size()) {
+                        out_err = "typed template payload v2 enum payload field-member range out of bounds";
+                        return false;
+                    }
+                    for (uint32_t mi = 0; mi < variant.payload_count; ++mi) {
+                        const auto& member = members[variant.payload_begin + mi];
+                        TemplateSidecarFieldMember out_member{};
+                        out_member.name = std::string(member.name);
+                        out_member.type_repr = canonical_type_repr_or_empty(member.type);
+                        if (member.type != parus::ty::kInvalidType) {
+                            out_member.type_semantic =
+                                parus::cimport::serialize_type_semantic_from_type(member.type, types);
+                        }
+                        out_member.visibility = static_cast<uint8_t>(member.visibility);
+                        out.field_members.push_back(std::move(out_member));
+                    }
+                    out.enum_variants.push_back(std::move(out_variant));
                 }
             }
 
@@ -3130,6 +3197,8 @@ namespace parusc::p0 {
                 ss.field_align = s.field_align;
                 ss.field_member_begin = s.field_member_begin;
                 ss.field_member_count = s.field_member_count;
+                ss.enum_variant_begin = s.enum_variant_begin;
+                ss.enum_variant_count = s.enum_variant_count;
                 ss.proto_fn_role = static_cast<uint8_t>(s.proto_fn_role);
                 ss.proto_require_kind = static_cast<uint8_t>(s.proto_require_kind);
                 ss.assoc_type_role = static_cast<uint8_t>(s.assoc_type_role);
@@ -3217,6 +3286,34 @@ namespace parusc::p0 {
                             out_sc.is_default = sc.is_default;
                             out_sc.pat_kind = static_cast<uint8_t>(sc.pat_kind);
                             out_sc.pat_text = std::string(sc.pat_text);
+                            if (sc.enum_type != parus::ty::kInvalidType) {
+                                out_sc.enum_type_repr = types.to_export_string(sc.enum_type);
+                                out_sc.enum_type_semantic =
+                                    parus::cimport::serialize_type_semantic_from_type(sc.enum_type, types);
+                            }
+                            out_sc.enum_variant_name = std::string(sc.enum_variant_name);
+                            out_sc.enum_bind_begin = static_cast<uint32_t>(out.switch_enum_binds.size());
+                            out_sc.enum_bind_count = sc.enum_bind_count;
+                            const auto& binds = ast.switch_enum_binds();
+                            const uint64_t bb = sc.enum_bind_begin;
+                            const uint64_t be = bb + sc.enum_bind_count;
+                            if (bb <= binds.size() && be <= binds.size()) {
+                                for (uint32_t bi = sc.enum_bind_begin; bi < sc.enum_bind_begin + sc.enum_bind_count; ++bi) {
+                                    const auto& sb = binds[bi];
+                                    TemplateSidecarSwitchEnumBind out_bind{};
+                                    out_bind.field_name = std::string(sb.field_name);
+                                    out_bind.bind_name = std::string(sb.bind_name);
+                                    if (sb.bind_type != parus::ty::kInvalidType) {
+                                        out_bind.bind_type_repr = types.to_export_string(sb.bind_type);
+                                        out_bind.bind_type_semantic =
+                                            parus::cimport::serialize_type_semantic_from_type(sb.bind_type, types);
+                                    }
+                                    out.switch_enum_binds.push_back(std::move(out_bind));
+                                }
+                            } else {
+                                out_sc.enum_bind_begin = 0;
+                                out_sc.enum_bind_count = 0;
+                            }
                             out_sc.body = serialize_stmt(sc.body);
                             out.switch_cases.push_back(std::move(out_sc));
                         }
@@ -3241,6 +3338,8 @@ namespace parusc::p0 {
                     case parus::ast::StmtKind::kBreak:
                     case parus::ast::StmtKind::kContinue:
                     case parus::ast::StmtKind::kAssocTypeDecl:
+                    case parus::ast::StmtKind::kFieldDecl:
+                    case parus::ast::StmtKind::kEnumDecl:
                         out.stmts[idx] = std::move(ss);
                         return idx;
                     default:
@@ -3359,7 +3458,14 @@ namespace parusc::p0 {
                     !s.name.empty() &&
                     s.is_export &&
                     s.decl_generic_param_count > 0;
-                if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts && !is_generic_class) {
+                const bool is_field_decl =
+                    s.kind == parus::ast::StmtKind::kFieldDecl &&
+                    !s.name.empty();
+                const bool is_enum_decl =
+                    s.kind == parus::ast::StmtKind::kEnumDecl &&
+                    !s.name.empty();
+                if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts &&
+                    !is_generic_class && !is_field_decl && !is_enum_decl) {
                     return true;
                 }
 
@@ -3371,6 +3477,8 @@ namespace parusc::p0 {
                     if (is_generic_proto && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (is_generic_acts && ex.kind != parus::sema::SymbolKind::kAct) continue;
                     if (is_generic_class && ex.kind != parus::sema::SymbolKind::kType) continue;
+                    if (is_field_decl && ex.kind != parus::sema::SymbolKind::kField) continue;
+                    if (is_enum_decl && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (ex.decl_file != decl_file) continue;
                     if (ex.decl_line != lc.line || ex.decl_col != lc.col) continue;
                     qname = ex.path;
@@ -3543,6 +3651,34 @@ namespace parusc::p0 {
             if (end == pos) return false;
             try {
                 out = static_cast<uint32_t>(std::stoul(std::string(text.substr(pos, end - pos))));
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+
+        bool parse_json_uint_field_optional_(std::string_view text, std::string_view key, uint32_t& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) {
+                out = 0;
+                return true;
+            }
+            return parse_json_uint_field_(text, key, out);
+        }
+
+        bool parse_json_i64_field_(std::string_view text, std::string_view key, int64_t& out) {
+            size_t pos = 0;
+            if (!find_json_key_pos_(text, key, pos)) return false;
+            pos = text.find(':', pos);
+            if (pos == std::string_view::npos) return false;
+            ++pos;
+            while (pos < text.size() && std::isspace(static_cast<unsigned char>(text[pos]))) ++pos;
+            size_t end = pos;
+            if (end < text.size() && (text[end] == '-' || text[end] == '+')) ++end;
+            while (end < text.size() && std::isdigit(static_cast<unsigned char>(text[end]))) ++end;
+            if (end == pos || (end == pos + 1 && (text[pos] == '-' || text[pos] == '+'))) return false;
+            try {
+                out = static_cast<int64_t>(std::stoll(std::string(text.substr(pos, end - pos))));
                 return true;
             } catch (...) {
                 return false;
@@ -3929,6 +4065,8 @@ namespace parusc::p0 {
                     ofs << ",\"field_align\":"; emit_uint(s.field_align);
                     ofs << ",\"field_member_begin\":"; emit_uint(s.field_member_begin);
                     ofs << ",\"field_member_count\":"; emit_uint(s.field_member_count);
+                    ofs << ",\"enum_variant_begin\":"; emit_uint(s.enum_variant_begin);
+                    ofs << ",\"enum_variant_count\":"; emit_uint(s.enum_variant_count);
                     ofs << ",\"proto_fn_role\":"; emit_uint(s.proto_fn_role);
                     ofs << ",\"proto_require_kind\":"; emit_uint(s.proto_require_kind);
                     ofs << ",\"assoc_type_role\":"; emit_uint(s.assoc_type_role);
@@ -4019,9 +4157,27 @@ namespace parusc::p0 {
                     ofs << "\"is_default\":"; emit_bool(sc.is_default);
                     ofs << ",\"pat_kind\":"; emit_uint(sc.pat_kind);
                     ofs << ",\"pat_text\":"; emit_q(sc.pat_text);
+                    ofs << ",\"enum_type_repr\":"; emit_q(sc.enum_type_repr);
+                    ofs << ",\"enum_type_semantic\":"; emit_q(sc.enum_type_semantic);
+                    ofs << ",\"enum_variant_name\":"; emit_q(sc.enum_variant_name);
+                    ofs << ",\"enum_bind_begin\":"; emit_uint(sc.enum_bind_begin);
+                    ofs << ",\"enum_bind_count\":"; emit_uint(sc.enum_bind_count);
                     ofs << ",\"body\":"; emit_uint(sc.body);
                     ofs << "}";
                     if (j + 1 != e.switch_cases.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"switch_enum_binds\":[";
+                for (size_t j = 0; j < e.switch_enum_binds.size(); ++j) {
+                    const auto& sb = e.switch_enum_binds[j];
+                    ofs << "{";
+                    ofs << "\"field_name\":"; emit_q(sb.field_name);
+                    ofs << ",\"bind_name\":"; emit_q(sb.bind_name);
+                    ofs << ",\"bind_type_repr\":"; emit_q(sb.bind_type_repr);
+                    ofs << ",\"bind_type_semantic\":"; emit_q(sb.bind_type_semantic);
+                    ofs << "}";
+                    if (j + 1 != e.switch_enum_binds.size()) ofs << ",";
                 }
                 ofs << "]";
 
@@ -4060,6 +4216,20 @@ namespace parusc::p0 {
                     ofs << ",\"visibility\":"; emit_uint(fm.visibility);
                     ofs << "}";
                     if (j + 1 != e.field_members.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"enum_variants\":[";
+                for (size_t j = 0; j < e.enum_variants.size(); ++j) {
+                    const auto& ev = e.enum_variants[j];
+                    ofs << "{";
+                    ofs << "\"name\":"; emit_q(ev.name);
+                    ofs << ",\"payload_begin\":"; emit_uint(ev.payload_begin);
+                    ofs << ",\"payload_count\":"; emit_uint(ev.payload_count);
+                    ofs << ",\"has_discriminant\":"; emit_bool(ev.has_discriminant);
+                    ofs << ",\"discriminant\":"; ofs << ev.discriminant;
+                    ofs << "}";
+                    if (j + 1 != e.enum_variants.size()) ofs << ",";
                 }
                 ofs << "]";
 
@@ -4278,6 +4448,8 @@ namespace parusc::p0 {
                         !parse_json_uint_field_(stmt_obj, "field_align", s.field_align) ||
                         !parse_json_uint_field_(stmt_obj, "field_member_begin", s.field_member_begin) ||
                         !parse_json_uint_field_(stmt_obj, "field_member_count", s.field_member_count) ||
+                        !parse_json_uint_field_(stmt_obj, "enum_variant_begin", s.enum_variant_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "enum_variant_count", s.enum_variant_count) ||
                         !parse_json_uint_field_(stmt_obj, "proto_fn_role", stmt_proto_fn_role) ||
                         !parse_json_uint_field_(stmt_obj, "proto_require_kind", stmt_proto_require_kind) ||
                         !parse_json_uint_field_(stmt_obj, "assoc_type_role", stmt_assoc_type_role) ||
@@ -4372,12 +4544,34 @@ namespace parusc::p0 {
                     if (!parse_json_bool_field_(switch_case_obj, "is_default", sc.is_default) ||
                         !parse_json_uint_field_(switch_case_obj, "pat_kind", pat_kind) ||
                         !parse_json_string_field_(switch_case_obj, "pat_text", sc.pat_text) ||
+                        !parse_json_string_field_optional_(switch_case_obj, "enum_type_repr", sc.enum_type_repr) ||
+                        !parse_json_string_field_optional_(switch_case_obj, "enum_type_semantic", sc.enum_type_semantic) ||
+                        !parse_json_string_field_optional_(switch_case_obj, "enum_variant_name", sc.enum_variant_name) ||
+                        !parse_json_uint_field_optional_(switch_case_obj, "enum_bind_begin", sc.enum_bind_begin) ||
+                        !parse_json_uint_field_optional_(switch_case_obj, "enum_bind_count", sc.enum_bind_count) ||
                         !parse_json_uint_field_(switch_case_obj, "body", sc.body)) {
                         out_err = "invalid template-sidecar switch case entry in: " + path;
                         return false;
                     }
                     sc.pat_kind = static_cast<uint8_t>(pat_kind);
                     entry.switch_cases.push_back(std::move(sc));
+                }
+
+                std::vector<std::string> switch_enum_bind_objs{};
+                if (!parse_json_array_object_slices_(obj, "switch_enum_binds", switch_enum_bind_objs)) {
+                    out_err = "invalid template-sidecar switch_enum_binds array in: " + path;
+                    return false;
+                }
+                for (const auto& switch_enum_bind_obj : switch_enum_bind_objs) {
+                    TemplateSidecarSwitchEnumBind sb{};
+                    if (!parse_json_string_field_(switch_enum_bind_obj, "field_name", sb.field_name) ||
+                        !parse_json_string_field_(switch_enum_bind_obj, "bind_name", sb.bind_name) ||
+                        !parse_json_string_field_optional_(switch_enum_bind_obj, "bind_type_repr", sb.bind_type_repr) ||
+                        !parse_json_string_field_optional_(switch_enum_bind_obj, "bind_type_semantic", sb.bind_type_semantic)) {
+                        out_err = "invalid template-sidecar switch enum bind entry in: " + path;
+                        return false;
+                    }
+                    entry.switch_enum_binds.push_back(std::move(sb));
                 }
 
                 std::vector<std::string> param_objs{};
@@ -4456,6 +4650,24 @@ namespace parusc::p0 {
                     }
                     fm.visibility = static_cast<uint8_t>(visibility);
                     entry.field_members.push_back(std::move(fm));
+                }
+
+                std::vector<std::string> enum_variant_objs{};
+                if (!parse_json_array_object_slices_(obj, "enum_variants", enum_variant_objs)) {
+                    out_err = "invalid template-sidecar enum_variants array in: " + path;
+                    return false;
+                }
+                for (const auto& enum_variant_obj : enum_variant_objs) {
+                    TemplateSidecarEnumVariant ev{};
+                    if (!parse_json_string_field_(enum_variant_obj, "name", ev.name) ||
+                        !parse_json_uint_field_(enum_variant_obj, "payload_begin", ev.payload_begin) ||
+                        !parse_json_uint_field_(enum_variant_obj, "payload_count", ev.payload_count) ||
+                        !parse_json_bool_field_(enum_variant_obj, "has_discriminant", ev.has_discriminant) ||
+                        !parse_json_i64_field_(enum_variant_obj, "discriminant", ev.discriminant)) {
+                        out_err = "invalid template-sidecar enum variant entry in: " + path;
+                        return false;
+                    }
+                    entry.enum_variants.push_back(std::move(ev));
                 }
 
                 std::vector<std::string> fpart_objs{};
@@ -4588,6 +4800,8 @@ namespace parusc::p0 {
             std::vector<parus::tyck::ImportedProtoTemplate>& out_proto_templates,
             std::vector<parus::tyck::ImportedActsTemplate>& out_acts_templates,
             std::vector<parus::tyck::ImportedClassTemplate>& out_class_templates,
+            std::vector<parus::tyck::ImportedFieldTemplate>& out_field_templates,
+            std::vector<parus::tyck::ImportedEnumTemplate>& out_enum_templates,
             std::unordered_map<uint32_t, std::string>& out_file_bundle_overrides,
             std::unordered_map<uint32_t, std::string>& out_file_module_head_overrides,
             std::string& out_err
@@ -4596,6 +4810,8 @@ namespace parusc::p0 {
             out_proto_templates.clear();
             out_acts_templates.clear();
             out_class_templates.clear();
+            out_field_templates.clear();
+            out_enum_templates.clear();
             out_file_bundle_overrides.clear();
             out_file_module_head_overrides.clear();
             out_err.clear();
@@ -4647,6 +4863,25 @@ namespace parusc::p0 {
                         !e.path.empty() &&
                         e.path.find("::") == std::string::npos) {
                         bundle_local_types_by_module[relative_module_head(e.module_head)].insert(e.path);
+                    }
+                }
+                for (const auto& templ : index.sidecars) {
+                    if (templ.root_stmt == parus::ast::k_invalid_stmt ||
+                        templ.root_stmt >= templ.stmts.size()) {
+                        continue;
+                    }
+                    const auto& root_stmt = templ.stmts[templ.root_stmt];
+                    if (root_stmt.kind != static_cast<uint8_t>(parus::ast::StmtKind::kFieldDecl) &&
+                        root_stmt.kind != static_cast<uint8_t>(parus::ast::StmtKind::kEnumDecl) &&
+                        root_stmt.kind != static_cast<uint8_t>(parus::ast::StmtKind::kClassDecl) &&
+                        root_stmt.kind != static_cast<uint8_t>(parus::ast::StmtKind::kProtoDecl)) {
+                        continue;
+                    }
+                    if (root_stmt.name.empty()) continue;
+                    const std::string module_head = relative_module_head(templ.module_head);
+                    bundle_module_heads.insert(module_head);
+                    if (root_stmt.name.find("::") == std::string::npos) {
+                        bundle_local_types_by_module[module_head].insert(root_stmt.name);
                     }
                 }
                 const std::unordered_set<std::string> empty_local_names{};
@@ -4917,13 +5152,6 @@ namespace parusc::p0 {
                                 }
                             }
                             if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kClassDecl)) {
-                                if (src.field_member_count != templ.field_members.size()) {
-                                    out_err =
-                                        "typed template sidecar class field-member count mismatch: " +
-                                        templ.lookup_name;
-                                    ast.stmt_mut(sid) = std::move(dst);
-                                    return sid;
-                                }
                                 dst.field_member_begin = static_cast<uint32_t>(ast.field_members().size());
                                 dst.field_member_count = static_cast<uint32_t>(templ.field_members.size());
                                 for (const auto& fm : templ.field_members) {
@@ -4943,6 +5171,62 @@ namespace parusc::p0 {
                                     ast.add_field_member(out_fm);
                                 }
                             }
+                        } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kFieldDecl)) {
+                            dst.field_member_begin = static_cast<uint32_t>(ast.field_members().size());
+                            dst.field_member_count = static_cast<uint32_t>(templ.field_members.size());
+                            for (const auto& fm : templ.field_members) {
+                                parus::ast::FieldMember out_fm{};
+                                out_fm.name = clone_sv_into_ast_(ast, fm.name);
+                                out_fm.visibility =
+                                    static_cast<parus::ast::FieldMember::Visibility>(fm.visibility);
+                                out_fm.span = anchor;
+                                if (!fm.type_repr.empty()) {
+                                    out_fm.type = parse_imported_type_repr_into_(
+                                        fm.type_repr,
+                                        fm.type_semantic,
+                                        std::string_view{}
+                                    );
+                                    out_fm.type_node = add_type_node_for(out_fm.type, anchor);
+                                }
+                                ast.add_field_member(out_fm);
+                            }
+                        } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kEnumDecl)) {
+                            dst.enum_variant_begin = static_cast<uint32_t>(ast.enum_variant_decls().size());
+                            dst.enum_variant_count = static_cast<uint32_t>(templ.enum_variants.size());
+                            for (const auto& ev : templ.enum_variants) {
+                                parus::ast::EnumVariantDecl out_ev{};
+                                out_ev.name = clone_sv_into_ast_(ast, ev.name);
+                                out_ev.payload_begin = static_cast<uint32_t>(ast.field_members().size());
+                                out_ev.payload_count = ev.payload_count;
+                                out_ev.has_discriminant = ev.has_discriminant;
+                                out_ev.discriminant = ev.discriminant;
+                                out_ev.span = anchor;
+                                const uint64_t pbegin = ev.payload_begin;
+                                const uint64_t pend = pbegin + ev.payload_count;
+                                if (pbegin > templ.field_members.size() || pend > templ.field_members.size()) {
+                                    out_err = "typed template sidecar enum payload field-member range out of bounds: " + templ.lookup_name;
+                                    ast.stmt_mut(sid) = std::move(dst);
+                                    return sid;
+                                }
+                                for (uint32_t mi = 0; mi < ev.payload_count; ++mi) {
+                                    const auto& fm = templ.field_members[ev.payload_begin + mi];
+                                    parus::ast::FieldMember out_fm{};
+                                    out_fm.name = clone_sv_into_ast_(ast, fm.name);
+                                    out_fm.visibility =
+                                        static_cast<parus::ast::FieldMember::Visibility>(fm.visibility);
+                                    out_fm.span = anchor;
+                                    if (!fm.type_repr.empty()) {
+                                        out_fm.type = parse_imported_type_repr_into_(
+                                            fm.type_repr,
+                                            fm.type_semantic,
+                                            std::string_view{}
+                                        );
+                                        out_fm.type_node = add_type_node_for(out_fm.type, anchor);
+                                    }
+                                    ast.add_field_member(out_fm);
+                                }
+                                ast.add_enum_variant_decl(out_ev);
+                            }
                         } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kSwitch)) {
                             const uint64_t begin = src.case_begin;
                             const uint64_t end = begin + src.case_count;
@@ -4960,6 +5244,39 @@ namespace parusc::p0 {
                                 out_sc.is_default = sc.is_default;
                                 out_sc.pat_kind = static_cast<parus::ast::CasePatKind>(sc.pat_kind);
                                 out_sc.pat_text = clone_sv_into_ast_(ast, sc.pat_text);
+                                out_sc.enum_variant_name = clone_sv_into_ast_(ast, sc.enum_variant_name);
+                                if (!sc.enum_type_repr.empty()) {
+                                    out_sc.enum_type = parse_imported_type_repr_into_(
+                                        sc.enum_type_repr,
+                                        sc.enum_type_semantic,
+                                        std::string_view{}
+                                    );
+                                    out_sc.enum_type_node = add_type_node_for(out_sc.enum_type, anchor);
+                                }
+                                const uint64_t ebb = sc.enum_bind_begin;
+                                const uint64_t ebe = ebb + sc.enum_bind_count;
+                                if (ebb > templ.switch_enum_binds.size() || ebe > templ.switch_enum_binds.size()) {
+                                    out_err = "typed template sidecar switch enum bind range out of bounds: " + templ.lookup_name;
+                                    ast.stmt_mut(sid) = std::move(dst);
+                                    return sid;
+                                }
+                                out_sc.enum_bind_begin = static_cast<uint32_t>(ast.switch_enum_binds().size());
+                                out_sc.enum_bind_count = sc.enum_bind_count;
+                                for (uint32_t bi = 0; bi < sc.enum_bind_count; ++bi) {
+                                    const auto& sb = templ.switch_enum_binds[sc.enum_bind_begin + bi];
+                                    parus::ast::SwitchEnumBind out_sb{};
+                                    out_sb.field_name = clone_sv_into_ast_(ast, sb.field_name);
+                                    out_sb.bind_name = clone_sv_into_ast_(ast, sb.bind_name);
+                                    out_sb.span = anchor;
+                                    if (!sb.bind_type_repr.empty()) {
+                                        out_sb.bind_type = parse_imported_type_repr_into_(
+                                            sb.bind_type_repr,
+                                            sb.bind_type_semantic,
+                                            std::string_view{}
+                                        );
+                                    }
+                                    ast.add_switch_enum_bind(out_sb);
+                                }
                                 out_sc.body = clone_stmt(sc.body);
                                 out_sc.span = anchor;
                                 ast.add_switch_case(out_sc);
@@ -5048,7 +5365,9 @@ namespace parusc::p0 {
                     if (root_stmt.kind != parus::ast::StmtKind::kFnDecl &&
                         root_stmt.kind != parus::ast::StmtKind::kProtoDecl &&
                         root_stmt.kind != parus::ast::StmtKind::kActsDecl &&
-                        root_stmt.kind != parus::ast::StmtKind::kClassDecl) {
+                        root_stmt.kind != parus::ast::StmtKind::kClassDecl &&
+                        root_stmt.kind != parus::ast::StmtKind::kFieldDecl &&
+                        root_stmt.kind != parus::ast::StmtKind::kEnumDecl) {
                         out_err = "typed template sidecar root kind is unsupported: " + templ.lookup_name;
                         return false;
                     }
@@ -5071,7 +5390,8 @@ namespace parusc::p0 {
                         );
                     }
                     if (root_stmt.kind == parus::ast::StmtKind::kProtoDecl ||
-                        root_stmt.kind == parus::ast::StmtKind::kClassDecl) {
+                        root_stmt.kind == parus::ast::StmtKind::kClassDecl ||
+                        root_stmt.kind == parus::ast::StmtKind::kFieldDecl) {
                         root_stmt.decl_path_ref_begin = static_cast<uint32_t>(ast.path_refs().size());
                         root_stmt.decl_path_ref_count = static_cast<uint32_t>(templ.path_refs.size());
                         for (const auto& pr : templ.path_refs) {
@@ -5171,7 +5491,7 @@ namespace parusc::p0 {
                         out_t.is_public_export = templ.is_public_export;
                         out_t.constraints = copy_constraints();
                         out_acts_templates.push_back(std::move(out_t));
-                    } else {
+                    } else if (root_stmt.kind == parus::ast::StmtKind::kClassDecl) {
                         parus::tyck::ImportedClassTemplate out_t{};
                         out_t.template_sid = root_sid;
                         out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
@@ -5185,6 +5505,34 @@ namespace parusc::p0 {
                         out_t.declared_type = root_stmt.type;
                         out_t.constraints = copy_constraints();
                         out_class_templates.push_back(std::move(out_t));
+                    } else if (root_stmt.kind == parus::ast::StmtKind::kFieldDecl) {
+                        parus::tyck::ImportedFieldTemplate out_t{};
+                        out_t.template_sid = root_sid;
+                        out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
+                        out_t.module_head = templ.module_head;
+                        out_t.public_path = templ.public_path;
+                        out_t.lookup_name = templ.lookup_name;
+                        out_t.decl_file = templ.decl_file;
+                        out_t.decl_line = templ.decl_line;
+                        out_t.decl_col = templ.decl_col;
+                        out_t.is_public_export = templ.is_public_export;
+                        out_t.declared_type = root_stmt.type;
+                        out_t.constraints = copy_constraints();
+                        out_field_templates.push_back(std::move(out_t));
+                    } else {
+                        parus::tyck::ImportedEnumTemplate out_t{};
+                        out_t.template_sid = root_sid;
+                        out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
+                        out_t.module_head = templ.module_head;
+                        out_t.public_path = templ.public_path;
+                        out_t.lookup_name = templ.lookup_name;
+                        out_t.decl_file = templ.decl_file;
+                        out_t.decl_line = templ.decl_line;
+                        out_t.decl_col = templ.decl_col;
+                        out_t.is_public_export = templ.is_public_export;
+                        out_t.declared_type = root_stmt.type;
+                        out_t.constraints = copy_constraints();
+                        out_enum_templates.push_back(std::move(out_t));
                     }
                 }
             }
@@ -6576,6 +6924,8 @@ namespace parusc::p0 {
         std::vector<parus::tyck::ImportedProtoTemplate> imported_proto_templates{};
         std::vector<parus::tyck::ImportedActsTemplate> imported_acts_templates{};
         std::vector<parus::tyck::ImportedClassTemplate> imported_class_templates{};
+        std::vector<parus::tyck::ImportedFieldTemplate> imported_field_templates{};
+        std::vector<parus::tyck::ImportedEnumTemplate> imported_enum_templates{};
         std::unordered_map<uint32_t, std::string> sidecar_file_bundle_overrides{};
         std::unordered_map<uint32_t, std::string> sidecar_file_module_head_overrides{};
         std::string sidecar_load_err{};
@@ -6589,6 +6939,8 @@ namespace parusc::p0 {
                 imported_proto_templates,
                 imported_acts_templates,
                 imported_class_templates,
+                imported_field_templates,
+                imported_enum_templates,
                 sidecar_file_bundle_overrides,
                 sidecar_file_module_head_overrides,
                 sidecar_load_err)) {
@@ -6623,6 +6975,12 @@ namespace parusc::p0 {
             }
             if (!imported_class_templates.empty()) {
                 tc.set_imported_class_templates(std::move(imported_class_templates));
+            }
+            if (!imported_field_templates.empty()) {
+                tc.set_imported_field_templates(std::move(imported_field_templates));
+            }
+            if (!imported_enum_templates.empty()) {
+                tc.set_imported_enum_templates(std::move(imported_enum_templates));
             }
             if (!core_impl_marker_file_ids.empty()) {
                 tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));

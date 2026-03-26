@@ -156,6 +156,10 @@
         auto collect_stmt = [&](auto&& self, ast::StmtId sid) -> void {
             if (sid == ast::k_invalid_stmt || (size_t)sid >= ast_.stmts().size()) return;
             const ast::Stmt& s = ast_.stmt(sid);
+            if (s.span.file_id != 0 &&
+                explicit_file_bundle_overrides_.find(s.span.file_id) != explicit_file_bundle_overrides_.end()) {
+                return;
+            }
             std::string stmt_impl_key{};
             ImplBindingKind stmt_impl_binding = ImplBindingKind::kNone;
             const bool has_any_impl_binding = stmt_impl_binding_key_(s, stmt_impl_key);

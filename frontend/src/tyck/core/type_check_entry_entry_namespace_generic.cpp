@@ -144,6 +144,15 @@ namespace parus::tyck {
         imported_fn_template_sid_by_link_name_.clear();
         imported_class_template_sid_set_.clear();
         imported_class_template_index_by_sid_.clear();
+        imported_field_template_sid_set_.clear();
+        imported_field_template_index_by_sid_.clear();
+        imported_field_template_sid_by_qname_.clear();
+        imported_hidden_field_template_sid_set_.clear();
+        imported_enum_template_sid_set_.clear();
+        imported_enum_template_index_by_sid_.clear();
+        imported_enum_template_sid_by_qname_.clear();
+        imported_hidden_enum_template_sid_set_.clear();
+        imported_hidden_enum_instance_sid_set_.clear();
         generic_fn_instance_cache_.clear();
         imported_fn_instance_cache_.clear();
         generic_fn_checked_instances_.clear();
@@ -160,6 +169,8 @@ namespace parus::tyck {
         imported_class_instance_cache_.clear();
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
+        imported_field_instance_cache_.clear();
+        imported_enum_instance_cache_.clear();
         generic_field_instance_cache_.clear();
         generic_enum_instance_cache_.clear();
         generic_decl_checked_instances_.clear();
@@ -330,6 +341,8 @@ namespace parus::tyck {
         register_imported_fn_templates_();
         register_imported_acts_templates_();
         register_imported_class_templates_();
+        register_imported_field_templates_();
+        register_imported_enum_templates_();
         if (core_context_invalid_) {
             result_.ok = false;
             return result_;
@@ -1319,6 +1332,33 @@ namespace parus::tyck {
 
         const ast::Expr old_e = ast_.expr(src);
         ast::Expr e = old_e;
+        auto rewrite_generic_text = [&](std::string_view raw) -> std::string_view {
+            if (raw.empty()) return raw;
+            auto rewrite_type_text = [&](std::string_view candidate) -> std::optional<std::string> {
+                const ty::TypeId candidate_t = types_.intern_ident(candidate);
+                if (candidate_t == ty::kInvalidType) return std::nullopt;
+                const ty::TypeId sub_t = substitute_generic_type_(candidate_t, subst);
+                if (sub_t == candidate_t || sub_t == ty::kInvalidType) return std::nullopt;
+                return types_.to_string(sub_t);
+            };
+            if (auto full = rewrite_type_text(raw); full.has_value()) {
+                return ast_.add_owned_string(*full);
+            }
+            const size_t split = std::string_view(raw).rfind("::");
+            if (split == std::string_view::npos || split == 0 || split + 2 >= raw.size()) {
+                return raw;
+            }
+            const std::string_view owner = std::string_view(raw).substr(0, split);
+            if (auto rewritten_owner = rewrite_type_text(owner); rewritten_owner.has_value()) {
+                std::string out = *rewritten_owner;
+                out.append(raw.substr(split));
+                return ast_.add_owned_string(std::move(out));
+            }
+            return raw;
+        };
+        if (!old_e.text.empty()) {
+            e.text = rewrite_generic_text(old_e.text);
+        }
 
         e.a = clone_expr_with_type_subst_(old_e.a, subst, expr_map, stmt_map);
         e.b = clone_expr_with_type_subst_(old_e.b, subst, expr_map, stmt_map);
@@ -1561,6 +1601,17 @@ namespace parus::tyck {
                 cloned_cases.reserve(old_s.case_count);
                 for (uint32_t i = 0; i < old_s.case_count; ++i) {
                     ast::SwitchCase c = src_cases[i];
+                    if (c.enum_type != ty::kInvalidType) {
+                        c.enum_type = substitute_generic_type_(c.enum_type, subst);
+                    }
+                    if (c.enum_type_node != ast::k_invalid_type_node &&
+                        static_cast<size_t>(c.enum_type_node) < ast_.type_nodes().size()) {
+                        ast::TypeNode tn = ast_.type_node(c.enum_type_node);
+                        if (tn.resolved_type != ty::kInvalidType) {
+                            tn.resolved_type = substitute_generic_type_(tn.resolved_type, subst);
+                        }
+                        c.enum_type_node = ast_.add_type_node(tn);
+                    }
                     c.body = clone_stmt_with_type_subst_(c.body, subst, expr_map, stmt_map);
                     if (c.enum_bind_count > 0) {
                         const auto& binds = ast_.switch_enum_binds();
@@ -2602,6 +2653,53 @@ namespace parus::tyck {
             base_key = *rewritten;
         }
 
+        const bool allow_hidden_imported_field =
+            use_span.file_id != 0 &&
+            explicit_file_bundle_overrides_.find(use_span.file_id) != explicit_file_bundle_overrides_.end();
+
+        if (auto it = imported_field_template_sid_by_qname_.find(base_key);
+            it != imported_field_template_sid_by_qname_.end()) {
+            const ast::StmtId templ_sid = it->second;
+            if (templ_sid != ast::k_invalid_stmt &&
+                static_cast<size_t>(templ_sid) < ast_.stmts().size()) {
+                if (!allow_hidden_imported_field &&
+                    imported_hidden_field_template_sid_set_.find(templ_sid) !=
+                        imported_hidden_field_template_sid_set_.end()) {
+                    return std::nullopt;
+                }
+                const auto& templ = ast_.stmt(templ_sid);
+                if (templ.kind == ast::StmtKind::kFieldDecl) {
+                    if (templ.decl_generic_param_count == 0) {
+                        return templ_sid;
+                    }
+                    for (const auto arg_t : args) {
+                        if (type_contains_unresolved_generic_param_(arg_t)) {
+                            return templ_sid;
+                        }
+                    }
+                    MonoRequest req{};
+                    req.templ.template_sid = templ_sid;
+                    req.templ.producer_bundle = current_bundle_name_();
+                    req.templ.template_symbol = base_key;
+                    req.concrete_args = args;
+                    if (imported_field_template_sid_set_.find(templ_sid) != imported_field_template_sid_set_.end()) {
+                        req.templ.source = MonoTemplateRef::SourceKind::kImportedField;
+                        if (auto idx_it = imported_field_template_index_by_sid_.find(templ_sid);
+                            idx_it != imported_field_template_index_by_sid_.end() &&
+                            idx_it->second < explicit_imported_field_templates_.size()) {
+                            const auto& templ_meta = explicit_imported_field_templates_[idx_it->second];
+                            req.templ.producer_bundle = templ_meta.producer_bundle;
+                            req.templ.template_symbol =
+                                !templ_meta.public_path.empty() ? templ_meta.public_path : templ_meta.lookup_name;
+                        }
+                    } else {
+                        req.templ.source = MonoTemplateRef::SourceKind::kLocalField;
+                    }
+                    return ensure_monomorphized_field_(req, use_span);
+                }
+            }
+        }
+
         auto sym_sid = sym_.lookup(base_key);
         if (!sym_sid.has_value()) {
             sym_sid = lookup_symbol_(base_key);
@@ -2846,7 +2944,25 @@ namespace parus::tyck {
                 return templ_sid;
             }
         }
-        const auto inst_sid = ensure_generic_field_instance_(templ_sid, args, use_span);
+        MonoRequest req{};
+        req.templ.template_sid = templ_sid;
+        req.templ.producer_bundle = current_bundle_name_();
+        req.templ.template_symbol = base_key;
+        req.concrete_args = args;
+        if (imported_field_template_sid_set_.find(templ_sid) != imported_field_template_sid_set_.end()) {
+            req.templ.source = MonoTemplateRef::SourceKind::kImportedField;
+            if (auto idx_it = imported_field_template_index_by_sid_.find(templ_sid);
+                idx_it != imported_field_template_index_by_sid_.end() &&
+                idx_it->second < explicit_imported_field_templates_.size()) {
+                const auto& templ_meta = explicit_imported_field_templates_[idx_it->second];
+                req.templ.producer_bundle = templ_meta.producer_bundle;
+                req.templ.template_symbol =
+                    !templ_meta.public_path.empty() ? templ_meta.public_path : templ_meta.lookup_name;
+            }
+        } else {
+            req.templ.source = MonoTemplateRef::SourceKind::kLocalField;
+        }
+        const auto inst_sid = ensure_monomorphized_field_(req, use_span);
         if (inst_sid.has_value() &&
             static_cast<size_t>(*inst_sid) < ast_.stmts().size()) {
             const auto& inst = ast_.stmt(*inst_sid);
@@ -2922,10 +3038,45 @@ namespace parus::tyck {
         inst.decl_constraint_begin = 0;
         inst.decl_constraint_count = 0;
 
+        auto module_info_for_file = [&](uint32_t file_id) {
+            struct ModuleInfo {
+                std::string bundle{};
+                std::string module{};
+            };
+            ModuleInfo out{};
+            if (file_id == 0) return out;
+            for (const auto& ss : sym_.symbols()) {
+                if (ss.is_external) continue;
+                if (ss.decl_file_id != file_id) continue;
+                if (!ss.decl_bundle_name.empty() && out.bundle.empty()) {
+                    out.bundle = ss.decl_bundle_name;
+                }
+                if (!ss.decl_module_head.empty() && out.module.empty()) {
+                    out.module = ss.decl_module_head;
+                }
+                if (!out.bundle.empty() && !out.module.empty()) return out;
+            }
+            if (out.bundle.empty()) out.bundle = current_bundle_name_();
+            if (out.module.empty()) out.module = current_module_head_();
+            return out;
+        };
         std::string base_qname = std::string(templ.name);
         if (templ.type != ty::kInvalidType) {
             base_qname = types_.to_string(templ.type);
         }
+        const auto module_info = module_info_for_file(templ.span.file_id);
+        const std::string canonical_module_head =
+            parus::normalize_core_public_module_head(module_info.bundle, module_info.module);
+        auto strip_type_prefix = [](std::string s, std::string_view prefix) {
+            if (prefix.empty()) return s;
+            const std::string full_prefix = std::string(prefix) + "::";
+            if (s.starts_with(full_prefix)) {
+                s.erase(0, full_prefix.size());
+            }
+            return s;
+        };
+        base_qname = strip_type_prefix(base_qname, canonical_module_head);
+        base_qname = strip_type_prefix(base_qname, module_info.module);
         std::ostringstream qn;
         qn << base_qname << "<";
         for (size_t i = 0; i < concrete_args.size(); ++i) {
@@ -2933,13 +3084,31 @@ namespace parus::tyck {
             qn << types_.to_string(concrete_args[i]);
         }
         qn << ">";
-        const std::string inst_qname = qn.str();
+        const std::string short_inst_qname = qn.str();
+        std::string inst_qname = short_inst_qname;
+        const size_t generic_pos = short_inst_qname.find('<');
+        const std::string_view base_name =
+            (generic_pos == std::string::npos)
+                ? std::string_view(short_inst_qname)
+                : std::string_view(short_inst_qname).substr(0, generic_pos);
+        if (!canonical_module_head.empty() && base_name.find("::") == std::string_view::npos) {
+            inst_qname = canonical_module_head + "::" + short_inst_qname;
+        }
         const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
         inst.name = ast_.add_owned_string(inst_qname);
         inst.type = inst_type;
 
         enum_decl_by_name_[inst_qname] = inst_sid;
         enum_decl_by_type_[inst_type] = inst_sid;
+        if (short_inst_qname != inst_qname) {
+            enum_decl_by_name_[short_inst_qname] = inst_sid;
+            enum_decl_by_type_[types_.intern_ident(ast_.add_owned_string(short_inst_qname))] = inst_sid;
+            if (!module_info.module.empty()) {
+                const std::string module_inst_qname = module_info.module + "::" + short_inst_qname;
+                enum_decl_by_name_[module_inst_qname] = inst_sid;
+                enum_decl_by_type_[types_.intern_ident(ast_.add_owned_string(module_inst_qname))] = inst_sid;
+            }
+        }
 
         if (auto existing = sym_.lookup_in_current(inst_qname)) {
             (void)sym_.update_declared_type(*existing, inst_type);
@@ -3023,11 +3192,17 @@ namespace parus::tyck {
             base_key = *rewritten;
         }
 
-        auto templ_it = enum_decl_by_name_.find(base_key);
-        if (templ_it == enum_decl_by_name_.end()) {
-            return std::nullopt;
+        ast::StmtId templ_sid = ast::k_invalid_stmt;
+        if (auto it = imported_enum_template_sid_by_qname_.find(base_key);
+            it != imported_enum_template_sid_by_qname_.end()) {
+            templ_sid = it->second;
+        } else {
+            auto templ_it = enum_decl_by_name_.find(base_key);
+            if (templ_it == enum_decl_by_name_.end()) {
+                return std::nullopt;
+            }
+            templ_sid = templ_it->second;
         }
-        const ast::StmtId templ_sid = templ_it->second;
         if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) {
             return std::nullopt;
         }
@@ -3038,7 +3213,41 @@ namespace parus::tyck {
         if (templ.decl_generic_param_count == 0) {
             return templ_sid;
         }
-        return ensure_generic_enum_instance_(templ_sid, args, use_span);
+        MonoRequest req{};
+        req.templ.template_sid = templ_sid;
+        req.templ.producer_bundle = current_bundle_name_();
+        req.templ.template_symbol = base_key;
+        req.concrete_args = args;
+        if (imported_enum_template_sid_set_.find(templ_sid) != imported_enum_template_sid_set_.end()) {
+            req.templ.source = MonoTemplateRef::SourceKind::kImportedEnum;
+            if (auto idx_it = imported_enum_template_index_by_sid_.find(templ_sid);
+                idx_it != imported_enum_template_index_by_sid_.end() &&
+                idx_it->second < explicit_imported_enum_templates_.size()) {
+                const auto& templ_meta = explicit_imported_enum_templates_[idx_it->second];
+                req.templ.producer_bundle = templ_meta.producer_bundle;
+                req.templ.template_symbol =
+                    !templ_meta.public_path.empty() ? templ_meta.public_path : templ_meta.lookup_name;
+            }
+        } else {
+            req.templ.source = MonoTemplateRef::SourceKind::kLocalEnum;
+        }
+        const auto inst_sid = ensure_monomorphized_enum_(req, use_span);
+        if (inst_sid.has_value() && static_cast<size_t>(*inst_sid) < ast_.stmts().size()) {
+            const auto& inst = ast_.stmt(*inst_sid);
+            if (inst.type != ty::kInvalidType) {
+                enum_decl_by_type_[maybe_generic_enum_type] = *inst_sid;
+                const ty::TypeId canonical_t =
+                    canonicalize_transparent_external_typedef_(maybe_generic_enum_type);
+                enum_decl_by_type_[canonical_t] = *inst_sid;
+                check_stmt_enum_decl_(*inst_sid);
+                if (auto meta_it = enum_abi_meta_by_type_.find(inst.type);
+                    meta_it != enum_abi_meta_by_type_.end()) {
+                    enum_abi_meta_by_type_[maybe_generic_enum_type] = meta_it->second;
+                    enum_abi_meta_by_type_[canonical_t] = meta_it->second;
+                }
+            }
+        }
+        return inst_sid;
     }
 
     std::optional<ast::StmtId> TypeChecker::ensure_generic_class_instance_(
@@ -4865,6 +5074,214 @@ namespace parus::tyck {
                 }
             }
         }
+    }
+
+    void TypeChecker::register_imported_field_templates_() {
+        imported_field_template_sid_set_.clear();
+        imported_field_template_index_by_sid_.clear();
+        imported_field_template_sid_by_qname_.clear();
+        imported_hidden_field_template_sid_set_.clear();
+        if (explicit_imported_field_templates_.empty()) return;
+
+        for (size_t idx = 0; idx < explicit_imported_field_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_field_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& field_stmt = ast_.stmt_mut(templ.template_sid);
+            if (field_stmt.kind != ast::StmtKind::kFieldDecl) continue;
+
+            imported_field_template_sid_set_.insert(templ.template_sid);
+            imported_field_template_index_by_sid_[templ.template_sid] = idx;
+            if (field_stmt.decl_generic_param_count > 0) {
+                generic_field_template_sid_set_.insert(templ.template_sid);
+            }
+
+            std::string qname = !templ.public_path.empty() ? templ.public_path : std::string(field_stmt.name);
+            const std::string canonical_head =
+                parus::normalize_core_public_module_head(templ.producer_bundle, templ.module_head);
+            if (!qname.empty() &&
+                qname.find("::") == std::string::npos &&
+                !canonical_head.empty()) {
+                qname = canonical_head + "::" + qname;
+            }
+            if (!qname.empty()) {
+                imported_field_template_sid_by_qname_[qname] = templ.template_sid;
+            }
+
+            if (!templ.is_public_export) {
+                imported_hidden_field_template_sid_set_.insert(templ.template_sid);
+            }
+
+            if (templ.declared_type != ty::kInvalidType) {
+                field_stmt.type = templ.declared_type;
+            }
+
+            const uint64_t begin = field_stmt.decl_constraint_begin;
+            const uint64_t end = begin + field_stmt.decl_constraint_count;
+            if (begin <= ast_.fn_constraint_decls().size() && end <= ast_.fn_constraint_decls().size()) {
+                auto& constraints = ast_.fn_constraint_decls_mut();
+                for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                    const auto& meta = templ.constraints[i];
+                    auto& cc = constraints[begin + i];
+                    if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                    if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, field_stmt.span)) {
+                        const auto& proto_decl = ast_.stmt(*proto_sid);
+                        if (proto_decl.type != ty::kInvalidType) {
+                            cc.rhs_type = proto_decl.type;
+                        }
+                    }
+                }
+            }
+
+            check_stmt_field_decl_(templ.template_sid);
+        }
+    }
+
+    void TypeChecker::register_imported_enum_templates_() {
+        imported_enum_template_sid_set_.clear();
+        imported_enum_template_index_by_sid_.clear();
+        imported_enum_template_sid_by_qname_.clear();
+        imported_hidden_enum_template_sid_set_.clear();
+        if (explicit_imported_enum_templates_.empty()) return;
+
+        for (size_t idx = 0; idx < explicit_imported_enum_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_enum_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& enum_stmt = ast_.stmt_mut(templ.template_sid);
+            if (enum_stmt.kind != ast::StmtKind::kEnumDecl) continue;
+
+            imported_enum_template_sid_set_.insert(templ.template_sid);
+            imported_enum_template_index_by_sid_[templ.template_sid] = idx;
+            if (enum_stmt.decl_generic_param_count > 0) {
+                generic_enum_template_sid_set_.insert(templ.template_sid);
+            }
+
+            std::string qname = !templ.public_path.empty() ? templ.public_path : std::string(enum_stmt.name);
+            const std::string canonical_head =
+                parus::normalize_core_public_module_head(templ.producer_bundle, templ.module_head);
+            if (!qname.empty() &&
+                qname.find("::") == std::string::npos &&
+                !canonical_head.empty()) {
+                qname = canonical_head + "::" + qname;
+            }
+            if (!qname.empty()) {
+                imported_enum_template_sid_by_qname_[qname] = templ.template_sid;
+            }
+
+            const bool is_hidden = !templ.is_public_export;
+            if (is_hidden) {
+                imported_hidden_enum_template_sid_set_.insert(templ.template_sid);
+            } else if (!qname.empty()) {
+                enum_decl_by_name_[qname] = templ.template_sid;
+                const size_t split = qname.rfind("::");
+                const std::string leaf =
+                    (split == std::string::npos) ? qname : qname.substr(split + 2);
+                if (!leaf.empty() && enum_decl_by_name_.find(leaf) == enum_decl_by_name_.end()) {
+                    enum_decl_by_name_[leaf] = templ.template_sid;
+                }
+            }
+
+            if (templ.declared_type != ty::kInvalidType) {
+                enum_stmt.type = templ.declared_type;
+                enum_decl_by_type_[templ.declared_type] = templ.template_sid;
+            }
+
+            const uint64_t begin = enum_stmt.decl_constraint_begin;
+            const uint64_t end = begin + enum_stmt.decl_constraint_count;
+            if (begin <= ast_.fn_constraint_decls().size() && end <= ast_.fn_constraint_decls().size()) {
+                auto& constraints = ast_.fn_constraint_decls_mut();
+                for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                    const auto& meta = templ.constraints[i];
+                    auto& cc = constraints[begin + i];
+                    if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                    if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, enum_stmt.span)) {
+                        const auto& proto_decl = ast_.stmt(*proto_sid);
+                        if (proto_decl.type != ty::kInvalidType) {
+                            cc.rhs_type = proto_decl.type;
+                        }
+                    }
+                }
+            }
+
+            check_stmt_enum_decl_(templ.template_sid);
+        }
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_monomorphized_field_(
+        const MonoRequest& request,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        if (request.templ.source == MonoTemplateRef::SourceKind::kImportedField) {
+            std::ostringstream key_oss;
+            key_oss << request.templ.producer_bundle << "|"
+                    << request.templ.template_symbol << "|"
+                    << request.target_lane << "|"
+                    << request.abi_lane << "|";
+            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+                if (i) key_oss << ",";
+                key_oss << request.concrete_args[i];
+            }
+            const std::string key = key_oss.str();
+            if (auto it = imported_field_instance_cache_.find(key);
+                it != imported_field_instance_cache_.end()) {
+                return it->second;
+            }
+            auto sid = ensure_generic_field_instance_(request.templ.template_sid, request.concrete_args, use_span);
+            if (!sid.has_value()) return std::nullopt;
+            imported_field_instance_cache_[key] = *sid;
+            return sid;
+        }
+
+        return ensure_generic_field_instance_(request.templ.template_sid, request.concrete_args, use_span);
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_monomorphized_enum_(
+        const MonoRequest& request,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        if (request.templ.source == MonoTemplateRef::SourceKind::kImportedEnum) {
+            std::ostringstream key_oss;
+            key_oss << request.templ.producer_bundle << "|"
+                    << request.templ.template_symbol << "|"
+                    << request.target_lane << "|"
+                    << request.abi_lane << "|";
+            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+                if (i) key_oss << ",";
+                key_oss << request.concrete_args[i];
+            }
+            const std::string key = key_oss.str();
+            if (auto it = imported_enum_instance_cache_.find(key);
+                it != imported_enum_instance_cache_.end()) {
+                return it->second;
+            }
+            auto sid = ensure_generic_enum_instance_(request.templ.template_sid, request.concrete_args, use_span);
+            if (!sid.has_value()) return std::nullopt;
+            imported_enum_instance_cache_[key] = *sid;
+            if (imported_hidden_enum_template_sid_set_.find(request.templ.template_sid) !=
+                imported_hidden_enum_template_sid_set_.end()) {
+                imported_hidden_enum_instance_sid_set_.insert(*sid);
+            }
+            return sid;
+        }
+
+        return ensure_generic_enum_instance_(request.templ.template_sid, request.concrete_args, use_span);
     }
 
     bool TypeChecker::materialize_imported_acts_templates_for_member_(

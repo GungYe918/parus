@@ -1098,6 +1098,14 @@ namespace parus::tyck {
 
                     ty::TypeId enum_owner_type = ty::kInvalidType;
                     ast::StmtId enum_owner_sid = ast::k_invalid_stmt;
+                    const bool allow_hidden_imported_enum =
+                        callee_expr.span.file_id != 0 &&
+                        explicit_file_bundle_overrides_.find(callee_expr.span.file_id) !=
+                            explicit_file_bundle_overrides_.end();
+                    auto is_hidden_imported_enum_sid = [&](ast::StmtId sid) -> bool {
+                        return imported_hidden_enum_template_sid_set_.find(sid) != imported_hidden_enum_template_sid_set_.end() ||
+                               imported_hidden_enum_instance_sid_set_.find(sid) != imported_hidden_enum_instance_sid_set_.end();
+                    };
 
                     auto resolve_plain_enum_owner = [&](const std::string& raw_name) -> ast::StmtId {
                         std::string key = raw_name;
@@ -1123,13 +1131,31 @@ namespace parus::tyck {
 
                         if (key.find("::") == std::string::npos) {
                             const std::string current_qualified = qualify_decl_name_(key);
+                            auto hidden_it = imported_enum_template_sid_by_qname_.find(current_qualified);
+                            if (hidden_it != imported_enum_template_sid_by_qname_.end()) {
+                                if (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(hidden_it->second)) {
+                                    return hidden_it->second;
+                                }
+                            }
                             auto current_it = enum_decl_by_name_.find(current_qualified);
-                            if (current_it != enum_decl_by_name_.end()) return current_it->second;
+                            if (current_it != enum_decl_by_name_.end() &&
+                                (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(current_it->second))) {
+                                return current_it->second;
+                            }
                         }
 
                         // 1) exact enum-decl name key lookup
+                        auto hidden_exact = imported_enum_template_sid_by_qname_.find(key);
+                        if (hidden_exact != imported_enum_template_sid_by_qname_.end()) {
+                            if (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(hidden_exact->second)) {
+                                return hidden_exact->second;
+                            }
+                        }
                         auto it = enum_decl_by_name_.find(key);
-                        if (it != enum_decl_by_name_.end()) return it->second;
+                        if (it != enum_decl_by_name_.end() &&
+                            (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(it->second))) {
+                            return it->second;
+                        }
 
                         // 1.5) suffix lookup for qualified names (e.g. pkg::Token)
                         {
@@ -1138,11 +1164,17 @@ namespace parus::tyck {
                             for (const auto& kv : enum_decl_by_name_) {
                                 const std::string& q = kv.first;
                                 if (q == key) {
+                                    if (!allow_hidden_imported_enum && is_hidden_imported_enum_sid(kv.second)) {
+                                        continue;
+                                    }
                                     found = kv.second;
                                     break;
                                 }
                                 if (q.size() > suffix.size() &&
                                     q.compare(q.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                                    if (!allow_hidden_imported_enum && is_hidden_imported_enum_sid(kv.second)) {
+                                        continue;
+                                    }
                                     if (found != ast::k_invalid_stmt && found != kv.second) {
                                         found = ast::k_invalid_stmt;
                                         break;
@@ -1166,10 +1198,16 @@ namespace parus::tyck {
                             if (ss.kind == sema::SymbolKind::kType &&
                                 ss.declared_type != ty::kInvalidType) {
                                 auto eit2 = enum_decl_by_type_.find(ss.declared_type);
-                                if (eit2 != enum_decl_by_type_.end()) return eit2->second;
+                                if (eit2 != enum_decl_by_type_.end() &&
+                                    (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(eit2->second))) {
+                                    return eit2->second;
+                                }
                             }
                             auto eit = enum_decl_by_name_.find(ss.name);
-                            if (eit != enum_decl_by_name_.end()) return eit->second;
+                            if (eit != enum_decl_by_name_.end() &&
+                                (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(eit->second))) {
+                                return eit->second;
+                            }
                         }
                         return ast::k_invalid_stmt;
                     };
@@ -1183,6 +1221,11 @@ namespace parus::tyck {
                             base_lookup = *rewritten;
                         }
                         ast::StmtId template_enum_sid = ast::k_invalid_stmt;
+                        auto hidden_exact_it = imported_enum_template_sid_by_qname_.find(base_lookup);
+                        if (hidden_exact_it != imported_enum_template_sid_by_qname_.end() &&
+                            (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(hidden_exact_it->second))) {
+                            template_enum_sid = hidden_exact_it->second;
+                        }
                         auto bit = enum_decl_by_name_.find(base_lookup);
                         if (bit == enum_decl_by_name_.end() &&
                             base_lookup.find("::") == std::string::npos) {
@@ -1206,16 +1249,40 @@ namespace parus::tyck {
                         if (bit == enum_decl_by_name_.end() &&
                             base_lookup.find("::") == std::string::npos) {
                             const std::string current_qualified = qualify_decl_name_(base_lookup);
+                            auto hidden_it = imported_enum_template_sid_by_qname_.find(current_qualified);
+                            if (hidden_it != imported_enum_template_sid_by_qname_.end() &&
+                                (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(hidden_it->second))) {
+                                template_enum_sid = hidden_it->second;
+                            }
                             bit = enum_decl_by_name_.find(current_qualified);
                         }
-                        if (bit != enum_decl_by_name_.end()) {
+                        if (bit != enum_decl_by_name_.end() &&
+                            (allow_hidden_imported_enum || !is_hidden_imported_enum_sid(bit->second))) {
                             template_enum_sid = bit->second;
                         }
                         if (template_enum_sid != ast::k_invalid_stmt) {
                             const auto& templ = ast_.stmt(template_enum_sid);
                             if (templ.kind == ast::StmtKind::kEnumDecl &&
                                 templ.decl_generic_param_count > 0) {
-                                if (auto inst_sid = ensure_generic_enum_instance_(template_enum_sid, owner_args, callee_expr.span)) {
+                                MonoRequest req{};
+                                req.templ.template_sid = template_enum_sid;
+                                req.templ.producer_bundle = current_bundle_name_();
+                                req.templ.template_symbol = base_lookup;
+                                req.concrete_args = owner_args;
+                                if (imported_enum_template_sid_set_.find(template_enum_sid) != imported_enum_template_sid_set_.end()) {
+                                    req.templ.source = MonoTemplateRef::SourceKind::kImportedEnum;
+                                    if (auto idx_it = imported_enum_template_index_by_sid_.find(template_enum_sid);
+                                        idx_it != imported_enum_template_index_by_sid_.end() &&
+                                        idx_it->second < explicit_imported_enum_templates_.size()) {
+                                        const auto& templ_meta = explicit_imported_enum_templates_[idx_it->second];
+                                        req.templ.producer_bundle = templ_meta.producer_bundle;
+                                        req.templ.template_symbol =
+                                            !templ_meta.public_path.empty() ? templ_meta.public_path : templ_meta.lookup_name;
+                                    }
+                                } else {
+                                    req.templ.source = MonoTemplateRef::SourceKind::kLocalEnum;
+                                }
+                                if (auto inst_sid = ensure_monomorphized_enum_(req, callee_expr.span)) {
                                     enum_owner_sid = *inst_sid;
                                     enum_owner_type = ast_.stmt(*inst_sid).type;
                                 }

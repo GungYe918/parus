@@ -478,6 +478,161 @@ namespace {
         return ok;
     }
 
+    /// @brief generic class 본문이 helper generic struct body에 의존해도 concrete closure가 함께 materialize되는지 검사한다.
+    static bool test_generic_class_helper_struct_closure_oir_lowering_ok() {
+        const std::string src = R"(
+            struct Pair<T> {
+                lhs: T;
+                rhs: T;
+            };
+
+            class Box<T> {
+                value: T;
+
+                init(v: T) {
+                    self.value = v;
+                }
+
+                def dup(self) -> Pair<T> {
+                    return Pair<T>{ lhs: self.value, rhs: self.value };
+                }
+            };
+
+            def main() -> i32 {
+                set b = Box<i32>(7i32);
+                set p = b.dup();
+                return p.lhs + p.rhs;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic class helper-struct source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic class helper-struct source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic class helper-struct source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_class_sids.empty(),
+                       "generic class helper-struct use must materialize at least one concrete class instance");
+        ok &= require_(!p.ty.generic_instantiated_field_sids.empty(),
+                       "generic class helper-struct use must materialize at least one concrete struct instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic class helper-struct source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic class helper-struct source");
+        if (!ok) return false;
+
+        bool has_pair_i32_layout = false;
+        bool has_dup_call = false;
+        for (const auto& f : oir.mod.fields) {
+            if (f.name.find("Pair") != std::string::npos &&
+                f.name.find("i32") != std::string::npos &&
+                f.members.size() == 2) {
+                has_pair_i32_layout = true;
+            }
+        }
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("Box_i32_") != std::string::npos &&
+                callee.name.find("$dup$") != std::string::npos) {
+                has_dup_call = true;
+                break;
+            }
+        }
+
+        ok &= require_(has_pair_i32_layout,
+                       "OIR must contain concrete helper struct layout metadata for Pair<i32>");
+        ok &= require_(has_dup_call,
+                       "generic class helper-struct path must lower to direct concrete dup call");
+        return ok;
+    }
+
+    /// @brief generic proto default body가 helper generic enum body에 의존해도 concrete closure가 함께 materialize되는지 검사한다.
+    static bool test_generic_proto_helper_enum_closure_oir_lowering_ok() {
+        const std::string src = R"(
+            enum Step<T> {
+                case Empty,
+                case Seen(value: T),
+            };
+
+            proto Probe<T> {
+                provide def seen(v: T) -> bool {
+                    set s = Step<T>::Seen(value: v);
+                    switch (s) {
+                    case Step<T>::Empty: { return false; }
+                    case Step<T>::Seen(value: x): { return x >= x; }
+                    }
+                    return false;
+                }
+            };
+
+            class LocalProbe: Probe<i32> {
+                init() = default;
+            };
+
+            def main() -> i32 {
+                if (LocalProbe()->seen(8i32)) {
+                    return 1i32;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic proto helper-enum source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic proto helper-enum source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic proto helper-enum source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_proto_sids.empty(),
+                       "generic proto helper-enum use must materialize at least one concrete proto instance");
+        ok &= require_(!p.ty.generic_instantiated_enum_sids.empty(),
+                       "generic proto helper-enum use must materialize at least one concrete enum instance");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types, nullptr, &p.pres.sym);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic proto helper-enum source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic proto helper-enum source");
+        if (!ok) return false;
+
+        bool has_probe_i32_seen = false;
+        bool has_direct_seen_call = false;
+        for (const auto& f : oir.mod.funcs) {
+            if (f.name.find("Probe_i32_") != std::string::npos &&
+                f.name.find("$seen$") != std::string::npos) {
+                has_probe_i32_seen = true;
+            }
+        }
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("Probe_i32_") != std::string::npos &&
+                callee.name.find("$seen$") != std::string::npos) {
+                has_direct_seen_call = true;
+                break;
+            }
+        }
+
+        ok &= require_(has_probe_i32_seen,
+                       "OIR must contain concrete proto default symbol for helper-enum path");
+        ok &= require_(has_direct_seen_call,
+                       "helper-enum proto default call must lower to direct concrete seen call");
+        return ok;
+    }
+
     /// @brief copy/clone 키워드가 builtin fast-path와 acts operator call-path로 모두 안정 하향되는지 검사한다.
     static bool test_copy_clone_lowering_paths_ok() {
         const std::string src = R"(
@@ -1673,6 +1828,8 @@ int main() {
         {"generic_proto_default_materialization_oir_lowering_ok", test_generic_proto_default_materialization_oir_lowering_ok},
         {"generic_acts_owner_materialization_oir_lowering_ok", test_generic_acts_owner_materialization_oir_lowering_ok},
         {"generic_struct_materialization_oir_lowering_ok", test_generic_struct_materialization_oir_lowering_ok},
+        {"generic_class_helper_struct_closure_oir_lowering_ok", test_generic_class_helper_struct_closure_oir_lowering_ok},
+        {"generic_proto_helper_enum_closure_oir_lowering_ok", test_generic_proto_helper_enum_closure_oir_lowering_ok},
         {"copy_clone_lowering_paths_ok", test_copy_clone_lowering_paths_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
