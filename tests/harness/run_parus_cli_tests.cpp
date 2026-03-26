@@ -2506,12 +2506,37 @@ bool test_external_generic_constraints_v2_work() {
     const std::string lib_src =
         "nest api;\n"
         "import constraints as constraints;\n"
+        "import ext as ext;\n"
         "import range as range;\n"
+        "extern \"C\" def puts(s: *const ext::c_char) -> ext::c_int;\n"
         "struct OnlyI32<T> with [T == i32] {\n"
         "  value: T;\n"
         "};\n"
         "struct Box<T> {\n"
         "  value: T;\n"
+        "};\n"
+        "export class GenericBox<T> {\n"
+        "  private:\n"
+        "    value: T;\n"
+        "\n"
+        "  public:\n"
+        "    static const ZERO: i32 = 5i32;\n"
+        "\n"
+        "    init(v: T) {\n"
+        "      self.value = v;\n"
+        "    }\n"
+        "\n"
+        "    static def bonus() -> i32 {\n"
+        "      return 6i32;\n"
+        "    }\n"
+        "\n"
+        "    def value_or_zero(self) -> i32 {\n"
+        "      return 7i32;\n"
+        "    }\n"
+        "\n"
+        "    deinit() {\n"
+        "      puts(\"drop\");\n"
+        "    }\n"
         "};\n"
         "export proto Defaulted<T> {\n"
         "  provide const ZERO: i32 = 4i32;\n"
@@ -2558,6 +2583,7 @@ bool test_external_generic_constraints_v2_work() {
     if (!contains(lib_index_text, "gconstraint=type_eq,T,i32") ||
         !contains(lib_index_text, "gconstraint=proto,T,core::constraints::SignedInteger") ||
         contains(lib_index_text, "gconstraint=proto,T,constraints::SignedInteger") ||
+        !contains(lib_index_text, "\"path\":\"api::GenericBox\"") ||
         !contains(lib_index_text, "\"path\":\"api::OnlyI32\"") ||
         !contains(lib_index_text, "parus_field_decl|layout=n|align=0|gparam=T|gconstraint=type_eq,T,i32|field=value:T")) {
         std::cerr << "generic export-index must carry equality/proto constraint metadata\n" << lib_index_text;
@@ -2745,6 +2771,36 @@ bool test_external_generic_constraints_v2_work() {
         return false;
     }
 
+    const auto ok_class_pr = temp_root / "ok_class.pr";
+    const std::string ok_class_src =
+        "import api as api;\n"
+        "\n"
+        "struct LocalNum {\n"
+        "  value: i32;\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set b = api::GenericBox<LocalNum>(LocalNum{ value: 1i32 });\n"
+        "  let z: i32 = api::GenericBox<LocalNum>::ZERO;\n"
+        "  let bonus: i32 = api::GenericBox<LocalNum>::bonus();\n"
+        "  let x: i32 = b.value_or_zero();\n"
+        "  return z + bonus + x;\n"
+        "}\n";
+    if (!write_text(ok_class_pr, ok_class_src)) {
+        std::cerr << "failed to write external generic class success sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_ok_class, out_ok_class] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_class_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_ok_class != 0) {
+        std::cerr << "external generic class success sample should typecheck\n" << out_ok_class;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
     const auto bad_acts_pr = temp_root / "bad_acts.pr";
     const std::string bad_acts_src =
         "import api as api;\n"
@@ -2777,6 +2833,10 @@ bool test_external_generic_constraints_v2_work() {
         "  value: T;\n"
         "};\n"
         "\n"
+        "struct LocalNum {\n"
+        "  value: i32;\n"
+        "};\n"
+        "\n"
         "def main() -> i32 {\n"
         "  let b: LocalBox<i32> = LocalBox<i32>{ value: 3i32 };\n"
         "  let z: i32 = b->ZERO;\n"
@@ -2786,6 +2846,22 @@ bool test_external_generic_constraints_v2_work() {
         "  let r3: core::range::Range<i32> = range::range(2i32, 5i32);\n"
         "  let ok_same: bool = r1.has_same_bounds(r2);\n"
         "  let ok_diff: bool = r1.has_same_bounds(r3);\n"
+        "  {\n"
+        "    set c = api::GenericBox<i32>(3i32);\n"
+        "    let cz: i32 = api::GenericBox<i32>::ZERO;\n"
+        "    let cb: i32 = api::GenericBox<i32>::bonus();\n"
+        "    let cx: i32 = c.value_or_zero();\n"
+        "    if (cz != 5i32 or cb != 6i32 or cx != 7i32) {\n"
+        "      return 0i32;\n"
+        "    }\n"
+        "  }\n"
+        "  {\n"
+        "    set d = api::GenericBox<LocalNum>(LocalNum{ value: 9i32 });\n"
+        "    let dx: i32 = d.value_or_zero();\n"
+        "    if (dx != 7i32) {\n"
+        "      return 0i32;\n"
+        "    }\n"
+        "  }\n"
         "  if (z == 4i32 and x == 7i32 and ok_same and (not ok_diff)) {\n"
         "    return 42i32;\n"
         "  }\n"
@@ -2817,7 +2893,9 @@ bool test_external_generic_constraints_v2_work() {
         std::cerr << "external generic proto/acts runtime sample should execute\n" << out_runtime_run;
         return false;
     }
-    if (!contains(out_runtime_run, "EXIT:42")) {
+    if (!contains(out_runtime_run, "drop") ||
+        out_runtime_run.find("drop") == out_runtime_run.rfind("drop") ||
+        !contains(out_runtime_run, "EXIT:42")) {
         std::cerr << "external generic proto/acts runtime exit mismatch (expected 42)\n"
                   << out_runtime_run;
         return false;

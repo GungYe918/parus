@@ -150,7 +150,7 @@ namespace parus::sir::detail {
         f.ret = s.fn_ret;
 
         // decl symbol (def name)
-        f.sym = resolve_symbol_from_stmt(nres, sid);
+        f.sym = resolve_symbol_from_stmt(nres, tyck, sid);
 
         // nested namespace를 통과한 내부 함수는 qualified symbol name을 사용한다.
         // C ABI 함수는 선언 원문 이름을 그대로 유지한다(no-mangle).
@@ -301,6 +301,7 @@ namespace parus::sir::detail {
         const parus::ast::AstArena& ast,
         const sema::SymbolTable& sym,
         const passes::NameResolveResult& nres,
+        const parus::ty::TypePool& types,
         parus::ast::StmtId sid
     ) {
         const auto& s = ast.stmt(sid);
@@ -310,12 +311,15 @@ namespace parus::sir::detail {
         if (s.field_member_count == 0) {
             return k_invalid_field;
         }
+        auto& ast_mut = const_cast<parus::ast::AstArena&>(ast);
 
         FieldDecl f{};
         f.span = s.span;
         f.is_export = s.is_export;
         f.sym = resolve_symbol_from_stmt(nres, sid);
-        if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
+        if (s.type != k_invalid_type) {
+            f.name = ast_mut.add_owned_string(types.to_string(s.type));
+        } else if (f.sym != k_invalid_symbol && (size_t)f.sym < sym.symbols().size()) {
             f.name = sym.symbol(f.sym).name;
         } else {
             f.name = s.name;
@@ -652,10 +656,12 @@ namespace parus::sir {
                 if (!lowered_decl_stmt_ids.insert(sid).second) {
                     return;
                 }
-                (void)lower_class_field_decl_(m, ast, sym, nres, sid);
+                (void)lower_class_field_decl_(m, ast, sym, nres, types, sid);
 
                 std::string class_qname = std::string(s.name);
-                if (auto class_sym = resolve_symbol_from_stmt(nres, tyck, sid);
+                if (s.type != k_invalid_type) {
+                    class_qname = types.to_string(s.type);
+                } else if (auto class_sym = resolve_symbol_from_stmt(nres, tyck, sid);
                     class_sym != k_invalid_symbol && (size_t)class_sym < sym.symbols().size()) {
                     class_qname = sym.symbol(class_sym).name;
                 }
@@ -680,9 +686,11 @@ namespace parus::sir {
                             if (!vqname.empty()) vqname += "::";
                             vqname += std::string(member.name);
 
-                            SymbolId v_sym = k_invalid_symbol;
-                            if (auto sid_sym = sym.lookup(vqname)) {
-                                v_sym = *sid_sym;
+                            SymbolId v_sym = resolve_symbol_from_stmt(nres, tyck, member_sid);
+                            if (v_sym == k_invalid_symbol) {
+                                if (auto sid_sym = sym.lookup(vqname)) {
+                                    v_sym = *sid_sym;
+                                }
                             }
                             lower_global_var_decl_(m, global_init_has_any_write, ast, sym, nres, tyck, member_sid, vqname, v_sym);
                             continue;

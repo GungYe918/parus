@@ -561,23 +561,10 @@ namespace parus::tyck {
                 }
             }
 
-            {
-                std::string owner_base;
-                std::vector<ty::TypeId> owner_args;
-                if (decompose_named_user_type_(owner_t, owner_base, owner_args) && !owner_args.empty()) {
-                    std::string owner_key = owner_base;
-                    if (auto rewritten = rewrite_imported_path_(owner_key)) {
-                        owner_key = *rewritten;
-                    }
-                    auto cit = class_decl_by_name_.find(owner_key);
-                    if (cit != class_decl_by_name_.end()) {
-                        if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, member_span)) {
-                            const auto& inst = ast_.stmt(*inst_sid);
-                            if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
-                                owner_t = inst.type;
-                            }
-                        }
-                    }
+            if (auto inst_sid = ensure_generic_class_instance_from_type_(owner_t, member_span)) {
+                const auto& inst = ast_.stmt(*inst_sid);
+                if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                    owner_t = inst.type;
                 }
             }
 
@@ -1516,7 +1503,30 @@ namespace parus::tyck {
                                         return types_.error();
                                     }
 
-                                    auto inst_sid = ensure_generic_class_instance_(class_sid, explicit_call_type_args, callee_expr.span);
+                                    MonoRequest req{};
+                                    req.templ.template_sid = class_sid;
+                                    req.templ.producer_bundle = current_bundle_name_();
+                                    req.templ.template_symbol = sym.name;
+                                    req.concrete_args = explicit_call_type_args;
+                                    if (imported_class_template_sid_set_.find(class_sid) != imported_class_template_sid_set_.end()) {
+                                        req.templ.source = MonoTemplateRef::SourceKind::kImportedClass;
+                                        if (auto it = imported_class_template_index_by_sid_.find(class_sid);
+                                            it != imported_class_template_index_by_sid_.end() &&
+                                            it->second < explicit_imported_class_templates_.size()) {
+                                            const auto& templ_meta = explicit_imported_class_templates_[it->second];
+                                            req.templ.producer_bundle = templ_meta.producer_bundle;
+                                            req.templ.template_symbol =
+                                                !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+                                        }
+                                    } else {
+                                        req.templ.source = MonoTemplateRef::SourceKind::kLocalClass;
+                                        if (auto qit = class_qualified_name_by_stmt_.find(class_sid);
+                                            qit != class_qualified_name_by_stmt_.end()) {
+                                            req.templ.template_symbol = qit->second;
+                                        }
+                                    }
+
+                                    auto inst_sid = ensure_monomorphized_class_(req, callee_expr.span);
                                     if (!inst_sid.has_value() ||
                                         *inst_sid == ast::k_invalid_stmt ||
                                         (size_t)(*inst_sid) >= ast_.stmts().size()) {

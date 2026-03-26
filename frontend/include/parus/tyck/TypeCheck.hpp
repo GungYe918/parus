@@ -82,6 +82,20 @@ namespace parus::tyck {
         std::vector<ImportedFnConstraintMeta> constraints{};
     };
 
+    struct ImportedClassTemplate {
+        ast::StmtId template_sid = ast::k_invalid_stmt;
+        std::string producer_bundle{};
+        std::string module_head{};
+        std::string public_path{};
+        std::string lookup_name{};
+        std::string decl_file{};
+        uint32_t decl_line = 1;
+        uint32_t decl_col = 1;
+        bool is_public_export = false;
+        ty::TypeId declared_type = ty::kInvalidType;
+        std::vector<ImportedFnConstraintMeta> constraints{};
+    };
+
     struct MonoTemplateRef {
         enum class SourceKind : uint8_t {
             kLocalFn = 0,
@@ -90,6 +104,8 @@ namespace parus::tyck {
             kImportedProto,
             kLocalActs,
             kImportedActs,
+            kLocalClass,
+            kImportedClass,
         };
 
         SourceKind source = SourceKind::kLocalFn;
@@ -231,6 +247,9 @@ namespace parus::tyck {
         }
         void set_imported_acts_templates(std::vector<ImportedActsTemplate> templates) {
             explicit_imported_acts_templates_ = std::move(templates);
+        }
+        void set_imported_class_templates(std::vector<ImportedClassTemplate> templates) {
+            explicit_imported_class_templates_ = std::move(templates);
         }
 
         // program(StmtId) 하나를 타입체크
@@ -746,6 +765,7 @@ namespace parus::tyck {
         std::vector<ImportedFnTemplate> explicit_imported_fn_templates_{};
         std::vector<ImportedProtoTemplate> explicit_imported_proto_templates_{};
         std::vector<ImportedActsTemplate> explicit_imported_acts_templates_{};
+        std::vector<ImportedClassTemplate> explicit_imported_class_templates_{};
 
         enum class BuiltinActsApiGroup : uint8_t {
             IntLike = 0,
@@ -832,6 +852,7 @@ namespace parus::tyck {
         void register_imported_fn_templates_();
         void register_imported_proto_templates_();
         void register_imported_acts_templates_();
+        void register_imported_class_templates_();
         bool materialize_imported_acts_templates_for_member_(
             ty::TypeId concrete_owner_type,
             std::string_view member_name,
@@ -924,6 +945,10 @@ namespace parus::tyck {
         std::optional<ast::StmtId> ensure_generic_class_instance_(
             ast::StmtId template_sid,
             const std::vector<ty::TypeId>& concrete_args,
+            Span use_span
+        );
+        std::optional<ast::StmtId> ensure_generic_class_instance_from_type_(
+            ty::TypeId maybe_generic_class_type,
             Span use_span
         );
         std::optional<ast::StmtId> ensure_generic_field_instance_(
@@ -1097,6 +1122,10 @@ namespace parus::tyck {
             ty::TypeId concrete_owner_type,
             Span use_span
         );
+        std::optional<ast::StmtId> ensure_monomorphized_class_(
+            const MonoRequest& request,
+            Span use_span
+        );
 
         struct FieldAbiMeta {
             ast::StmtId sid = ast::k_invalid_stmt;
@@ -1144,6 +1173,8 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, size_t> imported_proto_template_index_by_sid_;
         std::unordered_set<ast::StmtId> imported_acts_template_sid_set_;
         std::unordered_map<ast::StmtId, size_t> imported_acts_template_index_by_sid_;
+        std::unordered_set<ast::StmtId> imported_class_template_sid_set_;
+        std::unordered_map<ast::StmtId, size_t> imported_class_template_index_by_sid_;
         std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> imported_fn_instance_cache_;
         std::unordered_set<ast::StmtId> generic_fn_checked_instances_;
@@ -1157,6 +1188,7 @@ namespace parus::tyck {
         std::unordered_set<ast::StmtId> generic_field_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_enum_template_sid_set_;
         std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
+        std::unordered_map<std::string, ast::StmtId> imported_class_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
         std::unordered_map<std::string, ast::StmtId> generic_field_instance_cache_;

@@ -194,6 +194,13 @@ namespace parusc::p0 {
             uint32_t expr = parus::ast::k_invalid_expr;
         };
 
+        struct TemplateSidecarFieldMember {
+            std::string name{};
+            std::string type_repr{};
+            std::string type_semantic{};
+            uint8_t visibility = 0;
+        };
+
         struct TemplateSidecarFStringPart {
             bool is_expr = false;
             std::string text{};
@@ -301,6 +308,7 @@ namespace parusc::p0 {
             uint8_t fn_mode = 0;
             std::string fn_ret_repr{};
             std::string fn_ret_semantic{};
+            uint8_t member_visibility = 0;
             bool is_pure = false;
             bool is_comptime = false;
             bool is_commit = false;
@@ -323,6 +331,10 @@ namespace parusc::p0 {
             uint32_t decl_constraint_count = 0;
             uint32_t decl_path_ref_begin = 0;
             uint32_t decl_path_ref_count = 0;
+            uint8_t field_layout = 0;
+            uint32_t field_align = 0;
+            uint32_t field_member_begin = 0;
+            uint32_t field_member_count = 0;
             uint8_t proto_fn_role = 0;
             uint8_t proto_require_kind = 0;
             uint8_t assoc_type_role = 0;
@@ -356,6 +368,7 @@ namespace parusc::p0 {
             std::vector<TemplateSidecarSwitchCase> switch_cases{};
             std::vector<TemplateSidecarArg> args{};
             std::vector<TemplateSidecarFieldInit> field_inits{};
+            std::vector<TemplateSidecarFieldMember> field_members{};
             std::vector<TemplateSidecarFStringPart> fstring_parts{};
             std::vector<std::string> type_args{};
             std::vector<TemplateSidecarGenericParam> generic_params{};
@@ -2761,8 +2774,9 @@ namespace parusc::p0 {
                 root_decl.a != parus::ast::k_invalid_stmt;
             const bool is_proto = root_decl.kind == parus::ast::StmtKind::kProtoDecl;
             const bool is_acts = root_decl.kind == parus::ast::StmtKind::kActsDecl;
-            if (!is_free_fn && !is_proto && !is_acts) {
-                out_err = "template sidecar requires top-level generic fn/proto/acts declaration";
+            const bool is_class = root_decl.kind == parus::ast::StmtKind::kClassDecl;
+            if (!is_free_fn && !is_proto && !is_acts && !is_class) {
+                out_err = "template sidecar requires top-level generic fn/proto/acts/class declaration";
                 return false;
             }
 
@@ -2853,12 +2867,12 @@ namespace parusc::p0 {
                 out.constraints.push_back(std::move(meta));
             }
 
-            if (is_proto) {
+            if (is_proto || is_class) {
                 const auto& refs = ast.path_refs();
                 const uint64_t begin = root_decl.decl_path_ref_begin;
                 const uint64_t end = begin + root_decl.decl_path_ref_count;
                 if (begin > refs.size() || end > refs.size()) {
-                    out_err = "typed template payload v2 proto path-ref range out of bounds";
+                    out_err = "typed template payload v2 type path-ref range out of bounds";
                     return false;
                 }
                 for (uint32_t i = 0; i < root_decl.decl_path_ref_count; ++i) {
@@ -2883,6 +2897,28 @@ namespace parusc::p0 {
                             parus::cimport::serialize_type_semantic_from_type(pr.type, types);
                     }
                     out.path_refs.push_back(std::move(out_ref));
+                }
+            }
+
+            if (is_class) {
+                const auto& members = ast.field_members();
+                const uint64_t begin = root_decl.field_member_begin;
+                const uint64_t end = begin + root_decl.field_member_count;
+                if (begin > members.size() || end > members.size()) {
+                    out_err = "typed template payload v2 class field-member range out of bounds";
+                    return false;
+                }
+                for (uint32_t i = 0; i < root_decl.field_member_count; ++i) {
+                    const auto& member = members[root_decl.field_member_begin + i];
+                    TemplateSidecarFieldMember out_member{};
+                    out_member.name = std::string(member.name);
+                    out_member.type_repr = canonical_type_repr_or_empty(member.type);
+                    if (member.type != parus::ty::kInvalidType) {
+                        out_member.type_semantic =
+                            parus::cimport::serialize_type_semantic_from_type(member.type, types);
+                    }
+                    out_member.visibility = static_cast<uint8_t>(member.visibility);
+                    out.field_members.push_back(std::move(out_member));
                 }
             }
 
@@ -3067,6 +3103,7 @@ namespace parusc::p0 {
                 if (s.fn_ret != parus::ty::kInvalidType) {
                     ss.fn_ret_semantic = parus::cimport::serialize_type_semantic_from_type(s.fn_ret, types);
                 }
+                ss.member_visibility = static_cast<uint8_t>(s.member_visibility);
                 ss.is_pure = s.is_pure;
                 ss.is_comptime = s.is_comptime;
                 ss.is_commit = s.is_commit;
@@ -3089,6 +3126,10 @@ namespace parusc::p0 {
                 ss.decl_constraint_count = s.decl_constraint_count;
                 ss.decl_path_ref_begin = s.decl_path_ref_begin;
                 ss.decl_path_ref_count = s.decl_path_ref_count;
+                ss.field_layout = static_cast<uint8_t>(s.field_layout);
+                ss.field_align = s.field_align;
+                ss.field_member_begin = s.field_member_begin;
+                ss.field_member_count = s.field_member_count;
                 ss.proto_fn_role = static_cast<uint8_t>(s.proto_fn_role);
                 ss.proto_require_kind = static_cast<uint8_t>(s.proto_require_kind);
                 ss.assoc_type_role = static_cast<uint8_t>(s.assoc_type_role);
@@ -3108,7 +3149,8 @@ namespace parusc::p0 {
                 const bool has_stmt_children =
                     s.kind == parus::ast::StmtKind::kBlock ||
                     s.kind == parus::ast::StmtKind::kProtoDecl ||
-                    s.kind == parus::ast::StmtKind::kActsDecl;
+                    s.kind == parus::ast::StmtKind::kActsDecl ||
+                    s.kind == parus::ast::StmtKind::kClassDecl;
                 if (has_stmt_children) {
                     const auto& kids = ast.stmt_children();
                     const uint64_t begin = s.stmt_begin;
@@ -3130,7 +3172,7 @@ namespace parusc::p0 {
                 if (s.kind == parus::ast::StmtKind::kFnDecl) {
                     if (sid != root_sid && (s.fn_generic_param_count > 0 || s.fn_constraint_count > 0)) {
                         out.stmts[idx] = std::move(ss);
-                        out_err = "typed template payload v2 currently does not support generic proto/acts member functions";
+                        out_err = "typed template payload v2 currently does not support generic proto/acts/class member functions";
                         return idx;
                     }
                     ss.param_begin = static_cast<uint32_t>(out.params.size());
@@ -3203,7 +3245,7 @@ namespace parusc::p0 {
                         return idx;
                     default:
                         out.stmts[idx] = std::move(ss);
-                        out_err = "typed template payload v2 currently supports generic fn/proto/acts declarations without nested type/control extensions";
+                        out_err = "typed template payload v2 currently supports generic fn/proto/acts/class declarations without nested type/control extensions";
                         return idx;
                 }
             };
@@ -3312,7 +3354,12 @@ namespace parusc::p0 {
                     s.is_export &&
                     s.acts_is_for &&
                     s.decl_generic_param_count > 0;
-                if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts) {
+                const bool is_generic_class =
+                    s.kind == parus::ast::StmtKind::kClassDecl &&
+                    !s.name.empty() &&
+                    s.is_export &&
+                    s.decl_generic_param_count > 0;
+                if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts && !is_generic_class) {
                     return true;
                 }
 
@@ -3323,6 +3370,7 @@ namespace parusc::p0 {
                     if (is_generic_free_fn && ex.kind != parus::sema::SymbolKind::kFn) continue;
                     if (is_generic_proto && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (is_generic_acts && ex.kind != parus::sema::SymbolKind::kAct) continue;
+                    if (is_generic_class && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (ex.decl_file != decl_file) continue;
                     if (ex.decl_line != lc.line || ex.decl_col != lc.col) continue;
                     qname = ex.path;
@@ -3854,6 +3902,7 @@ namespace parusc::p0 {
                     ofs << ",\"fn_mode\":"; emit_uint(s.fn_mode);
                     ofs << ",\"fn_ret_repr\":"; emit_q(s.fn_ret_repr);
                     ofs << ",\"fn_ret_semantic\":"; emit_q(s.fn_ret_semantic);
+                    ofs << ",\"member_visibility\":"; emit_uint(s.member_visibility);
                     ofs << ",\"is_pure\":"; emit_bool(s.is_pure);
                     ofs << ",\"is_comptime\":"; emit_bool(s.is_comptime);
                     ofs << ",\"is_commit\":"; emit_bool(s.is_commit);
@@ -3876,6 +3925,10 @@ namespace parusc::p0 {
                     ofs << ",\"decl_constraint_count\":"; emit_uint(s.decl_constraint_count);
                     ofs << ",\"decl_path_ref_begin\":"; emit_uint(s.decl_path_ref_begin);
                     ofs << ",\"decl_path_ref_count\":"; emit_uint(s.decl_path_ref_count);
+                    ofs << ",\"field_layout\":"; emit_uint(s.field_layout);
+                    ofs << ",\"field_align\":"; emit_uint(s.field_align);
+                    ofs << ",\"field_member_begin\":"; emit_uint(s.field_member_begin);
+                    ofs << ",\"field_member_count\":"; emit_uint(s.field_member_count);
                     ofs << ",\"proto_fn_role\":"; emit_uint(s.proto_fn_role);
                     ofs << ",\"proto_require_kind\":"; emit_uint(s.proto_require_kind);
                     ofs << ",\"assoc_type_role\":"; emit_uint(s.assoc_type_role);
@@ -3994,6 +4047,19 @@ namespace parusc::p0 {
                     ofs << ",\"expr\":"; emit_uint(fi.expr);
                     ofs << "}";
                     if (j + 1 != e.field_inits.size()) ofs << ",";
+                }
+                ofs << "]";
+
+                ofs << ",\"field_members\":[";
+                for (size_t j = 0; j < e.field_members.size(); ++j) {
+                    const auto& fm = e.field_members[j];
+                    ofs << "{";
+                    ofs << "\"name\":"; emit_q(fm.name);
+                    ofs << ",\"type_repr\":"; emit_q(fm.type_repr);
+                    ofs << ",\"type_semantic\":"; emit_q(fm.type_semantic);
+                    ofs << ",\"visibility\":"; emit_uint(fm.visibility);
+                    ofs << "}";
+                    if (j + 1 != e.field_members.size()) ofs << ",";
                 }
                 ofs << "]";
 
@@ -4156,6 +4222,8 @@ namespace parusc::p0 {
                     uint32_t stmt_kind = 0;
                     uint32_t stmt_link_abi = 0;
                     uint32_t stmt_fn_mode = 0;
+                    uint32_t stmt_member_visibility = 0;
+                    uint32_t stmt_field_layout = 0;
                     uint32_t stmt_proto_fn_role = 0;
                     uint32_t stmt_proto_require_kind = 0;
                     uint32_t stmt_assoc_type_role = 0;
@@ -4183,6 +4251,7 @@ namespace parusc::p0 {
                         !parse_json_uint_field_(stmt_obj, "fn_mode", stmt_fn_mode) ||
                         !parse_json_string_field_(stmt_obj, "fn_ret_repr", s.fn_ret_repr) ||
                         !parse_json_string_field_optional_(stmt_obj, "fn_ret_semantic", s.fn_ret_semantic) ||
+                        !parse_json_uint_field_(stmt_obj, "member_visibility", stmt_member_visibility) ||
                         !parse_json_bool_field_(stmt_obj, "is_pure", s.is_pure) ||
                         !parse_json_bool_field_(stmt_obj, "is_comptime", s.is_comptime) ||
                         !parse_json_bool_field_(stmt_obj, "is_commit", s.is_commit) ||
@@ -4205,6 +4274,10 @@ namespace parusc::p0 {
                         !parse_json_uint_field_(stmt_obj, "decl_constraint_count", s.decl_constraint_count) ||
                         !parse_json_uint_field_(stmt_obj, "decl_path_ref_begin", s.decl_path_ref_begin) ||
                         !parse_json_uint_field_(stmt_obj, "decl_path_ref_count", s.decl_path_ref_count) ||
+                        !parse_json_uint_field_(stmt_obj, "field_layout", stmt_field_layout) ||
+                        !parse_json_uint_field_(stmt_obj, "field_align", s.field_align) ||
+                        !parse_json_uint_field_(stmt_obj, "field_member_begin", s.field_member_begin) ||
+                        !parse_json_uint_field_(stmt_obj, "field_member_count", s.field_member_count) ||
                         !parse_json_uint_field_(stmt_obj, "proto_fn_role", stmt_proto_fn_role) ||
                         !parse_json_uint_field_(stmt_obj, "proto_require_kind", stmt_proto_require_kind) ||
                         !parse_json_uint_field_(stmt_obj, "assoc_type_role", stmt_assoc_type_role) ||
@@ -4223,6 +4296,8 @@ namespace parusc::p0 {
                     s.kind = static_cast<uint8_t>(stmt_kind);
                     s.link_abi = static_cast<uint8_t>(stmt_link_abi);
                     s.fn_mode = static_cast<uint8_t>(stmt_fn_mode);
+                    s.member_visibility = static_cast<uint8_t>(stmt_member_visibility);
+                    s.field_layout = static_cast<uint8_t>(stmt_field_layout);
                     s.proto_fn_role = static_cast<uint8_t>(stmt_proto_fn_role);
                     s.proto_require_kind = static_cast<uint8_t>(stmt_proto_require_kind);
                     s.assoc_type_role = static_cast<uint8_t>(stmt_assoc_type_role);
@@ -4364,6 +4439,25 @@ namespace parusc::p0 {
                     entry.field_inits.push_back(std::move(fi));
                 }
 
+                std::vector<std::string> field_member_objs{};
+                if (!parse_json_array_object_slices_(obj, "field_members", field_member_objs)) {
+                    out_err = "invalid template-sidecar field_members array in: " + path;
+                    return false;
+                }
+                for (const auto& field_member_obj : field_member_objs) {
+                    TemplateSidecarFieldMember fm{};
+                    uint32_t visibility = 0;
+                    if (!parse_json_string_field_(field_member_obj, "name", fm.name) ||
+                        !parse_json_string_field_(field_member_obj, "type_repr", fm.type_repr) ||
+                        !parse_json_string_field_optional_(field_member_obj, "type_semantic", fm.type_semantic) ||
+                        !parse_json_uint_field_(field_member_obj, "visibility", visibility)) {
+                        out_err = "invalid template-sidecar field member entry in: " + path;
+                        return false;
+                    }
+                    fm.visibility = static_cast<uint8_t>(visibility);
+                    entry.field_members.push_back(std::move(fm));
+                }
+
                 std::vector<std::string> fpart_objs{};
                 if (!parse_json_array_object_slices_(obj, "fstring_parts", fpart_objs)) {
                     out_err = "invalid template-sidecar fstring_parts array in: " + path;
@@ -4493,6 +4587,7 @@ namespace parusc::p0 {
             std::vector<parus::tyck::ImportedFnTemplate>& out_fn_templates,
             std::vector<parus::tyck::ImportedProtoTemplate>& out_proto_templates,
             std::vector<parus::tyck::ImportedActsTemplate>& out_acts_templates,
+            std::vector<parus::tyck::ImportedClassTemplate>& out_class_templates,
             std::unordered_map<uint32_t, std::string>& out_file_bundle_overrides,
             std::unordered_map<uint32_t, std::string>& out_file_module_head_overrides,
             std::string& out_err
@@ -4500,6 +4595,7 @@ namespace parusc::p0 {
             out_fn_templates.clear();
             out_proto_templates.clear();
             out_acts_templates.clear();
+            out_class_templates.clear();
             out_file_bundle_overrides.clear();
             out_file_module_head_overrides.clear();
             out_err.clear();
@@ -4735,6 +4831,8 @@ namespace parusc::p0 {
                         s.name = clone_sv_into_ast_(ast, src.name);
                         s.is_export = src.is_export;
                         s.fn_mode = static_cast<parus::ast::FnMode>(src.fn_mode);
+                        s.member_visibility =
+                            static_cast<parus::ast::FieldMember::Visibility>(src.member_visibility);
                         s.is_pure = src.is_pure;
                         s.is_comptime = src.is_comptime;
                         s.is_commit = src.is_commit;
@@ -4755,6 +4853,10 @@ namespace parusc::p0 {
                         s.decl_constraint_count = src.decl_constraint_count;
                         s.decl_path_ref_begin = src.decl_path_ref_begin;
                         s.decl_path_ref_count = src.decl_path_ref_count;
+                        s.field_layout = static_cast<parus::ast::FieldLayout>(src.field_layout);
+                        s.field_align = src.field_align;
+                        s.field_member_begin = src.field_member_begin;
+                        s.field_member_count = src.field_member_count;
                         s.proto_fn_role = static_cast<parus::ast::ProtoFnRole>(src.proto_fn_role);
                         s.proto_require_kind = static_cast<parus::ast::ProtoRequireKind>(src.proto_require_kind);
                         s.assoc_type_role = static_cast<parus::ast::AssocTypeRole>(src.assoc_type_role);
@@ -4799,7 +4901,8 @@ namespace parusc::p0 {
 
                         if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kBlock) ||
                             src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kProtoDecl) ||
-                            src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kActsDecl)) {
+                            src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kActsDecl) ||
+                            src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kClassDecl)) {
                             const uint64_t begin = src.stmt_begin;
                             const uint64_t end = begin + src.stmt_count;
                             if (begin <= templ.stmt_children.size() && end <= templ.stmt_children.size()) {
@@ -4811,6 +4914,33 @@ namespace parusc::p0 {
                                 for (uint32_t i = 0; i < src.stmt_count; ++i) {
                                     ast.stmt_children_mut()[dst.stmt_begin + i] =
                                         clone_stmt(templ.stmt_children[src.stmt_begin + i]);
+                                }
+                            }
+                            if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kClassDecl)) {
+                                if (src.field_member_count != templ.field_members.size()) {
+                                    out_err =
+                                        "typed template sidecar class field-member count mismatch: " +
+                                        templ.lookup_name;
+                                    ast.stmt_mut(sid) = std::move(dst);
+                                    return sid;
+                                }
+                                dst.field_member_begin = static_cast<uint32_t>(ast.field_members().size());
+                                dst.field_member_count = static_cast<uint32_t>(templ.field_members.size());
+                                for (const auto& fm : templ.field_members) {
+                                    parus::ast::FieldMember out_fm{};
+                                    out_fm.name = clone_sv_into_ast_(ast, fm.name);
+                                    out_fm.visibility =
+                                        static_cast<parus::ast::FieldMember::Visibility>(fm.visibility);
+                                    out_fm.span = anchor;
+                                    if (!fm.type_repr.empty()) {
+                                        out_fm.type = parse_imported_type_repr_into_(
+                                            fm.type_repr,
+                                            fm.type_semantic,
+                                            std::string_view{}
+                                        );
+                                        out_fm.type_node = add_type_node_for(out_fm.type, anchor);
+                                    }
+                                    ast.add_field_member(out_fm);
                                 }
                             }
                         } else if (src.kind == static_cast<uint8_t>(parus::ast::StmtKind::kSwitch)) {
@@ -4917,7 +5047,8 @@ namespace parusc::p0 {
                     auto& root_stmt = ast.stmt_mut(root_sid);
                     if (root_stmt.kind != parus::ast::StmtKind::kFnDecl &&
                         root_stmt.kind != parus::ast::StmtKind::kProtoDecl &&
-                        root_stmt.kind != parus::ast::StmtKind::kActsDecl) {
+                        root_stmt.kind != parus::ast::StmtKind::kActsDecl &&
+                        root_stmt.kind != parus::ast::StmtKind::kClassDecl) {
                         out_err = "typed template sidecar root kind is unsupported: " + templ.lookup_name;
                         return false;
                     }
@@ -4939,7 +5070,8 @@ namespace parusc::p0 {
                             std::string_view{}
                         );
                     }
-                    if (root_stmt.kind == parus::ast::StmtKind::kProtoDecl) {
+                    if (root_stmt.kind == parus::ast::StmtKind::kProtoDecl ||
+                        root_stmt.kind == parus::ast::StmtKind::kClassDecl) {
                         root_stmt.decl_path_ref_begin = static_cast<uint32_t>(ast.path_refs().size());
                         root_stmt.decl_path_ref_count = static_cast<uint32_t>(templ.path_refs.size());
                         for (const auto& pr : templ.path_refs) {
@@ -5026,7 +5158,7 @@ namespace parusc::p0 {
                         out_t.declared_type = root_stmt.type;
                         out_t.constraints = copy_constraints();
                         out_proto_templates.push_back(std::move(out_t));
-                    } else {
+                    } else if (root_stmt.kind == parus::ast::StmtKind::kActsDecl) {
                         parus::tyck::ImportedActsTemplate out_t{};
                         out_t.template_sid = root_sid;
                         out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
@@ -5039,6 +5171,20 @@ namespace parusc::p0 {
                         out_t.is_public_export = templ.is_public_export;
                         out_t.constraints = copy_constraints();
                         out_acts_templates.push_back(std::move(out_t));
+                    } else {
+                        parus::tyck::ImportedClassTemplate out_t{};
+                        out_t.template_sid = root_sid;
+                        out_t.producer_bundle = templ.bundle.empty() ? index.bundle : templ.bundle;
+                        out_t.module_head = templ.module_head;
+                        out_t.public_path = templ.public_path;
+                        out_t.lookup_name = templ.lookup_name;
+                        out_t.decl_file = templ.decl_file;
+                        out_t.decl_line = templ.decl_line;
+                        out_t.decl_col = templ.decl_col;
+                        out_t.is_public_export = templ.is_public_export;
+                        out_t.declared_type = root_stmt.type;
+                        out_t.constraints = copy_constraints();
+                        out_class_templates.push_back(std::move(out_t));
                     }
                 }
             }
@@ -6429,6 +6575,7 @@ namespace parusc::p0 {
         std::vector<parus::tyck::ImportedFnTemplate> imported_fn_templates{};
         std::vector<parus::tyck::ImportedProtoTemplate> imported_proto_templates{};
         std::vector<parus::tyck::ImportedActsTemplate> imported_acts_templates{};
+        std::vector<parus::tyck::ImportedClassTemplate> imported_class_templates{};
         std::unordered_map<uint32_t, std::string> sidecar_file_bundle_overrides{};
         std::unordered_map<uint32_t, std::string> sidecar_file_module_head_overrides{};
         std::string sidecar_load_err{};
@@ -6441,6 +6588,7 @@ namespace parusc::p0 {
                 imported_fn_templates,
                 imported_proto_templates,
                 imported_acts_templates,
+                imported_class_templates,
                 sidecar_file_bundle_overrides,
                 sidecar_file_module_head_overrides,
                 sidecar_load_err)) {
@@ -6472,6 +6620,9 @@ namespace parusc::p0 {
             }
             if (!imported_acts_templates.empty()) {
                 tc.set_imported_acts_templates(std::move(imported_acts_templates));
+            }
+            if (!imported_class_templates.empty()) {
+                tc.set_imported_class_templates(std::move(imported_class_templates));
             }
             if (!core_impl_marker_file_ids.empty()) {
                 tc.set_core_impl_marker_file_ids(std::move(core_impl_marker_file_ids));

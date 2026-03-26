@@ -589,6 +589,10 @@ namespace parus::oir {
                 bool moved = false;
             };
 
+            struct CleanupStateSnapshot {
+                std::vector<CleanupItem> items{};
+            };
+
             struct ScopeFrame {
                 std::vector<std::pair<parus::sir::SymbolId, Binding>> undo{};
                 std::vector<uint32_t> cleanup_items{};
@@ -913,15 +917,25 @@ namespace parus::oir {
                 item.moved = true;
             }
 
+            CleanupStateSnapshot snapshot_cleanup_state() const {
+                CleanupStateSnapshot snap{};
+                snap.items = cleanup_items;
+                return snap;
+            }
+
+            void restore_cleanup_state(CleanupStateSnapshot snap) {
+                cleanup_items = std::move(snap.items);
+            }
+
             void emit_cleanups_to_depth(size_t keep_depth) {
                 if (keep_depth > env_stack.size()) keep_depth = env_stack.size();
                 for (size_t i = env_stack.size(); i > keep_depth; --i) {
                     auto& frame = env_stack[i - 1];
-                    if (frame.cleaned) continue;
+                    // Branch-local exits must not globally mark the lexical frame as cleaned,
+                    // or sibling fallthrough paths will lose their normal scope-exit drops.
                     for (auto it = frame.cleanup_items.rbegin(); it != frame.cleanup_items.rend(); ++it) {
                         emit_cleanup_item(*it);
                     }
-                    frame.cleaned = true;
                 }
             }
 
@@ -1522,7 +1536,9 @@ namespace parus::oir {
 
                 def->blocks.push_back(throw_bb);
                 cur_bb = throw_bb;
+                const auto cleanup_snapshot = snapshot_cleanup_state();
                 emit_propagate_throw_(/*cleanup_keep_depth=*/0);
+                restore_cleanup_state(std::move(cleanup_snapshot));
 
                 def->blocks.push_back(cont_bb);
                 cur_bb = cont_bb;
@@ -2390,18 +2406,22 @@ namespace parus::oir {
             // THEN
             def->blocks.push_back(then_bb);
             cur_bb = then_bb;
+            auto then_cleanup_snapshot = snapshot_cleanup_state();
             push_scope();
             ValueId then_val = lower_value(then_sir);
             pop_scope();
             if (!has_term()) br(join_bb, {then_val});
+            restore_cleanup_state(std::move(then_cleanup_snapshot));
 
             // ELSE
             def->blocks.push_back(else_bb);
             cur_bb = else_bb;
+            auto else_cleanup_snapshot = snapshot_cleanup_state();
             push_scope();
             ValueId else_val = lower_value(else_sir);
             pop_scope();
             if (!has_term()) br(join_bb, {else_val});
+            restore_cleanup_state(std::move(else_cleanup_snapshot));
 
             // JOIN
             def->blocks.push_back(join_bb);
@@ -4178,6 +4198,7 @@ namespace parus::oir {
 
                     def->blocks.push_back(fail_bb);
                     cur_bb = fail_bb;
+                    auto fail_cleanup_snapshot = snapshot_cleanup_state();
                     push_scope();
                     if (s.b != parus::sir::k_invalid_block) lower_block(s.b);
                     pop_scope();
@@ -4185,6 +4206,7 @@ namespace parus::oir {
                         report_lowering_error("consume-binding else block must diverge");
                         br(succ_bb, {});
                     }
+                    restore_cleanup_state(std::move(fail_cleanup_snapshot));
 
                     def->blocks.push_back(succ_bb);
                     cur_bb = succ_bb;
@@ -4303,6 +4325,7 @@ namespace parus::oir {
 
                         def->blocks.push_back(catch_bb);
                         cur_bb = catch_bb;
+                        auto catch_cleanup_snapshot = snapshot_cleanup_state();
                         const ValueId thrown_type_for_bind = emit_load_exc_type_();
                         ValueId typed_payload_for_bind = kInvalidId;
                         if (cc.has_typed_bind && cc.bind_type != kInvalidId) {
@@ -4327,6 +4350,7 @@ namespace parus::oir {
                         if (!has_term()) {
                             br(after_bb, {});
                         }
+                        restore_cleanup_state(std::move(catch_cleanup_snapshot));
 
                         if (next_bb != kInvalidId) {
                             def->blocks.push_back(next_bb);
@@ -4338,6 +4362,7 @@ namespace parus::oir {
                 }
 
                 if (!has_term()) {
+                    const auto rethrow_cleanup_snapshot = snapshot_cleanup_state();
                     if (!try_stack.empty()) {
                         const auto& outer = try_stack.back();
                         const ValueId throw_ty = emit_load_exc_type_();
@@ -4351,6 +4376,7 @@ namespace parus::oir {
                     } else {
                         emit_propagate_throw_(/*cleanup_keep_depth=*/0);
                     }
+                    restore_cleanup_state(std::move(rethrow_cleanup_snapshot));
                 }
 
                 def->blocks.push_back(after_bb);
@@ -4532,18 +4558,22 @@ namespace parus::oir {
                 // then
                 def->blocks.push_back(then_bb);
                 cur_bb = then_bb;
+                auto then_cleanup_snapshot = snapshot_cleanup_state();
                 push_scope();
                 lower_block(s.a);
                 pop_scope();
                 if (!has_term()) br(join_bb, {});
+                restore_cleanup_state(std::move(then_cleanup_snapshot));
 
                 // else
                 def->blocks.push_back(else_bb);
                 cur_bb = else_bb;
+                auto else_cleanup_snapshot = snapshot_cleanup_state();
                 push_scope();
                 if (s.b != parus::sir::k_invalid_block) lower_block(s.b);
                 pop_scope();
                 if (!has_term()) br(join_bb, {});
+                restore_cleanup_state(std::move(else_cleanup_snapshot));
 
                 // join
                 def->blocks.push_back(join_bb);
@@ -4675,6 +4705,7 @@ namespace parus::oir {
 
                         def->blocks.push_back(match_bb);
                         cur_bb = match_bb;
+                        auto match_cleanup_snapshot = snapshot_cleanup_state();
                         push_scope();
                         if (c.pat_kind == parus::sir::SwitchCasePatKind::kEnumVariant &&
                             c.enum_type != kInvalidId) {
@@ -4690,6 +4721,7 @@ namespace parus::oir {
                         lower_block(c.body);
                         pop_scope();
                         if (!has_term()) br(exit_bb, {});
+                        restore_cleanup_state(std::move(match_cleanup_snapshot));
 
                         def->blocks.push_back(next_bb);
                         cur_bb = next_bb;
@@ -4702,10 +4734,12 @@ namespace parus::oir {
 
                     def->blocks.push_back(def_bb);
                     cur_bb = def_bb;
+                    auto default_cleanup_snapshot = snapshot_cleanup_state();
                     push_scope();
                     lower_block(default_case->body);
                     pop_scope();
                     if (!has_term()) br(exit_bb, {});
+                    restore_cleanup_state(std::move(default_cleanup_snapshot));
                 } else {
                     if (!has_term()) br(exit_bb, {});
                 }
@@ -4781,8 +4815,10 @@ namespace parus::oir {
 
                 def->blocks.push_back(cleanup_bb);
                 cur_bb = cleanup_bb;
+                const auto cleanup_snapshot = snapshot_cleanup_state();
                 emit_cleanups_to_depth(tc.scope_depth_base);
                 br(tc.dispatch_bb, {});
+                restore_cleanup_state(std::move(cleanup_snapshot));
 
                 def->blocks.push_back(cont_bb);
                 cur_bb = cont_bb;

@@ -142,6 +142,8 @@ namespace parus::tyck {
         imported_fn_template_index_by_sid_.clear();
         imported_fn_template_sid_by_lookup_name_.clear();
         imported_fn_template_sid_by_link_name_.clear();
+        imported_class_template_sid_set_.clear();
+        imported_class_template_index_by_sid_.clear();
         generic_fn_instance_cache_.clear();
         imported_fn_instance_cache_.clear();
         generic_fn_checked_instances_.clear();
@@ -155,6 +157,7 @@ namespace parus::tyck {
         generic_field_template_sid_set_.clear();
         generic_enum_template_sid_set_.clear();
         generic_class_instance_cache_.clear();
+        imported_class_instance_cache_.clear();
         generic_proto_instance_cache_.clear();
         generic_acts_instance_cache_.clear();
         generic_field_instance_cache_.clear();
@@ -326,6 +329,7 @@ namespace parus::tyck {
         register_imported_proto_templates_();
         register_imported_fn_templates_();
         register_imported_acts_templates_();
+        register_imported_class_templates_();
         if (core_context_invalid_) {
             result_.ok = false;
             return result_;
@@ -2046,6 +2050,39 @@ namespace parus::tyck {
         );
     }
 
+    std::optional<ast::StmtId> TypeChecker::ensure_monomorphized_class_(
+        const MonoRequest& request,
+        Span use_span
+    ) {
+        if (request.templ.template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(request.templ.template_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+
+        if (request.templ.source == MonoTemplateRef::SourceKind::kImportedClass) {
+            std::ostringstream key_oss;
+            key_oss << request.templ.producer_bundle << "|"
+                    << request.templ.template_symbol << "|"
+                    << request.target_lane << "|"
+                    << request.abi_lane << "|";
+            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+                if (i) key_oss << ",";
+                key_oss << request.concrete_args[i];
+            }
+            const std::string key = key_oss.str();
+            if (auto it = imported_class_instance_cache_.find(key);
+                it != imported_class_instance_cache_.end()) {
+                return it->second;
+            }
+            auto sid = ensure_generic_class_instance_(request.templ.template_sid, request.concrete_args, use_span);
+            if (!sid.has_value()) return std::nullopt;
+            imported_class_instance_cache_[key] = *sid;
+            return sid;
+        }
+
+        return ensure_generic_class_instance_(request.templ.template_sid, request.concrete_args, use_span);
+    }
+
     std::string TypeChecker::path_ref_display_(const ast::PathRef& pr) const {
         if (pr.type != ty::kInvalidType) {
             return types_.to_string(pr.type);
@@ -3128,10 +3165,36 @@ namespace parus::tyck {
         class_qualified_name_by_stmt_[inst_sid] = inst_qname;
         class_decl_by_name_[inst_qname] = inst_sid;
         class_decl_by_type_[inst_type] = inst_sid;
+        const uint32_t global_scope = sym_.global_scope();
+        const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) {
+            stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        }
+        if (auto existing = sym_.lookup_in_scope(global_scope, inst_qname)) {
+            const auto& existing_sym = sym_.symbol(*existing);
+            if (existing_sym.kind == sema::SymbolKind::kType) {
+                (void)sym_.update_declared_type(*existing, inst_type);
+            }
+            if ((size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
+                stmt_resolved_symbol_cache_[inst_sid] = *existing;
+            }
+        } else {
+            auto ins = sym_.insert_into_scope(
+                sema::SymbolKind::kType,
+                global_scope,
+                inst_qname,
+                inst_type,
+                inst.span
+            );
+            if (ins.ok && (size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
+                stmt_resolved_symbol_cache_[inst_sid] = ins.symbol_id;
+            }
+        }
         field_abi_meta_by_type_[inst_type] = FieldAbiMeta{
             .sid = inst_sid,
-            .layout = ast::FieldLayout::kNone,
-            .align = 0,
+            .layout = inst.field_layout,
+            .align = inst.field_align,
         };
 
         const auto& kids = ast_.stmt_children();
@@ -3161,10 +3224,22 @@ namespace parus::tyck {
                         class_effective_method_map_[inst_type][std::string(m.name)].push_back(msid);
                     }
 
-                    if (auto existing = sym_.lookup_in_current(mqname)) {
+                    if (auto existing = sym_.lookup_in_scope(global_scope, mqname)) {
+                        if ((size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                            stmt_resolved_symbol_cache_[msid] = *existing;
+                        }
                         (void)sym_.update_declared_type(*existing, m.type);
                     } else {
-                        (void)sym_.insert(sema::SymbolKind::kFn, mqname, m.type, m.span);
+                        auto ins = sym_.insert_into_scope(
+                            sema::SymbolKind::kFn,
+                            global_scope,
+                            mqname,
+                            m.type,
+                            m.span
+                        );
+                        if (ins.ok && (size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                            stmt_resolved_symbol_cache_[msid] = ins.symbol_id;
+                        }
                     }
                 } else if (m.kind == ast::StmtKind::kVar && m.is_static) {
                     std::string vqname = inst_qname;
@@ -3174,17 +3249,33 @@ namespace parus::tyck {
                         private_class_member_qname_owner_[vqname] = inst_sid;
                     }
                     const ty::TypeId vt = (m.type == ty::kInvalidType) ? types_.error() : m.type;
-                    if (auto existing = sym_.lookup_in_current(vqname)) {
+                    uint32_t var_sym = sema::SymbolTable::kNoScope;
+                    if (auto existing = sym_.lookup_in_scope(global_scope, vqname)) {
+                        var_sym = *existing;
                         (void)sym_.update_declared_type(*existing, vt);
                     } else {
-                        (void)sym_.insert(sema::SymbolKind::kVar, vqname, vt, m.span);
+                        auto ins = sym_.insert_into_scope(
+                            sema::SymbolKind::kVar,
+                            global_scope,
+                            vqname,
+                            vt,
+                            m.span
+                        );
+                        if (ins.ok) {
+                            var_sym = ins.symbol_id;
+                        }
+                    }
+                    if (var_sym != sema::SymbolTable::kNoScope &&
+                        (size_t)msid < stmt_resolved_symbol_cache_.size()) {
+                        stmt_resolved_symbol_cache_[msid] = var_sym;
+                    }
+                    if (m.is_const && var_sym != sema::SymbolTable::kNoScope) {
+                        const_symbol_decl_sid_[var_sym] = msid;
                     }
                 }
             }
         }
 
-        const size_t expr_size = ast_.exprs().size();
-        const size_t stmt_size = ast_.stmts().size();
         if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
         if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
         if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
@@ -3226,6 +3317,66 @@ namespace parus::tyck {
             pending_generic_decl_instance_queue_.push_back(inst_sid);
         }
         return inst_sid;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::ensure_generic_class_instance_from_type_(
+        ty::TypeId maybe_generic_class_type,
+        Span use_span
+    ) {
+        if (maybe_generic_class_type == ty::kInvalidType) return std::nullopt;
+
+        std::string base;
+        std::vector<ty::TypeId> args;
+        if (!decompose_named_user_type_(maybe_generic_class_type, base, args) || args.empty()) {
+            auto it = class_decl_by_type_.find(maybe_generic_class_type);
+            if (it != class_decl_by_type_.end()) return it->second;
+            return std::nullopt;
+        }
+
+        std::string base_key = base;
+        if (auto rewritten = rewrite_imported_path_(base_key)) {
+            base_key = *rewritten;
+        }
+
+        auto templ_it = class_decl_by_name_.find(base_key);
+        if (templ_it == class_decl_by_name_.end()) {
+            return std::nullopt;
+        }
+        const ast::StmtId templ_sid = templ_it->second;
+        if (templ_sid == ast::k_invalid_stmt || static_cast<size_t>(templ_sid) >= ast_.stmts().size()) {
+            return std::nullopt;
+        }
+        const auto& templ = ast_.stmt(templ_sid);
+        if (templ.kind != ast::StmtKind::kClassDecl) {
+            return std::nullopt;
+        }
+        if (templ.decl_generic_param_count == 0) {
+            return templ_sid;
+        }
+
+        MonoRequest req{};
+        req.templ.template_sid = templ_sid;
+        req.templ.producer_bundle = current_bundle_name_();
+        req.templ.template_symbol = base_key;
+        req.concrete_args = args;
+        if (imported_class_template_sid_set_.find(templ_sid) != imported_class_template_sid_set_.end()) {
+            req.templ.source = MonoTemplateRef::SourceKind::kImportedClass;
+            if (auto it = imported_class_template_index_by_sid_.find(templ_sid);
+                it != imported_class_template_index_by_sid_.end() &&
+                it->second < explicit_imported_class_templates_.size()) {
+                const auto& templ_meta = explicit_imported_class_templates_[it->second];
+                req.templ.producer_bundle = templ_meta.producer_bundle;
+                req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            req.templ.source = MonoTemplateRef::SourceKind::kLocalClass;
+            if (auto it = class_qualified_name_by_stmt_.find(templ_sid); it != class_qualified_name_by_stmt_.end()) {
+                req.templ.template_symbol = it->second;
+            }
+        }
+
+        return ensure_monomorphized_class_(req, use_span);
     }
 
     std::optional<ast::StmtId> TypeChecker::ensure_generic_proto_instance_(
@@ -4625,6 +4776,88 @@ namespace parus::tyck {
                 auto& cc = constraints[begin + i];
                 if (meta.kind != ast::FnConstraintKind::kProto) continue;
                 if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, acts_stmt.span)) {
+                    const auto& proto_decl = ast_.stmt(*proto_sid);
+                    if (proto_decl.type != ty::kInvalidType) {
+                        cc.rhs_type = proto_decl.type;
+                    }
+                }
+            }
+        }
+    }
+
+    void TypeChecker::register_imported_class_templates_() {
+        imported_class_template_sid_set_.clear();
+        imported_class_template_index_by_sid_.clear();
+        if (explicit_imported_class_templates_.empty()) return;
+
+        for (size_t idx = 0; idx < explicit_imported_class_templates_.size(); ++idx) {
+            const auto& templ = explicit_imported_class_templates_[idx];
+            if (templ.template_sid == ast::k_invalid_stmt ||
+                static_cast<size_t>(templ.template_sid) >= ast_.stmts().size()) {
+                continue;
+            }
+
+            auto& class_stmt = ast_.stmt_mut(templ.template_sid);
+            if (class_stmt.kind != ast::StmtKind::kClassDecl) continue;
+
+            imported_class_template_sid_set_.insert(templ.template_sid);
+            imported_class_template_index_by_sid_[templ.template_sid] = idx;
+            generic_class_template_sid_set_.insert(templ.template_sid);
+
+            std::string qname = !templ.public_path.empty() ? templ.public_path : templ.lookup_name;
+            if (qname.empty()) {
+                qname = std::string(class_stmt.name);
+            }
+            const std::string canonical_head =
+                parus::normalize_core_public_module_head(templ.producer_bundle, templ.module_head);
+            if (!qname.empty() &&
+                qname.find("::") == std::string::npos &&
+                !canonical_head.empty()) {
+                qname = canonical_head + "::" + qname;
+            }
+            if (!qname.empty()) {
+                class_qualified_name_by_stmt_[templ.template_sid] = qname;
+                class_decl_by_name_[qname] = templ.template_sid;
+                const size_t split = qname.rfind("::");
+                const std::string leaf =
+                    (split == std::string::npos) ? qname : qname.substr(split + 2);
+                if (!leaf.empty() && class_decl_by_name_.find(leaf) == class_decl_by_name_.end()) {
+                    class_decl_by_name_[leaf] = templ.template_sid;
+                }
+            }
+
+            if (templ.declared_type != ty::kInvalidType) {
+                class_stmt.type = templ.declared_type;
+                class_decl_by_type_[templ.declared_type] = templ.template_sid;
+                field_abi_meta_by_type_[templ.declared_type] = FieldAbiMeta{
+                    .sid = templ.template_sid,
+                    .layout = class_stmt.field_layout,
+                    .align = class_stmt.field_align,
+                };
+            }
+
+            if (!qname.empty()) {
+                if (auto existing = sym_.lookup_in_current(qname)) {
+                    const auto& existing_sym = sym_.symbol(*existing);
+                    if (existing_sym.kind == sema::SymbolKind::kType && class_stmt.type != ty::kInvalidType) {
+                        (void)sym_.update_declared_type(*existing, class_stmt.type);
+                    }
+                } else {
+                    (void)sym_.insert(sema::SymbolKind::kType, qname, class_stmt.type, class_stmt.span);
+                }
+            }
+
+            const uint64_t begin = class_stmt.decl_constraint_begin;
+            const uint64_t end = begin + class_stmt.decl_constraint_count;
+            if (begin > ast_.fn_constraint_decls().size() || end > ast_.fn_constraint_decls().size()) {
+                continue;
+            }
+            auto& constraints = ast_.fn_constraint_decls_mut();
+            for (size_t i = 0; i < templ.constraints.size() && (begin + i) < constraints.size(); ++i) {
+                const auto& meta = templ.constraints[i];
+                auto& cc = constraints[begin + i];
+                if (meta.kind != ast::FnConstraintKind::kProto) continue;
+                if (auto proto_sid = resolve_imported_proto_sid_by_identity_(meta.proto, class_stmt.span)) {
                     const auto& proto_decl = ast_.stmt(*proto_sid);
                     if (proto_decl.type != ty::kInvalidType) {
                         cc.rhs_type = proto_decl.type;

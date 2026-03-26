@@ -1006,6 +1006,12 @@
 
             ty::TypeId owner_t = check_expr_(recv_eid);
             owner_t = read_decay_borrow_(types_, owner_t);
+            if (auto inst_sid = ensure_generic_class_instance_from_type_(owner_t, member_span)) {
+                const auto& inst = ast_.stmt(*inst_sid);
+                if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                    owner_t = inst.type;
+                }
+            }
             (void)ensure_generic_field_instance_from_type_(owner_t, member_span);
             return owner_t;
         };

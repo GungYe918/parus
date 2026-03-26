@@ -1229,9 +1229,9 @@ namespace parus::sir::detail {
                 break;
 
             case parus::ast::StmtKind::kBlock:
-                out.kind = StmtKind::kExprStmt;
-                out.expr = lower_block_value_(m, out_has_any_write, ast, sym, nres, tyck, sid,
-                                            parus::ast::k_invalid_expr, s.span, k_invalid_type);
+                // Bare statement blocks are legacy scope statements, not value-producing block expressions.
+                out.kind = StmtKind::kDoScopeStmt;
+                out.a = lower_block_stmt(m, out_has_any_write, ast, sym, nres, tyck, sid);
                 break;
 
             case parus::ast::StmtKind::kSwitch: {

@@ -693,22 +693,10 @@
         if (s.acts_is_for) {
             bool owner_ok = false;
             owner_type = canonicalize_acts_owner_type_(s.acts_target_type);
-            {
-                std::string owner_base{};
-                std::vector<ty::TypeId> owner_args{};
-                if (decompose_named_user_type_(owner_type, owner_base, owner_args) && !owner_args.empty()) {
-                    std::string owner_key = owner_base;
-                    if (auto rewritten = rewrite_imported_path_(owner_key)) {
-                        owner_key = *rewritten;
-                    }
-                    if (auto cit = class_decl_by_name_.find(owner_key); cit != class_decl_by_name_.end()) {
-                        if (auto inst_sid = ensure_generic_class_instance_(cit->second, owner_args, s.span)) {
-                            const auto& inst = ast_.stmt(*inst_sid);
-                            if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
-                                owner_type = inst.type;
-                            }
-                        }
-                    }
+            if (auto inst_sid = ensure_generic_class_instance_from_type_(owner_type, s.span)) {
+                const auto& inst = ast_.stmt(*inst_sid);
+                if (inst.kind == ast::StmtKind::kClassDecl && inst.type != ty::kInvalidType) {
+                    owner_type = inst.type;
                 }
             }
             (void)ensure_generic_field_instance_from_type_(owner_type, s.span);

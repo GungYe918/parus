@@ -71,9 +71,11 @@ namespace parus::sema {
         }
 
         static constexpr uint32_t kNoScope = 0xFFFF'FFFFu;
+        static constexpr uint32_t kGlobalScope = 0u;
 
         // 현재 스코프 id
         uint32_t current_scope() const { return scope_stack_.empty() ? 0 : scope_stack_.back(); }
+        uint32_t global_scope() const { return kGlobalScope; }
 
         // 스코프 push
         uint32_t push_scope() {
@@ -107,6 +109,14 @@ namespace parus::sema {
         // 같은 스코프 내 중복 여부(duplicate 체크용)
         std::optional<uint32_t> lookup_in_current(std::string_view name) const {
             const auto& m = scopes_[current_scope()].table;
+            auto it = m.find(std::string(name));
+            if (it == m.end()) return std::nullopt;
+            return it->second;
+        }
+
+        std::optional<uint32_t> lookup_in_scope(uint32_t scope_id, std::string_view name) const {
+            if (scope_id >= scopes_.size()) return std::nullopt;
+            const auto& m = scopes_[scope_id].table;
             auto it = m.find(std::string(name));
             if (it == m.end()) return std::nullopt;
             return it->second;
@@ -169,6 +179,73 @@ namespace parus::sema {
             symbols_.push_back(sym);
             uint32_t sid = (uint32_t)symbols_.size() - 1;
             scopes_[current_scope()].table.emplace(symbols_[sid].name, sid);
+
+            r.ok = true;
+            r.symbol_id = sid;
+
+            if (r.is_shadowing) {
+                Shadowing sh{};
+                sh.old_symbol = r.shadowed_symbol_id;
+                sh.new_symbol = sid;
+                sh.span = decl_span;
+                shadowings_.push_back(sh);
+            }
+            return r;
+        }
+
+        InsertResult insert_into_scope(SymbolKind kind,
+                                       uint32_t scope_id,
+                                       std::string_view name,
+                                       ty::TypeId declared_type,
+                                       Span decl_span,
+                                       uint32_t decl_file_id = 0,
+                                       std::string_view decl_bundle_name = {},
+                                       bool is_export = false,
+                                       bool is_external = false,
+                                       std::string_view decl_module_head = {},
+                                       std::string_view decl_source_dir_norm = {},
+                                       std::string_view link_name = {},
+                                       std::string_view external_payload = {}) {
+            InsertResult r{};
+            if (scope_id >= scopes_.size()) return r;
+
+            const auto& current_table = scopes_[scope_id].table;
+            if (auto it = current_table.find(std::string(name)); it != current_table.end()) {
+                r.ok = false;
+                r.is_duplicate = true;
+                r.symbol_id = it->second;
+                return r;
+            }
+
+            uint32_t outer_scope = scopes_[scope_id].parent;
+            while (outer_scope != kNoScope) {
+                const auto& m = scopes_[outer_scope].table;
+                if (auto it = m.find(std::string(name)); it != m.end()) {
+                    r.is_shadowing = true;
+                    r.shadowed_symbol_id = it->second;
+                    break;
+                }
+                outer_scope = scopes_[outer_scope].parent;
+            }
+
+            Symbol sym{};
+            sym.kind = kind;
+            sym.name = std::string(name);
+            sym.link_name = std::string(link_name);
+            sym.external_payload = std::string(external_payload);
+            sym.declared_type = declared_type;
+            sym.decl_span = decl_span;
+            sym.owner_scope = scope_id;
+            sym.decl_file_id = decl_file_id;
+            sym.decl_bundle_name = std::string(decl_bundle_name);
+            sym.decl_module_head = std::string(decl_module_head);
+            sym.decl_source_dir_norm = std::string(decl_source_dir_norm);
+            sym.is_export = is_export;
+            sym.is_external = is_external;
+
+            symbols_.push_back(sym);
+            uint32_t sid = (uint32_t)symbols_.size() - 1;
+            scopes_[scope_id].table.emplace(symbols_[sid].name, sid);
 
             r.ok = true;
             r.symbol_id = sid;

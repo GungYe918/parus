@@ -901,6 +901,37 @@ namespace parus::tyck {
                 if (!id.has_value()) {
                     id = lookup_symbol_(e.text);
                 }
+                if (!id.has_value() && std::string_view(e.text).find("::") != std::string_view::npos) {
+                    auto try_materialize_generic_class_static_member =
+                        [&](std::string_view full_name) -> std::optional<uint32_t> {
+                            const size_t split = full_name.rfind("::");
+                            if (split == std::string_view::npos || split + 2 >= full_name.size()) {
+                                return std::nullopt;
+                            }
+
+                            const std::string owner_text(full_name.substr(0, split));
+                            const std::string member_name(full_name.substr(split + 2));
+                            if (owner_text.empty() || member_name.empty()) return std::nullopt;
+
+                            const ty::TypeId owner_type = types_.intern_ident(owner_text);
+                            if (owner_type == ty::kInvalidType) return std::nullopt;
+
+                            auto inst_sid = ensure_generic_class_instance_from_type_(owner_type, e.span);
+                            if (!inst_sid.has_value() ||
+                                *inst_sid == ast::k_invalid_stmt ||
+                                static_cast<size_t>(*inst_sid) >= ast_.stmts().size()) {
+                                return std::nullopt;
+                            }
+
+                            auto qit = class_qualified_name_by_stmt_.find(*inst_sid);
+                            if (qit == class_qualified_name_by_stmt_.end()) return std::nullopt;
+
+                            const std::string member_qname = qit->second + "::" + member_name;
+                            return sym_.lookup(member_qname);
+                        };
+
+                    id = try_materialize_generic_class_static_member(e.text);
+                }
                 if (!id && !fn_sid_stack_.empty()) {
                     const ast::StmtId cur_fn_sid = fn_sid_stack_.back();
                     if (cur_fn_sid != ast::k_invalid_stmt && (size_t)cur_fn_sid < ast_.stmts().size()) {
