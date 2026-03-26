@@ -11,6 +11,7 @@ umbrella 방향성은 `docs/todo/CORE_FREESTANDING_BOOTSTRAP_PLAN.md`가 맡고,
 1. 새 core 모듈 추가 작업은 generics stabilization이 끝날 때까지 중단한다.
 2. core 문서의 다음 구현 후보는 참고용으로만 유지하고, 실제 다음 라운드 구현은 generics TODO를 우선한다.
 3. installed/external lane generic helper가 안정화되기 전에는 core surface 확장을 다시 시작하지 않는다.
+4. 현재 직접 구현 우선순위는 helper `class`, 이후 helper `actor` dependency closure다.
 
 ## 원칙
 

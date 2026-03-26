@@ -118,15 +118,15 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 4. local/external generic class declaration whole-body import/materialization
 5. external typed sidecar dependency closure 내부 hidden free function
 6. external typed sidecar dependency closure 내부 hidden helper `struct/enum`
+7. external typed sidecar dependency closure 내부 hidden helper `class`
 
 ## 3.3 Direct Next Step Freeze
 
 다음 직접 구현 라운드는 아래로 고정한다.
 
-1. external generic type body dependency closure를 `struct/enum` first로 연다.
-2. closure-private same-bundle helper `struct/enum`를 materialization 전용 내부 의존성으로 안정화한다.
-3. imported generic enum body를 common monomorphization service로 올린다.
-4. helper `class/actor` dependency closure 여부는 그 다음 라운드에서 결정한다.
+1. external generic type body dependency closure를 helper `class`까지 확장한다.
+2. closure-private same-bundle helper `class`를 materialization 전용 내부 의존성으로 안정화한다.
+3. helper `actor` dependency closure 여부는 그 다음 라운드에서 결정한다.
 
 고정 규칙:
 
@@ -296,7 +296,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 다음 직접 우선순위:
 
-1. external generic field/enum/type body dependency closure 확장
+1. helper `actor` dependency closure 확장
 2. generic actor lane 공통 mono 이전
 3. source-level import ergonomics 완화 검토
 
@@ -306,12 +306,13 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. installed core generic helper 호출
 1. consumer-local on-demand monomorphization
 1. imported typed sidecar dependency closure 내부 hidden helper free function
+2. imported typed sidecar dependency closure 내부 hidden helper `struct/enum/class`
 
 비활성 범위:
 
-1. exported generic class body import
-1. exported generic proto body import
-1. exported generic acts body import
+1. helper `actor` dependency closure
+2. global private state / class-static mutable state dependency closure
+3. source-level proto/type import ergonomics 완화
 
 구현 모델:
 

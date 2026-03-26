@@ -91,6 +91,13 @@
 2. module head 계산, `deps` 검증, `import` 대상 판정에는 `nest`를 사용하지 않는다.
 3. `import`는 파일 스코프에서만 허용한다.
 
+## 18.7-a Typed Sidecar Closure와 Visibility
+
+1. imported typed sidecar dependency closure는 same-bundle helper `free function/struct/enum/class`를 내부 materialization용으로 적재할 수 있다.
+2. closure-private helper declaration은 consumer source에서 lexical import 없이 직접 참조될 수 없다.
+3. closure-private helper declaration은 imported template table 내부 노드로만 존재하고, ordinary export/import visibility 규칙을 우회하지 않는다.
+4. helper `actor` dependency closure와 global private state / class-static mutable state dependency closure는 v0 범위 밖이다.
+
 ## 18.8 진단 코드 계약
 
 필수 진단 코드는 다음을 사용한다.

@@ -145,6 +145,8 @@ raw source closure 재파싱 모델은 제거한다.
 6. exported generic root body가 참조하는 same-bundle helper `struct/enum` type-body dependency closure
 7. dependency closure 내부 hidden helper free function의 typed body payload
 8. dependency closure 내부 hidden helper `struct/enum` typed body payload
+9. exported generic root body가 참조하는 same-bundle helper `class` whole-body dependency closure
+10. dependency closure 내부 hidden helper `class` typed whole-body payload
 
 payload 원칙:
 
@@ -167,14 +169,14 @@ payload 원칙:
    - raw source가 아니라 typed stmt/expr recipe
 5. `Dependency refs`
    - sidecar closure 안의 free function reference는 hidden lookup name으로 canonicalize
-   - helper `struct/enum` body dependency는 canonical type identity로 canonicalize
+   - helper `struct/enum/class` body dependency는 canonical type identity로 canonicalize
 6. `Decl span/file`
    - diagnostics용 decl file / line / col
 
 이번 라운드 비범위:
 
 1. IR-level template serialization
-2. helper `class/actor` dependency closure
+2. helper `actor` dependency closure
 3. global private state / class-static mutable state dependency closure
 4. dyn/object-safe dispatch lane
 
@@ -217,12 +219,13 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 7. exported generic class declaration whole-body import
 8. imported generic `struct/enum` common mono activation
 9. exported generic root의 helper `struct/enum` type-body dependency closure
-10. installed core generic helper와 generic member surface 복원
-11. concrete shim 제거
+10. exported generic root의 helper `class` whole-body dependency closure
+11. installed core generic helper와 generic member surface 복원
+12. concrete shim 제거
 
 이번 라운드에서 아직 열지 않는 것:
 
-1. helper `class/actor` dependency closure 확장
+1. helper `actor` dependency closure 확장
 2. generic actor lane 공통 mono 이전
 3. dyn/object lane
 
