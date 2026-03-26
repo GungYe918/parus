@@ -2897,6 +2897,31 @@ bool test_external_generic_type_body_closure_v2_work() {
         "  rhs: T;\n"
         "};\n"
         "\n"
+        "class PairBox<T> {\n"
+        "  lhs: T;\n"
+        "  rhs: T;\n"
+        "\n"
+        "public:\n"
+        "  static const BONUS: i32 = 9i32;\n"
+        "\n"
+        "  init(a: T, b: T) {\n"
+        "    self.lhs = a;\n"
+        "    self.rhs = b;\n"
+        "  }\n"
+        "\n"
+        "  static def bonus() -> i32 {\n"
+        "    return 9i32;\n"
+        "  }\n"
+        "\n"
+        "  def count(self) -> i32 {\n"
+        "    return 2i32;\n"
+        "  }\n"
+        "\n"
+        "  deinit() {\n"
+        "    puts(\"pair-drop\");\n"
+        "  }\n"
+        "};\n"
+        "\n"
         "enum HiddenStep<T> {\n"
         "  case Empty,\n"
         "  case Seen(value: T),\n"
@@ -2921,21 +2946,27 @@ bool test_external_generic_type_body_closure_v2_work() {
         "    return Pair<T>{ lhs: self.value, rhs: self.value };\n"
         "  }\n"
         "\n"
+        "  def helper_score(self) -> i32 {\n"
+        "    set p = PairBox<T>(self.value, self.value);\n"
+        "    return PairBox<T>::bonus() + PairBox<T>::BONUS + p.count();\n"
+        "  }\n"
+        "\n"
         "  def to_public(self) -> PublicStep<T> {\n"
         "    return PublicStep<T>::Seen(value: self.value);\n"
         "  }\n"
         "\n"
         "  deinit() {\n"
-        "    puts(\"drop\");\n"
+        "    puts(\"box-drop\");\n"
         "  }\n"
         "};\n"
         "\n"
         "export proto Probe<T> {\n"
         "  provide def seen(v: T) -> bool {\n"
+        "    set p = PairBox<T>(v, v);\n"
         "    set s = HiddenStep<T>::Seen(value: v);\n"
         "    switch (s) {\n"
         "    case HiddenStep<T>::Empty: { return false; }\n"
-        "    case HiddenStep<T>::Seen(value: x): { return x >= x; }\n"
+        "    case HiddenStep<T>::Seen(value: x): { return p.count() == 2i32 and x >= x; }\n"
         "    }\n"
         "    return false;\n"
         "  }\n"
@@ -2943,12 +2974,13 @@ bool test_external_generic_type_body_closure_v2_work() {
         "\n"
         "export acts for Box<T> with [T: constraints::Comparable] {\n"
         "  def tag(self) -> i32 {\n"
+        "    set p = PairBox<T>(self.value, self.value);\n"
         "    set s = HiddenStep<T>::Seen(value: self.value);\n"
         "    switch (s) {\n"
         "    case HiddenStep<T>::Empty: { return 0i32; }\n"
         "    case HiddenStep<T>::Seen(value: x): {\n"
         "      if (x >= x) {\n"
-        "        return 5i32;\n"
+        "        return PairBox<T>::bonus() + PairBox<T>::BONUS + p.count();\n"
         "      }\n"
         "      return 4i32;\n"
         "    }\n"
@@ -2978,10 +3010,11 @@ bool test_external_generic_type_body_closure_v2_work() {
     const auto lib_templates = temp_root / "lib.templates.json";
     const std::string lib_templates_text = read_text(lib_templates);
     if (!contains(lib_templates_text, "\"public_path\":\"Pair\"") ||
+        !contains(lib_templates_text, "\"public_path\":\"PairBox\"") ||
         !contains(lib_templates_text, "\"public_path\":\"HiddenStep\"") ||
         !contains(lib_templates_text, "\"public_path\":\"Box\"") ||
         !contains(lib_templates_text, "\"public_path\":\"Probe\"")) {
-        std::cerr << "typed sidecar must include helper struct/enum closure nodes alongside exported roots\n"
+        std::cerr << "typed sidecar must include helper struct/enum/class closure nodes alongside exported roots\n"
                   << lib_templates_text;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -3008,10 +3041,11 @@ bool test_external_generic_type_body_closure_v2_work() {
         "  {\n"
         "    set b = api::Box<i32>(7i32);\n"
         "    set p = b.dup();\n"
+        "    let helper_score: i32 = b.helper_score();\n"
         "    let tag: i32 = b.tag();\n"
         "    let bonus: i32 = api::Box<i32>::BONUS;\n"
         "    let step_sum: i32 = sum_step(b.to_public());\n"
-        "    if (seen and p.lhs == 7i32 and p.rhs == 7i32 and tag == 5i32 and bonus == 3i32 and step_sum == 7i32) {\n"
+        "    if (seen and p.lhs == 7i32 and p.rhs == 7i32 and helper_score == 20i32 and tag == 20i32 and bonus == 3i32 and step_sum == 7i32) {\n"
         "      return 0i32;\n"
         "    }\n"
         "    return 1i32;\n"
@@ -3038,8 +3072,11 @@ bool test_external_generic_type_body_closure_v2_work() {
     }
 
     auto [rc_runtime_run, out_runtime_run] = run_capture("\"" + runtime_exe.string() + "\"; echo EXIT:$?");
-    if (rc_runtime_run != 0 || !contains(out_runtime_run, "drop") || !contains(out_runtime_run, "EXIT:0")) {
-        std::cerr << "external type-body closure runtime sample should execute and drop once\n"
+    if (rc_runtime_run != 0 ||
+        !contains(out_runtime_run, "pair-drop") ||
+        !contains(out_runtime_run, "box-drop") ||
+        !contains(out_runtime_run, "EXIT:0")) {
+        std::cerr << "external type-body closure runtime sample should execute helper and root class deinit paths\n"
                   << out_runtime_run;
         std::filesystem::remove_all(temp_root, ec);
         return false;
@@ -3050,8 +3087,8 @@ bool test_external_generic_type_body_closure_v2_work() {
         "import api as api;\n"
         "\n"
         "def main() -> i32 {\n"
-        "  let p: api::Pair<i32> = api::Pair<i32>{ lhs: 1i32, rhs: 2i32 };\n"
-        "  return 0i32;\n"
+        "  set p = api::PairBox<i32>(1i32, 2i32);\n"
+        "  return api::PairBox<i32>::BONUS + p.count();\n"
         "}\n";
     if (!write_text(hidden_ref_pr, hidden_ref_src)) {
         std::cerr << "failed to write hidden helper lexical reference sample\n";
@@ -3063,10 +3100,12 @@ bool test_external_generic_type_body_closure_v2_work() {
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
         "\" --load-export-index \"" + lib_index.string() + "\"");
     if (rc_hidden_ref == 0 ||
-        (!contains(out_hidden_ref, "field initializer target has no field metadata") &&
-         !contains(out_hidden_ref, "struct initializer head must be a struct type") &&
+        (!contains(out_hidden_ref, "unknown identifier") &&
          !contains(out_hidden_ref, "unknown type") &&
-         !contains(out_hidden_ref, "UnknownType"))) {
+         !contains(out_hidden_ref, "unknown type") &&
+         !contains(out_hidden_ref, "SymbolNotExportedFileScope") &&
+         !contains(out_hidden_ref, "UnknownType") &&
+         !contains(out_hidden_ref, "no callable declaration candidate"))) {
         std::cerr << "closure-private helper type must not become a lexical public import\n"
                   << out_hidden_ref;
         std::filesystem::remove_all(temp_root, ec);

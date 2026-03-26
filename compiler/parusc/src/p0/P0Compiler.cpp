@@ -3453,11 +3453,9 @@ namespace parusc::p0 {
                     s.is_export &&
                     s.acts_is_for &&
                     s.decl_generic_param_count > 0;
-                const bool is_generic_class =
+                const bool is_class_decl =
                     s.kind == parus::ast::StmtKind::kClassDecl &&
-                    !s.name.empty() &&
-                    s.is_export &&
-                    s.decl_generic_param_count > 0;
+                    !s.name.empty();
                 const bool is_field_decl =
                     s.kind == parus::ast::StmtKind::kFieldDecl &&
                     !s.name.empty();
@@ -3465,7 +3463,7 @@ namespace parusc::p0 {
                     s.kind == parus::ast::StmtKind::kEnumDecl &&
                     !s.name.empty();
                 if (!is_generic_free_fn && !is_generic_proto && !is_generic_acts &&
-                    !is_generic_class && !is_field_decl && !is_enum_decl) {
+                    !is_class_decl && !is_field_decl && !is_enum_decl) {
                     return true;
                 }
 
@@ -3476,7 +3474,7 @@ namespace parusc::p0 {
                     if (is_generic_free_fn && ex.kind != parus::sema::SymbolKind::kFn) continue;
                     if (is_generic_proto && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (is_generic_acts && ex.kind != parus::sema::SymbolKind::kAct) continue;
-                    if (is_generic_class && ex.kind != parus::sema::SymbolKind::kType) continue;
+                    if (is_class_decl && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (is_field_decl && ex.kind != parus::sema::SymbolKind::kField) continue;
                     if (is_enum_decl && ex.kind != parus::sema::SymbolKind::kType) continue;
                     if (ex.decl_file != decl_file) continue;
@@ -3484,6 +3482,28 @@ namespace parusc::p0 {
                     qname = ex.path;
                     link_name_override = ex.link_name;
                     break;
+                }
+                if (is_class_decl && !s.is_export) {
+                    const auto& kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin <= kids.size() && end <= kids.size()) {
+                        for (uint32_t i = s.stmt_begin; i < s.stmt_begin + s.stmt_count; ++i) {
+                            const auto msid = kids[i];
+                            if (msid == parus::ast::k_invalid_stmt ||
+                                static_cast<size_t>(msid) >= ast.stmts().size()) {
+                                continue;
+                            }
+                            const auto& member = ast.stmt(msid);
+                            if (member.kind == parus::ast::StmtKind::kVar &&
+                                member.is_static &&
+                                !member.is_const) {
+                                out_err =
+                                    "typed template payload v2 does not allow helper class dependency closure with static mutable state";
+                                return false;
+                            }
+                        }
+                    }
                 }
                 TemplateSidecarFunction one{};
                 if (!serialize_top_level_generic_decl_sidecar_(

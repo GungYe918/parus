@@ -144,6 +144,9 @@ namespace parus::tyck {
         imported_fn_template_sid_by_link_name_.clear();
         imported_class_template_sid_set_.clear();
         imported_class_template_index_by_sid_.clear();
+        imported_class_template_sid_by_qname_.clear();
+        imported_hidden_class_template_sid_set_.clear();
+        imported_hidden_class_instance_sid_set_.clear();
         imported_field_template_sid_set_.clear();
         imported_field_template_index_by_sid_.clear();
         imported_field_template_sid_by_qname_.clear();
@@ -2128,6 +2131,10 @@ namespace parus::tyck {
             auto sid = ensure_generic_class_instance_(request.templ.template_sid, request.concrete_args, use_span);
             if (!sid.has_value()) return std::nullopt;
             imported_class_instance_cache_[key] = *sid;
+            if (imported_hidden_class_template_sid_set_.find(request.templ.template_sid) !=
+                imported_hidden_class_template_sid_set_.end()) {
+                imported_hidden_class_instance_sid_set_.insert(*sid);
+            }
             return sid;
         }
 
@@ -3370,34 +3377,41 @@ namespace parus::tyck {
         inst.decl_constraint_count = 0;
 
         inst.type = inst_type;
+        const bool is_hidden_imported_template =
+            imported_hidden_class_template_sid_set_.find(template_sid) !=
+            imported_hidden_class_template_sid_set_.end();
 
         class_qualified_name_by_stmt_[inst_sid] = inst_qname;
-        class_decl_by_name_[inst_qname] = inst_sid;
         class_decl_by_type_[inst_type] = inst_sid;
+        if (!is_hidden_imported_template) {
+            class_decl_by_name_[inst_qname] = inst_sid;
+        }
         const uint32_t global_scope = sym_.global_scope();
         const size_t expr_size = ast_.exprs().size();
         const size_t stmt_size = ast_.stmts().size();
         if (stmt_resolved_symbol_cache_.size() < stmt_size) {
             stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
         }
-        if (auto existing = sym_.lookup_in_scope(global_scope, inst_qname)) {
-            const auto& existing_sym = sym_.symbol(*existing);
-            if (existing_sym.kind == sema::SymbolKind::kType) {
-                (void)sym_.update_declared_type(*existing, inst_type);
-            }
-            if ((size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
-                stmt_resolved_symbol_cache_[inst_sid] = *existing;
-            }
-        } else {
-            auto ins = sym_.insert_into_scope(
-                sema::SymbolKind::kType,
-                global_scope,
-                inst_qname,
-                inst_type,
-                inst.span
-            );
-            if (ins.ok && (size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
-                stmt_resolved_symbol_cache_[inst_sid] = ins.symbol_id;
+        if (!is_hidden_imported_template) {
+            if (auto existing = sym_.lookup_in_scope(global_scope, inst_qname)) {
+                const auto& existing_sym = sym_.symbol(*existing);
+                if (existing_sym.kind == sema::SymbolKind::kType) {
+                    (void)sym_.update_declared_type(*existing, inst_type);
+                }
+                if ((size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
+                    stmt_resolved_symbol_cache_[inst_sid] = *existing;
+                }
+            } else {
+                auto ins = sym_.insert_into_scope(
+                    sema::SymbolKind::kType,
+                    global_scope,
+                    inst_qname,
+                    inst_type,
+                    inst.span
+                );
+                if (ins.ok && (size_t)inst_sid < stmt_resolved_symbol_cache_.size()) {
+                    stmt_resolved_symbol_cache_[inst_sid] = ins.symbol_id;
+                }
             }
         }
         field_abi_meta_by_type_[inst_type] = FieldAbiMeta{
@@ -3547,11 +3561,69 @@ namespace parus::tyck {
             base_key = *rewritten;
         }
 
-        auto templ_it = class_decl_by_name_.find(base_key);
-        if (templ_it == class_decl_by_name_.end()) {
-            return std::nullopt;
+        const bool allow_hidden_imported_class =
+            use_span.file_id != 0 &&
+            explicit_file_bundle_overrides_.find(use_span.file_id) != explicit_file_bundle_overrides_.end();
+        auto is_hidden_imported_class_sid = [&](ast::StmtId sid) -> bool {
+            return imported_hidden_class_template_sid_set_.find(sid) != imported_hidden_class_template_sid_set_.end() ||
+                   imported_hidden_class_instance_sid_set_.find(sid) != imported_hidden_class_instance_sid_set_.end();
+        };
+
+        ast::StmtId templ_sid = ast::k_invalid_stmt;
+        if (base_key.find("::") == std::string::npos) {
+            const std::string current_qualified = qualify_decl_name_(base_key);
+            if (auto hidden_it = imported_class_template_sid_by_qname_.find(current_qualified);
+                hidden_it != imported_class_template_sid_by_qname_.end()) {
+                if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hidden_it->second)) {
+                    templ_sid = hidden_it->second;
+                }
+            }
+            if (templ_sid == ast::k_invalid_stmt) {
+                if (auto current_it = class_decl_by_name_.find(current_qualified);
+                    current_it != class_decl_by_name_.end() &&
+                    (allow_hidden_imported_class || !is_hidden_imported_class_sid(current_it->second))) {
+                    templ_sid = current_it->second;
+                }
+            }
+            if (templ_sid == ast::k_invalid_stmt) {
+                const std::string cur_head = current_module_head_();
+                if (!cur_head.empty()) {
+                    const std::string module_qualified = cur_head + "::" + base_key;
+                    if (auto hidden_it = imported_class_template_sid_by_qname_.find(module_qualified);
+                        hidden_it != imported_class_template_sid_by_qname_.end()) {
+                        if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hidden_it->second)) {
+                            templ_sid = hidden_it->second;
+                        }
+                    }
+                    if (templ_sid == ast::k_invalid_stmt) {
+                        if (auto current_it = class_decl_by_name_.find(module_qualified);
+                            current_it != class_decl_by_name_.end() &&
+                            (allow_hidden_imported_class || !is_hidden_imported_class_sid(current_it->second))) {
+                            templ_sid = current_it->second;
+                        }
+                    }
+                }
+            }
         }
-        const ast::StmtId templ_sid = templ_it->second;
+
+        if (templ_sid == ast::k_invalid_stmt) {
+            if (auto hidden_exact = imported_class_template_sid_by_qname_.find(base_key);
+                hidden_exact != imported_class_template_sid_by_qname_.end()) {
+                if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hidden_exact->second)) {
+                    templ_sid = hidden_exact->second;
+                }
+            }
+        }
+        if (templ_sid == ast::k_invalid_stmt) {
+            auto templ_it = class_decl_by_name_.find(base_key);
+            if (templ_it == class_decl_by_name_.end()) {
+                return std::nullopt;
+            }
+            if (!allow_hidden_imported_class && is_hidden_imported_class_sid(templ_it->second)) {
+                return std::nullopt;
+            }
+            templ_sid = templ_it->second;
+        }
         if (templ_sid == ast::k_invalid_stmt || static_cast<size_t>(templ_sid) >= ast_.stmts().size()) {
             return std::nullopt;
         }
@@ -4997,6 +5069,8 @@ namespace parus::tyck {
     void TypeChecker::register_imported_class_templates_() {
         imported_class_template_sid_set_.clear();
         imported_class_template_index_by_sid_.clear();
+        imported_class_template_sid_by_qname_.clear();
+        imported_hidden_class_template_sid_set_.clear();
         if (explicit_imported_class_templates_.empty()) return;
 
         for (size_t idx = 0; idx < explicit_imported_class_templates_.size(); ++idx) {
@@ -5011,7 +5085,9 @@ namespace parus::tyck {
 
             imported_class_template_sid_set_.insert(templ.template_sid);
             imported_class_template_index_by_sid_[templ.template_sid] = idx;
-            generic_class_template_sid_set_.insert(templ.template_sid);
+            if (class_stmt.decl_generic_param_count > 0) {
+                generic_class_template_sid_set_.insert(templ.template_sid);
+            }
 
             std::string qname = !templ.public_path.empty() ? templ.public_path : templ.lookup_name;
             if (qname.empty()) {
@@ -5026,12 +5102,17 @@ namespace parus::tyck {
             }
             if (!qname.empty()) {
                 class_qualified_name_by_stmt_[templ.template_sid] = qname;
-                class_decl_by_name_[qname] = templ.template_sid;
-                const size_t split = qname.rfind("::");
-                const std::string leaf =
-                    (split == std::string::npos) ? qname : qname.substr(split + 2);
-                if (!leaf.empty() && class_decl_by_name_.find(leaf) == class_decl_by_name_.end()) {
-                    class_decl_by_name_[leaf] = templ.template_sid;
+                imported_class_template_sid_by_qname_[qname] = templ.template_sid;
+                if (!templ.is_public_export) {
+                    imported_hidden_class_template_sid_set_.insert(templ.template_sid);
+                } else {
+                    class_decl_by_name_[qname] = templ.template_sid;
+                    const size_t split = qname.rfind("::");
+                    const std::string leaf =
+                        (split == std::string::npos) ? qname : qname.substr(split + 2);
+                    if (!leaf.empty() && class_decl_by_name_.find(leaf) == class_decl_by_name_.end()) {
+                        class_decl_by_name_[leaf] = templ.template_sid;
+                    }
                 }
             }
 
@@ -5045,7 +5126,7 @@ namespace parus::tyck {
                 };
             }
 
-            if (!qname.empty()) {
+            if (!qname.empty() && templ.is_public_export) {
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
                     if (existing_sym.kind == sema::SymbolKind::kType && class_stmt.type != ty::kInvalidType) {

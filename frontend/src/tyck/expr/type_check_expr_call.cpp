@@ -1520,6 +1520,165 @@ namespace parus::tyck {
                 if (callee_expr.kind == ast::ExprKind::kIdent) {
                     std::string lookup_name = std::string(callee_expr.text);
                     const bool lookup_rewritten = apply_imported_path_rewrite_(lookup_name);
+                    const bool allow_hidden_imported_class =
+                        callee_expr.span.file_id != 0 &&
+                        explicit_file_bundle_overrides_.find(callee_expr.span.file_id) !=
+                            explicit_file_bundle_overrides_.end();
+                    auto is_hidden_imported_class_sid = [&](ast::StmtId sid) -> bool {
+                        return imported_hidden_class_template_sid_set_.find(sid) != imported_hidden_class_template_sid_set_.end() ||
+                               imported_hidden_class_instance_sid_set_.find(sid) != imported_hidden_class_instance_sid_set_.end();
+                    };
+                    auto resolve_class_template_by_text = [&](const std::string& raw_name) -> ast::StmtId {
+                        ast::StmtId found = ast::k_invalid_stmt;
+                        if (raw_name.find("::") == std::string::npos) {
+                            const std::string current_qualified = qualify_decl_name_(raw_name);
+                            if (auto hit = imported_class_template_sid_by_qname_.find(current_qualified);
+                                hit != imported_class_template_sid_by_qname_.end()) {
+                                if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hit->second)) {
+                                    found = hit->second;
+                                }
+                            }
+                            if (found == ast::k_invalid_stmt) {
+                                if (auto it = class_decl_by_name_.find(current_qualified);
+                                    it != class_decl_by_name_.end() &&
+                                    (allow_hidden_imported_class || !is_hidden_imported_class_sid(it->second))) {
+                                    found = it->second;
+                                }
+                            }
+                            if (found == ast::k_invalid_stmt) {
+                                const std::string cur_head = current_module_head_();
+                                if (!cur_head.empty()) {
+                                    const std::string module_qualified = cur_head + "::" + raw_name;
+                                    if (auto hit = imported_class_template_sid_by_qname_.find(module_qualified);
+                                        hit != imported_class_template_sid_by_qname_.end()) {
+                                        if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hit->second)) {
+                                            found = hit->second;
+                                        }
+                                    }
+                                    if (found == ast::k_invalid_stmt) {
+                                        if (auto it = class_decl_by_name_.find(module_qualified);
+                                            it != class_decl_by_name_.end() &&
+                                            (allow_hidden_imported_class || !is_hidden_imported_class_sid(it->second))) {
+                                            found = it->second;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (found == ast::k_invalid_stmt) {
+                            if (auto hit = imported_class_template_sid_by_qname_.find(raw_name);
+                                hit != imported_class_template_sid_by_qname_.end()) {
+                                if (allow_hidden_imported_class || !is_hidden_imported_class_sid(hit->second)) {
+                                    found = hit->second;
+                                }
+                            }
+                        }
+                        if (found == ast::k_invalid_stmt) {
+                            if (auto it = class_decl_by_name_.find(raw_name);
+                                it != class_decl_by_name_.end() &&
+                                (allow_hidden_imported_class || !is_hidden_imported_class_sid(it->second))) {
+                                found = it->second;
+                            }
+                        }
+                        return found;
+                    };
+                    auto adopt_class_ctor_from_sid = [&](ast::StmtId class_sid, const std::string& class_name_seed) -> bool {
+                        if (class_sid == ast::k_invalid_stmt || (size_t)class_sid >= ast_.stmts().size()) return false;
+                        const auto& class_decl = ast_.stmt(class_sid);
+                        if (class_decl.kind != ast::StmtKind::kClassDecl) return false;
+
+                        std::string class_name = class_name_seed;
+                        if (auto qit = class_qualified_name_by_stmt_.find(class_sid);
+                            qit != class_qualified_name_by_stmt_.end() && !qit->second.empty()) {
+                            class_name = qit->second;
+                        }
+
+                        is_ctor_call = true;
+                        ctor_owner_type = class_decl.type;
+                        fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
+                        callee_name = class_name;
+
+                        if (class_decl.decl_generic_param_count > 0) {
+                            if (explicit_call_type_args.empty()) {
+                                diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_expr.span, class_name);
+                                err_(callee_expr.span, "generic class constructor requires explicit type arguments");
+                                check_all_arg_exprs_only();
+                                return false;
+                            }
+
+                            MonoRequest req{};
+                            req.templ.template_sid = class_sid;
+                            req.templ.producer_bundle = current_bundle_name_();
+                            req.templ.template_symbol = class_name;
+                            req.concrete_args = explicit_call_type_args;
+                            if (imported_class_template_sid_set_.find(class_sid) != imported_class_template_sid_set_.end()) {
+                                req.templ.source = MonoTemplateRef::SourceKind::kImportedClass;
+                                if (auto it = imported_class_template_index_by_sid_.find(class_sid);
+                                    it != imported_class_template_index_by_sid_.end() &&
+                                    it->second < explicit_imported_class_templates_.size()) {
+                                    const auto& templ_meta = explicit_imported_class_templates_[it->second];
+                                    req.templ.producer_bundle = templ_meta.producer_bundle;
+                                    req.templ.template_symbol =
+                                        !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+                                }
+                            } else {
+                                req.templ.source = MonoTemplateRef::SourceKind::kLocalClass;
+                            }
+
+                            auto inst_sid = ensure_monomorphized_class_(req, callee_expr.span);
+                            if (!inst_sid.has_value() ||
+                                *inst_sid == ast::k_invalid_stmt ||
+                                (size_t)(*inst_sid) >= ast_.stmts().size()) {
+                                check_all_arg_exprs_only();
+                                return false;
+                            }
+
+                            const auto& inst_decl = ast_.stmt(*inst_sid);
+                            ctor_owner_type = inst_decl.type;
+                            fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
+
+                            if (auto qit = class_qualified_name_by_stmt_.find(*inst_sid);
+                                qit != class_qualified_name_by_stmt_.end() && !qit->second.empty()) {
+                                callee_name = qit->second;
+                            }
+
+                            const auto& kids = ast_.stmt_children();
+                            const uint64_t mb = inst_decl.stmt_begin;
+                            const uint64_t me = mb + inst_decl.stmt_count;
+                            if (mb <= kids.size() && me <= kids.size()) {
+                                for (uint32_t mi = inst_decl.stmt_begin; mi < inst_decl.stmt_begin + inst_decl.stmt_count; ++mi) {
+                                    const ast::StmtId msid = kids[mi];
+                                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                                    const auto& member = ast_.stmt(msid);
+                                    if (member.kind != ast::StmtKind::kFnDecl || member.name != "init") continue;
+                                    overload_decl_ids.push_back(msid);
+                                }
+                            }
+                            explicit_call_type_args.clear();
+                        } else {
+                            if (!explicit_call_type_args.empty()) {
+                                diag_(diag::Code::kGenericArityMismatch, callee_expr.span, "0",
+                                      std::to_string(explicit_call_type_args.size()));
+                                err_(callee_expr.span, "non-generic class constructor call does not accept type arguments");
+                                check_all_arg_exprs_only();
+                                return false;
+                            }
+
+                            std::string init_qname = class_name;
+                            init_qname += "::init";
+                            if (auto fit = fn_decl_by_name_.find(init_qname); fit != fn_decl_by_name_.end()) {
+                                overload_decl_ids = fit->second;
+                            }
+                        }
+
+                        if (overload_decl_ids.empty()) {
+                            diag_(diag::Code::kClassCtorMissingInit, callee_expr.span, class_name);
+                            err_(callee_expr.span, "class constructor call requires init overload");
+                            check_all_arg_exprs_only();
+                            return false;
+                        }
+                        return true;
+                    };
 
                     callee_name = lookup_name;
                     if (auto sid = lookup_rewritten ? sym_.lookup(lookup_name) : lookup_symbol_(lookup_name)) {
@@ -1680,7 +1839,17 @@ namespace parus::tyck {
                             }
                         }
                     }
-                    if (direct_ident_symbol == sema::SymbolTable::kNoScope) {
+                    if (direct_ident_symbol == sema::SymbolTable::kNoScope && overload_decl_ids.empty()) {
+                        const ast::StmtId hidden_class_sid = resolve_class_template_by_text(lookup_name);
+                        if (hidden_class_sid != ast::k_invalid_stmt) {
+                            if (!adopt_class_ctor_from_sid(hidden_class_sid, lookup_name)) {
+                                return types_.error();
+                            }
+                        }
+                    }
+                    if (direct_ident_symbol == sema::SymbolTable::kNoScope &&
+                        overload_decl_ids.empty() &&
+                        !is_ctor_call) {
                         auto external_sids = collect_external_fn_candidates_for_name_(lookup_name);
                         if (!external_sids.empty()) {
                             direct_ident_symbol = external_sids.front();
@@ -1749,17 +1918,101 @@ namespace parus::tyck {
                         types_.get(ct.elem).kind == ty::Kind::kFn) {
                         callable_sig = ct.elem;
                     }
+                    bool adopted_class_ctor_from_type = false;
                     const auto& callable_tt = types_.get(callable_sig);
                     if (callable_tt.kind != ty::Kind::kFn) {
-                        diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
-                        err_(e.span, "call target is not a function");
-                        check_all_arg_exprs_only();
-                        return types_.error();
+                        if (auto class_sid = ensure_generic_class_instance_from_type_(callee_t, callee_expr.span);
+                            class_sid.has_value()) {
+                            ast::StmtId concrete_class_sid = *class_sid;
+                            if ((size_t)concrete_class_sid >= ast_.stmts().size() ||
+                                ast_.stmt(concrete_class_sid).kind != ast::StmtKind::kClassDecl) {
+                                return types_.error();
+                            }
+                            const auto* class_decl = &ast_.stmt(concrete_class_sid);
+                            if (class_decl->decl_generic_param_count > 0) {
+                                if (explicit_call_type_args.empty()) {
+                                    diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_expr.span, types_.to_string(callee_t));
+                                    err_(callee_expr.span, "generic class constructor requires explicit type arguments");
+                                    check_all_arg_exprs_only();
+                                    return types_.error();
+                                }
+
+                                MonoRequest req{};
+                                req.templ.template_sid = concrete_class_sid;
+                                req.templ.producer_bundle = current_bundle_name_();
+                                req.templ.template_symbol = types_.to_string(callee_t);
+                                req.concrete_args = explicit_call_type_args;
+                                if (imported_class_template_sid_set_.find(concrete_class_sid) != imported_class_template_sid_set_.end()) {
+                                    req.templ.source = MonoTemplateRef::SourceKind::kImportedClass;
+                                    if (auto it = imported_class_template_index_by_sid_.find(concrete_class_sid);
+                                        it != imported_class_template_index_by_sid_.end() &&
+                                        it->second < explicit_imported_class_templates_.size()) {
+                                        const auto& templ_meta = explicit_imported_class_templates_[it->second];
+                                        req.templ.producer_bundle = templ_meta.producer_bundle;
+                                        req.templ.template_symbol =
+                                            !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+                                    }
+                                } else {
+                                    req.templ.source = MonoTemplateRef::SourceKind::kLocalClass;
+                                    if (auto qit = class_qualified_name_by_stmt_.find(concrete_class_sid);
+                                        qit != class_qualified_name_by_stmt_.end() && !qit->second.empty()) {
+                                        req.templ.template_symbol = qit->second;
+                                    }
+                                }
+
+                                auto concrete_inst_sid = ensure_monomorphized_class_(req, callee_expr.span);
+                                if (!concrete_inst_sid.has_value() ||
+                                    *concrete_inst_sid == ast::k_invalid_stmt ||
+                                    (size_t)(*concrete_inst_sid) >= ast_.stmts().size()) {
+                                    return types_.error();
+                                }
+                                concrete_class_sid = *concrete_inst_sid;
+                                class_decl = &ast_.stmt(concrete_class_sid);
+                                explicit_call_type_args.clear();
+                            }
+
+                            is_ctor_call = true;
+                            ctor_owner_type = class_decl->type;
+                            fallback_ret = (ctor_owner_type == ty::kInvalidType) ? types_.error() : ctor_owner_type;
+                            callee_name = types_.to_string(callee_t);
+                            if (auto qit = class_qualified_name_by_stmt_.find(concrete_class_sid);
+                                qit != class_qualified_name_by_stmt_.end() && !qit->second.empty()) {
+                                callee_name = qit->second;
+                            }
+
+                            overload_decl_ids.clear();
+                            const auto& kids = ast_.stmt_children();
+                            const uint64_t mb = class_decl->stmt_begin;
+                            const uint64_t me = mb + class_decl->stmt_count;
+                            if (mb <= kids.size() && me <= kids.size()) {
+                                for (uint32_t mi = class_decl->stmt_begin; mi < class_decl->stmt_begin + class_decl->stmt_count; ++mi) {
+                                    const ast::StmtId msid = kids[mi];
+                                    if (msid == ast::k_invalid_stmt || (size_t)msid >= ast_.stmts().size()) continue;
+                                    const auto& member = ast_.stmt(msid);
+                                    if (member.kind != ast::StmtKind::kFnDecl || member.name != "init") continue;
+                                    overload_decl_ids.push_back(msid);
+                                }
+                            }
+                            if (overload_decl_ids.empty()) {
+                                diag_(diag::Code::kClassCtorMissingInit, callee_expr.span, callee_name);
+                                err_(callee_expr.span, "class constructor call requires init overload");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                            adopted_class_ctor_from_type = true;
+                        } else {
+                            diag_(diag::Code::kTypeNotCallable, e.span, types_.to_string(callee_t));
+                            err_(e.span, "call target is not a function");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
                     }
 
-                    callee_t = callable_sig;
-                    fallback_ret = callable_tt.ret;
-                    callee_param_count = callable_tt.param_count;
+                    if (!adopted_class_ctor_from_type) {
+                        callee_t = callable_sig;
+                        fallback_ret = callable_tt.ret;
+                        callee_param_count = callable_tt.param_count;
+                    }
                 }
             }
 

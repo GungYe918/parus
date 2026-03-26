@@ -1225,6 +1225,9 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, size_t> imported_acts_template_index_by_sid_;
         std::unordered_set<ast::StmtId> imported_class_template_sid_set_;
         std::unordered_map<ast::StmtId, size_t> imported_class_template_index_by_sid_;
+        std::unordered_map<std::string, ast::StmtId> imported_class_template_sid_by_qname_;
+        std::unordered_set<ast::StmtId> imported_hidden_class_template_sid_set_;
+        std::unordered_set<ast::StmtId> imported_hidden_class_instance_sid_set_;
         std::unordered_set<ast::StmtId> imported_field_template_sid_set_;
         std::unordered_map<ast::StmtId, size_t> imported_field_template_index_by_sid_;
         std::unordered_map<std::string, ast::StmtId> imported_field_template_sid_by_qname_;

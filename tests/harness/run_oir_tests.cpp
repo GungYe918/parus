@@ -633,6 +633,103 @@ namespace {
         return ok;
     }
 
+    /// @brief generic class 본문이 helper generic class body에 의존해도 concrete closure가 함께 materialize되는지 검사한다.
+    static bool test_generic_class_helper_class_closure_oir_lowering_ok() {
+        const std::string src = R"(
+            class PairBox<T> {
+                lhs: T;
+                rhs: T;
+
+                static const BONUS: i32 = 9i32;
+
+                init(a: T, b: T) {
+                    self.lhs = a;
+                    self.rhs = b;
+                }
+
+                static def bonus() -> i32 {
+                    return BONUS;
+                }
+
+                def count(self) -> i32 {
+                    return 2i32;
+                }
+
+                deinit() = default;
+            };
+
+            class Box<T> {
+                value: T;
+
+                init(v: T) {
+                    self.value = v;
+                }
+
+                def helper_score(self) -> i32 {
+                    set p = PairBox<T>(self.value, self.value);
+                    return PairBox<T>::bonus() + PairBox<T>::BONUS + p.count();
+                }
+            };
+
+            def main() -> i32 {
+                set b = Box<i32>(7i32);
+                return b.helper_score();
+            }
+        )";
+
+        auto p = build_sir_pipeline_(src);
+        bool ok = true;
+        ok &= require_(!p.prog.bag.has_error(), "generic class helper-class source must not emit diagnostics");
+        ok &= require_(p.ty.errors.empty(), "generic class helper-class source must not emit tyck errors");
+        ok &= require_(p.sir_cap.ok, "generic class helper-class source must pass SIR capability");
+        ok &= require_(!p.ty.generic_instantiated_class_sids.empty(),
+                       "generic class helper-class use must materialize concrete class instances");
+        if (!ok) return false;
+
+        parus::oir::Builder ob(p.sir_mod, p.prog.types);
+        auto oir = ob.build();
+        ok &= require_(oir.gate_passed, "OIR gate must pass for generic class helper-class source");
+        if (!ok) return false;
+
+        parus::oir::run_passes(oir.mod);
+        const auto verrs = parus::oir::verify(oir.mod);
+        ok &= require_(verrs.empty(), "OIR verify must pass for generic class helper-class source");
+        if (!ok) return false;
+
+        bool has_pairbox_i32_type = false;
+        bool has_pairbox_bonus_call = false;
+        bool has_pairbox_count_call = false;
+        for (const auto& f : oir.mod.fields) {
+            if (f.name.find("PairBox") != std::string::npos &&
+                f.name.find("i32") != std::string::npos &&
+                f.members.size() == 2) {
+                has_pairbox_i32_type = true;
+            }
+        }
+        for (const auto& inst : oir.mod.insts) {
+            if (!std::holds_alternative<parus::oir::InstCall>(inst.data)) continue;
+            const auto& c = std::get<parus::oir::InstCall>(inst.data);
+            if (c.direct_callee == parus::oir::kInvalidId || c.direct_callee >= oir.mod.funcs.size()) continue;
+            const auto& callee = oir.mod.funcs[c.direct_callee];
+            if (callee.name.find("PairBox_i32_") != std::string::npos &&
+                callee.name.find("$bonus$") != std::string::npos) {
+                has_pairbox_bonus_call = true;
+            }
+            if (callee.name.find("PairBox_i32_") != std::string::npos &&
+                callee.name.find("$count$") != std::string::npos) {
+                has_pairbox_count_call = true;
+            }
+        }
+
+        ok &= require_(has_pairbox_i32_type,
+                       "OIR must contain concrete helper class layout metadata for PairBox<i32>");
+        ok &= require_(has_pairbox_bonus_call,
+                       "helper-class static def path must lower to direct concrete PairBox<i32>::bonus call");
+        ok &= require_(has_pairbox_count_call,
+                       "helper-class instance method path must lower to direct concrete PairBox<i32>::count call");
+        return ok;
+    }
+
     /// @brief copy/clone 키워드가 builtin fast-path와 acts operator call-path로 모두 안정 하향되는지 검사한다.
     static bool test_copy_clone_lowering_paths_ok() {
         const std::string src = R"(
@@ -1830,6 +1927,7 @@ int main() {
         {"generic_struct_materialization_oir_lowering_ok", test_generic_struct_materialization_oir_lowering_ok},
         {"generic_class_helper_struct_closure_oir_lowering_ok", test_generic_class_helper_struct_closure_oir_lowering_ok},
         {"generic_proto_helper_enum_closure_oir_lowering_ok", test_generic_proto_helper_enum_closure_oir_lowering_ok},
+        {"generic_class_helper_class_closure_oir_lowering_ok", test_generic_class_helper_class_closure_oir_lowering_ok},
         {"copy_clone_lowering_paths_ok", test_copy_clone_lowering_paths_ok},
         {"oir_const_fold_and_dce", test_oir_const_fold_and_dce},
         {"oir_const_fold_respects_block_params", test_oir_const_fold_respects_block_params},
