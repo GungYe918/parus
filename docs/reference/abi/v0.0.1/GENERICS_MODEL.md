@@ -44,6 +44,9 @@ Parus의 monomorphization은 아래 3단계 모델로 고정한다.
 1. local generic free function
 2. external imported generic free function
 3. external template dependency closure 내부의 hidden free function
+4. local/imported generic proto declaration whole-body instance
+5. local/imported generic acts declaration whole-body instance
+6. local/imported generic class declaration whole-body instance
 
 ### 2.2 Request
 
@@ -114,7 +117,7 @@ Request는 아래 정보를 갖는다.
 ### 5.2 External
 
 export-index만으로는 external generic free function body를 복원할 수 없다.  
-따라서 external exported generic free function은 **adjacent template sidecar**를 통해 typed template payload를 제공한다.
+따라서 external exported generic surface는 **adjacent template sidecar**를 통해 typed template payload를 제공한다.
 
 v2 원칙:
 
@@ -135,8 +138,11 @@ raw source closure 재파싱 모델은 제거한다.
 포함 범위:
 
 1. exported generic free function
-2. 그 body가 참조하는 same-bundle free-function dependency closure
-3. dependency closure 내부 hidden helper free function의 typed body payload
+2. exported generic proto declaration whole-body payload
+3. exported generic acts declaration whole-body payload
+4. exported generic class declaration whole-body payload
+5. 그 body가 참조하는 same-bundle free-function dependency closure
+6. dependency closure 내부 hidden helper free function의 typed body payload
 
 payload 원칙:
 
@@ -165,7 +171,7 @@ payload 원칙:
 이번 라운드 비범위:
 
 1. IR-level template serialization
-2. generic class/proto/acts body import
+2. external generic field/enum/type body dependency closure 확장
 3. dyn/object-safe dispatch lane
 
 sidecar가 있어도 export-index version은 유지한다.  
@@ -203,15 +209,16 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 3. raw-source sidecar를 typed template payload v2로 교체
 4. local/external generic free function을 common request/key 규칙으로 통합
 5. imported generic metadata의 proto constraint를 consumer import 없이 canonical identity로 resolve
-6. installed core generic helper 복원
-7. concrete shim 제거
+6. exported generic proto/acts declaration whole-body import
+7. exported generic class declaration whole-body import
+8. installed core generic helper와 generic member surface 복원
+9. concrete shim 제거
 
 이번 라운드에서 아직 열지 않는 것:
 
-1. exported generic class body import
-2. exported generic proto body import
-3. exported generic acts body import
-4. dyn/object lane
+1. external generic field/enum/type body dependency closure 확장
+2. generic actor lane 공통 mono 이전
+3. dyn/object lane
 
 ---
 
@@ -258,4 +265,5 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 4. external activation v1은 exported generic free function first로 고정
 5. sidecar 기반 consumer-local monomorphization 방향을 정본으로 확정
 6. raw-source sidecar는 typed template payload v2로 교체
+7. free function / proto / acts / class declaration whole-body import를 common mono service activation 범위로 확장
 7. consumer import 없는 canonical proto identity resolution은 imported generic metadata에만 적용

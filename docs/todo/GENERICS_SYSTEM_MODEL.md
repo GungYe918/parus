@@ -112,9 +112,11 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 
 이번 라운드 activation:
 
-1. local generic free function
-2. external imported generic free function
-3. external typed sidecar dependency closure 내부 hidden free function
+1. local/external generic free function
+2. local/external generic proto declaration whole-body import/materialization
+3. local/external generic acts declaration whole-body import/materialization
+4. local/external generic class declaration whole-body import/materialization
+5. external typed sidecar dependency closure 내부 hidden free function
 
 ---
 
@@ -231,6 +233,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. local generic instance는 이 단계에서 이미 동작한다.
 1. external/imported generic free function body는 이 단계만으로는 복원되지 않는다.
+2. 이후 라운드에서 raw-source sidecar는 제거되고 typed template payload v2를 정본으로 사용한다.
 
 구현 항목:
 
@@ -258,6 +261,28 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 1. 같은 인스턴스 재사용(중복 코드 생성 없음)
 
 ## 6.1.1 v1 Round 1 Activation: Exported Generic Free Function
+
+현재 완료:
+
+1. exported generic free function은 typed template payload v2로 consumer-local materialization된다.
+2. imported metadata의 proto constraint target은 consumer lexical import 없이 canonical proto identity로 resolve된다.
+3. installed core generic helper는 concrete shim 없이 동작한다.
+
+## 6.1.2 v1 Round 2 Activation: Exported Generic Proto/Acts/Class
+
+현재 완료:
+
+1. exported generic proto는 declaration whole-body import로 consumer에서 concrete instance를 만든다.
+2. exported generic acts는 declaration whole-body import로 consumer에서 concrete owner instance를 만든다.
+3. exported generic class는 declaration whole-body import로 consumer에서 concrete class/body를 만든다.
+4. constructor call, instance method dot call, static const/value access, static def call, RAII `deinit` availability가 installed/external lane에서 ordinary local class와 같은 concrete path를 탄다.
+5. `range/iter` generic member surface는 seed anchor 없이 sidecar + imported template lane으로 닫힌다.
+
+다음 직접 우선순위:
+
+1. external generic field/enum/type body dependency closure 확장
+2. generic actor lane 공통 mono 이전
+3. source-level import ergonomics 완화 검토
 
 이번 라운드 활성화 범위는 아래로 고정한다.
 

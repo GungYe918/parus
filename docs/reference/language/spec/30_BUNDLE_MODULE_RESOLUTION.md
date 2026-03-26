@@ -218,11 +218,12 @@ export def add(a: i32, b: i32) -> i32 {
 
 1. source-level path lookup과 imported generic metadata lookup은 구분한다.
 2. 사용자가 소스에 직접 쓴 path는 본 문서의 ordinary import/head/deps 규칙을 그대로 따른다.
-3. imported generic free function metadata 안의 proto constraint target은 lexical import로 다시 찾지 않는다.
+3. imported generic free function/proto/acts/class metadata 안의 proto constraint target은 lexical import로 다시 찾지 않는다.
 4. imported metadata는 canonical proto identity를 사용한다.
 4-a. producer bundle
 4-b. proto module head
 4-c. proto public path
 5. consumer는 이 canonical identity를 기준으로 proto stub 또는 imported proto symbol을 직접 resolve한다.
 6. 따라서 소비자는 라이브러리 내부 constraint vocabulary를 다시 import하지 않아도 된다.
-7. 이 완화는 imported metadata 경로에만 적용되며, source-level explicit import requirement를 제거하지 않는다.
+7. class/proto/acts whole-body import도 같은 canonical identity 규칙을 사용한다.
+8. 이 완화는 imported metadata 경로에만 적용되며, source-level explicit import requirement를 제거하지 않는다.
