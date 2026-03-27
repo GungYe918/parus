@@ -2824,9 +2824,71 @@ namespace parusc::p0 {
             const auto lc = sm.line_col(root_decl.span.file_id, root_decl.span.lo);
             out.decl_line = lc.line;
             out.decl_col = lc.col;
-            const uint32_t root_generic_count =
-                is_free_fn ? root_decl.fn_generic_param_count : root_decl.decl_generic_param_count;
-            out.is_public_export = root_decl.is_export && root_generic_count > 0;
+            const auto root_type_contains_unresolved_generic_param = [&](const auto& self,
+                                                                        parus::ty::TypeId t,
+                                                                        bool nested) -> bool {
+                if (t == parus::ty::kInvalidType || t >= types.count()) return false;
+                const auto& tt = types.get(t);
+                switch (tt.kind) {
+                    case parus::ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<parus::ty::TypeId> args{};
+                        if (!types.decompose_named_user(t, path, args) || path.empty()) return false;
+                        if (nested && args.empty() && path.size() == 1) {
+                            return true;
+                        }
+                        for (const auto arg_t : args) {
+                            if (self(self, arg_t, /*nested=*/true)) return true;
+                        }
+                        return false;
+                    }
+                    case parus::ty::Kind::kOptional:
+                    case parus::ty::Kind::kArray:
+                    case parus::ty::Kind::kBorrow:
+                    case parus::ty::Kind::kEscape:
+                    case parus::ty::Kind::kPtr:
+                        return self(self, tt.elem, /*nested=*/true);
+                    case parus::ty::Kind::kFn:
+                        if (self(self, tt.ret, /*nested=*/true)) return true;
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            if (self(self, types.fn_param_at(t, i), /*nested=*/true)) return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            };
+            const auto root_acts_is_generic_template = [&]() {
+                if (!is_acts) return false;
+                if (root_decl.decl_generic_param_count > 0) return true;
+                if (root_type_contains_unresolved_generic_param(
+                        root_type_contains_unresolved_generic_param,
+                        root_decl.acts_target_type,
+                        /*nested=*/false)) {
+                    return true;
+                }
+                const auto& witnesses = ast.acts_assoc_type_witness_decls();
+                const uint64_t begin = root_decl.acts_assoc_witness_begin;
+                const uint64_t end = begin + root_decl.acts_assoc_witness_count;
+                if (begin > witnesses.size() || end > witnesses.size()) return false;
+                for (uint32_t i = 0; i < root_decl.acts_assoc_witness_count; ++i) {
+                    const auto& witness = witnesses[root_decl.acts_assoc_witness_begin + i];
+                    if (root_type_contains_unresolved_generic_param(
+                            root_type_contains_unresolved_generic_param,
+                            witness.rhs_type,
+                            /*nested=*/false)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            const bool root_is_generic_template =
+                is_free_fn
+                    ? (root_decl.fn_generic_param_count > 0)
+                    : (is_acts
+                        ? root_acts_is_generic_template()
+                        : (root_decl.decl_generic_param_count > 0));
+            out.is_public_export = root_decl.is_export && root_is_generic_template;
             if (root_decl.type != parus::ty::kInvalidType) {
                 out.declared_type_repr = types.to_export_string(root_decl.type);
                 out.declared_type_semantic =
@@ -3353,24 +3415,81 @@ namespace parusc::p0 {
             return out_err.empty();
         }
 
+        std::string template_sidecar_identity_key_(const TemplateSidecarFunction& entry) {
+            uint32_t kind = 0;
+            if (entry.root_stmt != parus::ast::k_invalid_stmt &&
+                entry.root_stmt < entry.stmts.size()) {
+                kind = entry.stmts[entry.root_stmt].kind;
+            }
+
+            const std::string path_key =
+                !entry.public_path.empty() ? entry.public_path : entry.lookup_name;
+            std::string key = entry.bundle;
+            key.push_back('|');
+            key.append(std::to_string(kind));
+            key.push_back('|');
+            key.append(entry.module_head);
+            key.push_back('|');
+            key.append(path_key);
+            key.push_back('|');
+            key.append(entry.link_name);
+            if (kind == static_cast<uint32_t>(parus::ast::StmtKind::kActsDecl) &&
+                entry.root_stmt != parus::ast::k_invalid_stmt &&
+                entry.root_stmt < entry.stmts.size()) {
+                const auto& root = entry.stmts[entry.root_stmt];
+                key.append("|owner=");
+                key.append(root.acts_target_type_repr);
+                key.append("|w=");
+                for (size_t i = 0; i < entry.acts_assoc_witnesses.size(); ++i) {
+                    const auto& witness = entry.acts_assoc_witnesses[i];
+                    if (i) key.push_back(';');
+                    key.append(witness.assoc_name);
+                    key.push_back('=');
+                    key.append(witness.rhs_type_repr);
+                }
+                key.append("|c=");
+                for (size_t i = 0; i < entry.constraints.size(); ++i) {
+                    const auto& cc = entry.constraints[i];
+                    if (i) key.push_back(';');
+                    key.append(std::to_string(static_cast<uint32_t>(cc.kind)));
+                    key.push_back(':');
+                    key.append(cc.type_param);
+                    key.push_back(':');
+                    key.append(cc.rhs_type_repr);
+                    key.push_back(':');
+                    key.append(cc.proto.bundle);
+                    key.push_back(':');
+                    key.append(cc.proto.module_head);
+                    key.push_back(':');
+                    key.append(cc.proto.path);
+                }
+                key.append("|m=");
+                const uint64_t begin = root.stmt_begin;
+                const uint64_t end = begin + root.stmt_count;
+                if (begin <= entry.stmt_children.size() && end <= entry.stmt_children.size()) {
+                    for (uint32_t i = 0; i < root.stmt_count; ++i) {
+                        const auto child_sid = entry.stmt_children[root.stmt_begin + i];
+                        if (child_sid == parus::ast::k_invalid_stmt ||
+                            child_sid >= entry.stmts.size()) {
+                            continue;
+                        }
+                        const auto& member = entry.stmts[child_sid];
+                        if (i) key.push_back(';');
+                        key.append(std::to_string(member.kind));
+                        key.push_back(':');
+                        key.append(member.name);
+                    }
+                }
+            }
+            return key;
+        }
+
         void dedupe_template_sidecars_(std::vector<TemplateSidecarFunction>& entries) {
             std::unordered_set<std::string> seen{};
             std::vector<TemplateSidecarFunction> deduped{};
             deduped.reserve(entries.size());
             for (auto& e : entries) {
-                std::string key = e.bundle;
-                key.push_back('|');
-                key.append(e.module_head);
-                key.push_back('|');
-                key.append(e.lookup_name);
-                key.push_back('|');
-                key.append(e.link_name);
-                key.push_back('|');
-                key.append(e.decl_file);
-                key.push_back('|');
-                key.append(std::to_string(e.decl_line));
-                key.push_back('|');
-                key.append(std::to_string(e.decl_col));
+                const std::string key = template_sidecar_identity_key_(e);
                 if (!seen.insert(key).second) continue;
                 deduped.push_back(std::move(e));
             }
@@ -3398,6 +3517,67 @@ namespace parusc::p0 {
             }
             const auto& rs = ast.stmt(root);
             if (rs.kind != parus::ast::StmtKind::kBlock) return true;
+
+            const auto type_contains_unresolved_generic_param = [&](const auto& self,
+                                                                   parus::ty::TypeId t,
+                                                                   bool nested) -> bool {
+                if (t == parus::ty::kInvalidType || t >= types.count()) return false;
+                const auto& tt = types.get(t);
+                switch (tt.kind) {
+                    case parus::ty::Kind::kNamedUser: {
+                        std::vector<std::string_view> path{};
+                        std::vector<parus::ty::TypeId> args{};
+                        if (!types.decompose_named_user(t, path, args) || path.empty()) return false;
+                        if (nested && args.empty() && path.size() == 1) {
+                            return true;
+                        }
+                        for (const auto arg_t : args) {
+                            if (self(self, arg_t, /*nested=*/true)) return true;
+                        }
+                        return false;
+                    }
+                    case parus::ty::Kind::kOptional:
+                    case parus::ty::Kind::kArray:
+                    case parus::ty::Kind::kBorrow:
+                    case parus::ty::Kind::kEscape:
+                    case parus::ty::Kind::kPtr:
+                        return self(self, tt.elem, /*nested=*/true);
+                    case parus::ty::Kind::kFn:
+                        if (self(self, tt.ret, /*nested=*/true)) return true;
+                        for (uint32_t i = 0; i < tt.param_count; ++i) {
+                            if (self(self, types.fn_param_at(t, i), /*nested=*/true)) return true;
+                        }
+                        return false;
+                    default:
+                        return false;
+                }
+            };
+            const auto acts_has_unresolved_generic = [&](const parus::ast::Stmt& acts_decl) -> bool {
+                if (acts_decl.kind != parus::ast::StmtKind::kActsDecl || !acts_decl.acts_is_for) {
+                    return false;
+                }
+                if (acts_decl.decl_generic_param_count > 0) return true;
+                if (type_contains_unresolved_generic_param(
+                        type_contains_unresolved_generic_param,
+                        acts_decl.acts_target_type,
+                        /*nested=*/false)) {
+                    return true;
+                }
+                const auto& witnesses = ast.acts_assoc_type_witness_decls();
+                const uint64_t begin = acts_decl.acts_assoc_witness_begin;
+                const uint64_t end = begin + acts_decl.acts_assoc_witness_count;
+                if (begin > witnesses.size() || end > witnesses.size()) return false;
+                for (uint32_t i = 0; i < acts_decl.acts_assoc_witness_count; ++i) {
+                    const auto& witness = witnesses[acts_decl.acts_assoc_witness_begin + i];
+                    if (type_contains_unresolved_generic_param(
+                            type_contains_unresolved_generic_param,
+                            witness.rhs_type,
+                            /*nested=*/false)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
 
             std::vector<std::string> ns{};
             const auto collect_stmt = [&](const auto& self, parus::ast::StmtId sid) -> bool {
@@ -3452,7 +3632,7 @@ namespace parusc::p0 {
                     s.kind == parus::ast::StmtKind::kActsDecl &&
                     s.is_export &&
                     s.acts_is_for &&
-                    s.decl_generic_param_count > 0;
+                    acts_has_unresolved_generic(s);
                 const bool is_class_decl =
                     s.kind == parus::ast::StmtKind::kClassDecl &&
                     !s.name.empty();
@@ -4860,6 +5040,7 @@ namespace parusc::p0 {
                 return ast.add_type_node(tn);
             };
 
+            std::unordered_set<std::string> seen_sidecar_keys{};
             for (const auto& index : loaded) {
                 auto relative_module_head = [&](std::string_view module_head) -> std::string {
                     const std::string prefix = index.bundle + "::";
@@ -4908,6 +5089,7 @@ namespace parusc::p0 {
 
                 for (const auto& templ : index.sidecars) {
                     if (!templ.decl_file.empty() && templ.decl_file == current_norm) continue;
+                    if (!seen_sidecar_keys.insert(template_sidecar_identity_key_(templ)).second) continue;
                     if (templ.root_stmt == parus::ast::k_invalid_stmt ||
                         templ.root_stmt >= templ.stmts.size()) {
                         out_err = "typed template sidecar missing valid root stmt: " + templ.lookup_name;

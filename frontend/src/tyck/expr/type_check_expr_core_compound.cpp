@@ -1245,69 +1245,86 @@
                                     set_loop_binder(types_.error());
                                 } else {
                                     ensure_generic_acts_for_owner_(iterator_t, ast_.expr(e.loop_iter).span);
-                                    const auto source_item_t = lookup_acts_assoc_type_binding_(source_owner_t, "Item");
-                                    const auto source_iter_t = lookup_acts_assoc_type_binding_(source_owner_t, "Iter");
-                                    const auto iterator_item_t = lookup_acts_assoc_type_binding_(iterator_t, "Item");
-                                    if (!source_item_t.has_value() ||
-                                        !source_iter_t.has_value() ||
-                                        !iterator_item_t.has_value()) {
-                                        diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
-                                        err_(e.span, "iteration source is missing associated type bindings");
+                                    auto source_item_t = lookup_acts_assoc_type_binding_(source_owner_t, "Item");
+                                    auto source_iter_t = lookup_acts_assoc_type_binding_(source_owner_t, "Iter");
+                                    auto iterator_item_t = lookup_acts_assoc_type_binding_(iterator_t, "Item");
+                                    if (!source_iter_t.has_value()) {
+                                        source_iter_t = iterator_t;
+                                    }
+
+                                    const auto next_method =
+                                        resolve_loop_method(iterator_t, "next", LoopReceiverKind::kMut, ast_.expr(e.loop_iter).span);
+                                    if (!next_method.ok || next_method.fn_type == ty::kInvalidType ||
+                                        is_error_(next_method.fn_type)) {
                                         set_loop_binder(types_.error());
                                     } else {
-                                        const ty::TypeId canonical_source_item =
-                                            canonicalize_acts_owner_type_(
-                                                canonicalize_transparent_external_typedef_(*source_item_t));
-                                        const ty::TypeId canonical_source_iter =
-                                            canonicalize_acts_owner_type_(
-                                                canonicalize_transparent_external_typedef_(*source_iter_t));
-                                        const ty::TypeId canonical_iterator_t =
-                                            canonicalize_acts_owner_type_(iterator_t);
-                                        const ty::TypeId canonical_iterator_item =
-                                            canonicalize_acts_owner_type_(
-                                                canonicalize_transparent_external_typedef_(*iterator_item_t));
-                                        if (!loop_types_equivalent(
-                                                loop_types_equivalent,
-                                                canonical_source_iter,
-                                                canonical_iterator_t)) {
+                                        const auto& nft = types_.get(next_method.fn_type);
+                                        const ty::TypeId next_ret =
+                                            canonicalize_transparent_external_typedef_(nft.ret);
+                                        const ty::TypeId out_param_t =
+                                            (nft.kind == ty::Kind::kFn && nft.param_count >= 2)
+                                                ? canonicalize_transparent_external_typedef_(
+                                                      types_.fn_param_at(next_method.fn_type, 1))
+                                                : ty::kInvalidType;
+                                        bool next_sig_ok =
+                                            nft.kind == ty::Kind::kFn &&
+                                            nft.param_count == 2 &&
+                                            next_ret == types_.builtin(ty::Builtin::kBool);
+                                        ty::TypeId inferred_iterator_item = ty::kInvalidType;
+                                        if (next_sig_ok) {
+                                            const auto& opt = types_.get(out_param_t);
+                                            next_sig_ok =
+                                                opt.kind == ty::Kind::kBorrow &&
+                                                opt.borrow_is_mut &&
+                                                opt.elem != ty::kInvalidType;
+                                            if (next_sig_ok) {
+                                                inferred_iterator_item =
+                                                    canonicalize_transparent_external_typedef_(opt.elem);
+                                            }
+                                        }
+                                        if (!iterator_item_t.has_value() &&
+                                            inferred_iterator_item != ty::kInvalidType) {
+                                            iterator_item_t = inferred_iterator_item;
+                                        }
+                                        if (!source_item_t.has_value() && iterator_item_t.has_value()) {
+                                            source_item_t = *iterator_item_t;
+                                        }
+                                        if (!source_item_t.has_value() ||
+                                            !source_iter_t.has_value() ||
+                                            !iterator_item_t.has_value()) {
                                             diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
-                                            err_(e.span, "iteration source associated type Iter does not match method return type");
+                                            err_(e.span, "iteration source is missing associated type bindings");
                                             set_loop_binder(types_.error());
-                                        } else if (!loop_types_equivalent(
-                                                       loop_types_equivalent,
-                                                       canonical_iterator_item,
-                                                       canonical_source_item)) {
+                                        } else {
+                                            const ty::TypeId canonical_source_item =
+                                                canonicalize_acts_owner_type_(
+                                                    canonicalize_transparent_external_typedef_(*source_item_t));
+                                            const ty::TypeId canonical_source_iter =
+                                                canonicalize_acts_owner_type_(
+                                                    canonicalize_transparent_external_typedef_(*source_iter_t));
+                                            const ty::TypeId canonical_iterator_t =
+                                                canonicalize_acts_owner_type_(iterator_t);
+                                            const ty::TypeId canonical_iterator_item =
+                                                canonicalize_acts_owner_type_(
+                                                    canonicalize_transparent_external_typedef_(*iterator_item_t));
+                                            if (!loop_types_equivalent(
+                                                    loop_types_equivalent,
+                                                    canonical_source_iter,
+                                                    canonical_iterator_t)) {
                                                 diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
-                                                err_(e.span, "iteration source Item does not match iterator Item");
+                                                err_(e.span, "iteration source associated type Iter does not match method return type");
                                                 set_loop_binder(types_.error());
-                                            } else {
-                                                const auto next_method =
-                                                    resolve_loop_method(iterator_t, "next", LoopReceiverKind::kMut, ast_.expr(e.loop_iter).span);
-                                                if (!next_method.ok || next_method.fn_type == ty::kInvalidType ||
-                                                    is_error_(next_method.fn_type)) {
+                                            } else if (!loop_types_equivalent(
+                                                           loop_types_equivalent,
+                                                           canonical_iterator_item,
+                                                           canonical_source_item)) {
+                                                    diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
+                                                    err_(e.span, "iteration source Item does not match iterator Item");
                                                     set_loop_binder(types_.error());
                                                 } else {
-                                                    const auto& nft = types_.get(next_method.fn_type);
-                                                    const ty::TypeId next_ret =
-                                                        canonicalize_transparent_external_typedef_(nft.ret);
-                                                    const ty::TypeId out_param_t =
-                                                        (nft.kind == ty::Kind::kFn && nft.param_count >= 2)
-                                                            ? canonicalize_transparent_external_typedef_(
-                                                                  types_.fn_param_at(next_method.fn_type, 1))
-                                                            : ty::kInvalidType;
-                                                    bool next_sig_ok =
-                                                        nft.kind == ty::Kind::kFn &&
-                                                        nft.param_count == 2 &&
-                                                        next_ret == types_.builtin(ty::Builtin::kBool);
-                                                    if (next_sig_ok) {
-                                                        const auto& opt = types_.get(out_param_t);
-                                                        next_sig_ok =
-                                                            opt.kind == ty::Kind::kBorrow &&
-                                                            opt.borrow_is_mut &&
-                                                            opt.elem != ty::kInvalidType &&
-                                                            canonicalize_transparent_external_typedef_(opt.elem) == canonical_source_item;
-                                                    }
-                                                    if (!next_sig_ok) {
+                                                    if (!next_sig_ok ||
+                                                        inferred_iterator_item == ty::kInvalidType ||
+                                                        inferred_iterator_item != canonical_source_item) {
                                                         diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
                                                         err_(e.span, "iter::Iterator.next(self mut, out: &mut Self::Item) must return bool");
                                                         set_loop_binder(types_.error());

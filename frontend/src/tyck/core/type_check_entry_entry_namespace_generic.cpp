@@ -23,7 +23,6 @@ namespace parus::tyck {
     using detail::parse_int_literal_;
 
     namespace {
-
         struct ExternalGenericConstraintMeta {
             enum class Kind : uint8_t {
                 kProto = 0,
@@ -103,6 +102,86 @@ namespace parus::tyck {
                 if (next == payload.size()) break;
                 pos = next + 1;
             }
+            return out;
+        }
+
+        std::string build_acts_template_identity_(
+            const parus::ast::AstArena& ast,
+            const parus::ty::TypePool& types,
+            const std::unordered_map<parus::ast::StmtId, std::string>& acts_qnames,
+            parus::ast::StmtId template_sid
+        ) {
+            if (template_sid == parus::ast::k_invalid_stmt ||
+                static_cast<size_t>(template_sid) >= ast.stmts().size()) {
+                return {};
+            }
+            const auto& acts_decl = ast.stmt(template_sid);
+
+            std::string out{};
+            if (auto it = acts_qnames.find(template_sid); it != acts_qnames.end()) {
+                out = it->second;
+            } else {
+                out = std::string(acts_decl.name);
+            }
+
+            out.append("|owner=");
+            if (acts_decl.acts_target_type != parus::ty::kInvalidType) {
+                out.append(types.to_export_string(acts_decl.acts_target_type));
+            }
+
+            out.append("|w=");
+            const auto& witnesses = ast.acts_assoc_type_witness_decls();
+            const uint64_t wbegin = acts_decl.acts_assoc_witness_begin;
+            const uint64_t wend = wbegin + acts_decl.acts_assoc_witness_count;
+            if (wbegin <= witnesses.size() && wend <= witnesses.size()) {
+                for (uint32_t i = 0; i < acts_decl.acts_assoc_witness_count; ++i) {
+                    const auto& witness = witnesses[acts_decl.acts_assoc_witness_begin + i];
+                    if (i) out.push_back(';');
+                    out.append(witness.assoc_name);
+                    out.push_back('=');
+                    if (witness.rhs_type != parus::ty::kInvalidType) {
+                        out.append(types.to_export_string(witness.rhs_type));
+                    }
+                }
+            }
+
+            out.append("|c=");
+            const auto& constraints = ast.fn_constraint_decls();
+            const uint64_t cbegin = acts_decl.decl_constraint_begin;
+            const uint64_t cend = cbegin + acts_decl.decl_constraint_count;
+            if (cbegin <= constraints.size() && cend <= constraints.size()) {
+                for (uint32_t i = 0; i < acts_decl.decl_constraint_count; ++i) {
+                    const auto& cc = constraints[acts_decl.decl_constraint_begin + i];
+                    if (i) out.push_back(';');
+                    out.append(std::to_string(static_cast<uint32_t>(cc.kind)));
+                    out.push_back(':');
+                    out.append(cc.type_param);
+                    out.push_back(':');
+                    if (cc.rhs_type != parus::ty::kInvalidType) {
+                        out.append(types.to_export_string(cc.rhs_type));
+                    }
+                }
+            }
+
+            out.append("|m=");
+            const auto& kids = ast.stmt_children();
+            const uint64_t begin = acts_decl.stmt_begin;
+            const uint64_t end = begin + acts_decl.stmt_count;
+            if (begin <= kids.size() && end <= kids.size()) {
+                for (uint32_t i = 0; i < acts_decl.stmt_count; ++i) {
+                    const auto child_sid = kids[acts_decl.stmt_begin + i];
+                    if (child_sid == parus::ast::k_invalid_stmt ||
+                        static_cast<size_t>(child_sid) >= ast.stmts().size()) {
+                        continue;
+                    }
+                    const auto& member = ast.stmt(child_sid);
+                    if (i) out.push_back(';');
+                    out.append(std::to_string(static_cast<uint32_t>(member.kind)));
+                    out.push_back(':');
+                    out.append(member.name);
+                }
+            }
+
             return out;
         }
     }
@@ -186,6 +265,8 @@ namespace parus::tyck {
         generic_instantiated_field_sids_.clear();
         generic_instantiated_enum_sids_.clear();
         fn_qualified_name_by_stmt_.clear();
+        field_qualified_name_by_stmt_.clear();
+        enum_qualified_name_by_stmt_.clear();
         class_effective_method_map_.clear();
         const_symbol_decl_sid_.clear();
         const_symbol_eval_state_.clear();
@@ -589,65 +670,7 @@ namespace parus::tyck {
         }
 
         // Drain concrete generic instances after top-level walk.
-        bool progressed = true;
-        while (progressed) {
-            progressed = false;
-
-            while (!pending_generic_decl_instance_queue_.empty()) {
-                const ast::StmtId inst_sid = pending_generic_decl_instance_queue_.front();
-                pending_generic_decl_instance_queue_.pop_front();
-                pending_generic_decl_instance_enqueued_.erase(inst_sid);
-
-                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
-                    continue;
-                }
-                if (generic_decl_checked_instances_.find(inst_sid) != generic_decl_checked_instances_.end()) {
-                    continue;
-                }
-                if (!generic_decl_checking_instances_.insert(inst_sid).second) {
-                    continue;
-                }
-
-                check_stmt_(inst_sid);
-                generic_decl_checked_instances_.insert(inst_sid);
-                generic_decl_checking_instances_.erase(inst_sid);
-                progressed = true;
-            }
-
-            while (!pending_generic_instance_queue_.empty()) {
-                const ast::StmtId inst_sid = pending_generic_instance_queue_.front();
-                pending_generic_instance_queue_.pop_front();
-                pending_generic_instance_enqueued_.erase(inst_sid);
-
-                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
-                    continue;
-                }
-                if (generic_fn_checked_instances_.find(inst_sid) != generic_fn_checked_instances_.end()) {
-                    continue;
-                }
-                if (!generic_fn_checking_instances_.insert(inst_sid).second) {
-                    continue;
-                }
-
-                const auto& inst = ast_.stmt(inst_sid);
-                const bool was_in_actor_method = in_actor_method_;
-                const bool was_in_actor_pub = in_actor_pub_method_;
-                const bool was_in_actor_sub = in_actor_sub_method_;
-                if (actor_member_fn_sid_set_.find(inst_sid) != actor_member_fn_sid_set_.end()) {
-                    in_actor_method_ = true;
-                    in_actor_pub_method_ = (inst.fn_mode == ast::FnMode::kPub);
-                    in_actor_sub_method_ = (inst.fn_mode == ast::FnMode::kSub);
-                }
-                check_stmt_fn_decl_(inst_sid, inst);
-                in_actor_method_ = was_in_actor_method;
-                in_actor_pub_method_ = was_in_actor_pub;
-                in_actor_sub_method_ = was_in_actor_sub;
-
-                generic_fn_checked_instances_.insert(inst_sid);
-                generic_fn_checking_instances_.erase(inst_sid);
-                progressed = true;
-            }
-        }
+        drain_pending_generic_instances_();
         pop_alias_scope_();
         pop_acts_selection_scope_();
 
@@ -1809,7 +1832,8 @@ namespace parus::tyck {
             return std::nullopt;
         }
         const ast::Stmt templ = ast_.stmt(template_sid);
-        const bool imported_template = imported_fn_template_sid_set_.find(template_sid) != imported_fn_template_sid_set_.end();
+        const bool imported_template =
+            imported_fn_template_sid_set_.find(template_sid) != imported_fn_template_sid_set_.end();
         if (templ.kind != ast::StmtKind::kFnDecl) {
             return template_sid;
         }
@@ -1823,13 +1847,25 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_template) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedFn;
+            if (auto it = imported_fn_template_index_by_sid_.find(template_sid);
+                it != imported_fn_template_index_by_sid_.end() &&
+                it->second < explicit_imported_fn_templates_.size()) {
+                const auto& templ_meta = explicit_imported_fn_templates_[it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+                cache_req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalFn;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
 
         if (auto it = generic_fn_instance_cache_.find(cache_key);
             it != generic_fn_instance_cache_.end()) {
@@ -2025,10 +2061,6 @@ namespace parus::tyck {
             pending_generic_instance_queue_.push_back(inst_sid);
         }
 
-        if (imported_template) {
-            imported_fn_instance_cache_[cache_key] = inst_sid;
-        }
-
         return inst_sid;
     }
 
@@ -2042,16 +2074,7 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedFn) {
-            std::ostringstream key_oss;
-            key_oss << request.templ.producer_bundle << "|"
-                    << request.templ.template_symbol << "|"
-                    << request.target_lane << "|"
-                    << request.abi_lane << "|";
-            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
-                if (i) key_oss << ",";
-                key_oss << request.concrete_args[i];
-            }
-            const std::string key = key_oss.str();
+            const std::string key = build_mono_instance_key_(request);
             if (auto it = imported_fn_instance_cache_.find(key);
                 it != imported_fn_instance_cache_.end()) {
                 MonoInstance out{};
@@ -2114,16 +2137,7 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedClass) {
-            std::ostringstream key_oss;
-            key_oss << request.templ.producer_bundle << "|"
-                    << request.templ.template_symbol << "|"
-                    << request.target_lane << "|"
-                    << request.abi_lane << "|";
-            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
-                if (i) key_oss << ",";
-                key_oss << request.concrete_args[i];
-            }
-            const std::string key = key_oss.str();
+            const std::string key = build_mono_instance_key_(request);
             if (auto it = imported_class_instance_cache_.find(key);
                 it != imported_class_instance_cache_.end()) {
                 return it->second;
@@ -2189,14 +2203,26 @@ namespace parus::tyck {
         if (!direct_name.empty()) {
             const bool direct_had_alias = rewrite_imported_path_(direct_name).has_value();
             const bool direct_rewritten = apply_imported_path_rewrite_(direct_name);
-            if (!direct_had_alias && qualified_path_requires_import_(direct_name)) {
-                direct_name.clear();
+            const bool direct_can_use_ordinary_lookup =
+                direct_had_alias || qualified_proto_target_allows_ordinary_lookup_(direct_name);
+            std::optional<uint32_t> direct_sym_sid{};
+            if (!direct_had_alias && direct_name.find("::") != std::string::npos) {
+                direct_sym_sid = lookup_public_proto_target_symbol_(direct_name);
+                if (!direct_sym_sid.has_value() && !direct_name.starts_with("core::")) {
+                    direct_sym_sid = lookup_public_proto_target_symbol_("core::" + direct_name);
+                }
+                if (!direct_sym_sid.has_value() && !direct_can_use_ordinary_lookup) {
+                    direct_name.clear();
+                }
             }
             if (!direct_name.empty()) {
                 if (auto it = proto_decl_by_name_.find(direct_name); it != proto_decl_by_name_.end()) {
                     return it->second;
                 }
-                const auto sym_sid = direct_rewritten ? sym_.lookup(direct_name) : lookup_symbol_(direct_name);
+                auto sym_sid = direct_sym_sid;
+                if (!sym_sid.has_value() && direct_can_use_ordinary_lookup) {
+                    sym_sid = direct_rewritten ? sym_.lookup(direct_name) : lookup_symbol_(direct_name);
+                }
                 if (sym_sid.has_value()) {
                     const auto& ss = sym_.symbol(*sym_sid);
                     auto pit = proto_decl_by_name_.find(ss.name);
@@ -2228,15 +2254,29 @@ namespace parus::tyck {
         std::string base_key = base;
         const bool base_had_alias = rewrite_imported_path_(base_key).has_value();
         const bool base_rewritten = apply_imported_path_rewrite_(base_key);
-        if (!base_had_alias && qualified_path_requires_import_(base_key)) {
-            base_key.clear();
+        const bool base_can_use_ordinary_lookup =
+            base_had_alias || qualified_proto_target_allows_ordinary_lookup_(base_key);
+        std::optional<uint32_t> base_sym_sid{};
+        if (!base_had_alias && base_key.find("::") != std::string::npos) {
+            base_sym_sid = lookup_public_proto_target_symbol_(base_key);
+            if (!base_sym_sid.has_value() && !base_key.starts_with("core::")) {
+                base_sym_sid = lookup_public_proto_target_symbol_("core::" + base_key);
+            }
+            if (!base_sym_sid.has_value() && !base_can_use_ordinary_lookup) {
+                base_key.clear();
+            }
         }
 
         ast::StmtId templ_sid = ast::k_invalid_stmt;
         if (!base_key.empty()) {
             if (auto it = proto_decl_by_name_.find(base_key); it != proto_decl_by_name_.end()) {
                 templ_sid = it->second;
-            } else if (const auto sym_sid = base_rewritten ? sym_.lookup(base_key) : lookup_symbol_(base_key);
+            } else if (const auto sym_sid =
+                           base_sym_sid.has_value()
+                               ? base_sym_sid
+                               : (base_can_use_ordinary_lookup
+                                      ? (base_rewritten ? sym_.lookup(base_key) : lookup_symbol_(base_key))
+                                      : std::optional<uint32_t>{});
                        sym_sid.has_value()) {
                 const auto& ss = sym_.symbol(*sym_sid);
                 auto pit = proto_decl_by_name_.find(ss.name);
@@ -2371,19 +2411,27 @@ namespace parus::tyck {
         if (key.empty()) return std::nullopt;
         const bool key_had_alias = rewrite_imported_path_(key).has_value();
         const bool key_rewritten = apply_imported_path_rewrite_(key);
-        if (!key_had_alias && qualified_path_requires_import_(key)) {
-            return std::nullopt;
+        const bool key_can_use_ordinary_lookup =
+            key_had_alias || qualified_proto_target_allows_ordinary_lookup_(key);
+        std::optional<uint32_t> sym_sid{};
+        if (!key_had_alias && key.find("::") != std::string::npos) {
+            sym_sid = lookup_public_proto_target_symbol_(key);
+            if (!sym_sid.has_value() && !key.starts_with("core::")) {
+                sym_sid = lookup_public_proto_target_symbol_("core::" + key);
+            }
+            if (!sym_sid.has_value() && !key_can_use_ordinary_lookup) {
+                return std::nullopt;
+            }
         }
         if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
             return it->second;
         }
-        std::optional<uint32_t> sym_sid{};
-        if (key_rewritten) {
+        if (!sym_sid.has_value() && key_can_use_ordinary_lookup && key_rewritten) {
             sym_sid = sym_.lookup(key);
             if (!sym_sid.has_value()) {
                 sym_sid = lookup_symbol_(key);
             }
-        } else {
+        } else if (!sym_sid.has_value() && key_can_use_ordinary_lookup) {
             sym_sid = lookup_symbol_(key);
         }
         if (sym_sid.has_value()) {
@@ -2414,6 +2462,8 @@ namespace parus::tyck {
         if (templ.kind != ast::StmtKind::kFieldDecl || templ.decl_generic_param_count == 0) {
             return template_sid;
         }
+        const bool imported_template =
+            imported_field_template_sid_set_.find(template_sid) != imported_field_template_sid_set_.end();
 
         const auto generic_names = collect_decl_generic_param_names_(templ);
         if (generic_names.size() != concrete_args.size()) {
@@ -2429,13 +2479,25 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_template) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedField;
+            if (auto idx_it = imported_field_template_index_by_sid_.find(template_sid);
+                idx_it != imported_field_template_index_by_sid_.end() &&
+                idx_it->second < explicit_imported_field_templates_.size()) {
+                const auto& templ_meta = explicit_imported_field_templates_[idx_it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+                cache_req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalField;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
         if (auto it = generic_field_instance_cache_.find(cache_key);
             it != generic_field_instance_cache_.end()) {
             return it->second;
@@ -2552,6 +2614,7 @@ namespace parus::tyck {
         const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
         inst.name = ast_.add_owned_string(inst_qname);
         inst.type = inst_type;
+        field_qualified_name_by_stmt_[inst_sid] = inst_qname;
 
         if (auto existing = sym_.lookup_in_current(inst_qname)) {
             (void)sym_.update_declared_type(*existing, inst_type);
@@ -2998,6 +3061,8 @@ namespace parus::tyck {
         if (templ.kind != ast::StmtKind::kEnumDecl || templ.decl_generic_param_count == 0) {
             return template_sid;
         }
+        const bool imported_template =
+            imported_enum_template_sid_set_.find(template_sid) != imported_enum_template_sid_set_.end();
 
         const auto generic_names = collect_decl_generic_param_names_(templ);
         if (generic_names.size() != concrete_args.size()) {
@@ -3013,13 +3078,25 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_template) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedEnum;
+            if (auto idx_it = imported_enum_template_index_by_sid_.find(template_sid);
+                idx_it != imported_enum_template_index_by_sid_.end() &&
+                idx_it->second < explicit_imported_enum_templates_.size()) {
+                const auto& templ_meta = explicit_imported_enum_templates_[idx_it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+                cache_req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalEnum;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
         if (auto it = generic_enum_instance_cache_.find(cache_key);
             it != generic_enum_instance_cache_.end()) {
             return it->second;
@@ -3104,6 +3181,7 @@ namespace parus::tyck {
         const ty::TypeId inst_type = types_.intern_ident(ast_.add_owned_string(inst_qname));
         inst.name = ast_.add_owned_string(inst_qname);
         inst.type = inst_type;
+        enum_qualified_name_by_stmt_[inst_sid] = inst_qname;
 
         enum_decl_by_name_[inst_qname] = inst_sid;
         enum_decl_by_type_[inst_type] = inst_sid;
@@ -3284,13 +3362,25 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_class_template_sid_set_.find(template_sid) != imported_class_template_sid_set_.end()) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedClass;
+            if (auto it = imported_class_template_index_by_sid_.find(template_sid);
+                it != imported_class_template_index_by_sid_.end() &&
+                it->second < explicit_imported_class_templates_.size()) {
+                const auto& templ_meta = explicit_imported_class_templates_[it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+                cache_req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalClass;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
         if (auto it = generic_class_instance_cache_.find(cache_key);
             it != generic_class_instance_cache_.end()) {
             return it->second;
@@ -3672,6 +3762,8 @@ namespace parus::tyck {
         if (templ.kind != ast::StmtKind::kProtoDecl || templ.decl_generic_param_count == 0) {
             return template_sid;
         }
+        const bool imported_template =
+            imported_proto_template_sid_set_.find(template_sid) != imported_proto_template_sid_set_.end();
 
         const auto generic_names = collect_decl_generic_param_names_(templ);
         if (generic_names.size() != concrete_args.size()) {
@@ -3687,13 +3779,25 @@ namespace parus::tyck {
             return std::nullopt;
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_template) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedProto;
+            if (auto it = imported_proto_template_index_by_sid_.find(template_sid);
+                it != imported_proto_template_index_by_sid_.end() &&
+                it->second < explicit_imported_proto_templates_.size()) {
+                const auto& templ_meta = explicit_imported_proto_templates_[it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+                cache_req.templ.template_symbol =
+                    !templ_meta.lookup_name.empty() ? templ_meta.lookup_name : templ_meta.public_path;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalProto;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
         if (auto it = generic_proto_instance_cache_.find(cache_key);
             it != generic_proto_instance_cache_.end()) {
             return it->second;
@@ -3866,13 +3970,23 @@ namespace parus::tyck {
             }
         }
 
-        std::ostringstream key_oss;
-        key_oss << template_sid << "|" << concrete_owner_type << "|";
-        for (size_t i = 0; i < concrete_args.size(); ++i) {
-            if (i) key_oss << ",";
-            key_oss << concrete_args[i];
+        MonoRequest cache_req{};
+        cache_req.templ.template_sid = template_sid;
+        if (imported_acts_template_sid_set_.find(template_sid) != imported_acts_template_sid_set_.end()) {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kImportedActs;
+            if (auto it = imported_acts_template_index_by_sid_.find(template_sid);
+                it != imported_acts_template_index_by_sid_.end() &&
+                it->second < explicit_imported_acts_templates_.size()) {
+                const auto& templ_meta = explicit_imported_acts_templates_[it->second];
+                cache_req.templ.producer_bundle = templ_meta.producer_bundle;
+            }
+        } else {
+            cache_req.templ.source = MonoTemplateRef::SourceKind::kLocalActs;
+            cache_req.templ.producer_bundle = current_bundle_name_();
+            cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
-        const std::string cache_key = key_oss.str();
+        cache_req.concrete_args = concrete_args;
+        const std::string cache_key = build_mono_instance_key_(cache_req);
         if (auto it = generic_acts_instance_cache_.find(cache_key);
             it != generic_acts_instance_cache_.end()) {
             return it->second;
@@ -4146,6 +4260,7 @@ namespace parus::tyck {
         }
         std::sort(templates.begin(), templates.end());
 
+        bool materialized_any = false;
         for (const auto templ_sid : templates) {
             if (templ_sid == ast::k_invalid_stmt || (size_t)templ_sid >= ast_.stmts().size()) continue;
             const auto& templ = ast_.stmt(templ_sid);
@@ -4157,7 +4272,6 @@ namespace parus::tyck {
             templ_base = strip_generic_suffix(templ_base);
             if (!owner_base_name_matches(templ_base, owner_base)) continue;
             if (templ_args.size() != owner_args.size()) continue;
-
             MonoRequest req{};
             req.templ.template_sid = templ_sid;
             req.templ.producer_bundle = current_bundle_name_();
@@ -4180,7 +4294,75 @@ namespace parus::tyck {
                 }
             }
 
-            (void)ensure_monomorphized_acts_(req, concrete_owner_type, use_span);
+            if (ensure_monomorphized_acts_(req, concrete_owner_type, use_span).has_value()) {
+                materialized_any = true;
+            }
+        }
+
+        if (materialized_any) {
+            drain_pending_generic_instances_();
+        }
+    }
+
+    void TypeChecker::drain_pending_generic_instances_() {
+        bool progressed = true;
+        while (progressed) {
+            progressed = false;
+
+            while (!pending_generic_decl_instance_queue_.empty()) {
+                const ast::StmtId inst_sid = pending_generic_decl_instance_queue_.front();
+                pending_generic_decl_instance_queue_.pop_front();
+                pending_generic_decl_instance_enqueued_.erase(inst_sid);
+
+                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+                    continue;
+                }
+                if (generic_decl_checked_instances_.find(inst_sid) != generic_decl_checked_instances_.end()) {
+                    continue;
+                }
+                if (!generic_decl_checking_instances_.insert(inst_sid).second) {
+                    continue;
+                }
+
+                check_stmt_(inst_sid);
+                generic_decl_checked_instances_.insert(inst_sid);
+                generic_decl_checking_instances_.erase(inst_sid);
+                progressed = true;
+            }
+
+            while (!pending_generic_instance_queue_.empty()) {
+                const ast::StmtId inst_sid = pending_generic_instance_queue_.front();
+                pending_generic_instance_queue_.pop_front();
+                pending_generic_instance_enqueued_.erase(inst_sid);
+
+                if (inst_sid == ast::k_invalid_stmt || (size_t)inst_sid >= ast_.stmts().size()) {
+                    continue;
+                }
+                if (generic_fn_checked_instances_.find(inst_sid) != generic_fn_checked_instances_.end()) {
+                    continue;
+                }
+                if (!generic_fn_checking_instances_.insert(inst_sid).second) {
+                    continue;
+                }
+
+                const auto& inst = ast_.stmt(inst_sid);
+                const bool was_in_actor_method = in_actor_method_;
+                const bool was_in_actor_pub = in_actor_pub_method_;
+                const bool was_in_actor_sub = in_actor_sub_method_;
+                if (actor_member_fn_sid_set_.find(inst_sid) != actor_member_fn_sid_set_.end()) {
+                    in_actor_method_ = true;
+                    in_actor_pub_method_ = (inst.fn_mode == ast::FnMode::kPub);
+                    in_actor_sub_method_ = (inst.fn_mode == ast::FnMode::kSub);
+                }
+                check_stmt_fn_decl_(inst_sid, inst);
+                in_actor_method_ = was_in_actor_method;
+                in_actor_pub_method_ = was_in_actor_pub;
+                in_actor_sub_method_ = was_in_actor_sub;
+
+                generic_fn_checked_instances_.insert(inst_sid);
+                generic_fn_checking_instances_.erase(inst_sid);
+                progressed = true;
+            }
         }
     }
 
@@ -4483,6 +4665,168 @@ namespace parus::tyck {
         return true;
     }
 
+    bool TypeChecker::qualified_proto_target_allows_ordinary_lookup_(std::string_view raw_path) const {
+        if (raw_path.empty()) return false;
+        const size_t pos = raw_path.find("::");
+        if (pos == std::string_view::npos || pos == 0) return true;
+
+        const std::string_view head = raw_path.substr(0, pos);
+        if (raw_path.starts_with("core::")) return true;
+        if (is_known_namespace_path_(head)) return true;
+
+        const std::string cur_head = current_module_head_();
+        if (!cur_head.empty()) {
+            if (head == cur_head) return true;
+            if (cur_head.starts_with("core::") &&
+                head == std::string_view(cur_head).substr(std::string_view("core::").size())) {
+                return true;
+            }
+        }
+
+        if (sym_.lookup(head).has_value()) return true;
+
+        {
+            const std::string prefix = std::string(head) + "::";
+            for (const auto& candidate : sym_.symbols()) {
+                if (!candidate.is_external && candidate.name.starts_with(prefix)) {
+                    return true;
+                }
+            }
+        }
+
+        for (size_t depth = namespace_stack_.size(); depth > 0; --depth) {
+            std::string qname;
+            for (size_t i = 0; i < depth; ++i) {
+                if (i) qname += "::";
+                qname += namespace_stack_[i];
+            }
+            qname += "::";
+            qname += head;
+            if (sym_.lookup(qname).has_value()) return true;
+            const std::string nested_prefix = qname + "::";
+            for (const auto& candidate : sym_.symbols()) {
+                if (!candidate.is_external && candidate.name.starts_with(nested_prefix)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    std::optional<uint32_t> TypeChecker::lookup_public_proto_target_symbol_(std::string_view raw_path) const {
+        if (raw_path.empty() || raw_path.find("::") == std::string_view::npos) {
+            return std::nullopt;
+        }
+
+        std::string key(raw_path);
+        (void)apply_imported_path_rewrite_(key);
+
+        auto module_head_candidate_match = [&](const sema::Symbol& ss, std::string_view query) -> bool {
+            if (query.empty() || ss.name.empty()) return false;
+            if (ss.name == query) return true;
+
+            const std::string current_bundle = current_bundle_name_();
+            const std::string current_head =
+                parus::normalize_core_public_module_head(current_bundle, current_module_head_());
+            const std::string symbol_head =
+                parus::normalize_core_public_module_head(ss.decl_bundle_name, ss.decl_module_head);
+            const auto candidates = parus::candidate_names_for_external_export(
+                ss.name,
+                symbol_head,
+                ss.decl_bundle_name,
+                current_head
+            );
+            return std::find(candidates.begin(), candidates.end(), std::string(query)) != candidates.end();
+        };
+
+        const auto& syms = sym_.symbols();
+        for (uint32_t sid = 0; sid < syms.size(); ++sid) {
+            const auto& ss = syms[sid];
+            if (!ss.is_export) continue;
+            if (ss.kind != sema::SymbolKind::kType &&
+                proto_decl_by_name_.find(ss.name) == proto_decl_by_name_.end()) {
+                continue;
+            }
+            if (!module_head_candidate_match(ss, key)) continue;
+            return sid;
+        }
+        return std::nullopt;
+    }
+
+    std::string TypeChecker::mono_template_symbol_for_stmt_(
+        ast::StmtId template_sid,
+        MonoTemplateRef::SourceKind source
+    ) const {
+        if (template_sid == ast::k_invalid_stmt ||
+            static_cast<size_t>(template_sid) >= ast_.stmts().size()) {
+            return {};
+        }
+
+        switch (source) {
+            case MonoTemplateRef::SourceKind::kLocalFn:
+            case MonoTemplateRef::SourceKind::kImportedFn:
+                if (auto it = fn_qualified_name_by_stmt_.find(template_sid);
+                    it != fn_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                break;
+            case MonoTemplateRef::SourceKind::kLocalProto:
+            case MonoTemplateRef::SourceKind::kImportedProto:
+                if (auto it = proto_qualified_name_by_stmt_.find(template_sid);
+                    it != proto_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                break;
+            case MonoTemplateRef::SourceKind::kLocalActs:
+            case MonoTemplateRef::SourceKind::kImportedActs:
+                return build_acts_template_identity_(ast_, types_, acts_qualified_name_by_stmt_, template_sid);
+            case MonoTemplateRef::SourceKind::kLocalClass:
+            case MonoTemplateRef::SourceKind::kImportedClass:
+                if (auto it = class_qualified_name_by_stmt_.find(template_sid);
+                    it != class_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                break;
+            case MonoTemplateRef::SourceKind::kLocalField:
+            case MonoTemplateRef::SourceKind::kImportedField:
+                if (auto it = field_qualified_name_by_stmt_.find(template_sid);
+                    it != field_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                break;
+            case MonoTemplateRef::SourceKind::kLocalEnum:
+            case MonoTemplateRef::SourceKind::kImportedEnum:
+                if (auto it = enum_qualified_name_by_stmt_.find(template_sid);
+                    it != enum_qualified_name_by_stmt_.end()) {
+                    return it->second;
+                }
+                break;
+        }
+
+        return std::string(ast_.stmt(template_sid).name);
+    }
+
+    std::string TypeChecker::build_mono_instance_key_(const MonoRequest& request) const {
+        const std::string producer_bundle =
+            request.templ.producer_bundle.empty() ? current_bundle_name_() : request.templ.producer_bundle;
+        std::string template_symbol = request.templ.template_symbol;
+        if (template_symbol.empty()) {
+            template_symbol = mono_template_symbol_for_stmt_(request.templ.template_sid, request.templ.source);
+        }
+
+        std::ostringstream oss;
+        oss << producer_bundle << "|"
+            << template_symbol << "|"
+            << request.target_lane << "|"
+            << request.abi_lane << "|";
+        for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+            if (i) oss << ",";
+            oss << canonicalize_transparent_external_typedef_(request.concrete_args[i]);
+        }
+        return oss.str();
+    }
+
     bool TypeChecker::can_access_class_member_(
         ast::StmtId owner_class_sid,
         ast::FieldMember::Visibility visibility
@@ -4702,6 +5046,7 @@ namespace parus::tyck {
 
     std::optional<ast::StmtId> TypeChecker::ensure_external_proto_stub_from_symbol_(const sema::Symbol& ss) {
         if (!ss.is_external) return std::nullopt;
+        if (!ss.is_export) return std::nullopt;
         if (ss.kind != sema::SymbolKind::kType) return std::nullopt;
         if (!ss.external_payload.starts_with("parus_decl_kind=proto")) return std::nullopt;
 
@@ -4892,12 +5237,14 @@ namespace parus::tyck {
             }
             if (!qname.empty()) {
                 proto_qualified_name_by_stmt_[templ.template_sid] = qname;
-                proto_decl_by_name_[qname] = templ.template_sid;
-                const size_t split = qname.rfind("::");
-                const std::string leaf =
-                    (split == std::string::npos) ? qname : qname.substr(split + 2);
-                if (!leaf.empty() && proto_decl_by_name_.find(leaf) == proto_decl_by_name_.end()) {
-                    proto_decl_by_name_[leaf] = templ.template_sid;
+                if (templ.is_public_export) {
+                    proto_decl_by_name_[qname] = templ.template_sid;
+                    const size_t split = qname.rfind("::");
+                    const std::string leaf =
+                        (split == std::string::npos) ? qname : qname.substr(split + 2);
+                    if (!leaf.empty() && proto_decl_by_name_.find(leaf) == proto_decl_by_name_.end()) {
+                        proto_decl_by_name_[leaf] = templ.template_sid;
+                    }
                 }
             }
 
@@ -4906,7 +5253,7 @@ namespace parus::tyck {
                 proto_decl_by_type_[templ.declared_type] = templ.template_sid;
             }
 
-            if (!qname.empty()) {
+            if (!qname.empty() && templ.is_public_export) {
                 if (auto existing = sym_.lookup_in_current(qname)) {
                     const auto& existing_sym = sym_.symbol(*existing);
                     if (existing_sym.kind == sema::SymbolKind::kType && proto_stmt.type != ty::kInvalidType) {
@@ -5189,6 +5536,7 @@ namespace parus::tyck {
                 qname = canonical_head + "::" + qname;
             }
             if (!qname.empty()) {
+                field_qualified_name_by_stmt_[templ.template_sid] = qname;
                 imported_field_template_sid_by_qname_[qname] = templ.template_sid;
             }
 
@@ -5253,6 +5601,7 @@ namespace parus::tyck {
                 qname = canonical_head + "::" + qname;
             }
             if (!qname.empty()) {
+                enum_qualified_name_by_stmt_[templ.template_sid] = qname;
                 imported_enum_template_sid_by_qname_[qname] = templ.template_sid;
             }
 
@@ -5305,16 +5654,7 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedField) {
-            std::ostringstream key_oss;
-            key_oss << request.templ.producer_bundle << "|"
-                    << request.templ.template_symbol << "|"
-                    << request.target_lane << "|"
-                    << request.abi_lane << "|";
-            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
-                if (i) key_oss << ",";
-                key_oss << request.concrete_args[i];
-            }
-            const std::string key = key_oss.str();
+            const std::string key = build_mono_instance_key_(request);
             if (auto it = imported_field_instance_cache_.find(key);
                 it != imported_field_instance_cache_.end()) {
                 return it->second;
@@ -5338,16 +5678,7 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedEnum) {
-            std::ostringstream key_oss;
-            key_oss << request.templ.producer_bundle << "|"
-                    << request.templ.template_symbol << "|"
-                    << request.target_lane << "|"
-                    << request.abi_lane << "|";
-            for (size_t i = 0; i < request.concrete_args.size(); ++i) {
-                if (i) key_oss << ",";
-                key_oss << request.concrete_args[i];
-            }
-            const std::string key = key_oss.str();
+            const std::string key = build_mono_instance_key_(request);
             if (auto it = imported_enum_instance_cache_.find(key);
                 it != imported_enum_instance_cache_.end()) {
                 return it->second;
@@ -5457,7 +5788,6 @@ namespace parus::tyck {
                     owner_base_name_matches(templ_owner_export, concrete_owner_export);
                 if (!owner_matches) continue;
             }
-
             MonoRequest req{};
             req.templ.template_sid = templ_sid;
             req.templ.source = MonoTemplateRef::SourceKind::kImportedActs;
@@ -5472,6 +5802,9 @@ namespace parus::tyck {
             }
         }
 
+        if (materialized_any) {
+            drain_pending_generic_instances_();
+        }
         return materialized_any;
     }
 

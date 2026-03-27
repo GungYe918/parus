@@ -7,6 +7,8 @@
         }
         fn_decl_by_name_.clear();
         fn_qualified_name_by_stmt_.clear();
+        field_qualified_name_by_stmt_.clear();
+        enum_qualified_name_by_stmt_.clear();
         class_qualified_name_by_stmt_.clear();
         acts_qualified_name_by_stmt_.clear();
         class_decl_by_name_.clear();
@@ -499,6 +501,7 @@
                     generic_field_template_sid_set_.insert(sid);
                 }
                 const std::string qname = qualify_decl_name_(s.name);
+                field_qualified_name_by_stmt_[sid] = qname;
                 ty::TypeId field_ty = s.type;
                 if (field_ty == ty::kInvalidType && !qname.empty()) {
                     field_ty = types_.intern_ident(qname);
@@ -537,6 +540,7 @@
                 }
 
                 const std::string qname = qualify_decl_name_(s.name);
+                enum_qualified_name_by_stmt_[sid] = qname;
                 ty::TypeId enum_ty = s.type;
                 if (enum_ty == ty::kInvalidType && !qname.empty()) {
                     enum_ty = types_.intern_ident(qname);
@@ -985,8 +989,22 @@
                 const std::string qname = qualify_decl_name_(s.name);
                 acts_qualified_name_by_stmt_[sid] = qname;
                 if (s.acts_is_for) {
-                    const bool generic_owner = type_contains_unresolved_generic_param_(s.acts_target_type);
-                    if (generic_owner) {
+                    bool generic_owner = type_contains_unresolved_generic_param_(s.acts_target_type);
+                    if (!generic_owner && s.acts_assoc_witness_count > 0) {
+                        const auto& witnesses = ast_.acts_assoc_type_witness_decls();
+                        const uint64_t begin = s.acts_assoc_witness_begin;
+                        const uint64_t end = begin + s.acts_assoc_witness_count;
+                        if (begin <= witnesses.size() && end <= witnesses.size()) {
+                            for (uint32_t i = 0; i < s.acts_assoc_witness_count; ++i) {
+                                const auto& witness = witnesses[s.acts_assoc_witness_begin + i];
+                                if (type_contains_unresolved_generic_param_(witness.rhs_type)) {
+                                    generic_owner = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (generic_owner || s.decl_generic_param_count > 0) {
                         generic_acts_template_sid_set_.insert(sid);
                     }
                 }
@@ -2040,6 +2058,7 @@
         for (uint32_t sid = 0; sid < sym_.symbols().size(); ++sid) {
             const auto& sym = sym_.symbol(sid);
             if (!sym.is_external) continue;
+            if (!sym.is_export) continue;
             if (sym.kind != sema::SymbolKind::kType) continue;
             if (!sym.external_payload.starts_with("parus_decl_kind=proto")) continue;
             if (sym.name.empty()) continue;
@@ -2419,19 +2438,32 @@
     std::optional<ast::StmtId> TypeChecker::resolve_proto_sid_for_constraint_(std::string_view raw) const {
         if (raw.empty()) return std::nullopt;
         const bool qualified_raw = raw.find("::") != std::string_view::npos;
+        auto resolve_from_symbol = [&](uint32_t sym_sid) -> std::optional<ast::StmtId> {
+            const auto& ss = sym_.symbol(sym_sid);
+            if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
+                return pit->second;
+            }
+            return std::nullopt;
+        };
         auto try_resolve = [&](std::string key) -> std::optional<ast::StmtId> {
             const bool key_had_alias = rewrite_imported_path_(key).has_value();
             const bool key_rewritten = apply_imported_path_rewrite_(key);
+            std::optional<uint32_t> sym_sid{};
             if (!key_had_alias && qualified_path_requires_import_(key)) {
-                return std::nullopt;
+                sym_sid = lookup_public_proto_target_symbol_(key);
+                if (!sym_sid.has_value()) {
+                    return std::nullopt;
+                }
             }
             if (auto it = proto_decl_by_name_.find(key); it != proto_decl_by_name_.end()) {
                 return it->second;
             }
-            if (auto sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key)) {
-                const auto& ss = sym_.symbol(*sym_sid);
-                if (auto pit = proto_decl_by_name_.find(ss.name); pit != proto_decl_by_name_.end()) {
-                    return pit->second;
+            if (!sym_sid.has_value()) {
+                sym_sid = key_rewritten ? sym_.lookup(key) : lookup_symbol_(key);
+            }
+            if (sym_sid.has_value()) {
+                if (auto sid = resolve_from_symbol(*sym_sid)) {
+                    return sid;
                 }
             }
             return std::nullopt;
@@ -2440,14 +2472,14 @@
         if (auto resolved = try_resolve(std::string(raw))) {
             return resolved;
         }
+        if (!raw.starts_with("core::") && qualified_raw) {
+            if (auto resolved = try_resolve("core::" + std::string(raw))) {
+                return resolved;
+            }
+        }
         if (!qualified_raw) {
             if (auto it = proto_decl_by_name_.find(std::string(raw)); it != proto_decl_by_name_.end()) {
                 return it->second;
-            }
-        }
-        if (!raw.starts_with("core::") && qualified_raw && !qualified_path_requires_import_(raw)) {
-            if (auto resolved = try_resolve("core::" + std::string(raw))) {
-                return resolved;
             }
         }
 

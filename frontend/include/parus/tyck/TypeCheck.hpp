@@ -685,9 +685,14 @@ namespace parus::tyck {
         void init_file_namespace_(ast::StmtId program_stmt);
         std::string qualify_decl_name_(std::string_view base_name) const;
         std::optional<uint32_t> lookup_symbol_(std::string_view name) const;
+        std::optional<uint32_t> lookup_public_proto_target_symbol_(std::string_view raw_path) const;
         std::optional<std::string> rewrite_imported_path_(std::string_view path) const;
         bool apply_imported_path_rewrite_(std::string& path) const;
         bool qualified_path_requires_import_(std::string_view raw_path) const;
+        bool qualified_proto_target_allows_ordinary_lookup_(std::string_view raw_path) const;
+        std::string mono_template_symbol_for_stmt_(ast::StmtId template_sid, MonoTemplateRef::SourceKind source) const;
+        std::string build_mono_instance_key_(const MonoRequest& request) const;
+        void drain_pending_generic_instances_();
         std::string current_namespace_prefix_() const;
         std::string current_module_head_() const;
         std::string path_join_(uint32_t begin, uint32_t count) const;
@@ -722,6 +727,8 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, std::string> proto_qualified_name_by_stmt_;
         std::unordered_map<ty::TypeId, std::vector<ast::StmtId>> explicit_impl_proto_sids_by_type_;
         std::unordered_map<ast::StmtId, std::string> class_qualified_name_by_stmt_;
+        std::unordered_map<ast::StmtId, std::string> field_qualified_name_by_stmt_;
+        std::unordered_map<ast::StmtId, std::string> enum_qualified_name_by_stmt_;
         std::unordered_map<ast::StmtId, std::string> acts_qualified_name_by_stmt_;
         std::unordered_map<std::string, ast::StmtId> class_decl_by_name_;
         std::unordered_map<ty::TypeId, ast::StmtId> class_decl_by_type_;

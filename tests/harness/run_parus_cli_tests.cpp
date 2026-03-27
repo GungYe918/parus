@@ -28,6 +28,17 @@ bool contains(const std::string& s, const std::string& needle) {
     return s.find(needle) != std::string::npos;
 }
 
+size_t count_occurrences(const std::string& s, const std::string& needle) {
+    if (needle.empty()) return 0;
+    size_t count = 0;
+    size_t pos = 0;
+    while ((pos = s.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
 bool write_text(const std::filesystem::path& path, const std::string& text) {
     std::ofstream ofs(path, std::ios::binary);
     if (!ofs) return false;
@@ -2538,10 +2549,20 @@ bool test_external_generic_constraints_v2_work() {
         "      puts(\"drop\");\n"
         "    }\n"
         "};\n"
+        "export proto BaseProto {\n"
+        "  provide def base_value() -> i32 {\n"
+        "    return 9i32;\n"
+        "  }\n"
+        "};\n"
         "export proto Defaulted<T> {\n"
         "  provide const ZERO: i32 = 4i32;\n"
         "  provide def value_or_zero() -> i32 {\n"
         "    return 7i32;\n"
+        "  }\n"
+        "};\n"
+        "proto HiddenProto {\n"
+        "  provide def hidden_value() -> i32 {\n"
+        "    return 0i32;\n"
         "  }\n"
         "};\n"
         "export def only_i32<T>(x: T) with [T == i32] -> i32 {\n"
@@ -2601,30 +2622,29 @@ bool test_external_generic_constraints_v2_work() {
     auto [rc_ok, out_ok] = run_capture(
         "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + ok_pr.string() +
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
-        "\" --load-export-index \"" + lib_index.string() + "\"");
+        "\" --load-export-index \"" + lib_index.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
     if (rc_ok != 0) {
         std::cerr << "external generic constraints success sample should typecheck\n" << out_ok;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
 
-    const auto bad_import_pr = temp_root / "bad_import.pr";
-    const std::string bad_import_src =
+    const auto proto_target_pr = temp_root / "proto_target_no_import.pr";
+    const std::string proto_target_src =
         "def ordered<T>(x: T) with [T: constraints::Comparable] -> bool {\n"
         "  return x >= x;\n"
         "}\n";
-    if (!write_text(bad_import_pr, bad_import_src)) {
-        std::cerr << "failed to write missing-import generic constraint sample\n";
+    if (!write_text(proto_target_pr, proto_target_src)) {
+        std::cerr << "failed to write proto-target import-ergonomics sample\n";
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
-    auto [rc_bad_import, out_bad_import] = run_capture(
-        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_import_pr.string() +
+    auto [rc_proto_target, out_proto_target] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + proto_target_pr.string() +
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() + "\"");
-    if (rc_bad_import == 0 ||
-        (!contains(out_bad_import, "GenericConstraintProtoNotFound") &&
-         !contains(out_bad_import, "unknown proto in generic constraint"))) {
-        std::cerr << "qualified cross-module proto path must require an explicit import\n" << out_bad_import;
+    if (rc_proto_target != 0) {
+        std::cerr << "qualified proto target should typecheck without explicit import\n" << out_proto_target;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -2649,6 +2669,93 @@ bool test_external_generic_constraints_v2_work() {
         "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() + "\"");
     if (rc_ok_import != 0) {
         std::cerr << "explicit-import generic constraint sample should typecheck\n" << out_ok_import;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto proto_attach_pr = temp_root / "proto_attach_no_import.pr";
+    const std::string proto_attach_src =
+        "proto Derived: api::BaseProto {\n"
+        "};\n"
+        "\n"
+        "class LocalBox<T>: api::Defaulted<T> {\n"
+        "  init() = default;\n"
+        "};\n";
+    if (!write_text(proto_attach_pr, proto_attach_src)) {
+        std::cerr << "failed to write proto-attachment import-ergonomics sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_proto_attach, out_proto_attach] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + proto_attach_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_proto_attach != 0) {
+        std::cerr << "qualified proto inheritance/attachment should typecheck without explicit import\n"
+                  << out_proto_attach;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto hidden_proto_pr = temp_root / "hidden_proto.pr";
+    const std::string hidden_proto_src =
+        "def ordered<T>(x: T) with [T: api::HiddenProto] -> bool {\n"
+        "  return true;\n"
+        "}\n";
+    if (!write_text(hidden_proto_pr, hidden_proto_src)) {
+        std::cerr << "failed to write hidden-proto visibility sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_hidden_proto, out_hidden_proto] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + hidden_proto_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_hidden_proto == 0 ||
+        (!contains(out_hidden_proto, "GenericConstraintProtoNotFound") &&
+         !contains(out_hidden_proto, "unknown proto in generic constraint"))) {
+        std::cerr << "hidden proto must not become source-visible through proto-target import ergonomics\n"
+                  << out_hidden_proto;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_type_path_pr = temp_root / "bad_type_path.pr";
+    const std::string bad_type_path_src =
+        "def main() -> i32 {\n"
+        "  let b: api::GenericBox<i32> = api::GenericBox<i32>(1i32);\n"
+        "  return b.value_or_zero();\n"
+        "}\n";
+    if (!write_text(bad_type_path_pr, bad_type_path_src)) {
+        std::cerr << "failed to write ordinary type-path import sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_type_path, out_bad_type_path] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_type_path_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() +
+        "\" --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_bad_type_path == 0) {
+        std::cerr << "ordinary type path must still require an explicit import\n" << out_bad_type_path;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_value_path_pr = temp_root / "bad_value_path.pr";
+    const std::string bad_value_path_src =
+        "def main() -> i32 {\n"
+        "  return cmp::min(1i32, 2i32);\n"
+        "}\n";
+    if (!write_text(bad_value_path_pr, bad_value_path_src)) {
+        std::cerr << "failed to write ordinary value-path import sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    auto [rc_bad_value_path, out_bad_value_path] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_value_path_pr.string() +
+        "\" -fsyntax-only --load-export-index \"" + installed_core_index_path.string() + "\"");
+    if (rc_bad_value_path == 0) {
+        std::cerr << "ordinary value path must still require an explicit import\n" << out_bad_value_path;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -3019,6 +3126,14 @@ bool test_external_generic_type_body_closure_v2_work() {
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
+    if (count_occurrences(lib_templates_text, "\"public_path\":\"Pair\"") != 1 ||
+        count_occurrences(lib_templates_text, "\"public_path\":\"PairBox\"") != 1 ||
+        count_occurrences(lib_templates_text, "\"public_path\":\"HiddenStep\"") != 1) {
+        std::cerr << "typed sidecar helper closure nodes must be deduped by canonical identity\n"
+                  << lib_templates_text;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
 
     const auto runtime_pr = temp_root / "main.pr";
     const std::string runtime_src =
@@ -3067,6 +3182,22 @@ bool test_external_generic_type_body_closure_v2_work() {
         " --load-export-index \"" + lib_index.string() + "\"");
     if (rc_runtime_build != 0) {
         std::cerr << "external type-body closure runtime sample should compile/link\n" << out_runtime_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto runtime_dup_exe = temp_root / "main.dup";
+    auto [rc_runtime_dup_build, out_runtime_dup_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + runtime_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + runtime_dup_exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_runtime_dup_build != 0) {
+        std::cerr << "repeated export-index load should dedup imported helper templates\n"
+                  << out_runtime_dup_build;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
