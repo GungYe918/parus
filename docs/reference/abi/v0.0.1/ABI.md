@@ -132,7 +132,7 @@ extern "C" def write(buf: *mut u8, len: usize) -> isize;
 
 ### 7.2 금지 타입
 
-1. borrow/escape 관련 타입 (`&`, `&mut`, `&&`)
+1. borrow/escape 관련 타입 (`&`, `&mut`, `~`)
 2. optional, actor, class 직접 값 전달
 3. 구현 의존 내부 타입
 4. 표준 라이브러리 `String` 직접 값 전달 (`Utf8Span`/`Utf8Buf`로 변환해야 함)
@@ -249,7 +249,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 
 1. 문자열 모델/변환/표준 라이브러리 구현 지침:
    - `docs/reference/abi/v0.0.1/STRING_MODEL.md`
-2. 스택/힙/정적 저장소 정책 및 `&&` 비힙 규칙:
+2. 스택/힙/정적 저장소 정책 및 `~` 저장/ABI 규칙:
    - `docs/reference/abi/v0.0.1/STORAGE_POLICY.md`
 3. nullable(`T?`) 의미 규칙/승격 정책/하강 정합성:
    - `docs/reference/abi/v0.0.1/NULLABLE_MODEL.md`

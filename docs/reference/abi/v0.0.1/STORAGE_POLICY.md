@@ -3,7 +3,7 @@
 문서 상태: `Normative Supplement`
 
 이 문서는 `docs/reference/abi/v0.0.1/ABI.md`의 저장소/수명 요약을 상세화한다.
-특히 스택/힙/정적 저장소와 `&&` 규칙을 고정한다.
+특히 스택/힙/정적 저장소와 `~` 규칙을 고정한다.
 
 ---
 
@@ -41,36 +41,50 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 ---
 
-## 3. `&&` 비힙 규칙 (강제)
+## 3. `~` 저장/ABI 규칙 (강제)
 
-`&&`는 절대 힙에 materialize할 수 없다.
+`~`는 절대 implicit heap box로 materialize할 수 없다.
 
 허용 경로:
 
-1. trivial handle (materialization 없음)
-2. stack slot
-3. caller slot (return/argument 경계)
-4. static slot
+1. escape rvalue (cell commit/ABI pack 없음)
+2. handle cell
+   - local cell
+   - field cell
+   - optional cell
+   - static cell
+3. ABI handle pack
+   - return boundary
+   - argument boundary
 
 금지 경로:
 
 1. heap box로의 자동 승격
-2. 런타임 allocator 호출을 동반하는 `&&` 생성
+2. 런타임 allocator 호출을 동반하는 `~` 생성
+
+용어 고정:
+
+1. `cell commit`
+   - `~T`를 local/field/optional/static place에 저장
+2. `abi pack`
+   - `~T`를 call/return ABI 경계에서 3word handle로 구성
+
+`cell commit`은 곧바로 `abi pack`을 의미하지 않는다.
 
 ---
 
-## 4. `&&` 비힙 규칙으로 인한 제약
+## 4. `~` 저장/ABI 규칙으로 인한 제약
 
 다음 패턴은 v0에서 제한되거나 금지될 수 있다.
 
-1. 런타임 지역값의 장수명 `&&` 보관
-2. async/suspend 경계를 넘는 `&&` 유지
-3. 컨테이너에 `&&` 장기 저장
+1. async/suspend 경계를 넘는 `~` 유지
+2. 컨테이너/배열에 `~` 장기 저장
+3. direct field/index projection으로 `~` subplace를 임의 추출
 
 권장 해결:
 
-1. static 승격 가능한 값은 static place를 사용한다.
-2. 장수명 소유가 필요하면 `String` 같은 소유 타입으로 승격한다.
+1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
+2. one-shot extraction은 `(~T)?` + consume-binding을 사용한다.
 
 ---
 
@@ -87,14 +101,14 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. JIT/AOT 모두 `String` 3워드 헤더 ABI를 동일하게 해석해야 한다.
 2. `Utf8Span`/`Utf8Buf`의 필드 오프셋/정렬은 lane과 무관하게 동일해야 한다.
-3. `&&`의 비힙 규칙은 JIT/AOT에서 동일하게 검증되어야 한다.
+3. `~`의 `cell commit` / `abi pack` 규칙은 JIT/AOT에서 동일하게 검증되어야 한다.
 
 ---
 
 ## 7. 구현 체크리스트
 
-1. `&&` lowering 경로에 heap materialization이 없는지 검증한다.
-2. `String` drop 경로가 static backing에서 free를 호출하지 않는지 검증한다.
-3. `text -> String` 암시 변환이 발생하지 않는지 타입체커에서 검증한다.
-4. C ABI 함수에서 `String` 직접 전달을 거부하는지 검증한다.
-
+1. `~` lowering 경로에 heap materialization이 없는지 검증한다.
+2. local/field/optional 저장이 즉시 ABI pack으로 내려가지 않는지 검증한다.
+3. `String` drop 경로가 static backing에서 free를 호출하지 않는지 검증한다.
+4. `text -> String` 암시 변환이 발생하지 않는지 타입체커에서 검증한다.
+5. C ABI 함수에서 `String` 직접 전달을 거부하는지 검증한다.
