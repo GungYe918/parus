@@ -9,6 +9,15 @@
 
 1. `diag::render_one_context` 기반 컨텍스트 출력
 2. `--lang`, `--context` 옵션 반영
+3. generic/mono/sidecar 관련 진단은 primary span 외에 secondary label, `note:`, `help:`를 출력할 수 있다
+
+예시 출력 순서:
+
+1. primary error line
+2. primary span context
+3. secondary labeled spans
+4. `note: ...`
+5. `help: ...`
 
 ## json 모드 스키마
 
@@ -22,6 +31,42 @@
 6. `end_line`, `end_col`
 7. `args` (string array)
 8. `range` (0-based LSP 친화)
+9. optional `labels`
+10. optional `notes`
+11. optional `help`
+
+`labels` 항목 필드:
+
+1. `file`
+2. `line`, `col`
+3. `end_line`, `end_col`
+4. `range`
+5. `message`
+
+호환성 규칙:
+
+1. 기존 필드는 유지한다.
+2. `labels/notes/help`는 additive 확장이다.
+3. 기존 JSON consumer는 새 필드를 무시해도 된다.
+
+## Generic/Mono 우선 적용 범위
+
+structured diagnostics는 이번 라운드에서 아래 오류군에 우선 적용한다.
+
+1. generic constraint failures
+2. template-sidecar unavailable/schema failure
+3. unsupported dependency closure
+4. missing closure node
+5. conflicting canonical sidecar identity
+6. hidden helper/proto visibility misuse
+
+대표 코드:
+
+1. `TemplateSidecarUnavailable`
+2. `TemplateSidecarSchema`
+3. `TemplateSidecarUnsupportedClosure`
+4. `TemplateSidecarMissingNode`
+5. `TemplateSidecarConflictingNode`
 
 ## 종료 코드
 
@@ -32,3 +77,5 @@
 ## 코드 근거
 
 1. `compiler/parusc/src/p0/P0Compiler.cpp` (`flush_diags_`)
+2. `frontend/src/diag/render.cpp`
+3. `frontend/include/parus/diag/Diagnostic.hpp`

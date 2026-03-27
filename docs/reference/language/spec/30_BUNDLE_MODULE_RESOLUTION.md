@@ -97,6 +97,10 @@
 2. closure-private helper declaration은 consumer source에서 lexical import 없이 직접 참조될 수 없다.
 3. closure-private helper declaration은 imported template table 내부 노드로만 존재하고, ordinary export/import visibility 규칙을 우회하지 않는다.
 4. helper `actor` dependency closure와 global private state / class-static mutable state dependency closure는 v0 범위 밖이다.
+5. producer는 exported generic root별 closure graph를 검증해야 한다.
+6. consumer는 loaded sidecar node를 imported template table 적재 전에 canonical identity 기준으로 검증해야 한다.
+7. 같은 canonical identity에 대해 payload가 다르면 hard error다.
+8. hidden helper closure는 materialization 전용 내부 의존성일 뿐, source-level visibility 우회 수단이 아니다.
 
 ## 18.7-b Proto-Target Qualified Path Exception
 
@@ -250,5 +254,7 @@ export def add(a: i32, b: i32) -> i32 {
 10. 이번 라운드의 closure 허용 범위는 아래로 제한한다.
 10-a. same-bundle free-function dependency
 10-b. same-bundle helper `struct/enum` type-body dependency
+10-c. same-bundle helper `class` whole-body dependency
 11. closure-private helper type/function은 materialization 전용 내부 의존성으로만 사용된다.
 12. consumer source는 closure-private helper를 lexical import 없이 직접 참조할 수 없다.
+13. producer/consumer는 closure node를 canonical identity 기준으로 dedup하고 충돌을 검증한다.

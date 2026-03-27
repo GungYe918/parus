@@ -178,6 +178,15 @@ sidecar dedup 원칙:
 1. sidecar node dedup key는 canonical template identity를 사용한다.
 2. 기준은 `bundle + kind + module head + public path/hidden lookup name + link name`이다.
 3. decl file / line / col은 dedup key에 포함하지 않고 diagnostics payload로만 유지한다.
+4. 같은 canonical identity가 서로 다른 payload fingerprint를 가지면 producer/consumer 모두 hard error다.
+
+closure validator 원칙:
+
+1. producer는 exported generic root별 dependency closure graph를 검증한다.
+2. consumer는 loaded sidecar root/dependency node를 imported template table 적재 전에 다시 검증한다.
+3. 허용되는 dependency는 same-bundle helper `free function/struct/enum/class`까지다.
+4. helper `actor`, global private mutable state, class-static mutable state, visibility leak를 일으키는 dependency는 거부한다.
+5. validator는 가능하면 dependency chain을 보존하고 diagnostics note로 노출한다.
 
 이번 라운드 비범위:
 
@@ -212,7 +221,29 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 ---
 
-## 8. 이번 라운드 활성화 범위
+## 8. Diagnostics Contract
+
+generic/sidecar/closure 품질 라운드부터 관련 진단은 structured diagnostics를 사용한다.
+
+원칙:
+
+1. primary error code + primary span을 유지한다.
+2. 필요 시 secondary label span을 붙인다.
+3. note/help는 설명과 해결 가이드를 제공한다.
+4. JSON diagnostics는 additive 확장만 허용한다.
+5. generic/mono 관련 오류는 raw string 한 줄보다 dedicated code + note/help를 우선한다.
+
+이번 라운드 우선 적용 범위:
+
+1. generic constraint failures
+2. template-sidecar unavailable/schema failure
+3. unsupported dependency closure
+4. missing closure node
+5. hidden helper/proto visibility misuse
+
+---
+
+## 9. 이번 라운드 활성화 범위
 
 이번 라운드에서 실제로 연 기능은 아래뿐이다.
 
@@ -231,6 +262,9 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 13. source-level proto target qualified path import 완화
 14. canonical monomorphization key helper 통일
 15. sidecar dedup을 canonical template identity 기준으로 강화
+16. producer/consumer closure validator 도입
+17. generic/sidecar/closure structured diagnostics 도입
+18. dead `__parus_install_anchor_` filter 제거
 
 이번 라운드에서 아직 열지 않는 것:
 
@@ -240,7 +274,7 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 ---
 
-## 9. Ownership Materialization과의 분리
+## 10. Ownership Materialization과의 분리
 
 `~` escape handle 문제는 monomorphization과 분리한다.
 
@@ -259,7 +293,7 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 ---
 
-## 10. 비범위
+## 11. 비범위
 
 이번 문서의 직접 비범위:
 
@@ -273,7 +307,7 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 
 ---
 
-## 11. 변경 이력
+## 12. 변경 이력
 
 ### v0.0.1
 
@@ -284,4 +318,6 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 5. sidecar 기반 consumer-local monomorphization 방향을 정본으로 확정
 6. raw-source sidecar는 typed template payload v2로 교체
 7. free function / proto / acts / class declaration whole-body import를 common mono service activation 범위로 확장
-7. consumer import 없는 canonical proto identity resolution은 imported generic metadata에만 적용
+8. consumer import 없는 canonical proto identity resolution은 imported generic metadata에만 적용
+9. helper `struct/enum/class` dependency closure를 typed sidecar v2로 반입 가능
+10. canonical sidecar identity dedup + producer/consumer closure validator를 일반 경로 안전장치로 고정

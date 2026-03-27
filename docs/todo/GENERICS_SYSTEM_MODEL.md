@@ -124,15 +124,34 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 
 다음 직접 구현 라운드는 아래로 고정한다.
 
-1. external generic type body dependency closure를 helper `class`까지 확장한다.
-2. closure-private same-bundle helper `class`를 materialization 전용 내부 의존성으로 안정화한다.
-3. helper `actor` dependency closure 여부는 그 다음 라운드에서 결정한다.
+1. generic/mono closure validator를 producer/consumer 양쪽에 도입한다.
+2. canonical mono key helper와 sidecar dedup을 harden한다.
+3. generic/sidecar/closure diagnostics를 structured labels/notes/help로 확장한다.
 
 고정 규칙:
 
 1. source-level explicit import 규칙은 유지한다.
 2. 완화되는 것은 imported metadata와 closure-internal dependency materialization뿐이다.
 3. 새 core surface 추가보다 generics stabilization이 계속 우선이다.
+
+## 3.4 Current Quality Freeze Status
+
+현재 저장소 기준으로 아래가 구현되었다.
+
+1. local/external generic free function/common mono lane
+2. local/external generic proto/acts/class whole-body lane
+3. helper `struct/enum/class` dependency closure
+4. source-level proto target import ergonomics
+5. canonical mono key helper와 sidecar canonical identity dedup
+6. producer/consumer closure validator
+7. generic/sidecar/closure structured diagnostics
+
+다음 직접 후보:
+
+1. producer-side closure validator의 dependency chain 정밀도 강화
+2. mono cache/debug accounting and assertion hardening
+3. generic diagnostics 품질 마감 및 문구 일관화
+4. actor lane은 actor 의미론 고정 전까지 제외 유지
 
 ---
 
