@@ -24,6 +24,22 @@ namespace parus::type {
             std::vector<uint8_t> visiting{};
             std::vector<uint8_t> done{};
 
+            bool type_contains_escape(ty::TypeId tid) const {
+                if (tid == ty::kInvalidType || tid == types.error()) return false;
+                const auto& tt = types.get(tid);
+                switch (tt.kind) {
+                    case ty::Kind::kEscape:
+                        return true;
+                    case ty::Kind::kOptional:
+                    case ty::Kind::kArray:
+                    case ty::Kind::kBorrow:
+                    case ty::Kind::kPtr:
+                        return tt.elem != ty::kInvalidType && type_contains_escape(tt.elem);
+                    default:
+                        return false;
+                }
+            }
+
             ty::TypeId resolve_node(ast::TypeNodeId id) {
                 if (id == ast::k_invalid_type_node) return ty::kInvalidType;
                 if (id >= ast.type_nodes().size()) return types.error();
@@ -84,9 +100,20 @@ namespace parus::type {
 
                     case ast::TypeNodeKind::kArray: {
                         const auto e = resolve_node(n.elem);
-                        out = (e == ty::kInvalidType)
-                            ? types.error()
-                            : types.make_array(e, n.array_has_size, n.array_size);
+                        if (e == ty::kInvalidType) {
+                            out = types.error();
+                            break;
+                        }
+                        if (type_contains_escape(e)) {
+                            diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, n.span);
+                            d.add_arg("array/container of '~T' is deferred in this round");
+                            d.add_note("`~T` is first-class for locals, params/returns, fields, and `(~T)?`");
+                            d.add_help("store the handle in a local/field/optional place instead of an array/container");
+                            diags.add(std::move(d));
+                            out = types.error();
+                            break;
+                        }
+                        out = types.make_array(e, n.array_has_size, n.array_size);
                         break;
                     }
 

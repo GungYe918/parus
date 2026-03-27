@@ -1,0 +1,70 @@
+proto Probe {
+  provide def probe() -> i32 {
+    return 40i32;
+  }
+};
+
+class Worker: Probe {
+  value: i32;
+
+  init(v: i32) {
+    self.value = v;
+  }
+
+  def run(self) -> i32 {
+    return self.value + 2i32;
+  }
+};
+
+class Holder {
+  value: ~Worker;
+
+  init(v: ~Worker) {
+    self.value = v;
+  }
+
+  def run(self) -> i32 {
+    return self.value.run() + self.value->probe();
+  }
+};
+
+class Box<T> with [T: Probe] {
+  value: ~T;
+
+  init(v: ~T) {
+    self.value = v;
+  }
+
+  def probe_value(self) -> i32 {
+    return self.value->probe();
+  }
+};
+
+def make(seed: i32) -> ~Worker {
+  set w = Worker(seed);
+  return ~w;
+}
+
+def id_handle(h: ~Worker) -> ~Worker {
+  return h;
+}
+
+def main() -> i32 {
+  let h: ~Worker = make(5i32);
+  set moved = id_handle(h);
+  let a: i32 = moved.run() + moved->probe();
+
+  set holder = Holder(make(7i32));
+  let b: i32 = holder.run();
+
+  let mut slot: (~Worker)? = make(9i32);
+  let taken: ~Worker = slot else {
+    return 1i32;
+  };
+  let c: i32 = taken.run() + taken->probe();
+
+  set box = Box<Worker>(make(11i32));
+  let d: i32 = box.probe_value();
+
+  return a + b + c + d;
+}

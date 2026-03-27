@@ -987,12 +987,12 @@ namespace {
         ok &= require_(!p.sir_mod.escape_handles.empty(), "OIR gate seed must create escape handle metadata");
         if (!ok) return false;
 
-        p.sir_mod.escape_handles[0].materialize_count = 1;
+        p.sir_mod.escape_handles[0].abi_pack_count = 0;
 
         parus::oir::Builder ob(p.sir_mod, p.prog.types);
         auto oir = ob.build();
 
-        ok &= require_(!oir.gate_passed, "OIR gate must fail when materialize_count is non-zero");
+        ok &= require_(!oir.gate_passed, "OIR gate must fail when ABI pack accounting is inconsistent");
         ok &= require_(!oir.gate_errors.empty(), "OIR gate must emit at least one gate error");
         return ok;
     }

@@ -2702,8 +2702,8 @@ namespace parus::oir {
 
             case parus::sir::ValueKind::kBorrow:
             case parus::sir::ValueKind::kEscape:
-                // v0: borrow/escape는 컴파일타임 capability 토큰이다.
-                // OIR에서는 비물질화 원칙을 유지하고 원본 값으로 전달한다.
+                // borrow/escape는 source-level capability이지만,
+                // OIR에서는 owner-cell / direct-address / boundary value로 정규화한다.
                 {
                     const ValueId lowered = lower_value(v.a);
                     if (v.kind == parus::sir::ValueKind::kBorrow) {
@@ -4863,8 +4863,8 @@ namespace parus::oir {
         out.mod.actor_types = sir_.actor_types;
 
         // OIR 진입 게이트:
-        // - handle 비물질화(materialize_count==0)
-        // - static/boundary 규칙
+        // - cell commit / ABI pack accounting
+        // - 허용된 owner-cell / boundary 규칙
         // - escape 메타 일관성
         // 위 규칙을 만족하지 않으면 OIR lowering 자체를 중단한다.
         out.gate_errors = parus::sir::verify_escape_handles(sir_);

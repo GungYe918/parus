@@ -213,7 +213,7 @@
                       types_.to_string(m.type));
             } else {
                 oss << "field member '" << m.name
-                    << "' must use a POD value builtin type (e.g., i32/u32/f32/bool/char), got "
+                    << "' must use a POD builtin value type or `~T`/`(~T)?` in this round, got "
                     << types_.to_string(m.type);
                 diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
             }

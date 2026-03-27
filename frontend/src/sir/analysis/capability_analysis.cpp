@@ -24,7 +24,10 @@ namespace parus::sir {
             kValue,
             kBorrowOperand,
             kEscapeOperand,
-            kEscapeAliasInit,
+            kEscapeCellLocal,
+            kEscapeCellField,
+            kEscapeCellStatic,
+            kEscapeCellOptional,
             kAssignLhs,
             kCallArg,
             kReturnValue,
@@ -64,7 +67,6 @@ namespace parus::sir {
         struct SymbolTraits {
             bool is_mut = false;
             bool is_static = false;
-            bool is_escape_alias = false;
         };
 
         struct FlowState {
@@ -124,7 +126,8 @@ namespace parus::sir {
                 }
                 out.escape_handle_count = (uint32_t)m_.escape_handles.size();
                 for (const auto& h : m_.escape_handles) {
-                    out.materialized_handle_count += h.materialize_count;
+                    out.cell_commit_count += h.cell_commit_count;
+                    out.abi_pack_count += h.abi_pack_count;
                 }
                 return out;
             }
@@ -133,6 +136,17 @@ namespace parus::sir {
             /// @brief 오류 진단을 누적한다.
             void report_(diag::Code code, Span sp) {
                 diag::Diagnostic d(diag::Severity::kError, code, sp);
+                switch (code) {
+                    case diag::Code::kSirEscapeBoundaryViolation:
+                        d.add_note("`~x` first creates an escape rvalue; that rvalue must either commit into an allowed owner cell or cross a call/return boundary");
+                        d.add_help("store it in a local/field/`(~T)?` place, or pass/return it directly");
+                        break;
+                    case diag::Code::kBorrowOperandMustBeOwnedPlace:
+                        d.add_note("source-level borrow creation does not apply to existing borrow tokens or `~T` owner handles");
+                        break;
+                    default:
+                        break;
+                }
                 bag_.add(std::move(d));
                 ++error_count_;
             }
@@ -147,6 +161,49 @@ namespace parus::sir {
             bool is_escape_type_(TypeId t) const {
                 if (t == k_invalid_type || t >= types_.count()) return false;
                 return types_.get(t).kind == ty::Kind::kEscape;
+            }
+
+            bool is_optional_escape_type_(TypeId t) const {
+                if (t == k_invalid_type || t >= types_.count()) return false;
+                const auto& tt = types_.get(t);
+                return tt.kind == ty::Kind::kOptional &&
+                       tt.elem != k_invalid_type &&
+                       tt.elem < types_.count() &&
+                       types_.get(tt.elem).kind == ty::Kind::kEscape;
+            }
+
+            std::optional<ValueUse> escape_cell_use_for_var_decl_(const Stmt& s) const {
+                if (s.declared_type == k_invalid_type) return std::nullopt;
+                if (!is_escape_type_(s.declared_type) && !is_optional_escape_type_(s.declared_type)) {
+                    return std::nullopt;
+                }
+                if (s.is_static) return ValueUse::kEscapeCellStatic;
+                if (s.has_consume_else && is_escape_type_(s.declared_type)) return std::nullopt;
+                if (is_optional_escape_type_(s.declared_type)) return ValueUse::kEscapeCellOptional;
+                return ValueUse::kEscapeCellLocal;
+            }
+
+            std::optional<ValueUse> escape_cell_use_for_place_(ValueId lhs, TypeId lhs_type) const {
+                if (lhs_type != k_invalid_type) {
+                    if (is_optional_escape_type_(lhs_type)) {
+                        return ValueUse::kEscapeCellOptional;
+                    }
+                    if (!is_escape_type_(lhs_type)) {
+                        return std::nullopt;
+                    }
+                } else {
+                    return std::nullopt;
+                }
+
+                if (lhs == k_invalid_value || (size_t)lhs >= m_.values.size()) {
+                    return ValueUse::kEscapeCellLocal;
+                }
+                const auto& lv = m_.values[lhs];
+                if (is_static_place_(lhs)) return ValueUse::kEscapeCellStatic;
+                if (lv.kind == ValueKind::kField || lv.place == PlaceClass::kField) {
+                    return ValueUse::kEscapeCellField;
+                }
+                return ValueUse::kEscapeCellLocal;
             }
 
             /// @brief 타입이 drop을 요구할 수 있는지 보수적으로 판정한다.
@@ -433,12 +490,6 @@ namespace parus::sir {
                 return it->second.is_static;
             }
 
-            bool is_escape_alias_symbol_(SymbolId sym) const {
-                auto it = symbol_traits_.find(sym);
-                if (it == symbol_traits_.end()) return false;
-                return it->second.is_escape_alias;
-            }
-
             /// @brief 주어진 place와 겹치는 활성 '&mut' borrow 존재 여부를 반환한다.
             bool has_active_mut_(const PlaceRef& place) const {
                 for (const auto& b : active_borrows_) {
@@ -614,12 +665,57 @@ namespace parus::sir {
                 return use == ValueUse::kReturnValue || use == ValueUse::kCallArg;
             }
 
+            static bool is_escape_cell_use_(ValueUse use) {
+                switch (use) {
+                    case ValueUse::kEscapeCellLocal:
+                    case ValueUse::kEscapeCellField:
+                    case ValueUse::kEscapeCellStatic:
+                    case ValueUse::kEscapeCellOptional:
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+
             /// @brief 값 사용 문맥을 EscapeBoundaryKind로 변환한다.
             static EscapeBoundaryKind boundary_from_use_(ValueUse use) {
                 switch (use) {
                     case ValueUse::kReturnValue: return EscapeBoundaryKind::kReturn;
                     case ValueUse::kCallArg: return EscapeBoundaryKind::kCallArg;
                     default: return EscapeBoundaryKind::kNone;
+                }
+            }
+
+            static EscapeValueForm value_form_from_use_(ValueUse use) {
+                switch (use) {
+                    case ValueUse::kCallArg:
+                    case ValueUse::kReturnValue:
+                        return EscapeValueForm::kAbiPack;
+                    case ValueUse::kEscapeCellLocal:
+                    case ValueUse::kEscapeCellField:
+                    case ValueUse::kEscapeCellStatic:
+                    case ValueUse::kEscapeCellOptional:
+                        return EscapeValueForm::kCell;
+                    default:
+                        return EscapeValueForm::kRValue;
+                }
+            }
+
+            static EscapeCellKind cell_kind_from_use_(ValueUse use) {
+                switch (use) {
+                    case ValueUse::kEscapeCellLocal: return EscapeCellKind::kLocal;
+                    case ValueUse::kEscapeCellField: return EscapeCellKind::kField;
+                    case ValueUse::kEscapeCellStatic: return EscapeCellKind::kStatic;
+                    case ValueUse::kEscapeCellOptional: return EscapeCellKind::kOptional;
+                    default: return EscapeCellKind::kNone;
+                }
+            }
+
+            static EscapePackBoundary pack_boundary_from_use_(ValueUse use) {
+                switch (use) {
+                    case ValueUse::kCallArg: return EscapePackBoundary::kCallArg;
+                    case ValueUse::kReturnValue: return EscapePackBoundary::kReturn;
+                    default: return EscapePackBoundary::kNone;
                 }
             }
 
@@ -643,16 +739,21 @@ namespace parus::sir {
                 meta.from_static = from_static;
                 meta.has_drop = type_needs_drop_(meta.pointee_type);
                 meta.boundary = boundary;
+                meta.value_form = value_form_from_use_(use);
+                meta.cell_kind = cell_kind_from_use_(use);
+                meta.pack_boundary = pack_boundary_from_use_(use);
 
                 if (boundary == EscapeBoundaryKind::kReturn || boundary == EscapeBoundaryKind::kCallArg) {
                     meta.kind = EscapeHandleKind::kCallerSlot;
+                } else if (meta.value_form == EscapeValueForm::kCell) {
+                    meta.kind = from_static ? EscapeHandleKind::kStackSlot : EscapeHandleKind::kStackSlot;
                 } else {
                     meta.kind = EscapeHandleKind::kTrivial;
                 }
 
-                // v0: 내부는 비물질화 토큰으로 유지하고 ABI 경계에서만 패킹.
-                meta.abi_pack_required = (boundary == EscapeBoundaryKind::kAbi);
-                meta.materialize_count = 0;
+                meta.abi_pack_required = (meta.pack_boundary != EscapePackBoundary::kNone);
+                meta.cell_commit_count = (meta.value_form == EscapeValueForm::kCell) ? 1u : 0u;
+                meta.abi_pack_count = (meta.value_form == EscapeValueForm::kAbiPack) ? 1u : 0u;
 
                 auto it = escape_meta_by_value_.find(escape_vid);
                 if (it == escape_meta_by_value_.end()) {
@@ -679,11 +780,6 @@ namespace parus::sir {
                     auto& t = symbol_traits_[s.sym];
                     t.is_mut = s.is_mut;
                     t.is_static = s.is_static;
-                    t.is_escape_alias =
-                        s.is_set &&
-                        !s.is_mut &&
-                        !s.is_static &&
-                        is_escape_type_(value_type_(s.init));
                 }
                 for (const auto& g : m_.globals) {
                     if (g.sym == k_invalid_symbol) continue;
@@ -752,25 +848,20 @@ namespace parus::sir {
                                 init_owner = s.sym;
                             }
 
-                            const bool escape_alias_init =
-                                s.is_set &&
-                                !s.is_mut &&
-                                !s.is_static &&
-                                is_escape_type_(value_type_(s.init));
+                            ValueUse init_use = ValueUse::kValue;
+                            if (is_escape_type_(value_type_(s.init))) {
+                                if (auto cell_use = escape_cell_use_for_var_decl_(s)) {
+                                    init_use = *cell_use;
+                                }
+                            }
                             analyze_value_(
                                 s.init,
-                                escape_alias_init ? ValueUse::kEscapeAliasInit : ValueUse::kValue,
+                                init_use,
                                 init_owner
                             );
                             if (is_borrow_type_(value_type_(s.init)) && s.is_static) {
                                 report_(diag::Code::kBorrowEscapeToStorage, s.span);
                             }
-                        if (is_escape_type_(value_type_(s.init)) && !s.is_static && !escape_alias_init) {
-                            report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
-                        }
-                        if (s.has_consume_else && is_escape_type_(s.declared_type) && !s.is_static) {
-                            report_(diag::Code::kSirEscapeMustNotMaterialize, s.span);
-                        }
                         if (s.has_consume_else && s.b != k_invalid_block) {
                             const FlowState in = capture_flow_state_();
                             (void)analyze_block_with_flow_(s.b, in);
@@ -953,15 +1044,6 @@ namespace parus::sir {
                 switch (v.kind) {
                     case ValueKind::kLocal: {
                         if (v.sym == k_invalid_symbol) return;
-                        if (is_escape_alias_symbol_(v.sym)) {
-                            check_use_after_move_(vid, use, v.span);
-                            if (use != ValueUse::kCallArg && use != ValueUse::kReturnValue) {
-                                report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
-                                return;
-                            }
-                            mark_moved_(v.sym);
-                            return;
-                        }
                         check_use_after_move_(vid, use, v.span);
                         check_place_access_conflicts_(vid, use, v.span);
                         return;
@@ -975,7 +1057,7 @@ namespace parus::sir {
                             report_(diag::Code::kBorrowOperandMustBePlace, v.span);
                             return;
                         }
-                        if (is_borrow_type_(value_type_(v.a)) || is_escape_type_(value_type_(v.a))) {
+                        if (is_borrow_type_(value_type_(v.a))) {
                             report_(diag::Code::kBorrowOperandMustBeOwnedPlace, v.span);
                             return;
                         }
@@ -1041,13 +1123,13 @@ namespace parus::sir {
                                 report_(diag::Code::kEscapeWhileBorrowActive, v.span);
                             }
 
-                            const bool passthrough_use =
-                                is_escape_boundary_use_(use) || use == ValueUse::kEscapeAliasInit;
-                            if (!passthrough_use && !is_symbol_static_(*root)) {
+                            const bool allowed_use =
+                                is_escape_boundary_use_(use) || is_escape_cell_use_(use);
+                            if (!allowed_use && !is_symbol_static_(*root)) {
                                 report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
                             }
                             mark_moved_(*root);
-                        } else if (!(is_escape_boundary_use_(use) || use == ValueUse::kEscapeAliasInit)) {
+                        } else if (!(is_escape_boundary_use_(use) || is_escape_cell_use_(use))) {
                             report_(diag::Code::kSirEscapeBoundaryViolation, v.span);
                         }
                         return;
@@ -1065,11 +1147,13 @@ namespace parus::sir {
                             release_owner_borrows_(lhs_local_sym);
                         }
 
-                        analyze_value_(
-                            v.b,
-                            ValueUse::kValue,
-                            binds_borrow_rhs ? lhs_local_sym : k_invalid_symbol
-                        );
+                        ValueUse rhs_use = ValueUse::kValue;
+                        if (is_escape_type_(value_type_(v.b))) {
+                            if (auto cell_use = escape_cell_use_for_place_(v.a, value_type_(v.a))) {
+                                rhs_use = *cell_use;
+                            }
+                        }
+                        analyze_value_(v.b, rhs_use, binds_borrow_rhs ? lhs_local_sym : k_invalid_symbol);
 
                         if (is_borrow_type_(value_type_(v.b))) {
                             bool lhs_plain_local = false;
@@ -1084,10 +1168,6 @@ namespace parus::sir {
                                 report_(diag::Code::kBorrowEscapeToStorage, v.span);
                             }
                         }
-                        if (is_escape_type_(value_type_(v.b)) && !is_static_place_(v.a)) {
-                            report_(diag::Code::kSirEscapeMustNotMaterialize, v.span);
-                        }
-
                         if (auto root = root_symbol_(v.a)) {
                             clear_moved_(*root);
                         }

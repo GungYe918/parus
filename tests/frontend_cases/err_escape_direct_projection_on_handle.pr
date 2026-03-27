@@ -1,0 +1,21 @@
+class Worker {
+  value: i32;
+
+  init(v: i32) {
+    self.value = v;
+  }
+};
+
+class Holder {
+  value: ~Worker;
+
+  init(v: ~Worker) {
+    self.value = v;
+  }
+};
+
+def main() -> i32 {
+  set w = Worker(1i32);
+  set h = Holder(~w);
+  return h.value.value;
+}

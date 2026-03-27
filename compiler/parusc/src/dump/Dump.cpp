@@ -696,10 +696,14 @@ namespace parusc::dump {
                         << " pointee_ty=" << types.to_string(h.pointee_type) << " <id " << (uint32_t)h.pointee_type << ">"
                         << " kind=" << sir_escape_kind_name(h.kind)
                         << " boundary=" << sir_escape_boundary_name(h.boundary)
+                        << " value_form=" << static_cast<uint32_t>(h.value_form)
+                        << " cell_kind=" << static_cast<uint32_t>(h.cell_kind)
+                        << " pack_boundary=" << static_cast<uint32_t>(h.pack_boundary)
                         << " from_static=" << (h.from_static ? "true" : "false")
                         << " has_drop=" << (h.has_drop ? "true" : "false")
                         << " abi_pack=" << (h.abi_pack_required ? "true" : "false")
-                        << " materialize_count=" << h.materialize_count
+                        << " cell_commit_count=" << h.cell_commit_count
+                        << " abi_pack_count=" << h.abi_pack_count
                         << " span=[" << h.span.lo << "," << h.span.hi << ")"
                         << "\n";
             }

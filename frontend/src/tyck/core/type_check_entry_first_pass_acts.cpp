@@ -4515,8 +4515,11 @@
         if (id == ty::kInvalidType) return false;
         const auto& t = types.get(id);
         if (t.kind == ty::Kind::kOptional) {
-            // non-layout(c) field policy (v0): Optional<POD> is allowed.
+            // non-layout(c) field policy: Optional<POD> and Optional<~T> are allowed.
             return is_field_pod_value_type_(types, t.elem);
+        }
+        if (t.kind == ty::Kind::kEscape) {
+            return t.elem != ty::kInvalidType;
         }
         if (t.kind != ty::Kind::kBuiltin) return false;
 

@@ -2580,8 +2580,95 @@ namespace {
         return ok;
     }
 
-    static bool test_sir_handle_verify_rejects_materialized_handle() {
-        // OIR 이전 단계에서는 handle 물질화 카운트가 0이어야 하며, 0이 아니면 verify가 실패해야 한다.
+    static bool test_escape_first_class_places_accounting() {
+        const std::string src = R"(
+            proto Probe {
+                provide def probe() -> i32 {
+                    return 40i32;
+                }
+            };
+
+            class Worker: Probe {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value + 2i32;
+                }
+            };
+
+            class Holder {
+                value: ~Worker;
+
+                init(v: ~Worker) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value.run() + self.value->probe();
+                }
+            };
+
+            def sink(h: ~Worker) -> i32 {
+                return h.run() + h->probe();
+            }
+
+            def main() -> i32 {
+                set a = Worker(5i32);
+                let h: ~Worker = ~a;
+
+                set b = Worker(7i32);
+                let mut slot: (~Worker)? = ~b;
+                let taken: ~Worker = slot else {
+                    return 1i32;
+                };
+
+                set c = Worker(9i32);
+                set holder = Holder(~c);
+                return sink(h) + holder.run() + taken.run();
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "first-class ~ place seed must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "first-class ~ place seed must not emit tyck errors");
+        ok &= require_(cap.ok, "first-class ~ place seed must pass AST capability check");
+        ok &= require_(sir.cap.ok, "first-class ~ place seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "first-class ~ place seed must pass handle verification");
+        if (!ok) return false;
+
+        size_t cell_forms = 0;
+        size_t abi_pack_forms = 0;
+        for (const auto& h : sir.mod.escape_handles) {
+            if (h.value_form == parus::sir::EscapeValueForm::kCell) {
+                ++cell_forms;
+                ok &= require_(h.cell_commit_count > 0, "cell-form escape handle must record cell commits");
+                ok &= require_(h.abi_pack_count == 0, "cell-form escape handle must not record ABI packs");
+            }
+            if (h.value_form == parus::sir::EscapeValueForm::kAbiPack) {
+                ++abi_pack_forms;
+                ok &= require_(h.abi_pack_count > 0, "ABI-pack escape handle must record ABI packs");
+                ok &= require_(h.cell_commit_count == 0, "ABI-pack escape handle must not record cell commits");
+            }
+        }
+        ok &= require_(cell_forms >= 1, "first-class ~ place seed must produce at least one cell-form handle");
+        ok &= require_(abi_pack_forms >= 1, "first-class ~ place seed must produce at least one ABI-pack handle");
+        ok &= require_(sir.cap.cell_commit_count >= 1, "capability analysis must count cell commits");
+        ok &= require_(sir.cap.abi_pack_count >= 1, "capability analysis must count ABI packs");
+        return ok;
+    }
+
+    static bool test_sir_handle_verify_rejects_invalid_escape_pack_state() {
+        // OIR 이전 단계에서는 call/return ABI pack 상태가 일관돼야 하며, 깨지면 verify가 실패해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
             def sink(h: ~i32) -> i32 {
@@ -2598,30 +2685,30 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!p.bag.has_error(), "materialize-count verify seed must parse/type-check cleanly");
-        ok &= require_(ty.errors.empty(), "materialize-count verify seed must not emit tyck errors");
-        ok &= require_(sir.cap.ok, "materialize-count verify seed must pass SIR capability check");
-        ok &= require_(sir.handle_verify_errors.empty(), "materialize-count verify seed must pass handle verify initially");
-        ok &= require_(!sir.mod.escape_handles.empty(), "materialize-count verify seed must produce at least one escape handle");
+        ok &= require_(!p.bag.has_error(), "escape verify seed must parse/type-check cleanly");
+        ok &= require_(ty.errors.empty(), "escape verify seed must not emit tyck errors");
+        ok &= require_(sir.cap.ok, "escape verify seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "escape verify seed must pass handle verify initially");
+        ok &= require_(!sir.mod.escape_handles.empty(), "escape verify seed must produce at least one escape handle");
         if (!ok) return false;
 
-        sir.mod.escape_handles[0].materialize_count = 1;
+        sir.mod.escape_handles[0].abi_pack_count = 0;
         const auto verrs = parus::sir::verify_escape_handles(sir.mod);
-        ok &= require_(!verrs.empty(), "handle verify must fail when materialize_count is non-zero");
+        ok &= require_(!verrs.empty(), "handle verify must fail when ABI pack accounting is inconsistent");
 
-        bool has_materialize_msg = false;
+        bool has_pack_msg = false;
         for (const auto& e : verrs) {
-            if (e.msg.find("materialize_count must be 0") != std::string::npos) {
-                has_materialize_msg = true;
+            if (e.msg.find("abi_pack form requires") != std::string::npos) {
+                has_pack_msg = true;
                 break;
             }
         }
-        ok &= require_(has_materialize_msg, "handle verify must report materialize_count invariant violation");
+        ok &= require_(has_pack_msg, "handle verify must report ABI pack invariant violation");
         return ok;
     }
 
     static bool test_oir_gate_rejects_invalid_escape_handle() {
-        // OIR lowering 진입 전 게이트는 escape-handle verify 실패 시 lowering을 중단해야 한다.
+        // OIR lowering 진입 전 게이트는 invalid escape-handle pack state를 차단해야 한다.
         const std::string src = R"(
             static G: i32 = 7i32;
             def sink(h: ~i32) -> i32 {
@@ -2645,7 +2732,7 @@ namespace {
         ok &= require_(!sir.mod.escape_handles.empty(), "OIR gate seed must produce at least one escape handle");
         if (!ok) return false;
 
-        sir.mod.escape_handles[0].materialize_count = 1;
+        sir.mod.escape_handles[0].abi_pack_count = 0;
         parus::oir::Builder ob(sir.mod, p.types, nullptr, &pres.sym);
         auto oir = ob.build();
 
@@ -3354,7 +3441,8 @@ int main() {
         {"escape_set_alias_passthrough_ok", test_escape_set_alias_passthrough_ok},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
         {"consume_binding_static_optional_escape", test_consume_binding_static_optional_escape},
-        {"sir_handle_verify_rejects_materialized_handle", test_sir_handle_verify_rejects_materialized_handle},
+        {"escape_first_class_places_accounting", test_escape_first_class_places_accounting},
+        {"sir_handle_verify_rejects_invalid_escape_pack_state", test_sir_handle_verify_rejects_invalid_escape_pack_state},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},
         {"sir_uses_symbol_declared_type_for_set", test_sir_uses_symbol_declared_type_for_set},

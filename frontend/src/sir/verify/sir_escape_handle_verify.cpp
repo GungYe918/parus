@@ -38,6 +38,35 @@ namespace parus::sir {
             return "unknown";
         }
 
+        const char* value_form_name_(EscapeValueForm k) {
+            switch (k) {
+                case EscapeValueForm::kRValue: return "rvalue";
+                case EscapeValueForm::kCell: return "cell";
+                case EscapeValueForm::kAbiPack: return "abi_pack";
+            }
+            return "unknown";
+        }
+
+        const char* cell_kind_name_(EscapeCellKind k) {
+            switch (k) {
+                case EscapeCellKind::kNone: return "none";
+                case EscapeCellKind::kLocal: return "local";
+                case EscapeCellKind::kField: return "field";
+                case EscapeCellKind::kStatic: return "static";
+                case EscapeCellKind::kOptional: return "optional";
+            }
+            return "unknown";
+        }
+
+        const char* pack_boundary_name_(EscapePackBoundary k) {
+            switch (k) {
+                case EscapePackBoundary::kNone: return "none";
+                case EscapePackBoundary::kCallArg: return "call_arg";
+                case EscapePackBoundary::kReturn: return "return";
+            }
+            return "unknown";
+        }
+
         /// @brief 심볼이 static 저장소인지 확인하기 위해 static 심볼 집합을 만든다.
         std::unordered_set<SymbolId> build_static_symbols_(const Module& m) {
             std::unordered_set<SymbolId> out;
@@ -51,33 +80,9 @@ namespace parus::sir {
             return out;
         }
 
-        /// @brief place-like value에서 root symbol을 추적한다(local/index/field/global).
-        std::optional<SymbolId> root_symbol_(const Module& m, ValueId vid) {
-            if (vid == k_invalid_value || (size_t)vid >= m.values.size()) return std::nullopt;
-            const auto& v = m.values[vid];
-            if (v.origin_sym != k_invalid_symbol) return v.origin_sym;
-            switch (v.kind) {
-                case ValueKind::kLocal:
-                case ValueKind::kGlobal:
-                    return (v.sym == k_invalid_symbol) ? std::nullopt : std::optional<SymbolId>{v.sym};
-                case ValueKind::kIndex:
-                case ValueKind::kField:
-                    return root_symbol_(m, v.a);
-                default:
-                    return std::nullopt;
-            }
-        }
-
-        /// @brief 대입 lhs가 static place인지 판정한다.
-        bool is_static_place_(const Module& m, ValueId lhs, const std::unordered_set<SymbolId>& static_symbols) {
-            const auto root = root_symbol_(m, lhs);
-            if (!root) return false;
-            return static_symbols.find(*root) != static_symbols.end();
-        }
-
     } // namespace
 
-    /// @brief EscapeHandle 메타 규칙을 검증한다(정적 경계/비물질화 invariant).
+    /// @brief EscapeHandle 메타 규칙을 검증한다(cell commit / ABI pack invariant).
     std::vector<VerifyError> verify_escape_handles(const Module& m) {
         std::vector<VerifyError> errs;
         std::vector<uint8_t> escape_has_meta(m.values.size(), 0);
@@ -102,13 +107,6 @@ namespace parus::sir {
                 escape_has_meta[h.escape_value] = 1;
             }
 
-            if (h.materialize_count != 0) {
-                std::ostringstream oss;
-                oss << "escape-handle #" << i << " materialize_count must be 0 before OIR lowering (got "
-                    << h.materialize_count << ")";
-                push_error_(errs, oss.str());
-            }
-
             if (h.from_static) {
                 if (h.origin_sym == k_invalid_symbol ||
                     static_symbols.find(h.origin_sym) == static_symbols.end()) {
@@ -119,77 +117,75 @@ namespace parus::sir {
                 }
             }
 
-            if ((h.boundary == EscapeBoundaryKind::kReturn || h.boundary == EscapeBoundaryKind::kCallArg) &&
-                h.kind != EscapeHandleKind::kCallerSlot) {
-                std::ostringstream oss;
-                oss << "escape-handle #" << i
-                    << " boundary=" << boundary_name_(h.boundary)
-                    << " requires kind=caller_slot (got " << kind_name_(h.kind) << ")";
-                push_error_(errs, oss.str());
-            }
-
             if (h.kind == EscapeHandleKind::kHeapBox) {
                 std::ostringstream oss;
                 oss << "escape-handle #" << i << " uses heap_box kind, which is forbidden in v0";
                 push_error_(errs, oss.str());
             }
 
-            if (h.abi_pack_required &&
-                h.boundary != EscapeBoundaryKind::kAbi) {
-                std::ostringstream oss;
-                oss << "escape-handle #" << i
-                    << " abi_pack_required=true but boundary is " << boundary_name_(h.boundary);
-                push_error_(errs, oss.str());
-            }
-
-            if (h.boundary == EscapeBoundaryKind::kNone) {
-                if (h.kind != EscapeHandleKind::kTrivial) {
+            if (h.value_form == EscapeValueForm::kRValue) {
+                if (h.cell_kind != EscapeCellKind::kNone || h.pack_boundary != EscapePackBoundary::kNone ||
+                    h.cell_commit_count != 0 || h.abi_pack_count != 0) {
                     std::ostringstream oss;
                     oss << "escape-handle #" << i
-                        << " boundary=none must keep trivial non-materialized kind (got "
-                        << kind_name_(h.kind) << ")";
+                        << " form=" << value_form_name_(h.value_form)
+                        << " must not record cell/pack accounting";
                     push_error_(errs, oss.str());
                 }
-                if (h.abi_pack_required) {
+                if (h.kind != EscapeHandleKind::kTrivial || h.boundary != EscapeBoundaryKind::kNone ||
+                    h.abi_pack_required) {
                     std::ostringstream oss;
                     oss << "escape-handle #" << i
-                        << " boundary=none cannot request ABI packing";
+                        << " rvalue form must stay trivial and non-packed";
+                    push_error_(errs, oss.str());
+                }
+            } else if (h.value_form == EscapeValueForm::kCell) {
+                if (h.cell_kind == EscapeCellKind::kNone || h.cell_commit_count == 0) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " cell form requires a concrete cell_kind and nonzero cell_commit_count"
+                        << " (got cell_kind=" << cell_kind_name_(h.cell_kind) << ")";
+                    push_error_(errs, oss.str());
+                }
+                if (h.pack_boundary != EscapePackBoundary::kNone || h.abi_pack_count != 0 || h.abi_pack_required) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " cell form must not request ABI packing";
+                    push_error_(errs, oss.str());
+                }
+                if (h.boundary != EscapeBoundaryKind::kNone || h.kind != EscapeHandleKind::kStackSlot) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " cell form must use boundary=none and kind=stack_slot (got boundary="
+                        << boundary_name_(h.boundary) << ", kind=" << kind_name_(h.kind) << ")";
+                    push_error_(errs, oss.str());
+                }
+            } else if (h.value_form == EscapeValueForm::kAbiPack) {
+                if (h.pack_boundary == EscapePackBoundary::kNone || h.abi_pack_count == 0 || !h.abi_pack_required) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " abi_pack form requires pack_boundary, abi_pack_count, and abi_pack_required=true";
+                    push_error_(errs, oss.str());
+                }
+                if (h.cell_kind != EscapeCellKind::kNone || h.cell_commit_count != 0) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " abi_pack form must not record cell commit accounting";
+                    push_error_(errs, oss.str());
+                }
+                const bool boundary_ok =
+                    (h.boundary == EscapeBoundaryKind::kReturn && h.pack_boundary == EscapePackBoundary::kReturn) ||
+                    (h.boundary == EscapeBoundaryKind::kCallArg && h.pack_boundary == EscapePackBoundary::kCallArg);
+                if (!boundary_ok || h.kind != EscapeHandleKind::kCallerSlot) {
+                    std::ostringstream oss;
+                    oss << "escape-handle #" << i
+                        << " abi_pack form requires matching return/call_arg boundary and kind=caller_slot"
+                        << " (got boundary=" << boundary_name_(h.boundary)
+                        << ", pack_boundary=" << pack_boundary_name_(h.pack_boundary)
+                        << ", kind=" << kind_name_(h.kind) << ")";
                     push_error_(errs, oss.str());
                 }
             }
-        }
-
-        // non-static 바인딩으로 escape 토큰을 물질화하는 경로를 금지한다.
-        for (uint32_t sid = 0; sid < (uint32_t)m.stmts.size(); ++sid) {
-            const auto& s = m.stmts[sid];
-            if (s.kind != StmtKind::kVarDecl) continue;
-            if (s.is_static) continue;
-
-            if (s.init == k_invalid_value || (size_t)s.init >= m.values.size()) continue;
-            if (m.values[s.init].kind != ValueKind::kEscape) continue;
-            const bool escape_alias_var =
-                s.is_set &&
-                !s.is_mut &&
-                !s.is_static;
-            if (escape_alias_var) continue;
-
-            std::ostringstream oss;
-            oss << "stmt #" << sid
-                << " materializes escape handle into non-static variable declaration";
-            push_error_(errs, oss.str());
-        }
-
-        for (uint32_t vid = 0; vid < (uint32_t)m.values.size(); ++vid) {
-            const auto& v = m.values[vid];
-            if (v.kind != ValueKind::kAssign) continue;
-            if (v.b == k_invalid_value || (size_t)v.b >= m.values.size()) continue;
-            if (m.values[v.b].kind != ValueKind::kEscape) continue;
-            if (is_static_place_(m, v.a, static_symbols)) continue;
-
-            std::ostringstream oss;
-            oss << "value #" << vid
-                << " materializes escape handle into non-static assignment target";
-            push_error_(errs, oss.str());
         }
 
         for (uint32_t vid = 0; vid < (uint32_t)m.values.size(); ++vid) {

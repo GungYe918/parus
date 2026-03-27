@@ -77,7 +77,7 @@ namespace parus::oir {
         AsB,   // as! T
     };
 
-    /// @brief escape-handle storage kind(내부 비물질화 토큰의 의미 힌트).
+    /// @brief escape-handle storage kind(owner cell / boundary pack 의미 힌트).
     enum class EscapeHandleKind : uint8_t {
         Trivial = 0,
         StackSlot,

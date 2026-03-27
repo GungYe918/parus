@@ -631,8 +631,8 @@ namespace parus::diag {
             case Code::kEscapeWhileBorrowActive: return "cannot apply '~' while an active borrow exists for this place";
             case Code::kEscapeRequiresStaticOrBoundary: return "escaping '~' requires static storage or direct return/call-argument boundary";
             case Code::kSirUseAfterEscapeMove: return "use-after-move detected in SIR capability analysis ('~' moved value)";
-            case Code::kSirEscapeBoundaryViolation: return "SIR capability analysis: escape value must be consumed at return/call boundary or originate from static storage";
-            case Code::kSirEscapeMustNotMaterialize: return "SIR capability analysis: escape handle cannot be materialized into non-static bindings";
+            case Code::kSirEscapeBoundaryViolation: return "SIR capability analysis: escape rvalue must commit into an allowed owner cell or cross a call/return boundary";
+            case Code::kSirEscapeMustNotMaterialize: return "SIR capability analysis: escape handle cannot be committed into this storage shape";
 
             case Code::kTopLevelMustBeBlock: return "internal: program root must be a block";
             case Code::kTopLevelDeclOnly: return "top-level allows declarations only";
@@ -732,7 +732,7 @@ namespace parus::diag {
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '?" "?=' requires rhs assignable to {0} (got {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "empty array literal requires an explicit contextual type";
             case Code::kTypeFieldMemberRangeInvalid: return "internal: struct member range is out of AST bounds";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct member '{0}' must use a POD builtin value type (got {1})";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct member '{0}' must use a POD builtin value type or `~T`/`(~T)?` in this round (got {1})";
             case Code::kFieldInitTypeExpected: return "struct initializer head must be a struct type (got '{0}')";
             case Code::kFieldInitUnknownMember: return "struct initializer for '{0}' has unknown member '{1}'";
             case Code::kFieldInitDuplicateMember: return "struct initializer has duplicate member '{0}'";
@@ -1010,8 +1010,8 @@ namespace parus::diag {
             case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '~'를 적용할 수 없습니다";
             case Code::kEscapeRequiresStaticOrBoundary: return "'~' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";
             case Code::kSirUseAfterEscapeMove: return "SIR capability 분석에서 use-after-move가 감지되었습니다('~'로 move된 값 사용)";
-            case Code::kSirEscapeBoundaryViolation: return "SIR capability 분석: escape 값은 return/호출 인자 경계에서 소비되거나 static 저장소 기원이어야 합니다";
-            case Code::kSirEscapeMustNotMaterialize: return "SIR capability 분석: escape handle은 non-static 바인딩으로 물질화할 수 없습니다";
+            case Code::kSirEscapeBoundaryViolation: return "SIR capability 분석: escape rvalue는 허용된 owner cell에 commit되거나 return/호출 인자 경계를 넘어야 합니다";
+            case Code::kSirEscapeMustNotMaterialize: return "SIR capability 분석: escape handle은 이 storage shape으로 commit될 수 없습니다";
 
             case Code::kTopLevelMustBeBlock: return "내부 오류: 프로그램 루트는 블록이어야 합니다";
             case Code::kTopLevelDeclOnly: return "최상위에서는 decl만 허용됩니다";
@@ -1114,7 +1114,7 @@ namespace parus::diag {
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "'?" "?=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "빈 배열 리터럴은 명시적 문맥 타입이 필요합니다";
             case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: struct 멤버 범위가 AST 범위를 벗어났습니다";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct 멤버 '{0}'는 POD 내장 값 타입이어야 합니다(현재 {1})";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct 멤버 '{0}'는 이번 라운드에서 POD 내장 값 타입 또는 `~T`/`(~T)?` 여야 합니다(현재 {1})";
             case Code::kFieldInitTypeExpected: return "struct 초기화 헤드는 struct 타입이어야 합니다(현재 '{0}')";
             case Code::kFieldInitUnknownMember: return "struct '{0}' 초기화에 존재하지 않는 멤버 '{1}'가 있습니다";
             case Code::kFieldInitDuplicateMember: return "struct 초기화에서 멤버 '{0}'가 중복되었습니다";

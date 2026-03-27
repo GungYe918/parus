@@ -640,6 +640,7 @@ bool test_check_capability_diagnostic_surface() {
         "def main() -> i32 {\n"
         "  let x: i32 = 1i32;\n"
         "  let h: ~i32 = ~x;\n"
+        "  let p: &i32 = &h;\n"
         "  return 0i32;\n"
         "}\n";
 
@@ -655,7 +656,7 @@ bool test_check_capability_diagnostic_surface() {
         std::cerr << "capability diagnostic seed should fail but passed (parusc)\n" << out;
         return false;
     }
-    if (!contains(out, "SirEscapeBoundaryViolation")) {
+    if (!contains(out, "BorrowOperandMustBeOwnedPlace")) {
         std::cerr << "capability failure did not surface detailed diagnostic\n" << out;
         return false;
     }
@@ -4089,6 +4090,128 @@ bool test_consume_binding_optional_escape_runtime() {
     return true;
 }
 
+bool test_escape_first_class_places_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-first-class-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string main_src =
+        "proto Probe {\n"
+        "  provide def probe() -> i32 {\n"
+        "    return 40i32;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "\n"
+        "  init(v: i32) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def run(self) -> i32 {\n"
+        "    return self.value + 2i32;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Holder {\n"
+        "  value: ~Worker;\n"
+        "\n"
+        "  init(v: ~Worker) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def run(self) -> i32 {\n"
+        "    return self.value.run() + self.value->probe();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Box<T> with [T: Probe] {\n"
+        "  value: ~T;\n"
+        "\n"
+        "  init(v: ~T) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def probe_value(self) -> i32 {\n"
+        "    return self.value->probe();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def id_handle(h: ~Worker) -> ~Worker {\n"
+        "  return h;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let h: ~Worker = make(5i32);\n"
+        "  set moved = id_handle(h);\n"
+        "  let a: i32 = moved.run() + moved->probe();\n"
+        "\n"
+        "  set holder = Holder(make(7i32));\n"
+        "  let b: i32 = holder.run();\n"
+        "\n"
+        "  let mut slot: (~Worker)? = make(9i32);\n"
+        "  let taken: ~Worker = slot else {\n"
+        "    return 1i32;\n"
+        "  };\n"
+        "  let c: i32 = taken.run() + taken->probe();\n"
+        "\n"
+        "  set box = Box<Worker>(make(11i32));\n"
+        "  let d: i32 = box.probe_value();\n"
+        "\n"
+        "  return a + b + c + d;\n"
+        "}\n";
+    if (!write_text(main_pr, main_src)) {
+        std::cerr << "failed to write first-class ~ runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for first-class ~ runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "first-class ~ runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "first-class ~ runtime sample should execute\n" << out_run;
+        return false;
+    }
+    if (!contains(out_run, "EXIT:187")) {
+        std::cerr << "first-class ~ runtime exit mismatch (expected 187)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
 bool test_iteration_unsupported_iterable_hard_error() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -7134,6 +7257,7 @@ int main() {
     const bool ok85 = test_cstr_private_fields_hidden_but_helpers_work();
     const bool ok86 = test_external_generic_constraints_v2_work();
     const bool ok87 = test_external_generic_type_body_closure_v2_work();
+    const bool ok88 = test_escape_first_class_places_runtime();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -7142,7 +7266,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85 || !ok86 || !ok87) {
+        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88) {
         return 1;
     }
 

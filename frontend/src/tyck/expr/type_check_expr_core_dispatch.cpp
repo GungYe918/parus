@@ -1591,8 +1591,78 @@ namespace parus::tyck {
         return rec(rec, t);
     }
 
+    bool TypeChecker::type_contains_escape_(ty::TypeId t) const {
+        std::unordered_set<ty::TypeId> visiting{};
+        auto rec = [&](auto&& self, ty::TypeId cur) -> bool {
+            if (cur == ty::kInvalidType || is_error_(cur)) return false;
+            if (!visiting.insert(cur).second) return false;
+
+            const auto& tt = types_.get(cur);
+            switch (tt.kind) {
+                case ty::Kind::kEscape:
+                    return true;
+
+                case ty::Kind::kBuiltin:
+                case ty::Kind::kBorrow:
+                case ty::Kind::kPtr:
+                case ty::Kind::kFn:
+                case ty::Kind::kError:
+                    return false;
+
+                case ty::Kind::kOptional:
+                case ty::Kind::kArray:
+                    return tt.elem != ty::kInvalidType && self(self, tt.elem);
+
+                case ty::Kind::kNamedUser: {
+                    if (field_abi_meta_by_type_.find(cur) != field_abi_meta_by_type_.end()) {
+                        const auto& layout = field_abi_meta_by_type_.at(cur);
+                        const ast::StmtId sid = layout.sid;
+                        if (sid != ast::k_invalid_stmt && (size_t)sid < ast_.stmts().size()) {
+                            const auto& s = ast_.stmt(sid);
+                            const uint64_t begin = s.field_member_begin;
+                            const uint64_t end = begin + s.field_member_count;
+                            if (begin <= ast_.field_members().size() && end <= ast_.field_members().size()) {
+                                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                                    if (self(self, ast_.field_members()[i].type)) return true;
+                                }
+                            }
+                        }
+                    }
+
+                    auto eit = enum_abi_meta_by_type_.find(cur);
+                    if (eit != enum_abi_meta_by_type_.end()) {
+                        for (const auto& variant : eit->second.variants) {
+                            for (const auto& field : variant.fields) {
+                                if (self(self, field.type)) return true;
+                            }
+                        }
+                    }
+
+                    auto cit = class_decl_by_type_.find(cur);
+                    if (cit != class_decl_by_type_.end()) {
+                        const ast::StmtId sid = cit->second;
+                        if (sid != ast::k_invalid_stmt && (size_t)sid < ast_.stmts().size()) {
+                            const auto& s = ast_.stmt(sid);
+                            const uint64_t begin = s.field_member_begin;
+                            const uint64_t end = begin + s.field_member_count;
+                            if (begin <= ast_.field_members().size() && end <= ast_.field_members().size()) {
+                                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                                    if (self(self, ast_.field_members()[i].type)) return true;
+                                }
+                            }
+                        }
+                    }
+
+                    return false;
+                }
+            }
+            return false;
+        };
+        return rec(rec, t);
+    }
+
     bool TypeChecker::is_move_only_type_(ty::TypeId t) const {
-        return type_needs_drop_(t);
+        return type_needs_drop_(t) || type_contains_escape_(t);
     }
 
     bool TypeChecker::is_trivial_copy_clone_type_(ty::TypeId t) const {

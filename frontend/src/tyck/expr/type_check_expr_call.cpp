@@ -576,9 +576,14 @@ namespace parus::tyck {
 
             ty::TypeId owner_t = check_expr_(recv_eid);
             if (owner_t != ty::kInvalidType) {
-                const auto& ot = types_.get(owner_t);
-                if (ot.kind == ty::Kind::kBorrow) {
-                    owner_t = ot.elem;
+                while (owner_t != ty::kInvalidType) {
+                    const auto& ot = types_.get(owner_t);
+                    if ((ot.kind == ty::Kind::kBorrow || ot.kind == ty::Kind::kEscape) &&
+                        ot.elem != ty::kInvalidType) {
+                        owner_t = ot.elem;
+                        continue;
+                    }
+                    break;
                 }
             }
 

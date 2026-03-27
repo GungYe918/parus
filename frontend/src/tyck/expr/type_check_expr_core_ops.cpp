@@ -793,7 +793,15 @@
             if (!is_error_(at)) {
                 const auto& atv = types_.get(at);
                 if (atv.kind == ty::Kind::kBorrow || atv.kind == ty::Kind::kEscape) {
-                    diag_(diag::Code::kBorrowOperandMustBeOwnedPlace, e.span);
+                    if (atv.kind == ty::Kind::kEscape) {
+                        diag::Diagnostic d(diag::Severity::kError, diag::Code::kBorrowOperandMustBeOwnedPlace, e.span);
+                        d.add_label(ast_.expr(e.a).span, "this place has type `" + types_.to_string(at) + "`");
+                        d.add_note("`~T` is a move-only owner handle, not a source-level borrowable reference");
+                        d.add_help("call a method directly on the `~T` value, or move it through a `~T`/`(~T)?` path");
+                        if (diag_bag_) diag_bag_->add(std::move(d));
+                    } else {
+                        diag_(diag::Code::kBorrowOperandMustBeOwnedPlace, e.span);
+                    }
                     err_(e.span, "borrow '&' can only be created from owned place values");
                     return types_.error();
                 }
@@ -811,6 +819,19 @@
                 }
             }
             ty::TypeId at = check_expr_(e.a);
+            if (!is_error_(at)) {
+                const auto& atv = types_.get(at);
+                if (atv.kind == ty::Kind::kEscape) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, e.span);
+                    d.add_arg("re-escaping `~T` is not allowed");
+                    d.add_label(ast_.expr(e.a).span, "this expression already has type `" + types_.to_string(at) + "`");
+                    d.add_note("`~x` is the only explicit state transition from owned value to escape handle");
+                    d.add_help("move the existing `~T` value directly, or store it in `(~T)?` and use consume-binding");
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                    err_(e.span, "re-escaping an existing `~T` value is not allowed");
+                    return types_.error();
+                }
+            }
             if (!is_error_(at)) {
                 mark_expr_move_consumed_(e.a, at, e.span);
             }
@@ -1368,8 +1389,21 @@
             }
 
             if (meta_it == field_abi_meta_by_type_.end()) {
-                diag_(diag::Code::kTypeErrorGeneric, e.span,
-                    std::string("member access is only available on field/class/actor values in v0, got ") + types_.to_string(base_t));
+                if (types_.get(base_t).kind == ty::Kind::kEscape) {
+                    diag::Diagnostic d(
+                        diag::Severity::kError,
+                        diag::Code::kTypeErrorGeneric,
+                        e.span
+                    );
+                    d.add_arg(std::string("direct field/index projection on `~T` is deferred in this round (got ") +
+                              types_.to_string(base_t) + ")");
+                    d.add_note("`~T` supports local/field/optional storage and method/proto calls, but not direct projection");
+                    d.add_help("store the handle in `(~T)?` and use consume-binding, or call a method on the `~T` value directly");
+                    diag_bag_->add(d);
+                } else {
+                    diag_(diag::Code::kTypeErrorGeneric, e.span,
+                        std::string("member access is only available on field/class/actor values in v0, got ") + types_.to_string(base_t));
+                }
                 err_(e.span, "member access on non field/class/actor value");
                 return types_.error();
             }

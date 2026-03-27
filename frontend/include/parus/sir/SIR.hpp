@@ -128,6 +128,26 @@ namespace parus::sir {
         kAbi,
     };
 
+    enum class EscapeValueForm : uint8_t {
+        kRValue = 0,
+        kCell,
+        kAbiPack,
+    };
+
+    enum class EscapeCellKind : uint8_t {
+        kNone = 0,
+        kLocal,
+        kField,
+        kStatic,
+        kOptional,
+    };
+
+    enum class EscapePackBoundary : uint8_t {
+        kNone = 0,
+        kCallArg,
+        kReturn,
+    };
+
     inline constexpr uint8_t kManualPermGet = 1u << 0;
     inline constexpr uint8_t kManualPermSet = 1u << 1;
     inline constexpr uint8_t kManualPermAbi = 1u << 2;
@@ -531,7 +551,7 @@ namespace parus::sir {
         ConstInitData const_init{};
     };
 
-    /// @brief `~` 표현식에서 추출한 handle3 의미 메타데이터(내부는 비물질화 토큰 유지).
+    /// @brief `~` 표현식에서 추적하는 owner-handle 메타데이터.
     struct EscapeHandleMeta {
         ValueId escape_value = k_invalid_value;
         Span span{};
@@ -545,9 +565,11 @@ namespace parus::sir {
         bool from_static = false;
         bool has_drop = false;
         bool abi_pack_required = false;
-
-        // v0 규칙: OIR 진입 전 반드시 0이어야 한다.
-        uint32_t materialize_count = 0;
+        EscapeValueForm value_form = EscapeValueForm::kRValue;
+        EscapeCellKind cell_kind = EscapeCellKind::kNone;
+        EscapePackBoundary pack_boundary = EscapePackBoundary::kNone;
+        uint32_t cell_commit_count = 0;
+        uint32_t abi_pack_count = 0;
     };
 
     class Module {

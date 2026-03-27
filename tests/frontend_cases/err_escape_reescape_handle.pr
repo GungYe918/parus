@@ -1,0 +1,10 @@
+class Worker {
+  init() = default;
+};
+
+def main() -> i32 {
+  set w = Worker();
+  let h: ~Worker = ~w;
+  let h2: ~Worker = ~h;
+  return 0i32;
+}
