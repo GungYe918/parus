@@ -103,10 +103,17 @@ def main() -> i32 {
 
 import 규칙:
 
-1. source-level constraint target은 ordinary path lookup 규칙을 따른다.
-2. 따라서 사용자가 직접 `with [T: constraints::Comparable]`를 쓰는 경우 lexical import가 계속 필요하다.
-3. 이 규칙 완화는 source 문법이 아니라 imported generic metadata 해석 문제와 분리한다.
-4. external generic free function sidecar/import 경로에서는 canonical proto identity를 사용하므로, consumer는 library 내부 constraint proto를 다시 import하지 않아도 된다.
+1. source-level import 완화는 `proto target` 위치에만 적용한다.
+2. 허용:
+   - `with [T: constraints::Comparable]`
+   - `proto Derived: api::BaseProto`
+   - `class Box<T>: api::Defaulted<T>`
+   - `acts for Vec<T> with [T: api::Comparable]`
+3. 위 위치에서는 qualified public proto path를 lexical import 없이 직접 해석할 수 있다.
+4. 이 완화는 public exported proto에만 적용되며 hidden/internal proto를 source에서 직접 여는 우회 수단이 아니다.
+5. ordinary value/type path import 규칙은 그대로 유지한다.
+6. 따라서 `api::Box<i32>`, `cmp::min(...)`, `api::Foo::BAR` 같은 ordinary expression/type path는 계속 lexical import가 필요하다.
+7. external generic metadata 해석은 여전히 canonical proto identity를 사용하므로, consumer는 library 내부 constraint proto를 다시 import하지 않아도 된다.
 
 `ProtoTarget` 규칙:
 
@@ -163,7 +170,15 @@ def main() -> i32 {
 ```
 
 위 소비자 코드는 `constraints`를 직접 import하지 않아도 된다.  
-이 완화는 imported metadata에만 적용되며, 소비자 source가 자기 파일 안에서 직접 `with [T: constraints::Comparable]`를 쓸 때는 계속 import가 필요하다.
+또한 source-level proto target 위치에서도 아래 표면은 import 없이 허용된다.
+
+```parus
+def ordered<T>(x: T) with [T: constraints::Comparable] -> bool {
+  return x >= x;
+}
+```
+
+하지만 ordinary type/value path는 계속 import가 필요하다.
 
 ## 19.8 builtin proto family
 

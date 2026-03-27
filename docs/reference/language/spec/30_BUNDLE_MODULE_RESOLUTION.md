@@ -98,6 +98,18 @@
 3. closure-private helper declaration은 imported template table 내부 노드로만 존재하고, ordinary export/import visibility 규칙을 우회하지 않는다.
 4. helper `actor` dependency closure와 global private state / class-static mutable state dependency closure는 v0 범위 밖이다.
 
+## 18.7-b Proto-Target Qualified Path Exception
+
+1. ordinary value/type path는 계속 lexical import 규칙을 따른다.
+2. 예외는 `proto target` 위치뿐이다.
+3. `proto target` 위치에는 아래가 포함된다.
+3-a. generic constraint RHS
+3-b. proto inheritance target
+3-c. class/struct/enum의 proto attachment target
+3-d. acts header의 generic constraint RHS
+4. 위 위치에서는 qualified public proto path를 lexical import 없이 직접 해석할 수 있다.
+5. 이 예외는 hidden/internal proto나 ordinary expression/type symbol까지 넓어지지 않는다.
+
 ## 18.8 진단 코드 계약
 
 필수 진단 코드는 다음을 사용한다.

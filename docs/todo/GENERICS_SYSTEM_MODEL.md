@@ -298,7 +298,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. helper `actor` dependency closure 확장
 2. generic actor lane 공통 mono 이전
-3. source-level import ergonomics 완화 검토
+3. source-level import ergonomics 완화 구현
 
 이번 라운드 활성화 범위는 아래로 고정한다.
 
@@ -312,7 +312,7 @@ ActsForDecl    := "acts" NameOpt "for" TypePath ConstraintClauseOpt ActsBody ;
 
 1. helper `actor` dependency closure
 2. global private state / class-static mutable state dependency closure
-3. source-level proto/type import ergonomics 완화
+3. source-level ordinary type/value import ergonomics 완화
 
 구현 모델:
 
@@ -365,9 +365,17 @@ typed sidecar v2 payload:
 
 또한 아래가 같이 성립해야 한다.
 
-1. source-level `with [T: constraints::Comparable]`는 계속 import가 필요하다.
+1. source-level import 완화는 proto target 위치에만 적용된다.
+1. `with [T: constraints::Comparable]`, `proto A: api::BaseProto`, `class X: api::Proto<T>`는 import 없이 허용된다.
+1. ordinary value/type path는 계속 import가 필요하다.
 1. imported generic metadata 안의 same constraint는 consumer import 없이 해석된다.
 1. `text -> *const c_char` dead bridge는 제거된다.
+
+이번 라운드 cache/dedup 기준:
+
+1. mono key는 `producer bundle + template symbol + concrete tuple + target + abi` canonical helper로 통일한다.
+1. kind별 cache map은 유지하되 key builder는 공통 helper를 사용한다.
+1. sidecar dedup은 canonical template identity 기준으로 수행한다.
 
 ## 6.2 v2: Generic Acts + Coherence
 

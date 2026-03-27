@@ -173,6 +173,12 @@ payload 원칙:
 6. `Decl span/file`
    - diagnostics용 decl file / line / col
 
+sidecar dedup 원칙:
+
+1. sidecar node dedup key는 canonical template identity를 사용한다.
+2. 기준은 `bundle + kind + module head + public path/hidden lookup name + link name`이다.
+3. decl file / line / col은 dedup key에 포함하지 않고 diagnostics payload로만 유지한다.
+
 이번 라운드 비범위:
 
 1. IR-level template serialization
@@ -222,6 +228,9 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 10. exported generic root의 helper `class` whole-body dependency closure
 11. installed core generic helper와 generic member surface 복원
 12. concrete shim 제거
+13. source-level proto target qualified path import 완화
+14. canonical monomorphization key helper 통일
+15. sidecar dedup을 canonical template identity 기준으로 강화
 
 이번 라운드에서 아직 열지 않는 것:
 
