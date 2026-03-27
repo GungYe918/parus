@@ -2713,7 +2713,9 @@ bool test_external_generic_constraints_v2_work() {
         "\" --load-export-index \"" + lib_index.string() + "\"");
     if (rc_hidden_proto == 0 ||
         (!contains(out_hidden_proto, "GenericConstraintProtoNotFound") &&
-         !contains(out_hidden_proto, "unknown proto in generic constraint"))) {
+         !contains(out_hidden_proto, "unknown proto in generic constraint")) ||
+        !contains(out_hidden_proto, "note: proto-target import ergonomics only applies to public exported proto targets") ||
+        !contains(out_hidden_proto, "help: add an explicit import for the proto, or export the proto through a public path")) {
         std::cerr << "hidden proto must not become source-visible through proto-target import ergonomics\n"
                   << out_hidden_proto;
         std::filesystem::remove_all(temp_root, ec);
@@ -3236,9 +3238,64 @@ bool test_external_generic_type_body_closure_v2_work() {
          !contains(out_hidden_ref, "unknown type") &&
          !contains(out_hidden_ref, "SymbolNotExportedFileScope") &&
          !contains(out_hidden_ref, "UnknownType") &&
-         !contains(out_hidden_ref, "no callable declaration candidate"))) {
+         !contains(out_hidden_ref, "no callable declaration candidate")) ||
+        !contains(out_hidden_ref, "note: closure-private helper declarations are only materialized inside imported generic bodies") ||
+        !contains(out_hidden_ref, "help: reference the exported root API instead, or export this helper through a public path")) {
         std::cerr << "closure-private helper type must not become a lexical public import\n"
                   << out_hidden_ref;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto bad_state_pr = temp_root / "lib_bad_state.pr";
+    const std::string bad_state_src =
+        "nest bad;\n"
+        "\n"
+        "static mut GLOBAL: i32 = 1i32;\n"
+        "\n"
+        "class HiddenBox<T> {\n"
+        "  stored: T;\n"
+        "\n"
+        "  init(v: T) {\n"
+        "    self.stored = v;\n"
+        "  }\n"
+        "\n"
+        "  def score(self) -> i32 {\n"
+        "    return GLOBAL;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "export class Box<T> {\n"
+        "  stored: T;\n"
+        "\n"
+        "  init(v: T) {\n"
+        "    self.stored = v;\n"
+        "  }\n"
+        "\n"
+        "  def score(self) -> i32 {\n"
+        "    let h: HiddenBox<T> = HiddenBox<T>(self.stored);\n"
+        "    return h.score();\n"
+        "  }\n"
+        "};\n";
+    if (!write_text(bad_state_pr, bad_state_src)) {
+        std::cerr << "failed to write mutable-global closure rejection sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto bad_state_index = temp_root / "lib_bad_state.exports.json";
+    auto [rc_bad_state, out_bad_state] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + bad_state_pr.string() +
+        "\" -fsyntax-only --bundle-name bad --bundle-root \"" + temp_root.string() +
+        "\" --module-head bad --bundle-source \"" + bad_state_pr.string() +
+        "\" --load-export-index \"" + installed_core_index_path.string() +
+        "\" --emit-export-index \"" + bad_state_index.string() + "\"");
+    if (rc_bad_state == 0 ||
+        !contains(out_bad_state, "TemplateSidecarUnsupportedClosure") ||
+        !contains(out_bad_state, "unsupported mutable global dependency closure") ||
+        !contains(out_bad_state, "note: dependency chain:") ||
+        !contains(out_bad_state, "help: remove the mutable global/static dependency from the exported generic closure")) {
+        std::cerr << "mutable global dependency closure must be rejected with a structured diagnostic\n"
+                  << out_bad_state;
         std::filesystem::remove_all(temp_root, ec);
         return false;
     }
@@ -3257,7 +3314,10 @@ bool test_external_generic_type_body_closure_v2_work() {
     std::filesystem::remove_all(temp_root, ec);
     if (rc_broken == 0 ||
         (!contains(out_broken, "unsupported template-sidecar version") &&
-         !contains(out_broken, "ExportIndexSchema"))) {
+         !contains(out_broken, "TemplateSidecarSchema") &&
+         !contains(out_broken, "ExportIndexSchema")) ||
+        !contains(out_broken, "note:") ||
+        !contains(out_broken, "help:")) {
         std::cerr << "broken closure sidecar must report template payload load failure\n" << out_broken;
         return false;
     }

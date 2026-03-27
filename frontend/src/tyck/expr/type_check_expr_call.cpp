@@ -434,31 +434,23 @@ namespace parus::tyck {
 
         auto collect_imported_template_overloads_for_external_symbol_ = [&](const sema::Symbol& sym) {
             std::vector<ast::StmtId> out{};
+            std::unordered_set<ast::StmtId> seen{};
             auto add_sid = [&](ast::StmtId sid) {
                 if (sid == ast::k_invalid_stmt) return;
-                if (std::find(out.begin(), out.end(), sid) != out.end()) return;
+                if (!seen.insert(sid).second) return;
                 out.push_back(sid);
             };
             auto add_name = [&](std::string_view candidate) {
                 if (candidate.empty()) return;
-                if (auto it = imported_fn_template_sid_by_lookup_name_.find(std::string(candidate));
-                    it != imported_fn_template_sid_by_lookup_name_.end()) {
-                    add_sid(it->second);
-                }
-                auto fit = fn_decl_by_name_.find(std::string(candidate));
-                if (fit == fn_decl_by_name_.end()) return;
-                for (const auto sid : fit->second) {
-                    if (imported_fn_template_sid_set_.find(sid) == imported_fn_template_sid_set_.end()) {
-                        continue;
-                    }
+                for (const auto sid : lookup_imported_fn_templates_by_name_(candidate)) {
                     add_sid(sid);
                 }
             };
 
             if (!sym.link_name.empty()) {
-                if (auto it = imported_fn_template_sid_by_link_name_.find(sym.link_name);
-                    it != imported_fn_template_sid_by_link_name_.end()) {
-                    add_sid(it->second);
+                if (auto sid = lookup_imported_fn_template_by_link_name_(sym.link_name);
+                    sid.has_value()) {
+                    add_sid(*sid);
                 }
             }
 
@@ -488,7 +480,6 @@ namespace parus::tyck {
             }
 
             std::sort(out.begin(), out.end());
-            out.erase(std::unique(out.begin(), out.end()), out.end());
             return out;
         };
 
@@ -1853,9 +1844,9 @@ namespace parus::tyck {
                             if (sym.is_external &&
                                 !sym.link_name.empty() &&
                                 sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                if (auto templ_it = imported_fn_template_sid_by_link_name_.find(sym.link_name);
-                                    templ_it != imported_fn_template_sid_by_link_name_.end()) {
-                                    overload_decl_ids = {templ_it->second};
+                                if (auto templ_sid = lookup_imported_fn_template_by_link_name_(sym.link_name);
+                                    templ_sid.has_value()) {
+                                    overload_decl_ids = {*templ_sid};
                                 }
                             }
                             if (overload_decl_ids.empty()) {
@@ -1925,9 +1916,9 @@ namespace parus::tyck {
                                     if (resolved_sym.is_external &&
                                         !resolved_sym.link_name.empty() &&
                                         resolved_sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                        if (auto templ_it = imported_fn_template_sid_by_link_name_.find(resolved_sym.link_name);
-                                            templ_it != imported_fn_template_sid_by_link_name_.end()) {
-                                            overload_decl_ids = {templ_it->second};
+                                        if (auto templ_sid = lookup_imported_fn_template_by_link_name_(resolved_sym.link_name);
+                                            templ_sid.has_value()) {
+                                            overload_decl_ids = {*templ_sid};
                                         }
                                     }
                                     if (overload_decl_ids.empty()) {
@@ -2708,6 +2699,40 @@ namespace parus::tyck {
                 cache_external_callee_(selected_external_sym, selected_external_fn_type);
                 return {true, types_.get(selected_external_fn_type).ret};
             }
+            auto emit_external_generic_failure_diag_ = [&](diag::Code code,
+                                                           std::string_view a0 = {},
+                                                           std::string_view a1 = {},
+                                                           std::string_view a2 = {},
+                                                           std::string_view a3 = {}) {
+                if (!diag_bag_) return;
+                diag::Diagnostic d(diag::Severity::kError, code, e.span);
+                if (!a0.empty()) d.add_arg(a0);
+                if (!a1.empty()) d.add_arg(a1);
+                if (!a2.empty()) d.add_arg(a2);
+                if (!a3.empty()) d.add_arg(a3);
+                switch (code) {
+                    case diag::Code::kGenericConstraintProtoNotFound:
+                        d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                        d.add_note("the imported generic declaration depends on a proto target that could not be resolved");
+                        d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                        break;
+                    case diag::Code::kGenericConstraintUnsatisfied:
+                        d.add_note("constraint checking happens after substituting the concrete type tuple for this imported generic call");
+                        d.add_help("choose type arguments that satisfy the required proto, or relax the producer-side constraint");
+                        break;
+                    case diag::Code::kGenericConstraintTypeMismatch:
+                        d.add_note("generic equality constraints are checked after the imported call is concretized");
+                        d.add_help("make both sides reduce to the same concrete type");
+                        break;
+                    case diag::Code::kGenericTypeArgInferenceFailed:
+                        d.add_note("the compiler could not infer all generic arguments for this imported call shape");
+                        d.add_help("add explicit type arguments to the call");
+                        break;
+                    default:
+                        break;
+                }
+                diag_bag_->add(std::move(d));
+            };
             if (ext_has_arity) {
                 diag_(diag::Code::kGenericArityMismatch, e.span,
                       std::to_string(ext_expected_arity),
@@ -2717,27 +2742,37 @@ namespace parus::tyck {
                 return {true, fallback_ret};
             }
             if (ext_has_proto_not_found) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, ext_proto_not_found);
+                emit_external_generic_failure_diag_(
+                    diag::Code::kGenericConstraintProtoNotFound,
+                    ext_proto_not_found
+                );
                 err_(e.span, "generic constraint references unknown proto");
                 check_all_arg_exprs_only();
                 return {true, fallback_ret};
             }
             if (ext_has_unsatisfied) {
-                diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
-                      ext_unsat_lhs, ext_unsat_rhs, ext_unsat_concrete);
+                emit_external_generic_failure_diag_(
+                    diag::Code::kGenericConstraintUnsatisfied,
+                    ext_unsat_lhs, ext_unsat_rhs, ext_unsat_concrete
+                );
                 err_(e.span, "generic constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return {true, fallback_ret};
             }
             if (ext_has_type_mismatch) {
-                diag_(diag::Code::kGenericConstraintTypeMismatch, e.span,
-                      ext_eq_lhs, ext_eq_rhs, ext_eq_concrete_lhs, ext_eq_concrete_rhs);
+                emit_external_generic_failure_diag_(
+                    diag::Code::kGenericConstraintTypeMismatch,
+                    ext_eq_lhs, ext_eq_rhs, ext_eq_concrete_lhs, ext_eq_concrete_rhs
+                );
                 err_(e.span, "generic equality constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return {true, fallback_ret};
             }
             if (ext_has_infer_fail) {
-                diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                emit_external_generic_failure_diag_(
+                    diag::Code::kGenericTypeArgInferenceFailed,
+                    callee_name
+                );
                 err_(e.span, "failed to infer generic call type arguments");
                 check_all_arg_exprs_only();
                 return {true, fallback_ret};
@@ -3334,6 +3369,40 @@ namespace parus::tyck {
 
             if (selected_external_sym == sema::SymbolTable::kNoScope ||
                 selected_external_fn_type == ty::kInvalidType) {
+                auto emit_external_generic_failure_diag_ = [&](diag::Code code,
+                                                               std::string_view a0 = {},
+                                                               std::string_view a1 = {},
+                                                               std::string_view a2 = {},
+                                                               std::string_view a3 = {}) {
+                    if (!diag_bag_) return;
+                    diag::Diagnostic d(diag::Severity::kError, code, e.span);
+                    if (!a0.empty()) d.add_arg(a0);
+                    if (!a1.empty()) d.add_arg(a1);
+                    if (!a2.empty()) d.add_arg(a2);
+                    if (!a3.empty()) d.add_arg(a3);
+                    switch (code) {
+                        case diag::Code::kGenericConstraintProtoNotFound:
+                            d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                            d.add_note("the imported acts method depends on a proto target that could not be resolved");
+                            d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                            break;
+                        case diag::Code::kGenericConstraintUnsatisfied:
+                            d.add_note("constraint checking happens after substituting the concrete type tuple for this imported acts member");
+                            d.add_help("choose type arguments that satisfy the required proto, or relax the producer-side constraint");
+                            break;
+                        case diag::Code::kGenericConstraintTypeMismatch:
+                            d.add_note("generic equality constraints are checked after the imported acts member is concretized");
+                            d.add_help("make both sides reduce to the same concrete type");
+                            break;
+                        case diag::Code::kGenericTypeArgInferenceFailed:
+                            d.add_note("the compiler could not infer all generic arguments for this imported acts member call");
+                            d.add_help("add explicit type arguments to the call");
+                            break;
+                        default:
+                            break;
+                    }
+                    diag_bag_->add(std::move(d));
+                };
                 if (ext_has_arity) {
                     diag_(diag::Code::kGenericArityMismatch, e.span,
                           std::to_string(ext_expected_arity),
@@ -3343,27 +3412,37 @@ namespace parus::tyck {
                     return fallback_ret;
                 }
                 if (ext_has_proto_not_found) {
-                    diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, ext_proto_not_found);
+                    emit_external_generic_failure_diag_(
+                        diag::Code::kGenericConstraintProtoNotFound,
+                        ext_proto_not_found
+                    );
                     err_(e.span, "generic constraint references unknown proto");
                     check_all_arg_exprs_only();
                     return fallback_ret;
                 }
                 if (ext_has_unsatisfied) {
-                    diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
-                          ext_unsat_lhs, ext_unsat_rhs, ext_unsat_concrete);
+                    emit_external_generic_failure_diag_(
+                        diag::Code::kGenericConstraintUnsatisfied,
+                        ext_unsat_lhs, ext_unsat_rhs, ext_unsat_concrete
+                    );
                     err_(e.span, "generic constraint is not satisfied");
                     check_all_arg_exprs_only();
                     return fallback_ret;
                 }
                 if (ext_has_type_mismatch) {
-                    diag_(diag::Code::kGenericConstraintTypeMismatch, e.span,
-                          ext_eq_lhs, ext_eq_rhs, ext_eq_concrete_lhs, ext_eq_concrete_rhs);
+                    emit_external_generic_failure_diag_(
+                        diag::Code::kGenericConstraintTypeMismatch,
+                        ext_eq_lhs, ext_eq_rhs, ext_eq_concrete_lhs, ext_eq_concrete_rhs
+                    );
                     err_(e.span, "generic equality constraint is not satisfied");
                     check_all_arg_exprs_only();
                     return fallback_ret;
                 }
                 if (ext_has_infer_fail) {
-                    diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                    emit_external_generic_failure_diag_(
+                        diag::Code::kGenericTypeArgInferenceFailed,
+                        callee_name
+                    );
                     err_(e.span, "failed to infer generic call type arguments");
                     check_all_arg_exprs_only();
                     return fallback_ret;
@@ -3398,17 +3477,17 @@ namespace parus::tyck {
 
                 ast::StmtId imported_template_sid = ast::k_invalid_stmt;
                 if (overload_decl_ids.empty() && !selected_sym.link_name.empty()) {
-                    if (auto it = imported_fn_template_sid_by_link_name_.find(selected_sym.link_name);
-                        it != imported_fn_template_sid_by_link_name_.end()) {
-                        imported_template_sid = it->second;
+                    if (auto sid = lookup_imported_fn_template_by_link_name_(selected_sym.link_name);
+                        sid.has_value()) {
+                        imported_template_sid = *sid;
                     }
                 }
                 if (overload_decl_ids.empty() &&
                     imported_template_sid == ast::k_invalid_stmt &&
                     !selected_sym.name.empty()) {
-                    if (auto it = imported_fn_template_sid_by_lookup_name_.find(selected_sym.name);
-                        it != imported_fn_template_sid_by_lookup_name_.end()) {
-                        imported_template_sid = it->second;
+                    const auto sids = lookup_imported_fn_templates_by_name_(selected_sym.name);
+                    if (!sids.empty()) {
+                        imported_template_sid = sids.front();
                     }
                 }
 

@@ -213,6 +213,7 @@ namespace parusc::p0 {
 
             parus::diag::Diagnostic d(parus::diag::Severity::kError, code, span);
             d.add_arg(detail);
+            d.add_label(span, "while loading imported generic materialization data");
 
             if (code == Code::kTemplateSidecarUnsupportedClosure) {
                 const size_t colon = detail.find(": ");
@@ -236,6 +237,12 @@ namespace parusc::p0 {
                 d.add_note("external generic materialization requires the adjacent typed template-sidecar file");
                 d.add_help("load the producer bundle's export-index together with its .templates.json sidecar");
             } else {
+                if (detail.find("root kind is unsupported") != std::string_view::npos) {
+                    d.add_note("consumer-side validator found a node kind that does not match the expected template declaration kind");
+                } else if (detail.find("out of bounds") != std::string_view::npos ||
+                           detail.find("failed to reconstruct root decl") != std::string_view::npos) {
+                    d.add_note("consumer-side validator found malformed typed payload data while rebuilding the imported template");
+                }
                 d.add_note("template-sidecar loading failed before monomorphization could begin");
                 d.add_help("verify the sidecar schema/version and rebuild the producer bundle if needed");
             }
@@ -3873,16 +3880,6 @@ namespace parusc::p0 {
                 if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
                 const auto& s = ast.stmt(sid);
                 if (s.span.file_id != current_file_id) return;
-                if (s.kind == parus::ast::StmtKind::kBlock) {
-                    const auto& blk_kids = ast.stmt_children();
-                    const uint64_t begin = s.stmt_begin;
-                    const uint64_t end = begin + s.stmt_count;
-                    if (begin > blk_kids.size() || end > blk_kids.size()) return;
-                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
-                        self(self, blk_kids[s.stmt_begin + i]);
-                    }
-                    return;
-                }
                 if (s.kind == parus::ast::StmtKind::kNestDecl && !s.nest_is_file_directive) {
                     const auto& segs = ast.path_segs();
                     const uint64_t begin = s.nest_path_begin;
@@ -3894,7 +3891,22 @@ namespace parusc::p0 {
                             ++pushed;
                         }
                     }
-                    self(self, s.a);
+                    if (s.a != parus::ast::k_invalid_stmt &&
+                        static_cast<size_t>(s.a) < ast.stmts().size()) {
+                        const auto& body = ast.stmt(s.a);
+                        if (body.kind == parus::ast::StmtKind::kBlock) {
+                            const auto& blk_kids = ast.stmt_children();
+                            const uint64_t body_begin = body.stmt_begin;
+                            const uint64_t body_end = body_begin + body.stmt_count;
+                            if (body_begin <= blk_kids.size() && body_end <= blk_kids.size()) {
+                                for (uint32_t i = 0; i < body.stmt_count; ++i) {
+                                    self(self, blk_kids[body.stmt_begin + i]);
+                                }
+                            }
+                        } else {
+                            self(self, s.a);
+                        }
+                    }
                     while (pushed > 0) {
                         validate_ns.pop_back();
                         --pushed;
@@ -3919,12 +3931,28 @@ namespace parusc::p0 {
             }
 
             std::unordered_map<std::string, const TemplateSidecarFunction*> sidecar_by_name{};
+            const auto register_sidecar_name = [&](const TemplateSidecarFunction& templ,
+                                                   std::string_view name) {
+                if (name.empty()) return;
+                sidecar_by_name.emplace(std::string(name), &templ);
+            };
+            std::unordered_map<std::string, std::vector<std::string>> sidecar_decl_ref_cache{};
             for (const auto& templ : out) {
                 if (!templ.public_path.empty()) {
-                    sidecar_by_name.emplace(templ.public_path, &templ);
+                    register_sidecar_name(templ, templ.public_path);
+                    if (!templ.module_head.empty()) {
+                        const std::string prefix = templ.module_head + "::";
+                        if (templ.public_path.starts_with(prefix)) {
+                            register_sidecar_name(templ, std::string_view(templ.public_path).substr(prefix.size()));
+                        }
+                    }
+                    const size_t last = templ.public_path.rfind("::");
+                    if (last != std::string::npos) {
+                        register_sidecar_name(templ, std::string_view(templ.public_path).substr(last + 2));
+                    }
                 }
                 if (!templ.lookup_name.empty()) {
-                    sidecar_by_name.emplace(templ.lookup_name, &templ);
+                    register_sidecar_name(templ, templ.lookup_name);
                 }
             }
 
@@ -3945,29 +3973,112 @@ namespace parusc::p0 {
                 return out;
             };
             const auto collect_sidecar_decl_refs = [&](const TemplateSidecarFunction& templ) {
+                const std::string cache_key = template_sidecar_identity_key_(templ);
+                if (auto it = sidecar_decl_ref_cache.find(cache_key);
+                    it != sidecar_decl_ref_cache.end()) {
+                    return it->second;
+                }
                 std::vector<std::string> refs{};
                 std::unordered_set<std::string> seen{};
-                for (const auto& ref : templ.path_refs) {
-                    if (!ref.path.empty() && seen.insert(ref.path).second) {
-                        refs.push_back(ref.path);
+                std::vector<std::string> namespace_prefixes{};
+                const auto add_namespace_prefix = [&](std::string_view path) {
+                    const size_t pos = path.rfind("::");
+                    if (pos == std::string_view::npos) return;
+                    const std::string prefix(path.substr(0, pos));
+                    if (!prefix.empty() &&
+                        std::find(namespace_prefixes.begin(), namespace_prefixes.end(), prefix) ==
+                            namespace_prefixes.end()) {
+                        namespace_prefixes.push_back(prefix);
                     }
+                };
+                add_namespace_prefix(templ.public_path);
+                add_namespace_prefix(templ.lookup_name);
+                if (!templ.module_head.empty() &&
+                    std::find(namespace_prefixes.begin(), namespace_prefixes.end(), templ.module_head) ==
+                        namespace_prefixes.end()) {
+                    namespace_prefixes.push_back(templ.module_head);
+                }
+                const auto add_ref_candidate = [&](std::string candidate) {
+                    if (candidate.empty()) return;
+                    std::vector<std::string> candidates{};
+                    candidates.push_back(candidate);
+                    if (candidate.find("::") == std::string::npos) {
+                        for (const auto& prefix : namespace_prefixes) {
+                            candidates.push_back(prefix + "::" + candidate);
+                        }
+                    }
+                    for (auto expanded : candidates) {
+                        for (;;) {
+                            if (seen.find(expanded) == seen.end() &&
+                                local_decl_by_qname.find(expanded) != local_decl_by_qname.end()) {
+                                seen.insert(expanded);
+                                refs.push_back(expanded);
+                                return;
+                            }
+                            const size_t pos = expanded.rfind("::");
+                            if (pos == std::string::npos) break;
+                            expanded.erase(pos);
+                        }
+                    }
+                    if (candidate.find("::") == std::string::npos) {
+                        const std::string suffix = "::" + candidate;
+                        for (const auto& [qname, _sid] : local_decl_by_qname) {
+                            if (qname == candidate ||
+                                (qname.size() > suffix.size() &&
+                                 qname.ends_with(suffix))) {
+                                if (seen.find(qname) == seen.end()) {
+                                    seen.insert(qname);
+                                    refs.push_back(qname);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                };
+                const auto add_ref_tokens = [&](std::string_view text) {
+                    std::string token{};
+                    auto flush = [&]() {
+                        if (token.empty()) return;
+                        add_ref_candidate(strip_generic_args(token));
+                        token.clear();
+                    };
+                    for (const char ch : text) {
+                        const bool is_token_char =
+                            (ch >= 'A' && ch <= 'Z') ||
+                            (ch >= 'a' && ch <= 'z') ||
+                            (ch >= '0' && ch <= '9') ||
+                            ch == '_' || ch == ':';
+                        if (is_token_char) {
+                            token.push_back(ch);
+                        } else {
+                            flush();
+                        }
+                    }
+                    flush();
+                };
+                for (const auto& ref : templ.path_refs) {
+                    if (!ref.path.empty()) add_ref_candidate(ref.path);
+                    if (!ref.type_repr.empty()) add_ref_tokens(ref.type_repr);
+                }
+                for (const auto& field : templ.field_members) {
+                    if (!field.type_repr.empty()) add_ref_tokens(field.type_repr);
+                }
+                for (const auto& cc : templ.constraints) {
+                    if (!cc.rhs_type_repr.empty()) add_ref_tokens(cc.rhs_type_repr);
+                    if (!cc.proto.path.empty()) add_ref_candidate(cc.proto.path);
                 }
                 for (const auto& expr : templ.exprs) {
-                    if (expr.text.empty()) continue;
-                    std::string candidate = strip_generic_args(expr.text);
-                    if (candidate.empty()) continue;
-                    for (;;) {
-                        if (seen.find(candidate) == seen.end() &&
-                            local_decl_by_qname.find(candidate) != local_decl_by_qname.end()) {
-                            seen.insert(candidate);
-                            refs.push_back(candidate);
-                            break;
-                        }
-                        const size_t pos = candidate.rfind("::");
-                        if (pos == std::string::npos) break;
-                        candidate.erase(pos);
-                    }
+                    if (!expr.text.empty()) add_ref_tokens(expr.text);
+                    if (!expr.cast_type_repr.empty()) add_ref_tokens(expr.cast_type_repr);
+                    if (!expr.target_type_repr.empty()) add_ref_tokens(expr.target_type_repr);
+                    if (!expr.field_init_type_repr.empty()) add_ref_tokens(expr.field_init_type_repr);
                 }
+                for (const auto& stmt : templ.stmts) {
+                    if (!stmt.type_repr.empty()) add_ref_tokens(stmt.type_repr);
+                    if (!stmt.fn_ret_repr.empty()) add_ref_tokens(stmt.fn_ret_repr);
+                    if (!stmt.acts_target_type_repr.empty()) add_ref_tokens(stmt.acts_target_type_repr);
+                }
+                sidecar_decl_ref_cache.emplace(cache_key, refs);
                 return refs;
             };
 
@@ -3991,7 +4102,6 @@ namespace parusc::p0 {
                             return false;
                         }
                         if (dep.kind == parus::ast::StmtKind::kVar &&
-                            dep.is_static &&
                             !dep.is_const) {
                             out_err = "unsupported mutable global dependency closure: " + dep_chain;
                             return false;
@@ -5327,6 +5437,7 @@ namespace parusc::p0 {
             out_file_bundle_overrides.clear();
             out_file_module_head_overrides.clear();
             out_err.clear();
+            std::unordered_map<std::string, parus::ty::TypeId> imported_type_cache{};
 
             const auto make_anchor_span = [&](const TemplateSidecarFunction& templ) -> parus::Span {
                 std::string fake{};
@@ -5428,6 +5539,19 @@ namespace parusc::p0 {
                                                              std::string_view semantic,
                                                              std::string_view inst_payload)
                         -> parus::ty::TypeId {
+                        std::string cache_key = index.bundle;
+                        cache_key.push_back('|');
+                        cache_key.append(templ.module_head);
+                        cache_key.push_back('|');
+                        cache_key.append(repr);
+                        cache_key.push_back('|');
+                        cache_key.append(semantic);
+                        cache_key.push_back('|');
+                        cache_key.append(inst_payload);
+                        if (auto it = imported_type_cache.find(cache_key);
+                            it != imported_type_cache.end()) {
+                            return it->second;
+                        }
                         const std::string current_module_head = relative_module_head(templ.module_head);
                         const auto it = bundle_local_types_by_module.find(current_module_head);
                         const auto& local_names =
@@ -5440,7 +5564,10 @@ namespace parusc::p0 {
                             bundle_module_heads,
                             local_names
                         );
-                        return parse_type_repr_into_(qualified.first, qualified.second, inst_payload, types);
+                        const auto parsed =
+                            parse_type_repr_into_(qualified.first, qualified.second, inst_payload, types);
+                        imported_type_cache.emplace(std::move(cache_key), parsed);
+                        return parsed;
                     };
 
                     clone_expr = [&](uint32_t src_idx) -> parus::ast::ExprId {

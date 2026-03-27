@@ -3213,6 +3213,35 @@ namespace {
         return ok;
     }
 
+    static bool test_mono_stats_dedup_repeated_generic_request() {
+        const std::string src = R"(
+            def id<T>(x: T) -> T {
+                return x;
+            }
+
+            def main() -> i32 {
+                let a: i32 = id(1i32);
+                let b: i32 = id(2i32);
+                return a + b;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "mono-stats dedup case must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "mono-stats dedup case must not emit tyck errors");
+        ok &= require_(ty.mono_stats.unique_request_count == 1,
+            "repeated identical generic request must count as one unique mono request");
+        ok &= require_(ty.mono_stats.mono_cache_miss_count >= 1,
+            "first generic instantiation must register a mono cache miss");
+        ok &= require_(ty.mono_stats.mono_cache_hit_count >= 1,
+            "repeated generic instantiation must register a mono cache hit");
+        return ok;
+    }
+
     static bool test_file_cases_directory() {
 #ifndef PARUS_FRONTEND_CASE_DIR
         std::cerr << "  - PARUS_FRONTEND_CASE_DIR is not defined\n";
@@ -3347,6 +3376,7 @@ int main() {
         {"generic_type_eq_constraints_work", test_generic_type_eq_constraints_work},
         {"generic_type_eq_constraint_mismatch_reports", test_generic_type_eq_constraint_mismatch_reports},
         {"generic_struct_constraint_checked_in_signature_types", test_generic_struct_constraint_checked_in_signature_types},
+        {"mono_stats_dedup_repeated_generic_request", test_mono_stats_dedup_repeated_generic_request},
         {"file_cases_directory", test_file_cases_directory},
     };
 

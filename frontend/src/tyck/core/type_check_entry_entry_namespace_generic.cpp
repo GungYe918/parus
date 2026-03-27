@@ -23,6 +23,18 @@ namespace parus::tyck {
     using detail::parse_int_literal_;
 
     namespace {
+        size_t hash_combine_(size_t seed, size_t value) {
+            seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+            return seed;
+        }
+
+        std::string visible_external_fn_name_(std::string_view name) {
+            constexpr std::string_view marker = "@@extovl$";
+            const size_t pos = name.find(marker);
+            if (pos == std::string_view::npos) return std::string(name);
+            return std::string(name.substr(0, pos));
+        }
+
         struct ExternalGenericConstraintMeta {
             enum class Kind : uint8_t {
                 kProto = 0,
@@ -186,6 +198,17 @@ namespace parus::tyck {
         }
     }
 
+    size_t MonoCacheKeyHasher::operator()(const MonoCacheKey& key) const noexcept {
+        size_t seed = std::hash<std::string>{}(key.producer_bundle);
+        seed = hash_combine_(seed, std::hash<std::string>{}(key.template_symbol));
+        seed = hash_combine_(seed, std::hash<std::string>{}(key.target_lane));
+        seed = hash_combine_(seed, std::hash<std::string>{}(key.abi_lane));
+        for (const auto tid : key.concrete_args) {
+            seed = hash_combine_(seed, std::hash<uint32_t>{}(static_cast<uint32_t>(tid)));
+        }
+        return seed;
+    }
+
     TyckResult TypeChecker::check_program(ast::StmtId program_stmt) {
         // -----------------------------
         // HARD RESET (매 호출 독립 보장)
@@ -221,6 +244,7 @@ namespace parus::tyck {
         imported_fn_template_index_by_sid_.clear();
         imported_fn_template_sid_by_lookup_name_.clear();
         imported_fn_template_sid_by_link_name_.clear();
+        imported_fn_template_sids_by_name_.clear();
         imported_class_template_sid_set_.clear();
         imported_class_template_index_by_sid_.clear();
         imported_class_template_sid_by_qname_.clear();
@@ -235,6 +259,10 @@ namespace parus::tyck {
         imported_enum_template_sid_by_qname_.clear();
         imported_hidden_enum_template_sid_set_.clear();
         imported_hidden_enum_instance_sid_set_.clear();
+        seen_mono_requests_.clear();
+        public_proto_target_symbol_cache_.clear();
+        imported_proto_sid_by_identity_cache_.clear();
+        mono_stats_ = MonoStats{};
         generic_fn_instance_cache_.clear();
         imported_fn_instance_cache_.clear();
         generic_fn_checked_instances_.clear();
@@ -775,6 +803,7 @@ namespace parus::tyck {
         result_.generic_instantiated_acts_sids = generic_instantiated_acts_sids_;
         result_.generic_instantiated_field_sids = generic_instantiated_field_sids_;
         result_.generic_instantiated_enum_sids = generic_instantiated_enum_sids_;
+        result_.mono_stats = mono_stats_;
         result_.generic_acts_template_sids.assign(
             generic_acts_template_sid_set_.begin(),
             generic_acts_template_sid_set_.end()
@@ -2877,7 +2906,18 @@ namespace parus::tyck {
                     if (cc.kind == ExternalGenericConstraintMeta::Kind::kProto) {
                         ty::TypeId rhs_t = parus::cimport::parse_external_type_repr(cc.rhs, {}, {}, types_);
                         if (rhs_t == ty::kInvalidType) {
-                            diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                            if (diag_bag_) {
+                                diag::Diagnostic d(
+                                    diag::Severity::kError,
+                                    diag::Code::kGenericConstraintProtoNotFound,
+                                    use_span
+                                );
+                                d.add_arg(cc.rhs);
+                                d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                                d.add_note("this imported generic struct constraint could not resolve the referenced proto target");
+                                d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                                diag_bag_->add(std::move(d));
+                            }
                             err_(use_span, "external generic struct constraint references unknown proto");
                             return std::nullopt;
                         }
@@ -2889,7 +2929,18 @@ namespace parus::tyck {
                                 continue;
                             }
                             if (!typed_path_failure) {
-                                diag_(diag::Code::kGenericConstraintProtoNotFound, use_span, cc.rhs);
+                                if (diag_bag_) {
+                                    diag::Diagnostic d(
+                                        diag::Severity::kError,
+                                        diag::Code::kGenericConstraintProtoNotFound,
+                                        use_span
+                                    );
+                                    d.add_arg(cc.rhs);
+                                    d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                                    d.add_note("this imported generic struct constraint could not resolve the referenced proto target");
+                                    d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                                    diag_bag_->add(std::move(d));
+                                }
                             }
                             err_(use_span, "external generic struct constraint references unknown proto");
                             return std::nullopt;
@@ -4730,6 +4781,12 @@ namespace parus::tyck {
 
         std::string key(raw_path);
         (void)apply_imported_path_rewrite_(key);
+        if (auto it = public_proto_target_symbol_cache_.find(key);
+            it != public_proto_target_symbol_cache_.end()) {
+            ++mono_stats_.proto_target_cache_hit_count;
+            return it->second;
+        }
+        ++mono_stats_.proto_target_cache_miss_count;
 
         auto module_head_candidate_match = [&](const sema::Symbol& ss, std::string_view query) -> bool {
             if (query.empty() || ss.name.empty()) return false;
@@ -4758,8 +4815,10 @@ namespace parus::tyck {
                 continue;
             }
             if (!module_head_candidate_match(ss, key)) continue;
+            public_proto_target_symbol_cache_[key] = sid;
             return sid;
         }
+        public_proto_target_symbol_cache_[key] = std::nullopt;
         return std::nullopt;
     }
 
@@ -4816,43 +4875,60 @@ namespace parus::tyck {
         return std::string(ast_.stmt(template_sid).name);
     }
 
-    std::string TypeChecker::build_mono_instance_key_(const MonoRequest& request) const {
-        const std::string producer_bundle =
+    MonoCacheKey TypeChecker::make_mono_cache_key_(const MonoRequest& request) const {
+        MonoCacheKey key{};
+        key.producer_bundle =
             request.templ.producer_bundle.empty() ? current_bundle_name_() : request.templ.producer_bundle;
-        std::string template_symbol = request.templ.template_symbol;
-        if (template_symbol.empty()) {
-            template_symbol = mono_template_symbol_for_stmt_(request.templ.template_sid, request.templ.source);
+        key.template_symbol = request.templ.template_symbol;
+        if (key.template_symbol.empty()) {
+            key.template_symbol =
+                mono_template_symbol_for_stmt_(request.templ.template_sid, request.templ.source);
         }
+        key.target_lane = request.target_lane;
+        key.abi_lane = request.abi_lane;
+        key.concrete_args.reserve(request.concrete_args.size());
+        for (const auto arg : request.concrete_args) {
+            key.concrete_args.push_back(canonicalize_transparent_external_typedef_(arg));
+        }
+        return key;
+    }
 
+    std::string TypeChecker::build_mono_instance_key_(const MonoRequest& request) const {
+        const MonoCacheKey key = make_mono_cache_key_(request);
         std::ostringstream oss;
-        oss << producer_bundle << "|"
-            << template_symbol << "|"
-            << request.target_lane << "|"
-            << request.abi_lane << "|";
-        for (size_t i = 0; i < request.concrete_args.size(); ++i) {
+        oss << key.producer_bundle << "|"
+            << key.template_symbol << "|"
+            << key.target_lane << "|"
+            << key.abi_lane << "|";
+        for (size_t i = 0; i < key.concrete_args.size(); ++i) {
             if (i) oss << ",";
-            oss << canonicalize_transparent_external_typedef_(request.concrete_args[i]);
+            oss << key.concrete_args[i];
         }
         return oss.str();
     }
 
     std::optional<ast::StmtId> TypeChecker::lookup_mono_stmt_cache_(
-        const std::unordered_map<std::string, ast::StmtId>& cache,
+        const MonoStmtCache& cache,
         const MonoRequest& request
-    ) const {
-        const std::string key = build_mono_instance_key_(request);
+    ) {
+        const MonoCacheKey key = make_mono_cache_key_(request);
         if (auto it = cache.find(key); it != cache.end()) {
+            ++mono_stats_.mono_cache_hit_count;
             return it->second;
+        }
+        ++mono_stats_.mono_cache_miss_count;
+        if (seen_mono_requests_.insert(key).second) {
+            ++mono_stats_.unique_request_count;
         }
         return std::nullopt;
     }
 
     void TypeChecker::store_mono_stmt_cache_(
-        std::unordered_map<std::string, ast::StmtId>& cache,
+        MonoStmtCache& cache,
         const MonoRequest& request,
         ast::StmtId sid
     ) {
-        cache[build_mono_instance_key_(request)] = sid;
+        cache[make_mono_cache_key_(request)] = sid;
     }
 
     bool TypeChecker::can_access_class_member_(
@@ -5119,7 +5195,20 @@ namespace parus::tyck {
     ) {
         if (identity.path.empty()) return std::nullopt;
 
+        std::string cache_key = identity.bundle;
+        cache_key.push_back('|');
+        cache_key.append(parus::normalize_core_public_module_head(identity.bundle, identity.module_head));
+        cache_key.push_back('|');
+        cache_key.append(identity.path);
+        if (auto it = imported_proto_sid_by_identity_cache_.find(cache_key);
+            it != imported_proto_sid_by_identity_cache_.end()) {
+            ++mono_stats_.proto_target_cache_hit_count;
+            return it->second;
+        }
+        ++mono_stats_.proto_target_cache_miss_count;
+
         if (auto it = proto_decl_by_name_.find(identity.path); it != proto_decl_by_name_.end()) {
+            imported_proto_sid_by_identity_cache_[cache_key] = it->second;
             return it->second;
         }
 
@@ -5144,16 +5233,49 @@ namespace parus::tyck {
             if (!name_match) continue;
 
             if (auto sid = ensure_external_proto_stub_from_symbol_(ss)) {
+                imported_proto_sid_by_identity_cache_[cache_key] = sid;
                 return sid;
             }
         }
 
         if (auto sid = resolve_proto_sid_for_constraint_(identity.path)) {
+            imported_proto_sid_by_identity_cache_[cache_key] = sid;
             return sid;
         }
 
         (void)use_span;
+        imported_proto_sid_by_identity_cache_[cache_key] = std::nullopt;
         return std::nullopt;
+    }
+
+    std::optional<ast::StmtId> TypeChecker::lookup_imported_fn_template_by_link_name_(
+        std::string_view link_name
+    ) {
+        if (link_name.empty()) {
+            ++mono_stats_.imported_template_index_miss_count;
+            return std::nullopt;
+        }
+        if (auto it = imported_fn_template_sid_by_link_name_.find(std::string(link_name));
+            it != imported_fn_template_sid_by_link_name_.end()) {
+            ++mono_stats_.imported_template_index_hit_count;
+            return it->second;
+        }
+        ++mono_stats_.imported_template_index_miss_count;
+        return std::nullopt;
+    }
+
+    std::vector<ast::StmtId> TypeChecker::lookup_imported_fn_templates_by_name_(std::string_view name) {
+        if (name.empty()) {
+            ++mono_stats_.imported_template_index_miss_count;
+            return {};
+        }
+        if (auto it = imported_fn_template_sids_by_name_.find(std::string(name));
+            it != imported_fn_template_sids_by_name_.end()) {
+            ++mono_stats_.imported_template_index_hit_count;
+            return it->second;
+        }
+        ++mono_stats_.imported_template_index_miss_count;
+        return {};
     }
 
     void TypeChecker::register_imported_fn_templates_() {
@@ -5161,6 +5283,7 @@ namespace parus::tyck {
         imported_fn_template_index_by_sid_.clear();
         imported_fn_template_sid_by_lookup_name_.clear();
         imported_fn_template_sid_by_link_name_.clear();
+        imported_fn_template_sids_by_name_.clear();
         if (explicit_imported_fn_templates_.empty()) return;
 
         auto already_has_decl = [&](std::string_view name, ast::StmtId sid) -> bool {
@@ -5170,10 +5293,30 @@ namespace parus::tyck {
         };
         auto register_name = [&](std::string_view name, ast::StmtId sid) {
             if (name.empty()) return;
+            auto& imported_sids = imported_fn_template_sids_by_name_[std::string(name)];
+            if (std::find(imported_sids.begin(), imported_sids.end(), sid) == imported_sids.end()) {
+                imported_sids.push_back(sid);
+            }
             if (!already_has_decl(name, sid)) {
                 fn_decl_by_name_[std::string(name)].push_back(sid);
             }
         };
+
+        std::unordered_map<std::string, std::vector<std::string>> external_names_by_template_key{};
+        external_names_by_template_key.reserve(sym_.symbols().size());
+        for (const auto& ss : sym_.symbols()) {
+            if (ss.kind != sema::SymbolKind::kFn) continue;
+            if (ss.decl_bundle_name.empty() || ss.link_name.empty()) continue;
+            std::string key = ss.decl_bundle_name;
+            key.push_back('|');
+            key.append(ss.decl_module_head);
+            key.push_back('|');
+            key.append(ss.link_name);
+            auto& names = external_names_by_template_key[key];
+            if (std::find(names.begin(), names.end(), ss.name) == names.end()) {
+                names.push_back(ss.name);
+            }
+        }
 
         for (size_t idx = 0; idx < explicit_imported_fn_templates_.size(); ++idx) {
             const auto& templ = explicit_imported_fn_templates_[idx];
@@ -5204,13 +5347,26 @@ namespace parus::tyck {
                         : std::string_view(templ.public_path).substr(last + 2);
                 register_name(leaf, templ.template_sid);
             }
+            if (!templ.lookup_name.empty()) {
+                register_name(visible_external_fn_name_(templ.lookup_name), templ.template_sid);
+            }
+            if (!templ.public_path.empty()) {
+                register_name(visible_external_fn_name_(templ.public_path), templ.template_sid);
+            }
 
-            for (const auto& ss : sym_.symbols()) {
-                if (ss.kind != sema::SymbolKind::kFn) continue;
-                if (ss.decl_bundle_name != templ.producer_bundle) continue;
-                if (!templ.module_head.empty() && ss.decl_module_head != templ.module_head) continue;
-                if (!templ.link_name.empty() && ss.link_name != templ.link_name) continue;
-                register_name(ss.name, templ.template_sid);
+            if (!templ.link_name.empty()) {
+                std::string key = templ.producer_bundle;
+                key.push_back('|');
+                key.append(templ.module_head);
+                key.push_back('|');
+                key.append(templ.link_name);
+                if (auto it = external_names_by_template_key.find(key);
+                    it != external_names_by_template_key.end()) {
+                    for (const auto& external_name : it->second) {
+                        register_name(external_name, templ.template_sid);
+                        register_name(visible_external_fn_name_(external_name), templ.template_sid);
+                    }
+                }
             }
 
             const uint64_t begin = fn_stmt.fn_constraint_begin;

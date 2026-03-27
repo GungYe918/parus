@@ -177,12 +177,27 @@
                     } else {
                         const auto& symobj = sym.symbol(*sid);
                         if (!is_symbol_visible_from_use_site_(symobj, e.span.file_id, opt)) {
+                            diag::Diagnostic d(
+                                diag::Severity::kError,
+                                (!opt.current_bundle_name.empty() &&
+                                 !symobj.decl_bundle_name.empty() &&
+                                 symobj.decl_bundle_name != opt.current_bundle_name)
+                                    ? diag::Code::kSymbolNotExportedBundleScope
+                                    : diag::Code::kSymbolNotExportedFileScope,
+                                e.span
+                            );
+                            d.add_arg(e.text);
+                            if (symobj.is_external && !symobj.is_export) {
+                                d.add_note("closure-private helper declarations are only materialized inside imported generic bodies");
+                                d.add_note("source-level import ergonomics does not make hidden helper symbols directly visible");
+                                d.add_help("reference the exported root API instead, or export this helper through a public path");
+                            }
                             if (!opt.current_bundle_name.empty() &&
                                 !symobj.decl_bundle_name.empty() &&
                                 symobj.decl_bundle_name != opt.current_bundle_name) {
-                                report(bag, diag::Severity::kError, diag::Code::kSymbolNotExportedBundleScope, e.span, e.text);
+                                bag.add(std::move(d));
                             } else {
-                                report(bag, diag::Severity::kError, diag::Code::kSymbolNotExportedFileScope, e.span, e.text);
+                                bag.add(std::move(d));
                             }
                             break;
                         }

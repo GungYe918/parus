@@ -159,6 +159,32 @@ namespace parus::tyck {
         ty::TypeId fn_type = ty::kInvalidType;
     };
 
+    struct MonoCacheKey {
+        std::string producer_bundle{};
+        std::string template_symbol{};
+        std::string target_lane{};
+        std::string abi_lane{};
+        std::vector<ty::TypeId> concrete_args{};
+
+        bool operator==(const MonoCacheKey&) const = default;
+    };
+
+    struct MonoCacheKeyHasher {
+        size_t operator()(const MonoCacheKey& key) const noexcept;
+    };
+
+    struct MonoStats {
+        uint64_t unique_request_count = 0;
+        uint64_t mono_cache_hit_count = 0;
+        uint64_t mono_cache_miss_count = 0;
+        uint64_t imported_template_index_hit_count = 0;
+        uint64_t imported_template_index_miss_count = 0;
+        uint64_t proto_target_cache_hit_count = 0;
+        uint64_t proto_target_cache_miss_count = 0;
+    };
+
+    using MonoStmtCache = std::unordered_map<MonoCacheKey, ast::StmtId, MonoCacheKeyHasher>;
+
     // tyck의 에러는 우선 compile-safe한 독립 포맷으로 저장
     // (diag::Bag 연동은 프로젝트 내 Diagnostic API가 확정되면 쉽게 브릿지 가능)
     struct TyError {
@@ -239,6 +265,7 @@ namespace parus::tyck {
         std::unordered_set<ty::TypeId> tag_only_enum_type_ids; // enum types known to lower as tag-only layout
         std::unordered_map<uint32_t, ConstInitData> const_symbol_values; // SymbolId -> const initializer value
         std::unordered_map<ast::ExprId, ConstInitData> expr_external_const_values; // expr id -> imported external const literal payload
+        MonoStats mono_stats{};
         std::vector<TyError> errors;
     };
 
@@ -691,13 +718,14 @@ namespace parus::tyck {
         bool qualified_path_requires_import_(std::string_view raw_path) const;
         bool qualified_proto_target_allows_ordinary_lookup_(std::string_view raw_path) const;
         std::string mono_template_symbol_for_stmt_(ast::StmtId template_sid, MonoTemplateRef::SourceKind source) const;
+        MonoCacheKey make_mono_cache_key_(const MonoRequest& request) const;
         std::string build_mono_instance_key_(const MonoRequest& request) const;
         std::optional<ast::StmtId> lookup_mono_stmt_cache_(
-            const std::unordered_map<std::string, ast::StmtId>& cache,
+            const MonoStmtCache& cache,
             const MonoRequest& request
-        ) const;
+        );
         void store_mono_stmt_cache_(
-            std::unordered_map<std::string, ast::StmtId>& cache,
+            MonoStmtCache& cache,
             const MonoRequest& request,
             ast::StmtId sid
         );
@@ -963,6 +991,8 @@ namespace parus::tyck {
             const ImportedProtoIdentity& identity,
             Span use_span
         );
+        std::optional<ast::StmtId> lookup_imported_fn_template_by_link_name_(std::string_view link_name);
+        std::vector<ast::StmtId> lookup_imported_fn_templates_by_name_(std::string_view name);
         bool enforce_builtin_acts_policy_(const ast::Stmt& acts_decl, ty::TypeId owner_type);
         bool decompose_named_user_type_(
             ty::TypeId t,
@@ -1242,6 +1272,7 @@ namespace parus::tyck {
         std::unordered_map<ast::StmtId, size_t> imported_fn_template_index_by_sid_;
         std::unordered_map<std::string, ast::StmtId> imported_fn_template_sid_by_lookup_name_;
         std::unordered_map<std::string, ast::StmtId> imported_fn_template_sid_by_link_name_;
+        std::unordered_map<std::string, std::vector<ast::StmtId>> imported_fn_template_sids_by_name_;
         std::unordered_set<ast::StmtId> imported_proto_template_sid_set_;
         std::unordered_map<ast::StmtId, size_t> imported_proto_template_index_by_sid_;
         std::unordered_set<ast::StmtId> imported_acts_template_sid_set_;
@@ -1260,8 +1291,9 @@ namespace parus::tyck {
         std::unordered_map<std::string, ast::StmtId> imported_enum_template_sid_by_qname_;
         std::unordered_set<ast::StmtId> imported_hidden_enum_template_sid_set_;
         std::unordered_set<ast::StmtId> imported_hidden_enum_instance_sid_set_;
-        std::unordered_map<std::string, ast::StmtId> generic_fn_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> imported_fn_instance_cache_;
+        std::unordered_set<MonoCacheKey, MonoCacheKeyHasher> seen_mono_requests_;
+        MonoStmtCache generic_fn_instance_cache_;
+        MonoStmtCache imported_fn_instance_cache_;
         std::unordered_set<ast::StmtId> generic_fn_checked_instances_;
         std::unordered_set<ast::StmtId> generic_fn_checking_instances_;
         std::vector<ast::StmtId> generic_instantiated_fn_sids_;
@@ -1272,14 +1304,14 @@ namespace parus::tyck {
         std::unordered_set<ast::StmtId> generic_acts_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_field_template_sid_set_;
         std::unordered_set<ast::StmtId> generic_enum_template_sid_set_;
-        std::unordered_map<std::string, ast::StmtId> generic_class_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> imported_class_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> generic_proto_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> generic_acts_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> imported_field_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> imported_enum_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> generic_field_instance_cache_;
-        std::unordered_map<std::string, ast::StmtId> generic_enum_instance_cache_;
+        MonoStmtCache generic_class_instance_cache_;
+        MonoStmtCache imported_class_instance_cache_;
+        MonoStmtCache generic_proto_instance_cache_;
+        MonoStmtCache generic_acts_instance_cache_;
+        MonoStmtCache imported_field_instance_cache_;
+        MonoStmtCache imported_enum_instance_cache_;
+        MonoStmtCache generic_field_instance_cache_;
+        MonoStmtCache generic_enum_instance_cache_;
         std::unordered_set<ast::StmtId> generic_decl_checked_instances_;
         std::unordered_set<ast::StmtId> generic_decl_checking_instances_;
         std::deque<ast::StmtId> pending_generic_decl_instance_queue_;
@@ -1289,6 +1321,9 @@ namespace parus::tyck {
         std::vector<ast::StmtId> generic_instantiated_acts_sids_;
         std::vector<ast::StmtId> generic_instantiated_field_sids_;
         std::vector<ast::StmtId> generic_instantiated_enum_sids_;
+        mutable std::unordered_map<std::string, std::optional<uint32_t>> public_proto_target_symbol_cache_;
+        mutable std::unordered_map<std::string, std::optional<ast::StmtId>> imported_proto_sid_by_identity_cache_;
+        mutable MonoStats mono_stats_{};
         std::unordered_set<ast::ExprId> proto_require_type_diag_emitted_;
         std::unordered_set<ast::ExprId> proto_require_complex_diag_emitted_;
         std::unordered_map<uint32_t, ast::StmtId> const_symbol_decl_sid_;

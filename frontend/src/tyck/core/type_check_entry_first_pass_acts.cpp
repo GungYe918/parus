@@ -3169,7 +3169,18 @@
                            leaf == "UnsignedInteger" || leaf == "BinaryFloatingPoint" ||
                            leaf == "Step"))) {
                         if (!typed_path_failure) {
-                            diag_(diag::Code::kGenericConstraintProtoNotFound, c.span, proto_repr);
+                            diag::Diagnostic d(
+                                diag::Severity::kError,
+                                diag::Code::kGenericConstraintProtoNotFound,
+                                c.span
+                            );
+                            d.add_arg(proto_repr);
+                            d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                            d.add_note("this acts constraint could not resolve the referenced proto target");
+                            d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                            if (diag_bag_) {
+                                diag_bag_->add(std::move(d));
+                            }
                         }
                         err_(c.span, "unknown proto in generic constraint");
                         ok = false;
