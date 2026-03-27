@@ -890,6 +890,87 @@ namespace parus::tyck {
         // - 사용자 출력은 항상 diag_(Code, args...)만 사용
     }
 
+    void TypeChecker::emit_generic_constraint_failure_diag_(
+        const ast::FnConstraintDecl& cc,
+        const GenericConstraintFailure& failure,
+        Span use_span,
+        std::string_view context
+    ) {
+        if (!diag_bag_) return;
+
+        auto add_constraint_span_label = [&](diag::Diagnostic& d) {
+            if (cc.span.file_id != use_span.file_id ||
+                cc.span.lo != use_span.lo ||
+                cc.span.hi != use_span.hi) {
+                d.add_label(cc.span, "constraint declared here");
+            }
+        };
+
+        switch (failure.kind) {
+            case GenericConstraintFailure::Kind::kUnknownTypeParam: {
+                diag::Diagnostic d(
+                    diag::Severity::kError,
+                    diag::Code::kGenericUnknownTypeParamInConstraint,
+                    cc.span
+                );
+                d.add_arg(failure.lhs_type_param);
+                d.add_note(std::string(context) + " constraint references a generic parameter that is not in scope");
+                d.add_help("check the left-hand type parameter name in the constraint");
+                diag_bag_->add(std::move(d));
+                break;
+            }
+            case GenericConstraintFailure::Kind::kProtoNotFound: {
+                diag::Diagnostic d(
+                    diag::Severity::kError,
+                    diag::Code::kGenericConstraintProtoNotFound,
+                    use_span
+                );
+                d.add_arg(failure.rhs_proto);
+                add_constraint_span_label(d);
+                d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                d.add_note(std::string(context) + " could not resolve this proto target");
+                d.add_help("export the proto target or add an explicit import/alias for a public proto path");
+                diag_bag_->add(std::move(d));
+                break;
+            }
+            case GenericConstraintFailure::Kind::kProtoUnsatisfied: {
+                diag::Diagnostic d(
+                    diag::Severity::kError,
+                    diag::Code::kGenericDeclConstraintUnsatisfied,
+                    use_span
+                );
+                d.add_arg(failure.lhs_type_param);
+                d.add_arg(failure.rhs_proto);
+                d.add_arg(failure.concrete_lhs);
+                add_constraint_span_label(d);
+                d.add_note("constraint was checked after monomorphization using the concrete type tuple");
+                d.add_note("concrete type '" + failure.concrete_lhs + "' does not satisfy proto '" + failure.rhs_proto + "'");
+                d.add_help("choose a type argument that implements the required proto, or relax the constraint");
+                diag_bag_->add(std::move(d));
+                break;
+            }
+            case GenericConstraintFailure::Kind::kTypeMismatch: {
+                diag::Diagnostic d(
+                    diag::Severity::kError,
+                    diag::Code::kGenericConstraintTypeMismatch,
+                    use_span
+                );
+                d.add_arg(failure.lhs_type_param);
+                d.add_arg(failure.rhs_type_repr);
+                d.add_arg(failure.concrete_lhs);
+                d.add_arg(failure.concrete_rhs);
+                add_constraint_span_label(d);
+                d.add_note("constraint was checked after substituting concrete generic arguments");
+                d.add_note("left side became '" + failure.concrete_lhs + "', but right side became '" + failure.concrete_rhs + "'");
+                d.add_help("make the two sides reduce to the same concrete type, or remove the equality constraint");
+                diag_bag_->add(std::move(d));
+                break;
+            }
+            case GenericConstraintFailure::Kind::kNone:
+                break;
+        }
+    }
+
     bool TypeChecker::is_c_abi_safe_type_(ty::TypeId t, bool allow_void) const {
         std::unordered_set<ty::TypeId> visiting;
         return is_c_abi_safe_type_impl_(t, allow_void, visiting);
@@ -1865,11 +1946,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-
-        if (auto it = generic_fn_instance_cache_.find(cache_key);
-            it != generic_fn_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_fn_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::unordered_map<std::string, ty::TypeId> subst;
@@ -2053,7 +2132,7 @@ namespace parus::tyck {
             param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
         }
 
-        generic_fn_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_fn_instance_cache_, cache_req, inst_sid);
         generic_instantiated_fn_sids_.push_back(inst_sid);
 
         if (generic_fn_checked_instances_.find(inst_sid) == generic_fn_checked_instances_.end() &&
@@ -2074,17 +2153,16 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedFn) {
-            const std::string key = build_mono_instance_key_(request);
-            if (auto it = imported_fn_instance_cache_.find(key);
-                it != imported_fn_instance_cache_.end()) {
+            if (auto cached = lookup_mono_stmt_cache_(imported_fn_instance_cache_, request);
+                cached.has_value()) {
                 MonoInstance out{};
-                out.decl_sid = it->second;
-                out.fn_type = ast_.stmt(it->second).type;
+                out.decl_sid = *cached;
+                out.fn_type = ast_.stmt(*cached).type;
                 return out;
             }
             auto sid = ensure_generic_function_instance_(request.templ.template_sid, request.concrete_args, use_span);
             if (!sid.has_value()) return std::nullopt;
-            imported_fn_instance_cache_[key] = *sid;
+            store_mono_stmt_cache_(imported_fn_instance_cache_, request, *sid);
             MonoInstance out{};
             out.decl_sid = *sid;
             out.fn_type = ast_.stmt(*sid).type;
@@ -2137,14 +2215,13 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedClass) {
-            const std::string key = build_mono_instance_key_(request);
-            if (auto it = imported_class_instance_cache_.find(key);
-                it != imported_class_instance_cache_.end()) {
-                return it->second;
+            if (auto cached = lookup_mono_stmt_cache_(imported_class_instance_cache_, request);
+                cached.has_value()) {
+                return *cached;
             }
             auto sid = ensure_generic_class_instance_(request.templ.template_sid, request.concrete_args, use_span);
             if (!sid.has_value()) return std::nullopt;
-            imported_class_instance_cache_[key] = *sid;
+            store_mono_stmt_cache_(imported_class_instance_cache_, request, *sid);
             if (imported_hidden_class_template_sid_set_.find(request.templ.template_sid) !=
                 imported_hidden_class_template_sid_set_.end()) {
                 imported_hidden_class_instance_sid_set_.insert(*sid);
@@ -2497,10 +2574,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-        if (auto it = generic_field_instance_cache_.find(cache_key);
-            it != generic_field_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_field_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::unordered_map<std::string, ty::TypeId> subst;
@@ -2515,29 +2591,8 @@ namespace parus::tyck {
             const auto& cc = ast_.fn_constraint_decls()[idx];
             GenericConstraintFailure failure{};
             if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
-            switch (failure.kind) {
-                case GenericConstraintFailure::Kind::kUnknownTypeParam:
-                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
-                    err_(cc.span, "struct declaration constraint references unknown generic parameter");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoNotFound:
-                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
-                    err_(cc.span, "struct declaration constraint references unknown proto");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
-                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
-                    err_(cc.span, "struct declaration generic constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kTypeMismatch:
-                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
-                          failure.lhs_type_param, failure.rhs_type_repr,
-                          failure.concrete_lhs, failure.concrete_rhs);
-                    err_(cc.span, "struct declaration generic equality constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kNone:
-                    break;
-            }
+            emit_generic_constraint_failure_diag_(cc, failure, use_span, "struct declaration");
+            err_(use_span, "struct declaration generic constraint failed during monomorphization");
             return std::nullopt;
         }
 
@@ -2689,7 +2744,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
-        generic_field_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_field_instance_cache_, cache_req, inst_sid);
         generic_instantiated_field_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
             pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
@@ -3096,10 +3151,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-        if (auto it = generic_enum_instance_cache_.find(cache_key);
-            it != generic_enum_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_enum_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::unordered_map<std::string, ty::TypeId> subst;
@@ -3249,7 +3303,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
-        generic_enum_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_enum_instance_cache_, cache_req, inst_sid);
         generic_instantiated_enum_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
             pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
@@ -3380,10 +3434,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-        if (auto it = generic_class_instance_cache_.find(cache_key);
-            it != generic_class_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_class_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::string base_qname = std::string(templ.name);
@@ -3427,29 +3480,8 @@ namespace parus::tyck {
             const auto& cc = ast_.fn_constraint_decls()[idx];
             GenericConstraintFailure failure{};
             if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
-            switch (failure.kind) {
-                case GenericConstraintFailure::Kind::kUnknownTypeParam:
-                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
-                    err_(cc.span, "declaration constraint references unknown generic parameter");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoNotFound:
-                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
-                    err_(cc.span, "declaration constraint references unknown proto");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
-                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
-                    err_(cc.span, "declaration generic constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kTypeMismatch:
-                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
-                          failure.lhs_type_param, failure.rhs_type_repr,
-                          failure.concrete_lhs, failure.concrete_rhs);
-                    err_(cc.span, "declaration generic equality constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kNone:
-                    break;
-            }
+            emit_generic_constraint_failure_diag_(cc, failure, use_span, "class declaration");
+            err_(use_span, "class declaration generic constraint failed during monomorphization");
             return std::nullopt;
         }
 
@@ -3623,7 +3655,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
-        generic_class_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_class_instance_cache_, cache_req, inst_sid);
         generic_instantiated_class_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
             pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
@@ -3797,10 +3829,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-        if (auto it = generic_proto_instance_cache_.find(cache_key);
-            it != generic_proto_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_proto_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::unordered_map<std::string, ty::TypeId> subst;
@@ -3908,7 +3939,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
-        generic_proto_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_proto_instance_cache_, cache_req, inst_sid);
         generic_instantiated_proto_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
             pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
@@ -3986,10 +4017,9 @@ namespace parus::tyck {
             cache_req.templ.template_symbol = mono_template_symbol_for_stmt_(template_sid, cache_req.templ.source);
         }
         cache_req.concrete_args = concrete_args;
-        const std::string cache_key = build_mono_instance_key_(cache_req);
-        if (auto it = generic_acts_instance_cache_.find(cache_key);
-            it != generic_acts_instance_cache_.end()) {
-            return it->second;
+        if (auto cached = lookup_mono_stmt_cache_(generic_acts_instance_cache_, cache_req);
+            cached.has_value()) {
+            return *cached;
         }
 
         std::string acts_qname = std::string(templ.name);
@@ -4011,7 +4041,7 @@ namespace parus::tyck {
             if (auto it = acts_named_decl_by_owner_and_name_.find(key);
                 it != acts_named_decl_by_owner_and_name_.end() &&
                 it->second != template_sid) {
-                generic_acts_instance_cache_[cache_key] = it->second;
+                store_mono_stmt_cache_(generic_acts_instance_cache_, cache_req, it->second);
                 return it->second;
             }
         }
@@ -4042,29 +4072,8 @@ namespace parus::tyck {
             const auto& cc = ast_.fn_constraint_decls()[idx];
             GenericConstraintFailure failure{};
             if (evaluate_generic_constraint_(cc, subst, use_span, failure)) continue;
-            switch (failure.kind) {
-                case GenericConstraintFailure::Kind::kUnknownTypeParam:
-                    diag_(diag::Code::kGenericUnknownTypeParamInConstraint, cc.span, failure.lhs_type_param);
-                    err_(cc.span, "acts declaration constraint references unknown generic parameter");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoNotFound:
-                    diag_(diag::Code::kGenericConstraintProtoNotFound, cc.span, failure.rhs_proto);
-                    err_(cc.span, "acts declaration constraint references unknown proto");
-                    break;
-                case GenericConstraintFailure::Kind::kProtoUnsatisfied:
-                    diag_(diag::Code::kGenericDeclConstraintUnsatisfied, cc.span,
-                          failure.lhs_type_param, failure.rhs_proto, failure.concrete_lhs);
-                    err_(cc.span, "acts declaration generic constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kTypeMismatch:
-                    diag_(diag::Code::kGenericConstraintTypeMismatch, cc.span,
-                          failure.lhs_type_param, failure.rhs_type_repr,
-                          failure.concrete_lhs, failure.concrete_rhs);
-                    err_(cc.span, "acts declaration generic equality constraint unsatisfied");
-                    break;
-                case GenericConstraintFailure::Kind::kNone:
-                    break;
-            }
+            emit_generic_constraint_failure_diag_(cc, failure, use_span, "acts declaration");
+            err_(use_span, "acts declaration generic constraint failed during monomorphization");
             return std::nullopt;
         }
 
@@ -4205,7 +4214,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
-        generic_acts_instance_cache_[cache_key] = inst_sid;
+        store_mono_stmt_cache_(generic_acts_instance_cache_, cache_req, inst_sid);
         generic_instantiated_acts_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
             pending_generic_decl_instance_enqueued_.insert(inst_sid).second) {
@@ -4825,6 +4834,25 @@ namespace parus::tyck {
             oss << canonicalize_transparent_external_typedef_(request.concrete_args[i]);
         }
         return oss.str();
+    }
+
+    std::optional<ast::StmtId> TypeChecker::lookup_mono_stmt_cache_(
+        const std::unordered_map<std::string, ast::StmtId>& cache,
+        const MonoRequest& request
+    ) const {
+        const std::string key = build_mono_instance_key_(request);
+        if (auto it = cache.find(key); it != cache.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    }
+
+    void TypeChecker::store_mono_stmt_cache_(
+        std::unordered_map<std::string, ast::StmtId>& cache,
+        const MonoRequest& request,
+        ast::StmtId sid
+    ) {
+        cache[build_mono_instance_key_(request)] = sid;
     }
 
     bool TypeChecker::can_access_class_member_(
@@ -5654,14 +5682,13 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedField) {
-            const std::string key = build_mono_instance_key_(request);
-            if (auto it = imported_field_instance_cache_.find(key);
-                it != imported_field_instance_cache_.end()) {
-                return it->second;
+            if (auto cached = lookup_mono_stmt_cache_(imported_field_instance_cache_, request);
+                cached.has_value()) {
+                return *cached;
             }
             auto sid = ensure_generic_field_instance_(request.templ.template_sid, request.concrete_args, use_span);
             if (!sid.has_value()) return std::nullopt;
-            imported_field_instance_cache_[key] = *sid;
+            store_mono_stmt_cache_(imported_field_instance_cache_, request, *sid);
             return sid;
         }
 
@@ -5678,14 +5705,13 @@ namespace parus::tyck {
         }
 
         if (request.templ.source == MonoTemplateRef::SourceKind::kImportedEnum) {
-            const std::string key = build_mono_instance_key_(request);
-            if (auto it = imported_enum_instance_cache_.find(key);
-                it != imported_enum_instance_cache_.end()) {
-                return it->second;
+            if (auto cached = lookup_mono_stmt_cache_(imported_enum_instance_cache_, request);
+                cached.has_value()) {
+                return *cached;
             }
             auto sid = ensure_generic_enum_instance_(request.templ.template_sid, request.concrete_args, use_span);
             if (!sid.has_value()) return std::nullopt;
-            imported_enum_instance_cache_[key] = *sid;
+            store_mono_stmt_cache_(imported_enum_instance_cache_, request, *sid);
             if (imported_hidden_enum_template_sid_set_.find(request.templ.template_sid) !=
                 imported_hidden_enum_template_sid_set_.end()) {
                 imported_hidden_enum_instance_sid_set_.insert(*sid);

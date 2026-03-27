@@ -357,6 +357,11 @@ namespace parus::diag {
         kGenericTypePathTemplateKindMismatch, // generic-applied type path target kind mismatch
         kGenericActsOverlap, // acts coherence overlap
         kGenericActorDeclNotSupportedV1, // generic actor declaration is not supported in v1
+        kTemplateSidecarUnavailable, // template-sidecar materialization is unavailable across bundle boundary
+        kTemplateSidecarSchema, // template-sidecar schema/version/payload is invalid
+        kTemplateSidecarUnsupportedClosure, // template-sidecar dependency closure shape is unsupported
+        kTemplateSidecarMissingNode, // template-sidecar root/dependency node is missing
+        kTemplateSidecarConflictingNode, // template-sidecar canonical identity conflicts with another payload
         kConstExprNotEvaluable, // args[0]=reason
         kConstExprCallNotSupported, // function call is not allowed in const expression (v1)
         kConstExprCycle, // const declaration cycle detected

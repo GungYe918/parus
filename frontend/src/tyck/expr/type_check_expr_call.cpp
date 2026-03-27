@@ -1,5 +1,6 @@
 // frontend/src/tyck/type_check_expr_call_cast.cpp
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/common/ModulePath.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -431,32 +432,61 @@ namespace parus::tyck {
             return std::string(name.substr(0, pos));
         };
 
-        auto collect_local_sidecar_overloads_for_external_name_ = [&](const sema::Symbol& sym) {
+        auto collect_imported_template_overloads_for_external_symbol_ = [&](const sema::Symbol& sym) {
             std::vector<ast::StmtId> out{};
-            std::vector<std::string> candidate_names{};
-            auto add_name = [&](std::string candidate) {
+            auto add_sid = [&](ast::StmtId sid) {
+                if (sid == ast::k_invalid_stmt) return;
+                if (std::find(out.begin(), out.end(), sid) != out.end()) return;
+                out.push_back(sid);
+            };
+            auto add_name = [&](std::string_view candidate) {
                 if (candidate.empty()) return;
-                if (std::find(candidate_names.begin(), candidate_names.end(), candidate) != candidate_names.end()) {
-                    return;
+                if (auto it = imported_fn_template_sid_by_lookup_name_.find(std::string(candidate));
+                    it != imported_fn_template_sid_by_lookup_name_.end()) {
+                    add_sid(it->second);
                 }
-                candidate_names.push_back(std::move(candidate));
+                auto fit = fn_decl_by_name_.find(std::string(candidate));
+                if (fit == fn_decl_by_name_.end()) return;
+                for (const auto sid : fit->second) {
+                    if (imported_fn_template_sid_set_.find(sid) == imported_fn_template_sid_set_.end()) {
+                        continue;
+                    }
+                    add_sid(sid);
+                }
             };
 
-            add_name(sym.name);
-            add_name(visible_external_fn_name_(sym.name));
+            if (!sym.link_name.empty()) {
+                if (auto it = imported_fn_template_sid_by_link_name_.find(sym.link_name);
+                    it != imported_fn_template_sid_by_link_name_.end()) {
+                    add_sid(it->second);
+                }
+            }
 
+            add_name(sym.name);
             const std::string visible = visible_external_fn_name_(sym.name);
+            add_name(visible);
+
+            const std::string current_bundle = current_bundle_name_();
+            const std::string current_head =
+                parus::normalize_core_public_module_head(current_bundle, current_module_head_());
+            const std::string symbol_head =
+                parus::normalize_core_public_module_head(sym.decl_bundle_name, sym.decl_module_head);
+            const auto candidates = parus::candidate_names_for_external_export(
+                sym.name,
+                symbol_head,
+                sym.decl_bundle_name,
+                current_head
+            );
+            for (const auto& candidate : candidates) {
+                add_name(candidate);
+            }
+
             if (visible.starts_with("core::")) {
                 add_name(visible.substr(std::string("core::").size()));
             } else if (sym.decl_bundle_name == "core") {
                 add_name(std::string("core::") + visible);
             }
 
-            for (const auto& name : candidate_names) {
-                auto it = fn_decl_by_name_.find(name);
-                if (it == fn_decl_by_name_.end()) continue;
-                out.insert(out.end(), it->second.begin(), it->second.end());
-            }
             std::sort(out.begin(), out.end());
             out.erase(std::unique(out.begin(), out.end()), out.end());
             return out;
@@ -1834,7 +1864,7 @@ namespace parus::tyck {
                                     overload_decl_ids = it->second;
                                 } else if (sym.is_external &&
                                            sym.external_payload.find("parus_generic_decl") != std::string::npos) {
-                                    overload_decl_ids = collect_local_sidecar_overloads_for_external_name_(sym);
+                                    overload_decl_ids = collect_imported_template_overloads_for_external_symbol_(sym);
                                 }
                             }
                         }
@@ -2660,8 +2690,17 @@ namespace parus::tyck {
             if (selected_external_sym != sema::SymbolTable::kNoScope &&
                 selected_external_fn_type != ty::kInvalidType) {
                 if (selected_external_is_template) {
-                    diag_(diag::Code::kTypeErrorGeneric, e.span,
-                          "external generic free function template is unavailable across bundle boundary");
+                    if (diag_bag_) {
+                        diag::Diagnostic d(
+                            diag::Severity::kError,
+                            diag::Code::kTemplateSidecarUnavailable,
+                            e.span
+                        );
+                        d.add_arg(visible_external_fn_name_(sym_.symbol(selected_external_sym).name));
+                        d.add_note("external generic calls require typed template-sidecar materialization");
+                        d.add_help("load the producer bundle's export-index together with its adjacent .templates.json sidecar");
+                        diag_bag_->add(std::move(d));
+                    }
                     err_(e.span, "external generic free function requires template-sidecar materialization");
                     check_all_arg_exprs_only();
                     return {true, fallback_ret};
@@ -4132,6 +4171,41 @@ namespace parus::tyck {
             filtered.push_back(i);
         }
 
+        auto emit_generic_call_failure_diag_ = [&](diag::Code code,
+                                                   std::string_view a0 = {},
+                                                   std::string_view a1 = {},
+                                                   std::string_view a2 = {},
+                                                   std::string_view a3 = {}) {
+            if (!diag_bag_) return;
+            diag::Diagnostic d(diag::Severity::kError, code, e.span);
+            if (!a0.empty()) d.add_arg(a0);
+            if (!a1.empty()) d.add_arg(a1);
+            if (!a2.empty()) d.add_arg(a2);
+            if (!a3.empty()) d.add_arg(a3);
+            switch (code) {
+                case diag::Code::kGenericConstraintProtoNotFound:
+                    d.add_note("proto-target import ergonomics only applies to public exported proto targets");
+                    d.add_note("generic call '" + callee_name + "' depends on a proto target that could not be resolved");
+                    d.add_help("add an explicit import for the proto, or export the proto through a public path");
+                    break;
+                case diag::Code::kGenericConstraintUnsatisfied:
+                    d.add_note("constraint checking happens after substituting inferred or explicit generic arguments");
+                    d.add_help("choose type arguments that satisfy the required proto, or relax the constraint");
+                    break;
+                case diag::Code::kGenericConstraintTypeMismatch:
+                    d.add_note("generic equality constraints are checked after the concrete type tuple is fixed");
+                    d.add_help("make both sides reduce to the same concrete type");
+                    break;
+                case diag::Code::kGenericTypeArgInferenceFailed:
+                    d.add_note("the compiler could not infer all generic arguments from this call form");
+                    d.add_help("add explicit type arguments to the call");
+                    break;
+                default:
+                    break;
+            }
+            diag_bag_->add(std::move(d));
+        };
+
         if (filtered.empty()) {
             if (generic_failure.has_arity) {
                 diag_(diag::Code::kGenericArityMismatch, e.span,
@@ -4142,32 +4216,39 @@ namespace parus::tyck {
                 return fallback_ret;
             }
             if (generic_failure.has_proto_not_found) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, generic_failure.proto_not_found);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintProtoNotFound,
+                    generic_failure.proto_not_found
+                );
                 err_(e.span, "generic constraint references unknown proto");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_unsatisfied) {
-                diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
-                      generic_failure.unsat_type_param,
-                      generic_failure.unsat_proto,
-                      generic_failure.unsat_concrete);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintUnsatisfied,
+                    generic_failure.unsat_type_param,
+                    generic_failure.unsat_proto,
+                    generic_failure.unsat_concrete
+                );
                 err_(e.span, "generic constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_type_mismatch) {
-                diag_(diag::Code::kGenericConstraintTypeMismatch, e.span,
-                      generic_failure.eq_lhs,
-                      generic_failure.eq_rhs,
-                      generic_failure.eq_concrete_lhs,
-                      generic_failure.eq_concrete_rhs);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintTypeMismatch,
+                    generic_failure.eq_lhs,
+                    generic_failure.eq_rhs,
+                    generic_failure.eq_concrete_lhs,
+                    generic_failure.eq_concrete_rhs
+                );
                 err_(e.span, "generic equality constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_infer_fail) {
-                diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                emit_generic_call_failure_diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_name);
                 err_(e.span, "failed to infer generic call type arguments");
                 check_all_arg_exprs_only();
                 return fallback_ret;
@@ -4271,32 +4352,39 @@ namespace parus::tyck {
                 return fallback_ret;
             }
             if (generic_failure.has_proto_not_found) {
-                diag_(diag::Code::kGenericConstraintProtoNotFound, e.span, generic_failure.proto_not_found);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintProtoNotFound,
+                    generic_failure.proto_not_found
+                );
                 err_(e.span, "generic constraint references unknown proto");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_unsatisfied) {
-                diag_(diag::Code::kGenericConstraintUnsatisfied, e.span,
-                      generic_failure.unsat_type_param,
-                      generic_failure.unsat_proto,
-                      generic_failure.unsat_concrete);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintUnsatisfied,
+                    generic_failure.unsat_type_param,
+                    generic_failure.unsat_proto,
+                    generic_failure.unsat_concrete
+                );
                 err_(e.span, "generic constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_type_mismatch) {
-                diag_(diag::Code::kGenericConstraintTypeMismatch, e.span,
-                      generic_failure.eq_lhs,
-                      generic_failure.eq_rhs,
-                      generic_failure.eq_concrete_lhs,
-                      generic_failure.eq_concrete_rhs);
+                emit_generic_call_failure_diag_(
+                    diag::Code::kGenericConstraintTypeMismatch,
+                    generic_failure.eq_lhs,
+                    generic_failure.eq_rhs,
+                    generic_failure.eq_concrete_lhs,
+                    generic_failure.eq_concrete_rhs
+                );
                 err_(e.span, "generic equality constraint is not satisfied");
                 check_all_arg_exprs_only();
                 return fallback_ret;
             }
             if (generic_failure.has_infer_fail) {
-                diag_(diag::Code::kGenericTypeArgInferenceFailed, e.span, callee_name);
+                emit_generic_call_failure_diag_(diag::Code::kGenericTypeArgInferenceFailed, callee_name);
                 err_(e.span, "failed to infer generic call type arguments");
                 check_all_arg_exprs_only();
                 return fallback_ret;

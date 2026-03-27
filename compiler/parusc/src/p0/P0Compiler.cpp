@@ -138,6 +138,44 @@ namespace parusc::p0 {
                     std::cerr << "\"" << json_escape_(d.args()[i]) << "\"";
                 }
                 std::cerr << "],";
+                std::cerr << "\"labels\":[";
+                for (size_t i = 0; i < d.labels().size(); ++i) {
+                    const auto& label = d.labels()[i];
+                    const auto lsp = label.span;
+                    const uint32_t lend_off = (lsp.hi >= lsp.lo) ? lsp.hi : lsp.lo;
+                    const auto lbegin_lc = sm.line_col(lsp.file_id, lsp.lo);
+                    const auto lend_lc = sm.line_col(lsp.file_id, lend_off);
+                    const uint32_t lstart_line0 = (lbegin_lc.line > 0) ? (lbegin_lc.line - 1) : 0;
+                    const uint32_t lstart_col0 = (lbegin_lc.col > 0) ? (lbegin_lc.col - 1) : 0;
+                    const uint32_t lend_line0 = (lend_lc.line > 0) ? (lend_lc.line - 1) : 0;
+                    const uint32_t lend_col0 = (lend_lc.col > 0) ? (lend_lc.col - 1) : 0;
+                    if (i != 0) std::cerr << ",";
+                    std::cerr << "{";
+                    std::cerr << "\"file\":\"" << json_escape_(sm.name(lsp.file_id)) << "\",";
+                    std::cerr << "\"line\":" << lbegin_lc.line << ",";
+                    std::cerr << "\"col\":" << lbegin_lc.col << ",";
+                    std::cerr << "\"end_line\":" << lend_lc.line << ",";
+                    std::cerr << "\"end_col\":" << lend_lc.col << ",";
+                    std::cerr << "\"message\":\"" << json_escape_(label.message) << "\",";
+                    std::cerr << "\"range\":{"
+                                 "\"start\":{\"line\":" << lstart_line0 << ",\"character\":" << lstart_col0 << "},"
+                                 "\"end\":{\"line\":" << lend_line0 << ",\"character\":" << lend_col0 << "}"
+                              << "}";
+                    std::cerr << "}";
+                }
+                std::cerr << "],";
+                std::cerr << "\"notes\":[";
+                for (size_t i = 0; i < d.notes().size(); ++i) {
+                    if (i != 0) std::cerr << ",";
+                    std::cerr << "\"" << json_escape_(d.notes()[i]) << "\"";
+                }
+                std::cerr << "],";
+                std::cerr << "\"help\":[";
+                for (size_t i = 0; i < d.help().size(); ++i) {
+                    if (i != 0) std::cerr << ",";
+                    std::cerr << "\"" << json_escape_(d.help()[i]) << "\"";
+                }
+                std::cerr << "],";
 
                 const uint32_t start_line0 = (begin_lc.line > 0) ? (begin_lc.line - 1) : 0;
                 const uint32_t start_col0 = (begin_lc.col > 0) ? (begin_lc.col - 1) : 0;
@@ -152,6 +190,56 @@ namespace parusc::p0 {
             }
             std::cerr << "\n]\n";
             return bag.has_error() ? 1 : 0;
+        }
+
+        void add_template_sidecar_diag_(
+            parus::diag::Bag& bag,
+            parus::Span span,
+            std::string_view detail
+        ) {
+            using parus::diag::Code;
+            Code code = Code::kTemplateSidecarSchema;
+            if (detail.starts_with("unsupported helper actor dependency closure") ||
+                detail.starts_with("unsupported mutable global dependency closure") ||
+                detail.starts_with("unsupported helper class dependency closure")) {
+                code = Code::kTemplateSidecarUnsupportedClosure;
+            } else if (detail.find("missing valid root stmt") != std::string_view::npos) {
+                code = Code::kTemplateSidecarMissingNode;
+            } else if (detail.starts_with("conflicting canonical template-sidecar identity")) {
+                code = Code::kTemplateSidecarConflictingNode;
+            } else if (detail.find("template is unavailable") != std::string_view::npos) {
+                code = Code::kTemplateSidecarUnavailable;
+            }
+
+            parus::diag::Diagnostic d(parus::diag::Severity::kError, code, span);
+            d.add_arg(detail);
+
+            if (code == Code::kTemplateSidecarUnsupportedClosure) {
+                const size_t colon = detail.find(": ");
+                if (colon != std::string_view::npos && colon + 2 < detail.size()) {
+                    d.add_note("dependency chain: " + std::string(detail.substr(colon + 2)));
+                } else {
+                    d.add_note("producer-side closure validation rejected this dependency graph");
+                }
+                if (detail.starts_with("unsupported mutable global dependency closure")) {
+                    d.add_help("remove the mutable global/static dependency from the exported generic closure, or route the behavior through an allowed helper boundary");
+                } else {
+                    d.add_help("replace the unsupported helper dependency with a free function, struct, enum, or immutable helper class body");
+                }
+            } else if (code == Code::kTemplateSidecarMissingNode) {
+                d.add_note("consumer-side closure loading expected a root or dependency node that was not present in the sidecar");
+                d.add_help("rebuild and reinstall the producer bundle so its export-index and adjacent .templates.json stay in sync");
+            } else if (code == Code::kTemplateSidecarConflictingNode) {
+                d.add_note("sidecar dedup uses canonical template identity, so conflicting payloads indicate a broken merge or stale install");
+                d.add_help("clean stale export-index/template-sidecar artifacts and rebuild the producer bundle");
+            } else if (code == Code::kTemplateSidecarUnavailable) {
+                d.add_note("external generic materialization requires the adjacent typed template-sidecar file");
+                d.add_help("load the producer bundle's export-index together with its .templates.json sidecar");
+            } else {
+                d.add_note("template-sidecar loading failed before monomorphization could begin");
+                d.add_help("verify the sidecar schema/version and rebuild the producer bundle if needed");
+            }
+            bag.add(std::move(d));
         }
 
         /// @brief SourceManager를 사용해 토큰 스트림을 생성한다.
@@ -3484,16 +3572,80 @@ namespace parusc::p0 {
             return key;
         }
 
-        void dedupe_template_sidecars_(std::vector<TemplateSidecarFunction>& entries) {
-            std::unordered_set<std::string> seen{};
+        std::string template_sidecar_payload_fingerprint_(const TemplateSidecarFunction& entry) {
+            std::ostringstream oss;
+            oss << entry.bundle << "|"
+                << entry.module_head << "|"
+                << entry.public_path << "|"
+                << entry.link_name << "|"
+                << entry.lookup_name << "|"
+                << entry.declared_type_repr << "|"
+                << entry.declared_type_semantic << "|"
+                << entry.root_stmt << "|";
+            oss << "stmts=" << entry.stmts.size() << ";";
+            for (const auto& s : entry.stmts) {
+                oss << static_cast<uint32_t>(s.kind) << ":"
+                    << s.name << ":"
+                    << s.type_repr << ":"
+                    << s.fn_ret_repr << ":"
+                    << s.acts_target_type_repr << ":"
+                    << static_cast<uint32_t>(s.member_visibility) << ":"
+                    << static_cast<uint32_t>(s.field_layout) << ":"
+                    << s.stmt_count << ";";
+            }
+            oss << "params=" << entry.params.size() << ";";
+            for (const auto& p : entry.params) {
+                oss << p.name << ":" << p.type_repr << ":" << p.type_semantic << ":"
+                    << p.is_mut << ":" << p.is_self << ":" << static_cast<uint32_t>(p.self_kind) << ";";
+            }
+            oss << "constraints=" << entry.constraints.size() << ";";
+            for (const auto& c : entry.constraints) {
+                oss << static_cast<uint32_t>(c.kind) << ":" << c.type_param << ":"
+                    << c.rhs_type_repr << ":" << c.proto.bundle << ":"
+                    << c.proto.module_head << ":" << c.proto.path << ";";
+            }
+            oss << "path_refs=" << entry.path_refs.size() << ";";
+            for (const auto& pr : entry.path_refs) {
+                oss << pr.path << ":" << pr.type_repr << ":" << pr.type_semantic << ";";
+            }
+            oss << "field_members=" << entry.field_members.size() << ";";
+            for (const auto& fm : entry.field_members) {
+                oss << fm.name << ":" << fm.type_repr << ":" << fm.type_semantic << ":"
+                    << static_cast<uint32_t>(fm.visibility) << ";";
+            }
+            oss << "enum_variants=" << entry.enum_variants.size() << ";";
+            for (const auto& ev : entry.enum_variants) {
+                oss << ev.name << ":" << ev.payload_begin << ":" << ev.payload_count << ":"
+                    << ev.has_discriminant << ":" << ev.discriminant << ";";
+            }
+            oss << "witnesses=" << entry.acts_assoc_witnesses.size() << ";";
+            for (const auto& w : entry.acts_assoc_witnesses) {
+                oss << w.assoc_name << ":" << w.rhs_type_repr << ":" << w.rhs_type_semantic << ";";
+            }
+            return oss.str();
+        }
+
+        bool dedupe_template_sidecars_(std::vector<TemplateSidecarFunction>& entries, std::string* out_err = nullptr) {
+            std::unordered_map<std::string, std::string> fingerprint_by_key{};
             std::vector<TemplateSidecarFunction> deduped{};
             deduped.reserve(entries.size());
             for (auto& e : entries) {
                 const std::string key = template_sidecar_identity_key_(e);
-                if (!seen.insert(key).second) continue;
+                const std::string fingerprint = template_sidecar_payload_fingerprint_(e);
+                if (auto it = fingerprint_by_key.find(key); it != fingerprint_by_key.end()) {
+                    if (it->second != fingerprint) {
+                        if (out_err != nullptr) {
+                            *out_err = "conflicting canonical template-sidecar identity: " + key;
+                        }
+                        return false;
+                    }
+                    continue;
+                }
+                fingerprint_by_key.emplace(key, fingerprint);
                 deduped.push_back(std::move(e));
             }
             entries = std::move(deduped);
+            return true;
         }
 
         bool collect_typed_current_template_sidecars_(
@@ -3621,7 +3773,6 @@ namespace parusc::p0 {
                     s.kind == parus::ast::StmtKind::kFnDecl &&
                     !s.name.empty() &&
                     s.a != parus::ast::k_invalid_stmt &&
-                    !std::string_view(s.name).starts_with("__parus_install_anchor_") &&
                     s.fn_generic_param_count > 0;
                 const bool is_generic_proto =
                     s.kind == parus::ast::StmtKind::kProtoDecl &&
@@ -3663,28 +3814,6 @@ namespace parusc::p0 {
                     link_name_override = ex.link_name;
                     break;
                 }
-                if (is_class_decl && !s.is_export) {
-                    const auto& kids = ast.stmt_children();
-                    const uint64_t begin = s.stmt_begin;
-                    const uint64_t end = begin + s.stmt_count;
-                    if (begin <= kids.size() && end <= kids.size()) {
-                        for (uint32_t i = s.stmt_begin; i < s.stmt_begin + s.stmt_count; ++i) {
-                            const auto msid = kids[i];
-                            if (msid == parus::ast::k_invalid_stmt ||
-                                static_cast<size_t>(msid) >= ast.stmts().size()) {
-                                continue;
-                            }
-                            const auto& member = ast.stmt(msid);
-                            if (member.kind == parus::ast::StmtKind::kVar &&
-                                member.is_static &&
-                                !member.is_const) {
-                                out_err =
-                                    "typed template payload v2 does not allow helper class dependency closure with static mutable state";
-                                return false;
-                            }
-                        }
-                    }
-                }
                 TemplateSidecarFunction one{};
                 if (!serialize_top_level_generic_decl_sidecar_(
                         ast,
@@ -3711,8 +3840,191 @@ namespace parusc::p0 {
             for (uint32_t i = 0; i < rs.stmt_count; ++i) {
                 if (!collect_stmt(collect_stmt, kids[rs.stmt_begin + i])) return false;
             }
-            dedupe_template_sidecars_(out);
-            return true;
+
+            std::unordered_map<std::string, parus::ast::StmtId> local_decl_by_qname{};
+            const auto helper_class_has_static_mut_state = [&](parus::ast::StmtId sid) -> bool {
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) {
+                    return false;
+                }
+                const auto& decl = ast.stmt(sid);
+                if (decl.kind != parus::ast::StmtKind::kClassDecl) return false;
+                const auto& decl_kids = ast.stmt_children();
+                const uint64_t begin = decl.stmt_begin;
+                const uint64_t end = begin + decl.stmt_count;
+                if (begin > decl_kids.size() || end > decl_kids.size()) return false;
+                for (uint32_t i = decl.stmt_begin; i < decl.stmt_begin + decl.stmt_count; ++i) {
+                    const auto msid = decl_kids[i];
+                    if (msid == parus::ast::k_invalid_stmt ||
+                        static_cast<size_t>(msid) >= ast.stmts().size()) {
+                        continue;
+                    }
+                    const auto& member = ast.stmt(msid);
+                    if (member.kind == parus::ast::StmtKind::kVar &&
+                        member.is_static &&
+                        !member.is_const) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            std::vector<std::string> validate_ns{};
+            const auto index_decl = [&](const auto& self, parus::ast::StmtId sid) -> void {
+                if (sid == parus::ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast.stmts().size()) return;
+                const auto& s = ast.stmt(sid);
+                if (s.span.file_id != current_file_id) return;
+                if (s.kind == parus::ast::StmtKind::kBlock) {
+                    const auto& blk_kids = ast.stmt_children();
+                    const uint64_t begin = s.stmt_begin;
+                    const uint64_t end = begin + s.stmt_count;
+                    if (begin > blk_kids.size() || end > blk_kids.size()) return;
+                    for (uint32_t i = 0; i < s.stmt_count; ++i) {
+                        self(self, blk_kids[s.stmt_begin + i]);
+                    }
+                    return;
+                }
+                if (s.kind == parus::ast::StmtKind::kNestDecl && !s.nest_is_file_directive) {
+                    const auto& segs = ast.path_segs();
+                    const uint64_t begin = s.nest_path_begin;
+                    const uint64_t end = begin + s.nest_path_count;
+                    uint32_t pushed = 0;
+                    if (begin <= segs.size() && end <= segs.size()) {
+                        for (uint32_t i = 0; i < s.nest_path_count; ++i) {
+                            validate_ns.push_back(std::string(segs[s.nest_path_begin + i]));
+                            ++pushed;
+                        }
+                    }
+                    self(self, s.a);
+                    while (pushed > 0) {
+                        validate_ns.pop_back();
+                        --pushed;
+                    }
+                    return;
+                }
+                if (s.name.empty()) return;
+                switch (s.kind) {
+                    case parus::ast::StmtKind::kClassDecl:
+                    case parus::ast::StmtKind::kFieldDecl:
+                    case parus::ast::StmtKind::kEnumDecl:
+                    case parus::ast::StmtKind::kActorDecl:
+                    case parus::ast::StmtKind::kVar:
+                        local_decl_by_qname[qualify_name_(validate_ns, s.name)] = sid;
+                        break;
+                    default:
+                        break;
+                }
+            };
+            for (uint32_t i = 0; i < rs.stmt_count; ++i) {
+                index_decl(index_decl, kids[rs.stmt_begin + i]);
+            }
+
+            std::unordered_map<std::string, const TemplateSidecarFunction*> sidecar_by_name{};
+            for (const auto& templ : out) {
+                if (!templ.public_path.empty()) {
+                    sidecar_by_name.emplace(templ.public_path, &templ);
+                }
+                if (!templ.lookup_name.empty()) {
+                    sidecar_by_name.emplace(templ.lookup_name, &templ);
+                }
+            }
+
+            const auto strip_generic_args = [](std::string_view text) -> std::string {
+                std::string out{};
+                int depth = 0;
+                for (const char ch : text) {
+                    if (ch == '<') {
+                        ++depth;
+                        continue;
+                    }
+                    if (ch == '>') {
+                        if (depth > 0) --depth;
+                        continue;
+                    }
+                    if (depth == 0) out.push_back(ch);
+                }
+                return out;
+            };
+            const auto collect_sidecar_decl_refs = [&](const TemplateSidecarFunction& templ) {
+                std::vector<std::string> refs{};
+                std::unordered_set<std::string> seen{};
+                for (const auto& ref : templ.path_refs) {
+                    if (!ref.path.empty() && seen.insert(ref.path).second) {
+                        refs.push_back(ref.path);
+                    }
+                }
+                for (const auto& expr : templ.exprs) {
+                    if (expr.text.empty()) continue;
+                    std::string candidate = strip_generic_args(expr.text);
+                    if (candidate.empty()) continue;
+                    for (;;) {
+                        if (seen.find(candidate) == seen.end() &&
+                            local_decl_by_qname.find(candidate) != local_decl_by_qname.end()) {
+                            seen.insert(candidate);
+                            refs.push_back(candidate);
+                            break;
+                        }
+                        const size_t pos = candidate.rfind("::");
+                        if (pos == std::string::npos) break;
+                        candidate.erase(pos);
+                    }
+                }
+                return refs;
+            };
+
+            for (const auto& templ : out) {
+                if (!templ.is_public_export) continue;
+                const std::string root_name =
+                    !templ.public_path.empty() ? templ.public_path : templ.lookup_name;
+                std::unordered_set<std::string> visiting{};
+                const auto validate_closure_ref = [&](const auto& self,
+                                                      const std::string& chain,
+                                                      std::string_view ref_path) -> bool {
+                    if (ref_path.empty()) return true;
+                    const std::string dep_name(ref_path);
+                    const std::string dep_chain = chain + " -> " + dep_name;
+                    auto it = local_decl_by_qname.find(dep_name);
+                    if (it != local_decl_by_qname.end()) {
+                        const auto dep_sid = it->second;
+                        const auto& dep = ast.stmt(dep_sid);
+                        if (dep.kind == parus::ast::StmtKind::kActorDecl) {
+                            out_err = "unsupported helper actor dependency closure: " + dep_chain;
+                            return false;
+                        }
+                        if (dep.kind == parus::ast::StmtKind::kVar &&
+                            dep.is_static &&
+                            !dep.is_const) {
+                            out_err = "unsupported mutable global dependency closure: " + dep_chain;
+                            return false;
+                        }
+                        if (dep.kind == parus::ast::StmtKind::kClassDecl &&
+                            helper_class_has_static_mut_state(dep_sid)) {
+                            out_err = "unsupported helper class dependency closure with static mutable state: " +
+                                      dep_chain;
+                            return false;
+                        }
+                    }
+                    const auto sidecar_it = sidecar_by_name.find(dep_name);
+                    if (sidecar_it == sidecar_by_name.end()) return true;
+                    if (!visiting.insert(dep_name).second) return true;
+                    const TemplateSidecarFunction* dep_templ = sidecar_it->second;
+                    for (const auto& next_ref : collect_sidecar_decl_refs(*dep_templ)) {
+                        if (!self(self, dep_chain, next_ref)) {
+                            visiting.erase(dep_name);
+                            return false;
+                        }
+                    }
+                    visiting.erase(dep_name);
+                    return true;
+                };
+
+                for (const auto& ref : collect_sidecar_decl_refs(templ)) {
+                    if (!validate_closure_ref(validate_closure_ref, root_name, ref)) {
+                        return false;
+                    }
+                }
+            }
+
+            return dedupe_template_sidecars_(out, &out_err);
         }
 
         void validate_same_folder_export_collisions_(
@@ -5040,7 +5352,7 @@ namespace parusc::p0 {
                 return ast.add_type_node(tn);
             };
 
-            std::unordered_set<std::string> seen_sidecar_keys{};
+            std::unordered_map<std::string, std::string> seen_sidecar_keys{};
             for (const auto& index : loaded) {
                 auto relative_module_head = [&](std::string_view module_head) -> std::string {
                     const std::string prefix = index.bundle + "::";
@@ -5089,7 +5401,16 @@ namespace parusc::p0 {
 
                 for (const auto& templ : index.sidecars) {
                     if (!templ.decl_file.empty() && templ.decl_file == current_norm) continue;
-                    if (!seen_sidecar_keys.insert(template_sidecar_identity_key_(templ)).second) continue;
+                    const std::string sidecar_key = template_sidecar_identity_key_(templ);
+                    const std::string sidecar_fingerprint = template_sidecar_payload_fingerprint_(templ);
+                    if (auto it = seen_sidecar_keys.find(sidecar_key); it != seen_sidecar_keys.end()) {
+                        if (it->second != sidecar_fingerprint) {
+                            out_err = "conflicting canonical template-sidecar identity while loading: " + sidecar_key;
+                            return false;
+                        }
+                        continue;
+                    }
+                    seen_sidecar_keys.emplace(sidecar_key, sidecar_fingerprint);
                     if (templ.root_stmt == parus::ast::k_invalid_stmt ||
                         templ.root_stmt >= templ.stmts.size()) {
                         out_err = "typed template sidecar missing valid root stmt: " + templ.lookup_name;
@@ -6932,12 +7253,25 @@ namespace parusc::p0 {
             LoadedExternalIndex loaded{};
             std::string load_err{};
             if (!load_external_index_(idx_path, loaded, load_err)) {
-                const parus::diag::Code code = load_err.starts_with("missing export-index file")
-                    ? parus::diag::Code::kExportIndexMissing
-                    : parus::diag::Code::kExportIndexSchema;
-                parus::diag::Diagnostic d(parus::diag::Severity::kError, code, root_span);
-                d.add_arg(load_err);
-                bag.add(std::move(d));
+                if (load_err.starts_with("missing export-index file")) {
+                    parus::diag::Diagnostic d(
+                        parus::diag::Severity::kError,
+                        parus::diag::Code::kExportIndexMissing,
+                        root_span
+                    );
+                    d.add_arg(load_err);
+                    bag.add(std::move(d));
+                } else if (load_err.find("export-index") != std::string::npos) {
+                    parus::diag::Diagnostic d(
+                        parus::diag::Severity::kError,
+                        parus::diag::Code::kExportIndexSchema,
+                        root_span
+                    );
+                    d.add_arg(load_err);
+                    bag.add(std::move(d));
+                } else {
+                    add_template_sidecar_diag_(bag, root_span, load_err);
+                }
                 continue;
             }
             qualify_export_surface_entries_for_bundle_(loaded.entries, loaded.bundle);
@@ -7147,13 +7481,7 @@ namespace parusc::p0 {
                 sidecar_file_module_head_overrides,
                 sidecar_load_err)) {
             if (!sidecar_load_err.empty()) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kTypeErrorGeneric,
-                    root_span
-                );
-                d.add_arg(sidecar_load_err);
-                bag.add(std::move(d));
+                add_template_sidecar_diag_(bag, root_span, sidecar_load_err);
             }
             const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
             return (diag_rc != 0) ? 1 : 0;
@@ -7254,20 +7582,19 @@ namespace parusc::p0 {
                     typed_exports,
                     current_sidecars,
                     sidecar_err)) {
-                parus::diag::Diagnostic d(
-                    parus::diag::Severity::kError,
-                    parus::diag::Code::kTypeErrorGeneric,
-                    root_span
+                add_template_sidecar_diag_(
+                    bag,
+                    root_span,
+                    sidecar_err.empty()
+                        ? std::string("failed to collect template sidecar")
+                        : sidecar_err
                 );
-                d.add_arg(sidecar_err.empty()
-                    ? std::string("failed to collect template sidecar")
-                    : sidecar_err);
-                bag.add(std::move(d));
                 const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
                 return (diag_rc != 0) ? 1 : 0;
             }
             std::vector<ExportSurfaceEntry> merged_exports = typed_exports;
             std::vector<TemplateSidecarFunction> merged_sidecars = current_sidecars;
+            std::string write_err{};
             for (const auto& loaded : loaded_external_indices) {
                 if (loaded.bundle != opt.bundle.bundle_name) continue;
                 merged_exports.insert(merged_exports.end(), loaded.entries.begin(), loaded.entries.end());
@@ -7277,14 +7604,17 @@ namespace parusc::p0 {
 
             qualify_export_surface_entries_for_bundle_(merged_exports, opt.bundle.bundle_name);
             dedupe_export_surface_(merged_exports);
-            dedupe_template_sidecars_(merged_sidecars);
+            if (!dedupe_template_sidecars_(merged_sidecars, &write_err)) {
+                add_template_sidecar_diag_(bag, root_span, write_err);
+                const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
+                return (diag_rc != 0) ? 1 : 0;
+            }
             validate_same_folder_export_collisions_(merged_exports, bag, root_span);
             if (bag.has_error()) {
                 const int diag_rc = flush_diags_(bag, opt.lang, sm, opt.context_lines, opt.diag_format);
                 return (diag_rc != 0) ? 1 : 0;
             }
 
-            std::string write_err{};
             if (!write_export_index_(opt.bundle.emit_export_index_path,
                                      opt.bundle.bundle_name,
                                      merged_exports,

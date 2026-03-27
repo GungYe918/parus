@@ -379,6 +379,11 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "GenericTypePathTemplateKindMismatch";
             case Code::kGenericActsOverlap: return "GenericActsOverlap";
             case Code::kGenericActorDeclNotSupportedV1: return "GenericActorDeclNotSupportedV1";
+            case Code::kTemplateSidecarUnavailable: return "TemplateSidecarUnavailable";
+            case Code::kTemplateSidecarSchema: return "TemplateSidecarSchema";
+            case Code::kTemplateSidecarUnsupportedClosure: return "TemplateSidecarUnsupportedClosure";
+            case Code::kTemplateSidecarMissingNode: return "TemplateSidecarMissingNode";
+            case Code::kTemplateSidecarConflictingNode: return "TemplateSidecarConflictingNode";
             case Code::kConstExprNotEvaluable: return "ConstExprNotEvaluable";
             case Code::kConstExprCallNotSupported: return "ConstExprCallNotSupported";
             case Code::kConstExprCycle: return "ConstExprCycle";
@@ -751,6 +756,11 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "generic type path '{0}' points to a template of different kind (expected {1}, got {2})";
             case Code::kGenericActsOverlap: return "generic acts overlap detected for owner '{0}' and member '{1}'";
             case Code::kGenericActorDeclNotSupportedV1: return "generic actor declaration is not supported in v1: '{0}'";
+            case Code::kTemplateSidecarUnavailable: return "template-sidecar materialization is unavailable: '{0}'";
+            case Code::kTemplateSidecarSchema: return "template-sidecar payload is invalid: '{0}'";
+            case Code::kTemplateSidecarUnsupportedClosure: return "template-sidecar dependency closure is unsupported: '{0}'";
+            case Code::kTemplateSidecarMissingNode: return "template-sidecar dependency node is missing: '{0}'";
+            case Code::kTemplateSidecarConflictingNode: return "template-sidecar has conflicting duplicate node: '{0}'";
             case Code::kConstExprNotEvaluable: return "const expression is not evaluable: {0}";
             case Code::kConstExprCallNotSupported: return "function calls are not supported in const expressions (v1)";
             case Code::kConstExprCycle: return "const declaration cycle detected";
@@ -1128,6 +1138,11 @@ namespace parus::diag {
             case Code::kGenericTypePathTemplateKindMismatch: return "제네릭 타입 경로 '{0}'가 다른 종류의 템플릿을 가리킵니다: 기대 {1}, 실제 {2}";
             case Code::kGenericActsOverlap: return "owner '{0}'와 멤버 '{1}'에서 제네릭 acts 중복(coherence overlap)이 발생했습니다";
             case Code::kGenericActorDeclNotSupportedV1: return "v1에서는 제네릭 actor 선언을 지원하지 않습니다: '{0}'";
+            case Code::kTemplateSidecarUnavailable: return "template-sidecar 물질화 경로를 사용할 수 없습니다: '{0}'";
+            case Code::kTemplateSidecarSchema: return "template-sidecar payload가 올바르지 않습니다: '{0}'";
+            case Code::kTemplateSidecarUnsupportedClosure: return "template-sidecar dependency closure가 지원되지 않습니다: '{0}'";
+            case Code::kTemplateSidecarMissingNode: return "template-sidecar dependency node가 누락되었습니다: '{0}'";
+            case Code::kTemplateSidecarConflictingNode: return "template-sidecar에 충돌하는 중복 node가 있습니다: '{0}'";
             case Code::kConstExprNotEvaluable: return "const 식을 평가할 수 없습니다: {0}";
             case Code::kConstExprCallNotSupported: return "v1 const 식에서는 함수 호출을 지원하지 않습니다";
             case Code::kConstExprCycle: return "const 선언 간 순환 참조가 감지되었습니다";
@@ -1153,12 +1168,45 @@ namespace parus::diag {
         return format_template(std::move(msg), d.args());
     }
 
+    static void append_span_block_(
+        std::ostringstream& out,
+        const SourceManager& sm,
+        Span sp,
+        uint32_t context_lines,
+        std::string_view header_prefix,
+        std::string_view underline_message
+    ) {
+        auto lc = sm.line_col(sp.file_id, sp.lo);
+        auto blk = sm.snippet_block_for_span(sp, context_lines);
+        const uint32_t last_line_no = blk.first_line_no +
+            (blk.lines.empty() ? 0u : static_cast<uint32_t>(blk.lines.size()) - 1);
+        const uint32_t w = digits10(last_line_no == 0 ? 1u : last_line_no);
+
+        out << header_prefix << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
+        out << "  |\n";
+        for (uint32_t i = 0; i < blk.lines.size(); ++i) {
+            const uint32_t line_no = blk.first_line_no + i;
+            out << "  ";
+            {
+                const std::string num = std::to_string(line_no);
+                out << std::string(w - static_cast<uint32_t>(num.size()), ' ') << num;
+            }
+            out << " | " << blk.lines[i] << "\n";
+
+            if (i == blk.caret_line_offset) {
+                out << "  " << std::string(w, ' ') << " | ";
+                out << std::string(blk.caret_cols_before, ' ');
+                out << std::string(blk.caret_cols_len, '^');
+                if (!underline_message.empty()) {
+                    out << " " << underline_message;
+                }
+                out << "\n";
+            }
+        }
+    }
+
     std::string render_one(const Diagnostic& d, Language lang, const SourceManager& sm) {
         std::string msg = render_message(d, lang);
-
-        const auto sp = d.span();
-        auto lc = sm.line_col(sp.file_id, sp.lo);
-        auto sn = sm.snippet_for_span(sp);
 
         std::ostringstream oss;
         auto sev = d.severity();
@@ -1167,17 +1215,16 @@ namespace parus::diag {
             (sev == Severity::kFatal)   ? "fatal"   : "error";
 
         oss << sev_name << "[" << code_name_sv_(d.code()) << "]: " << msg << "\n";
-        oss << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
-        oss << "  |\n";
-        oss << sn.line_no << " | " << sn.line_text << "\n";
-        oss << "  | ";
-
-        // spaces to caret
-        for (uint32_t i = 0; i < sn.caret_cols_before; ++i) oss << ' ';
-
-        // underline
-        for (uint32_t i = 0; i < sn.caret_cols_len; ++i) oss << '^';
-        
+        append_span_block_(oss, sm, d.span(), /*context_lines=*/0, " --> ", "");
+        for (const auto& label : d.labels()) {
+            append_span_block_(oss, sm, label.span, /*context_lines=*/0, " ::: ", label.message);
+        }
+        for (const auto& note : d.notes()) {
+            oss << "  = note: " << note << "\n";
+        }
+        for (const auto& help : d.help()) {
+            oss << "  = help: " << help << "\n";
+        }
         return oss.str();
     }
 
@@ -1185,46 +1232,24 @@ namespace parus::diag {
         std::string msg = (lang == Language::kKo) ? template_ko(d.code()) : template_en(d.code());
         msg = format_template(std::move(msg), d.args());
 
-        const auto sp = d.span();
-        auto lc = sm.line_col(sp.file_id, sp.lo);
-
-        // 컨텍스트 스니펫
-        auto blk = sm.snippet_block_for_span(sp, context_lines);
-
-        uint32_t last_line_no = blk.first_line_no + static_cast<uint32_t>(blk.lines.size()) - 1;
-        uint32_t w = digits10(last_line_no);
-
         std::ostringstream out;
 
-        // error / fatal 출력
         auto sev = d.severity();
         const char* sev_name =
             (sev == Severity::kWarning) ? "warning" :
             (sev == Severity::kFatal)   ? "fatal"   : "error";
 
         out << sev_name << "[" << code_name_sv_(d.code()) << "]: " << msg << "\n";
-        out << " --> " << sm.name(sp.file_id) << ":" << lc.line << ":" << lc.col << "\n";
-        out << "  |\n";
-
-        for (uint32_t i = 0; i < blk.lines.size(); ++i) {
-            uint32_t line_no = blk.first_line_no + i;
-
-            // "  12 | code..."
-            out << std::string(2, ' ');
-            {
-                std::string num = std::to_string(line_no);
-                out << std::string(w - static_cast<uint32_t>(num.size()), ' ') << num;
-            }
-            out << " | " << blk.lines[i] << "\n";
-
-            if (i == blk.caret_line_offset) {
-                out << std::string(2, ' ');
-                out << std::string(w, ' ') << " | ";
-                out << std::string(blk.caret_cols_before, ' ');
-                out << std::string(blk.caret_cols_len, '^') << "\n";
-            }
+        append_span_block_(out, sm, d.span(), context_lines, " --> ", "");
+        for (const auto& label : d.labels()) {
+            append_span_block_(out, sm, label.span, context_lines, " ::: ", label.message);
         }
-
+        for (const auto& note : d.notes()) {
+            out << "  = note: " << note << "\n";
+        }
+        for (const auto& help : d.help()) {
+            out << "  = help: " << help << "\n";
+        }
         return out.str();
     }
 

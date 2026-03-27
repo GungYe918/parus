@@ -692,6 +692,15 @@ namespace parus::tyck {
         bool qualified_proto_target_allows_ordinary_lookup_(std::string_view raw_path) const;
         std::string mono_template_symbol_for_stmt_(ast::StmtId template_sid, MonoTemplateRef::SourceKind source) const;
         std::string build_mono_instance_key_(const MonoRequest& request) const;
+        std::optional<ast::StmtId> lookup_mono_stmt_cache_(
+            const std::unordered_map<std::string, ast::StmtId>& cache,
+            const MonoRequest& request
+        ) const;
+        void store_mono_stmt_cache_(
+            std::unordered_map<std::string, ast::StmtId>& cache,
+            const MonoRequest& request,
+            ast::StmtId sid
+        );
         void drain_pending_generic_instances_();
         std::string current_namespace_prefix_() const;
         std::string current_module_head_() const;
@@ -866,6 +875,13 @@ namespace parus::tyck {
             std::string concrete_lhs{};
             std::string concrete_rhs{};
         };
+
+        void emit_generic_constraint_failure_diag_(
+            const ast::FnConstraintDecl& cc,
+            const GenericConstraintFailure& failure,
+            Span use_span,
+            std::string_view context
+        );
 
         std::vector<std::unordered_map<ty::TypeId, ActiveActsSelection>> acts_selection_scope_stack_;
         std::unordered_map<uint32_t, ActiveActsSelection> acts_selection_by_symbol_;
