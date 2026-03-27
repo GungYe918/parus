@@ -179,6 +179,7 @@ sidecar dedup 원칙:
 2. 기준은 `bundle + kind + module head + public path/hidden lookup name + link name`이다.
 3. decl file / line / col은 dedup key에 포함하지 않고 diagnostics payload로만 유지한다.
 4. 같은 canonical identity가 서로 다른 payload fingerprint를 가지면 producer/consumer 모두 hard error다.
+5. repeated export-index load/shared closure merge 시 같은 canonical identity는 메모리 내부에서 한 번만 적재한다.
 
 closure validator 원칙:
 
@@ -209,6 +210,14 @@ Parus 정적 generic lane의 성능 원칙은 아래로 고정한다.
 3. no dictionary ABI
 4. no erased generic ABI
 5. no pre-expanded concrete matrix
+6. in-process cache hardening only
+
+추가 cache 원칙:
+
+1. concrete instance cache는 structured canonical key를 기준으로 한다.
+2. string key form은 diagnostics/debug 출력용으로만 남긴다.
+3. imported template identity index, imported overload/link-name index, sidecar canonical node index, proto-target direct-resolution cache는 재사용 가능한 메모리 인덱스로 유지한다.
+4. repeated concrete tuple / repeated sidecar merge / repeated imported lookup에서 선형 재탐색과 중복 materialization이 생기지 않아야 한다.
 
 즉 concrete instance가 필요할 때만 생성하고, 생성된 결과는 ordinary concrete symbol과 동일하게 취급한다.
 
@@ -265,12 +274,15 @@ generic/sidecar/closure 품질 라운드부터 관련 진단은 structured diagn
 16. producer/consumer closure validator 도입
 17. generic/sidecar/closure structured diagnostics 도입
 18. dead `__parus_install_anchor_` filter 제거
+19. in-memory mono cache/index hardening
+20. generic/mono edge-case diagnostics polish
 
 이번 라운드에서 아직 열지 않는 것:
 
 1. helper `actor` dependency closure 확장
 2. generic actor lane 공통 mono 이전
 3. dyn/object lane
+4. `~` ownership semantics 보강
 
 ---
 

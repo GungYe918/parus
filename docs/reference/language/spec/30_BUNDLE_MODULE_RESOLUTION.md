@@ -113,6 +113,7 @@
 3-d. acts header의 generic constraint RHS
 4. 위 위치에서는 qualified public proto path를 lexical import 없이 직접 해석할 수 있다.
 5. 이 예외는 hidden/internal proto나 ordinary expression/type symbol까지 넓어지지 않는다.
+6. hidden helper/proto/class를 lexical source에서 직접 참조하면 ordinary visibility/import 오류가 나와야 하며, 진단은 왜 proto-target ergonomics가 적용되지 않는지 `note/help`로 설명해야 한다.
 
 ## 18.8 진단 코드 계약
 

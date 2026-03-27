@@ -122,11 +122,12 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 
 ## 3.3 Direct Next Step Freeze
 
-다음 직접 구현 라운드는 아래로 고정한다.
+직전 품질 라운드에서 아래를 마감했다.
 
-1. generic/mono closure validator를 producer/consumer 양쪽에 도입한다.
-2. canonical mono key helper와 sidecar dedup을 harden한다.
-3. generic/sidecar/closure diagnostics를 structured labels/notes/help로 확장한다.
+1. generic/mono closure validator를 producer/consumer 양쪽에 도입했다.
+2. canonical mono key helper와 sidecar dedup을 harden했다.
+3. generic/sidecar/closure diagnostics를 structured labels/notes/help로 확장했다.
+4. in-memory mono cache/index/accounting을 강화했다.
 
 고정 규칙:
 
@@ -145,6 +146,7 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 5. canonical mono key helper와 sidecar canonical identity dedup
 6. producer/consumer closure validator
 7. generic/sidecar/closure structured diagnostics
+8. in-memory mono cache/index hardening
 
 다음 직접 후보:
 
@@ -152,6 +154,7 @@ v1.2부터 Parus의 정적 generic 실체화 모델은 기능별 특수패치가
 2. mono cache/debug accounting and assertion hardening
 3. generic diagnostics 품질 마감 및 문구 일관화
 4. actor lane은 actor 의미론 고정 전까지 제외 유지
+5. 다음 직접 구현 축은 `~` 의미론 보강
 
 ---
 
@@ -395,6 +398,8 @@ typed sidecar v2 payload:
 1. mono key는 `producer bundle + template symbol + concrete tuple + target + abi` canonical helper로 통일한다.
 1. kind별 cache map은 유지하되 key builder는 공통 helper를 사용한다.
 1. sidecar dedup은 canonical template identity 기준으로 수행한다.
+1. in-memory lookup은 structured canonical key/hash를 우선 사용하고, string key는 diagnostics/debug용으로만 유지한다.
+1. imported template identity index / imported overload index / proto-target direct-resolution cache를 재사용 가능한 메모리 인덱스로 유지한다.
 
 ## 6.2 v2: Generic Acts + Coherence
 
