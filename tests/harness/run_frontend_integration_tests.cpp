@@ -2748,13 +2748,6 @@ namespace {
 
     static bool test_escape_sized_array_owner_cells() {
         const std::string src = R"(
-            def replace<T>(place: &mut T, value: T) -> T {
-                return value;
-            }
-
-            def swap<T>(lhs: &mut T, rhs: &mut T) -> void {
-            }
-
             proto Probe {
                 provide def probe() -> i32 {
                     return 40i32;
@@ -2784,13 +2777,8 @@ namespace {
                     self.slots[0] ??= c;
                 }
 
-                def rotate(self mut) -> i32 {
-                    swap(self.workers[0], self.workers[1]);
+                def inspect(self) -> i32 {
                     return self.workers[0].run() + self.workers[1]->probe();
-                }
-
-                def refill(self mut, next: ~Worker) -> ~Worker {
-                    return replace(self.workers[0], next);
                 }
 
                 def take_slot(self mut) -> i32 {
@@ -2807,20 +2795,15 @@ namespace {
             }
 
             def main() -> i32 {
-                set mut local = [make(1i32), make(2i32)];
-                swap(local[0], local[1]);
+                set local = [make(1i32), make(2i32)];
 
                 set mut p = Pool(make(3i32), make(4i32), make(5i32));
-                let old: ~Worker = p.refill(make(6i32));
-                return local[0].run() + local[1]->probe() + p.rotate() + p.take_slot() + old.run();
+                return local[0].run() + local[1]->probe() + p.inspect() + p.take_slot();
             }
         )";
 
         auto p = parse_program(src);
-        parus::passes::PassOptions opt{};
-        opt.name_resolve.current_bundle_name = "core";
-        opt.name_resolve.current_module_head = "mem";
-        auto pres = parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
+        auto pres = run_passes(p);
         auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
         auto cap = run_cap(p, pres, ty);
         auto sir = run_sir(p, pres, ty);
@@ -2833,6 +2816,117 @@ namespace {
         ok &= require_(sir.handle_verify_errors.empty(), "escape sized owner array seed must pass handle verification");
         if (!ok) return false;
 
+        return ok;
+    }
+
+    static bool test_escape_projected_owner_cells_and_named_aggregates() {
+        const std::string src = R"(
+            proto Probe {
+                provide def probe() -> i32 {
+                    return 40i32;
+                }
+            };
+
+            class Worker: Probe {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value + 1i32;
+                }
+            };
+
+            class WorkerSlot {
+                item: (~Worker)?;
+
+                init(v: ~Worker) {
+                    self.item = null;
+                    self.item ??= v;
+                }
+            };
+
+            class WorkerGroup {
+                primary: ~Worker;
+                slots: WorkerSlot[2];
+
+                init(a: ~Worker, b: ~Worker, c: ~Worker) {
+                    self.primary = a;
+                    self.slots = [WorkerSlot(b), WorkerSlot(c)];
+                }
+            };
+
+            class Pool {
+                groups: WorkerGroup[2];
+
+                init(a: ~Worker, b: ~Worker, c: ~Worker, d: ~Worker, e: ~Worker, f: ~Worker) {
+                    self.groups = [WorkerGroup(a, b, c), WorkerGroup(d, e, f)];
+                }
+
+                def take(self mut) -> i32 {
+                    let taken: ~Worker = self.groups[1].slots[1].item else {
+                        return 1i32;
+                    };
+                    return self.groups[0].primary.run() + self.groups[0].primary->probe() + taken.run();
+                }
+            };
+
+            def make(seed: i32) -> ~Worker {
+                set w = Worker(seed);
+                return ~w;
+            }
+
+            def main() -> i32 {
+                set mut p = Pool(make(1i32), make(2i32), make(3i32), make(4i32), make(5i32), make(6i32));
+                return p.take();
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "projected owner-cell seed must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "projected owner-cell seed must not emit tyck errors");
+        ok &= require_(cap.ok, "projected owner-cell seed must pass AST capability check");
+        ok &= require_(sir.cap.ok, "projected owner-cell seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "projected owner-cell seed must pass handle verification");
+        return ok;
+    }
+
+    static bool test_escape_named_aggregate_unsized_container_rejected() {
+        const std::string src = R"(
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+            };
+
+            class WorkerSlot {
+                item: (~Worker)?;
+            };
+
+            class BadPool {
+                slots: WorkerSlot[];
+            };
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kTypeFieldMemberMustBePodBuiltin),
+                       "unsized named aggregate owner container must be rejected by field policy");
+        ok &= require_(!ty.errors.empty(), "unsized named aggregate owner container must fail tyck");
+        (void)pres;
         return ok;
     }
 
@@ -3613,6 +3707,8 @@ int main() {
         {"escape_first_class_places_accounting", test_escape_first_class_places_accounting},
         {"escape_stored_handle_calls_stay_cell_only", test_escape_stored_handle_calls_stay_cell_only},
         {"escape_sized_array_owner_cells", test_escape_sized_array_owner_cells},
+        {"escape_projected_owner_cells_and_named_aggregates", test_escape_projected_owner_cells_and_named_aggregates},
+        {"escape_named_aggregate_unsized_container_rejected", test_escape_named_aggregate_unsized_container_rejected},
         {"sir_handle_verify_rejects_invalid_escape_pack_state", test_sir_handle_verify_rejects_invalid_escape_pack_state},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},

@@ -1398,7 +1398,7 @@
                     d.add_arg(std::string("direct field/index projection on `~T` is deferred in this round (got ") +
                               types_.to_string(base_t) + ")");
                     d.add_note("`~T` supports local/field/optional storage and method/proto calls, but not direct projection");
-                    d.add_help("store the handle in `(~T)?` and use consume-binding, or call a method on the `~T` value directly");
+                    d.add_help("store the handle in `(~T)?` and use consume-binding, or keep traversing through storage-safe aggregate fields until the final operation is a method/proto call");
                     diag_bag_->add(d);
                 } else {
                     diag_(diag::Code::kTypeErrorGeneric, e.span,

@@ -86,8 +86,9 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
 2. sized array container가 필요하면 `(~T)[N]` 또는 `((~T)?)[N]`를 사용한다.
-3. one-shot extraction은 `(~T)?` 또는 `((~T)?)[N]` + consume-binding을 사용한다.
-4. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
+3. storage-safe named aggregate가 필요하면 그 내부 field graph를 `~T`, `(~T)?`, sized owner-array, 다시 storage-safe named aggregate로만 구성한다.
+4. one-shot extraction은 `(~T)?`, `((~T)?)[N]`, 또는 projected optional owner path + consume-binding을 사용한다.
+5. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
 
 ---
 

@@ -197,7 +197,7 @@
 
             const bool member_ok = (s.field_layout == ast::FieldLayout::kC)
                 ? is_c_abi_safe_type_(m.type, /*allow_void=*/false)
-                : is_field_pod_value_type_(types_, m.type);
+                : is_storage_safe_owner_container_type_(m.type);
 
             if (member_ok) {
                 continue;
@@ -213,7 +213,7 @@
                       types_.to_string(m.type));
             } else {
                 oss << "field member '" << m.name
-                    << "' must use a POD builtin value type, `~T`/`(~T)?`, or recursively-sized owner arrays in this round, got "
+                    << "' must use a POD builtin value type, `~T`/`(~T)?`, a recursively-sized owner array, or a storage-safe named aggregate in this round, got "
                     << types_.to_string(m.type);
                 diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, m.span, m.name, types_.to_string(m.type));
             }

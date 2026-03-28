@@ -1953,6 +1953,15 @@
                         continue;
                     }
 
+                    if (!is_storage_safe_owner_container_type_(fm.type)) {
+                        std::ostringstream oss;
+                        oss << "class field member '" << fm.name
+                            << "' must use a POD builtin value type, `~T`/`(~T)?`, a recursively-sized owner array, or a storage-safe named aggregate in this round, got "
+                            << types_.to_string(fm.type);
+                        diag_(diag::Code::kTypeFieldMemberMustBePodBuiltin, fm.span, fm.name, types_.to_string(fm.type));
+                        err_(fm.span, oss.str());
+                    }
+
                 }
             } else {
                 diag_(diag::Code::kTypeFieldMemberRangeInvalid, s.span);

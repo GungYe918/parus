@@ -7382,7 +7382,7 @@ bool test_escape_place_first_mem_rejects_non_escape() {
         std::cerr << "place-first mem::replace on non-escape type should fail\n";
         return false;
     }
-    if (out.find("place-first core::mem::replace is only available for `~T`") == std::string::npos ||
+    if (out.find("place-first core::mem::replace is only available for owner-cell places") == std::string::npos ||
         out.find("&mut") == std::string::npos) {
         std::cerr << "non-escape place-first mem rejection should explain the `&mut` path\n" << out;
         return false;
@@ -7424,7 +7424,8 @@ bool test_escape_sized_array_owner_cells_runtime() {
         "    self.workers = [a, b];\n"
         "    let empty_slots: ((~Worker)?)[2] = [null, null];\n"
         "    self.slots = empty_slots;\n"
-        "    self.slots[0] ??= c;\n"
+        "    self.slots[0] ?"
+        "?= c;\n"
         "  }\n"
         "\n"
         "  def rotate(self mut) -> i32 {\n"
@@ -7598,8 +7599,325 @@ bool test_escape_indexed_projection_rejected() {
         return false;
     }
     if (out.find("direct field/index projection on `~T` is deferred in this round") == std::string::npos ||
-        out.find("call a method on the `~T` value directly") == std::string::npos) {
+        out.find("storage-safe aggregate fields") == std::string::npos) {
         std::cerr << "indexed projection rejection should explain deferred direct projection\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_projected_owner_cells_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-projected-owner-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "out";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "proto Probe {\n"
+        "  provide def probe() -> i32 { return 40i32; }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value + 1i32; }\n"
+        "};\n"
+        "\n"
+        "class WorkerSlot {\n"
+        "  item: (~Worker)?;\n"
+        "  init(v: ~Worker) {\n"
+        "    self.item = null;\n"
+        "    self.item ?"
+        "?= v;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class WorkerGroup {\n"
+        "  primary: ~Worker;\n"
+        "  slots: WorkerSlot[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker) {\n"
+        "    self.primary = a;\n"
+        "    self.slots = [WorkerSlot(b), WorkerSlot(c)];\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  groups: WorkerGroup[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker, d: ~Worker, e: ~Worker, f: ~Worker) {\n"
+        "    self.groups = [WorkerGroup(a, b, c), WorkerGroup(d, e, f)];\n"
+        "  }\n"
+        "\n"
+        "  def refill(self mut, next: ~Worker) -> ~Worker {\n"
+        "    return mem::replace(self.groups[0].primary, next);\n"
+        "  }\n"
+        "\n"
+        "  def rotate(self mut) -> void {\n"
+        "    mem::swap(self.groups[0].slots[0].item, self.groups[1].slots[1].item);\n"
+        "  }\n"
+        "\n"
+        "  def take(self mut) -> i32 {\n"
+        "    let taken: ~Worker = self.groups[1].slots[1].item else {\n"
+        "      return 1i32;\n"
+        "    };\n"
+        "    return self.groups[0].primary.run() + self.groups[0].primary->probe() + taken.run();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut p = Pool(make(1i32), make(2i32), make(3i32), make(4i32), make(5i32), make(6i32));\n"
+        "  let old: ~Worker = p.refill(make(7i32));\n"
+        "  p.rotate();\n"
+        "  let total: i32 = p.take() + old.run();\n"
+        "  if (total > 0i32) { return 0i32; }\n"
+        "  return 1i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write projected owner-cell runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for projected owner-cell runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "projected owner-cell runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "projected owner-cell runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_projected_direct_projection_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-projected-direct-projection-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "class WorkerGroup {\n"
+        "  primary: ~Worker;\n"
+        "  init(v: ~Worker) { self.primary = v; }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  groups: WorkerGroup[1];\n"
+        "  init(v: ~Worker) { self.groups = [WorkerGroup(v)]; }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set p = Pool(make(1i32));\n"
+        "  return p.groups[0].primary.value;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write projected direct projection rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for projected direct projection rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "direct projection on projected ~T should fail\n";
+        return false;
+    }
+    if (out.find("direct field/index projection on `~T` is deferred in this round") == std::string::npos ||
+        out.find("storage-safe aggregate fields") == std::string::npos) {
+        std::cerr << "projected direct projection rejection should explain deferred projection guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_projected_borrow_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-projected-borrow-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "class WorkerGroup {\n"
+        "  primary: ~Worker;\n"
+        "  init(v: ~Worker) { self.primary = v; }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  groups: WorkerGroup[1];\n"
+        "  init(v: ~Worker) { self.groups = [WorkerGroup(v)]; }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut p = Pool(make(1i32));\n"
+        "  let r: &~Worker = &p.groups[0].primary;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write projected borrow rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for projected borrow rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "borrow of projected owner place should fail\n";
+        return false;
+    }
+    if ((out.find("BorrowOperandMustBeOwnedPlace") == std::string::npos &&
+         out.find("BorrowOperandMustBePlace") == std::string::npos) ||
+        (out.find("move-only owner handle") == std::string::npos &&
+         out.find("place expression") == std::string::npos)) {
+        std::cerr << "projected borrow rejection should keep projected owner-place borrow forbidden\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_named_aggregate_unsized_container_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-named-aggregate-unsized-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "class WorkerSlot {\n"
+        "  item: (~Worker)?;\n"
+        "};\n"
+        "\n"
+        "class BadPool {\n"
+        "  slots: WorkerSlot[];\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write named aggregate unsized rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for named aggregate unsized rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "unsized named aggregate owner container should fail\n";
+        return false;
+    }
+    if (out.find("storage-safe named aggregate") == std::string::npos ||
+        out.find("WorkerSlot[]") == std::string::npos) {
+        std::cerr << "named aggregate unsized rejection should mention storage-safe aggregate guidance\n" << out;
         return false;
     }
     return true;
@@ -7702,6 +8020,10 @@ int main() {
     const bool ok92 = test_escape_sized_array_owner_cells_runtime();
     const bool ok93 = test_escape_unsized_owner_array_rejected();
     const bool ok94 = test_escape_indexed_projection_rejected();
+    const bool ok95 = test_escape_projected_owner_cells_runtime();
+    const bool ok96 = test_escape_projected_direct_projection_rejected();
+    const bool ok97 = test_escape_projected_borrow_rejected();
+    const bool ok98 = test_escape_named_aggregate_unsized_container_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -7710,7 +8032,8 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94) {
+        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
+        !ok95 || !ok96 || !ok97 || !ok98) {
         return 1;
     }
 

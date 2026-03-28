@@ -107,8 +107,8 @@ namespace parus::type {
                         if (type_contains_escape(e) && !n.array_has_size) {
                             diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, n.span);
                             d.add_arg("unsized view/container of '~T' is deferred in this round");
-                            d.add_note("sized owner arrays like `(~T)[N]` and `((~T)?)[N]` are allowed in this round");
-                            d.add_help("use a sized array owner cell, or store the handle in a local/field/optional place instead");
+                            d.add_note("sized owner arrays like `(~T)[N]` and `((~T)?)[N]`, plus storage-safe named aggregates that contain them, are allowed in this round");
+                            d.add_help("use a sized owner-array path or a storage-safe named aggregate, or store the handle in a local/field/optional place instead");
                             diags.add(std::move(d));
                             out = types.error();
                             break;
