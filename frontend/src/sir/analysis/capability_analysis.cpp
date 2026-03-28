@@ -184,6 +184,14 @@ namespace parus::sir {
             }
 
             std::optional<ValueUse> escape_cell_use_for_place_(ValueId lhs, TypeId lhs_type) const {
+                auto place_contains_field_projection_ = [&](auto&& self, ValueId vid) -> bool {
+                    if (vid == k_invalid_value || (size_t)vid >= m_.values.size()) return false;
+                    const auto& v = m_.values[vid];
+                    if (v.kind == ValueKind::kField || v.place == PlaceClass::kField) return true;
+                    if (v.kind == ValueKind::kIndex) return self(self, v.a);
+                    return false;
+                };
+
                 if (lhs_type != k_invalid_type) {
                     if (is_optional_escape_type_(lhs_type)) {
                         return ValueUse::kEscapeCellOptional;
@@ -200,7 +208,9 @@ namespace parus::sir {
                 }
                 const auto& lv = m_.values[lhs];
                 if (is_static_place_(lhs)) return ValueUse::kEscapeCellStatic;
-                if (lv.kind == ValueKind::kField || lv.place == PlaceClass::kField) {
+                if (lv.kind == ValueKind::kField ||
+                    lv.place == PlaceClass::kField ||
+                    place_contains_field_projection_(place_contains_field_projection_, lhs)) {
                     return ValueUse::kEscapeCellField;
                 }
                 return ValueUse::kEscapeCellLocal;

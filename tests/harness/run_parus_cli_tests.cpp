@@ -7390,6 +7390,221 @@ bool test_escape_place_first_mem_rejects_non_escape() {
     return true;
 }
 
+bool test_escape_sized_array_owner_cells_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-sized-array-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "out";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "proto Probe {\n"
+        "  provide def probe() -> i32 { return 40i32; }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value + 1i32; }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  workers: (~Worker)[2];\n"
+        "  slots: ((~Worker)?)[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker) {\n"
+        "    self.workers = [a, b];\n"
+        "    let empty_slots: ((~Worker)?)[2] = [null, null];\n"
+        "    self.slots = empty_slots;\n"
+        "    self.slots[0] ??= c;\n"
+        "  }\n"
+        "\n"
+        "  def rotate(self mut) -> i32 {\n"
+        "    mem::swap(self.workers[0], self.workers[1]);\n"
+        "    return self.workers[0].run() + self.workers[1]->probe();\n"
+        "  }\n"
+        "\n"
+        "  def refill(self mut, next: ~Worker) -> ~Worker {\n"
+        "    return mem::replace(self.workers[0], next);\n"
+        "  }\n"
+        "\n"
+        "  def take_slot(self mut) -> i32 {\n"
+        "    let taken: ~Worker = self.slots[0] else {\n"
+        "      return 1i32;\n"
+        "    };\n"
+        "    return taken.run();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut local = [make(1i32), make(2i32)];\n"
+        "  mem::swap(local[0], local[1]);\n"
+        "\n"
+        "  set mut p = Pool(make(3i32), make(4i32), make(5i32));\n"
+        "  let old: ~Worker = p.refill(make(6i32));\n"
+        "  let total: i32 = local[0].run() + local[1]->probe() + p.rotate() + p.take_slot() + old.run();\n"
+        "  if (total == 98i32) { return 0i32; }\n"
+        "  return total;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write escape sized array runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for escape sized array runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "escape sized array runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "escape sized array runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_unsized_owner_array_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-unsized-array-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "class Pool {\n"
+        "  workers: (~Worker)[];\n"
+        "};\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write escape unsized owner array rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for escape unsized owner array rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "unsized owner array should fail\n";
+        return false;
+    }
+    if (out.find("unsized view/container of '~T' is deferred in this round") == std::string::npos ||
+        out.find("sized owner arrays") == std::string::npos) {
+        std::cerr << "unsized owner array rejection should explain sized-array-only guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_indexed_projection_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-indexed-projection-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut items = [make(1i32)];\n"
+        "  return items[0].value;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write escape indexed projection rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for escape indexed projection rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "direct projection on indexed ~T should fail\n";
+        return false;
+    }
+    if (out.find("direct field/index projection on `~T` is deferred in this round") == std::string::npos ||
+        out.find("call a method on the `~T` value directly") == std::string::npos) {
+        std::cerr << "indexed projection rejection should explain deferred direct projection\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -7484,6 +7699,9 @@ int main() {
     const bool ok89 = test_escape_mem_replace_swap_runtime();
     const bool ok90 = test_escape_plain_assignment_overwrite_rejected();
     const bool ok91 = test_escape_place_first_mem_rejects_non_escape();
+    const bool ok92 = test_escape_sized_array_owner_cells_runtime();
+    const bool ok93 = test_escape_unsized_owner_array_rejected();
+    const bool ok94 = test_escape_indexed_projection_rejected();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -7492,7 +7710,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91) {
+        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94) {
         return 1;
     }
 

@@ -732,7 +732,7 @@ namespace parus::diag {
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "operator '?" "?=' requires rhs assignable to {0} (got {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "empty array literal requires an explicit contextual type";
             case Code::kTypeFieldMemberRangeInvalid: return "internal: struct member range is out of AST bounds";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct member '{0}' must use a POD builtin value type or `~T`/`(~T)?` in this round (got {1})";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct member '{0}' must use a POD builtin value type, `~T`/`(~T)?`, or recursively-sized owner arrays in this round (got {1})";
             case Code::kFieldInitTypeExpected: return "struct initializer head must be a struct type (got '{0}')";
             case Code::kFieldInitUnknownMember: return "struct initializer for '{0}' has unknown member '{1}'";
             case Code::kFieldInitDuplicateMember: return "struct initializer has duplicate member '{0}'";
@@ -1114,7 +1114,7 @@ namespace parus::diag {
             case Code::kTypeNullCoalesceAssignRhsMismatch: return "'?" "?=' 연산자의 오른쪽은 {0}에 대입 가능해야 합니다(현재 {1})";
             case Code::kTypeArrayLiteralEmptyNeedsContext: return "빈 배열 리터럴은 명시적 문맥 타입이 필요합니다";
             case Code::kTypeFieldMemberRangeInvalid: return "내부 오류: struct 멤버 범위가 AST 범위를 벗어났습니다";
-            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct 멤버 '{0}'는 이번 라운드에서 POD 내장 값 타입 또는 `~T`/`(~T)?` 여야 합니다(현재 {1})";
+            case Code::kTypeFieldMemberMustBePodBuiltin: return "struct 멤버 '{0}'는 이번 라운드에서 POD 내장 값 타입, `~T`/`(~T)?`, 또는 재귀적인 sized owner array 여야 합니다(현재 {1})";
             case Code::kFieldInitTypeExpected: return "struct 초기화 헤드는 struct 타입이어야 합니다(현재 '{0}')";
             case Code::kFieldInitUnknownMember: return "struct '{0}' 초기화에 존재하지 않는 멤버 '{1}'가 있습니다";
             case Code::kFieldInitDuplicateMember: return "struct 초기화에서 멤버 '{0}'가 중복되었습니다";

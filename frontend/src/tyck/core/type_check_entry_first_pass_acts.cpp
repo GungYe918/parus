@@ -4518,6 +4518,10 @@
             // non-layout(c) field policy: Optional<POD> and Optional<~T> are allowed.
             return is_field_pod_value_type_(types, t.elem);
         }
+        if (t.kind == ty::Kind::kArray) {
+            if (!t.array_has_size) return false;
+            return is_field_pod_value_type_(types, t.elem);
+        }
         if (t.kind == ty::Kind::kEscape) {
             return t.elem != ty::kInvalidType;
         }

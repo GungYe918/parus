@@ -104,11 +104,11 @@ namespace parus::type {
                             out = types.error();
                             break;
                         }
-                        if (type_contains_escape(e)) {
+                        if (type_contains_escape(e) && !n.array_has_size) {
                             diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, n.span);
-                            d.add_arg("array/container of '~T' is deferred in this round");
-                            d.add_note("`~T` is first-class for locals, params/returns, fields, and `(~T)?`");
-                            d.add_help("store the handle in a local/field/optional place instead of an array/container");
+                            d.add_arg("unsized view/container of '~T' is deferred in this round");
+                            d.add_note("sized owner arrays like `(~T)[N]` and `((~T)?)[N]` are allowed in this round");
+                            d.add_help("use a sized array owner cell, or store the handle in a local/field/optional place instead");
                             diags.add(std::move(d));
                             out = types.error();
                             break;
