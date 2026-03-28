@@ -65,7 +65,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 용어 고정:
 
 1. `cell commit`
-   - `~T`를 local/field/optional/static place에 저장
+   - `~T`를 local/field/array-element/optional/static place에 저장
    - `core::mem::replace` / `core::mem::swap`로 existing `~T` cell을 교체/교환하는 것도 cell mutation으로 본다
 2. `abi pack`
    - `~T`를 call/return ABI 경계에서 3word handle로 구성
@@ -79,14 +79,15 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 다음 패턴은 v0에서 제한되거나 금지될 수 있다.
 
 1. async/suspend 경계를 넘는 `~` 유지
-2. 컨테이너/배열에 `~` 장기 저장
-3. direct field/index projection으로 `~` subplace를 임의 추출
+2. unsized view / generalized container에 `~` 장기 저장
+3. direct field/index projection으로 plain `~T` subplace를 임의 추출
 
 권장 해결:
 
 1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
-2. one-shot extraction은 `(~T)?` + consume-binding을 사용한다.
-3. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
+2. sized array container가 필요하면 `(~T)[N]` 또는 `((~T)?)[N]`를 사용한다.
+3. one-shot extraction은 `(~T)?` 또는 `((~T)?)[N]` + consume-binding을 사용한다.
+4. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
 
 ---
 
@@ -110,7 +111,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 ## 7. 구현 체크리스트
 
 1. `~` lowering 경로에 heap materialization이 없는지 검증한다.
-2. local/field/optional 저장이 즉시 ABI pack으로 내려가지 않는지 검증한다.
+2. local/field/array-element/optional 저장이 즉시 ABI pack으로 내려가지 않는지 검증한다.
 3. `String` drop 경로가 static backing에서 free를 호출하지 않는지 검증한다.
 4. `text -> String` 암시 변환이 발생하지 않는지 타입체커에서 검증한다.
 5. C ABI 함수에서 `String` 직접 전달을 거부하는지 검증한다.
