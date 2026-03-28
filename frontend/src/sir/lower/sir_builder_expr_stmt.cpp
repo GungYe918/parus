@@ -606,6 +606,17 @@ namespace parus::sir::detail {
                     v.callee_sym = external_callee_sym;
                     v.callee_decl_stmt = ast::k_invalid_stmt;
                 }
+                const auto infer_core_mem_type_arg_ = [&]() -> TypeId {
+                    if (e.arg_count == 0) return k_invalid_type;
+                    const auto& args = ast.args();
+                    const uint64_t arg_begin = e.arg_begin;
+                    const uint64_t arg_end = arg_begin + e.arg_count;
+                    if (arg_begin > args.size() || arg_end > args.size()) return k_invalid_type;
+                    const auto& a0 = args[e.arg_begin];
+                    if (a0.is_hole || a0.expr == ast::k_invalid_expr) return k_invalid_type;
+                    const TypeId inferred = best_effort_type_of_ast_expr(ast, sym, nres, tyck, a0.expr);
+                    return type_is_escape_for_sir_build(inferred) ? inferred : k_invalid_type;
+                };
                 if (v.core_call_kind == CoreCallKind::kNone &&
                     v.callee_decl_stmt != ast::k_invalid_stmt &&
                     static_cast<size_t>(v.callee_decl_stmt) < ast.stmts().size()) {
@@ -690,11 +701,21 @@ namespace parus::sir::detail {
                                 if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
                                     v.core_call_type_arg = type_args[e.call_type_arg_begin];
                                     v.core_call_kind = CoreCallKind::kMemSwap;
+                                } else if (e.call_type_arg_count == 0) {
+                                    v.core_call_type_arg = infer_core_mem_type_arg_();
+                                    if (v.core_call_type_arg != k_invalid_type) {
+                                        v.core_call_kind = CoreCallKind::kMemSwap;
+                                    }
                                 }
                             } else if (tail == "replace") {
                                 if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
                                     v.core_call_type_arg = type_args[e.call_type_arg_begin];
                                     v.core_call_kind = CoreCallKind::kMemReplace;
+                                } else if (e.call_type_arg_count == 0) {
+                                    v.core_call_type_arg = infer_core_mem_type_arg_();
+                                    if (v.core_call_type_arg != k_invalid_type) {
+                                        v.core_call_kind = CoreCallKind::kMemReplace;
+                                    }
                                 }
                             }
                         }

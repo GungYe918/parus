@@ -1179,6 +1179,67 @@ namespace parus::sir {
                     case ValueKind::kEnumCtor: {
                         analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
 
+                        const bool is_escape_mem_core_call =
+                            (v.core_call_kind == CoreCallKind::kMemReplace ||
+                             v.core_call_kind == CoreCallKind::kMemSwap) &&
+                            is_escape_type_(v.core_call_type_arg);
+                        if (is_escape_mem_core_call) {
+                            auto arg_value_at_ = [&](uint32_t index) -> ValueId {
+                                if (index >= v.arg_count) return k_invalid_value;
+                                const uint32_t aid = v.arg_begin + index;
+                                if ((size_t)aid >= m_.args.size()) return k_invalid_value;
+                                const auto& a = m_.args[aid];
+                                return a.is_hole ? k_invalid_value : a.value;
+                            };
+                            auto report_shared_write_if_needed_ = [&](ValueId place_vid) {
+                                if (place_vid == k_invalid_value || (size_t)place_vid >= m_.values.size()) return;
+                                if (auto place = place_ref_(place_vid); place && has_active_shared_(*place)) {
+                                    report_(diag::Code::kBorrowSharedWriteConflict, m_.values[place_vid].span);
+                                }
+                            };
+
+                            const ValueId lhs = arg_value_at_(0);
+                            const ValueId rhs = arg_value_at_(1);
+                            if (v.core_call_kind == CoreCallKind::kMemReplace) {
+                                if (lhs != k_invalid_value) {
+                                    analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
+                                    report_shared_write_if_needed_(lhs);
+                                }
+
+                                ValueUse rhs_use = ValueUse::kValue;
+                                if (lhs != k_invalid_value &&
+                                    rhs != k_invalid_value &&
+                                    is_escape_type_(value_type_(rhs))) {
+                                    if (auto cell_use = escape_cell_use_for_place_(lhs, value_type_(lhs))) {
+                                        rhs_use = *cell_use;
+                                    }
+                                }
+                                if (rhs != k_invalid_value) {
+                                    analyze_value_(rhs, rhs_use, k_invalid_symbol);
+                                }
+                                if (auto root = root_symbol_(lhs)) {
+                                    clear_moved_(*root);
+                                }
+                                return;
+                            }
+
+                            if (lhs != k_invalid_value) {
+                                analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
+                                report_shared_write_if_needed_(lhs);
+                            }
+                            if (rhs != k_invalid_value) {
+                                analyze_value_(rhs, ValueUse::kValue, k_invalid_symbol);
+                                report_shared_write_if_needed_(rhs);
+                            }
+                            if (auto root = root_symbol_(lhs)) {
+                                clear_moved_(*root);
+                            }
+                            if (auto root = root_symbol_(rhs)) {
+                                clear_moved_(*root);
+                            }
+                            return;
+                        }
+
                         // call 인자에서 만들어진 임시 borrow는 call 식 종료와 함께 정리한다.
                         enter_scope_();
                         uint32_t i = 0;

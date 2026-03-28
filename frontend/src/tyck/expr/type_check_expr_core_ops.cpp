@@ -2156,6 +2156,60 @@
 
         ty::TypeId rt = check_expr_(e.b);
 
+        if (e.op == K::kAssign &&
+            lhs_target != ty::kInvalidType &&
+            !is_error_(lhs_target) &&
+            types_.get(lhs_target).kind == ty::Kind::kEscape) {
+            bool allow_local_reinit = false;
+            bool allow_ctor_field_init = false;
+            if (e.a != ast::k_invalid_expr && static_cast<size_t>(e.a) < ast_.exprs().size()) {
+                const auto& lhs_expr = ast_.expr(e.a);
+                if (lhs_expr.kind == ast::ExprKind::kIdent) {
+                    if (auto sid = root_place_symbol_(e.a)) {
+                        allow_local_reinit = ownership_state_of_(*sid) != OwnershipState::kInitialized;
+                    }
+                } else if (lhs_expr.kind == ast::ExprKind::kBinary &&
+                           lhs_expr.op == K::kDot &&
+                           lhs_expr.a != ast::k_invalid_expr &&
+                           lhs_expr.b != ast::k_invalid_expr &&
+                           static_cast<size_t>(lhs_expr.a) < ast_.exprs().size() &&
+                           static_cast<size_t>(lhs_expr.b) < ast_.exprs().size()) {
+                    const auto& base = ast_.expr(lhs_expr.a);
+                    const auto& member = ast_.expr(lhs_expr.b);
+                    if (base.kind == ast::ExprKind::kIdent &&
+                        base.text == "self" &&
+                        member.kind == ast::ExprKind::kIdent &&
+                        current_fn_decl_id_ != ast::k_invalid_stmt &&
+                        static_cast<size_t>(current_fn_decl_id_) < ast_.stmts().size()) {
+                        const auto& current_fn = ast_.stmt(current_fn_decl_id_);
+                        if (current_fn.kind == ast::StmtKind::kFnDecl &&
+                            current_fn.name == "init") {
+                            if (auto owner_it = class_member_owner_by_stmt_.find(current_fn_decl_id_);
+                                owner_it != class_member_owner_by_stmt_.end() &&
+                                owner_it->second != ast::k_invalid_stmt &&
+                                static_cast<size_t>(owner_it->second) < ast_.stmts().size()) {
+                                const auto& owner = ast_.stmt(owner_it->second);
+                                if (owner.kind == ast::StmtKind::kClassDecl) {
+                                    allow_ctor_field_init = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!allow_local_reinit && !allow_ctor_field_init) {
+                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, e.span);
+                d.add_arg("plain assignment cannot overwrite an initialized `~T` place");
+                d.add_label(ast_.expr(e.a).span, "this place has type `" + types_.to_string(lhs_target) + "`");
+                d.add_note("plain `~T` overwrite stays explicit in this round to keep owner-state transitions visible");
+                d.add_help("use `core::mem::replace(place, value)` or `core::mem::swap(lhs, rhs)` instead");
+                if (diag_bag_) diag_bag_->add(std::move(d));
+                err_(e.span, "plain assignment cannot overwrite initialized `~T` place");
+                return types_.error();
+            }
+        }
+
         const CoercionPlan assign_plan = classify_assign_with_coercion_(
             AssignSite::Assign, lhs_target, e.b, e.span);
         rt = assign_plan.src_after;

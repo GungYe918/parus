@@ -6,6 +6,7 @@
 namespace parus::sir::detail {
 
     TypeId active_builtin_type(parus::ty::Builtin b);
+    bool type_is_escape_for_sir_build(TypeId t);
 
     /// @brief Tyck 결과에서 AST expression의 최종 타입을 조회한다.
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid);

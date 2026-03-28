@@ -7167,6 +7167,229 @@ bool test_hosted_actor_parus_lld_mode_succeeds() {
     return true;
 }
 
+bool test_escape_mem_replace_swap_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-mem-replace-swap";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "main";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "proto Probe {\n"
+        "  provide def probe() -> i32 {\n"
+        "    return 40i32;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "\n"
+        "  init(v: i32) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def run(self) -> i32 {\n"
+        "    return self.value + 1i32;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "struct Holder {\n"
+        "  value: ~Worker;\n"
+        "  spare: ~Worker;\n"
+        "};\n"
+        "\n"
+        "class Box<T> with [T: Probe] {\n"
+        "  value: ~T;\n"
+        "\n"
+        "  init(v: ~T) {\n"
+        "    self.value = v;\n"
+        "  }\n"
+        "\n"
+        "  def replace_value(self mut, next: ~T) -> ~T {\n"
+        "    return mem::replace(self.value, next);\n"
+        "  }\n"
+        "\n"
+        "  def probe_value(self) -> i32 {\n"
+        "    return self.value->probe();\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set a = Worker(1i32);\n"
+        "  set b = Worker(2i32);\n"
+        "  set c = Worker(3i32);\n"
+        "\n"
+        "  set mut left = ~a;\n"
+        "  set mut right = ~b;\n"
+        "  mem::swap(left, right);\n"
+        "\n"
+        "  set mut holder = Holder{ value: left, spare: right };\n"
+        "  let old: ~Worker = mem::replace(holder.value, ~c);\n"
+        "  mem::swap(holder.value, holder.spare);\n"
+        "  let ok_base: bool = old.run() == 3i32 and holder.value.run() == 2i32 and holder.spare.run() == 4i32;\n"
+        "\n"
+        "  set d = Worker(4i32);\n"
+        "  set e = Worker(5i32);\n"
+        "  set mut box = Box<Worker>(~d);\n"
+        "  let old_box: ~Worker = box.replace_value(~e);\n"
+        "  let ok_box: bool = old_box.run() == 5i32 and box.probe_value() == 40i32;\n"
+        "  if (ok_base and ok_box) { return 0i32; }\n"
+        "  return 1i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write escape mem replace/swap runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for escape mem replace/swap test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "escape mem replace/swap runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "escape mem replace/swap runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_plain_assignment_overwrite_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-plain-assign-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set a = Worker(1i32);\n"
+        "  set mut h = ~a;\n"
+        "  set b = Worker(2i32);\n"
+        "  h = ~b;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write escape plain assignment rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for escape plain assignment rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "plain assignment overwrite on initialized ~T should fail\n";
+        return false;
+    }
+    if (out.find("plain assignment cannot overwrite an initialized `~T` place") == std::string::npos ||
+        out.find("core::mem::replace") == std::string::npos) {
+        std::cerr << "escape plain assignment rejection should mention mem::replace/swap guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_place_first_mem_rejects_non_escape() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-mem-non-escape-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut x = 1i32;\n"
+        "  set mut y = 2i32;\n"
+        "  let old: i32 = mem::replace<i32>(x, y);\n"
+        "  return old;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write non-escape place-first mem rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for non-escape place-first mem rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "place-first mem::replace on non-escape type should fail\n";
+        return false;
+    }
+    if (out.find("place-first core::mem::replace is only available for `~T`") == std::string::npos ||
+        out.find("&mut") == std::string::npos) {
+        std::cerr << "non-escape place-first mem rejection should explain the `&mut` path\n" << out;
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -7258,6 +7481,9 @@ int main() {
     const bool ok86 = test_external_generic_constraints_v2_work();
     const bool ok87 = test_external_generic_type_body_closure_v2_work();
     const bool ok88 = test_escape_first_class_places_runtime();
+    const bool ok89 = test_escape_mem_replace_swap_runtime();
+    const bool ok90 = test_escape_plain_assignment_overwrite_rejected();
+    const bool ok91 = test_escape_place_first_mem_rejects_non_escape();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -7266,7 +7492,7 @@ int main() {
         !ok48 || !ok49 || !ok50 || !ok51 || !ok52 || !ok53 || !ok54 || !ok55 || !ok56 || !ok57 || !ok58 || !ok59 ||
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
-        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88) {
+        !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91) {
         return 1;
     }
 

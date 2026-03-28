@@ -62,6 +62,13 @@
 
     void TypeChecker::check_stmt_fn_decl_(ast::StmtId sid, const ast::Stmt& s) {
         const ast::Stmt fn = s;
+        const ast::StmtId saved_fn_decl_id = current_fn_decl_id_;
+        current_fn_decl_id_ = sid;
+        struct RestoreFnDeclId {
+            ast::StmtId& slot;
+            ast::StmtId saved;
+            ~RestoreFnDeclId() { slot = saved; }
+        } restore_fn_decl_id{current_fn_decl_id_, saved_fn_decl_id};
         // ----------------------------
         // 0) 시그니처 타입 확보
         // ----------------------------

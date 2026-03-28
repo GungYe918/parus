@@ -3652,8 +3652,160 @@ namespace parus::tyck {
                 return types_.make_optional(value_ty);
             }
 
-            if (overload_decl_ids.empty() &&
-                is_core_module_fn_(direct_ident_symbol, "mem", "replace")) {
+            if (is_core_module_fn_(direct_ident_symbol, "mem", "replace")) {
+                enum class EscapeMemPlaceStatus : uint8_t { kNotEscapePlace, kOk, kHardError };
+                auto add_escape_mem_diag = [&](Span primary_span,
+                                               Span label_span,
+                                               std::string primary,
+                                               std::string label,
+                                               std::string note,
+                                               std::string help) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, primary_span);
+                    d.add_arg(std::move(primary));
+                    d.add_label(label_span, std::move(label));
+                    if (!note.empty()) d.add_note(std::move(note));
+                    if (!help.empty()) d.add_help(std::move(help));
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                };
+                auto classify_escape_mem_place = [&](const ast::Arg* arg,
+                                                     std::string_view op_name,
+                                                     bool require_readable,
+                                                     ty::TypeId& out_place_ty) -> EscapeMemPlaceStatus {
+                    out_place_ty = ty::kInvalidType;
+                    if (arg == nullptr || arg->expr == ast::k_invalid_expr) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto& arg_expr = ast_.expr(arg->expr);
+                    if (arg_expr.kind == ast::ExprKind::kUnary &&
+                        arg_expr.op == K::kAmp &&
+                        arg_expr.a != ast::k_invalid_expr) {
+                        const ty::TypeId operand_t = check_expr_place_no_read_(arg_expr.a);
+                        if (!is_error_(operand_t) && types_.get(operand_t).kind == ty::Kind::kEscape) {
+                            add_escape_mem_diag(
+                                e.span,
+                                arg->span,
+                                "core::mem::" + std::string(op_name) + " on `~T` expects a place, not `&mut ~T`",
+                                "this argument already borrows a `~T` place",
+                                "`~T` is a move-only owner handle; source-level `&mut ~T` is still forbidden",
+                                "pass the writable `~T` place directly, for example `mem::" + std::string(op_name) + "(slot, value)`");
+                            err_(arg->span, "core::mem::replace/swap on `~T` expects a place, not `&mut`");
+                            return EscapeMemPlaceStatus::kHardError;
+                        }
+                    }
+
+                    if (!is_place_expr_(arg->expr)) return EscapeMemPlaceStatus::kNotEscapePlace;
+
+                    const ty::TypeId place_t = check_expr_place_no_read_(arg->expr);
+                    if (is_error_(place_t)) return EscapeMemPlaceStatus::kHardError;
+                    if (types_.get(place_t).kind != ty::Kind::kEscape) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto root = root_place_symbol_(arg->expr);
+                    if (!root.has_value() || !is_mutable_symbol_(*root)) {
+                        add_escape_mem_diag(
+                            e.span,
+                            arg->span,
+                            "core::mem::" + std::string(op_name) + " requires a writable `~T` place",
+                            "this `~T` place is not writable",
+                            "replace/swap mutates the owner cell in place",
+                            "make the root binding mutable, or move through `(~T)?` consume-binding instead");
+                        err_(arg->span, "core::mem::replace/swap requires writable `~T` place");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+
+                    if (require_readable && !ensure_symbol_readable_(*root, arg->span)) {
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+
+                    if (is_global_like_symbol_(*root)) {
+                        diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, arg->span, sym_.symbol(*root).name);
+                        err_(arg->span, "move from global/static `~T` place is not allowed");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+
+                    out_place_ty = place_t;
+                    return EscapeMemPlaceStatus::kOk;
+                };
+
+                if (form == CallForm::kPositionalOnly &&
+                    outside_positional.size() == 2 &&
+                    outside_labeled.empty()) {
+                    ty::TypeId place_ty = ty::kInvalidType;
+                    const EscapeMemPlaceStatus place_status =
+                        classify_escape_mem_place(outside_positional[0], "replace", /*require_readable=*/true, place_ty);
+                    if (place_status == EscapeMemPlaceStatus::kOk) {
+                        if (explicit_call_type_args.size() > 1) {
+                            diag_(diag::Code::kGenericArityMismatch, e.span, "0 or 1",
+                                  std::to_string(explicit_call_type_args.size()));
+                            err_(e.span, "core::mem::replace on `~T` accepts at most one explicit type argument");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        ty::TypeId value_ty = place_ty;
+                        if (explicit_call_type_args.size() == 1) {
+                            value_ty = explicit_call_type_args[0];
+                            if (value_ty != place_ty) {
+                                add_escape_mem_diag(
+                                    e.span,
+                                    outside_positional[0]->span,
+                                    "core::mem::replace explicit type argument must match the `~T` place type",
+                                    "the first argument has type `" + types_.to_string(place_ty) + "`",
+                                    "place-first `core::mem::replace` for `~T` uses the destination place type as its canonical value type",
+                                    "remove the explicit type argument, or change it to `" + types_.to_string(place_ty) + "`");
+                                err_(e.span, "core::mem::replace explicit type argument mismatch");
+                                check_all_arg_exprs_only();
+                                return types_.error();
+                            }
+                        }
+
+                        const CoercionPlan value_plan = classify_assign_with_coercion_(
+                            AssignSite::CallArg, value_ty, outside_positional[1]->expr, outside_positional[1]->span);
+                        if (!value_plan.ok) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[1]->span,
+                                "core::mem::replace second argument must be assignable to the destination `~T` place",
+                                "expected `" + types_.to_string(value_ty) + "` here",
+                                "place-first `core::mem::replace` moves a replacement handle into the existing owner cell",
+                                "pass a value of type `" + types_.to_string(value_ty) + "` or use `(~T)?` consume-binding to extract one");
+                            err_(e.span, "core::mem::replace second argument mismatch");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        mark_expr_move_consumed_(outside_positional[1]->expr, value_ty, outside_positional[1]->span);
+                        if (auto lhs_root = root_place_symbol_(outside_positional[0]->expr)) {
+                            mark_symbol_initialized_(*lhs_root);
+                        }
+                        cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
+                        return value_ty;
+                    }
+                    if (place_status == EscapeMemPlaceStatus::kHardError) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    const auto& place_expr = ast_.expr(outside_positional[0]->expr);
+                    if (place_expr.kind != ast::ExprKind::kUnary || place_expr.op != K::kAmp) {
+                        const ty::TypeId place_like_t = check_expr_place_no_read_(outside_positional[0]->expr);
+                        if (!is_error_(place_like_t) && is_place_expr_(outside_positional[0]->expr)) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[0]->span,
+                                "place-first core::mem::replace is only available for `~T`",
+                                "this place has type `" + types_.to_string(place_like_t) + "`",
+                                "ordinary values still use the existing `&mut T` memory helper path",
+                                "use `mem::replace<T>(&mut place, value)` for ordinary `T`, or pass a `~T` place directly");
+                            err_(e.span, "place-first core::mem::replace only supports `~T`");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+                    }
+                }
+
                 if (form != CallForm::kPositionalOnly || outside_positional.size() != 2 || !outside_labeled.empty()) {
                     return fail_core_shape_("core::mem::replace expects positional(&mut T, T)");
                 }
@@ -3680,8 +3832,173 @@ namespace parus::tyck {
                 return value_ty;
             }
 
-            if (overload_decl_ids.empty() &&
-                is_core_module_fn_(direct_ident_symbol, "mem", "swap")) {
+            if (is_core_module_fn_(direct_ident_symbol, "mem", "swap")) {
+                enum class EscapeMemPlaceStatus : uint8_t { kNotEscapePlace, kOk, kHardError };
+                auto add_escape_mem_diag = [&](Span primary_span,
+                                               Span label_span,
+                                               std::string primary,
+                                               std::string label,
+                                               std::string note,
+                                               std::string help) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, primary_span);
+                    d.add_arg(std::move(primary));
+                    d.add_label(label_span, std::move(label));
+                    if (!note.empty()) d.add_note(std::move(note));
+                    if (!help.empty()) d.add_help(std::move(help));
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                };
+                auto classify_escape_mem_place = [&](const ast::Arg* arg,
+                                                     ty::TypeId& out_place_ty) -> EscapeMemPlaceStatus {
+                    out_place_ty = ty::kInvalidType;
+                    if (arg == nullptr || arg->expr == ast::k_invalid_expr) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto& arg_expr = ast_.expr(arg->expr);
+                    if (arg_expr.kind == ast::ExprKind::kUnary &&
+                        arg_expr.op == K::kAmp &&
+                        arg_expr.a != ast::k_invalid_expr) {
+                        const ty::TypeId operand_t = check_expr_place_no_read_(arg_expr.a);
+                        if (!is_error_(operand_t) && types_.get(operand_t).kind == ty::Kind::kEscape) {
+                            add_escape_mem_diag(
+                                e.span,
+                                arg->span,
+                                "core::mem::swap on `~T` expects places, not `&mut ~T`",
+                                "this argument already borrows a `~T` place",
+                                "`~T` remains move-only and is not source-level borrowable",
+                                "pass the writable `~T` places directly, for example `mem::swap(lhs, rhs)`");
+                            err_(arg->span, "core::mem::swap on `~T` expects places, not `&mut`");
+                            return EscapeMemPlaceStatus::kHardError;
+                        }
+                    }
+
+                    if (!is_place_expr_(arg->expr)) return EscapeMemPlaceStatus::kNotEscapePlace;
+
+                    const ty::TypeId place_t = check_expr_place_no_read_(arg->expr);
+                    if (is_error_(place_t)) return EscapeMemPlaceStatus::kHardError;
+                    if (types_.get(place_t).kind != ty::Kind::kEscape) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto root = root_place_symbol_(arg->expr);
+                    if (!root.has_value() || !is_mutable_symbol_(*root)) {
+                        add_escape_mem_diag(
+                            e.span,
+                            arg->span,
+                            "core::mem::swap requires writable `~T` places",
+                            "this `~T` place is not writable",
+                            "swap mutates both owner cells in place",
+                            "make the root binding mutable, or move through `(~T)?` consume-binding instead");
+                        err_(arg->span, "core::mem::swap requires writable `~T` places");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+                    if (!ensure_symbol_readable_(*root, arg->span)) {
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+                    if (is_global_like_symbol_(*root)) {
+                        diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, arg->span, sym_.symbol(*root).name);
+                        err_(arg->span, "move from global/static `~T` place is not allowed");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+
+                    out_place_ty = place_t;
+                    return EscapeMemPlaceStatus::kOk;
+                };
+
+                if (form == CallForm::kPositionalOnly &&
+                    outside_positional.size() == 2 &&
+                    outside_labeled.empty()) {
+                    ty::TypeId lhs_place_ty = ty::kInvalidType;
+                    ty::TypeId rhs_place_ty = ty::kInvalidType;
+                    const EscapeMemPlaceStatus lhs_status =
+                        classify_escape_mem_place(outside_positional[0], lhs_place_ty);
+                    const EscapeMemPlaceStatus rhs_status =
+                        classify_escape_mem_place(outside_positional[1], rhs_place_ty);
+
+                    if (lhs_status == EscapeMemPlaceStatus::kHardError ||
+                        rhs_status == EscapeMemPlaceStatus::kHardError) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    if (lhs_status == EscapeMemPlaceStatus::kOk ||
+                        rhs_status == EscapeMemPlaceStatus::kOk) {
+                        if (lhs_status != EscapeMemPlaceStatus::kOk ||
+                            rhs_status != EscapeMemPlaceStatus::kOk) {
+                            add_escape_mem_diag(
+                                e.span,
+                                e.span,
+                                "core::mem::swap on `~T` requires both arguments to be writable `~T` places",
+                                "swap needs two `~T` places of the same type",
+                                "mixed `~T`/non-`~T` swap is not supported in this round",
+                                "pass two writable places of the same `~T` type, or use the existing `&mut T` swap path for ordinary values");
+                            err_(e.span, "core::mem::swap requires two writable `~T` places");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        if (explicit_call_type_args.size() > 1) {
+                            diag_(diag::Code::kGenericArityMismatch, e.span, "0 or 1",
+                                  std::to_string(explicit_call_type_args.size()));
+                            err_(e.span, "core::mem::swap on `~T` accepts at most one explicit type argument");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+                        if (lhs_place_ty != rhs_place_ty) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[1]->span,
+                                "core::mem::swap requires both `~T` places to have the same type",
+                                "this place has type `" + types_.to_string(rhs_place_ty) + "`",
+                                "swap exchanges owner cells without coercion",
+                                "make both places use the same `~T` type before swapping");
+                            err_(e.span, "core::mem::swap type mismatch");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+                        if (explicit_call_type_args.size() == 1 &&
+                            explicit_call_type_args[0] != lhs_place_ty) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[0]->span,
+                                "core::mem::swap explicit type argument must match the `~T` place type",
+                                "the first argument has type `" + types_.to_string(lhs_place_ty) + "`",
+                                "place-first `core::mem::swap` uses the destination place type as its canonical value type",
+                                "remove the explicit type argument, or change it to `" + types_.to_string(lhs_place_ty) + "`");
+                            err_(e.span, "core::mem::swap explicit type argument mismatch");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        if (auto lhs_root = root_place_symbol_(outside_positional[0]->expr)) {
+                            mark_symbol_initialized_(*lhs_root);
+                        }
+                        if (auto rhs_root = root_place_symbol_(outside_positional[1]->expr)) {
+                            mark_symbol_initialized_(*rhs_root);
+                        }
+                        cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
+                        return types_.builtin(ty::Builtin::kUnit);
+                    }
+
+                    const auto& lhs_expr = ast_.expr(outside_positional[0]->expr);
+                    if ((lhs_expr.kind != ast::ExprKind::kUnary || lhs_expr.op != K::kAmp) &&
+                        is_place_expr_(outside_positional[0]->expr)) {
+                        const ty::TypeId lhs_place_like_t = check_expr_place_no_read_(outside_positional[0]->expr);
+                        if (!is_error_(lhs_place_like_t)) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[0]->span,
+                                "place-first core::mem::swap is only available for `~T`",
+                                "this place has type `" + types_.to_string(lhs_place_like_t) + "`",
+                                "ordinary values still use the existing `&mut T` memory helper path",
+                                "use `mem::swap<T>(&mut lhs, &mut rhs)` for ordinary `T`, or pass `~T` places directly");
+                            err_(e.span, "place-first core::mem::swap only supports `~T`");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+                    }
+                }
+
                 if (form != CallForm::kPositionalOnly || outside_positional.size() != 2 || !outside_labeled.empty()) {
                     return fail_core_shape_("core::mem::swap expects positional(&mut T, &mut T)");
                 }

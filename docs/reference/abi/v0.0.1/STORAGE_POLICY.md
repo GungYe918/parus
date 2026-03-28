@@ -66,6 +66,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. `cell commit`
    - `~T`를 local/field/optional/static place에 저장
+   - `core::mem::replace` / `core::mem::swap`로 existing `~T` cell을 교체/교환하는 것도 cell mutation으로 본다
 2. `abi pack`
    - `~T`를 call/return ABI 경계에서 3word handle로 구성
 
@@ -85,6 +86,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
 2. one-shot extraction은 `(~T)?` + consume-binding을 사용한다.
+3. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
 
 ---
 

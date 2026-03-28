@@ -1047,14 +1047,6 @@ namespace parus::backend::aot {
 
             parus::ty::TypeId slot_storage_type_id_(parus::oir::ValueId slot) const {
                 auto tid = value_type_id_(slot);
-                if (tid == parus::ty::kInvalidType || tid >= types_.count()) return tid;
-                const auto& t = types_.get(tid);
-                if ((t.kind == parus::ty::Kind::kPtr ||
-                     t.kind == parus::ty::Kind::kBorrow ||
-                     t.kind == parus::ty::Kind::kEscape) &&
-                    t.elem != parus::ty::kInvalidType) {
-                    return t.elem;
-                }
                 return tid;
             }
 

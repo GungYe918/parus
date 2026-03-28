@@ -2491,8 +2491,8 @@ namespace {
         return ok;
     }
 
-    static bool test_escape_set_alias_passthrough_ok() {
-        // set-도입 local ~ alias는 storage materialization이 아니라 direct passthrough면 허용돼야 한다.
+    static bool test_escape_set_binding_commits_to_cell_ok() {
+        // set-도입 local ~ binding도 이제 일반 cell commit 경로로 허용돼야 한다.
         const std::string src = R"(
             def sink(h: ~i32) -> i32 {
                 return 0i32;
@@ -2511,12 +2511,13 @@ namespace {
         auto sir = run_sir(p, pres, ty);
 
         bool ok = true;
-        ok &= require_(!p.bag.has_error(), "set-introduced local ~ alias must not emit diagnostics");
-        ok &= require_(ty.errors.empty(), "set-introduced local ~ alias must typecheck");
-        ok &= require_(cap.ok, "AST capability pass must allow local ~ alias passthrough");
-        ok &= require_(sir.cap.ok, "SIR capability pass must allow local ~ alias passthrough");
+        ok &= require_(!p.bag.has_error(), "set-introduced local ~ binding must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "set-introduced local ~ binding must typecheck");
+        ok &= require_(cap.ok, "AST capability pass must allow local ~ cell commit");
+        ok &= require_(sir.cap.ok, "SIR capability pass must allow local ~ cell commit");
         ok &= require_(sir.handle_verify_errors.empty(),
-            "SIR handle verifier must accept local ~ alias passthrough");
+            "SIR handle verifier must accept local ~ cell commit");
+        ok &= require_(sir.cap.cell_commit_count >= 1, "set-introduced local ~ binding must record a cell commit");
         return ok;
     }
 
@@ -2664,6 +2665,55 @@ namespace {
         ok &= require_(abi_pack_forms >= 1, "first-class ~ place seed must produce at least one ABI-pack handle");
         ok &= require_(sir.cap.cell_commit_count >= 1, "capability analysis must count cell commits");
         ok &= require_(sir.cap.abi_pack_count >= 1, "capability analysis must count ABI packs");
+        return ok;
+    }
+
+    static bool test_escape_stored_handle_calls_stay_cell_only() {
+        const std::string src = R"(
+            class Worker {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value + 1i32;
+                }
+            };
+
+            struct Holder {
+                value: ~Worker;
+                spare: ~Worker;
+            };
+
+            def main() -> i32 {
+                set a = Worker(1i32);
+                set b = Worker(2i32);
+                set left = ~a;
+                set right = ~b;
+                set holder = Holder{ value: left, spare: right };
+
+                return left.run() + holder.value.run() + holder.spare.run();
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "stored `~T` call seed must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "stored `~T` call seed must not emit tyck errors");
+        ok &= require_(cap.ok, "stored `~T` call seed must pass AST capability check");
+        ok &= require_(sir.cap.ok, "stored `~T` call seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(), "stored `~T` call seed must pass handle verification");
+        if (!ok) return false;
+
+        ok &= require_(sir.cap.cell_commit_count >= 1, "stored `~T` call seed must still record cell commits");
+        ok &= require_(sir.cap.abi_pack_count == 0, "stored `~T` calls must not introduce ABI packs");
         return ok;
     }
 
@@ -3438,10 +3488,11 @@ int main() {
         {"cap_shared_conflict_with_mut", test_cap_shared_conflict_with_mut},
         {"cap_mut_conflict_with_shared", test_cap_mut_conflict_with_shared},
         {"cap_shared_write_conflict", test_cap_shared_write_conflict},
-        {"escape_set_alias_passthrough_ok", test_escape_set_alias_passthrough_ok},
+        {"escape_set_binding_commits_to_cell_ok", test_escape_set_binding_commits_to_cell_ok},
         {"static_allows_escape_storage", test_static_allows_escape_storage},
         {"consume_binding_static_optional_escape", test_consume_binding_static_optional_escape},
         {"escape_first_class_places_accounting", test_escape_first_class_places_accounting},
+        {"escape_stored_handle_calls_stay_cell_only", test_escape_stored_handle_calls_stay_cell_only},
         {"sir_handle_verify_rejects_invalid_escape_pack_state", test_sir_handle_verify_rejects_invalid_escape_pack_state},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},
         {"sir_mut_analysis_allows_mut_borrow_write_through", test_sir_mut_analysis_allows_mut_borrow_write_through},

@@ -599,6 +599,7 @@ namespace parus::tyck {
         std::vector<uint32_t> param_resolved_symbol_cache_;
         ast::ExprId current_expr_id_ = ast::k_invalid_expr;
         ast::StmtId current_stmt_id_ = ast::k_invalid_stmt;
+        ast::StmtId current_fn_decl_id_ = ast::k_invalid_stmt;
         ast::StmtId current_for_stmt_id_ = ast::k_invalid_stmt;
 
         // builtin text type for string literals

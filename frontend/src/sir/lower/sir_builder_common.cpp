@@ -18,6 +18,13 @@ namespace parus::sir::detail {
         return g_active_sir_types_ != nullptr ? g_active_sir_types_->builtin(b) : k_invalid_type;
     }
 
+    bool type_is_escape_for_sir_build(TypeId t) {
+        return g_active_sir_types_ != nullptr &&
+               t != k_invalid_type &&
+               static_cast<size_t>(t) < g_active_sir_types_->count() &&
+               g_active_sir_types_->get(t).kind == parus::ty::Kind::kEscape;
+    }
+
     TypeId type_of_ast_expr(const tyck::TyckResult& tyck, parus::ast::ExprId eid) {
         if (eid == parus::ast::k_invalid_expr) return k_invalid_type;
         if ((size_t)eid >= tyck.expr_types.size()) return k_invalid_type;
