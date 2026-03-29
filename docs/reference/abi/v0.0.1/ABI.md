@@ -264,7 +264,8 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 2. `""`의 기본 타입은 표준 라이브러리 링크 여부와 무관하게 항상 `text`다.
 3. `text -> String` 암시 변환은 허용하지 않는다.
 4. `~`는 힙에 materialize할 수 없다.
-   - `~T`는 local/field/optional/owner-array/storage-safe named aggregate cell에 저장할 수 있다.
+   - `~T`는 local/field/optional/owner-array/storage-safe named aggregate cell과 non-`layout(c)` enum payload에 저장할 수 있다.
+   - ordinary non-owner enum payload는 기존처럼 계속 허용된다.
    - 3word handle pack은 call/return ABI 경계에서만 허용한다.
 5. C ABI 문자열 경계는 `Utf8Span`/`Utf8Buf`를 사용한다.
 6. nullable은 하이브리드 모델을 따른다.

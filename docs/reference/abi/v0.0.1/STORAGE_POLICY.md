@@ -53,6 +53,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
    - field cell
    - optional cell
    - static cell
+   - non-`layout(c)` enum payload cell
 3. ABI handle pack
    - return boundary
    - argument boundary
@@ -87,8 +88,11 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 1. 장수명 owner cell이 필요하면 local/field/optional/static place를 사용한다.
 2. sized array container가 필요하면 `(~T)[N]` 또는 `((~T)?)[N]`를 사용한다.
 3. storage-safe named aggregate가 필요하면 그 내부 field graph를 `~T`, `(~T)?`, sized owner-array, 다시 storage-safe named aggregate로만 구성한다.
-4. one-shot extraction은 `(~T)?`, `((~T)?)[N]`, 또는 projected optional owner path + consume-binding을 사용한다.
-5. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
+4. owner payload를 상태기계에 실어야 하면 non-`layout(c)` enum payload에 `~T` / `(~T)?` / sized owner-array를 사용한다.
+   - ordinary non-owner payload는 기존처럼 계속 허용된다.
+5. one-shot extraction은 `(~T)?`, `((~T)?)[N]`, projected optional owner path + consume-binding, 또는 `core::mem::take(place)`를 사용한다.
+6. owner payload를 `switch`로 꺼낼 때는 direct place consume를 하지 말고, 먼저 local move 또는 `core::mem::replace(..., Empty)`로 enum 값을 분리한 뒤 consuming switch on value를 사용한다.
+7. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
 
 ---
 
@@ -113,6 +117,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 
 1. `~` lowering 경로에 heap materialization이 없는지 검증한다.
 2. local/field/array-element/optional 저장이 즉시 ABI pack으로 내려가지 않는지 검증한다.
-3. `String` drop 경로가 static backing에서 free를 호출하지 않는지 검증한다.
-4. `text -> String` 암시 변환이 발생하지 않는지 타입체커에서 검증한다.
-5. C ABI 함수에서 `String` 직접 전달을 거부하는지 검증한다.
+3. enum payload owner storage와 `core::mem::take`가 eager ABI pack으로 내려가지 않는지 검증한다.
+4. `String` drop 경로가 static backing에서 free를 호출하지 않는지 검증한다.
+5. `text -> String` 암시 변환이 발생하지 않는지 타입체커에서 검증한다.
+6. C ABI 함수에서 `String` 직접 전달을 거부하는지 검증한다.
