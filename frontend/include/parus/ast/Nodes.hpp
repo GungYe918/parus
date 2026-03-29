@@ -156,7 +156,7 @@ namespace parus::ast {
     enum class SelfReceiverKind : uint8_t {
         kNone = 0,
         kRead,   // self      -> &Self
-        kMut,    // self mut  -> &mut Self
+        kMut,    // mut self  -> &mut Self
         kMove,   // self move -> Self
     };
 

@@ -361,7 +361,7 @@
                     param_resolved_symbol_cache_.resize((size_t)(fn.param_begin + i) + 1, sema::SymbolTable::kNoScope);
                 }
                 param_resolved_symbol_cache_[fn.param_begin + i] = ins.symbol_id;
-                // receiver mutability follows `self mut`; regular params follow `mut name: T`.
+                // receiver mutability follows `mut self`; regular params follow `mut name: T`.
                 const bool param_is_mut = p.is_mut ||
                     (p.is_self && p.self_kind == ast::SelfReceiverKind::kMut);
                 sym_is_mut_[ins.symbol_id] = param_is_mut;

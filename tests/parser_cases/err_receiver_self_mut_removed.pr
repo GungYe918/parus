@@ -1,0 +1,8 @@
+//@expect-error SelfMutSyntaxRemoved
+class Counter {
+  value: i32;
+
+  def bump(self mut) -> i32 {
+    return self.value;
+  }
+}

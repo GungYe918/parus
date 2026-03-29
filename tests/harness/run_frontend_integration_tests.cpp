@@ -681,7 +681,7 @@ namespace {
             };
 
             acts for CounterIter<T is Item> with [T == i32] {
-                def next(self mut, out: &mut T) -> bool {
+                def next(mut self, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -815,7 +815,7 @@ namespace {
             };
 
             acts for CounterIter<T is Item> with [T == i32] {
-                def next(self mut, out: &mut T) -> bool {
+                def next(mut self, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -885,7 +885,7 @@ namespace {
             };
 
             acts for CounterIter<T is Item> with [T == i32] {
-                def next(self mut, out: &mut T) -> bool {
+                def next(mut self, out: &mut T) -> bool {
                     if (self.cur > self.end) {
                         return false;
                     }
@@ -2092,7 +2092,7 @@ namespace {
             };
 
             acts for CounterIter<T is Item> with [T == i32] {
-                def next(self mut, out: &mut T) -> bool {
+                def next(mut self, out: &mut T) -> bool {
                     if (self.cur >= self.end) {
                         return false;
                     }
@@ -2167,7 +2167,7 @@ namespace {
             };
 
             acts for CounterIter<T is Item> with [T == i32] {
-                def next(self mut, out: &mut T) -> bool {
+                def next(mut self, out: &mut T) -> bool {
                     if (self.cur >= self.end) {
                         return false;
                     }
@@ -2251,7 +2251,7 @@ namespace {
             acts for CounterIter {
                 type Item = i32;
 
-                def next(self mut, out: &mut i32) -> bool {
+                def next(mut self, out: &mut i32) -> bool {
                     return false;
                 }
             };
@@ -2795,7 +2795,7 @@ namespace {
                     return self.workers[0].run() + self.workers[1]->probe();
                 }
 
-                def take_slot(self mut) -> i32 {
+                def take_slot(mut self) -> i32 {
                     let taken: ~Worker = self.slots[0] else {
                         return 1i32;
                     };
@@ -2879,7 +2879,7 @@ namespace {
                     self.groups = [WorkerGroup(a, b, c), WorkerGroup(d, e, f)];
                 }
 
-                def take(self mut) -> i32 {
+                def take(mut self) -> i32 {
                     let taken: ~Worker = self.groups[1].slots[1].item else {
                         return 1i32;
                     };

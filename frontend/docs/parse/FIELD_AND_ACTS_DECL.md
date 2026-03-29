@@ -31,7 +31,7 @@
 1. 첫 파라미터에서만 허용
 2. 허용 표기
    - `self` (`&Self`)
-   - `self mut` (`&mut Self`)
+   - `mut self` (`&mut Self`)
    - `self move` (`Self`)
 3. legacy `self a: T`는 파서 진단 후 소비
 
@@ -51,7 +51,9 @@ ActsMember     := FnDecl
                | OperatorDecl
                | EmptyItem ;
 
-SelfRecv       := "self" ["mut" | "move"] ;
+SelfRecv       := "self"
+               | "mut" "self"
+               | "self" "move" ;
 ```
 
 ## 진단/오류 복구

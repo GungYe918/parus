@@ -81,11 +81,11 @@ Parus OOP 모델은 아래 목표를 동시에 만족해야 한다.
 2. 함수 파라미터의 첫 위치에서만 허용한다.
 3. 허용 형태:
    - `self` (기본: read-only receiver)
-   - `self mut` (mutable receiver)
+   - `mut self` (mutable receiver)
 4. `self move`는 v0에서 보류한다.
 5. 의미:
    - `self`: `&Self`로 해석
-   - `self mut`: `&mut Self`로 해석
+   - `mut self`: `&mut Self`로 해석
 
 ### 5.2 `Self` (문맥 타입 이름)
 

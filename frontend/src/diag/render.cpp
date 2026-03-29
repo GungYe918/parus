@@ -42,6 +42,7 @@ namespace parus::diag {
             case Code::kNestedTernaryNotAllowed: return "NestedTernaryNotAllowed";
             case Code::kAmbiguousAmpPrefixChain: return "AmbiguousAmpPrefixChain";
             case Code::kLegacyEscapeCaretAmpUseTilde: return "LegacyEscapeCaretAmpUseTilde";
+            case Code::kSelfMutSyntaxRemoved: return "SelfMutSyntaxRemoved";
             case Code::kArraySizeExpectedIntLiteral: return "ArraySizeExpectedIntLiteral";
             case Code::kArraySizeInvalidLiteral: return "ArraySizeInvalidLiteral";
             case Code::kMacroNoMatch: return "MacroNoMatch";
@@ -412,6 +413,7 @@ namespace parus::diag {
             case Code::kNestedTernaryNotAllowed: return "nested ternary operator is not allowed";
             case Code::kAmbiguousAmpPrefixChain: return "ambiguous '&' prefix chain (3+ consecutive '&'); use parentheses (e.g. ~( &x ) or &(~x))";
             case Code::kLegacyEscapeCaretAmpUseTilde: return "legacy escape syntax '^&' is removed; use '~' instead";
+            case Code::kSelfMutSyntaxRemoved: return "receiver syntax 'self mut' is removed; use 'mut self' instead";
             case Code::kArraySizeExpectedIntLiteral: return "array size must be an integer literal (use T[N] or T[])";
             case Code::kArraySizeInvalidLiteral: return "invalid array size literal '{0}' (expected decimal u32 range)";
             case Code::kMacroNoMatch: return "no matching macro arm for call '{0}'";
@@ -788,6 +790,7 @@ namespace parus::diag {
             case Code::kNestedTernaryNotAllowed: return "삼항 연산자 중첩은 허용되지 않습니다";
             case Code::kAmbiguousAmpPrefixChain: return "'&' 접두사 체인이 모호합니다(연속 '&' 3개 이상). 괄호로 명시하세요(예: ~(&x), &(~x))";
             case Code::kLegacyEscapeCaretAmpUseTilde: return "legacy escape 문법 '^&'는 제거되었습니다. 대신 '~'를 사용하세요";
+            case Code::kSelfMutSyntaxRemoved: return "리시버 문법 'self mut'는 제거되었습니다. 대신 'mut self'를 사용하세요";
             case Code::kArraySizeExpectedIntLiteral: return "배열 크기는 정수 리터럴이어야 합니다(T[N] 또는 T[] 사용)";
             case Code::kArraySizeInvalidLiteral: return "배열 크기 리터럴 '{0}'이(가) 유효하지 않습니다(10진 u32 범위 필요)";
             case Code::kMacroNoMatch: return "매크로 호출 '{0}'과(와) 일치하는 arm을 찾지 못했습니다";

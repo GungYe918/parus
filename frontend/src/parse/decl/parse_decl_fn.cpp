@@ -55,7 +55,7 @@ namespace parus {
     // 파라미터 1개를 파싱한다.
     // v0(acts receiver):
     // - 일반 파라미터: name ':' Type
-    // - 리시버 파라미터: self | self mut | self move
+    // - 리시버 파라미터: self | mut self | self move
     bool Parser::parse_decl_fn_one_param(bool is_named_group, std::string_view* out_name, bool* out_is_self) {
         using K = syntax::TokenKind;
 
@@ -78,20 +78,28 @@ namespace parus {
         ast::TypeNodeId parsed_type_node = ast::k_invalid_type_node;
 
         // receiver form:
-        //   self | self mut | self move
+        //   self | mut self | self move
         if (name_tok.kind == K::kIdent && name_tok.lexeme == "self") {
             is_self = true;
             start_span = is_mut ? start_span : name_tok.span;
             const Token self_tok = cursor_.bump(); // self
 
             if (cursor_.at(K::kKwMut)) {
+                diag_report(diag::Code::kSelfMutSyntaxRemoved, cursor_.peek().span);
                 self_kind = ast::SelfReceiverKind::kMut;
                 cursor_.bump(); // mut
             } else if (cursor_.peek().kind == K::kIdent && cursor_.peek().lexeme == "move") {
+                if (is_mut) {
+                    diag_report(
+                        diag::Code::kUnexpectedToken,
+                        cursor_.peek().span,
+                        "receiver must be either 'mut self' or 'self move'"
+                    );
+                }
                 self_kind = ast::SelfReceiverKind::kMove;
                 cursor_.bump(); // move
             } else {
-                self_kind = ast::SelfReceiverKind::kRead;
+                self_kind = is_mut ? ast::SelfReceiverKind::kMut : ast::SelfReceiverKind::kRead;
             }
 
             // legacy typed receiver removal:
@@ -102,7 +110,7 @@ namespace parus {
                 diag_report(
                     diag::Code::kUnexpectedToken,
                     cursor_.peek().span,
-                    "legacy self typed syntax is removed (use 'self', 'self mut', or 'self move')"
+                    "legacy self typed syntax is removed (use 'self', 'mut self', or 'self move')"
                 );
 
                 if (cursor_.peek().kind == K::kIdent && cursor_.peek(1).kind == K::kColon) {
@@ -111,14 +119,6 @@ namespace parus {
                 if (cursor_.eat(K::kColon)) {
                     (void)parse_type(); // consume legacy payload for recovery
                 }
-            }
-
-            if (is_mut) {
-                diag_report(
-                    diag::Code::kUnexpectedToken,
-                    self_tok.span,
-                    "use 'self mut' instead of prefix 'mut self'"
-                );
             }
 
             name = self_tok.lexeme; // "self"

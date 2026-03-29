@@ -78,13 +78,13 @@ export def range_inclusive_iter_next_impl_<T>(mut it: &mut RangeInclusiveIter<T>
 }
 
 export acts for RangeIter<T is Item> with [T: constraints::Step] {
-    def next(self mut, out: &mut T) -> bool {
+    def next(mut self, out: &mut T) -> bool {
         return range_iter_next_impl_<T>(self, out);
     }
 };
 
 export acts for RangeInclusiveIter<T is Item> with [T: constraints::Step] {
-    def next(self mut, out: &mut T) -> bool {
+    def next(mut self, out: &mut T) -> bool {
         return range_inclusive_iter_next_impl_<T>(self, out);
     }
 };

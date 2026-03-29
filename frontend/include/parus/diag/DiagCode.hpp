@@ -27,6 +27,7 @@ namespace parus::diag {
         kNestedTernaryNotAllowed,
         kAmbiguousAmpPrefixChain,      // deprecated: ambiguous '&' prefix chain diagnostic
         kLegacyEscapeCaretAmpUseTilde, // legacy '^&' escape syntax is removed; use '~'
+        kSelfMutSyntaxRemoved,         // legacy receiver syntax 'self mut' is removed; use 'mut self'
         kArraySizeExpectedIntLiteral,  // array suffix requires integer literal (T[N])
         kArraySizeInvalidLiteral,      // array size literal is malformed/out of range
         kMacroNoMatch,                 // macro arm/group matching failed

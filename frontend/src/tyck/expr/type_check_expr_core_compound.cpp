@@ -1326,7 +1326,7 @@
                                                         inferred_iterator_item == ty::kInvalidType ||
                                                         inferred_iterator_item != canonical_source_item) {
                                                         diag_(diag::Code::kLoopIterableUnsupported, ast_.expr(e.loop_iter).span);
-                                                        err_(e.span, "iter::Iterator.next(self mut, out: &mut Self::Item) must return bool");
+                                                        err_(e.span, "iter::Iterator.next(mut self, out: &mut Self::Item) must return bool");
                                                         set_loop_binder(types_.error());
                                                     } else {
                                                         loop_source_kind = parus::LoopSourceKind::kSequence;
