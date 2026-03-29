@@ -3652,6 +3652,161 @@ namespace parus::tyck {
                 return types_.make_optional(value_ty);
             }
 
+            if (is_core_module_fn_(direct_ident_symbol, "mem", "take")) {
+                enum class EscapeMemPlaceStatus : uint8_t { kNotEscapePlace, kOk, kHardError };
+                auto add_escape_mem_diag = [&](Span primary_span,
+                                               Span label_span,
+                                               std::string primary,
+                                               std::string label,
+                                               std::string note,
+                                               std::string help) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, primary_span);
+                    d.add_arg(std::move(primary));
+                    d.add_label(label_span, std::move(label));
+                    if (!note.empty()) d.add_note(std::move(note));
+                    if (!help.empty()) d.add_help(std::move(help));
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                };
+                auto is_optional_owner_cell_place_type = [&](ty::TypeId t) -> bool {
+                    if (t == ty::kInvalidType || is_error_(t) || t >= types_.count()) return false;
+                    const auto& tt = types_.get(t);
+                    return tt.kind == ty::Kind::kOptional &&
+                           tt.elem != ty::kInvalidType &&
+                           tt.elem < types_.count() &&
+                           types_.get(tt.elem).kind == ty::Kind::kEscape;
+                };
+                auto classify_escape_take_place = [&](const ast::Arg* arg,
+                                                      ty::TypeId& out_place_ty) -> EscapeMemPlaceStatus {
+                    out_place_ty = ty::kInvalidType;
+                    if (arg == nullptr || arg->expr == ast::k_invalid_expr) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto& arg_expr = ast_.expr(arg->expr);
+                    if (arg_expr.kind == ast::ExprKind::kUnary &&
+                        arg_expr.op == K::kAmp &&
+                        arg_expr.a != ast::k_invalid_expr) {
+                        const ty::TypeId operand_t = check_expr_place_no_read_(arg_expr.a);
+                        if (!is_error_(operand_t) && is_optional_owner_cell_place_type(operand_t)) {
+                            add_escape_mem_diag(
+                                e.span,
+                                arg->span,
+                                "core::mem::take on `(~T)?` expects a place, not `&mut`",
+                                "this argument already borrows an optional owner-cell place",
+                                "`(~T)?` remains move-only and is not source-level borrowable",
+                                "pass the writable `(~T)?` place directly, for example `mem::take(slot)`");
+                            err_(arg->span, "core::mem::take on optional owner-cell place expects a place, not `&mut`");
+                            return EscapeMemPlaceStatus::kHardError;
+                        }
+                    }
+
+                    if (!is_place_expr_(arg->expr)) return EscapeMemPlaceStatus::kNotEscapePlace;
+
+                    const ty::TypeId place_t = check_expr_place_no_read_(arg->expr);
+                    if (is_error_(place_t)) return EscapeMemPlaceStatus::kHardError;
+                    if (!is_optional_owner_cell_place_type(place_t)) {
+                        return EscapeMemPlaceStatus::kNotEscapePlace;
+                    }
+
+                    const auto root = root_place_symbol_(arg->expr);
+                    if (!root.has_value() || !is_mutable_symbol_(*root)) {
+                        add_escape_mem_diag(
+                            e.span,
+                            arg->span,
+                            "core::mem::take requires a writable `(~T)?` place",
+                            "this optional owner-cell place is not writable",
+                            "`take` extracts the current owner and writes `null` back into the same cell",
+                            "make the root binding mutable, or use local/state restructuring so the owner lives in a mutable `(~T)?` slot");
+                        err_(arg->span, "core::mem::take requires writable optional owner-cell place");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+                    if (!ensure_symbol_readable_(*root, arg->span)) {
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+                    if (is_global_like_symbol_(*root)) {
+                        diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, arg->span, sym_.symbol(*root).name);
+                        err_(arg->span, "move from global/static optional owner-cell place is not allowed");
+                        return EscapeMemPlaceStatus::kHardError;
+                    }
+
+                    out_place_ty = place_t;
+                    return EscapeMemPlaceStatus::kOk;
+                };
+
+                if (form == CallForm::kPositionalOnly &&
+                    outside_positional.size() == 1 &&
+                    outside_labeled.empty()) {
+                    ty::TypeId place_ty = ty::kInvalidType;
+                    const EscapeMemPlaceStatus place_status =
+                        classify_escape_take_place(outside_positional[0], place_ty);
+                    if (place_status == EscapeMemPlaceStatus::kOk) {
+                        if (explicit_call_type_args.size() > 1) {
+                            diag_(diag::Code::kGenericArityMismatch, e.span, "0 or 1",
+                                  std::to_string(explicit_call_type_args.size()));
+                            err_(e.span, "core::mem::take on optional owner-cell place accepts at most one explicit type argument");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        if (explicit_call_type_args.size() == 1 && explicit_call_type_args[0] != place_ty) {
+                            add_escape_mem_diag(
+                                e.span,
+                                outside_positional[0]->span,
+                                "core::mem::take explicit type argument must match the optional owner-cell place type",
+                                "the first argument has type `" + types_.to_string(place_ty) + "`",
+                                "place-first `core::mem::take` uses the destination `(~T)?` place type as its canonical value type",
+                                "remove the explicit type argument, or change it to `" + types_.to_string(place_ty) + "`");
+                            err_(e.span, "core::mem::take explicit type argument mismatch");
+                            check_all_arg_exprs_only();
+                            return types_.error();
+                        }
+
+                        if (auto root = root_place_symbol_(outside_positional[0]->expr)) {
+                            mark_symbol_initialized_(*root);
+                        }
+                        cache_external_callee_(direct_ident_symbol, direct_sym.declared_type);
+                        return place_ty;
+                    }
+                    if (place_status == EscapeMemPlaceStatus::kHardError) {
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+
+                    const auto& place_expr = ast_.expr(outside_positional[0]->expr);
+                    const bool used_amp =
+                        place_expr.kind == ast::ExprKind::kUnary &&
+                        place_expr.op == K::kAmp;
+                    const ty::TypeId place_like_t =
+                        used_amp && place_expr.a != ast::k_invalid_expr
+                            ? check_expr_place_no_read_(place_expr.a)
+                            : check_expr_place_no_read_(outside_positional[0]->expr);
+                    if (!is_error_(place_like_t) &&
+                        (is_place_expr_(outside_positional[0]->expr) || used_amp)) {
+                        add_escape_mem_diag(
+                            e.span,
+                            outside_positional[0]->span,
+                            "place-first core::mem::take is only available for optional owner-cell places",
+                            "this argument has type `" + types_.to_string(place_like_t) + "`",
+                            "this round only opens `core::mem::take` for writable projected `(~T)?` places",
+                            "use consume-binding on a `(~T)?` place, or use `core::mem::replace`/`swap` for plain `~T` owner cells");
+                        err_(e.span, "place-first core::mem::take only supports optional owner-cell places");
+                        check_all_arg_exprs_only();
+                        return types_.error();
+                    }
+                }
+
+                add_escape_mem_diag(
+                    e.span,
+                    e.span,
+                    "core::mem::take in this round only supports `mem::take(place)` for projected `(~T)?` places",
+                    "ordinary non-owner optional `take` is not opened in this round",
+                    "`take` is a shorthand for optional owner-cell extraction plus null writeback",
+                    "pass a writable `(~T)?` place directly, or keep using consume-binding on the same place");
+                err_(e.span, "core::mem::take only supports optional owner-cell places in this round");
+                check_all_arg_exprs_only();
+                return types_.error();
+            }
+
             if (is_core_module_fn_(direct_ident_symbol, "mem", "replace")) {
                 enum class EscapeMemPlaceStatus : uint8_t { kNotEscapePlace, kOk, kHardError };
                 auto add_escape_mem_diag = [&](Span primary_span,
@@ -3676,6 +3831,9 @@ namespace parus::tyck {
                            tt.elem < types_.count() &&
                            types_.get(tt.elem).kind == ty::Kind::kEscape;
                 };
+                auto is_owner_carrying_place_type = [&](ty::TypeId t) -> bool {
+                    return t != ty::kInvalidType && !is_error_(t) && type_contains_escape_(t);
+                };
                 auto owner_cell_label = [&](ty::TypeId t) -> std::string {
                     if (t != ty::kInvalidType &&
                         t < types_.count() &&
@@ -3683,6 +3841,10 @@ namespace parus::tyck {
                         return "`(~T)?`";
                     }
                     return "`~T`";
+                };
+                auto owner_place_label = [&](ty::TypeId t) -> std::string {
+                    if (is_owner_cell_place_type(t)) return owner_cell_label(t);
+                    return "`" + types_.to_string(t) + "`";
                 };
                 auto classify_escape_mem_place = [&](const ast::Arg* arg,
                                                      std::string_view op_name,
@@ -3698,16 +3860,16 @@ namespace parus::tyck {
                         arg_expr.op == K::kAmp &&
                         arg_expr.a != ast::k_invalid_expr) {
                         const ty::TypeId operand_t = check_expr_place_no_read_(arg_expr.a);
-                        if (!is_error_(operand_t) && is_owner_cell_place_type(operand_t)) {
-                            const std::string owner_label = owner_cell_label(operand_t);
+                        if (!is_error_(operand_t) && is_owner_carrying_place_type(operand_t)) {
+                            const std::string owner_label = owner_place_label(operand_t);
                             add_escape_mem_diag(
                                 e.span,
                                 arg->span,
                                 "core::mem::" + std::string(op_name) + " on " + owner_label +
                                     " expects a place, not `&mut`",
-                                "this argument already borrows an owner-cell place",
+                                "this argument already borrows an owner-carrying place",
                                 owner_label + " remains move-only and is not source-level borrowable",
-                                "pass the writable owner-cell place directly, for example `mem::" +
+                                "pass the writable owner-carrying place directly, for example `mem::" +
                                     std::string(op_name) + "(slot, value)`");
                             err_(arg->span, "core::mem::replace/swap on owner-cell place expects a place, not `&mut`");
                             return EscapeMemPlaceStatus::kHardError;
@@ -3718,19 +3880,19 @@ namespace parus::tyck {
 
                     const ty::TypeId place_t = check_expr_place_no_read_(arg->expr);
                     if (is_error_(place_t)) return EscapeMemPlaceStatus::kHardError;
-                    if (!is_owner_cell_place_type(place_t)) {
+                    if (!is_owner_carrying_place_type(place_t)) {
                         return EscapeMemPlaceStatus::kNotEscapePlace;
                     }
 
                     const auto root = root_place_symbol_(arg->expr);
                     if (!root.has_value() || !is_mutable_symbol_(*root)) {
-                        const std::string owner_label = owner_cell_label(place_t);
+                        const std::string owner_label = owner_place_label(place_t);
                         add_escape_mem_diag(
                             e.span,
                             arg->span,
                             "core::mem::" + std::string(op_name) + " requires a writable " + owner_label + " place",
-                            "this owner-cell place is not writable",
-                            "replace/swap mutates the owner cell in place",
+                            "this owner-carrying place is not writable",
+                            "replace/swap mutates the owner-carrying place in place",
                             "make the root binding mutable, or move through `(~T)?` consume-binding instead");
                         err_(arg->span, "core::mem::replace/swap requires writable owner-cell place");
                         return EscapeMemPlaceStatus::kHardError;
@@ -3742,7 +3904,7 @@ namespace parus::tyck {
 
                     if (is_global_like_symbol_(*root)) {
                         diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, arg->span, sym_.symbol(*root).name);
-                        err_(arg->span, "move from global/static owner-cell place is not allowed");
+                        err_(arg->span, "move from global/static owner-carrying place is not allowed");
                         return EscapeMemPlaceStatus::kHardError;
                     }
 
@@ -3769,7 +3931,7 @@ namespace parus::tyck {
                         if (explicit_call_type_args.size() == 1) {
                             value_ty = explicit_call_type_args[0];
                             if (value_ty != place_ty) {
-                                const std::string owner_label = owner_cell_label(place_ty);
+                                const std::string owner_label = owner_place_label(place_ty);
                                 add_escape_mem_diag(
                                     e.span,
                                     outside_positional[0]->span,
@@ -3786,13 +3948,13 @@ namespace parus::tyck {
                         const CoercionPlan value_plan = classify_assign_with_coercion_(
                             AssignSite::CallArg, value_ty, outside_positional[1]->expr, outside_positional[1]->span);
                         if (!value_plan.ok) {
-                            const std::string owner_label = owner_cell_label(value_ty);
+                            const std::string owner_label = owner_place_label(value_ty);
                             add_escape_mem_diag(
                                 e.span,
                                 outside_positional[1]->span,
-                                "core::mem::replace second argument must be assignable to the destination owner-cell place",
+                                "core::mem::replace second argument must be assignable to the destination owner-carrying place",
                                 "expected `" + types_.to_string(value_ty) + "` here",
-                                "place-first `core::mem::replace` moves a replacement value into the existing " + owner_label + " cell",
+                                "place-first `core::mem::replace` moves a replacement value into the existing " + owner_label + " place",
                                 "pass a value of type `" + types_.to_string(value_ty) + "` or use `(~T)?` consume-binding to extract one");
                             err_(e.span, "core::mem::replace second argument mismatch");
                             check_all_arg_exprs_only();
@@ -3818,11 +3980,11 @@ namespace parus::tyck {
                             add_escape_mem_diag(
                                 e.span,
                                 outside_positional[0]->span,
-                                "place-first core::mem::replace is only available for owner-cell places",
+                                "place-first core::mem::replace is only available for owner-carrying places",
                                 "this place has type `" + types_.to_string(place_like_t) + "`",
                                 "ordinary values still use the existing `&mut T` memory helper path",
-                                "use `mem::replace<T>(&mut place, value)` for ordinary `T`, or pass a `~T`/`(~T)?` place directly");
-                            err_(e.span, "place-first core::mem::replace only supports owner-cell places");
+                                "use `mem::replace<T>(&mut place, value)` for ordinary `T`, or pass a place whose type carries `~` ownership directly");
+                            err_(e.span, "place-first core::mem::replace only supports owner-carrying places");
                             check_all_arg_exprs_only();
                             return types_.error();
                         }
@@ -3879,6 +4041,9 @@ namespace parus::tyck {
                            tt.elem < types_.count() &&
                            types_.get(tt.elem).kind == ty::Kind::kEscape;
                 };
+                auto is_owner_carrying_place_type = [&](ty::TypeId t) -> bool {
+                    return t != ty::kInvalidType && !is_error_(t) && type_contains_escape_(t);
+                };
                 auto owner_cell_label = [&](ty::TypeId t) -> std::string {
                     if (t != ty::kInvalidType &&
                         t < types_.count() &&
@@ -3886,6 +4051,10 @@ namespace parus::tyck {
                         return "`(~T)?`";
                     }
                     return "`~T`";
+                };
+                auto owner_place_label = [&](ty::TypeId t) -> std::string {
+                    if (is_owner_cell_place_type(t)) return owner_cell_label(t);
+                    return "`" + types_.to_string(t) + "`";
                 };
                 auto classify_escape_mem_place = [&](const ast::Arg* arg,
                                                      ty::TypeId& out_place_ty) -> EscapeMemPlaceStatus {
@@ -3899,15 +4068,15 @@ namespace parus::tyck {
                         arg_expr.op == K::kAmp &&
                         arg_expr.a != ast::k_invalid_expr) {
                         const ty::TypeId operand_t = check_expr_place_no_read_(arg_expr.a);
-                        if (!is_error_(operand_t) && is_owner_cell_place_type(operand_t)) {
-                            const std::string owner_label = owner_cell_label(operand_t);
+                        if (!is_error_(operand_t) && is_owner_carrying_place_type(operand_t)) {
+                            const std::string owner_label = owner_place_label(operand_t);
                             add_escape_mem_diag(
                                 e.span,
                                 arg->span,
                                 "core::mem::swap on " + owner_label + " expects places, not `&mut`",
-                                "this argument already borrows an owner-cell place",
+                                "this argument already borrows an owner-carrying place",
                                 owner_label + " remains move-only and is not source-level borrowable",
-                                "pass the writable owner-cell places directly, for example `mem::swap(lhs, rhs)`");
+                                "pass the writable owner-carrying places directly, for example `mem::swap(lhs, rhs)`");
                             err_(arg->span, "core::mem::swap on owner-cell place expects places, not `&mut`");
                             return EscapeMemPlaceStatus::kHardError;
                         }
@@ -3917,19 +4086,19 @@ namespace parus::tyck {
 
                     const ty::TypeId place_t = check_expr_place_no_read_(arg->expr);
                     if (is_error_(place_t)) return EscapeMemPlaceStatus::kHardError;
-                    if (!is_owner_cell_place_type(place_t)) {
+                    if (!is_owner_carrying_place_type(place_t)) {
                         return EscapeMemPlaceStatus::kNotEscapePlace;
                     }
 
                     const auto root = root_place_symbol_(arg->expr);
                     if (!root.has_value() || !is_mutable_symbol_(*root)) {
-                        const std::string owner_label = owner_cell_label(place_t);
+                        const std::string owner_label = owner_place_label(place_t);
                         add_escape_mem_diag(
                             e.span,
                             arg->span,
                             "core::mem::swap requires writable " + owner_label + " places",
-                            "this owner-cell place is not writable",
-                            "swap mutates both owner cells in place",
+                            "this owner-carrying place is not writable",
+                            "swap mutates both owner-carrying places in place",
                             "make the root binding mutable, or move through `(~T)?` consume-binding instead");
                         err_(arg->span, "core::mem::swap requires writable owner-cell places");
                         return EscapeMemPlaceStatus::kHardError;
@@ -3939,7 +4108,7 @@ namespace parus::tyck {
                     }
                     if (is_global_like_symbol_(*root)) {
                         diag_(diag::Code::kMoveFromGlobalOrStaticForbidden, arg->span, sym_.symbol(*root).name);
-                        err_(arg->span, "move from global/static owner-cell place is not allowed");
+                        err_(arg->span, "move from global/static owner-carrying place is not allowed");
                         return EscapeMemPlaceStatus::kHardError;
                     }
 
@@ -3970,11 +4139,11 @@ namespace parus::tyck {
                             add_escape_mem_diag(
                                 e.span,
                                 e.span,
-                                "core::mem::swap on owner-cell places requires both arguments to be writable owner-cell places",
-                                "swap needs two owner-cell places of the same type",
-                                "mixed owner-cell/non-owner swap is not supported in this round",
-                                "pass two writable places of the same `~T`/`(~T)?` type, or use the existing `&mut T` swap path for ordinary values");
-                            err_(e.span, "core::mem::swap requires two writable owner-cell places");
+                                "core::mem::swap on owner-carrying places requires both arguments to be writable owner-carrying places",
+                                "swap needs two owner-carrying places of the same type",
+                                "mixed owner-carrying/non-owner swap is not supported in this round",
+                                "pass two writable places of the same owner-carrying type, or use the existing `&mut T` swap path for ordinary values");
+                            err_(e.span, "core::mem::swap requires two writable owner-carrying places");
                             check_all_arg_exprs_only();
                             return types_.error();
                         }
@@ -4030,11 +4199,11 @@ namespace parus::tyck {
                             add_escape_mem_diag(
                                 e.span,
                                 outside_positional[0]->span,
-                                "place-first core::mem::swap is only available for owner-cell places",
+                                "place-first core::mem::swap is only available for owner-carrying places",
                                 "this place has type `" + types_.to_string(lhs_place_like_t) + "`",
                                 "ordinary values still use the existing `&mut T` memory helper path",
-                                "use `mem::swap<T>(&mut lhs, &mut rhs)` for ordinary `T`, or pass `~T`/`(~T)?` places directly");
-                            err_(e.span, "place-first core::mem::swap only supports owner-cell places");
+                                "use `mem::swap<T>(&mut lhs, &mut rhs)` for ordinary `T`, or pass places whose type carries `~` ownership directly");
+                            err_(e.span, "place-first core::mem::swap only supports owner-carrying places");
                             check_all_arg_exprs_only();
                             return types_.error();
                         }

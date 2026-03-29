@@ -483,6 +483,7 @@ namespace parus::tyck {
         bool type_needs_drop_(ty::TypeId t) const;
         bool type_contains_escape_(ty::TypeId t) const;
         bool is_storage_safe_owner_container_type_(ty::TypeId t) const;
+        bool is_storage_safe_enum_payload_type_(ty::TypeId t) const;
         bool is_move_only_type_(ty::TypeId t) const;
         bool is_trivial_copy_clone_type_(ty::TypeId t) const;
         bool can_access_class_member_(ast::StmtId owner_class_sid, ast::FieldMember::Visibility visibility) const;

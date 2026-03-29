@@ -4648,6 +4648,83 @@
         return rec(rec, id);
     }
 
+    bool TypeChecker::is_storage_safe_enum_payload_type_(ty::TypeId id) const {
+        std::unordered_set<ty::TypeId> visiting{};
+        auto rec = [&](auto&& self, ty::TypeId cur) -> bool {
+            cur = canonicalize_transparent_external_typedef_(cur);
+            if (cur == ty::kInvalidType || is_error_(cur)) return false;
+
+            const auto& t = types_.get(cur);
+            switch (t.kind) {
+                case ty::Kind::kBorrow:
+                case ty::Kind::kFn:
+                    return false;
+
+                case ty::Kind::kEscape:
+                    return is_storage_safe_owner_container_type_(cur);
+
+                case ty::Kind::kOptional:
+                case ty::Kind::kArray:
+                    if (type_contains_escape_(cur)) {
+                        return is_storage_safe_owner_container_type_(cur);
+                    }
+                    return t.elem != ty::kInvalidType && self(self, t.elem);
+
+                case ty::Kind::kPtr:
+                    return t.elem != ty::kInvalidType;
+
+                case ty::Kind::kBuiltin:
+                    return t.builtin != ty::Builtin::kInferInteger &&
+                           t.builtin != ty::Builtin::kNever;
+
+                case ty::Kind::kNamedUser:
+                    break;
+
+                default:
+                    return false;
+            }
+
+            if (!visiting.insert(cur).second) {
+                // Recursive by-value payload is not storage-safe in this round.
+                return false;
+            }
+
+            if (actor_decl_by_type_.find(cur) != actor_decl_by_type_.end() ||
+                class_decl_by_type_.find(cur) != class_decl_by_type_.end()) {
+                return false;
+            }
+
+            auto validate_field_members = [&](ast::StmtId sid) -> bool {
+                if (sid == ast::k_invalid_stmt || static_cast<size_t>(sid) >= ast_.stmts().size()) return false;
+                const auto& s = ast_.stmt(sid);
+                const uint64_t begin = s.field_member_begin;
+                const uint64_t end = begin + s.field_member_count;
+                if (begin > ast_.field_members().size() || end > ast_.field_members().size() || begin > end) {
+                    return false;
+                }
+                for (uint32_t i = s.field_member_begin; i < s.field_member_begin + s.field_member_count; ++i) {
+                    if (!self(self, ast_.field_members()[i].type)) return false;
+                }
+                return true;
+            };
+
+            if (auto it = field_abi_meta_by_type_.find(cur); it != field_abi_meta_by_type_.end()) {
+                return validate_field_members(it->second.sid);
+            }
+            if (auto it = enum_abi_meta_by_type_.find(cur); it != enum_abi_meta_by_type_.end()) {
+                for (const auto& variant : it->second.variants) {
+                    for (const auto& field : variant.fields) {
+                        if (!self(self, field.type)) return false;
+                    }
+                }
+                return true;
+            }
+
+            return false;
+        };
+        return rec(rec, id);
+    }
+
     bool TypeChecker::type_contains_infer_int_(ty::TypeId tid) const {
         tid = canonicalize_transparent_external_typedef_(tid);
         if (tid == ty::kInvalidType) return false;

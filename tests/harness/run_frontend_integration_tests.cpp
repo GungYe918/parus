@@ -1885,6 +1885,20 @@ namespace {
             .is_export = true,
             .inst_payload = {},
         });
+        opt.name_resolve.external_exports.push_back({
+            .kind = parus::sema::SymbolKind::kFn,
+            .path = "core::mem::take",
+            .link_name = "core::mem::take",
+            .declared_type = parus::ty::kInvalidType,
+            .declared_type_repr = {},
+            .declared_type_semantic = {},
+            .decl_span = {},
+            .decl_bundle_name = "core",
+            .module_head = "mem",
+            .decl_source_dir_norm = {},
+            .is_export = true,
+            .inst_payload = {},
+        });
         auto pres = parus::passes::run_on_program(p.ast, p.root, p.bag, opt);
         auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
         auto cap = run_cap(p, pres, ty);

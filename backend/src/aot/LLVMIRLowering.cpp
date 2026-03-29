@@ -859,6 +859,7 @@ namespace parus::backend::aot {
                 std::ostringstream os;
                 const std::string ret_ty =
                     map_type_(types_, fn_.ret_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                const bool returns_escape_via_slot = return_uses_escape_slot_(fn_.ret_ty);
                 (void)require_storage_shape_(fn_.ret_ty, "function return");
                 const std::string sym = sanitize_symbol_(fn_.name);
 
@@ -873,10 +874,18 @@ namespace parus::backend::aot {
                             os << abi_value_ty_(entry.params[i], fn_.abi);
                         }
                     }
-                    if (fn_.is_c_variadic) {
+                    if (returns_escape_via_slot) {
                         if (fn_.entry != parus::oir::kInvalidId &&
                             static_cast<size_t>(fn_.entry) < m_.blocks.size() &&
                             !m_.blocks[fn_.entry].params.empty()) {
+                            os << ", ";
+                        }
+                        os << "ptr";
+                    }
+                    if (fn_.is_c_variadic) {
+                        if (fn_.entry != parus::oir::kInvalidId &&
+                            static_cast<size_t>(fn_.entry) < m_.blocks.size() &&
+                            (!m_.blocks[fn_.entry].params.empty() || returns_escape_via_slot)) {
                             os << ", ...";
                         } else {
                             os << "...";
@@ -895,6 +904,14 @@ namespace parus::backend::aot {
                         if (i) os << ", ";
                         os << abi_value_ty_(entry.params[i], fn_.abi) << " %arg" << i;
                     }
+                }
+                if (returns_escape_via_slot) {
+                    if (fn_.entry != parus::oir::kInvalidId &&
+                        static_cast<size_t>(fn_.entry) < m_.blocks.size() &&
+                        !m_.blocks[fn_.entry].params.empty()) {
+                        os << ", ";
+                    }
+                    os << "ptr " << hidden_escape_ret_slot_arg_();
                 }
                 os << ")";
                 if (fn_.is_pure || fn_.is_comptime) {
@@ -947,12 +964,38 @@ namespace parus::backend::aot {
             struct DirectCalleeInfo {
                 std::string symbol{};
                 std::string ret_ty{};
+                parus::ty::TypeId ret_type_id = parus::ty::kInvalidType;
+                parus::ty::TypeId ret_escape_elem_ty = parus::ty::kInvalidType;
                 std::vector<std::string> param_tys{};
                 parus::oir::FunctionAbi abi = parus::oir::FunctionAbi::Parus;
                 parus::oir::CCallConv c_callconv = parus::oir::CCallConv::Default;
                 bool is_variadic = false;
                 uint32_t fixed_param_count = 0;
+                bool returns_escape_via_slot = false;
             };
+
+            bool return_uses_escape_slot_(parus::ty::TypeId tid) const {
+                if (tid == parus::ty::kInvalidType || tid >= types_.count()) return false;
+                const auto& tt = types_.get(tid);
+                return tt.kind == parus::ty::Kind::kEscape && tt.elem != parus::ty::kInvalidType;
+            }
+
+            parus::ty::TypeId return_escape_elem_type_(parus::ty::TypeId tid) const {
+                if (!return_uses_escape_slot_(tid)) return parus::ty::kInvalidType;
+                return types_.get(tid).elem;
+            }
+
+            size_t visible_param_count_() const {
+                if (fn_.entry == parus::oir::kInvalidId ||
+                    static_cast<size_t>(fn_.entry) >= m_.blocks.size()) {
+                    return 0;
+                }
+                return m_.blocks[fn_.entry].params.size();
+            }
+
+            std::string hidden_escape_ret_slot_arg_() const {
+                return "%arg" + std::to_string(visible_param_count_());
+            }
 
             std::string llvm_callconv_prefix_(parus::oir::CCallConv cc) const {
                 using CC = parus::oir::CCallConv;
@@ -1327,6 +1370,9 @@ namespace parus::backend::aot {
                 DirectCalleeInfo info{};
                 info.symbol = sanitize_symbol_(forced_symbol.empty() ? target.name : forced_symbol);
                 info.ret_ty = map_type_(types_, target.ret_ty, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                info.ret_type_id = target.ret_ty;
+                info.returns_escape_via_slot = return_uses_escape_slot_(target.ret_ty);
+                info.ret_escape_elem_ty = return_escape_elem_type_(target.ret_ty);
                 info.abi = target.abi;
                 info.c_callconv = target.c_callconv;
                 info.is_variadic = target.is_c_variadic;
@@ -1338,6 +1384,9 @@ namespace parus::backend::aot {
                     for (auto p : entry.params) {
                         info.param_tys.push_back(abi_value_ty_(p, target.abi));
                     }
+                }
+                if (info.returns_escape_via_slot) {
+                    info.param_tys.push_back("ptr");
                 }
 
                 return info;
@@ -1386,6 +1435,19 @@ namespace parus::backend::aot {
                 const std::string slot = next_tmp_();
                 os << "  " << slot << " = alloca " << agg_ty << "\n";
                 os << "  store " << agg_ty << " zeroinitializer, ptr " << slot << "\n";
+                return slot;
+            }
+
+            std::string emit_zero_storage_slot_(
+                std::ostringstream& os,
+                const std::string& ty
+            ) {
+                if (is_aggregate_llvm_ty_(ty)) {
+                    return emit_zero_aggregate_slot_(os, ty);
+                }
+                const std::string slot = next_tmp_();
+                os << "  " << slot << " = alloca " << ty << "\n";
+                os << "  store " << ty << " " << zero_literal_(ty) << ", ptr " << slot << "\n";
                 return slot;
             }
 
@@ -2630,6 +2692,22 @@ namespace parus::backend::aot {
                                 arg_vals.push_back(coerce_value_(os, x.args[ai], want));
                             }
 
+                            if (direct.has_value() && direct->returns_escape_via_slot) {
+                                const std::string ret_elem_ty = map_type_(
+                                    types_,
+                                    direct->ret_escape_elem_ty,
+                                    &named_layouts_,
+                                    &actor_types_,
+                                    &scalar_enum_types_
+                                );
+                                const std::string ret_slot = emit_zero_storage_slot_(os, ret_elem_ty);
+                                arg_tys.push_back("ptr");
+                                arg_vals.push_back(ret_slot);
+                                if (inst.result != kInvalidId) {
+                                    address_ref_by_value_[inst.result] = ret_slot;
+                                }
+                            }
+
                             const auto emit_default_result = [&]() {
                                 if (inst.result == kInvalidId) return;
                                 const auto rty = value_ty_(inst.result);
@@ -2979,6 +3057,27 @@ namespace parus::backend::aot {
                            << ", label %" << bref_(t.then_bb)
                            << ", label %" << bref_(t.else_bb) << "\n";
                     } else if constexpr (std::is_same_v<T, TermRet>) {
+                        if (return_uses_escape_slot_(fn_.ret_ty)) {
+                            if (!t.has_value) {
+                                os << "  ret ptr null\n";
+                                return;
+                            }
+                            const auto elem_tid = return_escape_elem_type_(fn_.ret_ty);
+                            const std::string elem_ty =
+                                map_type_(types_, elem_tid, &named_layouts_, &actor_types_, &scalar_enum_types_);
+                            const std::string out_slot = hidden_escape_ret_slot_arg_();
+                            const std::string src_ptr = coerce_value_(os, t.value, "ptr");
+                            if (is_aggregate_llvm_ty_(elem_ty)) {
+                                const std::string loaded = safe_load_aggregate_from_ptr_(os, elem_ty, src_ptr);
+                                os << "  store " << elem_ty << " " << loaded << ", ptr " << out_slot << "\n";
+                            } else {
+                                const std::string loaded = next_tmp_();
+                                os << "  " << loaded << " = load " << elem_ty << ", ptr " << src_ptr << "\n";
+                                os << "  store " << elem_ty << " " << loaded << ", ptr " << out_slot << "\n";
+                            }
+                            os << "  ret ptr " << out_slot << "\n";
+                            return;
+                        }
                         if (ret_ty == "void") {
                             os << "  ret void\n";
                             return;

@@ -350,11 +350,33 @@ namespace parus::tyck {
             out_payload_type = ty::kInvalidType;
 
             if (!is_place_expr_(place_eid)) {
+                if (place_eid != ast::k_invalid_expr) {
+                    const ty::TypeId rhs_t = check_expr_(place_eid, Slot::kValue);
+                    if (!is_error_(rhs_t) && is_optional_(rhs_t) &&
+                        place_eid < expr_external_callee_symbol_cache_.size()) {
+                        const uint32_t callee_sid = expr_external_callee_symbol_cache_[place_eid];
+                        if (callee_sid != sema::SymbolTable::kNoScope &&
+                            callee_sid < sym_.symbols().size()) {
+                            const auto& callee_sym = sym_.symbol(callee_sid);
+                            const std::string_view callee_name = callee_sym.name;
+                            const bool is_take_leaf =
+                                callee_name == "take" ||
+                                (callee_name.size() > 6 &&
+                                 callee_name.substr(callee_name.size() - 6) == "::take");
+                            if (callee_sym.kind == sema::SymbolKind::kFn &&
+                                callee_sym.decl_bundle_name == "core" &&
+                                (callee_sym.decl_module_head == "mem" ||
+                                 callee_sym.decl_module_head == "core::mem") &&
+                                is_take_leaf) {
+                                out_opt_type = rhs_t;
+                                out_payload_type = optional_elem_(rhs_t);
+                                return out_payload_type != ty::kInvalidType;
+                            }
+                        }
+                    }
+                }
                 diag_(diag::Code::kVarConsumeElseRequiresPlace, s.span);
                 err_(s.span, "consume-binding rhs must be a mutable place expression");
-                if (place_eid != ast::k_invalid_expr) {
-                    (void)check_expr_(place_eid, Slot::kValue);
-                }
                 return false;
             }
 
@@ -1223,10 +1245,16 @@ namespace parus::tyck {
             (void)ensure_generic_enum_instance_from_type_(scrut_enum_t, s.span);
         }
 
+        const OwnershipStateMap before = capture_ownership_state_();
+        std::vector<OwnershipStateMap> branches{};
+        bool saw_default_case = false;
+
         for (uint32_t i = 0; i < s.case_count; ++i) {
             const uint32_t cidx = s.case_begin + i;
             if ((size_t)cidx >= ast_.switch_cases().size()) break;
             auto& c = ast_.switch_cases_mut()[cidx];
+            restore_ownership_state_(before);
+            if (c.is_default) saw_default_case = true;
 
             if (c.pat_kind == ast::CasePatKind::kNull && !scrut_is_optional) {
                 diag_(diag::Code::kTypeErrorGeneric, c.span, "case null is only valid for optional scrutinee");
@@ -1263,6 +1291,7 @@ namespace parus::tyck {
                 }
 
                 bool bind_scope_opened = false;
+                bool case_has_owner_payload_bind = false;
                 if (meta_it == enum_abi_meta_by_type_.end()) {
                     diag_(diag::Code::kTypeErrorGeneric, c.span, "enum pattern requires a known enum type");
                     err_(c.span, "enum pattern requires known enum metadata");
@@ -1310,6 +1339,50 @@ namespace parus::tyck {
                                 const auto& fm = vm.fields[fit->second];
                                 b.bind_type = fm.type;
                                 b.storage_name = ast_.add_owned_string(fm.storage_name);
+                                if (type_contains_escape_(fm.type)) {
+                                    case_has_owner_payload_bind = true;
+                                }
+                            }
+
+                            if (case_has_owner_payload_bind && c.enum_bind_count != vm.fields.size()) {
+                                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, c.span);
+                                d.add_arg("owner-payload enum switch bind must bind every payload field in this round");
+                                d.add_label(c.span, "this case binds an owner payload field");
+                                d.add_note("moving `~` payload out of an enum variant is only supported when the whole payload is explicitly consumed");
+                                d.add_help("bind every payload field in this variant, or move the enum into a simpler state before switching on it");
+                                if (diag_bag_) diag_bag_->add(std::move(d));
+                                err_(c.span, "owner-payload enum switch bind must bind all payload fields");
+                            }
+
+                            if (case_has_owner_payload_bind && scrut_is_optional) {
+                                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, s.span);
+                                d.add_arg("owner payload switch bind does not yet consume through optional enum scrutinees");
+                                d.add_label(ast_.expr(s.expr).span, "this scrutinee has optional enum type");
+                                d.add_note("this round keeps owner extraction explicit and only supports direct enum values");
+                                d.add_help("take or unwrap the optional enum first, then switch on the resulting enum value");
+                                if (diag_bag_) diag_bag_->add(std::move(d));
+                                err_(ast_.expr(s.expr).span, "owner payload switch bind does not accept optional enum scrutinee");
+                            } else if (case_has_owner_payload_bind &&
+                                scrut_t != ty::kInvalidType &&
+                                scrut_t < types_.count() &&
+                                types_.get(scrut_t).kind == ty::Kind::kBorrow) {
+                                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, s.span);
+                                d.add_arg("owner payload switch bind requires a consuming enum value, not a borrow");
+                                d.add_label(ast_.expr(s.expr).span, "this scrutinee is a borrow");
+                                d.add_note("owner payload extraction stays explicit in this round and does not consume through source-level borrow paths");
+                                d.add_help("first move the enum into a local value, then switch on that local");
+                                if (diag_bag_) diag_bag_->add(std::move(d));
+                                err_(ast_.expr(s.expr).span, "owner payload switch bind does not accept borrow scrutinee");
+                            } else if (case_has_owner_payload_bind &&
+                                       is_place_expr_(s.expr) &&
+                                       ast_.expr(s.expr).kind != ast::ExprKind::kIdent) {
+                                diag::Diagnostic d(diag::Severity::kError, diag::Code::kTypeErrorGeneric, s.span);
+                                d.add_arg("owner payload switch bind requires an explicit local/rvalue enum value in this round");
+                                d.add_label(ast_.expr(s.expr).span, "this scrutinee is a projected place");
+                                d.add_note("direct place consume would hide a subplace move from the enum owner");
+                                d.add_help("move the enum into a local first, or use `mem::replace(..., Empty)` before switching");
+                                if (diag_bag_) diag_bag_->add(std::move(d));
+                                err_(ast_.expr(s.expr).span, "owner payload switch bind does not accept projected-place scrutinee");
                             }
 
                             sym_.push_scope();
@@ -1329,14 +1402,22 @@ namespace parus::tyck {
                     }
                 }
 
+                if (case_has_owner_payload_bind) {
+                    mark_expr_move_consumed_(s.expr, scrut_t, c.span);
+                }
                 if (c.body != ast::k_invalid_stmt) check_stmt_(c.body);
                 if (bind_scope_opened) {
                     sym_.pop_scope();
                 }
+                branches.push_back(capture_ownership_state_());
                 continue;
             }
 
             // case body는 항상 block
             if (c.body != ast::k_invalid_stmt) check_stmt_(c.body);
+            branches.push_back(capture_ownership_state_());
         }
+
+        restore_ownership_state_(before);
+        merge_ownership_state_from_branches_(before, branches, /*include_before_as_fallthrough=*/!saw_default_case);
     }

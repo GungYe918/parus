@@ -17,3 +17,7 @@ export def swap<T>(a: &mut T, b: &mut T) -> void {
     let tmp: T = replace<T>(a, *b);
     *b = tmp;
 }
+
+export def take<T>(dst: &mut T?) -> T? {
+    return replace<T?>(dst, null);
+}

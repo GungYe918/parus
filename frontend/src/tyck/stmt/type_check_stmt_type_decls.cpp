@@ -470,10 +470,11 @@
                     }
 
                     const auto& mt = types_.get(m.type);
-                    if (mt.kind == ty::Kind::kBorrow || mt.kind == ty::Kind::kEscape || mt.kind == ty::Kind::kFn) {
+                    if (mt.kind == ty::Kind::kBorrow || mt.kind == ty::Kind::kFn) {
                         diag_(diag::Code::kTypeErrorGeneric, m.span,
                               std::string("unsupported enum payload type for field '") + std::string(m.name) + "'");
                         err_(m.span, "unsupported enum payload type");
+                        continue;
                     }
 
                     if (class_decl_by_type_.find(m.type) != class_decl_by_type_.end() ||
@@ -482,6 +483,15 @@
                               std::string("enum payload field '") + std::string(m.name) +
                               "' cannot use class/actor type in v0");
                         err_(m.span, "enum payload class/actor type is not supported in v0");
+                        continue;
+                    }
+
+                    if (!is_storage_safe_enum_payload_type_(m.type)) {
+                        diag_(diag::Code::kTypeErrorGeneric, m.span,
+                              std::string("enum payload field '") + std::string(m.name) +
+                              "' must use a supported value type, or `~T`/`(~T)?`, a recursively-sized owner array, or a storage-safe named aggregate in this round");
+                        err_(m.span, "enum payload field type is not storage-safe in this round");
+                        continue;
                     }
 
                     EnumVariantFieldMeta fm{};

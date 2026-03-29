@@ -1678,6 +1678,7 @@ bool test_core_seed_export_index_and_auto_injection() {
         !contains(core_index_text, "\"path\":\"align_of\"") ||
         !contains(core_index_text, "\"path\":\"swap\"") ||
         !contains(core_index_text, "\"path\":\"replace\"") ||
+        !contains(core_index_text, "\"path\":\"take\"") ||
         !contains(core_index_text, "\"path\":\"unreachable\"") ||
         !contains(core_index_text, "\"path\":\"spin_loop\"") ||
         !contains(core_index_text, "parus_impl_binding|key=Impl::SizeOf|mode=compiler") ||
@@ -2260,6 +2261,7 @@ bool test_core_seed_runtime_smoke() {
         !contains(installed_core_index, "\"path\":\"align_of\"") ||
         !contains(installed_core_index, "\"path\":\"swap\"") ||
         !contains(installed_core_index, "\"path\":\"replace\"") ||
+        !contains(installed_core_index, "\"path\":\"take\"") ||
         !contains(installed_core_index, "\"path\":\"unreachable\"") ||
         !contains(installed_core_index, "\"path\":\"spin_loop\"") ||
         !contains(installed_core_index, "\"path\":\"Range\"") ||
@@ -7382,7 +7384,8 @@ bool test_escape_place_first_mem_rejects_non_escape() {
         std::cerr << "place-first mem::replace on non-escape type should fail\n";
         return false;
     }
-    if (out.find("place-first core::mem::replace is only available for owner-cell places") == std::string::npos ||
+    if ((out.find("place-first core::mem::replace is only available for owner-cell places") == std::string::npos &&
+         out.find("place-first core::mem::replace is only available for owner-carrying places") == std::string::npos) ||
         out.find("&mut") == std::string::npos) {
         std::cerr << "non-escape place-first mem rejection should explain the `&mut` path\n" << out;
         return false;
@@ -7862,6 +7865,299 @@ bool test_escape_projected_borrow_rejected() {
     return true;
 }
 
+bool test_escape_enum_owner_payload_and_take_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-enum-owner-take-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "out";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value + 1i32; }\n"
+        "};\n"
+        "\n"
+        "enum Job {\n"
+        "  case Empty,\n"
+        "  case Ready(worker: ~Worker),\n"
+        "  case Done(result: ~Worker),\n"
+        "};\n"
+        "\n"
+        "class WorkerSlot {\n"
+        "  item: (~Worker)?;\n"
+        "  init(v: ~Worker) {\n"
+        "    self.item = v;\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "class Scheduler {\n"
+        "  state: Job;\n"
+        "  slots: WorkerSlot[2];\n"
+        "\n"
+        "  init(a: ~Worker, b: ~Worker, c: ~Worker) {\n"
+        "    self.state = Job::Ready(worker: a);\n"
+        "    self.slots = [WorkerSlot(b), WorkerSlot(c)];\n"
+        "  }\n"
+        "\n"
+        "  def take_worker(self mut) -> (~Worker)? {\n"
+        "    let state: Job = mem::replace(self.state, Job::Empty());\n"
+        "    switch (state) {\n"
+        "    case Job::Ready(worker: w): { return w; }\n"
+        "    case Job::Done(result: r): { return r; }\n"
+        "    default: { return null; }\n"
+        "    }\n"
+        "    return null;\n"
+        "  }\n"
+        "\n"
+        "  def take_slot(self mut, i: i32) -> (~Worker)? {\n"
+        "    return mem::take(self.slots[i].item);\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut s = Scheduler(make(1i32), make(2i32), make(3i32));\n"
+        "  let mut from_state_opt: (~Worker)? = s.take_worker();\n"
+        "  let from_state: ~Worker = from_state_opt else { return 1i32; };\n"
+        "  let from_slot: ~Worker = mem::take(s.slots[1].item) else { return 2i32; };\n"
+        "  let mut from_slot2_opt: (~Worker)? = s.take_slot(0i32);\n"
+        "  let from_slot2: ~Worker = from_slot2_opt else { return 3i32; };\n"
+        "  let a: i32 = from_state.run();\n"
+        "  let b: i32 = from_slot.run();\n"
+        "  let c: i32 = from_slot2.run();\n"
+        "  if (a != 2i32) { return 11i32; }\n"
+        "  if (b != 4i32) { return 12i32; }\n"
+        "  if (c != 3i32) { return 13i32; }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write enum owner payload runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for enum owner payload runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "enum owner payload runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "enum owner payload runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_enum_owner_payload_direct_place_switch_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-enum-direct-place-switch-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "enum Job {\n"
+        "  case Empty,\n"
+        "  case Ready(worker: ~Worker),\n"
+        "};\n"
+        "\n"
+        "class Scheduler {\n"
+        "  state: Job;\n"
+        "\n"
+        "  def take_worker(self mut) -> (~Worker)? {\n"
+        "    switch (self.state) {\n"
+        "    case Job::Ready(worker: w): { return w; }\n"
+        "    default: { return null; }\n"
+        "    }\n"
+        "    return null;\n"
+        "  }\n"
+        "};\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write direct place enum owner switch rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for direct place enum owner switch rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "direct place enum owner switch should fail\n";
+        return false;
+    }
+    if (out.find("owner payload switch bind does not accept projected-place scrutinee") == std::string::npos ||
+        out.find("mem::replace") == std::string::npos) {
+        std::cerr << "direct place enum owner switch rejection should mention explicit consume guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_enum_owner_payload_borrow_switch_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-enum-borrow-switch-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "\n"
+        "enum Job {\n"
+        "  case Empty,\n"
+        "  case Ready(worker: ~Worker),\n"
+        "};\n"
+        "\n"
+        "def bad(s: &Job) -> (~Worker)? {\n"
+        "  switch (s) {\n"
+        "  case Job::Ready(worker: w): { return w; }\n"
+        "  default: { return null; }\n"
+        "  }\n"
+        "  return null;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write borrow enum owner switch rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for borrow enum owner switch rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "borrow enum owner switch should fail\n";
+        return false;
+    }
+    if (out.find("owner payload switch bind does not accept borrow scrutinee") == std::string::npos ||
+        out.find("first move the enum into a local value, then switch on that local") == std::string::npos) {
+        std::cerr << "borrow enum owner switch rejection should explain explicit consume path\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_mem_take_rejects_non_owner_optional() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-mem-take-non-owner-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "import mem as mem;\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let mut value: i32? = 1i32;\n"
+        "  let old: i32? = mem::take(value);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write non-owner mem::take rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for non-owner mem::take rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "mem::take on non-owner optional should fail\n";
+        return false;
+    }
+    if (out.find("place-first core::mem::take is only available for optional owner-cell places") == std::string::npos ||
+        out.find("this round only opens `core::mem::take` for writable projected `(~T)?` places") == std::string::npos) {
+        std::cerr << "non-owner mem::take rejection should explain owner-only surface\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_named_aggregate_unsized_container_rejected() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -8024,6 +8320,10 @@ int main() {
     const bool ok96 = test_escape_projected_direct_projection_rejected();
     const bool ok97 = test_escape_projected_borrow_rejected();
     const bool ok98 = test_escape_named_aggregate_unsized_container_rejected();
+    const bool ok99 = test_escape_enum_owner_payload_and_take_runtime();
+    const bool ok100 = test_escape_enum_owner_payload_direct_place_switch_rejected();
+    const bool ok101 = test_escape_enum_owner_payload_borrow_switch_rejected();
+    const bool ok102 = test_escape_mem_take_rejects_non_owner_optional();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -8033,7 +8333,7 @@ int main() {
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
-        !ok95 || !ok96 || !ok97 || !ok98) {
+        !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102) {
         return 1;
     }
 

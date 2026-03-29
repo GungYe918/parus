@@ -172,6 +172,45 @@ namespace parus::sir {
                        types_.get(tt.elem).kind == ty::Kind::kEscape;
             }
 
+            const FieldDecl* find_field_decl_(TypeId self_ty) const {
+                for (const auto& f : m_.fields) {
+                    if (f.self_type == self_ty) return &f;
+                }
+                return nullptr;
+            }
+
+            bool type_contains_escape_(TypeId t) const {
+                std::unordered_set<TypeId> visiting{};
+                auto rec = [&](auto&& self, TypeId cur) -> bool {
+                    if (cur == k_invalid_type || cur >= types_.count()) return false;
+                    if (!visiting.insert(cur).second) return false;
+
+                    const auto& tt = types_.get(cur);
+                    switch (tt.kind) {
+                        case ty::Kind::kEscape:
+                            return true;
+                        case ty::Kind::kOptional:
+                        case ty::Kind::kArray:
+                            return tt.elem != k_invalid_type && self(self, tt.elem);
+                        case ty::Kind::kNamedUser: {
+                            const FieldDecl* layout = find_field_decl_(cur);
+                            if (layout == nullptr) return false;
+                            const uint32_t mb = layout->member_begin;
+                            const uint32_t me = mb + layout->member_count;
+                            if (mb > m_.field_members.size() || me > m_.field_members.size() || mb > me) return false;
+                            for (uint32_t i = mb; i < me; ++i) {
+                                const auto& m = m_.field_members[i];
+                                if (self(self, m.type)) return true;
+                            }
+                            return false;
+                        }
+                        default:
+                            return false;
+                    }
+                };
+                return rec(rec, t);
+            }
+
             std::optional<ValueUse> escape_cell_use_for_var_decl_(const Stmt& s) const {
                 if (s.declared_type == k_invalid_type) return std::nullopt;
                 if (!is_escape_type_(s.declared_type) && !is_optional_escape_type_(s.declared_type)) {
@@ -1016,7 +1055,28 @@ namespace parus::sir {
                         if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)m_.switch_cases.size()) {
                             for (uint32_t i = 0; i < s.case_count; ++i) {
                                 const auto& c = m_.switch_cases[s.case_begin + i];
-                                const FlowState arm_out = analyze_block_with_flow_(c.body, after_scrut);
+                                FlowState arm_in = after_scrut;
+                                bool owner_payload_bind = false;
+                                const uint64_t bb = c.enum_bind_begin;
+                                const uint64_t be = bb + c.enum_bind_count;
+                                if (bb <= m_.switch_enum_binds.size() && be <= m_.switch_enum_binds.size()) {
+                                    for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
+                                        const auto& b = m_.switch_enum_binds[bi];
+                                        if (type_contains_escape_(b.bind_type)) {
+                                            owner_payload_bind = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if (owner_payload_bind &&
+                                    s.expr != k_invalid_value &&
+                                    (size_t)s.expr < m_.values.size()) {
+                                    const auto& sv = m_.values[s.expr];
+                                    if (sv.kind == ValueKind::kLocal && sv.sym != k_invalid_symbol) {
+                                        arm_in.moved_true[sv.sym] = true;
+                                    }
+                                }
+                                const FlowState arm_out = analyze_block_with_flow_(c.body, arm_in);
                                 if (!has_case) {
                                     merged = arm_out;
                                     has_case = true;
@@ -1190,9 +1250,11 @@ namespace parus::sir {
                         analyze_value_(v.a, ValueUse::kValue, k_invalid_symbol);
 
                         const bool is_escape_mem_core_call =
-                            (v.core_call_kind == CoreCallKind::kMemReplace ||
-                             v.core_call_kind == CoreCallKind::kMemSwap) &&
-                            is_escape_type_(v.core_call_type_arg);
+                            ((v.core_call_kind == CoreCallKind::kMemReplace ||
+                              v.core_call_kind == CoreCallKind::kMemSwap) &&
+                             type_contains_escape_(v.core_call_type_arg)) ||
+                            (v.core_call_kind == CoreCallKind::kMemTake &&
+                             is_optional_escape_type_(v.core_call_type_arg));
                         if (is_escape_mem_core_call) {
                             auto arg_value_at_ = [&](uint32_t index) -> ValueId {
                                 if (index >= v.arg_count) return k_invalid_value;
@@ -1210,6 +1272,16 @@ namespace parus::sir {
 
                             const ValueId lhs = arg_value_at_(0);
                             const ValueId rhs = arg_value_at_(1);
+                            if (v.core_call_kind == CoreCallKind::kMemTake) {
+                                if (lhs != k_invalid_value) {
+                                    analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
+                                    report_shared_write_if_needed_(lhs);
+                                }
+                                if (auto root = root_symbol_(lhs)) {
+                                    clear_moved_(*root);
+                                }
+                                return;
+                            }
                             if (v.core_call_kind == CoreCallKind::kMemReplace) {
                                 if (lhs != k_invalid_value) {
                                     analyze_value_(lhs, ValueUse::kValue, k_invalid_symbol);
@@ -1226,6 +1298,12 @@ namespace parus::sir {
                                 }
                                 if (rhs != k_invalid_value) {
                                     analyze_value_(rhs, rhs_use, k_invalid_symbol);
+                                    if (rhs_use == ValueUse::kValue &&
+                                        type_contains_escape_(value_type_(rhs))) {
+                                        if (auto root = root_symbol_(rhs)) {
+                                            mark_moved_(*root);
+                                        }
+                                    }
                                 }
                                 if (auto root = root_symbol_(lhs)) {
                                     clear_moved_(*root);

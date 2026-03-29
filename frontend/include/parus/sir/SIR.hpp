@@ -110,6 +110,7 @@ namespace parus::sir {
         kStepNext,
         kMemSwap,
         kMemReplace,
+        kMemTake,
     };
 
     /// @brief `~` lowering 시 생성되는 escape handle의 storage kind를 나타낸다.

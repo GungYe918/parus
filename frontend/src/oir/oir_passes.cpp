@@ -1698,6 +1698,20 @@ namespace parus::oir {
             bool changed = false;
             std::unordered_map<ValueId, ValueId> repl;
 
+            auto is_forwardable_value = [&](ValueId v) -> bool {
+                if (v == kInvalidId || (size_t)v >= m.values.size()) return false;
+                const auto& vv = m.values[v];
+                if (vv.def_b != kInvalidId) {
+                    // Block params can carry aggregate/indirect payloads that are cheap
+                    // to keep in their committed slot form. Forward only pure local
+                    // producers here so owner-cell paths still read from the real cell.
+                    return false;
+                }
+                if (vv.def_a == kInvalidId || (size_t)vv.def_a >= m.insts.size()) return false;
+                const auto& def_inst = m.insts[vv.def_a];
+                return def_inst.eff == Effect::Pure;
+            };
+
             for (auto& f : m.funcs) {
                 std::unordered_map<ValueId, bool> nonescape_cache;
                 auto is_alloca_slot = [&](ValueId slot) -> bool {
@@ -1781,6 +1795,7 @@ namespace parus::oir {
                                 if (has_memory_base_(loc) && loc.precision == MemoryLocPrecision::Exact) {
                                     for (auto it = mem_value_cache.rbegin(); it != mem_value_cache.rend(); ++it) {
                                         if (!must_alias_memory_loc_(it->loc, loc)) continue;
+                                        if (!is_forwardable_value(it->value)) break;
                                         repl[inst.result] = resolve_alias_(repl, it->value);
                                         changed = true;
                                         break;

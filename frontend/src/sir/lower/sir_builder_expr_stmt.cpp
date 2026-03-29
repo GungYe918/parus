@@ -615,7 +615,13 @@ namespace parus::sir::detail {
                     const auto& a0 = args[e.arg_begin];
                     if (a0.is_hole || a0.expr == ast::k_invalid_expr) return k_invalid_type;
                     const TypeId inferred = best_effort_type_of_ast_expr(ast, sym, nres, tyck, a0.expr);
-                    return type_is_escape_for_sir_build(inferred) ? inferred : k_invalid_type;
+                    if (type_is_escape_for_sir_build(inferred)) return inferred;
+                    const auto& a0_expr = ast.expr(a0.expr);
+                    if (classify_place_from_ast(ast, a0.expr) != PlaceClass::kNotPlace &&
+                        !(a0_expr.kind == parus::ast::ExprKind::kUnary && a0_expr.op == parus::syntax::TokenKind::kAmp)) {
+                        return inferred;
+                    }
+                    return k_invalid_type;
                 };
                 if (v.core_call_kind == CoreCallKind::kNone &&
                     v.callee_decl_stmt != ast::k_invalid_stmt &&
@@ -705,6 +711,16 @@ namespace parus::sir::detail {
                                     v.core_call_type_arg = infer_core_mem_type_arg_();
                                     if (v.core_call_type_arg != k_invalid_type) {
                                         v.core_call_kind = CoreCallKind::kMemSwap;
+                                    }
+                                }
+                            } else if (tail == "take") {
+                                if (e.call_type_arg_count == 1 && begin <= type_args.size() && end <= type_args.size()) {
+                                    v.core_call_type_arg = type_args[e.call_type_arg_begin];
+                                    v.core_call_kind = CoreCallKind::kMemTake;
+                                } else if (e.call_type_arg_count == 0) {
+                                    v.core_call_type_arg = infer_core_mem_type_arg_();
+                                    if (v.core_call_type_arg != k_invalid_type) {
+                                        v.core_call_kind = CoreCallKind::kMemTake;
                                     }
                                 }
                             } else if (tail == "replace") {

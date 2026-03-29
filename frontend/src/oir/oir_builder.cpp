@@ -1269,6 +1269,34 @@ namespace parus::oir {
                 return tt.kind == parus::ty::Kind::kEscape || is_optional_escape_type_(ty);
             }
 
+            bool type_contains_escape_(TypeId ty) const {
+                if (types == nullptr || ty == kInvalidId) return false;
+                std::unordered_set<TypeId> visiting{};
+                auto rec = [&](auto&& self, TypeId cur) -> bool {
+                    if (cur == kInvalidId || types == nullptr || (size_t)cur >= types->count()) return false;
+                    if (!visiting.insert(cur).second) return false;
+                    const auto& tt = types->get(cur);
+                    switch (tt.kind) {
+                        case parus::ty::Kind::kEscape:
+                            return true;
+                        case parus::ty::Kind::kOptional:
+                        case parus::ty::Kind::kArray:
+                            return tt.elem != kInvalidId && self(self, tt.elem);
+                        case parus::ty::Kind::kNamedUser: {
+                            const FieldLayoutDecl* layout = find_field_layout_(cur);
+                            if (layout == nullptr) return false;
+                            for (const auto& m : layout->members) {
+                                if (self(self, m.type)) return true;
+                            }
+                            return false;
+                        }
+                        default:
+                            return false;
+                    }
+                };
+                return rec(rec, ty);
+            }
+
             void remap_escape_value_(parus::sir::ValueId src_vid, ValueId lowered) {
                 if (escape_value_map == nullptr ||
                     src_vid == parus::sir::k_invalid_value ||
@@ -1919,6 +1947,15 @@ namespace parus::oir {
                         // Optional some(T): represent as typed cast at OIR boundary.
                         return emit_cast(dst_ty, Effect::Pure, CastKind::As, dst_ty, src);
                     }
+                    if (elem_ty != kInvalidId &&
+                        value_is_address_like_(src) &&
+                        type_contains_escape_(elem_ty)) {
+                        // `~T` call results and owner-cell values can be carried as address-like
+                        // OIR values even when their semantic type has already been narrowed away
+                        // by earlier materialization. When storing into `(~T)?`, force an explicit
+                        // optional-some cast so the payload tag is actually materialized.
+                        return emit_cast(dst_ty, Effect::Pure, CastKind::As, dst_ty, src);
+                    }
                 }
 
                 if (value_is_address_like_(src) && src_ty != kInvalidId) {
@@ -2541,12 +2578,45 @@ namespace parus::oir {
 
             if (v.kind == parus::sir::ValueKind::kIndex ||
                 v.kind == parus::sir::ValueKind::kField) {
-                if (auto root_sym = place_root_local_sym(vid); root_sym.has_value()) {
-                    if (const ValueId root_slot = lookup_bound_slot(*root_sym); root_slot != kInvalidId) {
-                        const auto rebuild = [&](parus::sir::ValueId cur_vid) -> ValueId {
-                            const auto& cur = sir->values[cur_vid];
-                            const TypeId cur_place_ty =
-                                (cur.place_elem_type != parus::sir::k_invalid_type)
+                const auto place_root_local_value_ = [&](parus::sir::ValueId cur_vid) -> parus::sir::ValueId {
+                    while (sir != nullptr && cur_vid != parus::sir::k_invalid_value &&
+                           (size_t)cur_vid < sir->values.size()) {
+                        const auto& cur = sir->values[cur_vid];
+                        if (cur.kind == parus::sir::ValueKind::kLocal) return cur_vid;
+                        if (cur.kind == parus::sir::ValueKind::kIndex ||
+                            cur.kind == parus::sir::ValueKind::kField) {
+                            cur_vid = cur.a;
+                            continue;
+                        }
+                        break;
+                    }
+                    return parus::sir::k_invalid_value;
+                };
+                const auto root_vid = place_root_local_value_(vid);
+                bool root_is_indirect = false;
+                if (sir != nullptr &&
+                    root_vid != parus::sir::k_invalid_value &&
+                    (size_t)root_vid < sir->values.size()) {
+                    const auto& root_sv = sir->values[root_vid];
+                    const TypeId root_ty =
+                        (root_sv.place_elem_type != parus::sir::k_invalid_type)
+                            ? (TypeId)root_sv.place_elem_type
+                            : (TypeId)root_sv.type;
+                    if (types != nullptr && root_ty != kInvalidId && (size_t)root_ty < types->count()) {
+                        const auto& rt = types->get(root_ty);
+                        root_is_indirect =
+                            rt.kind == parus::ty::Kind::kBorrow ||
+                            rt.kind == parus::ty::Kind::kEscape ||
+                            rt.kind == parus::ty::Kind::kPtr;
+                    }
+                }
+                if (!root_is_indirect) {
+                    if (auto root_sym = place_root_local_sym(vid); root_sym.has_value()) {
+                        if (const ValueId root_slot = lookup_bound_slot(*root_sym); root_slot != kInvalidId) {
+                            const auto rebuild = [&](parus::sir::ValueId cur_vid) -> ValueId {
+                                const auto& cur = sir->values[cur_vid];
+                                const TypeId cur_place_ty =
+                                    (cur.place_elem_type != parus::sir::k_invalid_type)
                                     ? (TypeId)cur.place_elem_type
                                     : (TypeId)cur.type;
                             switch (cur.kind) {
@@ -2571,8 +2641,9 @@ namespace parus::oir {
                                     report_lowering_error("place lowering failed: rooted rebuild hit non-place node");
                                     return lower_value(cur_vid);
                             }
-                        };
-                        return rebuild(vid);
+                            };
+                            return rebuild(vid);
+                        }
                     }
                 }
             }
@@ -2997,18 +3068,20 @@ namespace parus::oir {
                             if (arg_ty == kInvalidId || static_cast<size_t>(arg_ty) >= types->count()) {
                                 return kInvalidId;
                             }
-                            return types->get(arg_ty).kind == parus::ty::Kind::kEscape ? arg_ty : kInvalidId;
+                            return type_contains_escape_(arg_ty) ? arg_ty : kInvalidId;
                         };
                         const TypeId core_escape_ty =
                             (types != nullptr &&
                              v.core_call_type_arg != parus::sir::k_invalid_type &&
                              static_cast<size_t>(v.core_call_type_arg) < types->count() &&
-                             types->get((TypeId)v.core_call_type_arg).kind == parus::ty::Kind::kEscape)
+                             type_contains_escape_((TypeId)v.core_call_type_arg))
                                 ? static_cast<TypeId>(v.core_call_type_arg)
                                 : kInvalidId;
                         const TypeId arg_escape_ty = arg_escape_type_(a.value);
                         if (v.core_call_kind == parus::sir::CoreCallKind::kMemReplace) {
                             lower_as_place = (i == 0u) && (core_escape_ty != kInvalidId || arg_escape_ty != kInvalidId);
+                        } else if (v.core_call_kind == parus::sir::CoreCallKind::kMemTake) {
+                            lower_as_place = (i == 0u) && core_escape_ty != kInvalidId;
                         } else if (v.core_call_kind == parus::sir::CoreCallKind::kMemSwap) {
                             if (i < 2u) {
                                 lower_as_place = (core_escape_ty != kInvalidId || arg_escape_ty != kInvalidId);
@@ -3142,6 +3215,28 @@ namespace parus::oir {
                             const ValueId oldv = emit_load(elem_ty, slot);
                             const ValueId newv = coerce_value_for_target(elem_ty, args[1]);
                             emit_store(slot, newv);
+                            return oldv;
+                        }
+                        case parus::sir::CoreCallKind::kMemTake: {
+                            if (args.size() != 1u) {
+                                report_lowering_error("core::mem::take lowering failed: expected 1 argument");
+                                return emit_const_null(v.type);
+                            }
+                            const ValueId slot = args[0];
+                            if (!value_is_address_like_(slot)) {
+                                report_lowering_error("core::mem::take lowering failed: first argument is not addressable");
+                                return emit_const_null(v.type);
+                            }
+                            const TypeId elem_ty =
+                                (v.core_call_type_arg != kInvalidId)
+                                    ? v.core_call_type_arg
+                                    : (((size_t)arg_value_ids[0] < sir->values.size())
+                                           ? ((sir->values[arg_value_ids[0]].place_elem_type != parus::sir::k_invalid_type)
+                                                  ? (TypeId)sir->values[arg_value_ids[0]].place_elem_type
+                                                  : (TypeId)sir->values[arg_value_ids[0]].type)
+                                           : v.type);
+                            const ValueId oldv = emit_load(elem_ty, slot);
+                            emit_store(slot, emit_const_null(elem_ty));
                             return oldv;
                         }
                         case parus::sir::CoreCallKind::kMemSwap: {
@@ -3319,6 +3414,20 @@ namespace parus::oir {
                      (size_t)direct_callee < out->funcs.size())
                         ? &out->funcs[direct_callee]
                         : nullptr;
+                const TypeId call_ret_ty = [&]() -> TypeId {
+                    if (direct_target != nullptr && direct_target->ret_ty != kInvalidId) {
+                        return direct_target->ret_ty;
+                    }
+                    if (types != nullptr &&
+                        v.callee_fn_type != parus::sir::k_invalid_type &&
+                        static_cast<size_t>(v.callee_fn_type) < types->count()) {
+                        const auto& fn_tt = types->get((TypeId)v.callee_fn_type);
+                        if (fn_tt.kind == parus::ty::Kind::kFn && fn_tt.ret != kInvalidId) {
+                            return fn_tt.ret;
+                        }
+                    }
+                    return v.type;
+                }();
                 ValueId ctor_tmp_slot = kInvalidId;
                 if (ctor_call && !(direct_target != nullptr && direct_target->is_actor_init)) {
                     ctor_tmp_slot = emit_alloca(ctor_owner_ty);
@@ -3420,7 +3529,12 @@ namespace parus::oir {
                             continue;
                         }
                         ValueId arg_v = inout_args[ai];
-                        arg_v = materialize_escape_value_to_cell_(param_ty, arg_v);
+                        if (types != nullptr &&
+                            param_ty != kInvalidId &&
+                            (size_t)param_ty < types->count() &&
+                            types->get(param_ty).kind != parus::ty::Kind::kEscape) {
+                            arg_v = materialize_escape_value_to_cell_(param_ty, arg_v);
+                        }
                         if (ai < arg_value_ids.size()) {
                             remap_escape_value_(arg_value_ids[ai], arg_v);
                         }
@@ -3533,13 +3647,17 @@ namespace parus::oir {
                     args.push_back(ctx);
                     coerce_args_for_direct_(args);
                     consume_direct_owned_args_();
-                    const ValueId result = emit_direct_call(v.type, direct_callee, std::move(args));
+                    ValueId result = emit_direct_call(call_ret_ty, direct_callee, std::move(args));
                     const TypeId unit_ty =
                         (types != nullptr)
                             ? (TypeId)types->builtin(parus::ty::Builtin::kUnit)
                             : kInvalidId;
                     (void)emit_direct_call(unit_ty, actor_runtime->leave_fn, {ctx});
-                    return materialize_escape_call_result_(v.type, result);
+                    result = materialize_escape_call_result_(call_ret_ty, result);
+                    if (call_ret_ty != v.type) {
+                        result = coerce_value_for_target(v.type, result);
+                    }
+                    return result;
                 }
 
                 coerce_args_for_direct_(args);
@@ -3564,8 +3682,8 @@ namespace parus::oir {
                     return emit_const_null(v.type);
                 }
 
-                const ValueId result = emit_call(
-                    v.type,
+                ValueId result = emit_call(
+                    call_ret_ty,
                     callee,
                     std::move(args),
                     direct_callee,
@@ -3574,7 +3692,11 @@ namespace parus::oir {
                     map_c_callconv_(v.call_c_callconv),
                     v.call_c_fixed_param_count
                 );
-                return materialize_escape_call_result_(v.type, result);
+                result = materialize_escape_call_result_(call_ret_ty, result);
+                if (call_ret_ty != v.type) {
+                    result = coerce_value_for_target(v.type, result);
+                }
+                return result;
             }
 
             case parus::sir::ValueKind::kEnumCtor: {
@@ -4254,7 +4376,75 @@ namespace parus::oir {
             case parus::sir::StmtKind::kVarDecl: {
                 TypeId declared = s.declared_type;
                 auto materialize_var_decl_ = [&](ValueId init, bool consume_init_sir) {
+                    const auto reusable_ctor_slot_ = [&]() -> ValueId {
+                        if (sir == nullptr || out == nullptr || types == nullptr) return kInvalidId;
+                        if (s.init == parus::sir::k_invalid_value ||
+                            (size_t)s.init >= sir->values.size() ||
+                            init == kInvalidId ||
+                            (size_t)init >= out->values.size() ||
+                            !value_is_address_like_(init) ||
+                            out->values[init].ty != declared) {
+                            return kInvalidId;
+                        }
+                        const auto& init_sv = sir->values[s.init];
+                        if (init_sv.kind != parus::sir::ValueKind::kCall || !init_sv.call_is_ctor) {
+                            return kInvalidId;
+                        }
+                        const auto& dt = types->get(declared);
+                        if (dt.kind == parus::ty::Kind::kBorrow ||
+                            dt.kind == parus::ty::Kind::kEscape) {
+                            return kInvalidId;
+                        }
+                        return init;
+                    }();
+
+                    if (reusable_ctor_slot_ != kInvalidId) {
+                        const auto existing = env.find(s.sym);
+                        const bool reassign_existing = s.is_set && existing != env.end();
+                        const bool needs_cleanup = type_needs_drop_(declared);
+
+                        if (reassign_existing) {
+                            ValueId slot = ensure_slot(s.sym, declared);
+                            ValueId loaded = emit_load(declared, reusable_ctor_slot_);
+                            emit_store(slot, loaded);
+                            if (consume_init_sir) {
+                                consume_owned_sir_value_(s.init, declared);
+                            }
+                            return;
+                        }
+
+                        const uint32_t cleanup_id =
+                            needs_cleanup ? register_cleanup(s.sym, reusable_ctor_slot_, declared) : kInvalidId;
+                        bind(s.sym, Binding{true, false, reusable_ctor_slot_, cleanup_id});
+                        if (should_remember_home_slot(declared)) {
+                            remember_home_slot(s.sym, reusable_ctor_slot_);
+                        }
+                        if (consume_init_sir) {
+                            consume_owned_sir_value_(s.init, declared);
+                        }
+                        return;
+                    }
+
                     init = coerce_value_for_target(declared, init);
+                    if (types != nullptr &&
+                        declared != kInvalidId &&
+                        (size_t)declared < types->count()) {
+                        const auto& declared_tt = types->get(declared);
+                        if (declared_tt.kind == parus::ty::Kind::kOptional &&
+                            declared_tt.elem != kInvalidId &&
+                            (size_t)declared_tt.elem < types->count() &&
+                            types->get(declared_tt.elem).kind == parus::ty::Kind::kEscape &&
+                            init != kInvalidId) {
+                            const TypeId init_ty =
+                                ((size_t)init < out->values.size()) ? out->values[init].ty : kInvalidId;
+                            if (init_ty != declared &&
+                                (value_is_address_like_(init) ||
+                                 init_ty == declared_tt.elem ||
+                                 (init_ty != kInvalidId && type_contains_escape_(init_ty)))) {
+                                init = emit_cast(declared, Effect::Pure, CastKind::As, declared, init);
+                            }
+                        }
+                    }
                     if (is_escape_cell_type_(declared)) {
                         init = materialize_escape_value_to_cell_(declared, init);
                         remap_escape_value_(s.init, init);
@@ -4317,6 +4507,9 @@ namespace parus::oir {
                     s.init != parus::sir::k_invalid_value &&
                     (size_t)s.init < sir->values.size()) {
                     const auto& place = sir->values[s.init];
+                    const bool consume_from_mem_take =
+                        place.kind == parus::sir::ValueKind::kCall &&
+                        place.core_call_kind == parus::sir::CoreCallKind::kMemTake;
                     TypeId opt_ty = place.type;
                     TypeId payload_ty = declared;
                     if (types != nullptr &&
@@ -4330,13 +4523,20 @@ namespace parus::oir {
 
                     ValueId place_slot = kInvalidId;
                     ValueId current_opt = emit_const_null(opt_ty);
-                    place_slot = lower_place(s.init, &opt_ty);
-                    if (place_slot != kInvalidId &&
-                        (size_t)place_slot < out->values.size() &&
-                        opt_ty == kInvalidId) {
-                        opt_ty = out->values[place_slot].ty;
+                    if (consume_from_mem_take) {
+                        current_opt = lower_value(s.init);
+                        if (current_opt != kInvalidId && value_is_address_like_(current_opt)) {
+                            current_opt = emit_load(opt_ty, current_opt);
+                        }
+                    } else {
+                        place_slot = lower_place(s.init, &opt_ty);
+                        if (place_slot != kInvalidId &&
+                            (size_t)place_slot < out->values.size() &&
+                            opt_ty == kInvalidId) {
+                            opt_ty = out->values[place_slot].ty;
+                        }
+                        current_opt = emit_load(opt_ty, place_slot);
                     }
-                    current_opt = emit_load(opt_ty, place_slot);
 
                     const ValueId is_null =
                         emit_binop(bool_type_(), Effect::Pure, BinOp::Eq, current_opt, emit_const_null(opt_ty));
@@ -4360,10 +4560,12 @@ namespace parus::oir {
                     cur_bb = succ_bb;
                     const ValueId payload =
                         emit_cast(payload_ty, Effect::MayTrap, CastKind::AsB, payload_ty, current_opt);
-                    emit_store(place_slot, emit_const_null(opt_ty));
-                    if (place.kind == parus::sir::ValueKind::kLocal &&
-                        place.sym != parus::sir::k_invalid_symbol) {
-                        mark_symbol_moved(place.sym, /*moved=*/false);
+                    if (!consume_from_mem_take) {
+                        emit_store(place_slot, emit_const_null(opt_ty));
+                        if (place.kind == parus::sir::ValueKind::kLocal &&
+                            place.sym != parus::sir::k_invalid_symbol) {
+                            mark_symbol_moved(place.sym, /*moved=*/false);
+                        }
                     }
                     materialize_var_decl_(payload, /*consume_init_sir=*/false);
                     return;
@@ -4731,6 +4933,7 @@ namespace parus::oir {
             }
 
             case parus::sir::StmtKind::kSwitch: {
+                push_scope();
                 const ValueId scrut = lower_value(s.expr);
                 const TypeId scrut_ty =
                     (scrut != kInvalidId && (size_t)scrut < out->values.size())
@@ -4740,6 +4943,65 @@ namespace parus::oir {
                     (types != nullptr)
                         ? (TypeId)types->builtin(parus::ty::Builtin::kBool)
                         : kInvalidId;
+
+                auto switch_case_has_owner_payload_bind_ = [&](const parus::sir::SwitchCase& c) -> bool {
+                    const uint64_t bb = c.enum_bind_begin;
+                    const uint64_t be = bb + c.enum_bind_count;
+                    if (bb > sir->switch_enum_binds.size() || be > sir->switch_enum_binds.size()) return false;
+                    for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
+                        const auto& b = sir->switch_enum_binds[bi];
+                        if (type_contains_escape_((TypeId)b.bind_type)) return true;
+                    }
+                    return false;
+                };
+
+                bool switch_has_owner_payload_bind = false;
+                if ((uint64_t)s.case_begin + (uint64_t)s.case_count <= (uint64_t)sir->switch_cases.size()) {
+                    for (uint32_t i = 0; i < s.case_count; ++i) {
+                        if (switch_case_has_owner_payload_bind_(sir->switch_cases[s.case_begin + i])) {
+                            switch_has_owner_payload_bind = true;
+                            break;
+                        }
+                    }
+                }
+
+                ValueId owner_payload_scrut_storage = kInvalidId;
+                uint32_t owner_payload_scrut_cleanup_id = kInvalidId;
+                parus::sir::SymbolId owner_payload_scrut_sym = parus::sir::k_invalid_symbol;
+                if (switch_has_owner_payload_bind) {
+                    if (s.expr != parus::sir::k_invalid_value &&
+                        (size_t)s.expr < sir->values.size()) {
+                        const auto& sv = sir->values[s.expr];
+                        if (sv.kind == parus::sir::ValueKind::kLocal &&
+                            sv.sym != parus::sir::k_invalid_symbol) {
+                            owner_payload_scrut_sym = sv.sym;
+                            owner_payload_scrut_storage = lookup_bound_slot(sv.sym);
+                            if (auto it = env.find(sv.sym); it != env.end()) {
+                                owner_payload_scrut_cleanup_id = it->second.cleanup_id;
+                            }
+                        }
+                    }
+                    if (owner_payload_scrut_storage == kInvalidId && scrut_ty != kInvalidId) {
+                        owner_payload_scrut_storage = emit_alloca(scrut_ty);
+                        emit_store(owner_payload_scrut_storage, scrut);
+                        if (type_needs_drop_(scrut_ty)) {
+                            owner_payload_scrut_cleanup_id =
+                                register_cleanup(parus::sir::k_invalid_symbol,
+                                                 owner_payload_scrut_storage,
+                                                 scrut_ty);
+                        }
+                    }
+                }
+
+                const auto mark_owner_payload_scrut_consumed_ = [&]() {
+                    if (owner_payload_scrut_sym != parus::sir::k_invalid_symbol) {
+                        mark_symbol_moved(owner_payload_scrut_sym, /*moved=*/true);
+                    }
+                    if (owner_payload_scrut_cleanup_id != kInvalidId &&
+                        owner_payload_scrut_cleanup_id < cleanup_items.size()) {
+                        cleanup_items[owner_payload_scrut_cleanup_id].moved = true;
+                    }
+                };
 
                 const auto emit_case_match_cond = [&](const parus::sir::SwitchCase& c) -> ValueId {
                     switch (c.pat_kind) {
@@ -4796,6 +5058,9 @@ namespace parus::oir {
                     const uint64_t bb = c.enum_bind_begin;
                     const uint64_t be = bb + c.enum_bind_count;
                     if (bb > sir->switch_enum_binds.size() || be > sir->switch_enum_binds.size()) return;
+                    if (switch_case_has_owner_payload_bind_(c)) {
+                        mark_owner_payload_scrut_consumed_();
+                    }
                     for (uint32_t bi = c.enum_bind_begin; bi < c.enum_bind_begin + c.enum_bind_count; ++bi) {
                         const auto& b = sir->switch_enum_binds[bi];
                         if (b.bind_sym == parus::sir::k_invalid_symbol || b.bind_type == parus::sir::k_invalid_type) {
@@ -4803,7 +5068,21 @@ namespace parus::oir {
                         }
                         ValueId place = emit_field((TypeId)b.bind_type, enum_value, std::string(b.storage_name));
                         ValueId bound = emit_load((TypeId)b.bind_type, place);
-                        bind(b.bind_sym, Binding{false, false, bound, kInvalidId});
+                        const TypeId bind_ty = (TypeId)b.bind_type;
+                        const bool needs_cleanup = type_needs_drop_(bind_ty);
+                        const bool needs_cell_storage = is_escape_cell_type_(bind_ty);
+                        if (needs_cleanup || needs_cell_storage) {
+                            ValueId slot = emit_alloca(bind_ty);
+                            emit_store(slot, bound);
+                            const uint32_t cleanup_id =
+                                needs_cleanup ? register_cleanup(b.bind_sym, slot, bind_ty) : kInvalidId;
+                            bind(b.bind_sym, Binding{true, false, slot, cleanup_id});
+                            if (should_remember_home_slot(bind_ty)) {
+                                remember_home_slot(b.bind_sym, slot);
+                            }
+                        } else {
+                            bind(b.bind_sym, Binding{false, false, bound, kInvalidId});
+                        }
                     }
                 };
 
@@ -4858,7 +5137,11 @@ namespace parus::oir {
                         push_scope();
                         if (c.pat_kind == parus::sir::SwitchCasePatKind::kEnumVariant &&
                             c.enum_type != kInvalidId) {
-                            ValueId enum_value = scrut;
+                            ValueId enum_value =
+                                (switch_case_has_owner_payload_bind_(c) &&
+                                 owner_payload_scrut_storage != kInvalidId)
+                                    ? owner_payload_scrut_storage
+                                    : scrut;
                             if (types != nullptr && scrut_ty != kInvalidId) {
                                 const auto& st = types->get(scrut_ty);
                                 if (st.kind == parus::ty::Kind::kOptional && st.elem == c.enum_type) {
@@ -4895,6 +5178,7 @@ namespace parus::oir {
 
                 def->blocks.push_back(exit_bb);
                 cur_bb = exit_bb;
+                pop_scope();
                 return;
             }
 
