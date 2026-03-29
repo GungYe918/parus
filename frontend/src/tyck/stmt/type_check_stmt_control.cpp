@@ -1275,11 +1275,21 @@ namespace parus::tyck {
                     diag_(diag::Code::kTypeErrorGeneric, c.span,
                           std::string("invalid enum pattern target: ") + enum_path);
                     err_(c.span, "invalid enum switch pattern target");
-                } else if (scrut_enum_t != ty::kInvalidType &&
-                           !switch_types_equivalent(switch_types_equivalent, scrut_enum_t, case_enum_t)) {
-                    diag_(diag::Code::kTypeMismatch, c.span,
-                          types_.to_string(scrut_enum_t), types_.to_string(case_enum_t));
-                    err_(c.span, "enum case pattern type does not match switch scrutinee");
+                } else if (scrut_enum_t != ty::kInvalidType) {
+                    const bool enum_types_match =
+                        switch_types_equivalent(switch_types_equivalent, scrut_enum_t, case_enum_t);
+                    if (!enum_types_match) {
+                        diag_(diag::Code::kTypeMismatch, c.span,
+                              types_.to_string(scrut_enum_t), types_.to_string(case_enum_t));
+                        err_(c.span, "enum case pattern type does not match switch scrutinee");
+                    } else {
+                        // Imported generic enum patterns can resolve through a consumer-visible alias
+                        // while ctor/locals already carry the producer-side concrete specialization.
+                        // Canonicalize the case metadata to the scrutinee's exact concrete type so
+                        // switch lowering, ctor layout, and payload bind all talk about the same enum.
+                        case_enum_t = scrut_enum_t;
+                        c.enum_type = scrut_enum_t;
+                    }
                 }
 
                 auto meta_it = enum_abi_meta_by_type_.find(case_enum_t);

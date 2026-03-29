@@ -439,7 +439,6 @@ namespace parus::tyck {
         ensure_builtin_family_proto_aliases_();
         collect_external_builtin_acts_methods_();
         collect_external_fn_overloads_();
-        collect_external_enum_metadata_();
 
         // ---------------------------------------------------------
         // PASS 1: Top-level decl precollect (mutual recursion 지원)
@@ -455,6 +454,7 @@ namespace parus::tyck {
         register_imported_class_templates_();
         register_imported_field_templates_();
         register_imported_enum_templates_();
+        collect_external_enum_metadata_();
         if (core_context_invalid_) {
             result_.ok = false;
             return result_;

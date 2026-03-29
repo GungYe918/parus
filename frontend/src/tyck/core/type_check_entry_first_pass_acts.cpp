@@ -2258,6 +2258,13 @@
             if (sym.external_payload.empty()) continue;
             if (sym.declared_type == ty::kInvalidType) continue;
             if (enum_abi_meta_by_type_.find(sym.declared_type) != enum_abi_meta_by_type_.end()) continue;
+            if (sym.external_payload.find("parus_generic_decl") != std::string::npos) continue;
+
+            if (auto it = enum_decl_by_type_.find(sym.declared_type);
+                it != enum_decl_by_type_.end() &&
+                imported_enum_template_sid_set_.find(it->second) != imported_enum_template_sid_set_.end()) {
+                continue;
+            }
 
             EnumAbiMeta meta{};
             if (!parse_external_enum_decl_payload_(sym.external_payload, meta)) continue;

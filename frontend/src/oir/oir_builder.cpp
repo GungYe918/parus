@@ -5035,6 +5035,70 @@ namespace parus::oir {
                     }
                 };
 
+                const auto enum_types_equivalent = [&](auto&& self, TypeId lhs, TypeId rhs) -> bool {
+                    if (lhs == rhs) return true;
+                    if (lhs == kInvalidId || rhs == kInvalidId || types == nullptr) return false;
+                    if (static_cast<size_t>(lhs) >= types->count() || static_cast<size_t>(rhs) >= types->count()) {
+                        return false;
+                    }
+
+                    const auto& lt = types->get(lhs);
+                    const auto& rt = types->get(rhs);
+                    if (lt.kind != rt.kind) return false;
+
+                    switch (lt.kind) {
+                        case parus::ty::Kind::kBuiltin:
+                            return lt.builtin == rt.builtin;
+                        case parus::ty::Kind::kPtr:
+                        case parus::ty::Kind::kBorrow:
+                        case parus::ty::Kind::kEscape:
+                            return self(self, lt.elem, rt.elem);
+                        case parus::ty::Kind::kOptional:
+                            return self(self, lt.elem, rt.elem);
+                        case parus::ty::Kind::kArray:
+                            return lt.array_has_size == rt.array_has_size &&
+                                   (!lt.array_has_size || lt.array_size == rt.array_size) &&
+                                   self(self, lt.elem, rt.elem);
+                        case parus::ty::Kind::kNamedUser: {
+                            std::vector<std::string_view> lpath{};
+                            std::vector<TypeId> largs{};
+                            std::vector<std::string_view> rpath{};
+                            std::vector<TypeId> rargs{};
+                            if (!types->decompose_named_user(lhs, lpath, largs) ||
+                                !types->decompose_named_user(rhs, rpath, rargs) ||
+                                lpath.empty() || rpath.empty()) {
+                                return types->to_string(lhs) == types->to_string(rhs);
+                            }
+                            if (largs.size() != rargs.size()) return false;
+                            for (size_t i = 0; i < largs.size(); ++i) {
+                                if (!self(self, largs[i], rargs[i])) return false;
+                            }
+
+                            auto same_path = [](const std::vector<std::string_view>& a,
+                                                const std::vector<std::string_view>& b) -> bool {
+                                if (a.size() != b.size()) return false;
+                                for (size_t i = 0; i < a.size(); ++i) {
+                                    if (a[i] != b[i]) return false;
+                                }
+                                return true;
+                            };
+
+                            if (same_path(lpath, rpath)) return true;
+                            if (lpath.size() == rpath.size() + 1u) {
+                                return std::equal(lpath.begin() + 1, lpath.end(), rpath.begin(), rpath.end());
+                            }
+                            if (rpath.size() == lpath.size() + 1u) {
+                                return std::equal(rpath.begin() + 1, rpath.end(), lpath.begin(), lpath.end());
+                            }
+                            return false;
+                        }
+                        case parus::ty::Kind::kFn:
+                        case parus::ty::Kind::kError:
+                        default:
+                            return false;
+                    }
+                };
+
                 const auto emit_enum_tag_match_cond = [&](ValueId enum_value, const parus::sir::SwitchCase& c) -> ValueId {
                     TypeId tag_ty =
                         (types != nullptr)
@@ -5101,14 +5165,17 @@ namespace parus::oir {
                         const BlockId next_bb = new_block();
                         if (c.pat_kind == parus::sir::SwitchCasePatKind::kEnumVariant &&
                             c.enum_type != kInvalidId) {
+                            const bool scrut_matches_case_enum =
+                                enum_types_equivalent(enum_types_equivalent, scrut_ty, c.enum_type);
                             bool scrut_is_optional_enum = false;
                             if (types != nullptr && scrut_ty != kInvalidId) {
                                 const auto& st = types->get(scrut_ty);
                                 scrut_is_optional_enum =
-                                    (st.kind == parus::ty::Kind::kOptional && st.elem == c.enum_type);
+                                    (st.kind == parus::ty::Kind::kOptional &&
+                                     enum_types_equivalent(enum_types_equivalent, st.elem, c.enum_type));
                             }
 
-                            if (scrut_ty == c.enum_type) {
+                            if (scrut_matches_case_enum) {
                                 const ValueId cond = emit_enum_tag_match_cond(scrut, c);
                                 condbr(cond, match_bb, {}, next_bb, {});
                             } else if (scrut_is_optional_enum) {
@@ -5708,39 +5775,6 @@ namespace parus::oir {
         }
 
         if (tag_only_enum_type_ids_ != nullptr) {
-            auto append_tag_keys = [&](TypeId tid, std::unordered_set<std::string>& out) {
-                if (tid == parus::ty::kInvalidType) return;
-
-                std::vector<std::string_view> path{};
-                std::vector<TypeId> args{};
-                if (!ty_.decompose_named_user(tid, path, args) || path.empty()) {
-                    out.insert(ty_.to_string(tid));
-                    return;
-                }
-
-                std::string full{};
-                for (size_t i = 0; i < path.size(); ++i) {
-                    if (i != 0) full += "::";
-                    full += std::string(path[i]);
-                }
-                out.insert(full);
-
-                if (path.size() >= 2) {
-                    std::string dropped_first{};
-                    for (size_t i = 1; i < path.size(); ++i) {
-                        if (i != 1) dropped_first += "::";
-                        dropped_first += std::string(path[i]);
-                    }
-                    out.insert(std::move(dropped_first));
-                }
-            };
-
-            std::unordered_set<std::string> tag_only_enum_names{};
-            tag_only_enum_names.reserve(tag_only_enum_type_ids_->size() * 2u);
-            for (const auto enum_ty : *tag_only_enum_type_ids_) {
-                append_tag_keys(enum_ty, tag_only_enum_names);
-            }
-
             auto add_tag_only_layout = [&](TypeId enum_ty) {
                 if (enum_ty == parus::ty::kInvalidType) return;
                 if (named_layout_by_type.find(enum_ty) != named_layout_by_type.end()) return;
@@ -5764,23 +5798,6 @@ namespace parus::oir {
 
             for (const auto enum_ty : *tag_only_enum_type_ids_) {
                 add_tag_only_layout(enum_ty);
-            }
-
-            for (uint32_t i = 0; i < ty_.count(); ++i) {
-                const auto cur = static_cast<TypeId>(i);
-                const auto& tt = ty_.get(cur);
-                if (tt.kind != parus::ty::Kind::kNamedUser) continue;
-                std::unordered_set<std::string> cur_keys{};
-                append_tag_keys(cur, cur_keys);
-                bool matches = false;
-                for (const auto& key : cur_keys) {
-                    if (tag_only_enum_names.find(key) != tag_only_enum_names.end()) {
-                        matches = true;
-                        break;
-                    }
-                }
-                if (!matches) continue;
-                add_tag_only_layout(cur);
             }
         }
 

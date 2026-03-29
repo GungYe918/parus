@@ -3533,6 +3533,166 @@ bool test_bundle_grandparent_relative_import_resolves() {
     return true;
 }
 
+bool test_external_generic_owner_enum_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+
+    const auto sysroot_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_target.has_value()) {
+        std::cerr << "installed sysroot manifest not found for external generic owner-enum test\n";
+        return false;
+    }
+    const std::string sysroot = sysroot_target->first;
+    const std::string target = sysroot_target->second;
+    const auto installed_core_index_path =
+        std::filesystem::path(sysroot) / ".cache/exports/core.exports.json";
+    if (!std::filesystem::exists(installed_core_index_path)) {
+        std::cerr << "installed core export-index not found for external generic owner-enum test\n";
+        return false;
+    }
+
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-ext-generic-owner-enum";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto lib_pr = temp_root / "lib.pr";
+    const std::string lib_src =
+        "export enum Job<T> {\n"
+        "  case Empty,\n"
+        "  case Ready(worker: ~T),\n"
+        "};\n"
+        "\n"
+        "export def pass<T>(j: Job<T>) -> Job<T> {\n"
+        "  return j;\n"
+        "}\n";
+    if (!write_text(lib_pr, lib_src)) {
+        std::cerr << "failed to write external generic owner-enum library source\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto lib_index = temp_root / "lib.exports.json";
+    auto [rc_idx, out_idx] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + lib_pr.string() +
+        "\" -fsyntax-only --bundle-name ownerlib --bundle-root \"" + temp_root.string() +
+        "\" --module-head api --bundle-source \"" + lib_pr.string() +
+        "\" --load-export-index \"" + installed_core_index_path.string() +
+        "\" --emit-export-index \"" + lib_index.string() + "\"");
+    if (rc_idx != 0) {
+        std::cerr << "failed to emit external generic owner-enum export-index\n" << out_idx;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto direct_pr = temp_root / "main_direct.pr";
+    const std::string direct_src =
+        "import api as api;\n"
+        "\n"
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value; }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let j: api::Job<Worker> = api::Job<Worker>::Ready(worker: make(41i32));\n"
+        "  switch (j) {\n"
+        "  case api::Job<Worker>::Ready(worker: w): { return w.run(); }\n"
+        "  default: { return 1i32; }\n"
+        "  }\n"
+        "  return 2i32;\n"
+        "}\n";
+    if (!write_text(direct_pr, direct_src)) {
+        std::cerr << "failed to write direct external generic owner-enum runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto direct_exe = temp_root / "main_direct";
+    auto [rc_direct_build, out_direct_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + direct_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + direct_exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_direct_build != 0) {
+        std::cerr << "direct external generic owner-enum sample should compile/link\n" << out_direct_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_direct_run, out_direct_run] = run_capture("\"" + direct_exe.string() + "\"; echo EXIT:$?");
+    if (rc_direct_run != 0 || !contains(out_direct_run, "EXIT:41")) {
+        std::cerr << "direct external generic owner-enum runtime exit mismatch (expected 41)\n"
+                  << out_direct_run;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto pass_pr = temp_root / "main.pr";
+    const std::string pass_src =
+        "import api as api;\n"
+        "\n"
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value; }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  let j: api::Job<Worker> = api::pass<Worker>(api::Job<Worker>::Ready(worker: make(31i32)));\n"
+        "  switch (j) {\n"
+        "  case api::Job<Worker>::Ready(worker: w): { return w.run(); }\n"
+        "  default: { return 1i32; }\n"
+        "  }\n"
+        "  return 2i32;\n"
+        "}\n";
+    if (!write_text(pass_pr, pass_src)) {
+        std::cerr << "failed to write pass-through external generic owner-enum runtime sample\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto pass_exe = temp_root / "main";
+    auto [rc_pass_build, out_pass_build] = run_capture(
+        "PARUS_SYSROOT=\"" + sysroot + "\" \"" + bin + "\" tool parusc -- \"" + pass_pr.string() +
+        "\" --sysroot \"" + sysroot + "\"" +
+        " --target " + target +
+        " -o \"" + pass_exe.string() + "\"" +
+        " --load-export-index \"" + installed_core_index_path.string() + "\"" +
+        " --load-export-index \"" + lib_index.string() + "\"");
+    if (rc_pass_build != 0) {
+        std::cerr << "pass-through external generic owner-enum sample should compile/link\n" << out_pass_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_pass_run, out_pass_run] = run_capture("\"" + pass_exe.string() + "\"; echo EXIT:$?");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_pass_run != 0 || !contains(out_pass_run, "EXIT:31")) {
+        std::cerr << "pass-through external generic owner-enum runtime exit mismatch (expected 31)\n"
+                  << out_pass_run;
+        return false;
+    }
+
+    return true;
+}
+
 bool test_core_marker_bare_use_special_form() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -8309,21 +8469,22 @@ int main() {
     const bool ok85 = test_cstr_private_fields_hidden_but_helpers_work();
     const bool ok86 = test_external_generic_constraints_v2_work();
     const bool ok87 = test_external_generic_type_body_closure_v2_work();
-    const bool ok88 = test_escape_first_class_places_runtime();
-    const bool ok89 = test_escape_mem_replace_swap_runtime();
-    const bool ok90 = test_escape_plain_assignment_overwrite_rejected();
-    const bool ok91 = test_escape_place_first_mem_rejects_non_escape();
-    const bool ok92 = test_escape_sized_array_owner_cells_runtime();
-    const bool ok93 = test_escape_unsized_owner_array_rejected();
-    const bool ok94 = test_escape_indexed_projection_rejected();
-    const bool ok95 = test_escape_projected_owner_cells_runtime();
-    const bool ok96 = test_escape_projected_direct_projection_rejected();
-    const bool ok97 = test_escape_projected_borrow_rejected();
-    const bool ok98 = test_escape_named_aggregate_unsized_container_rejected();
-    const bool ok99 = test_escape_enum_owner_payload_and_take_runtime();
-    const bool ok100 = test_escape_enum_owner_payload_direct_place_switch_rejected();
-    const bool ok101 = test_escape_enum_owner_payload_borrow_switch_rejected();
-    const bool ok102 = test_escape_mem_take_rejects_non_owner_optional();
+    const bool ok88 = test_external_generic_owner_enum_runtime();
+    const bool ok89 = test_escape_first_class_places_runtime();
+    const bool ok90 = test_escape_mem_replace_swap_runtime();
+    const bool ok91 = test_escape_plain_assignment_overwrite_rejected();
+    const bool ok92 = test_escape_place_first_mem_rejects_non_escape();
+    const bool ok93 = test_escape_sized_array_owner_cells_runtime();
+    const bool ok94 = test_escape_unsized_owner_array_rejected();
+    const bool ok95 = test_escape_indexed_projection_rejected();
+    const bool ok96 = test_escape_projected_owner_cells_runtime();
+    const bool ok97 = test_escape_projected_direct_projection_rejected();
+    const bool ok98 = test_escape_projected_borrow_rejected();
+    const bool ok99 = test_escape_named_aggregate_unsized_container_rejected();
+    const bool ok100 = test_escape_enum_owner_payload_and_take_runtime();
+    const bool ok101 = test_escape_enum_owner_payload_direct_place_switch_rejected();
+    const bool ok102 = test_escape_enum_owner_payload_borrow_switch_rejected();
+    const bool ok103 = test_escape_mem_take_rejects_non_owner_optional();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -8333,7 +8494,7 @@ int main() {
         !ok60 || !ok61 || !ok62 || !ok63 || !ok64 || !ok65 || !ok66 || !ok67 || !ok68 || !ok69 || !ok70 || !ok71 ||
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
-        !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102) {
+        !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103) {
         return 1;
     }
 
