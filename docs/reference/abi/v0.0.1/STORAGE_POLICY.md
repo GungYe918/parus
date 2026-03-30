@@ -4,6 +4,7 @@
 
 이 문서는 `docs/reference/abi/v0.0.1/ABI.md`의 저장소/수명 요약을 상세화한다.
 특히 스택/힙/정적 저장소와 `~` 규칙을 고정한다.
+이 문서의 `~` 규칙은 v0 core/freestanding semantics의 정본이며, alloc-backed owner container는 범위 밖으로 둔다.
 
 ---
 
@@ -98,6 +99,7 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 8. raw-pointer/borrow dereference `*p` / `*bp`는 ordinary pointer/manual path일 뿐 owner-cell family가 아니다.
    - `~(*p)`, `~(*bp)` 같은 owner extraction은 허용하지 않는다.
    - owner-typed pointee에 대한 raw read/write도 ordinary pointer path로 처리하지 않고 명시적으로 거부한다.
+9. dynamic alloc-backed owner container(`Vec<(~T)?>`, `Box<~T>` 등)는 이 코어 저장 정책의 일부가 아니다.
 
 ---
 

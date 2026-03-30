@@ -650,6 +650,7 @@ namespace parus::tyck {
         bool infer_int_value_of_expr_(ast::ExprId eid, num::BigInt& out) const;
         static bool fits_builtin_int_big_(const num::BigInt& v, ty::Builtin dst);
         static bool is_field_pod_value_type_(const ty::TypePool& types, ty::TypeId id);
+        void ensure_tyck_cache_capacity_for_current_ast_();
         bool has_manual_permission_(uint8_t perm) const;
         bool parse_external_c_type_with_semantic_(
             std::string_view type_repr,

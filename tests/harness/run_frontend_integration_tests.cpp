@@ -1478,6 +1478,29 @@ namespace {
         return ok;
     }
 
+    static bool test_escape_borrow_of_owner_handle_rejected() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let x: i32 = 7i32;
+                let h: ~i32 = ~x;
+                let p: &i32 = &h;
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
+        auto cap = run_cap(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kBorrowOperandMustBeOwnedPlace),
+                       "&h must emit BorrowOperandMustBeOwnedPlace");
+        ok &= require_(!ty.errors.empty(), "&h must fail typecheck");
+        ok &= require_(!cap.ok, "&h must fail AST capability check");
+        return ok;
+    }
+
     static bool test_consume_binding_deref_rhs_rejected() {
         const std::string src = R"(
             class Worker {
@@ -3126,6 +3149,70 @@ namespace {
         return ok;
     }
 
+    static bool test_escape_generic_owner_array_named_aggregate_surface() {
+        const std::string src = R"(
+            proto Probe {
+                provide def probe() -> i32 {
+                    return 20i32;
+                }
+            };
+
+            class Worker: Probe {
+                value: i32;
+
+                init(v: i32) {
+                    self.value = v;
+                }
+
+                def run(self) -> i32 {
+                    return self.value + 1i32;
+                }
+            };
+
+            class Holder<T> {
+                values: (~T)[2];
+                slots: ((~T)?)[1];
+
+                init(a: ~T, b: ~T, c: ~T) {
+                    self.values = [a, b];
+                    self.slots = [null];
+                    let ignored: (~T)? = self.slots.put(0usize, c);
+                }
+            };
+
+            def make(seed: i32) -> ~Worker {
+                set w = Worker(seed);
+                return ~w;
+            }
+
+            def main() -> i32 {
+                set mut h = Holder<Worker>(make(1i32), make(2i32), make(3i32));
+                h.values.swap(0usize, 1usize);
+                let old: ~Worker = h.values.replace(1usize, make(4i32));
+                set mut taken_opt = h.slots.take(0usize);
+                let taken: ~Worker = taken_opt else {
+                    return 1i32;
+                };
+                return h.values[0].run() + h.values[1]->probe() + old.run() + taken.run();
+            }
+        )";
+
+        auto p = parse_program(src);
+        auto pres = run_passes(p);
+        auto ty = run_tyck(p, &pres.generic_prep, &pres.sym);
+        auto cap = run_cap(p, pres, ty);
+        auto sir = run_sir(p, pres, ty);
+
+        bool ok = true;
+        ok &= require_(!p.bag.has_error(), "generic owner-array named aggregate seed must not emit diagnostics");
+        ok &= require_(ty.errors.empty(), "generic owner-array named aggregate seed must not emit tyck errors");
+        ok &= require_(cap.ok, "generic owner-array named aggregate seed must pass AST capability check");
+        ok &= require_(sir.cap.ok, "generic owner-array named aggregate seed must pass SIR capability check");
+        ok &= require_(sir.handle_verify_errors.empty(),
+                       "generic owner-array named aggregate seed must pass handle verification");
+        return ok;
+    }
+
     static bool test_escape_named_aggregate_unsized_container_rejected() {
         const std::string src = R"(
             class Worker {
@@ -3911,6 +3998,7 @@ int main() {
         {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
         {"escape_deref_raw_ptr_rejected", test_escape_deref_raw_ptr_rejected},
         {"escape_deref_borrow_rejected", test_escape_deref_borrow_rejected},
+        {"escape_borrow_of_owner_handle_rejected", test_escape_borrow_of_owner_handle_rejected},
         {"consume_binding_deref_rhs_rejected", test_consume_binding_deref_rhs_rejected},
         {"raw_ptr_owner_pointee_read_rejected", test_raw_ptr_owner_pointee_read_rejected},
         {"raw_ptr_owner_pointee_write_rejected", test_raw_ptr_owner_pointee_write_rejected},
@@ -3941,6 +4029,7 @@ int main() {
         {"escape_sized_array_owner_cells", test_escape_sized_array_owner_cells},
         {"escape_projected_owner_cells_and_named_aggregates", test_escape_projected_owner_cells_and_named_aggregates},
         {"escape_sized_array_container_methods_surface", test_escape_sized_array_container_methods_surface},
+        {"escape_generic_owner_array_named_aggregate_surface", test_escape_generic_owner_array_named_aggregate_surface},
         {"escape_named_aggregate_unsized_container_rejected", test_escape_named_aggregate_unsized_container_rejected},
         {"sir_handle_verify_rejects_invalid_escape_pack_state", test_sir_handle_verify_rejects_invalid_escape_pack_state},
         {"oir_gate_rejects_invalid_escape_handle", test_oir_gate_rejects_invalid_escape_handle},

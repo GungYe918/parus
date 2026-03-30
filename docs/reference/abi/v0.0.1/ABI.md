@@ -268,6 +268,7 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
    - `~T`는 local/field/optional/owner-array/storage-safe named aggregate cell과 non-`layout(c)` enum payload에 저장할 수 있다.
    - ordinary non-owner enum payload는 기존처럼 계속 허용된다.
    - 3word handle pack은 call/return ABI 경계에서만 허용한다.
+   - alloc-backed dynamic owner containers는 이 코어 ABI 층의 범위 밖이다.
 5. C ABI 문자열 경계는 `Utf8Span`/`Utf8Buf`를 사용한다.
 6. nullable은 하이브리드 모델을 따른다.
    - `T?`는 1급 값 타입이다.
@@ -300,6 +301,6 @@ Parus는 DOD 친화적 구조를 유지하되, 외부 ABI는 단순/안정하게
 1. C 경계 문자열 표준 타입 `Utf8Span`/`Utf8Buf`를 명시
 2. `String` 직접 C ABI 전달 금지 규칙을 명시
 3. `text` 기본 리터럴 타입, `text -> String` 비암시 변환 규칙 요약 추가
-4. `&&` 비힙 materialization 규칙 요약 추가
+4. `~` 비힙 owner materialization 규칙 요약 추가
 5. 상세 명세를 `STRING_MODEL.md`, `STORAGE_POLICY.md`로 분리
 6. nullable 하이브리드 정본 문서 `NULLABLE_MODEL.md` 연결 규칙 추가

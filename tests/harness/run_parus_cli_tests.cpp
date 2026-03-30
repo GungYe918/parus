@@ -8451,6 +8451,57 @@ bool test_escape_deref_borrow_rejected() {
     return true;
 }
 
+bool test_escape_borrow_of_owner_handle_rejected_installed() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-borrow-owner-installed-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 7i32;\n"
+        "  let h: ~i32 = ~x;\n"
+        "  let p: &i32 = &h;\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write borrow-owner rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for borrow-owner rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "borrow of owner handle should fail\n";
+        return false;
+    }
+    if (out.find("BorrowOperandMustBeOwnedPlace") == std::string::npos ||
+        out.find("move-only owner handle") == std::string::npos) {
+        std::cerr << "borrow of owner handle rejection should keep move-only owner guidance\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_deref_consume_binding_rejected() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -8731,6 +8782,91 @@ bool test_escape_enum_owner_payload_and_take_runtime() {
     std::filesystem::remove_all(temp_root, ec);
     if (rc_run != 0) {
         std::cerr << "enum owner payload runtime exit mismatch (expected 0)\n" << out_run;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_generic_owner_array_named_aggregate_runtime() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root =
+        std::filesystem::temp_directory_path(ec) / "parus-cli-escape-generic-owner-array-named-aggregate-runtime";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const auto exe = temp_root / "out";
+    const std::string src =
+        "proto Probe {\n"
+        "  provide def probe() -> i32 { return 20i32; }\n"
+        "};\n"
+        "\n"
+        "class Worker: Probe {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "  def run(self) -> i32 { return self.value + 1i32; }\n"
+        "};\n"
+        "\n"
+        "class Holder<T> {\n"
+        "  values: (~T)[2];\n"
+        "  slots: ((~T)?)[1];\n"
+        "\n"
+        "  init(a: ~T, b: ~T, c: ~T) {\n"
+        "    self.values = [a, b];\n"
+        "    self.slots = [null];\n"
+        "    let ignored: (~T)? = self.slots.put(0usize, c);\n"
+        "  }\n"
+        "};\n"
+        "\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "\n"
+        "def main() -> i32 {\n"
+        "  set mut h = Holder<Worker>(make(1i32), make(2i32), make(3i32));\n"
+        "  h.values.swap(0usize, 1usize);\n"
+        "  let old: ~Worker = h.values.replace(1usize, make(4i32));\n"
+        "  set mut taken_opt = h.slots.take(0usize);\n"
+        "  let taken: ~Worker = taken_opt else { return 1i32; };\n"
+        "  let total: i32 = h.values[0].run() + h.values[1]->probe() + old.run() + taken.run();\n"
+        "  if (total == 29i32) { return 0i32; }\n"
+        "  return total;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write generic owner-array named aggregate runtime test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for generic owner-array named aggregate runtime test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc_build, out_build] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target +
+        " -o \"" + exe.string() + "\"");
+    if (rc_build != 0) {
+        std::cerr << "generic owner-array named aggregate runtime sample should compile/link\n" << out_build;
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    auto [rc_run, out_run] = run_capture("\"" + exe.string() + "\"");
+    std::filesystem::remove_all(temp_root, ec);
+    if (rc_run != 0) {
+        std::cerr << "generic owner-array named aggregate runtime exit mismatch (expected 0)\n" << out_run;
         return false;
     }
     return true;
@@ -9080,19 +9216,21 @@ int main() {
     const bool ok98 = test_escape_projected_borrow_rejected();
     const bool ok99 = test_escape_deref_raw_ptr_rejected();
     const bool ok100 = test_escape_deref_borrow_rejected();
-    const bool ok101 = test_escape_deref_consume_binding_rejected();
-    const bool ok102 = test_escape_raw_ptr_owner_pointee_read_rejected();
-    const bool ok103 = test_escape_raw_ptr_owner_pointee_write_rejected();
-    const bool ok104 = test_escape_named_aggregate_unsized_container_rejected();
-    const bool ok105 = test_escape_enum_owner_payload_and_take_runtime();
-    const bool ok106 = test_escape_enum_owner_payload_direct_place_switch_rejected();
-    const bool ok107 = test_escape_enum_owner_payload_borrow_switch_rejected();
-    const bool ok108 = test_escape_mem_take_rejects_non_owner_optional();
-    const bool ok109 = test_escape_sized_array_container_methods_runtime();
-    const bool ok110 = test_escape_array_method_take_rejected_on_plain_owner_array();
-    const bool ok111 = test_escape_array_method_replace_rejected_on_optional_owner_array();
-    const bool ok112 = test_escape_array_method_put_rejected_on_non_owner_array();
-    const bool ok113 = test_escape_array_method_rejects_immutable_receiver();
+    const bool ok101 = test_escape_borrow_of_owner_handle_rejected_installed();
+    const bool ok102 = test_escape_deref_consume_binding_rejected();
+    const bool ok103 = test_escape_raw_ptr_owner_pointee_read_rejected();
+    const bool ok104 = test_escape_raw_ptr_owner_pointee_write_rejected();
+    const bool ok105 = test_escape_named_aggregate_unsized_container_rejected();
+    const bool ok106 = test_escape_enum_owner_payload_and_take_runtime();
+    const bool ok107 = test_escape_generic_owner_array_named_aggregate_runtime();
+    const bool ok108 = test_escape_enum_owner_payload_direct_place_switch_rejected();
+    const bool ok109 = test_escape_enum_owner_payload_borrow_switch_rejected();
+    const bool ok110 = test_escape_mem_take_rejects_non_owner_optional();
+    const bool ok111 = test_escape_sized_array_container_methods_runtime();
+    const bool ok112 = test_escape_array_method_take_rejected_on_plain_owner_array();
+    const bool ok113 = test_escape_array_method_replace_rejected_on_optional_owner_array();
+    const bool ok114 = test_escape_array_method_put_rejected_on_non_owner_array();
+    const bool ok115 = test_escape_array_method_rejects_immutable_receiver();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -9103,7 +9241,7 @@ int main() {
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
         !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
-        !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113) {
+        !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113 || !ok114 || !ok115) {
         return 1;
     }
 

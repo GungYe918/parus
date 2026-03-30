@@ -1456,6 +1456,50 @@ namespace parus::tyck {
         }
     }
 
+    void TypeChecker::ensure_tyck_cache_capacity_for_current_ast_() {
+        const size_t expr_size = ast_.exprs().size();
+        const size_t stmt_size = ast_.stmts().size();
+        const size_t param_size = ast_.params().size();
+        if (expr_type_cache_.size() < expr_size) expr_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_overload_target_cache_.size() < expr_size) expr_overload_target_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_ctor_owner_type_cache_.size() < expr_size) expr_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_owner_type_cache_.size() < expr_size) expr_enum_ctor_owner_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_enum_ctor_variant_index_cache_.size() < expr_size) expr_enum_ctor_variant_index_cache_.resize(expr_size, 0xFFFF'FFFFu);
+        if (expr_enum_ctor_tag_value_cache_.size() < expr_size) expr_enum_ctor_tag_value_cache_.resize(expr_size, 0);
+        if (expr_resolved_symbol_cache_.size() < expr_size) expr_resolved_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (stmt_resolved_symbol_cache_.size() < stmt_size) stmt_resolved_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (expr_proto_const_decl_cache_.size() < expr_size) expr_proto_const_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_external_callee_symbol_cache_.size() < expr_size) expr_external_callee_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_external_callee_type_cache_.size() < expr_size) expr_external_callee_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_external_receiver_expr_cache_.size() < expr_size) expr_external_receiver_expr_cache_.resize(expr_size, ast::k_invalid_expr);
+        if (expr_array_family_call_kind_cache_.size() < expr_size) expr_array_family_call_kind_cache_.resize(expr_size, static_cast<uint8_t>(ArrayFamilyCallKind::kNone));
+        if (expr_call_is_c_abi_cache_.size() < expr_size) expr_call_is_c_abi_cache_.resize(expr_size, 0u);
+        if (expr_call_is_c_variadic_cache_.size() < expr_size) expr_call_is_c_variadic_cache_.resize(expr_size, 0u);
+        if (expr_call_c_callconv_cache_.size() < expr_size) expr_call_c_callconv_cache_.resize(expr_size, ty::CCallConv::kDefault);
+        if (expr_call_c_fixed_param_count_cache_.size() < expr_size) expr_call_c_fixed_param_count_cache_.resize(expr_size, 0u);
+        if (expr_loop_source_kind_cache_.size() < expr_size) expr_loop_source_kind_cache_.resize(expr_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (expr_loop_binder_type_cache_.size() < expr_size) expr_loop_binder_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iterator_type_cache_.size() < expr_size) expr_loop_iterator_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_iter_decl_cache_.size() < expr_size) expr_loop_iter_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_iter_external_symbol_cache_.size() < expr_size) expr_loop_iter_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_iter_fn_type_cache_.size() < expr_size) expr_loop_iter_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (expr_loop_next_decl_cache_.size() < expr_size) expr_loop_next_decl_cache_.resize(expr_size, ast::k_invalid_stmt);
+        if (expr_loop_next_external_symbol_cache_.size() < expr_size) expr_loop_next_external_symbol_cache_.resize(expr_size, sema::SymbolTable::kNoScope);
+        if (expr_loop_next_fn_type_cache_.size() < expr_size) expr_loop_next_fn_type_cache_.resize(expr_size, ty::kInvalidType);
+        if (stmt_for_source_kind_cache_.size() < stmt_size) stmt_for_source_kind_cache_.resize(stmt_size, static_cast<uint8_t>(parus::LoopSourceKind::kNone));
+        if (stmt_for_binder_type_cache_.size() < stmt_size) stmt_for_binder_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iterator_type_cache_.size() < stmt_size) stmt_for_iterator_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_iter_decl_cache_.size() < stmt_size) stmt_for_iter_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_iter_external_symbol_cache_.size() < stmt_size) stmt_for_iter_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_iter_fn_type_cache_.size() < stmt_size) stmt_for_iter_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (stmt_for_next_decl_cache_.size() < stmt_size) stmt_for_next_decl_cache_.resize(stmt_size, ast::k_invalid_stmt);
+        if (stmt_for_next_external_symbol_cache_.size() < stmt_size) stmt_for_next_external_symbol_cache_.resize(stmt_size, sema::SymbolTable::kNoScope);
+        if (stmt_for_next_fn_type_cache_.size() < stmt_size) stmt_for_next_fn_type_cache_.resize(stmt_size, ty::kInvalidType);
+        if (expr_external_c_bitfield_cache_.size() < expr_size) expr_external_c_bitfield_cache_.resize(expr_size, ExternalCBitfieldAccess{});
+        if (expr_fstring_runtime_expr_cache_.size() < expr_size) expr_fstring_runtime_expr_cache_.resize(expr_size, ast::k_invalid_expr);
+        if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
+    }
+
     ast::ExprId TypeChecker::clone_expr_with_type_subst_(
         ast::ExprId src,
         const std::unordered_map<std::string, ty::TypeId>& subst,
@@ -2167,6 +2211,7 @@ namespace parus::tyck {
             param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
         }
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_fn_instance_cache_, cache_req, inst_sid);
         generic_instantiated_fn_sids_.push_back(inst_sid);
 
@@ -2780,6 +2825,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_field_instance_cache_, cache_req, inst_sid);
         generic_instantiated_field_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
@@ -3363,6 +3409,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_enum_instance_cache_, cache_req, inst_sid);
         generic_instantiated_enum_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
@@ -3715,6 +3762,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_class_instance_cache_, cache_req, inst_sid);
         generic_instantiated_class_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
@@ -4000,6 +4048,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_proto_instance_cache_, cache_req, inst_sid);
         generic_instantiated_proto_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
@@ -4276,6 +4325,7 @@ namespace parus::tyck {
         const size_t param_size = ast_.params().size();
         if (param_resolved_symbol_cache_.size() < param_size) param_resolved_symbol_cache_.resize(param_size, sema::SymbolTable::kNoScope);
 
+        ensure_tyck_cache_capacity_for_current_ast_();
         store_mono_stmt_cache_(generic_acts_instance_cache_, cache_req, inst_sid);
         generic_instantiated_acts_sids_.push_back(inst_sid);
         if (generic_decl_checked_instances_.find(inst_sid) == generic_decl_checked_instances_.end() &&
