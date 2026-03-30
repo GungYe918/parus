@@ -1,6 +1,7 @@
 // frontend/src/cap/capability_check.cpp
 #include <parus/cap/CapabilityCheck.hpp>
 
+#include <parus/ast/PlaceExpr.hpp>
 #include <parus/diag/DiagCode.hpp>
 #include <parus/diag/Diagnostic.hpp>
 #include <parus/syntax/TokenKind.hpp>
@@ -237,17 +238,9 @@ namespace parus::cap {
                 return e.op == syntax::TokenKind::kDotDot || e.op == syntax::TokenKind::kDotDotColon;
             }
 
-            /// @brief expression이 place expression인지 판정한다(v0: ident/index).
+            /// @brief expression이 source-level storage place인지 판정한다.
             bool is_place_expr_(ast::ExprId eid) const {
-                if (eid == ast::k_invalid_expr) return false;
-                const auto& e = ast_.expr(eid);
-                if (e.kind == ast::ExprKind::kIdent) return true;
-                if (e.kind == ast::ExprKind::kIndex) {
-                    // range index는 slice view 생성용이므로 일반 place로는 취급하지 않는다.
-                    if (is_range_expr_(e.b)) return false;
-                    return is_place_expr_(e.a);
-                }
-                return false;
+                return ast::is_storage_place_expr(ast_, eid);
             }
 
             /// @brief `&x[a..b]` / `&mut x[a..:b]` 형태의 slice borrow 피연산자인지 확인한다.
@@ -259,6 +252,14 @@ namespace parus::cap {
                 if (e.kind != ast::ExprKind::kIndex) return false;
                 if (!is_range_expr_(e.b)) return false;
                 return is_place_expr_(e.a);
+            }
+
+            bool is_borrow_operand_place_(ast::ExprId eid) const {
+                if (is_place_expr_(eid)) return true;
+                if (eid == ast::k_invalid_expr || (size_t)eid >= ast_.exprs().size()) return false;
+                const auto& e = ast_.expr(eid);
+                if (e.kind == ast::ExprKind::kIndex) return is_place_expr_(e.a);
+                return false;
             }
 
             /// @brief ident expression의 SymbolId를 name-resolve 결과에서 조회한다.
@@ -290,12 +291,15 @@ namespace parus::cap {
                 return nres_.resolved[rid].sym;
             }
 
-            /// @brief place expression의 root SymbolId를 조회한다(v0: ident/index(base)).
+            /// @brief place expression의 root SymbolId를 조회한다(v0: ident/index/dot(base)).
             std::optional<SymbolId> root_place_symbol_(ast::ExprId eid) const {
                 if (eid == ast::k_invalid_expr) return std::nullopt;
                 const auto& e = ast_.expr(eid);
                 if (e.kind == ast::ExprKind::kIdent) return symbol_from_ident_expr_(eid);
                 if (e.kind == ast::ExprKind::kIndex) return root_place_symbol_(e.a);
+                if (e.kind == ast::ExprKind::kBinary && e.op == syntax::TokenKind::kDot) {
+                    return root_place_symbol_(e.a);
+                }
                 return std::nullopt;
             }
 
@@ -507,7 +511,8 @@ namespace parus::cap {
                         if (e.op == syntax::TokenKind::kAmp) {
                             walk_expr_(e.a, ExprUse::kBorrowOperand);
 
-                            const bool place_ok = is_place_expr_(e.a) || is_slice_borrow_operand_(e.a);
+                            const bool place_ok =
+                                is_borrow_operand_place_(e.a) || is_slice_borrow_operand_(e.a);
                             if (!place_ok) {
                                 report_(diag::Code::kBorrowOperandMustBePlace, e.span);
                             }
@@ -528,6 +533,25 @@ namespace parus::cap {
 
                         if (e.op == syntax::TokenKind::kTilde) {
                             walk_expr_(e.a, ExprUse::kEscapeOperand);
+
+                            if (e.a != ast::k_invalid_expr &&
+                                static_cast<size_t>(e.a) < ast_.exprs().size()) {
+                                const auto& opnd = ast_.expr(e.a);
+                                if (opnd.kind == ast::ExprKind::kUnary &&
+                                    opnd.op == syntax::TokenKind::kStar) {
+                                    diag::Diagnostic d(
+                                        diag::Severity::kError,
+                                        diag::Code::kEscapeDerefSourceNotAllowed,
+                                        e.span
+                                    );
+                                    d.add_label(opnd.span, "this dereference is not an owner transition source");
+                                    d.add_note("deref stays in the borrow/raw-pointer family and does not participate in `~` ownership transitions");
+                                    d.add_help("move from a root owner place, or keep using field/index owner-cell paths");
+                                    bag_.add(std::move(d));
+                                    ++error_count_;
+                                    return;
+                                }
+                            }
 
                             if (!is_place_expr_(e.a)) {
                                 report_(diag::Code::kEscapeOperandMustBePlace, e.span);

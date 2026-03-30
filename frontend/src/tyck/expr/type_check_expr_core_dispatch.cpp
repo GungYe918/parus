@@ -1,5 +1,6 @@
 // frontend/src/tyck/type_check_expr_core.cpp
 #include <parus/tyck/TypeCheck.hpp>
+#include <parus/ast/PlaceExpr.hpp>
 #include <parus/cimport/TypeReprNormalize.hpp>
 #include <parus/syntax/TokenKind.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -1883,21 +1884,7 @@ namespace parus::tyck {
 
     // place expr (v0: Ident, Index, Field(dot)만 place로 인정)
     bool TypeChecker::is_place_expr_(ast::ExprId eid) const {
-        if (eid == ast::k_invalid_expr) return false;
-        const auto& e = ast_.expr(eid);
-        if (e.kind == ast::ExprKind::kIdent) return true;
-        if (e.kind == ast::ExprKind::kIndex) {
-            // range index는 slice 생성용 view이므로 v0에서 write/place로 취급하지 않는다.
-            if (is_range_expr_(e.b)) return false;
-            return is_place_expr_(e.a);
-        }
-        if (e.kind == ast::ExprKind::kBinary && e.op == K::kDot) {
-            if (e.b == ast::k_invalid_expr) return false;
-            const auto& rhs = ast_.expr(e.b);
-            if (rhs.kind != ast::ExprKind::kIdent) return false;
-            return is_place_expr_(e.a);
-        }
-        return false;
+        return ast::is_storage_place_expr(ast_, eid);
     }
 
     // --------------------

@@ -8348,6 +8348,281 @@ bool test_escape_projected_borrow_rejected() {
     return true;
 }
 
+bool test_escape_deref_raw_ptr_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-deref-raw-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "def main() -> i32 {\n"
+        "  manual[get] {\n"
+        "    let p: *mut i32 = null;\n"
+        "    let h: ~i32 = ~(*p);\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write raw deref escape rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for raw deref escape rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "~(*p) should fail\n";
+        return false;
+    }
+    if (out.find("EscapeDerefSourceNotAllowed") == std::string::npos ||
+        out.find("not an owner transition source") == std::string::npos) {
+        std::cerr << "raw deref escape rejection should explain deref/owner boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_deref_borrow_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-deref-borrow-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "def main() -> i32 {\n"
+        "  let x: i32 = 1i32;\n"
+        "  let b: &i32 = &x;\n"
+        "  let h: ~i32 = ~(*b);\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write borrow deref escape rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for borrow deref escape rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "~(*bp) should fail\n";
+        return false;
+    }
+    if (out.find("EscapeDerefSourceNotAllowed") == std::string::npos ||
+        out.find("deref") == std::string::npos) {
+        std::cerr << "borrow deref escape rejection should explain deref/owner boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_deref_consume_binding_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-deref-consume-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def main() -> i32 {\n"
+        "  let mut slot: (~Worker)? = null;\n"
+        "  let p: &mut ((~Worker)?) = &mut slot;\n"
+        "  let h: ~Worker = *p else {\n"
+        "    return 1i32;\n"
+        "  };\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write deref consume-binding rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for deref consume-binding rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "consume-binding from deref should fail\n";
+        return false;
+    }
+    if (out.find("VarConsumeElseRequiresPlace") == std::string::npos) {
+        std::cerr << "deref consume-binding rejection should keep place-only consume-binding rule\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_raw_ptr_owner_pointee_read_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-owner-ptr-read-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def main() -> i32 {\n"
+        "  manual[get] {\n"
+        "    let p: *mut (~Worker) = null;\n"
+        "    let h: ~Worker = *p;\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write owner raw-pointer read rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for owner raw-pointer read rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "raw pointer owner read should fail\n";
+        return false;
+    }
+    if (out.find("RawPointerOwnerPointeeReadNotAllowed") == std::string::npos ||
+        out.find("owner-typed pointee") == std::string::npos) {
+        std::cerr << "owner raw-pointer read rejection should explain pointer/owner boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
+bool test_escape_raw_ptr_owner_pointee_write_rejected() {
+    const std::string bin = PARUS_BUILD_BIN;
+    std::error_code ec{};
+    const auto temp_root = std::filesystem::temp_directory_path(ec) / "parus-cli-escape-owner-ptr-write-reject";
+    std::filesystem::remove_all(temp_root, ec);
+    std::filesystem::create_directories(temp_root, ec);
+    if (ec) {
+        std::cerr << "temp dir create failed\n";
+        return false;
+    }
+
+    const auto main_pr = temp_root / "main.pr";
+    const std::string src =
+        "class Worker {\n"
+        "  value: i32;\n"
+        "  init(v: i32) { self.value = v; }\n"
+        "};\n"
+        "def make(seed: i32) -> ~Worker {\n"
+        "  set w = Worker(seed);\n"
+        "  return ~w;\n"
+        "}\n"
+        "def main() -> i32 {\n"
+        "  manual[set] {\n"
+        "    let p: *mut (~Worker) = null;\n"
+        "    *p = make(1i32);\n"
+        "  }\n"
+        "  return 0i32;\n"
+        "}\n";
+    if (!write_text(main_pr, src)) {
+        std::cerr << "failed to write owner raw-pointer write rejection test file\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+
+    const auto sysroot_and_target = resolve_installed_sysroot_and_target();
+    if (!sysroot_and_target) {
+        std::cerr << "failed to resolve installed sysroot/target for owner raw-pointer write rejection test\n";
+        std::filesystem::remove_all(temp_root, ec);
+        return false;
+    }
+    const auto& [sysroot, target] = *sysroot_and_target;
+
+    auto [rc, out] = run_capture(
+        "\"" + bin + "\" tool parusc -- \"" + main_pr.string() + "\""
+        " --sysroot \"" + sysroot + "\""
+        " --target " + target);
+    std::filesystem::remove_all(temp_root, ec);
+
+    if (rc == 0) {
+        std::cerr << "raw pointer owner write should fail\n";
+        return false;
+    }
+    if (out.find("RawPointerOwnerPointeeWriteNotAllowed") == std::string::npos ||
+        out.find("owner-typed pointee") == std::string::npos) {
+        std::cerr << "owner raw-pointer write rejection should explain pointer/owner boundary\n" << out;
+        return false;
+    }
+    return true;
+}
+
 bool test_escape_enum_owner_payload_and_take_runtime() {
     const std::string bin = PARUS_BUILD_BIN;
     std::error_code ec{};
@@ -8803,16 +9078,21 @@ int main() {
     const bool ok96 = test_escape_projected_owner_cells_runtime();
     const bool ok97 = test_escape_projected_direct_projection_rejected();
     const bool ok98 = test_escape_projected_borrow_rejected();
-    const bool ok99 = test_escape_named_aggregate_unsized_container_rejected();
-    const bool ok100 = test_escape_enum_owner_payload_and_take_runtime();
-    const bool ok101 = test_escape_enum_owner_payload_direct_place_switch_rejected();
-    const bool ok102 = test_escape_enum_owner_payload_borrow_switch_rejected();
-    const bool ok103 = test_escape_mem_take_rejects_non_owner_optional();
-    const bool ok104 = test_escape_sized_array_container_methods_runtime();
-    const bool ok105 = test_escape_array_method_take_rejected_on_plain_owner_array();
-    const bool ok106 = test_escape_array_method_replace_rejected_on_optional_owner_array();
-    const bool ok107 = test_escape_array_method_put_rejected_on_non_owner_array();
-    const bool ok108 = test_escape_array_method_rejects_immutable_receiver();
+    const bool ok99 = test_escape_deref_raw_ptr_rejected();
+    const bool ok100 = test_escape_deref_borrow_rejected();
+    const bool ok101 = test_escape_deref_consume_binding_rejected();
+    const bool ok102 = test_escape_raw_ptr_owner_pointee_read_rejected();
+    const bool ok103 = test_escape_raw_ptr_owner_pointee_write_rejected();
+    const bool ok104 = test_escape_named_aggregate_unsized_container_rejected();
+    const bool ok105 = test_escape_enum_owner_payload_and_take_runtime();
+    const bool ok106 = test_escape_enum_owner_payload_direct_place_switch_rejected();
+    const bool ok107 = test_escape_enum_owner_payload_borrow_switch_rejected();
+    const bool ok108 = test_escape_mem_take_rejects_non_owner_optional();
+    const bool ok109 = test_escape_sized_array_container_methods_runtime();
+    const bool ok110 = test_escape_array_method_take_rejected_on_plain_owner_array();
+    const bool ok111 = test_escape_array_method_replace_rejected_on_optional_owner_array();
+    const bool ok112 = test_escape_array_method_put_rejected_on_non_owner_array();
+    const bool ok113 = test_escape_array_method_rejects_immutable_receiver();
 
     if (!ok1 || !ok2 || !ok3 || !ok4 || !ok5 || !ok6 || !ok7 || !ok8 || !ok9 || !ok10 || !ok11 ||
         !ok12 || !ok13 || !ok14 || !ok15 || !ok16 || !ok17 || !ok18 || !ok19 || !ok20 || !ok21 || !ok22 || !ok23 ||
@@ -8823,7 +9103,7 @@ int main() {
         !ok72 || !ok73 || !ok74 || !ok75 || !ok76 || !ok77 || !ok78 || !ok79 || !ok80 || !ok81 || !ok82 ||
         !ok83 || !ok84 || !ok85 || !ok86 || !ok87 || !ok88 || !ok89 || !ok90 || !ok91 || !ok92 || !ok93 || !ok94 ||
         !ok95 || !ok96 || !ok97 || !ok98 || !ok99 || !ok100 || !ok101 || !ok102 || !ok103 || !ok104 || !ok105 ||
-        !ok106 || !ok107 || !ok108) {
+        !ok106 || !ok107 || !ok108 || !ok109 || !ok110 || !ok111 || !ok112 || !ok113) {
         return 1;
     }
 

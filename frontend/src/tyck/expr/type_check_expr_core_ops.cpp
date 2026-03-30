@@ -818,6 +818,19 @@
                     return types_.error();
                 }
             }
+            if (e.a != ast::k_invalid_expr &&
+                static_cast<size_t>(e.a) < ast_.exprs().size()) {
+                const auto& opnd = ast_.expr(e.a);
+                if (opnd.kind == ast::ExprKind::kUnary && opnd.op == K::kStar) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kEscapeDerefSourceNotAllowed, e.span);
+                    d.add_label(opnd.span, "this dereference stays in the borrow/raw-pointer family");
+                    d.add_note("Parus keeps `*` outside the owner-transition family; dereference is not a source for `~`");
+                    d.add_help("move from a root owner place, or keep using field/index owner-cell paths with `mem::replace`, `mem::swap`, or `mem::take`");
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                    err_(e.span, "ownership cannot be extracted through dereference");
+                    return types_.error();
+                }
+            }
             ty::TypeId at = check_expr_(e.a);
             if (!is_error_(at)) {
                 const auto& atv = types_.get(at);
@@ -862,6 +875,19 @@
                     diag_(diag::Code::kTypeErrorGeneric, e.span,
                           "raw pointer dereference requires manual[get] or manual[set]");
                     err_(e.span, "raw pointer dereference requires manual[get] or manual[set]");
+                    return types_.error();
+                }
+                if (type_contains_escape_(ot.elem)) {
+                    diag::Diagnostic d(
+                        diag::Severity::kError,
+                        diag::Code::kRawPointerOwnerPointeeReadNotAllowed,
+                        e.span
+                    );
+                    d.add_label(e.span, "this raw dereference would read owner-typed storage `" + types_.to_string(ot.elem) + "`");
+                    d.add_note("raw-pointer/manual dereference stays in the ordinary pointer family and does not participate in owner-cell extraction");
+                    d.add_help("read or move owner values through root owner places, projected owner-cell paths, or `core::mem::{replace,swap,take}`");
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                    err_(e.span, "raw pointer dereference cannot read owner-typed pointee");
                     return types_.error();
                 }
                 return ot.elem;
@@ -1988,6 +2014,19 @@
                 }
                 if (ot.elem == ty::kInvalidType) {
                     err_(lhs.span, "mutable raw pointer dereference target type is invalid");
+                    return false;
+                }
+                if (type_contains_escape_(ot.elem)) {
+                    diag::Diagnostic d(
+                        diag::Severity::kError,
+                        diag::Code::kRawPointerOwnerPointeeWriteNotAllowed,
+                        lhs.span
+                    );
+                    d.add_label(lhs.span, "this raw dereference would write owner-typed storage `" + types_.to_string(ot.elem) + "`");
+                    d.add_note("raw-pointer/manual writes stay in the ordinary pointer family and do not create owner-cell mutation privileges");
+                    d.add_help("mutate owner storage through root owner places, projected owner-cell paths, or `core::mem::{replace,swap,take}`");
+                    if (diag_bag_) diag_bag_->add(std::move(d));
+                    err_(lhs.span, "raw pointer dereference cannot write owner-typed pointee");
                     return false;
                 }
                 out_target = ot.elem;

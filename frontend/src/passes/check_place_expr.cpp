@@ -1,6 +1,7 @@
 // frontend/src/passes/check_place_expr.cpp
 #include <parus/passes/CheckPlaceExpr.hpp>
 
+#include <parus/ast/PlaceExpr.hpp>
 #include <parus/ast/Nodes.hpp>
 #include <parus/ast/Visitor.hpp>
 #include <parus/diag/Diagnostic.hpp>
@@ -15,34 +16,35 @@ namespace parus::passes {
     }
 
     static bool is_place_expr(const ast::AstArena& ast, ast::ExprId id) {
-        if (id == ast::k_invalid_expr) return false;
-
-        const auto& e = ast.expr(id);
-
-        // v0 기준 place 후보:
-        // - Ident
-        // - Index(base[...])  (base도 place여야 함)
-        switch (e.kind) {
-            case ast::ExprKind::kIdent:
-                return true;
-
-            case ast::ExprKind::kIndex:
-                // base가 place면 base[index]도 place로 인정
-                return is_place_expr(ast, e.a);
-
-            default:
-                return false;
-        }
+        return parus::ast::is_storage_place_expr(ast, id);
     }
 
     static bool is_borrow_unary(const ast::Expr& e) {
         return (e.kind == ast::ExprKind::kUnary) && (e.op == syntax::TokenKind::kAmp);
     }
 
+    static bool is_slice_borrow_operand(const ast::AstArena& ast, ast::ExprId id) {
+        if (id == ast::k_invalid_expr) return false;
+        const auto& e = ast.expr(id);
+        return e.kind == ast::ExprKind::kIndex &&
+               parus::ast::is_range_index_expr(ast, e.b) &&
+               is_place_expr(ast, e.a);
+    }
+
+    static bool is_borrow_operand_place(const ast::AstArena& ast, ast::ExprId id) {
+        if (is_place_expr(ast, id)) return true;
+        if (id == ast::k_invalid_expr) return false;
+        const auto& e = ast.expr(id);
+        if (e.kind == ast::ExprKind::kIndex) {
+            return is_place_expr(ast, e.a);
+        }
+        return false;
+    }
+
     static void check_unary_place_rules(const ast::AstArena& ast, const ast::Expr& u, diag::Bag& bag) {
         // & / ~ 는 operand가 place여야 함
         if (u.op == syntax::TokenKind::kAmp) {
-            if (!is_place_expr(ast, u.a)) {
+            if (!is_borrow_operand_place(ast, u.a) && !is_slice_borrow_operand(ast, u.a)) {
                 report(bag, diag::Code::kBorrowOperandMustBePlace, u.span);
             }
             // syntactic fast-path: &(&x), &(~x) 형태는 v0 규칙에서 금지
@@ -57,6 +59,18 @@ namespace parus::passes {
         }
 
         if (u.op == syntax::TokenKind::kTilde) {
+            if (u.a != ast::k_invalid_expr) {
+                const auto& opnd = ast.expr(u.a);
+                if (opnd.kind == ast::ExprKind::kUnary && opnd.op == syntax::TokenKind::kStar) {
+                    diag::Diagnostic d(diag::Severity::kError, diag::Code::kEscapeDerefSourceNotAllowed, u.span);
+                    d.add_label(opnd.span, "this dereference is not an owner transition source");
+                    d.add_note("raw-pointer and borrow dereference stay ordinary manual/borrow access paths");
+                    d.add_help("move from a root owner place, or keep using field/index owner-cell paths with `mem::replace`, `mem::swap`, or `mem::take`");
+                    bag.add(std::move(d));
+                    return;
+                }
+            }
+
             // 1) place여야 함
             if (!is_place_expr(ast, u.a)) {
                 report(bag, diag::Code::kEscapeOperandMustBePlace, u.span);

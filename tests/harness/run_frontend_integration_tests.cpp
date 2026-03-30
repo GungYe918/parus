@@ -1435,6 +1435,136 @@ namespace {
         return ok;
     }
 
+    static bool test_escape_deref_raw_ptr_rejected() {
+        const std::string src = R"(
+            def main() -> i32 {
+                manual[get] {
+                    let p: *mut i32 = null;
+                    let h: ~i32 = ~(*p);
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kEscapeDerefSourceNotAllowed),
+            "~(*p) must emit EscapeDerefSourceNotAllowed");
+        ok &= require_(!ty.errors.empty(), "~(*p) must fail typecheck");
+        return ok;
+    }
+
+    static bool test_escape_deref_borrow_rejected() {
+        const std::string src = R"(
+            def main() -> i32 {
+                let x: i32 = 1i32;
+                let b: &i32 = &x;
+                let h: ~i32 = ~(*b);
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kEscapeDerefSourceNotAllowed),
+            "~(*bp) must emit EscapeDerefSourceNotAllowed");
+        ok &= require_(!ty.errors.empty(), "~(*bp) must fail typecheck");
+        return ok;
+    }
+
+    static bool test_consume_binding_deref_rhs_rejected() {
+        const std::string src = R"(
+            class Worker {
+                value: i32;
+                init(v: i32) { self.value = v; }
+            };
+
+            def main() -> i32 {
+                let mut slot: (~Worker)? = null;
+                let p: &mut ((~Worker)?) = &mut slot;
+                let h: ~Worker = *p else {
+                    return 1i32;
+                };
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kVarConsumeElseRequiresPlace),
+            "consume-binding from deref must still require a place");
+        ok &= require_(!ty.errors.empty(), "consume-binding from deref must fail typecheck");
+        return ok;
+    }
+
+    static bool test_raw_ptr_owner_pointee_read_rejected() {
+        const std::string src = R"(
+            class Worker {
+                value: i32;
+                init(v: i32) { self.value = v; }
+            };
+
+            def main() -> i32 {
+                manual[get] {
+                    let p: *mut (~Worker) = null;
+                    let h: ~Worker = *p;
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kRawPointerOwnerPointeeReadNotAllowed),
+            "raw pointer owner read must emit RawPointerOwnerPointeeReadNotAllowed");
+        ok &= require_(!ty.errors.empty(), "raw pointer owner read must fail typecheck");
+        return ok;
+    }
+
+    static bool test_raw_ptr_owner_pointee_write_rejected() {
+        const std::string src = R"(
+            class Worker {
+                value: i32;
+                init(v: i32) { self.value = v; }
+            };
+
+            def make(seed: i32) -> ~Worker {
+                set w = Worker(seed);
+                return ~w;
+            }
+
+            def main() -> i32 {
+                manual[set] {
+                    let p: *mut (~Worker) = null;
+                    *p = make(1i32);
+                }
+                return 0i32;
+            }
+        )";
+
+        auto p = parse_program(src);
+        (void)run_passes(p);
+        auto ty = run_tyck(p);
+
+        bool ok = true;
+        ok &= require_(p.bag.has_code(parus::diag::Code::kRawPointerOwnerPointeeWriteNotAllowed),
+            "raw pointer owner write must emit RawPointerOwnerPointeeWriteNotAllowed");
+        ok &= require_(!ty.errors.empty(), "raw pointer owner write must fail typecheck");
+        return ok;
+    }
+
     static bool test_text_view_constructor_requires_manual_abi() {
         const std::string src = R"(
             def main() -> i32 {
@@ -3779,6 +3909,11 @@ int main() {
         {"text_slicing_remains_unsupported", test_text_slicing_remains_unsupported},
         {"text_view_surface_and_borrow_deref_ok", test_text_view_surface_and_borrow_deref_ok},
         {"raw_ptr_deref_manual_gates", test_raw_ptr_deref_manual_gates},
+        {"escape_deref_raw_ptr_rejected", test_escape_deref_raw_ptr_rejected},
+        {"escape_deref_borrow_rejected", test_escape_deref_borrow_rejected},
+        {"consume_binding_deref_rhs_rejected", test_consume_binding_deref_rhs_rejected},
+        {"raw_ptr_owner_pointee_read_rejected", test_raw_ptr_owner_pointee_read_rejected},
+        {"raw_ptr_owner_pointee_write_rejected", test_raw_ptr_owner_pointee_write_rejected},
         {"text_view_constructor_requires_manual_abi", test_text_view_constructor_requires_manual_abi},
         {"legacy_ptr_type_syntax_rejected", test_legacy_ptr_type_syntax_rejected},
         {"core_mem_and_hint_surface_ok", test_core_mem_and_hint_surface_ok},

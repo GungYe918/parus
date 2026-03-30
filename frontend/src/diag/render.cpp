@@ -241,6 +241,7 @@ namespace parus::diag {
             case Code::kBorrowOperandMustBePlace: return "BorrowOperandMustBePlace";
             case Code::kBorrowOperandMustBeOwnedPlace: return "BorrowOperandMustBeOwnedPlace";
             case Code::kEscapeOperandMustBePlace: return "EscapeOperandMustBePlace";
+            case Code::kEscapeDerefSourceNotAllowed: return "EscapeDerefSourceNotAllowed";
             case Code::kEscapeSubplaceMoveNotAllowed: return "EscapeSubplaceMoveNotAllowed";
             case Code::kEscapeOperandMustNotBeBorrow: return "EscapeOperandMustNotBeBorrow";
             case Code::kBorrowMutRequiresMutablePlace: return "BorrowMutRequiresMutablePlace";
@@ -256,6 +257,8 @@ namespace parus::diag {
             case Code::kMaybeUninitializedMoveOnlyUse: return "MaybeUninitializedMoveOnlyUse";
             case Code::kMoveFromNonRootPlaceNotAllowed: return "MoveFromNonRootPlaceNotAllowed";
             case Code::kMoveFromGlobalOrStaticForbidden: return "MoveFromGlobalOrStaticForbidden";
+            case Code::kRawPointerOwnerPointeeReadNotAllowed: return "RawPointerOwnerPointeeReadNotAllowed";
+            case Code::kRawPointerOwnerPointeeWriteNotAllowed: return "RawPointerOwnerPointeeWriteNotAllowed";
             case Code::kEscapeWhileMutBorrowActive: return "EscapeWhileMutBorrowActive";
             case Code::kEscapeWhileBorrowActive: return "EscapeWhileBorrowActive";
             case Code::kEscapeRequiresStaticOrBoundary: return "EscapeRequiresStaticOrBoundary";
@@ -614,6 +617,7 @@ namespace parus::diag {
             case Code::kBorrowOperandMustBePlace: return "& operand must be a place expression";
             case Code::kBorrowOperandMustBeOwnedPlace: return "&/&mut operand must be an owned place (cannot borrow from borrow/escape value)";
             case Code::kEscapeOperandMustBePlace: return "'~' operand must be a place expression";
+            case Code::kEscapeDerefSourceNotAllowed: return "'~' cannot extract ownership through dereference";
             case Code::kEscapeSubplaceMoveNotAllowed: return "'~' only supports root identifier move in v0 (subplace move-out is not allowed)";
             case Code::kEscapeOperandMustNotBeBorrow: return "'~' cannot be applied to a borrow operand";
             case Code::kBorrowMutRequiresMutablePlace: return "&mut requires a mutable place";
@@ -629,6 +633,8 @@ namespace parus::diag {
             case Code::kMaybeUninitializedMoveOnlyUse: return "value '{0}' may be uninitialized after move on some control-flow path";
             case Code::kMoveFromNonRootPlaceNotAllowed: return "partial move from non-root place is not supported in v1";
             case Code::kMoveFromGlobalOrStaticForbidden: return "move from global/static storage '{0}' is not allowed in v1";
+            case Code::kRawPointerOwnerPointeeReadNotAllowed: return "raw pointer dereference cannot read owner-typed pointee";
+            case Code::kRawPointerOwnerPointeeWriteNotAllowed: return "raw pointer dereference cannot write owner-typed pointee";
             case Code::kEscapeWhileMutBorrowActive: return "cannot apply '~' while an active '&mut' borrow exists for this place";
             case Code::kEscapeWhileBorrowActive: return "cannot apply '~' while an active borrow exists for this place";
             case Code::kEscapeRequiresStaticOrBoundary: return "escaping '~' requires static storage or direct return/call-argument boundary";
@@ -994,6 +1000,7 @@ namespace parus::diag {
             case Code::kBorrowOperandMustBePlace: return "'&'의 피연산자는 place expression이어야 합니다";
             case Code::kBorrowOperandMustBeOwnedPlace: return "'&'/'&mut'의 피연산자는 owned place여야 합니다(borrow/escape 값 재참조 금지)";
             case Code::kEscapeOperandMustBePlace: return "'~'의 피연산자는 place expression이어야 합니다";
+            case Code::kEscapeDerefSourceNotAllowed: return "'~'는 역참조 결과에서 소유권을 추출할 수 없습니다";
             case Code::kEscapeSubplaceMoveNotAllowed: return "v0에서 '~'는 루트 식별자만 이동할 수 있습니다(subplace move-out 금지)";
             case Code::kEscapeOperandMustNotBeBorrow: return "'~'는 borrow('& ...')에 적용할 수 없습니다";
             case Code::kBorrowMutRequiresMutablePlace: return "'&mut'는 mutable place에만 적용할 수 있습니다";
@@ -1009,6 +1016,8 @@ namespace parus::diag {
             case Code::kMaybeUninitializedMoveOnlyUse: return "값 '{0}'은(는) 일부 제어 흐름에서 move되어 미초기화 상태일 수 있습니다";
             case Code::kMoveFromNonRootPlaceNotAllowed: return "v1에서는 non-root place에서의 partial move를 지원하지 않습니다";
             case Code::kMoveFromGlobalOrStaticForbidden: return "global/static 저장소 '{0}'에서는 move를 수행할 수 없습니다";
+            case Code::kRawPointerOwnerPointeeReadNotAllowed: return "raw pointer 역참조로 owner 타입 pointee를 읽을 수 없습니다";
+            case Code::kRawPointerOwnerPointeeWriteNotAllowed: return "raw pointer 역참조로 owner 타입 pointee에 쓸 수 없습니다";
             case Code::kEscapeWhileMutBorrowActive: return "활성 '&mut' borrow가 있는 동안에는 해당 place에 '~'를 적용할 수 없습니다";
             case Code::kEscapeWhileBorrowActive: return "활성 borrow가 있는 동안에는 해당 place에 '~'를 적용할 수 없습니다";
             case Code::kEscapeRequiresStaticOrBoundary: return "'~' 탈출은 static 저장소이거나 return/호출 인자 경계에서 직접 사용되어야 합니다";

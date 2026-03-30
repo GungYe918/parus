@@ -95,6 +95,9 @@ Parus v0 저장소 클래스는 다음으로 구분한다.
 5. one-shot extraction은 `(~T)?`, `((~T)?)[N]`, projected optional owner path + consume-binding, 또는 `core::mem::take(place)`를 사용한다.
 6. owner payload를 `switch`로 꺼낼 때는 direct place consume를 하지 말고, 먼저 local move 또는 `core::mem::replace(..., Empty)`로 enum 값을 분리한 뒤 consuming switch on value를 사용한다.
 7. initialized plain `~T` place를 교체해야 하면 `core::mem::replace` / `core::mem::swap`를 사용한다.
+8. raw-pointer/borrow dereference `*p` / `*bp`는 ordinary pointer/manual path일 뿐 owner-cell family가 아니다.
+   - `~(*p)`, `~(*bp)` 같은 owner extraction은 허용하지 않는다.
+   - owner-typed pointee에 대한 raw read/write도 ordinary pointer path로 처리하지 않고 명시적으로 거부한다.
 
 ---
 
