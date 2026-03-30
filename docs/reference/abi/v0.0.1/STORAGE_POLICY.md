@@ -5,6 +5,7 @@
 이 문서는 `docs/reference/abi/v0.0.1/ABI.md`의 저장소/수명 요약을 상세화한다.
 특히 스택/힙/정적 저장소와 `~` 규칙을 고정한다.
 이 문서의 `~` 규칙은 v0 core/freestanding semantics의 정본이며, alloc-backed owner container는 범위 밖으로 둔다.
+이 문서에서 `~`로 정의되는 전체 저장/이동/ABI 의미론은 **owner-handle model**이라고 부른다.
 
 ---
 
